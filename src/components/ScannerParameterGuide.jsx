@@ -9,7 +9,7 @@ const universeItems = [
 const commonMarketItems = [
   ['Min market cap / ETF min AUM', 'Minimum company equity value or fund assets. These are separate because funds do not have a market capitalization.'],
   ['Min $ volume', 'Minimum average daily share-price × share-volume. Higher values usually lead to more liquid option chains.'],
-  ['Lookback', 'Trading-day window used for the scanner’s move, volatility, momentum, and relative-strength measurements.'],
+  ['Lookback', 'Historical trading-day window used for the scanner’s move, volatility, momentum, and relative-strength measurements. It is independent of Target DTE.'],
   ['Target DTE', 'Preferred calendar days to expiration. The scanner selects the nearest listed expiration in its allowed window.'],
 ]
 
@@ -25,7 +25,7 @@ const GUIDES = {
       title: 'Setup filters',
       items: [
         ['Min drop / ETF min drop', 'Minimum decline from the 52-week high. Funds use a separate, normally lower threshold.'],
-        ['Min stretch / ETF min stretch', 'Minimum decline in standard deviations of the underlying’s own normal lookback move.'],
+        ['Min stretch / ETF min stretch', 'Minimum volatility-normalized decline. Stretch = recent log-return decline ÷ (prior daily volatility × √Lookback). For example, 1% daily volatility implies a normal 21-day move of about 4.6%, so a roughly 6.9% decline is about 1.5σ. Target DTE does not change it.'],
         ['Max RSI', 'Highest allowed 14-day RSI. Lower values require a more oversold candidate.'],
         ...commonMarketItems,
       ],
@@ -71,7 +71,7 @@ const GUIDES = {
       title: 'Bullish setup',
       items: [
         ['Min / max pullback', 'Allowed stock decline from the recent high; ETFs have their own min/max band.'],
-        ['Min / max stretch', 'Allowed pullback measured in standard deviations of the underlying’s normal move.'],
+        ['Min / max stretch', 'Allowed volatility-normalized pullback. Stretch = recent log-return decline ÷ (prior daily volatility × √Lookback). For example, 1% daily volatility implies a normal 21-day move of about 4.6%, so a roughly 6.9% decline is about 1.5σ. Target DTE does not change it.'],
         ['Min / max RSI', 'Allowed 14-day RSI band: weak enough to offer premium, but not a falling knife.'],
         ['Require price above 200-day', 'Keeps the long-term trend bullish.'],
         ['Require 50-day above 200-day', 'Requires a confirmed moving-average uptrend.'],
@@ -196,7 +196,7 @@ const GUIDES = {
       items: [
         ['Tickers', 'Comma-separated underlyings to scan.'],
         ['Short-delta pair', 'Chooses the front/back short-put delta targets: 15/5, 20/10, 25/15, or all three.'],
-        ['Target DTE', 'Preferred days to expiration.'],
+        ['Target DTE', 'Preferred days to expiration. The default is 160 DTE.'],
         ['Minimum / Maximum DTE', 'Hard calendar-day bounds for eligible listed expirations.'],
       ],
     },
@@ -228,6 +228,147 @@ const GUIDES = {
       ],
     },
   ],
+  'double-hedge-put-butterfly': [
+    {
+      title: 'Underlying and documented structure',
+      items: [
+        ['Tickers', "Comma-separated liquid index ETFs. SPY, QQQ, and IWM are the smaller-scale defaults; they adapt the document's SPX structure without pretending the products have identical notional exposure."],
+        ['STFS market bias', 'Applies the documented per-tranche delta band: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
+        ['Target / Minimum / Maximum DTE', 'Selects the standard monthly nearest 200 DTE inside the document’s 160–230 DTE range. Weekly expirations are excluded.'],
+        ['Upper-long qty', 'Scales the full 1/−2/+2 contract ratio. The default 4 produces 4 upper longs, 8 body shorts, and 8 lower longs.'],
+        ['Leg Δ tolerance', 'Maximum miss from the 25-delta upper long, 15-delta body, and 2.5-delta lower hedge. The lower strike is also shifted to fit the STFS bias.'],
+        ['Min lower-wing ratio', 'Requires the body-to-lower-long strike distance to remain wider than the upper-long-to-body distance.'],
+        ['Minimum leg OI', 'Minimum open interest on each of the three unique strikes.'],
+      ],
+    },
+    {
+      title: 'Entry trio and upper line',
+      items: [
+        ['Minimum theta', 'Minimum complete-tranche ATM theta in dollars per day. The document’s default is greater than +$10.'],
+        ['Minimum T+0 −20%', 'Lowest acceptable modeled P/L after an immediate 20% underlying decline. The document’s default floor is −$10,000 per base tranche.'],
+        ['UEL tolerance', 'Preferred dollar distance of the upper expiration line from $0. This ranks entry quality and warns; it is not a mathematical loss limit.'],
+        ['T+0 −15% diagnostic', 'Shows the modeled mark emphasized for option-buying-power monitoring. Broker portfolio-margin scenarios and the full account still govern actual buying power.'],
+        ['Expiration geometry', 'Shows the upper flat, body peak, lower-strike loss valley, and the recovering crash tail created by the doubled lower hedge.'],
+      ],
+    },
+    {
+      title: 'Entry monitors and campaign state',
+      items: [
+        ['Structure-price / Concavity / Skew monitor', 'Manual favorable, unfavorable, or unconfirmed states from the document’s historical blue/green and magenta/red monitors. A current chain snapshot cannot reproduce their historical standard-deviation signals.'],
+        ['Current-chain context', 'Body richness versus a linear interpolation of the long strikes and the current put-skew slope are displayed as transparent diagnostics, separate from the historical monitor states.'],
+        ['Warning signals', 'Count from the document’s OBV, ATR, STFS, Force Index, and term-structure monitor. Four or five active warnings prohibit a new tranche.'],
+        ['Awaiting 8/34 all-clear', 'After a four- or five-warning event, keep this checked until a bullish 8/34 EMA crossover occurs on the 30-minute chart.'],
+        ['Campaign capital / Capital per tranche / Open tranches', 'Enforces the document’s campaign-capacity ceiling. The default $150,000 ÷ $12,500 permits at most 12 open tranches.'],
+        ['LPTA context', 'At four warnings, the document calls for one roughly 30-DTE 2-delta long put per three open tranches; at five warnings, two. Reassess coverage at 7 DTE.'],
+        ['Fixed and theta references', 'Shows the $1,000 target, roughly $800 expected profit, $2,500 management loss, 12-week average holding period, $20,000 learning reserve, and appendix 120×/71× theta references. The document favors conservative tiered fixed targets rather than theta alone.'],
+      ],
+    },
+  ],
+  'road-trip-butterfly': [
+    {
+      title: 'Underlying, expiration, and placement',
+      items: [
+        ['Tickers', 'Comma-separated underlyings. SPY, QQQ, and IWM stand in for the SPX, ES, and RUT the article trades; the shape travels but the notional exposure does not match.'],
+        ['Target / Minimum / Maximum DTE', 'The article chooses expirations 70 to 85 days out. Unlike the two STT butterfly screens, weekly expirations are eligible because the model runs on SPX and ES weeklies.'],
+        ['Contracts', 'Upper-long count, which sets the whole 1/−2/+1 ratio. Typical sizes are 5x10x5 and 6x12x6; a 2x4x2 works and needs even fewer adjustments.'],
+        ['Behind market', 'How far below spot the upper long sits. This is the article’s signature: the highest strike is placed behind the market rather than at it. The SPX example with the index at 2000 uses 1975, or 1.25% back.'],
+        ['± tolerance', 'How far the upper long may drift from that placement before the candidate is rejected.'],
+        ['Upper wing / Lower wing', 'Wing widths as a percentage of spot. The example’s 45 and 55 points on a 2000 index are 2.25% and 2.75%. The lower wing must be the wider one, which is what makes the wing broken.'],
+        ['Wing ± tolerance', 'How far the wings may stray from those targets. Widen it when the debit rule cannot be satisfied at the example widths.'],
+        ['Min wing ratio', 'Requires the lower wing to stay wider than the upper wing. Values above 1 preserve the broken wing.'],
+        ['Minimum leg OI', 'Minimum open interest on each of the three unique strikes.'],
+      ],
+    },
+    {
+      title: 'The price rule and structure gates',
+      items: [
+        ['Max debit / margin', 'The article’s governing rule: the entry debit must be under 5% of initial margin, its own example being 487 / 12,732 = 3.8%. An expensive entry makes upside profitability too hard to reach later.'],
+        ['How margin is computed', 'Initial margin is the broken-wing downside risk — (lower wing − upper wing) × 100 × contracts — plus the debit paid. It is the same number the profit target and stop are percentages of.'],
+        ['When placement and price conflict', 'The price rule wins. A narrow broken wing risks little, so its margin base is small and its debit ratio is very sensitive, while a wider lower wing raises margin and cheapens the lower long at once. Expect a wider gap than the illustrative 45/55.'],
+        ['Market bias', 'Net delta band in share equivalents per butterfly, scaled by contract count. The trade aims to be roughly delta neutral; unlike the STT ladder its strikes do not cancel to zero by construction.'],
+        ['Minimum theta', 'Minimum daily theta for the whole position. This is a decay trade, so positive theta at entry is the point.'],
+        ['Selection', 'Candidates are chosen on the article’s geometry, not a delta ladder. The deltas the structure lands on are reported rather than targeted.'],
+      ],
+    },
+    {
+      title: 'Management, adjustments, and laddering',
+      items: [
+        ['Profit target low / high', 'Take-profit band as a percentage of capital at risk. The article aims for 7% to 15% per trade.'],
+        ['Stop', 'Exit if the loss passes this share of utilized capital. The article uses 4% to 5% and treats such an exit as a good trade, not a failure.'],
+        ['Article exit backstop', 'The article plans to be out 15 to 20 days before expiration. The probability cards lead with the earlier halfway-to-two-thirds close window, when the time-value profit zone is broad; this input remains the latest planned exit.'],
+        ['Hands-off window', 'The first 21 to 30 days are left alone so theta can work. That is the stretch the trade is named for.'],
+        ['Reverse Harvey roll', 'One priced step of the upside adjustment: sell the upper long and buy the next strike down toward the body for a credit, lifting the upper expiration line. Because entry is a debit, that line starts below zero. The managed probability counts prices above the upper long as success because the strategy continues these rolls until the right side is flat or slightly profitable; the unadjusted expiration odds remain disclosed separately.'],
+        ['Downside trigger and hedge width', 'A GTC conditional entered in advance at the body strike, where the risk curve turns back down from its peak. It adds a long put debit spread — buy the higher strike, sell below it — whose width is set here as a percentage of spot. Close it at 50–75% of the debit paid so a whipsaw does not cost the whole hedge.'],
+        ['Require preferred entry session', 'The article prefers a down day with volatility up, but says timing is not critical, so this is advisory unless checked. Elevation is graded from 20-day realized volatility and its one-year percentile, not from VIX, VVIX, SKEW, or term structure.'],
+        ['Open positions / Max concurrent / Entry interval / Days since last', 'The model adds a position every two weeks and runs four or five at once for time diversification. These inputs flag a ladder that is full or an entry that is too soon.'],
+      ],
+    },
+  ],
+  'sixty-forty-twenty-fly': [
+    {
+      title: 'Universe, expiration, and structure',
+      items: [
+        ['Tickers', 'SPY, QQQ, IWM, and VOO are the defaults. Every ticker uses its own live chain and the same entry gates; VOO is not assumed to have SPY liquidity.'],
+        ['Target / Minimum / Maximum DTE', 'Selects the listed expiration nearest 70 DTE inside the supplied 60-80 DTE entry window. Monthly and weekly expirations are both eligible.'],
+        ['Fly quantity', 'Scales the complete 1/-2/+1 put structure. One fly buys one upper put, sells two body puts, and buys one lower put.'],
+        ['Leg delta tolerance', 'Maximum miss from the absolute 60-delta upper long, 40-delta body short, and 20-delta lower long targets.'],
+        ['Max absolute net delta', 'Maximum share-equivalent delta for the complete position. The target ladder is algebraically neutral: -0.60 + 2(0.40) - 0.20 = 0.'],
+      ],
+    },
+    {
+      title: 'Liquidity and entry quality',
+      items: [
+        ['Minimum leg OI', 'Minimum open interest required at every unique strike. Increase this when you want to exclude thin VOO or other ETF contracts.'],
+        ['Max bid/ask width', 'Largest allowed spread as a percentage of the leg mid. Every leg must have a live two-sided quote to be entry-ready; recent-trade estimates are review-only.'],
+        ['Delta/theta at entry', 'Absolute complete-position delta divided by positive daily theta. A candidate already at or above the caution threshold is not entry-ready.'],
+        ['Ranking', 'Prefers entry-ready structures, then the smallest total delta miss, the smallest net delta, a lower delta/theta ratio, proximity to target DTE, and better liquidity.'],
+      ],
+    },
+    {
+      title: 'Monitoring and exit rules',
+      items: [
+        ['20% delta change', 'Caution band for the original upper-long and body-short contracts. The exact bands are 48-72 delta around the 60-delta leg and 32-48 delta around the 40-delta leg.'],
+        ['30% delta change', 'Exit when either original monitored leg reaches its exact 30% boundary: 42/78 delta for the upper long or 28/52 delta for the body. The presentation rounds these to roughly 40-80 and 30-50.'],
+        ['Delta/theta caution and exit', 'Defaults to caution above 50% and exit above 60%, matching the supplied 50-60% management range.'],
+        ['Mandatory exit', 'Close at 30 DTE regardless of price, P/L, or the other monitors.'],
+        ['8- and 14-day reviews', 'Reprices the complete fly at the two illustrated review dates and at 30 DTE with each entry leg IV held constant. These are scenario estimates, not promised returns.'],
+        ['Original contracts only', 'Monitor the deltas of the contracts opened at entry. Do not rerun the scanner and substitute newly selected 60- or 40-delta strikes when checking an existing position.'],
+      ],
+    },
+  ],
+  'iron-butterfly': [
+    {
+      title: 'Expiration and strike search',
+      items: [
+        ['Target / Minimum / Maximum DTE', 'Accepts any target from 1 through 1,095 DTE and compares the nearest listed expirations inside the hard bounds.'],
+        ['Expirations', 'Number of nearest listed expirations to compare for each ticker.'],
+        ['Body strike', 'Optional exact strike for both the short put and short call. Leave blank to search every strike shared by the put and call chains.'],
+        ['Put / Call wing strike', 'Optional exact lower put or upper call strike. Leave blank to search all listed strikes on that side.'],
+        ['Min / Max wing width', 'Allowed distance from the shared body strike as a percentage of spot.'],
+        ['Wing delta', 'Absolute delta target for both long wings. The delta remains unchanged while farther expirations move the selected strikes farther from the body. Exact wing strikes override it.'],
+      ],
+    },
+    {
+      title: 'Entry and risk gates',
+      items: [
+        ['Min credit', 'Minimum credit as a percentage of the narrower wing. The credit is the maximum profit of the iron butterfly.'],
+        ['Max wing skew', 'Largest allowed percentage difference between the put and call wing widths.'],
+        ['Target body offset', 'Ranking preference for an off-centre body; it does not reject other body strikes.'],
+        ['Max absolute net delta', 'Maximum complete-position delta in share equivalents.'],
+        ['Minimum leg OI / Max bid-ask', 'Liquidity gates applied to the least-liquid leg and widest quoted market. Recent-trade estimates remain review-only.'],
+      ],
+    },
+    {
+      title: 'Three-strike payoff',
+      items: [
+        ['Three strikes / four legs', 'Buy the lower put, sell the put and call at the shared body, and buy the upper call.'],
+        ['Maximum profit', 'The entry credit, earned when the underlying finishes at the shared body strike.'],
+        ['Maximum loss', 'The larger wing width minus the credit, multiplied by contract size and quantity.'],
+        ['Breakevens', 'Body strike minus and plus the per-unit credit.'],
+        ['Review DTE', 'A DTE-relative management review point. The scanner also models a halfway review and expiration.'],
+      ],
+    },
+  ],
   'unbalanced-butterfly': [
     {
       title: 'Universe and expiration',
@@ -235,7 +376,7 @@ const GUIDES = {
         ['Tickers', 'Comma-separated underlyings to scan. Use the market-data symbol expected by Yahoo Finance, such as SPY or ^SPX.'],
         ['Upper-long delta', 'Scans a 20-delta upper long, the course-original 25-delta upper long, or both as separate candidates.'],
         ['Market bias', 'Applies the course tranche-delta range: bearish −3 to −1, neutral −1 to +1, or bullish +1 to +3 share equivalents.'],
-        ['Target DTE', 'Preferred calendar days to expiration. The default is 180 DTE, matching the Unbalanced Put Condor.'],
+        ['Target DTE', 'Preferred calendar days to expiration. The default is 160 DTE, matching the Unbalanced Put Condor.'],
         ['Minimum / Maximum DTE', 'Hard bounds for eligible standard monthly expirations. The 120–240 DTE defaults match the Unbalanced Put Condor; weekly expirations are excluded.'],
       ],
     },

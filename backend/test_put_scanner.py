@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -686,6 +687,67 @@ class ScanUniverseTests(unittest.TestCase):
         self.assertEqual(ps.resolve_scan_universe({
             "include_stocks": False, "include_index_etfs": False, "include_sector_etfs": False,
         }), [])
+
+    def test_selected_funds_are_an_exact_user_defined_universe(self):
+        tickers = ps.resolve_scan_universe({
+            "include_stocks": False,
+            "include_index_etfs": False,
+            "include_sector_etfs": False,
+            "include_selected_funds": True,
+            "selected_fund_tickers": "spy, qqq; iwm GLD",
+        })
+        self.assertEqual(tickers, ["SPY", "QQQ", "IWM", "GLD"])
+
+
+class SelectedFundFallbackTests(unittest.TestCase):
+    def test_selected_etf_technical_near_miss_is_returned_with_warning(self):
+        weak_tech = {
+            "price": 100.0, "drawdown_pct": -0.2, "stretch_sigma": 0.1,
+            "rsi_14": 75.0, "avg_dollar_volume": 2e9, "fresh_low": False,
+            "rv_30": 0.20, "rv_252": 0.18, "window_pct": 0.1,
+            "expected_move_pct": 2.0, "excess_drop_pct": 0.0,
+            "beta": 1.0, "week52_high": 101.0, "week52_low": 90.0,
+            "above_52w_low_pct": 11.0, "bounce_off_low_pct": 1.0,
+            "decel_pp": 0.0, "sma_50": 99.0, "sma_200": 95.0,
+        }
+        etf = {
+            "quote_type": "ETF", "total_assets": 500e9,
+            "name": "SPDR S&P 500 ETF Trust", "category": "Large Blend",
+            "next_earnings": None,
+        }
+        put = {
+            "expiration": (date.today() + timedelta(days=35)).isoformat(),
+            "dte": 35, "strike": 95.0, "bid": 1.0, "ask": 1.1,
+            "mid": 1.05, "iv": 0.22, "atm_iv": 0.23, "delta": -0.25,
+            "prob_otm": 75.0, "open_interest": 1000, "volume": 100,
+            "spread_pct": 9.5, "quote_source": "live_bid_ask",
+            "premium_yield_pct": 1.1, "annualized_pct": 11.0,
+            "cash_required": 9500.0, "premium_dollars": 105.0,
+            "effective_basis": 93.95, "discount_to_spot_pct": 6.1,
+            "otm_pct": 5.0,
+        }
+        with (
+            patch.object(ps, "_load_history", return_value=pd.DataFrame({"x": [1]})),
+            patch.object(ps, "_benchmark_returns", return_value=None),
+            patch.object(ps, "_ticker_frame", return_value=pd.DataFrame({"x": [1]})),
+            patch.object(ps, "_compute_technicals", return_value=weak_tech),
+            patch.object(ps, "_fetch_fundamentals_bulk", return_value={"SPY": etf}),
+            patch.object(ps, "_suggest_put", return_value=put),
+            patch.object(ps, "profit_probability_schedule", return_value=[]),
+        ):
+            result = ps.run_put_scan({
+                "include_stocks": False,
+                "include_index_etfs": False,
+                "include_sector_etfs": False,
+                "include_selected_funds": True,
+                "selected_fund_tickers": "SPY",
+                "include_lower_confidence_selected_funds": True,
+            })
+
+        self.assertEqual(result["rows"][0]["ticker"], "SPY")
+        self.assertEqual(result["rows"][0]["candidate_status"], "lower_confidence")
+        self.assertIn(ps.LOW_CONFIDENCE_SELECTED_FUND_FLAG, result["rows"][0]["flags"])
+        self.assertEqual(result["stats"]["lower_confidence"], 1)
 
 
 class UniverseTests(unittest.TestCase):

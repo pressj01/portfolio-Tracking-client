@@ -27,6 +27,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import iron_condor_scanner as ic
 import bull_put_spread_scanner as bull
 import bear_call_spread_scanner as bcs
+from options_pricing import black_scholes
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +99,13 @@ def synthetic_frame(kind="range", days=300, seed=11):
         close = 100.0 * np.exp(np.cumsum(legs + noise * 0.2))
     else:
         raise ValueError(kind)
-    index = pd.bdate_range(end=date.today(), periods=days)
+    # Pandas 3 may produce one fewer observation when an invalid weekend end is
+    # combined with `periods`. Normalize to the latest weekday so this pure-math
+    # fixture is stable regardless of which day the suite runs.
+    end = pd.Timestamp(date.today())
+    while end.weekday() >= 5:
+        end -= pd.Timedelta(days=1)
+    index = pd.bdate_range(end=end, periods=days)
     return pd.DataFrame({
         "Open": close * 0.999, "High": close * 1.006,
         "Low": close * 0.994, "Close": close,
@@ -180,6 +188,69 @@ class RiskArithmetic(unittest.TestCase):
         self.assertIsNone(condor["natural_credit"])
         self.assertIsNone(condor["exec_cost_pct"])
 
+    def test_recent_trades_keep_the_complete_after_hours_scan_available(self):
+        expiration = (date.today() + timedelta(days=40)).isoformat()
+        puts = [
+            leg(80, 0.0, 1.0, volume=100),
+            leg(90, 0.0, 3.0, volume=100),
+        ]
+        calls = [
+            leg(110, 0.0, 3.0, volume=100),
+            leg(120, 0.0, 1.0, volume=100),
+        ]
+        fake_ticker = type("FakeTicker", (), {"options": [expiration]})()
+        with (
+            patch.object(ic.yf, "Ticker", return_value=fake_ticker),
+            patch.object(ic, "_load_put_chain", return_value=puts),
+            patch.object(ic, "_load_call_chain", return_value=calls),
+        ):
+            condor = ic._suggest_iron_condor(
+                "TEST", 100.0, 0.0, 0.20, 40, 1, 1095,
+                min_width_pct=1.0,
+                max_width_pct=20.0,
+                min_credit_pct_of_width=1.0,
+                min_cushion_sigma=0.0,
+                min_otm_pct=0.0,
+                min_open_interest=0,
+                max_exec_cost_pct=100.0,
+            )
+
+        self.assertIsNotNone(condor)
+        self.assertTrue(condor["uses_last_trade_prices"])
+        self.assertEqual(condor["quote_source"], "last_trade_estimate")
+        self.assertTrue(condor["constraints_relaxed"])
+        self.assertIsNone(condor["natural_cashflow"])
+
+    def test_row_probability_matches_the_expiration_probability_card(self):
+        distribution_iv = 0.18
+        condor = standard_condor(distribution_iv=distribution_iv)
+        expiration = (date.today() + timedelta(days=40)).isoformat()
+        schedule = ic.profit_probability_schedule(
+            spot=100.0,
+            dte=40,
+            expiration=expiration,
+            distribution_iv=distribution_iv,
+            entry_cashflow=condor["entry_cashflow"],
+            risk_free_rate=ic.RISK_FREE,
+            legs=[
+                {"option_type": "put", "strike": condor["put_long_strike"],
+                 "iv": condor["put_leg_long"]["iv"], "quantity": 1},
+                {"option_type": "put", "strike": condor["put_short_strike"],
+                 "iv": condor["put_leg_short"]["iv"], "quantity": -1},
+                {"option_type": "call", "strike": condor["call_short_strike"],
+                 "iv": condor["call_leg_short"]["iv"], "quantity": -1},
+                {"option_type": "call", "strike": condor["call_long_strike"],
+                 "iv": condor["call_leg_long"]["iv"], "quantity": 1},
+            ],
+        )
+
+        expiration_point = next(point for point in schedule if point["kind"] == "expiration")
+        self.assertAlmostEqual(
+            condor["prob_profit"],
+            expiration_point["probability_success_pct"],
+            delta=0.11,
+        )
+
     def test_credit_at_or_above_the_wing_is_rejected(self):
         """A credit exceeding the wing implies risk-free money, i.e. bad data."""
         self.assertIsNone(standard_condor(
@@ -207,6 +278,53 @@ class RiskArithmetic(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class Balance(unittest.TestCase):
+
+    def test_fixed_delta_strikes_move_farther_from_spot_with_dte(self):
+        def chain_for(dte, option_type):
+            rows = []
+            for strike in range(50, 151):
+                priced = black_scholes(
+                    100.0,
+                    float(strike),
+                    dte / 365.0,
+                    ic.RISK_FREE,
+                    0.0,
+                    0.20,
+                    option_type,
+                )
+                rows.append({"strike": float(strike), "delta": priced["delta"]})
+            return rows
+
+        near_put = ic._delta_pool(chain_for(30, "put"), 0.16, 0.0)[0]
+        far_put = ic._delta_pool(chain_for(120, "put"), 0.16, 0.0)[0]
+        near_call = ic._delta_pool(chain_for(30, "call"), 0.16, 0.0)[0]
+        far_call = ic._delta_pool(chain_for(120, "call"), 0.16, 0.0)[0]
+
+        self.assertLess(far_put["strike"], near_put["strike"])
+        self.assertGreater(far_call["strike"], near_call["strike"])
+
+    def test_pair_shortlist_prefers_closest_requested_deltas(self):
+        legs = [
+            leg(80, 0.45, 0.55, delta=-0.07),
+            leg(82, 0.55, 0.65, delta=-0.10, oi=2000),
+            leg(90, 1.45, 1.55, delta=-0.16),
+            leg(92, 1.75, 1.85, delta=-0.20, oi=2000),
+        ]
+        pairs, _ = ic._side_pairs(
+            legs,
+            short_pool=legs[2:],
+            long_pool=legs[:2],
+            is_put_side=True,
+            lo_width=1.0,
+            hi_width=20.0,
+            min_open_interest=0,
+            keep=4,
+            short_target=0.16,
+            long_target=0.07,
+        )
+
+        self.assertAlmostEqual(abs(pairs[0]["short"]["delta"]), 0.16)
+        self.assertAlmostEqual(abs(pairs[0]["long"]["delta"]), 0.07)
 
     def test_equal_deltas_are_balanced_and_equal_distances_need_not_be(self):
         balanced = standard_condor()
@@ -562,6 +680,25 @@ class ScoringEnvelope(unittest.TestCase):
         dirty = ic.score_candidate(tech, {"market_cap": 8e10, "next_earnings": soon}, condor)
         self.assertIn("Earnings before expiration", dirty["flags"])
         self.assertLess(dirty["components"]["safety"], clean["components"]["safety"])
+
+
+# ---------------------------------------------------------------------------
+# Balanced index universe
+# ---------------------------------------------------------------------------
+
+class BalancedIndexUniverse(unittest.TestCase):
+
+    def test_selected_indexes_are_combined_with_stock_universe(self):
+        with patch.object(ic, "resolve_universe", return_value=["AAPL", "MSFT"]):
+            tickers = ic.resolve_scan_universe({
+                "include_stocks": True,
+                "universe": "large_cap",
+                "include_index_etfs": True,
+                "index_tickers": "SPY,QQQ,IWM",
+                "include_sector_etfs": False,
+            })
+
+        self.assertEqual(tickers, ["AAPL", "MSFT", "SPY", "QQQ", "IWM"])
 
 
 # ---------------------------------------------------------------------------

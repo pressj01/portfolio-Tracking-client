@@ -121,6 +121,39 @@ class ProfitProbabilityScheduleTests(unittest.TestCase):
             places=7,
         )
 
+    def test_managed_upper_region_keeps_unadjusted_probability_visible(self):
+        schedule = profit_probability_schedule(
+            spot=100,
+            dte=60,
+            expiration="2026-09-28",
+            distribution_iv=0.20,
+            entry_cashflow=-0.25,
+            legs=[
+                {"option_type": "put", "strike": 98, "iv": 0.18, "quantity": 1},
+                {"option_type": "put", "strike": 94, "iv": 0.20, "quantity": -2},
+                {"option_type": "put", "strike": 89, "iv": 0.23, "quantity": 1},
+            ],
+            exit_points=[{
+                "kind": "planned_exit",
+                "label": "Two-thirds close",
+                "remaining_dte": 20,
+            }],
+            always_success_above=98,
+            include_breakeven=True,
+        )
+
+        for point in schedule:
+            self.assertGreaterEqual(
+                point["probability_success_pct"],
+                point["probability_unadjusted_success_pct"],
+            )
+            self.assertAlmostEqual(
+                point["probability_success_pct"],
+                point["probability_unadjusted_success_pct"]
+                + point["probability_managed_upside_pct"],
+                delta=0.2,
+            )
+
     def test_missing_iv_suppresses_schedule(self):
         self.assertEqual(
             profit_probability_schedule(

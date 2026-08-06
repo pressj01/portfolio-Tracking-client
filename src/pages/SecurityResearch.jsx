@@ -275,6 +275,34 @@ function DistributionChart({ history, ticker, price, frequency, source }) {
   )
 }
 
+function UpcomingDistributionSchedule({ schedule, sourceUrl }) {
+  if (!schedule?.length) return null
+
+  return (
+    <section className="research-section" id="upcoming-distribution-schedule">
+      <h3>Upcoming Distribution Schedule</h3>
+      <p className="research-muted">
+        Official scheduled dates; distribution amounts appear in history after they are declared.
+        {sourceUrl && <> <a href={sourceUrl} target="_blank" rel="noreferrer">Source: XFUNDS</a></>}
+      </p>
+      <table className="research-table">
+        <thead>
+          <tr><th>Declaration Date</th><th>Ex/Record Date</th><th>Payable Date</th></tr>
+        </thead>
+        <tbody>
+          {schedule.map((row, index) => (
+            <tr key={`${row.ex_dividend_date}-${index}`}>
+              <td>{fmtDate(row.declaration_date)}</td>
+              <td>{fmtDate(row.ex_dividend_date)}</td>
+              <td>{fmtDate(row.payable_date)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
 function ETFResult({ data, onOpenChart, return1y }) {
   const chartPrice = Number(data.price) > 0 ? data.price : data.nav_price
   const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
@@ -332,6 +360,11 @@ function ETFResult({ data, onOpenChart, return1y }) {
         price={chartPrice}
         frequency={data.dividend_frequency}
         source={data.distribution_source || data.yield_source || data.data_source}
+      />
+
+      <UpcomingDistributionSchedule
+        schedule={data.future_distribution_schedule}
+        sourceUrl={data.source_url}
       />
 
       <section className="research-two-col">

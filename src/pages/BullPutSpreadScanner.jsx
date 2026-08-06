@@ -61,7 +61,13 @@ const PRESETS = {
   },
 }
 
-const DEFAULT_FILTERS = { ...PRESETS.balanced.filters, custom_tickers: '' }
+const DEFAULT_FILTERS = {
+  ...PRESETS.balanced.filters,
+  custom_tickers: '',
+  include_selected_funds: false,
+  selected_fund_tickers: 'SPY, QQQ, IWM, GLD',
+  include_lower_confidence_selected_funds: true,
+}
 const FUND_UNIVERSE_IDS = new Set(['index_etf', 'sector_etf', 'etf_all', 'stocks_and_etfs'])
 
 const usd = (value, digits = 2) => value == null
@@ -87,6 +93,14 @@ function GradeBadge({ row }) {
   )
 }
 
+function ConfidenceBadge({ row }) {
+  if (row.candidate_status !== 'lower_confidence') return null
+  return <span title="This selected ETF missed one or more setup filters. Its spread is watchlist-only and should be compared using the shown score and modeled probability."
+    style={{ display: 'inline-flex', marginTop: '0.2rem', fontSize: '0.62rem', color: 'var(--warning-text)', border: '1px solid var(--warning)', borderRadius: 3, padding: '0.04rem 0.22rem', whiteSpace: 'nowrap' }}>
+    Lower confidence
+  </span>
+}
+
 function KindBadge({ row }) {
   const label = row.is_fund
     ? row.fund_kind === 'index' ? 'Index' : row.fund_kind === 'sector' ? 'Sector' : 'Fund'
@@ -110,6 +124,7 @@ const FLAG_SHORT = {
   'No pair met every spread filter': 'Filters missed',
   'Earnings before expiration': 'Earnings',
   'Option chain unavailable': 'No chain',
+  'Misses selected underlying filters — lower-confidence candidate': 'Lower confidence',
   'Not priced — outside chain limit': 'Not priced',
 }
 
@@ -162,6 +177,11 @@ function HelpPanel() {
       {section('filters', 'Why these filters are hard gates', <>
         <p><strong>Credit % of width</strong> prevents taking substantial defined risk for a token premium. <strong>Breakeven cushion</strong> measures how far the stock can fall before the trade loses at expiration. <strong>Min OI</strong> applies to the thinner leg, and <strong>Max slippage</strong> measures both bid/ask spreads against the credit.</p>
         <p style={{ marginBottom: 0 }}>Only live spreads meeting every selected structure limit appear as actionable. With the earnings skip enabled, reports inside Target DTE plus the safety buffer remove the ticker entirely; relaxed pairs, missing chains, and names outside the live-pricing limit stay in Watchlist Candidates.</p>
+      </>)}
+      {section('stretch', 'What Sigma Stretch means', <>
+        <p><strong>Sigma Stretch = recent log-return decline ÷ (prior daily volatility × √Lookback).</strong> It makes a pullback comparable across quiet indexes and volatile stocks by measuring each against its own earlier volatility.</p>
+        <p>For example, 1% daily volatility implies a normal 21-day move of about 1% × √21 = 4.6%. A roughly 6.9% decline is about 1.5σ. The minimum requires a meaningful dip; the maximum rejects a breakdown that may be too severe for a defined-risk bullish trade.</p>
+        <p style={{ marginBottom: 0 }}><strong>Lookback and Target DTE are separate.</strong> A longer Lookback changes the price window and its square-root scaling. A longer Target DTE only changes the option expiration and does not change Sigma Stretch.</p>
       </>)}
       {section('management', 'Management and expiration risk', <>
         <p>The management card gives a limit debit for closing both legs after capturing 50–65% of the original credit, a risk trigger near twice the entry credit, a reassessment date, and a close-by date before expiration.</p>
@@ -304,9 +324,33 @@ export default function BullPutSpreadScanner() {
   useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(filters)) }, [filters])
 
   const set = (key, value) => setFilters(current => ({ ...current, [key]: value }))
+  const setInclude = (key, value) => {
+    if (key !== 'include_selected_funds' || !value) return set(key, value)
+    setFilters(current => ({
+      ...current,
+      include_stocks: false,
+      include_index_etfs: false,
+      include_sector_etfs: false,
+      include_selected_funds: true,
+    }))
+  }
   const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
-  const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
+  const selectedFunds = String(filters.selected_fund_tickers || '').trim()
+  const anyFunds = !!(
+    filters.include_index_etfs
+    || filters.include_sector_etfs
+    || (filters.include_selected_funds && selectedFunds)
+  )
   const nothingSelected = !filters.include_stocks && !anyFunds
+  const useCoreFunds = () => setFilters(current => ({
+    ...current,
+    include_stocks: false,
+    include_index_etfs: false,
+    include_sector_etfs: false,
+    include_selected_funds: true,
+    selected_fund_tickers: 'SPY, QQQ, IWM, GLD',
+    include_lower_confidence_selected_funds: true,
+  }))
 
   const runScan = useCallback(() => {
     setLoading(true)
@@ -431,8 +475,9 @@ export default function BullPutSpreadScanner() {
         <strong style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Include:</strong>
         {[
           ['include_stocks', 'Stocks'], ['include_index_etfs', 'Index ETFs'], ['include_sector_etfs', 'Sector & commodity ETFs'],
+          ['include_selected_funds', 'Selected ETFs only'],
         ].map(([key, label]) => <label key={key} style={{ color: filters[key] ? 'var(--text-strong)' : 'var(--text-dim)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={!!filters[key]} onChange={event => set(key, event.target.checked)} /> {label}
+          <input type="checkbox" checked={!!filters[key]} onChange={event => setInclude(key, event.target.checked)} /> {label}
         </label>)}
         {nothingSelected && <span style={{ color: 'var(--neg-strong)' }}>Pick at least one.</span>}
       </div>
@@ -473,6 +518,17 @@ export default function BullPutSpreadScanner() {
         {numField('Max RSI', 'max_rsi')}
         {filters.include_stocks && numField('Min mkt cap', 'min_market_cap', { scale: 1e9, suffix: 'B' })}
         {anyFunds && numField('ETF min AUM', 'fund_min_aum', { scale: 1e6, suffix: 'M' })}
+        {filters.include_selected_funds && <div style={{ flex: '1 1 330px', minWidth: 260 }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Index / commodity ETFs to scan
+            <input value={filters.selected_fund_tickers || ''} onChange={event => set('selected_fund_tickers', event.target.value.toUpperCase())}
+              placeholder="SPY, QQQ, IWM, GLD" style={{ width: '100%', padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+          </label>
+          <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+            <button type="button" className="btn btn-xs btn-outline" onClick={useCoreFunds}>Use SPY, QQQ, IWM, GLD</button>
+            {checkField('Show best available if filters miss', 'include_lower_confidence_selected_funds', 'Returns selected index and commodity fund spreads in a clearly lower-confidence, watchlist-only state rather than hiding every technical near miss')}
+          </div>
+        </div>}
         {numField('Min $ volume', 'min_avg_dollar_volume', { scale: 1e6, suffix: 'M' })}
         {numField('Lookback', 'lookback_days', { suffix: 'd' })}
         {numField('Target DTE', 'target_dte', { min: 1, max: 1095 })}
@@ -529,7 +585,7 @@ export default function BullPutSpreadScanner() {
                   <td><a href="#" onClick={event => { event.preventDefault(); event.stopPropagation(); setChartTicker(row.ticker) }}
                     style={{ color: 'var(--accent-bright)', fontWeight: 700, textDecoration: 'none' }}>{row.ticker} 📈</a>
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.name}</div></td>
-                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /></td>
+                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /><ConfidenceBadge row={row} /></td>
                   <td style={{ textAlign: 'right' }}>{usd(row.price)}</td>
                   <td style={{ textAlign: 'center' }}><span title="Price above 200-day" style={{ color: row.price >= row.sma_200 ? 'var(--pos)' : 'var(--neg)' }}>200</span>
                     {' '}<span title="50-day above 200-day" style={{ color: row.sma_50 >= row.sma_200 ? 'var(--pos)' : 'var(--text-dim)' }}>50/200</span></td>
@@ -554,12 +610,13 @@ export default function BullPutSpreadScanner() {
             Underlying setup passed, but the trade is not currently actionable
           </span>
         </summary>
-        <div className="sst-wrap" style={{ maxHeight: '45vh', borderLeft: 0, borderRight: 0, borderBottom: 0 }}>
+        <div className="sst-wrap bull-put-watchlist-table" style={{ maxHeight: '45vh', borderLeft: 0, borderRight: 0, borderBottom: 0 }}>
           <table className="sst">
             <thead><tr><th /><th>Ticker</th><th>Type</th><th>Score</th><th>Pullback</th><th>Status</th><th>Indicative Spread</th><th style={{ textAlign: 'right' }}>DTE</th><th>Warnings</th></tr></thead>
             <tbody>{watchlistRows.map(row => {
               const open = expanded === row.ticker
               const status = {
+                underlying_filters_missed: 'Lower-confidence selected ETF',
                 earnings: 'Earnings inside trade', constraints_relaxed: 'Structure limits missed',
                 unavailable: 'No quotable spread', not_priced: 'Awaiting live pricing',
               }[row.chain_status] || 'Not actionable'
@@ -567,12 +624,12 @@ export default function BullPutSpreadScanner() {
                 <tr onClick={() => setExpanded(open ? null : row.ticker)} style={{ cursor: 'pointer' }}>
                   <td>{open ? '▾' : '▸'}</td>
                   <td><strong style={{ color: 'var(--accent-bright)' }}>{row.ticker}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.name}</div></td>
-                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /></td>
+                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /><ConfidenceBadge row={row} /></td>
                   <td>{pct(-row.drawdown_pct)} · {sigma(row.stretch_sigma)}</td>
-                  <td style={{ color: 'var(--amber)', maxWidth: 300 }}><strong>{status}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.watchlist_reason}</div></td>
-                  <td>{row.spread ? `$${row.spread.short_strike} / $${row.spread.long_strike} · ${usd(row.spread.credit)} credit` : '—'}</td>
+                  <td className="bull-put-watchlist-status"><strong>{status}</strong><div>{row.watchlist_reason}</div></td>
+                  <td className="bull-put-watchlist-spread">{row.spread ? `$${row.spread.short_strike} / $${row.spread.long_strike} · ${usd(row.spread.credit)} credit` : '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.spread ? `${row.spread.dte}d` : '—'}</td>
-                  <td><Flags flags={row.flags} /></td>
+                  <td className="bull-put-watchlist-warnings"><Flags flags={row.flags} /></td>
                 </tr>
                 {open && <DetailRow row={row} colSpan={9} />}
               </React.Fragment>

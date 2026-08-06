@@ -90,7 +90,7 @@ export default function Import() {
   const pf = useProfileFetch()
   const { isRefreshing: marketRefreshing, waitForMarketRefresh } = useMarketRefresh()
   const { selection, profiles, isAggregate, refreshProfiles, currentProfileName } = useProfile()
-  const [activeTab, setActiveTab] = useState('owner')
+  const [activeTab, setActiveTab] = useState('generic')
   const [file, setFile] = useState(null)
   const [sheetName, setSheetName] = useState('All Accounts')
   const [loading, setLoading] = useState(false)
@@ -385,12 +385,6 @@ export default function Import() {
       )}
 
       <div className="tabs">
-        <button
-          className={`tab ${activeTab === 'owner' ? 'active' : ''}`}
-          onClick={() => handleTabChange('owner')}
-        >
-          My Spreadsheet
-        </button>
         <button
           className={`tab ${activeTab === 'generic' ? 'active' : ''}`}
           onClick={() => handleTabChange('generic')}

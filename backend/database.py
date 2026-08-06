@@ -1245,6 +1245,19 @@ def ensure_tables_exist(conn=None):
         ON tax_loss_plan (profile_id, status)
     """)
 
+    # ── action_center_completions ───────────────────────────────────────────
+    # Stores user-completed Action Center work separately from the underlying
+    # portfolio signal.  This lets a reviewed item stay out of the active list
+    # without changing holdings, saved plans, or tax-loss records.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS action_center_completions (
+            scope_key     TEXT NOT NULL,
+            action_id     TEXT NOT NULL,
+            completed_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope_key, action_id)
+        )
+    """)
+
     # ── regime_predictions (Brier score tracking) ─────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS regime_predictions (
@@ -1338,6 +1351,113 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # ── fund_holdings ─────────────────────────────────────────────────────────
+    # Look-through constituents for a fund (what the ETF/CEF/mutual fund owns).
+    # Cached because resolving a 190-ticker portfolio live means one HTTP scrape
+    # per fund. source='manual' rows are user-entered and are never overwritten
+    # by a refresh.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_holdings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_ticker  TEXT NOT NULL,
+            symbol       TEXT,
+            name         TEXT,
+            weight_pct   REAL,
+            source       TEXT NOT NULL DEFAULT 'auto',
+            as_of        TEXT,
+            fetched_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fund_holdings_ticker
+        ON fund_holdings(fund_ticker)
+    """)
+
+    # ── fund_holdings_meta ────────────────────────────────────────────────────
+    # Per-fund resolution bookkeeping: which source answered, how much of the
+    # fund the stored rows actually cover, and whether it needs manual entry.
+    # coverage_pct is what keeps the UI honest — top-25 lists cover as little as
+    # 6% of a broad fund, so the remainder is reported as Undisclosed.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_holdings_meta (
+            fund_ticker    TEXT PRIMARY KEY,
+            status         TEXT DEFAULT 'unresolved',
+            source         TEXT,
+            coverage_pct   REAL,
+            holdings_count INTEGER DEFAULT 0,
+            security_type  TEXT,
+            is_manual      INTEGER DEFAULT 0,
+            note           TEXT,
+            as_of          TEXT,
+            fetched_at     TEXT,
+            updated_at     TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── fund_exposure_map ─────────────────────────────────────────────────────
+    # Economic exposure for synthetic / option-income funds. Their filed
+    # holdings are T-bills and option legs (KGLD files ~100% Treasuries), so a
+    # literal look-through misreports the portfolio as cash. These rows say what
+    # the fund is actually exposed to. exposure_pct values are percent of fund.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_exposure_map (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            fund_ticker   TEXT NOT NULL,
+            symbol        TEXT,
+            name          TEXT,
+            exposure_pct  REAL,
+            asset_class   TEXT,
+            source        TEXT NOT NULL DEFAULT 'seed',
+            updated_at    TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_fund_exposure_ticker
+        ON fund_exposure_map(fund_ticker)
+    """)
+
+    # ── fund_issuers ──────────────────────────────────────────────────────────
+    # Where a fund family publishes its holdings. The URL pattern lives here,
+    # not in code, so a new issuer is a row rather than a deploy. `parser` picks
+    # the format handler in diversification.py ({ticker} / {ticker_lower} are
+    # substituted into url_template).
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_issuers (
+            issuer_key   TEXT PRIMARY KEY,
+            label        TEXT NOT NULL,
+            url_template TEXT,
+            parser       TEXT NOT NULL DEFAULT 'generic_csv',
+            website      TEXT,
+            enabled      INTEGER DEFAULT 1,
+            note         TEXT,
+            updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── fund_issuer_map ───────────────────────────────────────────────────────
+    # Which family a ticker belongs to. Editable, so mapping a newly launched
+    # fund to its issuer never requires touching Python.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS fund_issuer_map (
+            fund_ticker  TEXT PRIMARY KEY,
+            issuer_key   TEXT NOT NULL,
+            source       TEXT NOT NULL DEFAULT 'seed',
+            url_override TEXT,
+            updated_at   TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    _fim_cols = {r[1] for r in cur.execute("PRAGMA table_info(fund_issuer_map)").fetchall()}
+    if "url_override" not in _fim_cols:
+        # Some issuers key their holdings file on an internal product id rather
+        # than the ticker (BlackRock), so one template cannot cover the family.
+        cur.execute("ALTER TABLE fund_issuer_map ADD COLUMN url_override TEXT")
+
+    _fi_cols = {r[1] for r in cur.execute("PRAGMA table_info(fund_issuers)").fetchall()}
+    if "match_pattern" not in _fi_cols:
+        # Keywords matched against a fund's family/name so a newly held fund
+        # routes to its issuer automatically instead of needing a manual map.
+        cur.execute("ALTER TABLE fund_issuers ADD COLUMN match_pattern TEXT")
+
     # ── option_strategies ─────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS option_strategies (
@@ -1390,6 +1510,95 @@ def ensure_tables_exist(conn=None):
             sort_order   INTEGER DEFAULT 0,
             FOREIGN KEY (strategy_id) REFERENCES option_strategies(id) ON DELETE CASCADE
         )
+    """)
+
+    # ── option trade ledger ──────────────────────────────────────────────────
+    # Strategy Lab rows above are planning scenarios and scanner opportunities.
+    # The ledger below is intentionally separate: it stores actual account
+    # trades, their individual contracts, and every broker/manual execution.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_trades (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id           INTEGER NOT NULL DEFAULT 1,
+            underlying           TEXT NOT NULL,
+            strategy_type        TEXT NOT NULL DEFAULT 'Custom',
+            purpose              TEXT NOT NULL DEFAULT 'Income',
+            status               TEXT NOT NULL DEFAULT 'OPEN',
+            opened_at            TEXT,
+            closed_at            TEXT,
+            source               TEXT NOT NULL DEFAULT 'manual',
+            source_format        TEXT,
+            external_group_id    TEXT,
+            linked_strategy_id   INTEGER,
+            max_risk             REAL,
+            summary_realized_pnl REAL,
+            limited_history      INTEGER NOT NULL DEFAULT 0,
+            notes                TEXT,
+            created_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+            updated_at           TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE,
+            FOREIGN KEY (linked_strategy_id) REFERENCES option_strategies(id) ON DELETE SET NULL
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trades_profile_status
+        ON option_trades (profile_id, status, opened_at)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trades_external_group
+        ON option_trades (profile_id, source_format, external_group_id)
+        WHERE external_group_id IS NOT NULL
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_trade_legs (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id       INTEGER NOT NULL,
+            option_type    TEXT NOT NULL,
+            position_side  TEXT NOT NULL,
+            expiration     TEXT NOT NULL,
+            strike         REAL NOT NULL,
+            contracts      INTEGER NOT NULL,
+            multiplier     INTEGER NOT NULL DEFAULT 100,
+            occ_symbol     TEXT,
+            status         TEXT NOT NULL DEFAULT 'OPEN',
+            sort_order     INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (trade_id) REFERENCES option_trades(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_trade_legs_trade
+        ON option_trade_legs (trade_id, expiration, strike)
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS option_executions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id      INTEGER NOT NULL,
+            leg_id        INTEGER NOT NULL,
+            action        TEXT NOT NULL,
+            executed_at   TEXT NOT NULL,
+            contracts     INTEGER NOT NULL,
+            price         REAL NOT NULL DEFAULT 0,
+            fees          REAL NOT NULL DEFAULT 0,
+            external_id   TEXT,
+            dedupe_hash   TEXT,
+            source        TEXT NOT NULL DEFAULT 'manual',
+            notes         TEXT,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (trade_id) REFERENCES option_trades(id) ON DELETE CASCADE,
+            FOREIGN KEY (leg_id) REFERENCES option_trade_legs(id) ON DELETE CASCADE
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_option_executions_trade_date
+        ON option_executions (trade_id, executed_at)
+    """)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_option_executions_dedupe
+        ON option_executions (dedupe_hash)
+        WHERE dedupe_hash IS NOT NULL
     """)
     # Scanner trades are live opportunities rather than permanent learning
     # scenarios. Remove them on the first application request after every option

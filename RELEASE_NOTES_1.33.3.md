@@ -1,8 +1,37 @@
-# Portfolio Tracking Client v1.33.0
+# Portfolio Tracking Client v1.33.3
 
 Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Mac.
 
-This release includes every change merged after v1.32.1: 39 commits spanning two new pages, portfolio-performance analysis, income planning, options research, imports, market-data reliability, layout improvements, and automated coverage.
+This release carries forward everything shipped after v1.32.1 and adds the installed-build fixes below. The Windows installer is code signed.
+
+## New in v1.33.3
+
+### Installed Build Fixes
+
+These problems only appeared in the installed application, never when running from source.
+
+- Fixed the installed backend failing to start. It created its uploads folder next to the program files, which Windows keeps read-only for a standard user, so the backend exited before the app could reach it.
+- Fixed the desktop launcher attaching to the wrong backend. It previously only checked that something answered on the local port, so an already-running copy could be adopted by mistake. Each launch now issues its own identity token and waits for that exact backend, and reports a startup failure instead of hanging if the backend exits.
+- Fixed the Diversification X-Ray screen returning no fund holdings in the installed build. The look-through module could not reach the running application's data fetchers once packaged, so every fund resolved as undisclosed.
+- Added the Diversification module to the packaged build inputs, which had been left out of the installer definition, the build script, and both CI build steps.
+- The release build now smoke-tests the packaged X-Ray seed and fund routes and the packaged backend's startup and health check before the installer is published.
+
+### Interface Fixes
+
+- Fixed a DRIP Matrix window on Manage Holdings that could not be closed. With no accounts included in Owner, or when the backend was unreachable, the window shrank far enough to clip its own Close button. It now keeps a minimum width, closes with Escape or a click outside, and shows a real message with a Retry option instead of an empty grid.
+- Reordered the Options risk graph so the chart and its summary metrics appear directly under the controls, with the option chain picker and volatility scenario panel below them.
+- Fixed the Bull Put Spread Scanner watchlist, where the status explanation overlapped the indicative spread, DTE, and warning columns.
+
+## Desktop Deployment
+
+- Added a GitHub Actions deployment path for Windows PC, Intel Mac, and Apple-silicon Mac installers from the same release workflow.
+- Windows builds are signed through Microsoft Azure Trusted Signing using the public certificate profile for James Presser, so the installer, app executable, and bundled backend executable are Authenticode signed before upload.
+- Added CI signature verification for the Windows installer, desktop executable, and packaged backend before the installer artifact is published. The build fails rather than publishing an unsigned or invalidly signed installer.
+- The GitHub release now uses this full release description so Windows and Mac downloads share one complete feature and bug-fix summary.
+
+## Everything Included From v1.33.x
+
+The remainder of this description covers every change merged after v1.32.1: two new pages, portfolio-performance analysis, income planning, options research, imports, market-data reliability, layout improvements, and automated coverage.
 
 ## New Pages
 
@@ -93,6 +122,8 @@ This release includes every change merged after v1.32.1: 39 commits spanning two
 
 ## Options, Imports, Watchlists, and Scanners
 
+- Updated the Option Trade Tracker with improved open-risk handling, realized-performance calculations, income classification, and a clearer execution ledger for multi-leg option positions.
+- Added focused backend coverage for option trade tracker calculations and close/expire behavior.
 - Added CBTX option-import parsing and automated coverage.
 - Routed broker imports by each portfolio’s configured source so transactions and positions land in the correct account.
 - Preserved frozen original cost basis during transaction rollups while allowing broker-adjusted basis to remain authoritative for broker-managed accounts.
@@ -156,5 +187,11 @@ The following commits are included after v1.32.1:
 - Route broker imports by portfolio source.
 - Unify portfolio performance periods and grades.
 - Add the Put Selling Scanner and income-planning updates.
+- Update the Option Trade Tracker calculations, ledger behavior, and tests.
+- Add signed Windows deployment and a shared PC/Mac GitHub release description.
+- Fix duplicate option imports.
+- Fix the unclosable DRIP Matrix window.
+- Fix installed-build startup and Diversification X-Ray, and reorder the risk graph.
 
-**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.32.1...v1.33.0
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.32.1...v1.33.3
+

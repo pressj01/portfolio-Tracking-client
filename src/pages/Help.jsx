@@ -21,7 +21,9 @@ const GROUPS = [
     id: 'options-group',
     label: 'Options',
     sections: [
+      { id: 'option-dashboard', label: 'Options Dashboard' },
       { id: 'options', label: 'Options' },
+      { id: 'option-trades', label: 'Option Trades' },
       { id: 'put-selling-scanner', label: 'Put Selling Scanner' },
       { id: 'bull-put-spread-scanner', label: 'Bull Put Spread Scanner' },
       { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
@@ -30,6 +32,9 @@ const GROUPS = [
       { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
       { id: 'unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner' },
       { id: 'unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner' },
+      { id: 'double-hedge-put-butterfly-scanner', label: 'Double-Hedge Put Butterfly Scanner' },
+      { id: 'road-trip-butterfly-scanner', label: 'Road Trip Butterfly Scanner' },
+      { id: 'sixty-forty-twenty-fly-scanner', label: '60/40/20 Fly Scanner' },
     ],
   },
   {
@@ -105,6 +110,8 @@ const GROUPS = [
       { id: 'income-growth', label: 'Income Growth' },
       { type: 'heading', label: 'Portfolio Diagnostics' },
       { id: 'analytics', label: 'Portfolio Analytics' },
+      { id: 'diversification', label: 'Diversification' },
+      { id: 'fund-definitions', label: 'Fund Definitions' },
       { id: 'correlation', label: 'Correlation Matrix' },
       { id: 'consolidation', label: 'Consolidation Analysis' },
       { id: 'macro-dashboard', label: 'Macro Regime Dashboard' },
@@ -127,6 +134,36 @@ const GROUPS = [
     ],
   },
 ]
+
+// Help screenshots are captured separately from the code, so a section can be
+// written and shipped before its images exist. Rather than render a broken
+// image icon and a caption describing something the reader cannot see, hide
+// the whole figure when the file is missing. Dropping the PNG into
+// public/help-screenshots/ is all that is needed to make it appear.
+function HelpScreenshot({ src, alt, caption }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return null
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      <img
+        src={src}
+        alt={alt}
+        onError={() => setFailed(true)}
+        style={{
+          maxWidth: '100%',
+          height: 'auto',
+          borderRadius: '4px',
+          border: '1px solid var(--p-333)',
+        }}
+      />
+      {caption && (
+        <p style={{ margin: '0.45rem 0 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          {caption}
+        </p>
+      )}
+    </div>
+  )
+}
 
 function Overview() {
   return (
@@ -164,8 +201,9 @@ function ImportHelp() {
       <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
       <p style={{ marginBottom: '1rem' }}>
         The <strong>Import Brokerage Positions and Snowball Data</strong> page lets you bulk-load holdings into a portfolio from an Excel or CSV file.
-        There are two main import modes, each on its own tab: <strong>My Spreadsheet</strong> (owner format) and <strong>Generic Upload</strong>.
-        Both support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
+        Use <strong>Generic Positions</strong> for flexible spreadsheet uploads, <strong>Generic Transactions</strong> for broker-neutral history,
+        or <strong>Brokerage &amp; Export Import</strong> for supported brokerage and app exports.
+        Position imports support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
         while app-only fields (like DRIP toggles or pay dates you edited manually) are preserved unless the spreadsheet provides them.
       </p>
 
@@ -394,66 +432,8 @@ function ImportHelp() {
         <img src="./help-screenshots/import/automatic-backup-notice.jpg" alt="Automatic database backup notice shown before each import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      {/* ── My Spreadsheet ──────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 1: My Spreadsheet (Owner Format)</h3>
-
-      <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/owner-spreadsheet-import.jpg" alt="My Spreadsheet tab showing the owner-format import interface" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
-
-      <p style={{ marginBottom: '0.75rem' }}>
-        This mode is designed for the developer's personal dividend-tracking Excel file. It expects a specific column layout
-        (the "All Accounts" sheet) and can also import auxiliary sheets for weekly payouts, monthly payouts, and dividend-month data.
-      </p>
-
-      <h4 style={{ marginBottom: '0.4rem' }}>Step-by-Step</h4>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>
-          <strong>Select the correct portfolio</strong> from the navbar dropdown at the top-right. The page shows
-          "Importing into: <em>Portfolio Name</em>" to confirm your target.
-        </li>
-        <li>
-          <strong>Click "My Spreadsheet" tab</strong> (selected by default).
-        </li>
-        <li>
-          <strong>Drag & drop your Excel file</strong> (.xlsx or .xlsm) onto the drop zone, or click it to browse.
-          The filename appears once selected.
-        </li>
-        <li>
-          <strong>Choose single-sheet or multi-sheet mode:</strong>
-          <ul style={{ paddingLeft: '1.5rem', marginTop: '0.25rem' }}>
-            <li><strong>Single sheet (default)</strong> — the "Sheet Name" field defaults to "All Accounts". If your Excel file uses a different tab name, you <strong>must</strong> update this field to match the exact tab name in your workbook, otherwise the import will fail with a "sheet not found" error. Only the named sheet is imported into the currently selected portfolio.</li>
-            <li><strong>Multi-sheet</strong> — check "Import all sheets as separate portfolios". Each sheet becomes its own portfolio, named after the sheet tab. This ignores the Sheet Name field.</li>
-          </ul>
-        </li>
-        <li>
-          <strong>Toggle auxiliary imports</strong> (all on by default):
-          <ul style={{ paddingLeft: '1.5rem', marginTop: '0.25rem' }}>
-            <li><em>Import Weekly Payouts</em> — reads the "Weekly_Payers" sheet.</li>
-            <li><em>Import Monthly Payouts</em> — reads the "Monthly Tracking" sheet.</li>
-            <li><em>Import Dividend Months</em> — reads the "DivMonths" sheet.</li>
-          </ul>
-          Uncheck any you don't need. If a sheet is missing, that step reports an error but the main import still succeeds.
-        </li>
-        <li>
-          <strong>Import as Transactions (optional)</strong> — check "Import rows as transactions" if you want each row
-          compared against the current position. The app calculates the share difference and creates a BUY or SELL transaction
-          for the delta rather than overwriting the position directly. This is useful for tracking lot-level cost basis.
-        </li>
-        <li>
-          <strong>Click "Import Spreadsheet"</strong> (or "Merge Spreadsheet" if the portfolio already has data).
-          A spinner shows while processing. Results appear at the bottom — green for success, red for errors.
-        </li>
-      </ol>
-
-      <div className="alert alert-info" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
-        <strong>Merge Mode:</strong> When the portfolio already contains holdings, the button label changes to "Merge Spreadsheet".
-        Existing tickers are updated with spreadsheet values. New tickers are added. Fields you've edited only in the app
-        (DRIP, pay dates, etc.) are kept unless the spreadsheet also provides those columns.
-      </div>
-
       {/* ── Generic Upload ──────────────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tab 2: Generic Upload</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Generic Positions</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
         <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
@@ -590,6 +570,7 @@ function ActionCenterHelp() {
         <li><strong>Needs Review</strong> — shows only warning-priority items that need action.</li>
         <li><strong>Watch</strong> — shows info-priority items to monitor.</li>
         <li><strong>Clear</strong> — shows success-priority items that are in good shape.</li>
+        <li><strong>Completed</strong> — shows reviewable items you marked complete; use Restore to return one to the active list.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
@@ -601,6 +582,7 @@ function ActionCenterHelp() {
         <li><strong>Priority badge</strong> — Needs Review (warning), Watch (info), or Clear (success).</li>
         <li><strong>Title &amp; Detail</strong> — a plain-English description of the issue or observation.</li>
         <li><strong>Open button</strong> — navigates directly to the relevant page in the app so you can act on the item.</li>
+        <li><strong>Mark complete</strong> — available only for items that can be manually reviewed or finished. It removes the item from the active list while keeping it available in Completed.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
@@ -613,7 +595,8 @@ function ActionCenterHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Items are computed from the data already in the app — holdings, dividend history, category weights,
-        and income estimates. They are recalculated each time you open the Action Center or Dashboard.
+        and income estimates. They are recalculated each time you open the Action Center or Dashboard; completed
+        reviewable items stay hidden until you restore them.
         No manual refresh is needed; click <strong>Refresh Data</strong> (links to Holdings) if you want
         to ensure market data is current before reviewing items.
       </p>
@@ -708,6 +691,7 @@ function DashboardHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
         <li><strong>Portfolio Value</strong> — total current market value.</li>
+        <li><strong>Portfolio IRR / Filtered IRR</strong> — annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value; idle account cash is excluded. The card shows <strong>Unavailable</strong> instead of estimating when transaction shares, transfers, or dividend payment history do not fully reconcile. <strong>Manage exclusions</strong> lists the blocking tickers and lets you omit selected ones. Any resulting number is labeled <strong>Filtered IRR</strong> and discloses the percentage of current portfolio value excluded, because it measures only the documented subset—not the whole account.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
         <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
@@ -854,7 +838,7 @@ function DashboardHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
         <li><strong>Record NAV button</strong> — click at any time to save today's portfolio value using the prices already refreshed on page load. No import required. The button records a snapshot for the active portfolio and, if it is a sub-portfolio, also records one for Owner automatically.</li>
-        <li><strong>Import trigger</strong> — any holdings import (Owner spreadsheet, generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
+        <li><strong>Import trigger</strong> — any holdings import (generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
         <li><strong>One snapshot per day</strong> — clicking the button or importing multiple times on the same day simply updates that day's value rather than creating duplicates.</li>
         <li><strong>Accuracy</strong> — snapshots from the button and from imports use identical logic. Both reflect the prices currently stored in the database, which are refreshed from yfinance on each page load or import.</li>
       </ul>
@@ -2741,8 +2725,8 @@ function EarningsCalendarHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each holding with an earnings date appears as a card. Cards are sorted upcoming-first
-        (soonest at the top), then past earnings most-recent first. Each card contains:
+        Each holding with an earnings date appears as a card. Cards are sorted chronologically from
+        earlier to later dates, left to right. Each card contains:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
@@ -4395,6 +4379,228 @@ function IncomeSimHelp() {
   )
 }
 
+function DiversificationHelp() {
+  return (
+    <div>
+      <h2>Diversification</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds hide what you actually own. If you hold three S&amp;P 500 funds, the holdings
+        screen shows three positions — but economically you own one basket of the same
+        500 companies, and your real NVDA exposure is the sum across all three. This page
+        opens each fund up and re-adds everything at the constituent level, so concentration
+        that is invisible position-by-position becomes obvious.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How the page opens</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/as-held.png"
+        alt="The Diversification page with X-Ray Funds off, showing the donut and ranked bar list of all 51 positions exactly as they are held"
+        caption="X-Ray off: one slice per position, the portfolio as your broker shows it."
+      />
+      <p style={{ marginBottom: '1rem' }}>
+        The page opens with <strong>X-Ray Funds</strong> off — your positions as you actually
+        hold them, largest first, with the donut and the ranked list always agreeing on a
+        slice's colour. Nothing here is looked through yet, so CHPY is simply CHPY.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The control bar</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/controls.png"
+        alt="The control bar with X-Ray Funds checked, the Economic exposure and Literal holdings buttons, and the Define funds, Resolve gaps, and Refresh all buttons"
+        caption="Turning X-Ray on reveals the Synthetic funds switch. The count on Define funds is how many of your funds still have no holdings data."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>X-Ray Funds</strong> — replaces every fund with what is inside it.</li>
+        <li><strong>Synthetic funds</strong> — how option-income funds report themselves; see below.</li>
+        <li><strong>Define funds (n)</strong> — jumps to Fund Definitions, already filtered to the
+          funds nothing could be found for. The number is that count.</li>
+        <li><strong>Resolve gaps</strong> — looks up new funds and retries incomplete ones against
+          their issuer's latest holdings download.</li>
+        <li><strong>Refresh all</strong> — re-fetches everything. Both run in the background and
+          report progress on a bar; hand-entered definitions are never overwritten.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>X-Ray Funds</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/xray-lookthrough.png"
+        alt="X-Ray on: the collateral and undisclosed banners above the Look-through holdings card, where 51 positions have become 2,735 constituents led by cash collateral, Gold, and NVDA"
+        caption="Same portfolio, looked through: 51 positions become 2,735 constituents, and NVDA arrives as one 3.30% slice instead of hiding inside a dozen funds."
+      />
+      <p style={{ marginBottom: '1rem' }}>
+        Every fund is replaced by what is inside it, with identical constituents merging into a
+        single slice no matter how many funds they arrived through. The two banners above the
+        chart are the honesty notes — how much is fund collateral rather than exposure, and how
+        much no issuer discloses. Both are explained below.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Look-through is recursive. Several income funds are really a wrapper around one
+        ETF — TSPY is ~100% VOO, TDAQ ~100% QQQM — so those are expanded again into the
+        companies underneath rather than being left as a fund sitting in your chart. A
+        nested fund is only expanded when it is itself well covered; a thinly-covered one
+        stays put, because expanding it would convert known exposure into Undisclosed.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Economic exposure vs. Literal holdings</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Option-income funds do not hold what they track. KGLD's filed holdings are three
+        Treasury bills — it reaches gold through options written against that collateral.
+        Read literally, a portfolio full of these funds looks like a giant cash position.
+        The top of the same portfolio, in each mode, shows what that costs you:
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
+        <div style={{ flex: '1 1 340px', minWidth: 300 }}>
+          <HelpScreenshot
+            src="./help-screenshots/diversification/mode-economic.png"
+            alt="Top constituents in Economic exposure mode: cash collateral 9.40%, Gold 3.95%, NVDA 3.30%, Bitcoin 2.41%"
+            caption="Economic exposure — Gold and Bitcoin appear as themselves, collateral is 9.40%."
+          />
+        </div>
+        <div style={{ flex: '1 1 340px', minWidth: 300 }}>
+          <HelpScreenshot
+            src="./help-screenshots/diversification/mode-literal.png"
+            alt="The same constituents in Literal holdings mode: cash collateral 16.34%, no Gold or Bitcoin rows, and an Options and derivatives row at 2.36%"
+            caption="Literal holdings — the same money reads as 16.34% collateral plus option legs."
+          />
+        </div>
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Economic exposure</strong> (default) — KGLD reports as Gold, BTCI as
+          Bitcoin when the underlying exposure can be stated accurately.</li>
+        <li><strong>Literal holdings</strong> — every fund reports exactly what it files,
+          Treasury collateral and option legs included. Useful for seeing how much of the
+          portfolio is really sitting in short-term paper.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Funds that genuinely hold their underlying equities (QQQI, SPYI, CHPY) are
+        unaffected by this switch — their filed holdings are already correct, which is why
+        NVDA, IEFA, AAPL, and MSFT hold the same weight in both pictures.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Cash, equivalents, and fund collateral</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Cash &amp; equivalents</strong> is actual cash-like exposure, including
+        money-market funds. <strong>Cash &amp; T-bill collateral</strong> is shown separately:
+        it is held inside option or leveraged funds to back derivatives and financing, so it
+        is not spendable account cash. Whenever it reaches 0.25% of the portfolio the banner
+        appears and names its largest source funds. Economic mode replaces collateral only
+        when the underlying exposure can be stated accurately; otherwise it remains visible
+        rather than being guessed.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Undisclosed slice</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Free holdings sources often publish only a fund's largest positions. For a broad
+        fund that can be a small fraction of the whole — a top-25 list covers roughly 6% of
+        RSP and 18% of AVUV. Rather than rescaling the known names to 100% and overstating
+        them, the unknown remainder is charted as its own grey slice, and rows such as
+        <em> UTG — rest not disclosed by issuer</em> name the fund it came from.
+        <strong> Every weight on this page is therefore a floor, not an estimate.</strong>{' '}
+        Where a fund's issuer publishes a complete holdings file, the full list is used and
+        the Undisclosed slice for that fund disappears.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The banner separates the two cases by colour, because they call for different
+        responses. <strong>Grey</strong> is what the issuer will not publish — a ceiling you
+        cannot do anything about. <strong>Amber</strong> is a fund with no holdings data at
+        all, which is fixable: point it at a holdings source or define it by hand.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Per-fund coverage</h3>
+      <HelpScreenshot
+        src="./help-screenshots/diversification/fund-coverage.png"
+        alt="The expanded per-fund coverage table listing fund, value, source, as-of date, basis, and coverage percentage for each of 45 funds"
+        caption="Which source answered for each fund, and how much of that fund it actually covered."
+      />
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Source</strong> is who supplied the holdings — an issuer (<code>neos</code>,
+        <code> yieldmax</code>, <code>firsttrust</code>), a general source, <code>manual</code> for
+        anything you entered on Fund Definitions, or <code>exposure</code> when an economic mapping
+        was used instead. <strong>Basis</strong> says whether that data is the fund's literal
+        filing or a mapped economic exposure. <strong>Coverage</strong> is the share of the fund
+        those holdings account for: green at 95% and above, red below 50%, and a
+        <em> no data — define</em> link when nothing was found at all.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Read it top-down. The table is ordered by dollar value, so a poor coverage figure in the
+        first few rows distorts the chart far more than a missing small position, and those are
+        the funds worth defining by hand first.
+      </p>
+    </div>
+  )
+}
+
+function FundDefinitionsHelp() {
+  return (
+    <div>
+      <h2>Fund Definitions</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Some funds cannot be opened up automatically — mutual funds in particular have no
+        free constituent source, and newer ETFs often have no published page yet. This page
+        lists them, largest position first, so you can fill in what they hold by hand.
+        Anything you define here immediately joins the{' '}
+        <strong>Diversification</strong> look-through.
+      </p>
+
+      <h3>The two tabs</h3>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><strong>Constituents</strong> — what the fund holds, as percentages of the fund.
+          You do not have to account for all 100%: whatever you leave out simply stays in the
+          Undisclosed slice, so entering a fund's top ten is a real improvement over nothing.</li>
+        <li><strong>Economic exposure</strong> — for funds whose filed holdings misrepresent
+          them. Use this when a fund holds Treasuries and options but is economically tracking
+          gold, bitcoin, or a single stock. This is what the Diversification page uses in
+          Economic exposure mode.</li>
+      </ul>
+
+      <h3>Hand-entered data always wins</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Definitions you enter are stored separately from fetched data and are
+        <strong> never overwritten by a refresh</strong>, including <em>Refresh all</em>. If
+        you later want a fund resolved automatically again, clear its rows and save.
+      </p>
+
+      <h3>Filters</h3>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><strong>Needs definition</strong> — no constituent data at all. Start here; the
+          list is ordered by dollar value, so the top rows move the chart most.</li>
+        <li><strong>Partial coverage</strong> — resolved, but under 90% of the fund is known.
+          Worth topping up by hand for large positions.</li>
+        <li><strong>Hand-defined</strong> — everything you have already entered.</li>
+      </ul>
+
+      <h3>Holdings sources (the lookup table)</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The second tab lists fund families and where each one publishes its holdings.
+        None of it is hardcoded — adding a family, fixing a URL, or pointing a ticker at a
+        different issuer all happen here, and the next refresh picks them up. Put{' '}
+        <code>{'{ticker}'}</code> or <code>{'{ticker_lower}'}</code> in the URL where the
+        symbol belongs.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Format</strong> tells the app how to read what comes back:
+      </p>
+      <ul style={{ marginBottom: '1rem' }}>
+        <li><code>neos_csv</code>, <code>ssga_xlsx</code>, <code>vanguard_json</code> — those
+          issuers' specific file formats.</li>
+        <li><code>generic_csv</code> — any plain CSV; columns are detected by name.</li>
+        <li><code>html_table</code> — scrapes a holdings table straight off an issuer page.
+          Works for Reaves (UTG) and Adams (ADX).</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Test</strong> fetches a fund you actually own through that issuer and reports
+        how many holdings came back and what percentage they cover, so a URL can be validated
+        without running a full refresh.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Some issuers build their holdings table in JavaScript (TappAlpha, Nicholas/XFUNDS,
+        Cohen &amp; Steers, Aberdeen). There is no HTML table to read on those pages, so they
+        need either a published CSV/XLSX file — set its URL here — or hand entry on the Funds
+        tab.
+      </p>
+    </div>
+  )
+}
+
 function CorrelationHelp() {
   return (
     <div>
@@ -5947,12 +6153,38 @@ function OptionsHelp() {
         how the structure changes.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
+        Choose <strong>Add from option chain</strong> without leaving Risk Profile to build on a scanner trade or any
+        simulated position. Every listed expiration is available with its DTE; select <strong>All strikes</strong> for
+        far-out-of-the-money contracts. The Expiration / DTE selector includes every listed weekly, monthly, and LEAP;
+        choose any one, then click an ask to add a bought leg or a bid to add a sold leg. You can open
+        another expiration and keep adding legs, so the same graph can model calendars, diagonals, near-term trades
+        with longer-dated protection, and other mixed-expiration positions. The scanner return controls stay visible
+        while you edit the trade or replace a leg from its Chain button.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
         The volatility bar applies a proportional scenario to each leg&rsquo;s own modeled IV instead of forcing every
         strike to the same volatility. For example, a <strong>+10%</strong> surface move changes 20%, 25%, and 32% IV
         legs to 22%, 27.5%, and 35.2%. That preserves the position&rsquo;s current strike skew and expiration differences
         while every leg, Greek, probability, and pre-expiration P/L curve is repriced. It is a risk scenario, not a
         forecast of how the live volatility surface will move.
       </p>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The <strong>Volatility scenario</strong> panel below the main controls extends that parallel move without
+        changing any selected strike or quantity:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Downside skew change</strong> is entered in volatility points per 10% move below spot. A positive value steepens downside skew by adding more IV to lower strikes and less—or negative—IV to higher strikes. A negative value flattens or reverses that incremental skew.</li>
+        <li><strong>Apply crash-vol spike</strong> combines a +50% parallel surface shock with a modest +2 volatility-point steepening per 10% lower strike. This makes the far-downside hedge puts respond more strongly than a parallel-only scenario while keeping both assumptions visible and editable.</li>
+        <li><strong>Expiration-specific IV change</strong> adds or subtracts volatility points only from the named expiration after the parallel and skew changes. Mixed-expiration trades therefore can model a near-term event crush without forcing the back month to fall by the same amount.</li>
+        <li><strong>Sticky strike</strong> keeps each contract&rsquo;s final modeled IV fixed as the risk chart sweeps underlying prices. This is the conservative, transparent default and matches the earlier risk-profile behavior.</li>
+        <li><strong>Sticky delta</strong> moves the modeled surface with the underlying. A fixed strike samples a different point on the position&rsquo;s modeled skew as its moneyness changes. The slope is estimated separately from the modeled legs in each expiration; an expiration with fewer than two distinct strikes safely falls back to sticky strike.</li>
+        <li><strong>Per-leg reconciliation</strong> shows market IV, the result after any manual leg adjustment, and the separate parallel, skew, and term contributions before the final modeled IV. The bubble cards repeat the active assumptions, and <strong>Reset to current surface</strong> clears every scenario change.</li>
+      </ul>
+      <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+        The current chain supplies the ticker-specific starting surface. The scenario controls are explicit manual
+        assumptions, not a calibration from historical option surfaces. Historical stock prices alone cannot
+        reconstruct past implied-volatility skew or term structure.
+      </div>
       <p style={{ marginBottom: '0.75rem' }}>
         Scanner handoffs prefer live two-sided quotes. When the data feed clears bid/ask outside market hours, every
         option scanner may keep the risk graph available from a recent traded price with a prominent estimate warning.
@@ -6027,12 +6259,331 @@ function OptionsHelp() {
   )
 }
 
+function OptionDashboardHelp() {
+  return (
+    <div>
+      <h2>Options Dashboard</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Options Dashboard answers the question that comes <em>before</em> picking a contract:
+        given what SPY, QQQ, and IWM are doing and what the economy looks like right now, which
+        scanner is worth opening first? It scores each of the three markets across three timeframes,
+        scores the macro backdrop from market-based proxies, then ranks all twelve option strategies
+        the app can scan for. It never selects a strike, an expiration, or a price &mdash; the linked
+        scanner still does that.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>Ranks scanners, not trades.</strong> A high fit score means &ldquo;this structure suits
+        the current regime,&rdquo; not &ldquo;there is a good trade available today.&rdquo; The scanner you open
+        still has to find liquid contracts at acceptable prices, and it can legitimately return nothing.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Header and the four summary cards</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/dashboard-overview.png"
+        alt="Options Dashboard header with the live/cached badge, Refresh market data button, and the Weekly market posture, Economic prediction, Volatility regime, and Best scanner fit cards"
+        caption="The top strip: data freshness on the right, then the four regime summaries."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Freshness badge</strong> &mdash; <em>live</em> means the numbers were just built from a fresh download, <em>cached</em> means a snapshot less than 15 minutes old is being reused, and <em>stale</em> means the refresh failed and the last good snapshot is shown along with the error. <strong>Refresh market data</strong> forces a new download and rebuild.</li>
+        <li><strong>Market posture</strong> &mdash; the average technical score of the three markets for the selected timeframe, plus how many are bullish, how many are bearish, and an agreement percentage. High agreement with a strong score is a much cleaner signal than one market carrying the average.</li>
+        <li><strong>Economic prediction</strong> &mdash; the outlook and recession-risk read from the Economic Nowcast section below.</li>
+        <li><strong>Volatility regime</strong> &mdash; the average realized-volatility percentile of the three markets. Low percentiles favor buying premium; high percentiles favor selling it.</li>
+        <li><strong>Best scanner fit</strong> &mdash; the top-ranked row of the Action Ranking table <em>as currently filtered</em>, so it changes when you click a market card or change the Fit filter.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Timeframe and the trend map</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/timeframe-trend-map.png"
+        alt="Daily, Weekly, and Monthly timeframe tabs above the SPY, QQQ, and IWM trend cards with technical score, price, trailing return, trend meter, and quick indicator values"
+        caption="Every number on the page &mdash; scores, indicators, and the strategy ranking &mdash; follows the selected timeframe."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Daily bars are the raw session data, weekly bars are resampled to Friday closes, and monthly bars
+        to month ends. The trailing-return rule changes with the timeframe as well: 20 days on daily,
+        13 weeks on weekly, and 6 months on monthly. Use <strong>Monthly</strong> for the primary regime,
+        <strong> Weekly</strong> for the trade thesis, and <strong>Daily</strong> for entry timing;
+        agreement across all three is stronger evidence than any single tab.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each market card shows the technical score, the adjusted close, the trailing return, a
+        &minus;100&hellip;+100 meter, and the four values that most often decide a trade: RSI 14, MACD
+        histogram, ADX 14, and the realized-volatility percentile. <strong>Click a card</strong> to filter
+        the Action Ranking to that market; click it again to go back to all three. Scores of +50 or
+        better read as strong bullish, +20 to +50 bullish, &minus;20 to +20 neutral or mixed, and the
+        mirror images on the downside.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Show score calculation</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/score-calculation.png"
+        alt="Expanded score calculation for SPY listing all eight technical rules with their +1, 0, or -1 contributions"
+        caption="Every score is auditable: eight rules, each worth +1, 0, or &minus;1."
+      />
+      <p style={{ marginBottom: '0.5rem' }}>
+        The score is simply the sum of the eight rules divided by eight and scaled to 100, so +62 means
+        five net positive rules. The rules are:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Trend structure</strong> &mdash; price vs EMA 20, EMA 20 vs EMA 50, and EMA 50 vs EMA 200.</li>
+        <li><strong>Momentum</strong> &mdash; MACD histogram above or below zero, RSI 14 (+1 at 55 or higher, &minus;1 at 45 or lower, otherwise 0), and the Awesome Oscillator.</li>
+        <li><strong>Confirmation</strong> &mdash; the trailing return for the timeframe, and ADX direction, which only scores when ADX 14 is 20 or higher; below that the trend is treated as non-directional and contributes 0.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Indicator evidence</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/indicator-evidence.png"
+        alt="Indicator evidence table listing price, EMA 20/50/200, MACD, signal, histogram, RSI, Awesome Oscillator, ADX, +DI/-DI, ATR, realized volatility, and RV percentile for each market"
+        caption="The raw values behind the scores, including ATR and realized volatility."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Nothing here is scored separately &mdash; this table exists so you can check a value yourself
+        rather than take the score on faith. Two columns matter beyond the rules: <strong>ATR 14</strong>
+        tells you how far the market typically travels in one bar, which is a sanity check on strike
+        distance, and <strong>RV percentile</strong> compares current realized volatility with its own
+        recent history, which is what drives the volatility part of every fit score.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Economic nowcast</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/economic-nowcast.png"
+        alt="Economic nowcast showing the macro score and the six evidence cards for yield curve, credit, discretionary vs staples, industrials, inflation proxy, and VIX"
+        caption="Six market-implied proxies, each contributing a fixed number of macro points."
+      />
+      <p style={{ marginBottom: '0.5rem' }}>
+        The macro score is the sum of six weighted signals, each of which can be positive, neutral (zero
+        points), or negative:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>10Y &minus; 3M yield curve</strong> (25 pts) &mdash; positive above +0.25, warning below &minus;0.25.</li>
+        <li><strong>High-yield / quality credit</strong>, HYG vs LQD (20 pts) &mdash; the 3-month change in risk appetite.</li>
+        <li><strong>Discretionary / staples</strong>, XLY vs XLP (15 pts) &mdash; cyclical versus defensive consumer leadership.</li>
+        <li><strong>Industrials trend</strong>, XLI versus its 200-day EMA (15 pts).</li>
+        <li><strong>VIX stress gauge</strong> (15 pts) &mdash; supportive below 18, stressed above 25.</li>
+        <li><strong>Inflation pressure proxy</strong>, TIP vs IEF (10 pts) &mdash; rising pressure counts against the score because it restricts policy.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Totals of +40 or better read as &ldquo;Expansion likely,&rdquo; +15 to +40 as a soft landing,
+        &minus;15 to +15 as mixed or slowing, &minus;40 to &minus;15 as slowdown risk, and below
+        &minus;40 as contraction risk. This is a market-implied proxy model, not an official GDP forecast.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Action ranking</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-dashboard/action-ranking.png"
+        alt="Action ranking table with rank, market, trade to research, fit badge and score, technical, economy, and volatility components, the reasoning column, and Open scanner buttons"
+        caption="Twelve strategies scored against every market, filtered by the Market and Fit dropdowns."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each strategy carries its own preferred trend window, macro window, and volatility preference
+        (high for premium selling, low for debit structures, medium for the balanced flies). The fit
+        score is <strong>55% technical + 25% economic + 20% volatility</strong>, and the badge follows
+        from it: <strong>Ideal</strong> at 78 and above, <strong>Favorable</strong> at 65,
+        <strong> Selective</strong> at 50, and <strong>Avoid</strong> below that. Iron condors and iron
+        butterflies additionally lose points when ADX 14 reaches 25, because a strong directional trend
+        is the main way a neutral trade fails.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Why it ranks here</strong> column shows the strategy&rsquo;s thesis, the three facts
+        that produced the score, and any cautions in amber &mdash; for example premium being too cheap
+        for a short-volatility structure, or macro risk arguing for a defined-risk alternative to an
+        undefined-risk trade. <strong>Open scanner</strong> jumps to that scanner. Use the
+        <strong> Market</strong> dropdown (or a click on a trend card) and the <strong>Fit</strong>
+        dropdown to narrow the list; choose <strong>All fits</strong> if you want to see what the model
+        currently rates as poor.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to use the page</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Start on <strong>Monthly</strong> to establish the regime, then switch to <strong>Weekly</strong> for the trade thesis. If the two disagree, prefer smaller size or defined risk.</li>
+        <li>Read the posture and agreement card. Three markets agreeing is a much better backdrop than one strong index pulling the average.</li>
+        <li>Check the volatility regime. It decides whether you should be selling premium or buying it, regardless of direction.</li>
+        <li>Click the market you actually trade to filter the ranking, then read the reasoning and cautions on the top two or three rows rather than only the score.</li>
+        <li>Press <strong>Open scanner</strong> and let the scanner validate liquidity, expiration, strikes, and price. If it finds nothing acceptable, that is a valid answer &mdash; a good regime is not a trade.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginTop: '0.75rem' }}>
+        <strong>Educational analysis only.</strong> Market data can be delayed or incomplete, and a
+        technical score plus an economic nowcast are decision aids, not guarantees or personalized
+        investment advice.
+      </div>
+    </div>
+  )
+}
+
+function OptionTradesHelp() {
+  return (
+    <div>
+      <h2>Option Trades</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Option Trades is the ledger for positions you actually opened, as opposed to the modeling done
+        on the Options page. It stores each leg and each broker execution, works out realized P/L,
+        maximum risk, win rate, and profit factor, and lets you decide which trades count as income.
+        It is a <strong>separate ledger from your holdings</strong> &mdash; adding, closing, or deleting
+        an option trade never changes share counts, cost basis, or dividends.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/trades-overview.png"
+        alt="Option Trades header with Import option transactions and Add trade buttons, the Owner scope notice, and the six summary cards"
+        caption="The header, the account-scope notice, and the six summary cards."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Which account you are looking at</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>The eyebrow above the title names the selected portfolio, and every number on the page follows the portfolio selector.</li>
+        <li>An <strong>owner rollup</strong> shows trades from its member accounts as well. Those rows are read-only here &mdash; the Actions column says <em>Manage in &lt;account&gt;</em>. Select the source account to close, classify, or delete them.</li>
+        <li>An <strong>aggregate</strong> view is fully read-only: adding, importing, closing, and deleting are disabled until you select a single portfolio.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The six summary cards</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        These always cover every trade in the selected account, not just the rows left after the table
+        filters. Each card has a <strong>?</strong> tooltip with the same definition.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Open trades</strong> &mdash; count of trades still open, and how many of those have a known maximum risk.</li>
+        <li><strong>Known open risk</strong> &mdash; the sum of maximum risk across open trades where risk is known. Trades with undefined risk are left out, so this is not your total account risk.</li>
+        <li><strong>Realized MTD / YTD</strong> &mdash; net realized option P/L for the current month and calendar year, across every purpose.</li>
+        <li><strong>Win rate</strong> &mdash; winning trades divided by fully closed trades. Open trades are excluded and breakeven trades stay in the denominator.</li>
+        <li><strong>Profit factor</strong> &mdash; gross wins divided by gross losses on fully closed trades. A dash means there are no closed losses yet.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Income view</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/income-view.png"
+        alt="Income view panel with the Include realized options toggle and the Fund YTD, Income options YTD, and Selected YTD total values"
+        caption="Option premium only joins your income total when the trade is classified as Income and the P/L is realized."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Include realized options</strong> adds <em>Income options YTD</em> to <em>Fund YTD</em>
+        to produce the selected total. Two rules keep this honest: only trades whose purpose is
+        <strong> Income</strong> qualify (Directional, Hedge, Adjustment, and Other never count), and only
+        <strong> realized</strong> P/L counts &mdash; premium collected on a position that is still open is
+        not income yet. The toggle is remembered between sessions and changes nothing in the ledger itself.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How these numbers are calculated</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/calculation-audit.png"
+        alt="Expanded How these numbers are calculated panel showing when P/L becomes realized, the month-to-date audit table, and the scope and income rules"
+        caption="Expand this panel to see every realization event that produced the current MTD figure."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        A leg becomes realized once <em>all</em> of its contracts are closed, expired, assigned, or
+        exercised; its realized amount is the opening cash flow plus the closing cash flow, less fees.
+        A finished leg counts even if the rest of the trade is still open, which is why MTD can move on a
+        trade whose status is still Open. The date of the final closing execution decides the month and
+        year. The middle column lists every event behind the current MTD total, so a surprising figure
+        can be traced to a specific fill.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The execution ledger</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/execution-ledger.png"
+        alt="Trades table with ticker, status, and purpose filters and columns for underlying, strategy, opened, expiration and DTE, entry, max risk, realized P/L, return on risk, status, and actions"
+        caption="Filter by ticker, status, and purpose; each row is one trade, however many legs it has."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Underlying</strong> &mdash; ticker, leg count, and (in rollups) the account that owns the trade.</li>
+        <li><strong>Strategy / purpose</strong> &mdash; the structure plus the income classification. A <em>Needs classification</em> flag appears when the strategy is still &ldquo;Custom&rdquo; or the purpose is still &ldquo;Other,&rdquo; which is common right after an import.</li>
+        <li><strong>Expiration / DTE</strong> &mdash; the nearest expiration with open contracts and days to it; closed trades show the close date instead. A negative DTE means the trade holds legs that already expired and still need to be recorded.</li>
+        <li><strong>Entry</strong> &mdash; the net opening cash: green <strong>CREDIT</strong> for premium received, red <strong>DEBIT</strong> for premium paid.</li>
+        <li><strong>Max risk</strong> &mdash; what you entered, or a derived value with its method shown underneath: <em>net debit</em> for all-long positions, <em>derived spread width</em> for a two-leg vertical, and <em>derived condor width</em> for a four-leg condor (the wider wing minus the credit). Undefined-risk trades such as a naked short put show a dash.</li>
+        <li><strong>Realized P/L</strong> &mdash; realized cash with a WIN, LOSS, or BREAKEVEN tag once the trade is closed.</li>
+        <li><strong>Return on risk</strong> &mdash; realized P/L divided by maximum risk, only for closed trades that have a risk figure.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Row actions: <strong>Risk graph</strong> stages the trade on the Options page and draws its payoff
+        with live chain data; <strong>Classify</strong> / <strong>Edit class</strong> sets strategy, purpose,
+        max risk, and notes; <strong>Mark expired</strong> appears once open legs are past expiration and
+        records a zero-value expiration in one click; <strong>Close</strong> opens the execution form; and
+        <strong> Delete</strong> asks for a second click to confirm.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Expanding a trade</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/trade-detail-expanded.png"
+        alt="Expanded TSLA bull put spread showing source, total fees, net cash flow, risk method, notes, and a per-leg table with every execution"
+        caption="The + button opens a full audit: per-leg contracts, net cash, and every recorded fill."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        The summary line shows where the trade came from (manual entry or a broker format), total fees,
+        net cash flow so far, and how maximum risk was determined. The table below lists each leg with its
+        original and still-open contract counts, its net cash, and each execution with action, price, date,
+        and cash effect. Stock-backed trades such as covered calls also show a <strong>LONG STOCK</strong>
+        row that reads share coverage from the account&rsquo;s holdings &mdash; a read-only link that flags a
+        shortfall without altering the holding.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Adding a trade by hand</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/add-trade-form.png"
+        alt="Add option trade form with underlying, strategy, purpose, open date, maximum risk, notes, and one leg row"
+        caption="One row per contract leg; use + Add leg for spreads, condors, and butterflies."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Premiums are entered <strong>per share</strong> &mdash; the 100&times; multiplier is applied for you, so a $2.99 credit on one contract becomes $299.</li>
+        <li>Side and type describe the leg (SHORT PUT, LONG CALL, and so on); the strategy dropdown only labels the trade, and <strong>Custom name&hellip;</strong> is there for structures not in the list.</li>
+        <li><strong>Maximum risk</strong> can be left blank for defined-risk verticals and condors, which are derived. Enter it manually when you want to record the cash actually set aside &mdash; for example the full assignment cost of a cash-secured put.</li>
+        <li><strong>Purpose</strong> is the field that decides whether this trade can ever reach your income total, so set it deliberately.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Closing works the same way in reverse: press <strong>Close</strong>, set the date, and give each
+        open leg an action &mdash; buy/sell to close with a price, or <strong>Expired</strong>,
+        <strong> Assigned</strong>, or <strong>Exercised</strong>, which are priced at zero automatically.
+        You can close part of a position by lowering the contract count, and fees can be entered per leg.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Importing broker executions</h3>
+      <HelpScreenshot
+        src="./help-screenshots/option-trades/import-transactions.png"
+        alt="Import Option Transactions page with the file-format selector, drop zone, generic template download, and the rules explaining how rows are handled"
+        caption="Import option transactions accepts Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, and a generic CSV/XLSX template."
+      />
+      <p style={{ marginBottom: '0.75rem' }}>
+        Pick the format, choose the file, and use <strong>Preview executions</strong> before importing;
+        the preview reports how many rows were recognized, how many are duplicates of executions already
+        stored, and how many closing rows could not be matched to an open contract. Legs are grouped into
+        one trade by broker trade ID first and order ID second, so multi-leg orders arrive intact.
+        Transaction history &mdash; not a positions export &mdash; is what produces accurate premium,
+        fees, and realized P/L; if your history starts after a position was opened, add the missing
+        opening executions with the generic template first. Imported trades usually arrive needing
+        classification, so set strategy and purpose afterwards.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>Select the individual account that actually holds the trades before adding or importing.</li>
+        <li>Import broker activity where you can, and add anything the broker export missed by hand.</li>
+        <li>Clear every <em>Needs classification</em> flag &mdash; the income total and the Income options figure depend on it.</li>
+        <li>Record closes, expirations, and assignments as they happen so MTD, win rate, and profit factor stay honest.</li>
+        <li>Use <strong>Risk graph</strong> on open positions to check where a live trade stands, and the expanded row to reconcile fees and fills against the broker statement.</li>
+      </ol>
+    </div>
+  )
+}
+
 function PutSellingScannerHelp() {
   const screenshotStyle = {
     maxWidth: '100%',
     height: 'auto',
     borderRadius: '4px',
     border: '1px solid var(--p-333)',
+  }
+
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
   }
 
   return (
@@ -6043,6 +6594,94 @@ function PutSellingScannerHelp() {
         volatility justifies, then rates each one as a candidate for selling cash-secured puts. It suggests a
         specific strike and expiration for every candidate and shows what you would actually be paid.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: the only screen where losing is the plan
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned result on a true scale: Corning at $138.25, sell the $120 put 34 days out for a $5.57 credit.
+        The shape is simple, and the number that matters is not the credit.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Cash-secured put payoff showing a 557 dollar credit kept above the 120 strike, a breakeven at 114.43 which is also the assignment basis, and a loss that continues all the way down">
+          <line x1="50" y1="120" x2="700" y2="120" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="292" textAnchor="end" fill="var(--text-dim)" fontSize="11">GLW price at expiration →</text>
+
+          <line x1="326" y1="55" x2="326" y2="262" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <text x="326" y="274" textAnchor="middle" fill="var(--text-dim)" fontSize="10">$120 strike</text>
+          <line x1="487" y1="70" x2="487" y2="262" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+          <text x="487" y="64" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $138.25</text>
+
+          <polyline points="60,230 276,120 326,95 680,95"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+          <path d="M60 230 L 40 240" stroke="var(--neg)" strokeWidth="2.5" strokeDasharray="4 3" />
+          <text x="62" y="256" fill="var(--neg)" fontSize="10">…continues to −$11,443 at zero</text>
+
+          <circle cx="276" cy="120" r="4.5" fill="var(--amber)" />
+
+          <text x="510" y="86" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$557 — the credit</text>
+          <text x="510" y="112" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">50% annualized if it just stays up</text>
+
+          <rect x="120" y="140" width="300" height="62" rx="4" fill="var(--surface-inset)" stroke="var(--amber)" strokeWidth="1.5" />
+          <text x="270" y="159" textAnchor="middle" fill="var(--amber)" fontSize="11.5" fontWeight="700">Breakeven $114.43 = your basis</text>
+          <text x="270" y="176" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">below here you own 100 shares</text>
+          <text x="270" y="192" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">at $114.42 — 17% under today</text>
+        </svg>
+        <p style={captionStyle}>
+          Every other screen in this family treats a breach as failure. Here the amber line is the
+          <strong> outcome you agreed to</strong>: assignment at an effective $114.42, a 17% discount to today&rsquo;s
+          price. That is why this screen carries a Quality axis that the Covered Call Scanner does not &mdash; you are
+          not renting the shares out, you are agreeing to buy the business. If you would not want it at $114.42, the
+          50% annualized return is irrelevant.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: why the biggest drop is not the biggest dislocation
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Two rows from the same scan. Ranked on the raw decline they are not close; ranked on
+        <strong> Stretch</strong> the order reverses. This is the single measurement the whole screen is built on.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 260" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Comparison of XSD down 25 percent at 1.6 sigma against LIN down 12.5 percent at 2.1 sigma, showing that the smaller percentage decline is the larger dislocation once normalized by each name's own volatility">
+          <text x="60" y="30" fill="var(--text-dim)" fontSize="11.5" fontWeight="700">Ranked on % off the high</text>
+          <text x="410" y="30" fill="var(--accent-bright)" fontSize="11.5" fontWeight="700">Ranked on Stretch (σ)</text>
+
+          <rect x="60" y="48" width="222" height="34" rx="3" fill="var(--neg)" opacity="0.30" stroke="var(--neg)" strokeWidth="1" />
+          <text x="72" y="70" fill="var(--text-strong)" fontSize="12" fontWeight="700">XSD −25.0%</text>
+          <rect x="60" y="98" width="111" height="34" rx="3" fill="var(--neg)" opacity="0.30" stroke="var(--neg)" strokeWidth="1" />
+          <text x="72" y="120" fill="var(--text-strong)" fontSize="12" fontWeight="700">LIN −12.5%</text>
+          <text x="60" y="154" fill="var(--text-dim)" fontSize="10.5">&ldquo;XSD fell twice as far&rdquo;</text>
+
+          <line x1="330" y1="45" x2="330" y2="165" stroke="var(--border)" strokeWidth="1" />
+
+          <rect x="410" y="48" width="230" height="34" rx="3" fill="var(--accent-bright)" opacity="0.30" stroke="var(--accent-bright)" strokeWidth="1" />
+          <text x="422" y="70" fill="var(--text-strong)" fontSize="12" fontWeight="700">LIN 2.1σ</text>
+          <rect x="410" y="98" width="175" height="34" rx="3" fill="var(--accent-bright)" opacity="0.30" stroke="var(--accent-bright)" strokeWidth="1" />
+          <text x="422" y="120" fill="var(--text-strong)" fontSize="12" fontWeight="700">XSD 1.6σ</text>
+          <text x="410" y="154" fill="var(--accent-bright)" fontSize="10.5">&ldquo;LIN moved further than it ever does&rdquo;</text>
+
+          <rect x="60" y="180" width="600" height="62" rx="5" fill="var(--surface-inset)" stroke="var(--border)" strokeWidth="1" />
+          <text x="360" y="202" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">
+            A 12.5% fall in an industrial-gas company is a bigger event than a 25% fall in a semiconductor ETF,
+          </text>
+          <text x="360" y="220" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">
+            because one of them does that all the time and the other does not.
+          </text>
+          <text x="360" y="236" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">
+            Stretch divides the actual move by how far that name would ordinarily travel over the window.
+          </text>
+        </svg>
+        <p style={captionStyle}>
+          The same σ measure is shared with the Covered Call, Bull Put, and Bear Put screens, so the four cannot drift
+          apart in how they judge &ldquo;that has moved a lot.&rdquo; <strong>vs Market</strong> then strips out the
+          part of the move that was simply beta times the index &mdash; on the pictured Corning row, −45.9% off the
+          high was still −37.8% after that subtraction, so the dislocation was genuinely company-specific.
+        </p>
+      </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
@@ -6063,9 +6702,17 @@ function PutSellingScannerHelp() {
         A 20% drop means very different things for a utility and a semiconductor stock, so the scanner does not rank
         on the raw decline. For each stock it measures the daily volatility of the period <em>before</em> the selloff,
         works out how far that stock would ordinarily travel over the lookback window, and expresses the actual drop
-        as a multiple of that figure. This is the <strong>Stretch</strong> column, shown in standard deviations
-        (&sigma;). A stretch of 2.5&sigma; means the stock fell two and a half standard deviations further than its own
-        history says is routine.
+        as a multiple of that figure. This is the <strong>Sigma Stretch</strong> column, calculated as
+        <strong> recent log-return decline &divide; (prior daily volatility &times; &radic;Lookback)</strong>. A positive
+        result means the price fell; 2.5&sigma; is a decline equal to two and a half of its own normal lookback moves.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Example: if daily volatility is 1% and Lookback is 21 trading days, one normal move is approximately
+        1% &times; &radic;21 = 4.6%. A roughly 6.9% decline is therefore about 1.5&sigma;. Increasing
+        <strong> Lookback</strong> changes both the historical return being measured and the square-root scaling.
+        Increasing <strong>Target DTE</strong> does not change Stretch; it only changes the option expiration the
+        scanner seeks. This is also different from <strong>% Off High</strong>, which is simply the distance from the
+        52-week high and is not volatility-adjusted.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         The scanner also subtracts the market&rsquo;s move times the stock&rsquo;s beta, reported as
@@ -6194,6 +6841,20 @@ function PutSellingScannerHelp() {
 }
 
 function CoveredCallScannerHelp() {
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Covered Call Scanner</h2>
@@ -6203,6 +6864,52 @@ function CoveredCallScannerHelp() {
         <em> and are starting to stall</em>, then rates each one as a candidate for selling a covered call, suggests a
         specific strike and expiration, and shows both what you are paid and what you give up.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: what you keep and what you sell
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned result, drawn to a true scale. You own Travelers at $374.36 and sell the $390 call 48 days out
+        for a $6.35 credit. The dashed line is the shares on their own; the solid line is the shares plus the written
+        call.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Covered call payoff showing profit capped at the 390 strike, a breakeven at 368.01, unprotected downside below it, and the forgone upside above the strike compared with holding the shares alone">
+          <line x1="50" y1="170" x2="700" y2="170" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="292" textAnchor="end" fill="var(--text-dim)" fontSize="11">Stock price at expiration →</text>
+
+          <line x1="503" y1="60" x2="503" y2="265" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="364" y1="120" x2="364" y2="265" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+
+          <path d="M503 90 L 680 90 L 680 40 Z" fill="var(--neg)" opacity="0.15" />
+          <text x="612" y="80" textAnchor="middle" fill="var(--neg)" fontSize="10.5">upside you sold</text>
+
+          <polyline points="364,170 680,40" fill="none" stroke="var(--text-dim)"
+            strokeWidth="1.5" strokeDasharray="5 4" />
+          <polyline points="60,272 308,170 503,90 680,90"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="308" cy="170" r="4" fill="var(--amber)" />
+          <circle cx="503" cy="90" r="4" fill="var(--pos)" />
+
+          <text x="150" y="255" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">Every dollar of the decline</text>
+          <text x="150" y="270" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">the credit is the only cushion</text>
+
+          <text x="308" y="188" textAnchor="middle" fill="var(--amber)" fontSize="10.5">breakeven $368.01</text>
+          <text x="364" y="114" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $374.36</text>
+          <text x="503" y="53" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$390 strike</text>
+
+          <text x="590" y="110" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Capped at +$2,199</text>
+          <text x="590" y="124" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">5.9% if called · 45% ann.</text>
+        </svg>
+        <p style={captionStyle}>
+          The two things this picture is for. <strong>Left:</strong> the solid line falls with the shares almost all the
+          way down &mdash; the $6.35 credit moves breakeven from $374.36 to $368.01 and that is the entire protection.
+          <strong> Right:</strong> above $390 the line goes flat while the dashed shares keep climbing, and the shaded
+          wedge is the move you sold. A covered call is an income trade, not a hedge.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Why &ldquo;overbought&rdquo; on its own is the wrong screen
@@ -6248,6 +6955,51 @@ function CoveredCallScannerHelp() {
         not need one are rescaled and the grade gets an asterisk; those provisional scores always sort below fully
         priced candidates.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: where the 100 points live
+      </h3>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 190" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Bar showing the covered call score split into Overextension 30 points, Premium 25 points, Stall 20 points, and Trade terms 25 points, with grade thresholds at 50 60 70 and 80">
+          {[
+            ['Overextension', '30', 60, 180, 'var(--accent-bright)'],
+            ['Premium', '25', 240, 150, 'var(--pos)'],
+            ['Stall', '20', 390, 120, 'var(--amber)'],
+            ['Trade terms', '25', 510, 150, 'var(--teal)'],
+          ].map(([label, points, x, width, color]) => (
+            <g key={label}>
+              <rect x={x} y="45" width={width} height="46" fill={color} opacity="0.22" stroke={color} strokeWidth="1.5" />
+              <text x={Number(x) + Number(width) / 2} y="68" textAnchor="middle" fill={color} fontSize="12.5" fontWeight="700">{label}</text>
+              <text x={Number(x) + Number(width) / 2} y="84" textAnchor="middle" fill="var(--text-muted)" fontSize="11">{points} pts</text>
+            </g>
+          ))}
+          <text x="60" y="35" fill="var(--text-dim)" fontSize="11">0</text>
+          <text x="660" y="35" textAnchor="end" fill="var(--text-dim)" fontSize="11">100</text>
+
+          {[['D', 50], ['C', 60], ['B', 70], ['A', 80]].map(([grade, value]) => (
+            <g key={grade}>
+              <line x1={60 + Number(value) * 6} y1="91" x2={60 + Number(value) * 6} y2="112" stroke="var(--text-dim)" strokeWidth="1" />
+              <text x={60 + Number(value) * 6} y="126" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5" fontWeight="700">{grade}</text>
+              <text x={60 + Number(value) * 6} y="140" textAnchor="middle" fill="var(--text-dim)" fontSize="10">{value}</text>
+            </g>
+          ))}
+
+          <rect x="60" y="155" width="348" height="26" rx="4" fill="var(--surface-inset)" stroke="var(--border)" strokeWidth="1" />
+          <text x="234" y="172" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">
+            58 pts need no option chain
+          </text>
+          <rect x="418" y="155" width="242" height="26" rx="4" fill="var(--surface-inset)" stroke="var(--amber)" strokeWidth="1" />
+          <text x="539" y="172" textAnchor="middle" fill="var(--amber)" fontSize="11.5">42 pts require a live chain</text>
+        </svg>
+        <p style={captionStyle}>
+          Note how little of the score the premium actually drives. A name can carry a fat credit and still grade badly
+          because it has not stalled &mdash; and in the pictured scan the top-ranked result had an
+          <strong> IV/RV of 0.70</strong>, meaning its options were <em>cheap</em> against realized movement, yet it led
+          the table on extension and stall. If no chain is available the 58 chain-free points are rescaled and the grade
+          gets an asterisk.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Small caps</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -6312,15 +7064,91 @@ function CoveredCallScannerHelp() {
         credit or to let them go and bank the capped gain.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The controls, one by one
+      </h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Four presets sit above the filters. <strong>Conservative</strong> is holdings-only, must have stalled, strike
+        above your basis and 5% out of the money at 0.20 delta. <strong>Balanced</strong> adds index ETFs and uses the
+        conventional 0.30-delta write. <strong>Small caps</strong> asks for more room (6% OTM) at a lower delta.
+        <strong> Aggressive</strong> widens the universe, allows names still breaking out, and drops the cost-basis
+        rule &mdash; more premium, and far more chance of losing the shares.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Min run / Min stretch (σ):</strong> the two halves of &ldquo;has already moved.&rdquo; Run is the raw advance over the lookback; stretch normalizes it by the name&rsquo;s own prior volatility. Stretch is the one that travels across sectors.</li>
+        <li><strong>Min mkt cap</strong> and <strong>Small-cap min cap:</strong> two separate floors, because the large-cap gate would drop every small cap outright. Funds are sized by <strong>ETF min AUM</strong> instead.</li>
+        <li><strong>ETF min run / ETF min stretch:</strong> lower thresholds for funds, since a basket does not move like a single stock.</li>
+        <li><strong>Min RSI</strong> and <strong>Min % of range:</strong> how overbought, and how far up the 52-week range. These are necessary but never sufficient &mdash; see the Stall axis.</li>
+        <li><strong>Min $ volume:</strong> the single most useful liquidity control on this screen. Option quality tracks share dollar volume far better than it tracks market cap, which is what makes small caps workable here at all.</li>
+        <li><strong>Lookback:</strong> trading days in the advance window, 21 by default.</li>
+        <li><strong>Target DTE:</strong> 35 by default. The suggested expiration is the listed one nearest this.</li>
+        <li><strong>Target delta:</strong> roughly the assignment probability you are accepting. 0.30 is conventional: enough premium to be worth writing, about a 70% chance of keeping the shares.</li>
+        <li><strong>Min OTM:</strong> the floor on how far above spot the strike must sit, applied <em>after</em> the delta search. This is what stops a high-volatility name from handing you a 0.30-delta strike that is barely above the money.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        The five checkboxes are where most of the discipline lives: <strong>Skip fresh 52-wk highs</strong> (the names
+        most likely to run through your strike), <strong>Skip earnings inside trade</strong>,
+        <strong> Only where I hold 100+ shares</strong>, <strong>Keep strike above my cost basis</strong>, and
+        <strong> Skip leveraged / inverse ETFs</strong>.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/covered-call-scanner/01-scanner-overview.png"
+        alt="Covered Call Scanner showing the include row, the four presets, the filter panel, the scan stats line, and the ranked results table with score, shares held, percent of range, run, stretch, versus market, RSI, IV over RV, the suggested call, annualized return, if called, and buy-back price"
+        caption={<>
+          Each row names a specific contract &mdash; strike, expiration, how far above the price it sits, and the
+          credit &mdash; alongside the extension metrics that justified it and any warnings.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading the columns and the warnings
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Shares</strong> shows what you hold and how many contracts it supports; a dash means you hold none, so
+        the row is research rather than a trade you can place today. <strong>Ann. Return</strong> assumes the stock goes
+        nowhere. <strong>If Called</strong> is the capped best case, premium plus the gain up to the strike &mdash; and
+        it is usually the more honest number, since a name that just ran 30% is not obviously going to stand still.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The Warnings column is not decoration. <em>Wide spread</em> and <em>Thin OI</em> say the credit shown may not be
+        obtainable. <em>Recent trade estimate &mdash; no live bid/ask</em> means the quote came from the last trade,
+        not a live two-sided market. <em>Still climbing</em> means the name failed the stall test and got in anyway on
+        a loosened preset. <em>Div assign likely</em> means the dividend inside the trade exceeds the whole premium, so
+        expect early assignment. Any of these can invalidate an otherwise attractive row.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/covered-call-scanner/02-expanded-row.png"
+        alt="Expanded Covered Call row showing the score breakdown by axis, the full suggested trade with effective sale price and downside breakeven, the management plan with buy back and defend levels, and the dividend and earnings detail"
+        caption={<>
+          The expansion gives the score breakdown, the effective sale price, the downside breakeven, the gain against
+          your own basis if called, and the ex-dividend and earnings dates that could take the shares early.
+        </>}
+      />
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Start with <strong>My holdings</strong> (the default), and tick <strong>Only where I hold 100+ shares</strong> to see nothing but writable positions.</li>
         <li>Add <strong>Index ETFs</strong> or <strong>Sector &amp; commodity ETFs</strong> with the independent Include checkboxes; an ETF-only scan skips the stock universe and finishes in a few seconds.</li>
-        <li>Pick a <strong>preset</strong> (Conservative, Balanced, Aggressive) or set the filters yourself.</li>
+        <li>Pick a <strong>preset</strong> (Conservative, Balanced, Small caps, Aggressive) or set the filters yourself.</li>
         <li>Click <strong>Run Scan</strong>. The first run pulls a year of history and takes roughly 20&ndash;40 seconds; the price cache is shared with the Put Selling Scanner, so running one after the other is much faster.</li>
+        <li>Read the stats line: tickers scanned, how many were <em>extended</em>, how many passed size and liquidity, how many were rated, and how many option chains were priced.</li>
         <li>Click any row for the score breakdown, the full trade, the management plan, the extension metrics, and the dividend and earnings detail.</li>
-        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI.</li>
+        <li>Click the ticker to pull up its price chart with moving averages, MACD, and RSI &mdash; the fastest way to confirm by eye that the advance really is cooling.</li>
+        <li>Before writing, ask the one question the scanner cannot: <em>am I willing to sell these shares at this strike?</em> If the answer is no, do not write the call.</li>
       </ol>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        When the scan returns nothing
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        This is common and usually correct. A Balanced holdings-only run during a market pullback returned
+        <em> 133 scanned &rarr; 0 extended</em> &mdash; not a single position had run far enough to be worth capping.
+        Switching to the Aggressive preset over the full large+mid+small universe turned the same moment into
+        <em> 729 scanned &rarr; 95 extended &rarr; 40 rated</em>. Both answers were right; they asked different
+        questions. Loosening filters until something appears is how you end up writing calls on a name that is still
+        climbing.
+      </p>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1rem' }}>
         <strong>No trades execute here.</strong> The scanner rates setups from public market data. Scores are not
@@ -6339,6 +7167,20 @@ function CoveredCallScannerHelp() {
 }
 
 function BullPutSpreadScannerHelp() {
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Bull Put Spread Scanner</h2>
@@ -6347,6 +7189,52 @@ function BullPutSpreadScannerHelp() {
         sound stocks and ETFs in a healthy longer-term trend that have pulled back without breaking down. For each
         candidate it sells a higher-strike put and buys a lower-strike put in the same expiration.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: what you are actually being paid
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This is a real scanned result drawn on a <strong>true</strong> P/L scale &mdash; nothing is compressed. Amphenol
+        at $160.70, sell the $145 put and buy the $130 put, 48 days out, for a $3.20 credit.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Expiration payoff of a bull put spread showing a thin 320 dollar maximum profit above the short strike and a 1180 dollar maximum loss below the long strike, drawn to a true scale">
+          <line x1="50" y1="170" x2="700" y2="170" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="290" textAnchor="end" fill="var(--text-dim)" fontSize="11">Stock price at expiration →</text>
+
+          <line x1="184" y1="60" x2="184" y2="265" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="370" y1="60" x2="370" y2="265" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="565" y1="100" x2="565" y2="265" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+
+          <rect x="330" y="148" width="235" height="22" fill="var(--pos)" opacity="0.12" />
+          <text x="447" y="163" textAnchor="middle" fill="var(--pos)" fontSize="10.5">11.8% cushion</text>
+
+          <polyline points="60,250 184,250 330,170 370,148 680,148"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="330" cy="170" r="4" fill="var(--amber)" />
+          <circle cx="565" cy="148" r="4" fill="var(--accent)" />
+
+          <text x="122" y="243" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">Max loss −$1,180</text>
+          <text x="122" y="266" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">below $130 long put</text>
+
+          <text x="184" y="53" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$130 long</text>
+          <text x="370" y="53" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$145 short</text>
+
+          <text x="330" y="188" textAnchor="middle" fill="var(--amber)" fontSize="10.5">breakeven $141.80</text>
+          <text x="565" y="94" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $160.70</text>
+
+          <text x="600" y="140" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$320</text>
+          <text x="600" y="126" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">the credit, and nothing more</text>
+        </svg>
+        <p style={captionStyle}>
+          Drawn honestly, the reward is a thin sliver and the risk is a deep step. You are risking
+          <strong> $1,180 to make $320</strong> &mdash; a 27% return on risk &mdash; and the trade pays that maximum
+          anywhere above $145. This is why the scanner spends most of its filters on the <em>probability</em> of staying
+          up there rather than on the size of the credit.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Why the entry screen is different from cash-secured puts
@@ -6371,32 +7259,178 @@ function BullPutSpreadScannerHelp() {
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: the funnel, and why so few survive it
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The stats line under the filter panel is the whole scan in one sentence. These are the real counts from a
+        Balanced large-cap run:
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 250" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Funnel diagram: 348 tickers priced, 53 controlled pullbacks, 50 passed quality, 3 actionable spreads and 37 watchlist candidates">
+          {[
+            ['348', 'priced', 30, 640, 'var(--text-muted)'],
+            ['53', 'controlled pullbacks', 75, 420, 'var(--accent)'],
+            ['50', 'passed quality', 120, 390, 'var(--accent)'],
+            ['13', 'live spreads priced', 165, 250, 'var(--amber)'],
+          ].map(([count, label, y, width, color]) => (
+            <g key={label}>
+              <rect x={(720 - width) / 2} y={y} width={width} height="34" rx="4"
+                fill="var(--surface-inset)" stroke={color} strokeWidth="1.5" />
+              <text x="360" y={Number(y) + 22} textAnchor="middle" fill={color} fontSize="13" fontWeight="700">
+                {count} — {label}
+              </text>
+            </g>
+          ))}
+          <rect x="120" y="210" width="230" height="34" rx="4" fill="var(--surface-inset)" stroke="var(--pos)" strokeWidth="1.5" />
+          <text x="235" y="232" textAnchor="middle" fill="var(--pos)" fontSize="13" fontWeight="700">3 actionable</text>
+          <rect x="370" y="210" width="230" height="34" rx="4" fill="var(--surface-inset)" stroke="var(--amber)" strokeWidth="1.5" />
+          <text x="485" y="232" textAnchor="middle" fill="var(--amber)" fontSize="13" fontWeight="700">37 watchlist</text>
+          <path d="M235 199 L 235 210 M485 199 L 485 210 M235 199 L 485 199 M360 187 L 360 199" fill="none" stroke="var(--border)" strokeWidth="1.5" />
+        </svg>
+        <p style={captionStyle}>
+          348 tickers priced, 53 in a controlled pullback, 50 of those with acceptable business quality, 13 with a
+          live two-leg market &mdash; and <strong>3</strong> that cleared every structure gate. A further 10 were
+          dropped outright for earnings. Three actionable results from 348 is a normal outcome, not a broken scan.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Running the scan, control by control
+      </h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Start with the <strong>Include</strong> row (Stocks, Index ETFs, Sector &amp; commodity ETFs) and a
+        <strong> preset</strong>. Conservative wants confirmed uptrends, 20-delta shorts, 5% cushion and 100 open
+        interest; Balanced is the conventional 25-delta write; Aggressive adds mid caps, drops the 200-day requirement,
+        and tolerates 40% slippage. The preset button highlights only while the filters still match it exactly, so any
+        hand edit deselects it.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Stock universe:</strong> large caps, large+mid, mid only, your holdings, your watchlist, or a custom ticker list. ETF inclusion is separate, via the Include checkboxes.</li>
+        <li><strong>Min / Max pullback:</strong> the size of the dip, in percent, with separate lower ETF bounds since indexes move less than single names.</li>
+        <li><strong>Min / Max stretch (σ):</strong> recent log-return decline &divide; (prior daily volatility &times; &radic;Lookback). With 1% daily volatility, a normal 21-day move is about 4.6%, so a roughly 6.9% dip is about 1.5&sigma;. The minimum requires a meaningful dip; the maximum rejects a dislocation too severe for a defined-risk trade.</li>
+        <li><strong>Min / Max RSI:</strong> soft but not exhausted. Balanced uses 35&ndash;58.</li>
+        <li><strong>Min mkt cap / ETF min AUM / Min $ volume:</strong> size and tradability floors. Dollar volume is the best single proxy for how tight the option market will be.</li>
+        <li><strong>Lookback:</strong> historical trading days in the pullback window, 21 by default. Raising it changes both the return being measured and the &radic;Lookback term in Sigma Stretch.</li>
+        <li><strong>Target DTE:</strong> 35 by default. It is independent of Lookback and Sigma Stretch; it only guides the listed expiration selected, and the scanner never substitutes a very short one to dodge an earnings report.</li>
+        <li><strong>Short delta / Long delta:</strong> where the two legs sit. 0.25 short and 0.10 long is the Balanced pair. Raising short delta raises the credit and lowers the probability of keeping it &mdash; that trade is the whole strategy.</li>
+        <li><strong>Min / Max width:</strong> strike width as a percentage of spot, which bounds the maximum loss.</li>
+        <li><strong>Min credit (% width):</strong> the anti-token-premium gate. Below about 20% of width you are taking real defined risk for very little.</li>
+        <li><strong>Min cushion:</strong> how far the stock can fall before the trade loses at expiration.</li>
+        <li><strong>Min leg OI:</strong> applied to the <em>thinner</em> of the two legs.</li>
+        <li><strong>Max slippage (% credit):</strong> both bid/ask spreads measured against the credit. A spread that looks good at the mid and is unfillable at the natural fails here.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        The six checkboxes are the structural safety rails: price above the 200-day, 50-day above the 200-day,
+        profitable companies only, skip fresh 52-week lows, skip earnings inside the trade, and skip leveraged or
+        inverse ETFs. The earnings skip removes the ticker entirely rather than working around the report.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/01-scanner-overview.png"
+        alt="Bull Put Spread Scanner showing the include row, presets, the full filter panel, the scan funnel stats line, and the actionable spreads table with suggested strikes, credit, risk, cushion, probability out of the money, and buy-back price"
+        caption={<>
+          The live screen. Each actionable row names the exact spread to sell, the credit, maximum profit against
+          maximum loss, the breakeven cushion, modeled probability out of the money, and the buy-back limit.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading a row and its expansion
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Trend</strong> column is two independent lights: <em>200</em> is green when price is above the
+        200-day, <em>50/200</em> when the 50-day is above the 200-day. <strong>Pullback</strong> shows the dip and the
+        σ underneath. <strong>IV/RV</strong> above 1.0 means the option market is charging more than recent realized
+        movement &mdash; you want that as a seller, and one of the pictured results sat at 0.88, which is a genuine
+        mark against it even though everything else passed.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Click the row to expand. You get a plain-language verdict, the probability cards, the four score bars, and the
+        full quote detail. The score is out of 100: <strong>Setup 30</strong> (pullback, RSI, 200-day, 50/200 structure),
+        <strong> Quality 20</strong> (the same profitability, balance-sheet, size and liquidity model as Put Selling),
+        <strong> Premium 25</strong> (IV over realized vol, credit against realized-vol fair value, annualized return on
+        risk), and <strong>Safety 25</strong> (modeled probability out of the money, cushion, two-leg execution cost,
+        open interest, and whether the natural fill is still a credit). A dashed grade badge with an asterisk means no
+        live spread could be priced, and those partial scores always sort below fully priced ones.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bull Put Spread row showing the verdict, probability cards, Setup Quality Premium and Safety score bars, both leg quotes, mid versus natural credit, breakeven and cushion, and the management plan"
+        caption={<>
+          Check <strong>Mid / natural credit</strong> before anything else. The scanner ranks on the mid; the natural is
+          what you would actually get by hitting the market, and the gap between them is your real execution cost.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Actionable versus watchlist
       </h3>
-      <p style={{ marginBottom: '1rem' }}>
+      <p style={{ marginBottom: '0.75rem' }}>
         <strong>Actionable Spreads</strong> meet every price, quality, event, liquidity, and structure gate.
         With the earnings skip enabled, a stock whose report falls within Target DTE plus the safety buffer is removed
         entirely. <strong>Watchlist Candidates</strong> remain visible when the chain is unavailable or no spread clears
         every hard gate. A relaxed fallback is never promoted to the actionable table.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The watchlist Status column tells you which one it was: <em>Earnings inside trade</em>,
+        <em> Structure limits missed</em>, <em>No quotable spread</em>, or <em>Awaiting live pricing</em>. That
+        distinction matters &mdash; &ldquo;structure limits missed&rdquo; is a filter you could reasonably loosen,
+        while &ldquo;no quotable spread&rdquo; means the market is not there to trade.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/bull-put-spread-scanner/03-watchlist.png"
+        alt="Bull Put Spread Scanner watchlist candidates table showing per-ticker status reasons such as earnings inside trade, structure limits missed, and no quotable spread"
+        caption={<>
+          The watchlist is usually far longer than the actionable table, and it is where you learn which gate is
+          binding on your current settings.
+        </>}
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Management</h3>
       <p style={{ marginBottom: '1rem' }}>
         The result includes a buy-back target that captures roughly 50&ndash;65% of the original credit, a defensive
         debit near twice the credit, a DTE checkpoint, and a default instruction to close before the final three days.
         Short puts can be assigned before expiration, and pin risk rises near expiration, so the page treats monitoring
-        and an early closing plan as part of the setup rather than an afterthought.
+        and an early closing plan as part of the setup rather than an afterthought. The last of the credit is
+        precisely the part you are paid least for and carry the most assignment risk to collect.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested workflow</h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Pick the Include boxes and a preset. Balanced on large caps plus index ETFs is the sane starting point.</li>
+        <li>Run the scan and read the funnel line before the table. If <em>controlled pullbacks</em> is near zero, the market is not offering this setup today and no filter tweak will conjure one.</li>
+        <li>Work the Actionable table first. Sort by <strong>Cushion</strong> or <strong>Prob. OTM</strong> rather than by score when you want safety, and by <strong>Credit / Risk</strong> when you want return.</li>
+        <li>Expand the best candidate. Read the verdict, then mid versus natural credit, then the two leg quotes and thinner-leg OI.</li>
+        <li>Open the risk graph to confirm the strikes, width, breakeven, maximum profit, and maximum loss.</li>
+        <li>Enter as one vertical limit order at or near the mid. Never leg into it.</li>
+        <li>Set the buy-back limit at the same time you open the trade, and diary the reassessment DTE.</li>
+      </ol>
 
       <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
         The scanner is a research and ranking tool, not an order ticket. Verify the quotes as one vertical limit order,
         check earnings and other events again before entry, and size from maximum loss rather than the credit received.
+        On the pictured trade that means budgeting $1,180 per contract, not $320.
       </div>
     </div>
   )
 }
 
 function BearPutSpreadScannerHelp() {
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Bear Put Spread Scanner</h2>
@@ -6407,6 +7441,52 @@ function BearPutSpreadScannerHelp() {
         to the short strike. The scanner finds names whose breakdown has <em>started but not finished</em>, then prices
         a specific vertical on each one.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: the shape inverts
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned result on a true scale: SMH at $540.53, buy the $520 put and sell the $430 put 48 days out for a
+        $21.85 debit. Compare this against the bull put spread picture and the difference is the whole point of a debit
+        trade.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Bear put spread payoff showing a 6815 dollar maximum profit below the 430 short strike and a 2185 dollar maximum loss above the 520 long strike, with breakeven at 498.15">
+          <line x1="50" y1="190" x2="700" y2="190" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="290" textAnchor="end" fill="var(--text-dim)" fontSize="11">Stock price at expiration →</text>
+
+          <line x1="176" y1="50" x2="176" y2="262" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="525" y1="50" x2="525" y2="262" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="605" y1="120" x2="605" y2="262" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+
+          <path d="M440 190 L 605 190" stroke="var(--amber)" strokeWidth="6" opacity="0.25" />
+          <text x="522" y="182" textAnchor="middle" fill="var(--amber)" fontSize="10.5">must fall 7.9% just to break even</text>
+
+          <polyline points="60,60 176,60 440,190 525,232 680,232"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="440" cy="190" r="4" fill="var(--amber)" />
+          <circle cx="605" cy="232" r="4" fill="var(--accent)" />
+
+          <text x="118" y="52" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$6,815</text>
+          <text x="118" y="80" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">below the $430 short</text>
+
+          <text x="176" y="278" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$430 short</text>
+          <text x="525" y="278" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$520 long</text>
+          <text x="440" y="208" textAnchor="middle" fill="var(--amber)" fontSize="10.5">breakeven $498.15</text>
+          <text x="605" y="114" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $540.53</text>
+
+          <text x="640" y="252" textAnchor="end" fill="var(--neg)" fontSize="11.5" fontWeight="700">Max loss −$2,185</text>
+          <text x="640" y="266" textAnchor="end" fill="var(--text-dim)" fontSize="10.5">the debit, lost in full if nothing happens</text>
+        </svg>
+        <p style={captionStyle}>
+          Risk $2,185 to make $6,815 &mdash; a <strong>3.12:1</strong> reward-to-risk, the mirror image of the bull put
+          spread&rsquo;s thin sliver. But look at the amber bar: the stock has to fall <strong>7.9% just to reach
+          breakeven</strong> and 20.4% to collect the maximum. On the selling screens you win by default; here nothing
+          happening loses the entire debit.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Why this is not the Put Selling Scanner run backwards
@@ -6427,6 +7507,56 @@ function BearPutSpreadScannerHelp() {
         paying for a move that is behind you. That single inversion is the difference between this screen and the put
         screen read upside-down.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: the band, not a ramp
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This is the single most important idea on the screen. Every other scanner scores &ldquo;more is better&rdquo;
+        on its headline measure. Here, more stops being better and starts being worse.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 265" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Trapezoid showing decline-size credit peaking between 1 and 2 sigma and falling away above 2.5 sigma, with the washed-out crash zone marked as the put seller's setup">
+          <line x1="60" y1="200" x2="680" y2="200" stroke="var(--border)" strokeWidth="1" />
+          {[0, 1, 2, 3, 4].map(tick => (
+            <g key={tick}>
+              <line x1={60 + tick * 150} y1="200" x2={60 + tick * 150} y2="206" stroke="var(--border)" strokeWidth="1" />
+              <text x={60 + tick * 150} y="220" textAnchor="middle" fill="var(--text-dim)" fontSize="11">{tick}σ</text>
+            </g>
+          ))}
+          <text x="680" y="240" textAnchor="end" fill="var(--text-dim)" fontSize="11">size of the decline, in this name&rsquo;s own standard deviations →</text>
+
+          <path d="M135 200 L 210 90 L 360 90 L 510 200 Z" fill="var(--accent-bright)" opacity="0.18" />
+          <polyline points="135,200 210,90 360,90 510,200" fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <text x="285" y="80" textAnchor="middle" fill="var(--accent-bright)" fontSize="12.5" fontWeight="700">full credit</text>
+          <text x="285" y="120" textAnchor="middle" fill="var(--text-muted)" fontSize="11">breakdown started,</text>
+          <text x="285" y="135" textAnchor="middle" fill="var(--text-muted)" fontSize="11">not finished</text>
+
+          <text x="95" y="178" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">nothing</text>
+          <text x="95" y="192" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">broken yet</text>
+
+          <text x="600" y="150" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">crash-chasing</text>
+          <text x="600" y="166" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">the put SELLER&rsquo;s setup —</text>
+          <text x="600" y="180" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">peak IV, move already made</text>
+          <text x="600" y="194" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">fresh lows excluded outright</text>
+
+          <circle cx="255" cy="90" r="5" fill="var(--pos)" />
+          <text x="255" y="60" textAnchor="middle" fill="var(--pos)" fontSize="11" fontWeight="700">SMH at 1.3σ</text>
+
+          <line x1="135" y1="45" x2="135" y2="200" stroke="var(--amber)" strokeDasharray="4 3" strokeWidth="1" />
+          <line x1="435" y1="45" x2="435" y2="200" stroke="var(--amber)" strokeDasharray="4 3" strokeWidth="1" />
+          <text x="135" y="38" textAnchor="middle" fill="var(--amber)" fontSize="10">Min stretch 0.5σ</text>
+          <text x="435" y="38" textAnchor="middle" fill="var(--amber)" fontSize="10">Max stretch 2.5σ</text>
+        </svg>
+        <p style={captionStyle}>
+          The two amber lines are the Balanced preset&rsquo;s <strong>Min stretch</strong> and
+          <strong> Max stretch</strong>. Max stretch is the gate that stops this becoming a crash-chaser, and it is the
+          one most likely to be loosened for the wrong reason: widening it to 4σ will absolutely produce more
+          candidates, and they will be exactly the names the Put Selling Scanner wants to sell puts on.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -6500,6 +7630,69 @@ function BearPutSpreadScannerHelp() {
         falling, not that it is falling faster than the market.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The controls, one by one
+      </h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Four presets. <strong>Conservative</strong> demands a confirmed downtrend, 2pp of relative weakness, a debit
+        under 45% of width and a target within 1.5σ. <strong>Balanced</strong> needs only a broken 50-day and the
+        conventional 50/25-delta vertical. <strong>Hedge my holdings</strong> scans your own positions and drops the
+        relative-weakness and fresh-low gates. <strong>Aggressive</strong> widens the universe and accepts wider,
+        cheaper spreads that need a bigger move.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Min / Max stretch (σ):</strong> the band from the picture above. Max stretch is the load-bearing one.</li>
+        <li><strong>Min / Max RSI:</strong> a floor <em>and</em> a ceiling. Below the floor the name is washed out and the next move is as likely to be the bounce; above the ceiling it has not rolled over yet.</li>
+        <li><strong>Min vs market (pp):</strong> how far the name must lag the beta-adjusted market. ETFs get their own floor, usually 0, because a fund tracks its benchmark by construction &mdash; SPY has no weakness against itself.</li>
+        <li><strong>Max drawdown:</strong> skip names already this far off the 52-week high. The payoff is capped at the short strike, so most of the move has to still be available.</li>
+        <li><strong>Min above low:</strong> minimum room left above the 52-week low. Same logic from the other end.</li>
+        <li><strong>Min mkt cap / Small-cap min cap / ETF min AUM / Min $ volume:</strong> size and liquidity floors, all set higher than on the single-leg screens because a vertical has to fill on two legs.</li>
+        <li><strong>Target DTE:</strong> 45 by default, deliberately longer than a credit trade wants. A debit spread needs time for the move to happen, and buying too little of it is the most common way a correct call still loses money.</li>
+        <li><strong>Long delta / Short delta:</strong> 0.50 and 0.25 by default. Lowering the short delta widens the spread &mdash; cheaper as a share of width, but a bigger move required.</li>
+        <li><strong>Max debit (% of width):</strong> above 50% you are risking more than you can make. 33% is a clean 2:1.</li>
+        <li><strong>Min R:R</strong> and <strong>Max move needed (σ):</strong> the two halves of the same judgement. A 4:1 spread that needs a 3σ move is a lottery ticket, and Max move needed is what rejects it.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        The checkboxes: <strong>Require price below the 50-day</strong> (the minimum definition of a broken trend),
+        <strong> Require 50-day below 200-day</strong> (a confirmed downtrend, far fewer candidates),
+        <strong> Skip fresh 52-wk lows</strong>, <strong>Skip earnings inside trade</strong>, and
+        <strong> Skip leveraged / inverse ETFs</strong>.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/bear-put-spread-scanner/01-scanner-overview.png"
+        alt="Bear Put Spread Scanner showing the four presets, the filter panel, the scan funnel stats line, and the actionable spreads table with trend lights, move in sigma, versus market, RSI, IV over RV, the suggested spread, risk and reward, the move needed, edge, and exit plan"
+        caption={<>
+          The live screen. The <strong>Trend</strong> cell is three lights (20-day, 50-day, downtrend), <strong>Move</strong>
+          carries the σ underneath the percentage, and <strong>Needs</strong> gives the distance to the short strike both
+          as a percentage and in expected moves.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading a row
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Read <strong>Needs</strong> before you read <strong>Risk / Reward</strong>. A 3.5:1 spread that needs 1.03σ and
+        a 2.6:1 spread that needs 1.13σ are much closer trades than the ratios suggest, and the σ figure is what tells
+        you so. Then read <strong>Edge</strong>: positive means the market is charging less than the name&rsquo;s own
+        realized movement justifies. In the pictured scan the leaders ran +26% to +40%, while some rows were negative
+        &mdash; paying up for a move after the scare, which is the usual state of affairs.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Warnings</strong> column earns its place here. <em>Slippage</em> appeared on most of the pictured
+        results, and on a debit trade slippage comes straight out of the reward-to-risk you were sold on.
+        <em> Bounced</em> means the name has already started recovering off its low.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/bear-put-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bear Put Spread row showing the four score bars, both leg quotes with deltas, the debit against realized-volatility fair value, and the exit plan with take profit, stop, reassess by, and invalidate above levels"
+        caption={<>
+          The expansion carries the score breakdown, both leg quotes, and the four-part exit plan &mdash; take profit,
+          stop, reassess by, and the price that invalidates the thesis outright.
+        </>}
+      />
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Pick a <strong>preset</strong>. Conservative wants a confirmed downtrend and a cheap, reachable spread; <strong>Hedge my holdings</strong> scans what you already own.</li>
@@ -6528,6 +7721,20 @@ function BearPutSpreadScannerHelp() {
 }
 
 function BearCallSpreadScannerHelp() {
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Bear Call Spread Scanner</h2>
@@ -6538,6 +7745,52 @@ function BearCallSpreadScannerHelp() {
         Only a rally loses. The scanner finds rallies that have been <em>refused</em> under overhead supply, then prices
         a specific vertical on each one.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: the payoff, and where the strike goes
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned result on a true scale: Costco at $951.89, sell the $975 call and buy the $1010 call 27 days out
+        for a $9.75 credit. The grey band is the overhead level the scanner found &mdash; a 200-day average sitting just
+        0.6% above the price &mdash; and note where the short strike was placed relative to it.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 360" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Bear call spread payoff showing 975 dollars maximum profit below the 975 strike, a 2525 dollar maximum loss above 1010, breakeven at 984.75, and the 200-day resistance level sitting below the short strike">
+          <line x1="50" y1="170" x2="700" y2="170" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="352" textAnchor="end" fill="var(--text-dim)" fontSize="11">Stock price at expiration →</text>
+
+          <rect x="222" y="60" width="18" height="270" fill="var(--text-dim)" opacity="0.22" />
+          <text x="231" y="52" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">200-day wall</text>
+
+          <line x1="339" y1="70" x2="339" y2="330" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="556" y1="70" x2="556" y2="330" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="196" y1="120" x2="196" y2="330" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+
+          <polyline points="60,105 339,105 400,170 556,338 680,338"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="400" cy="170" r="4" fill="var(--amber)" />
+          <circle cx="196" cy="105" r="4" fill="var(--accent)" />
+
+          <text x="150" y="95" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$975</text>
+          <text x="150" y="140" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">down, flat, or up a little</text>
+          <text x="196" y="114" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $951.89</text>
+
+          <text x="339" y="348" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$975 short</text>
+          <text x="556" y="348" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">$1010 long</text>
+          <text x="400" y="190" textAnchor="middle" fill="var(--amber)" fontSize="10.5">breakeven $984.75 · only 3.5% up</text>
+
+          <text x="670" y="320" textAnchor="end" fill="var(--neg)" fontSize="11.5" fontWeight="700">Max loss −$2,525</text>
+          <text x="670" y="334" textAnchor="end" fill="var(--text-dim)" fontSize="10.5">2.6× the credit you collected</text>
+        </svg>
+        <p style={captionStyle}>
+          Three things at once. The <strong>reward is the thin plateau</strong> and the risk is 2.6× larger &mdash; size
+          from $2,525, never from $975. The <strong>cushion is only 3.5%</strong>, or 0.54 expected moves, which is
+          uncomfortably little. And the short strike sits <em>above</em> the 200-day wall, so price has to break
+          something structural before the trade starts losing. That last part is what this screen does that no other one does.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
         Why this is not the Covered Call Scanner without the shares
@@ -6565,6 +7818,59 @@ function BearCallSpreadScannerHelp() {
         falls away above 3&sigma; &mdash; and relative performance is gated as a <em>maximum</em>, the only screen in
         the family where outperformance disqualifies a candidate.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: three charts, only one of them yours
+      </h3>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 220" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Three price path sketches: an accelerating breakout to fresh highs which is excluded, a collapsed name which belongs to the bear put screen, and a rally that stalled under a declining average which is this screen's setup">
+          {[
+            {
+              x: 10, title: 'Still climbing', color: 'var(--neg)', verdict: 'EXCLUDED',
+              path: 'M30 150 L 70 135 L 110 115 L 150 80 L 190 40',
+              note: 'accelerating into fresh highs',
+              note2: 'the Covered Call screen — and here it',
+              note3: 'costs the full width, not a capped gain',
+            },
+            {
+              x: 245, title: 'Already collapsed', color: 'var(--neg)', verdict: 'WRONG SCREEN',
+              path: 'M30 45 L 70 70 L 110 115 L 150 145 L 190 155',
+              note: 'call skew flat, credit tiny,',
+              note2: 'sharpest rallies live in downtrends —',
+              note3: 'Bear Put Spread pays you for this instead',
+            },
+            {
+              x: 480, title: 'Rally refused', color: 'var(--pos)', verdict: 'THIS SCREEN',
+              path: 'M30 140 L 70 105 L 110 78 L 150 88 L 190 96',
+              note: 'bounce into a declining average,',
+              note2: 'lower high, momentum rolling over,',
+              note3: 'a wall to place the strike behind',
+            },
+          ].map(panel => (
+            <g key={panel.title} transform={`translate(${panel.x}, 0)`}>
+              <rect x="10" y="18" width="215" height="185" rx="5"
+                fill="var(--surface-inset)" stroke={panel.color} strokeWidth="1.5" />
+              <text x="117" y="38" textAnchor="middle" fill={panel.color} fontSize="12.5" fontWeight="700">{panel.title}</text>
+              {panel.title === 'Rally refused' && (
+                <line x1="28" y1="68" x2="200" y2="86" stroke="var(--text-dim)" strokeDasharray="4 3" strokeWidth="1.5" />
+              )}
+              <path d={panel.path} fill="none" stroke={panel.color} strokeWidth="2.5"
+                strokeLinejoin="round" strokeLinecap="round" transform="translate(0, 22)" />
+              <text x="117" y="182" textAnchor="middle" fill="var(--text-muted)" fontSize="9.5">{panel.note}</text>
+              <text x="117" y="193" textAnchor="middle" fill="var(--text-muted)" fontSize="9.5">{panel.note2}</text>
+              <text x="117" y="204" textAnchor="middle" fill="var(--text-dim)" fontSize="9.5">{panel.note3}</text>
+              <text x="117" y="12" textAnchor="middle" fill={panel.color} fontSize="10" fontWeight="700">{panel.verdict}</text>
+            </g>
+          ))}
+        </svg>
+        <p style={captionStyle}>
+          The dashed line in the third panel is a flat-or-declining moving average. That detail is load-bearing: a
+          <em> rising</em> average that price has just slipped under is support about to be reclaimed, and treating it
+          as a ceiling would put your short strike directly in the path of the next leg up &mdash; which is the Bull Put
+          Spread Scanner&rsquo;s setup, not this one.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How candidates are scored</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -6660,6 +7966,96 @@ function BearCallSpreadScannerHelp() {
         them.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        The controls, one by one
+      </h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Four presets: <strong>Conservative</strong>, <strong>Balanced</strong>, <strong>Downtrend rips</strong> (the
+        highest-probability version &mdash; confirmed downtrends that have just bounced into a declining average), and
+        <strong> Aggressive</strong>. This screen has more controls than any other in the family, because it has more
+        ways to lose.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Min / Max rally (σ):</strong> the band. Below the minimum nothing has been rejected; above the maximum it is a momentum thrust, not a refused rally.</li>
+        <li><strong>Max vs market (pp):</strong> a <em>maximum</em>, and the only one of its kind in the family. You never sell calls against the market&rsquo;s leader. ETFs get their own, tighter ceiling.</li>
+        <li><strong>Min / Max RSI:</strong> below the floor the name is already broken and you are selling calls on something the Bear Put screen would buy puts on; above the ceiling it is trending, not rolling over.</li>
+        <li><strong>Max acceleration (pp):</strong> rejects names whose last 5 sessions gained this much more than the prior 5. Accelerating momentum is the single condition that loses the whole width.</li>
+        <li><strong>Max run off low (%):</strong> rejects names already up this much from the 20-day low &mdash; the shape of a short squeeze, and a squeeze runs to the full width while your gain is capped at the credit.</li>
+        <li><strong>Max % of range:</strong> near the highs there is no overhead supply left to reject anything.</li>
+        <li><strong>Small-cap min cap:</strong> set higher here than on the Bear Put screen, and not for liquidity reasons &mdash; a takeover bid gaps a short call straight through any strike, and those land on small companies.</li>
+        <li><strong>Target DTE:</strong> 30&ndash;45, deliberately shorter than the debit screens. A seller is paid by time; buying more of it just means more chances to be wrong.</li>
+        <li><strong>Short delta / Long delta / Min strike OTM:</strong> where the two legs sit, plus a hard floor on how far above spot the short strike must be so a normal week does not put it in play immediately.</li>
+        <li><strong>Min credit (% of width) / Min cushion / Min open interest / Max slippage:</strong> the four execution gates. Below about 20% of width you are not being paid enough for defined risk.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Three checkboxes are unique to this screen: <strong>Require a rolled-over high</strong> (the minimum definition
+        of a refused rally), <strong>Require resistance overhead</strong> (skip names where nothing has to break for
+        price to reach your strike), and <strong>Place the strike above resistance</strong> (prefer pairs clearing the
+        nearest wall rather than taking whatever the target delta lands on). The rest match the other screens.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/01-scanner-overview.png"
+        alt="Bear Call Spread Scanner showing the four presets, the full filter panel, the scan stats line including how many strikes were placed above resistance, and the results table with setup lights, rally size, versus market, RSI, the ceiling level, IV over RV, the suggested spread, credit and risk, cushion, edge, and exit"
+        caption={<>
+          The <strong>Ceiling</strong> column names the actual overhead level and how far above price it sits &mdash;
+          &ldquo;0.6% &middot; 200-day average&rdquo; &mdash; and the stats line reports how many strikes the scanner
+          managed to place above one.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading a row, and taking the warnings seriously
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Read <strong>Cushion</strong> first &mdash; both the percentage and the σ figure next to it. A 3.5% cushion that
+        is only 0.54 expected moves is a very different trade from a 3.5% cushion worth 1.5σ. Then read
+        <strong> Edge</strong>: negative means the credit is below what the name&rsquo;s own realized movement justifies,
+        so you are being underpaid for the risk.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The warnings matter more here than anywhere else in the family, because each one names a specific way the full
+        width gets lost. <em>Leader</em> means the name is outperforming. <em>Below the wall</em> means the strike could
+        not be placed above resistance. <em>Strike close</em> means the short strike sits near the money.
+        <em> Upside bid</em> means the far calls are pricing a jump. <em>Underpaid</em> and <em>IV cheap</em> mean the
+        credit does not compensate. A row carrying four or five of these is telling you something even when the grade
+        looks acceptable.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/02-expanded-row.png"
+        alt="Expanded Bear Call Spread row showing the four score axes, both call leg quotes, the upside tail and call skew diagnostics, the dividend close-before date, and the exit plan"
+        caption={<>
+          The expansion carries both leg quotes, the upside-tail and call-skew diagnostics, any dividend
+          <strong> Close before</strong> date, and the exit plan.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        What a real scan looks like, and the trap in loosening it
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This screen returns nothing more often than any other, and the reason is structural rather than a bug. A
+        Balanced large-cap run during a market pullback gave <em>443 scanned &rarr; <strong>2</strong> rallies rejected
+        &rarr; 0 actionable</em>. There were no refused rallies to find, because the market had just sold off &mdash;
+        the same session in which the Bull Put Spread Scanner found 53 controlled pullbacks.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Switching to the Aggressive preset over the full universe turned that into <em>729 scanned &rarr; 76 rallies
+        rejected &rarr; <strong>3 actionable</strong></em>. But look at what the three were: grades of
+        <strong> D 51.7, F 44.5, and F 42</strong>, carrying <em>Leader</em>, <em>Underpaid</em>, <em>Below the wall</em>,
+        <em> Strike close</em>, and <em>Upside bid</em> between them. The scanner did exactly what it was told and
+        graded the results honestly. Three actionable F-grade rows are not three trades &mdash; they are the screen
+        telling you the setup does not exist today.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/bear-call-spread-scanner/03-empty-scan.png"
+        alt="Bear Call Spread Scanner after a Balanced run showing 443 tickers scanned, only 2 rallies rejected, zero actionable spreads, and the watchlist explaining which limit each candidate missed"
+        caption={<>
+          An empty actionable table with a short watchlist is a normal, correct outcome for this screen. The watchlist
+          Status column tells you which gate each candidate missed.
+        </>}
+      />
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Pick a <strong>preset</strong>. <strong>Downtrend rips</strong> is the highest-probability version: only names already in a confirmed downtrend that have just bounced into a declining average.</li>
@@ -6695,6 +8091,20 @@ function IronCondorScannerHelp() {
     border: '1px solid var(--p-333)',
   }
 
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Iron Condor Scanner</h2>
@@ -6724,6 +8134,98 @@ function IronCondorScannerHelp() {
         only finish on one side of the range, so only one wing can ever be breached. This is how brokers margin the
         position. Adding the two wings together is the most common arithmetic error in condor trading: it roughly
         doubles the apparent risk and halves the apparent return on it.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: only one side can ever be breached
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned result on a true scale: IWM at $291.20, sell the $270/$280 put wing and the $304/$315 call wing,
+        34 days out, for a $2.91 net credit. The wings are deliberately <em>not</em> equal &mdash; 10 points on the put
+        side, 11 on the call side &mdash; which is exactly what makes the arithmetic point visible.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 320" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Iron condor payoff showing a 290 dollar credit plateau between the short strikes, a 709 dollar loss on the put side, and a 809 dollar loss on the call side, with the two never occurring together">
+          <line x1="50" y1="150" x2="700" y2="150" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="312" textAnchor="end" fill="var(--text-dim)" fontSize="11">IWM price at expiration →</text>
+
+          {[[155, '$270'], [251, '$280'], [480, '$304'], [585, '$315']].map(([x, label]) => (
+            <g key={label}>
+              <line x1={x} y1="60" x2={x} y2="288" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+              <text x={x} y="300" textAnchor="middle" fill="var(--text-dim)" fontSize="10">{label}</text>
+            </g>
+          ))}
+          <line x1="358" y1="70" x2="358" y2="288" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+          <text x="358" y="64" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $291.20</text>
+
+          <rect x="223" y="96" width="284" height="54" fill="var(--pos)" opacity="0.10" />
+
+          <polyline points="60,260 155,260 223,150 251,105 480,105 507,150 585,276 680,276"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="223" cy="150" r="4" fill="var(--amber)" />
+          <circle cx="507" cy="150" r="4" fill="var(--amber)" />
+
+          <text x="365" y="92" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$290 (the credit)</text>
+          <text x="223" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $277.09</text>
+          <text x="507" y="168" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $306.91</text>
+
+          <text x="105" y="250" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$709</text>
+          <text x="105" y="234" textAnchor="middle" fill="var(--text-dim)" fontSize="10">put wing</text>
+          <text x="640" y="266" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$809</text>
+          <text x="640" y="250" textAnchor="middle" fill="var(--text-dim)" fontSize="10">call wing</text>
+
+          <rect x="245" y="228" width="245" height="52" rx="4" fill="var(--surface-inset)" stroke="var(--neg-strong)" strokeWidth="1.5" />
+          <text x="367" y="247" textAnchor="middle" fill="var(--neg-strong)" fontSize="11.5" fontWeight="700">Max loss = $809, the worse side</text>
+          <text x="367" y="263" textAnchor="middle" fill="var(--text-muted)" fontSize="10.5">NOT $709 + $809. NOT both wings</text>
+          <text x="367" y="276" textAnchor="middle" fill="var(--text-dim)" fontSize="10">minus the credit ($1,809)</text>
+        </svg>
+        <p style={captionStyle}>
+          IWM finishes in one place. It cannot be below $270 <em>and</em> above $315, so the two tails can never both
+          happen &mdash; the position is margined at the worse one. Sizing this trade from $1,809 instead of
+          <strong> $809</strong> more than doubles the apparent risk and turns a 35.9% return on risk into about 16%.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: why net drift is not enough
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Both paths below start and end in exactly the same place. Every net-drift measure &mdash; window return, stretch
+        sigma, distance from a moving average &mdash; scores them identically. One of them was a fine condor and the
+        other was breached twice.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 250" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Two price paths with identical start and end points: a quiet path staying inside the condor range with a low efficiency ratio, and a round trip that breaches both short strikes despite zero net drift">
+          <rect x="60" y="95" width="600" height="60" fill="var(--pos)" opacity="0.10" />
+          <line x1="60" y1="95" x2="660" y2="95" stroke="var(--pos)" strokeDasharray="5 4" strokeWidth="1.5" />
+          <line x1="60" y1="155" x2="660" y2="155" stroke="var(--pos)" strokeDasharray="5 4" strokeWidth="1.5" />
+          <text x="668" y="99" fill="var(--pos)" fontSize="10" textAnchor="end">short call $304</text>
+          <text x="668" y="167" fill="var(--pos)" fontSize="10" textAnchor="end">short put $280</text>
+          <text x="66" y="88" fill="var(--pos)" fontSize="10.5" fontWeight="700">the range you sold</text>
+
+          <polyline points="60,130 140,118 220,136 300,122 380,140 460,120 540,134 620,124 660,128"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+          <polyline points="60,130 140,105 220,72 300,50 380,62 460,110 540,168 620,196 660,128"
+            fill="none" stroke="var(--neg)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="60" cy="130" r="4.5" fill="var(--text-muted)" />
+          <circle cx="660" cy="128" r="4.5" fill="var(--text-muted)" />
+          <text x="60" y="222" textAnchor="start" fill="var(--text-dim)" fontSize="10">same start</text>
+          <text x="660" y="222" textAnchor="end" fill="var(--text-dim)" fontSize="10">same finish</text>
+
+          <text x="250" y="200" fill="var(--accent-bright)" fontSize="11.5" fontWeight="700">efficiency 0.19 — never left the range</text>
+          <text x="300" y="42" fill="var(--neg)" fontSize="11.5" fontWeight="700">breached the call wing…</text>
+          <text x="560" y="212" fill="var(--neg)" fontSize="11.5" fontWeight="700">…then the put wing</text>
+        </svg>
+        <p style={captionStyle}>
+          This is what the <strong>efficiency ratio</strong> catches and nothing else on the screen does: net distance
+          travelled divided by total path length. The blue path covered little ground and stayed put. The red path had
+          <em> zero net drift</em> and was a disaster. The pictured IWM result scored 0.19 &mdash; a lot of walking,
+          almost no travelling.
+        </p>
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
@@ -6939,6 +8441,20 @@ function UnbalancedPutCondorScannerHelp() {
     border: '1px solid var(--p-333)',
   }
 
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
   return (
     <div>
       <h2>Unbalanced Put Condor Scanner</h2>
@@ -6948,6 +8464,76 @@ function UnbalancedPutCondorScannerHelp() {
         expiration, then searches nearby strikes for the complete package whose net delta best matches the
         selected neutral, slightly bullish, or slightly bearish target.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: two spreads, one table-top
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The four legs are easier to hold in your head as two separate spreads that get added together. This is a real
+        scanned SPY result at $747.03, 167 days out.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 200" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Diagram showing the purchased upper put spread of buy 715 and sell 710 combined with the sold lower spread of sell 665 and buy 655, producing the complete four-put structure">
+          <rect x="20" y="30" width="290" height="120" rx="6" fill="var(--surface-inset)" stroke="var(--pos)" strokeWidth="1.5" />
+          <text x="165" y="52" textAnchor="middle" fill="var(--pos)" fontSize="12.5" fontWeight="700">Purchased spread (upper)</text>
+          <text x="165" y="76" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">BUY 1 × $715 put &nbsp;Δ 28.1</text>
+          <text x="165" y="96" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">SELL 1 × $710 put &nbsp;Δ 26.5</text>
+          <text x="165" y="120" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">5 points wide · costs money</text>
+          <text x="165" y="138" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">this is the part that pays</text>
+
+          <text x="340" y="96" textAnchor="middle" fill="var(--text-muted)" fontSize="22" fontWeight="700">+</text>
+
+          <rect x="370" y="30" width="290" height="120" rx="6" fill="var(--surface-inset)" stroke="var(--amber)" strokeWidth="1.5" />
+          <text x="515" y="52" textAnchor="middle" fill="var(--amber)" fontSize="12.5" fontWeight="700">Sold spread (lower / back)</text>
+          <text x="515" y="76" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">SELL 1 × $665 put &nbsp;Δ 15.5</text>
+          <text x="515" y="96" textAnchor="middle" fill="var(--text-muted)" fontSize="11.5">BUY 1 × $655 put &nbsp;Δ 13.8</text>
+          <text x="515" y="120" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">10 points wide · brings money in</text>
+          <text x="515" y="138" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">this is the part that funds it</text>
+
+          <text x="360" y="180" textAnchor="middle" fill="var(--accent-bright)" fontSize="12" fontWeight="700">
+            Net delta +0.01 · entered for a $4 credit · widths and quantities stay independent
+          </text>
+        </svg>
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Added together at expiration they make a lopsided table-top. Note the two things that make this structure
+        unusual: the profit plateau is <em>wide</em>, and the upper flat is slightly <em>positive</em>, so there is no
+        upper breakeven at all &mdash; the market going nowhere is a small win rather than a small loss.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Four-put condor payoff showing a small positive upper flat above 715, a 504 dollar plateau between 665 and 710, a fall to a 496 dollar loss flat below 655, and a single lower breakeven at 659.96">
+          <line x1="50" y1="165" x2="700" y2="165" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="292" textAnchor="end" fill="var(--text-dim)" fontSize="11">SPY price at expiration →</text>
+
+          {[[145, '$655'], [200, '$665'], [500, '$710'], [560, '$715']].map(([x, label]) => (
+            <g key={label}>
+              <line x1={x} y1="55" x2={x} y2="268" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+              <text x={x} y="280" textAnchor="middle" fill="var(--text-dim)" fontSize="10">{label}</text>
+            </g>
+          ))}
+          <line x1="655" y1="120" x2="655" y2="268" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+          <text x="655" y="114" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $747</text>
+
+          <polyline points="60,242 145,242 200,165 234,80 500,80 560,161 680,161"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="200" cy="165" r="4" fill="var(--amber)" />
+
+          <text x="367" y="70" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Centre max +$504</text>
+          <text x="200" y="183" textAnchor="middle" fill="var(--amber)" fontSize="10">breakeven $659.96</text>
+          <text x="102" y="232" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$496</text>
+          <text x="102" y="258" textAnchor="middle" fill="var(--text-dim)" fontSize="10">lower flat</text>
+          <text x="620" y="151" textAnchor="middle" fill="var(--pos)" fontSize="11" fontWeight="700">upper flat +$4</text>
+          <text x="620" y="137" textAnchor="middle" fill="var(--text-dim)" fontSize="10">no upper breakeven</text>
+        </svg>
+        <p style={captionStyle}>
+          The structure sits far below the market &mdash; SPY would have to fall about 4.3% just to reach the top of
+          the plateau. That is the point: you are paid a small amount for the market staying up, and paid well if it
+          drifts down into the tent. The modeled odds of the underlying even touching the back short strike were 38.8%.
+        </p>
+      </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
@@ -7102,12 +8688,574 @@ function UnbalancedPutCondorScannerHelp() {
   )
 }
 
+function SixtyFortyTwentyFlyScannerHelp() {
+  return (
+    <div>
+      <h2>60/40/20 Fly Scanner</h2>
+      <p>
+        This scanner builds a same-expiration <strong>1/−2/+1 put butterfly</strong> by
+        buying the put nearest 60 delta, selling two puts nearest 40 delta, and buying
+        the put nearest 20 delta. It searches listed expirations from 60 through 80 DTE.
+        At the target deltas, the three legs begin near delta neutral.
+      </p>
+      <p>
+        SPY, QQQ, IWM, and VOO are included by default. VOO must pass the same live-quote,
+        open-interest, bid/ask-width, delta-fit, theta, and net-delta gates as SPY. A thin
+        chain is shown as needing review or unavailable rather than treated as equivalent.
+      </p>
+      <h3>Reading the results</h3>
+      <ul>
+        <li><strong>Landed deltas</strong> compare the listed contracts with the 60/40/20 targets.</li>
+        <li><strong>Net delta</strong> is the complete position in share equivalents.</li>
+        <li><strong>Delta/theta</strong> is absolute position delta divided by positive daily theta.</li>
+        <li><strong>Liquidity</strong> shows the widest leg bid/ask percentage and minimum leg open interest.</li>
+        <li>Expand a row for probability cards, 8- and 14-day modeled P/L, expiration geometry, the risk graph, and the complete exit plan.</li>
+      </ul>
+      <h3>Management rules</h3>
+      <p>
+        Monitor the <em>original entry contracts</em>. A 20% change in either monitored
+        delta is caution: 48–72 delta for the upper long and 32–48 for the body short.
+        Exit at the exact 30% boundaries: 42/78 or 28/52. Also caution when delta/theta
+        exceeds 50%, exit above 60%, and close at 30 DTE regardless of price or P/L.
+      </p>
+      <div className="alert alert-warning">
+        Modeled probabilities and 8- or 14-day outcomes are estimates, not promised
+        returns. Verify the exact contracts, current Greeks, quotes, maximum loss, and
+        multi-leg execution before trading.
+      </div>
+    </div>
+  )
+}
+
+function RoadTripButterflyScannerHelp() {
+  const screenshotStyle = {
+    maxWidth: '100%',
+    height: 'auto',
+    borderRadius: '4px',
+    border: '1px solid var(--p-333)',
+  }
+
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
+  return (
+    <div>
+      <h2>Road Trip Unbalanced Butterfly Scanner</h2>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This scanner builds the Harvey/Nunamaker road-trip put butterfly: buy one upper put,
+        sell two body puts, and buy one lower put at the same expiration. The default five-unit
+        position is therefore <strong>5/−10/5</strong>. It looks 70–85 days out, places the upper
+        long about 1.25% behind the market, and makes the lower wing wider than the upper wing.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The governing entry rule is price, not a particular delta ladder. The net debit must stay
+        below 5% of initial margin, the complete position should be near delta neutral with positive
+        theta, and every result reports the exact strikes, quantities, debit, margin, Greeks, close
+        window, target, stop, and adjustment plan.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: the expiration shape
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The pictured SPY trade drawn to a true scale: buy 5 × $738 puts, sell 10 × $723, buy 5 × $702,
+        for a $120 debit against $3,120 of initial margin.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Road trip butterfly expiration payoff showing a 7380 dollar peak at the 723 body strike, breakevens at 708.24 and 737.76, and a 3120 dollar loss flat below the 702 lower long">
+          <line x1="50" y1="120" x2="700" y2="120" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="292" textAnchor="end" fill="var(--text-dim)" fontSize="11">SPY price at expiration →</text>
+
+          {[[150, '$702'], [360, '$723'], [510, '$738']].map(([x, label]) => (
+            <g key={label}>
+              <line x1={x} y1="40" x2={x} y2="268" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+              <text x={x} y="280" textAnchor="middle" fill="var(--text-dim)" fontSize="10">{label}</text>
+            </g>
+          ))}
+
+          <polyline points="60,192 150,192 212,120 360,45 508,118 512,127 680,127"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="212" cy="120" r="4" fill="var(--amber)" />
+          <circle cx="508" cy="120" r="4" fill="var(--amber)" />
+          <circle cx="360" cy="45" r="4.5" fill="var(--pos)" />
+
+          <text x="360" y="36" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Max profit +$7,380 at the body</text>
+          <text x="212" y="138" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $708.24</text>
+          <text x="540" y="112" textAnchor="middle" fill="var(--amber)" fontSize="10">BE $737.76</text>
+          <text x="100" y="182" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$3,120</text>
+          <text x="100" y="208" textAnchor="middle" fill="var(--text-dim)" fontSize="10">the broken-wing flat</text>
+          <text x="612" y="145" textAnchor="middle" fill="var(--text-dim)" fontSize="10">upper line −$120 (the debit)</text>
+        </svg>
+        <p style={captionStyle}>
+          The lower wing (21 points) is wider than the upper (15), which is what creates the loss flat on the left
+          rather than a symmetric tent. <strong>Initial margin is that broken-wing risk</strong> &mdash; the width
+          difference times 100 times the quantity, plus the debit &mdash; and the 5% debit-to-margin rule is measured
+          against it: $120 on $3,120 is 3.8%.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: why you never see that shape
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This is the idea the whole strategy turns on, and the reason the headline probability is not the expiration
+        number. The sharp tent above only exists on the final day. For the months you actually hold the trade, the
+        profit zone is a broad rounded hill covering a far wider price range &mdash; and the plan is to leave well
+        before the two converge.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 280" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Comparison of the narrow sharp expiration tent against the broad rounded pre-expiration profit curve, with the preferred close window marked between halfway and two-thirds through the trade">
+          <line x1="50" y1="180" x2="700" y2="180" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="272" textAnchor="end" fill="var(--text-dim)" fontSize="11">underlying price →</text>
+
+          <polyline points="60,215 150,215 212,180 360,70 508,178 512,183 680,183"
+            fill="none" stroke="var(--text-dim)" strokeWidth="2" strokeDasharray="5 4" strokeLinejoin="round" />
+          <path d="M60 210 C 170 205, 200 160, 290 145 S 430 140, 520 158 C 590 170, 630 178, 680 180"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" />
+
+          <text x="360" y="60" textAnchor="middle" fill="var(--text-dim)" fontSize="11">expiration: narrow and sharp</text>
+          <text x="300" y="130" textAnchor="middle" fill="var(--accent-bright)" fontSize="11.5" fontWeight="700">two-thirds through: broad and rounded</text>
+
+          <rect x="212" y="196" width="296" height="26" rx="4" fill="var(--pos)" opacity="0.14" />
+          <text x="360" y="213" textAnchor="middle" fill="var(--pos)" fontSize="11" fontWeight="700">the wide zone you are actually trading</text>
+
+          <g transform="translate(0, 238)">
+            <line x1="60" y1="0" x2="680" y2="0" stroke="var(--border)" strokeWidth="1.5" />
+            <rect x="370" y="-9" width="145" height="18" rx="3" fill="var(--pos)" opacity="0.22" stroke="var(--pos)" strokeWidth="1" />
+            <text x="442" y="4" textAnchor="middle" fill="var(--pos)" fontSize="10" fontWeight="700">close window</text>
+            <text x="62" y="22" fill="var(--text-dim)" fontSize="10">entry</text>
+            <text x="200" y="22" textAnchor="middle" fill="var(--text-dim)" fontSize="10">hands off 21–30 days</text>
+            <text x="600" y="22" textAnchor="middle" fill="var(--amber)" fontSize="10">15–20 DTE backstop</text>
+            <text x="680" y="4" textAnchor="end" fill="var(--text-dim)" fontSize="10">expiry</text>
+          </g>
+        </svg>
+        <p style={captionStyle}>
+          This is why the pictured example reads <strong>88.4% success at halfway and 86.6% at two-thirds</strong> while
+          the unadjusted expiration tent is only <strong>19.7%</strong>. Those numbers are not in conflict &mdash; they
+          answer different questions, and only one of them describes the trade as planned. The 15&ndash;20 DTE date is
+          the latest planned exit, not the target.
+        </p>
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/01-scanner-overview.png"
+          alt="Road Trip Butterfly Scanner settings and ranked IWM QQQ and SPY results with structure, debit-to-margin, Greeks, two-thirds value, plan, and status"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          Start with the article defaults, then run the scan. A green <strong>Entry ready</strong>
+          row fits the structure and price gates; expand it before acting. Live strikes and dollar
+          values change with the option chain, so the pictured SPY trade is an example, not a fixed recommendation.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Reading the probability cards
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The headline probability is the <strong>two-thirds close</strong>, not expiration. The two
+        checkpoints bracket the preferred close window: halfway through the trade and two-thirds
+        through it. At each checkpoint all three option legs are repriced with their current implied
+        volatilities held constant, creating the broad rounded T+0 profit zone that exists before the
+        sharp expiration tent forms.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Success:</strong> positive modeled closing P/L plus the rally region above the upper long, where the planned reverse Harvey is continued until the right side is at least flat.</li>
+        <li><strong>Failure:</strong> the exact complementary downside loss region. Success and failure always total 100% at the same checkpoint.</li>
+        <li><strong>Unadjusted expiration tent:</strong> shown separately as context. It is deliberately not the headline because the strategy is managed and normally closed earlier.</li>
+        <li><strong>Model limitation:</strong> these are theoretical price-distribution estimates, not historical win rates or guarantees. A volatility, skew, fill, or gap change can alter the real outcome.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/02-probability-cards.png"
+          alt="Expanded SPY Road Trip result showing 88.4 percent managed success at halfway and 86.6 percent at two-thirds, with exact complementary failure probabilities"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          In the pictured SPY example, managed success is 88.4% at halfway and 86.6% at
+          two-thirds. The unadjusted expiration tent is only 19.7%; that lower number answers a
+          different question because it ignores both the earlier close and the reverse-Harvey rally management.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Entry math and the close plan
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Debit ÷ initial margin:</strong> must remain below 5%. Initial margin is the broken-wing downside risk—lower-wing width minus upper-wing width, times 100 and the upper-long quantity—plus the debit paid.</li>
+        <li><strong>Hands-off window:</strong> leave the trade alone for the first 21–30 days so theta can work.</li>
+        <li><strong>Preferred close window:</strong> manage the exit from halfway through two-thirds through the trade, while the time-value profit zone remains broad.</li>
+        <li><strong>Article exit backstop:</strong> the 15–20 DTE date is the latest planned exit, not the probability headline or the start of the preferred close window.</li>
+        <li><strong>Profit and stop:</strong> the defaults seek 7%–15% of utilized capital and stop near a 4%–5% loss, well before the expiration maximum loss.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Pre-planned adjustments
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Reverse Harvey on a rally:</strong> sell the upper long and buy the next lower strike toward the body for a credit. Repeat only as needed to lift the right-side expiration line to flat or slightly profitable. Reprice the complete position after every roll.</li>
+        <li><strong>Downside trigger:</strong> place the planned conditional near the body, where the curve turns back down, rather than improvising after the decline.</li>
+        <li><strong>Put debit-spread hedge:</strong> buy the higher strike and sell the lower strike. The screen prices one current-chain example and shows the planned 50%–75% hedge close; actual size and execution still require judgment.</li>
+      </ul>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/03-management-adjustments.png"
+          alt="Road Trip SPY result showing debit and margin checks, halfway and two-thirds close values, article backstop, reverse Harvey roll, and downside put-spread hedge"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          The example paid a $120 debit on $3,120 of initial margin, modeled +$256 unchanged at
+          halfway and +$419 at two-thirds, and priced one $738-to-$737 reverse Harvey roll that
+          would lift the upper line from −$120 to +$25 before costs.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Confirming the payoff in Strategy Lab
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Click <strong>Risk graph</strong> to load the exact strikes, quantities, entry prices, and
+        per-leg implied volatilities into Strategy Lab. The cyan expiration line should show the
+        broken-wing tent and lower loss flat; the purple pre-expiration curve should show the wider,
+        rounded time-value zone. Confirm that Strategy Lab agrees with the scanner before using any
+        target or stop. For the pictured 738/723/702 SPY example, the exact expiration breakevens are
+        $708.24 and $737.76, maximum profit is $7,380 at the body, and maximum loss is $3,120 below
+        the lower long.
+      </p>
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/road-trip-butterfly-scanner/04-risk-graph.png"
+          alt="Strategy Lab risk graph for the 738 723 702 SPY Road Trip butterfly showing the rounded current curve, expiration tent, and exact 708.24 and 737.76 breakevens"
+          style={screenshotStyle}
+        />
+        <p style={captionStyle}>
+          The graph makes the timing distinction visible: the expiration payoff is narrow and sharp,
+          while the earlier model curve spreads positive time value across a much wider price range.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Suggested workflow
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Scan liquid index ETFs with the article defaults and confirm the selected expiration is inside 70–85 DTE.</li>
+        <li>Reject any row above the 5% debit-to-margin ceiling or outside the selected net-delta, theta, liquidity, and wing-ratio gates.</li>
+        <li>Expand the row and compare halfway and two-thirds success, unchanged P/L, targets, stop, close window, and both adjustments.</li>
+        <li>Open the risk graph and reconcile the entry debit, breakevens, maximum profit, maximum loss, strikes, quantities, and expiration.</li>
+        <li>Verify a live multi-leg quote at the broker. Use the planned stop and schedule; do not substitute the displayed model for executable prices.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Trade at your own risk.</strong> The reverse Harvey prevents the modeled upside line
+        from remaining a loss only when the required rolls are available and executed as planned.
+        Slippage, volatility and skew changes, gaps, assignment, commissions, liquidity, and delayed
+        execution can all produce a different result. Size from the full expiration maximum loss.
+      </div>
+    </div>
+  )
+}
+
+function DoubleHedgePutButterflyScannerHelp() {
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
+  }
+
+  return (
+    <div>
+      <h2>Double-Hedge Put Butterfly Scanner</h2>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This screen adapts a March 2021 SPX trade plan to liquid index ETFs. One tranche is a
+        single-expiration put butterfly with a <strong>doubled lower wing</strong>: buy 4 puts near
+        25 delta, sell 8 puts near 15 delta, and buy 8 puts near 2.5 delta. The default order is
+        therefore <strong>4/−8/+8</strong>, roughly 200 days out, on a standard monthly expiration.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The extra 4 lower puts are the &ldquo;double hedge.&rdquo; They are what separates this from
+        the ordinary broken-wing butterfly on the Unbalanced Butterfly screen, and they change the
+        shape of the trade in a way that is worth seeing before you touch any control.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: the shape you are buying
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Every number on this screen describes one of the four regions below. The diagram is the
+        expiration payoff of a real scanned SPY tranche &mdash; buy 4 × 705 puts, sell 8 × 640 puts,
+        buy 8 × 290 puts &mdash; drawn with a compressed vertical scale so the deep valley and the
+        small profits are visible together.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 320" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Expiration payoff of a 4 by minus 8 by plus 8 double-hedge put butterfly, showing the crash tail at zero, the deep valley at the lower strike, the tall body tent, and the near-flat upper line">
+          <line x1="50" y1="215" x2="700" y2="215" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="233" textAnchor="end" fill="var(--text-dim)" fontSize="11">Underlying price at expiration →</text>
+          <text x="52" y="30" fill="var(--text-dim)" fontSize="11">P/L (compressed scale)</text>
+
+          <line x1="300" y1="45" x2="300" y2="285" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="590" y1="45" x2="590" y2="285" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+          <line x1="644" y1="45" x2="644" y2="285" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+
+          <polyline
+            points="60,197 65,215 300,278 536,215 590,55 644,208 695,208"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5"
+            strokeLinejoin="round" strokeLinecap="round"
+          />
+
+          <circle cx="60" cy="197" r="4" fill="var(--pos)" />
+          <circle cx="300" cy="278" r="4" fill="var(--neg)" />
+          <circle cx="590" cy="55" r="4" fill="var(--pos)" />
+          <circle cx="644" cy="208" r="4" fill="var(--amber)" />
+
+          <text x="66" y="188" fill="var(--pos)" fontSize="11.5" fontWeight="700">Crash tail +$2,182</text>
+          <text x="66" y="174" fill="var(--text-muted)" fontSize="10.5">8 lower puts recover</text>
+
+          <text x="300" y="298" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">Valley −$113,818 at 290</text>
+          <text x="300" y="60" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">lower long</text>
+
+          <text x="590" y="45" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Body peak +$26,182 at 640</text>
+          <text x="590" y="298" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">body short</text>
+
+          <text x="695" y="200" textAnchor="end" fill="var(--amber)" fontSize="11.5" fontWeight="700">Upper line +$182</text>
+          <text x="644" y="298" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">upper long 705</text>
+
+          <text x="536" y="207" textAnchor="middle" fill="var(--accent)" fontSize="10.5">breakeven 574.54</text>
+          <text x="86" y="228" textAnchor="middle" fill="var(--accent)" fontSize="10.5">breakeven 5.45</text>
+        </svg>
+        <p style={captionStyle}>
+          Four regions, left to right: a <strong>crash tail</strong> that turns profitable again only
+          in a near-total collapse, a <strong>valley</strong> that is the real maximum loss, a
+          <strong> tent</strong> that pays most at the body strike, and a nearly flat
+          <strong> upper line</strong> where the market simply stays up. Sloped segments all move at
+          the same $400 per index point, because the net contract count is 4 everywhere.
+        </p>
+      </div>
+      <p style={{ marginBottom: '1rem' }}>
+        Read the two profit regions honestly. The tent is the trade. The crash tail is insurance whose
+        breakeven, in this SPY example, sits at $5.45 &mdash; SPY would have to fall 99% for the doubled
+        hedge to pay. What the extra puts really buy you is a <em>less steep</em> loss on the way down
+        and a much better mark in a fast selloff, which is exactly what the T+0 stress numbers measure.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: the scanner and its two gates
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The screen has two filter panels stacked above the results, and they do very different jobs.
+        The top panel is everything the scanner can compute from the option chain. The bottom panel is
+        everything the scanner <em>cannot</em> know and you must tell it.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 240" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Diagram showing computed structural gates and manually entered monitor gates both feeding the entry ready status">
+          <rect x="20" y="20" width="270" height="130" rx="6" fill="var(--surface-inset)" stroke="var(--pos)" strokeWidth="1.5" />
+          <text x="36" y="44" fill="var(--pos)" fontSize="13" fontWeight="700">Panel 1 — computed</text>
+          <text x="36" y="66" fill="var(--text-muted)" fontSize="11.5">Strikes, deltas, wing ratio</text>
+          <text x="36" y="86" fill="var(--text-muted)" fontSize="11.5">Tranche delta inside bias band</text>
+          <text x="36" y="106" fill="var(--text-muted)" fontSize="11.5">ATM theta ≥ minimum</text>
+          <text x="36" y="126" fill="var(--text-muted)" fontSize="11.5">T+0 at −20% ≥ floor</text>
+          <text x="36" y="144" fill="var(--text-dim)" fontSize="10.5">→ Structure matched</text>
+
+          <rect x="20" y="165" width="270" height="60" rx="6" fill="var(--surface-inset)" stroke="var(--amber)" strokeWidth="1.5" />
+          <text x="36" y="188" fill="var(--amber)" fontSize="13" fontWeight="700">Panel 2 — you supply</text>
+          <text x="36" y="208" fill="var(--text-muted)" fontSize="11.5">3 monitors · warning count · all-clear</text>
+          <text x="36" y="222" fill="var(--text-dim)" fontSize="10.5">→ Entry monitors ready</text>
+
+          <path d="M290 90 L 360 110 L 360 130 L 430 130" fill="none" stroke="var(--border)" strokeWidth="1.5" />
+          <path d="M290 195 L 360 175 L 360 155 L 430 155" fill="none" stroke="var(--border)" strokeWidth="1.5" />
+
+          <rect x="430" y="105" width="260" height="76" rx="6" fill="var(--surface-inset)" stroke="var(--accent-bright)" strokeWidth="1.5" />
+          <text x="450" y="132" fill="var(--accent-bright)" fontSize="13" fontWeight="700">Entry ready</text>
+          <text x="450" y="154" fill="var(--text-muted)" fontSize="11.5">Both gates clean, campaign has room</text>
+          <text x="450" y="172" fill="var(--text-dim)" fontSize="10.5">Anything missing → &quot;Needs review&quot;</text>
+        </svg>
+        <p style={captionStyle}>
+          A row can be a perfect <strong>Structure matched</strong> and still say
+          <strong> Needs review</strong>, and on a fresh install it always will &mdash; the three
+          monitors default to <em>Unconfirmed</em>. That is deliberate, not a bug.
+        </p>
+      </div>
+
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/01-scanner-overview.png"
+        alt="Double-Hedge Put Butterfly Scanner showing the structure panel, the monitor and campaign panel, and ranked SPY QQQ and IWM results with structure, net delta, theta, T plus zero stress, upper line, and expiration geometry"
+        caption={<>
+          The live screen. Top panel sets the structure, bottom panel carries the monitors, campaign
+          capital, and the <strong>Run scan</strong> button. Strikes and dollar values move with the
+          option chain, so every figure pictured here is an example, not a recommendation.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Setting up the scan, control by control
+      </h3>
+      <p style={{ marginBottom: '0.5rem' }}>Top panel &mdash; the structure:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Tickers:</strong> liquid index ETFs. SPY, QQQ, and IWM are the defaults; they stand in for the original SPX plan without matching its notional size. Up to 20 tickers are scanned.</li>
+        <li><strong>STFS market bias:</strong> picks the allowed tranche delta band &mdash; bearish −3 to −1, neutral −1 to +1, bullish +1 to +3 share equivalents. The scanner shifts the <em>lower</em> strike to hit the band, which is why the lower long is not always exactly 2.5 delta.</li>
+        <li><strong>Target / Minimum / Maximum DTE:</strong> 200 / 160 / 230 by default. It starts at the standard monthly nearest the target and walks the rest of the window only if the first one yields nothing. Weeklies are excluded.</li>
+        <li><strong>Upper-long qty:</strong> scales the whole 1/−2/+2 ratio. Changing 4 to 8 gives 8/−16/+16 <em>and</em> automatically rescales the theta minimum, T+0 floor, upper-line tolerance, and capital per tranche. Do not rescale those by hand.</li>
+        <li><strong>Leg Δ tolerance:</strong> how far each leg may sit from 25 / 15 / 2.5 delta. Default 0.02. Widen it when a chain has coarse strikes; every widening is a real drift from the documented structure.</li>
+        <li><strong>Min lower-wing ratio:</strong> forces the body-to-lower distance to exceed the upper-to-body distance. Default 1.05. This is what makes it a broken wing rather than a symmetric butterfly.</li>
+        <li><strong>Minimum leg OI:</strong> open-interest floor on each of the three strikes. Leave at 0 for a first look, then raise it before you would actually route the order &mdash; a 2.5-delta long-dated put can be very thin.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>Top panel &mdash; the three entry gates:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Minimum theta</strong> (default +$10/day per base tranche): the trade has to be paid to wait. A structure below this is rejected as a structural miss.</li>
+        <li><strong>Minimum T+0 −20%</strong> (default −$10,000): reprice every leg for an immediate 20% drop, keeping each leg&rsquo;s current implied volatility fixed. This is the stress test the doubled hedge exists to pass.</li>
+        <li><strong>UEL tolerance</strong> (default $250): how close the upper expiration line must sit to $0. A large positive upper line usually means you were paid a credit and the market simply going nowhere is a small win; a large negative one means a rally costs money.</li>
+      </ul>
+      <p style={{ marginBottom: '0.5rem' }}>Bottom panel &mdash; what only you can answer:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Structure-price, Concavity, and Skew monitors:</strong> the original plan reads these as changes against their own recent histories. One chain snapshot cannot reconstruct a history, so the scanner refuses to guess and asks you to set Favorable, Unfavorable, or Unconfirmed yourself.</li>
+        <li><strong>Warning signals (0&ndash;5):</strong> your count from OBV, ATR, STFS, Force Index, and the term-structure monitor. At <strong>4 or 5 the scanner blocks a new tranche</strong> outright.</li>
+        <li><strong>Awaiting 8/34 all-clear:</strong> after a 4- or 5-warning event, leave this checked until a bullish 8/34 EMA crossover prints on the 30-minute chart.</li>
+        <li><strong>Campaign capital / Capital per tranche / Open tranches:</strong> $150,000 ÷ $12,500 allows at most 12 open tranches. When capacity is full, every row drops to Needs review no matter how good the structure is.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        The screen still measures today&rsquo;s <strong>body richness</strong> (body mid versus a straight
+        line between the two long strikes) and today&rsquo;s <strong>put-skew slope</strong> in IV points,
+        and shows them beside the monitors. They are transparent cross-sectional context, offered
+        precisely so they cannot be mistaken for the historical monitors.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 3: reading a result row
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Rows sort worst-status-last, so entry-ready structures float to the top. Click any row to
+        expand it. Every column heading with an arrow is sortable.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>4/−8/+8 structure:</strong> the three strikes and quantities, green for buys and red for the short body.</li>
+        <li><strong>Wing widths:</strong> upper width / lower width, plus the ratio. A 5.38× lower wing means the downside leg is more than five times as wide as the front wing.</li>
+        <li><strong>Net delta:</strong> the complete tranche in share equivalents, with the selected bias band underneath. Green means inside the band.</li>
+        <li><strong>Theta and T+0 −20%:</strong> the two hard gates, each printed with the floor you set.</li>
+        <li><strong>Upper line:</strong> dollars, target near $0.</li>
+        <li><strong>Expiration geometry:</strong> peak, valley, and crash tail &mdash; the same three landmarks as the diagram above.</li>
+        <li><strong>Entry readiness:</strong> Entry ready or Needs review on top, <em>Structure matched</em> or <em>near_match</em> underneath, warning count last. Always read both lines; they fail independently.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/02-entry-trio.png"
+        alt="Expanded Double-Hedge result showing the probability cards and the entry trio metrics for tranche delta, ATM theta, T plus zero after a twenty percent and fifteen percent decline, and the upper expiration line"
+        caption={<>
+          Expanding a row leads with the probability cards, then the entry trio. Success counts both
+          the tent and the recovered crash tail; failure is the exact complement, so the pair always
+          sums to 100% at the same checkpoint. These are model estimates from a price distribution,
+          not historical win rates.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Geometry, monitors, and the campaign panel
+      </h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Expiration geometry card:</strong> upper flat, body peak, lower-strike valley, crash tail at $0, and both breakevens. The valley is the number to size from &mdash; in the pictured SPY tranche it is −$113,818, more than nine times the $12,500 of planned capital.</li>
+        <li><strong>Roll-down / roll-up reviews:</strong> printed as prices, roughly 2% and 14% above the upper long. They are calendar-free reminders to look, not automatic orders.</li>
+        <li><strong>Campaign card:</strong> the $1,000 fixed target, roughly $800 average expectation, $2,500 management loss, 12-week average hold, $20,000 learning reserve, tranche capacity, and the LPTA put count. All dollar figures scale with Upper-long qty.</li>
+        <li><strong>LPTA context:</strong> at 4 warnings the plan calls for one roughly 30-DTE, 2-delta long put per three <em>already open</em> tranches; at 5 warnings, two. It hedges the campaign you have, and is not part of this entry order.</li>
+        <li><strong>Theta references:</strong> the 120× and 71× appendix figures are shown as context. The source plan preferred conservative tiered fixed targets, so do not treat them as exits.</li>
+      </ul>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/03-geometry-campaign.png"
+        alt="Double-Hedge expanded row showing the expiration geometry landmarks, the monitor confirmation states with body richness and put skew context, and the campaign sizing and LPTA card"
+        caption={<>
+          The monitor card shows why a clean structure still reads Needs review: three
+          <em> Unconfirmed</em> states. Set them only after you have actually checked the signals.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Confirming it in Strategy Lab
+      </h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The <strong>Risk graph</strong> button at the bottom of the expanded row loads the exact
+        strikes, quantities, entry prices, and per-leg implied volatilities into Strategy Lab.
+        Reconcile the breakevens, peak, and valley against the scanner before trusting either. The
+        expiration line should show the sharp tent and the long descent into the lower strike; the
+        pre-expiration curve is much rounder and is where the trade actually lives for its first months.
+      </p>
+      <HelpScreenshot
+        src="./help-screenshots/double-hedge-put-butterfly-scanner/04-risk-graph.png"
+        alt="Strategy Lab risk graph of the scanned double-hedge put butterfly showing the expiration tent, the descent to the lower strike valley, and the rounded pre-expiration curve"
+        caption={<>
+          Strategy Lab is the reconciliation step. If the two screens disagree on a breakeven or a
+          maximum loss, stop and find out why before routing anything.
+        </>}
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Suggested workflow
+      </h3>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Leave the defaults alone on the first run. Enter your tickers, pick the bias that matches your read, and click <strong>Run scan</strong>.</li>
+        <li>Check the stats line: tickers scanned, monthly expirations priced, structural matches, entry ready. Structural matches are the number worth reading.</li>
+        <li>Ignore <em>Entry readiness</em> for a moment and sort by <strong>Net delta</strong>, then confirm theta and T+0 −20% clear your floors on the rows that interest you.</li>
+        <li>Expand the best row. Read the valley first, then the probability cards, then the entry trio.</li>
+        <li>Now go do the outside work: check the three monitors and count your warning signals. Come back, set them in the bottom panel, and re-run. Only then does Entry ready mean anything.</li>
+        <li>Open the risk graph and reconcile strikes, quantities, breakevens, peak, and valley.</li>
+        <li>Price the four-leg complex order live at the broker and confirm the −15% and −20% buying-power scenarios there. Portfolio margin uses broker models and your whole account; the T+0 marks here do not.</li>
+      </ol>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>Trade at your own risk.</strong> Size this from the expiration valley, not from the
+        planned $2,500 management loss &mdash; the two differ by more than an order of magnitude. The
+        T+0 marks hold each leg&rsquo;s current implied volatility constant, which a real crash will not
+        do; a volatility or skew shift, a gap, thin 2.5-delta strikes, early assignment on the short
+        body, or slippage across four legs can all produce a materially different result. Outside
+        market hours the option feed can blank bid/ask, and any row built from last-trade estimates
+        is labelled as such &mdash; re-run during regular hours before acting on it.
+      </div>
+    </div>
+  )
+}
+
 function UnbalancedButterflyScannerHelp() {
   const screenshotStyle = {
     maxWidth: '100%',
     height: 'auto',
     borderRadius: '4px',
     border: '1px solid var(--p-333)',
+  }
+
+  const captionStyle = {
+    margin: '0.45rem 0 0',
+    color: 'var(--text-muted)',
+    fontSize: '0.82rem',
+  }
+
+  const figureStyle = {
+    background: 'var(--surface-sunken)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    padding: '0.75rem',
+    marginBottom: '1.5rem',
   }
 
   return (
@@ -7121,6 +9269,95 @@ function UnbalancedButterflyScannerHelp() {
         15 delta, and searches the lower long and adjacent listed strikes for the selected
         bearish, neutral, or bullish complete-position delta.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 1: what the broken wing buys
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A real scanned SPY result at $747.03, 167 days out: buy 4 &times; $685 puts, sell 8 &times; $650, buy
+        4 &times; $590. The upper wing is 35 points and the lower is 60 &mdash; a 1.71&times; ratio &mdash; and the
+        whole structure was entered for a $6 debit.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 300" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Unbalanced butterfly payoff showing a near-zero upper flat above 685, a 13994 dollar peak at the 650 body, a breakeven near 615, and a 10006 dollar loss flat below the 590 lower long">
+          <line x1="50" y1="120" x2="700" y2="120" stroke="var(--border)" strokeWidth="1" />
+          <text x="700" y="292" textAnchor="end" fill="var(--text-dim)" fontSize="11">SPY price at expiration →</text>
+
+          {[[130, '$590'], [400, '$650'], [558, '$685']].map(([x, label]) => (
+            <g key={label}>
+              <line x1={x} y1="38" x2={x} y2="266" stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" />
+              <text x={x} y="278" textAnchor="middle" fill="var(--text-dim)" fontSize="10">{label}</text>
+            </g>
+          ))}
+          <line x1="656" y1="70" x2="656" y2="266" stroke="var(--accent)" strokeDasharray="2 4" strokeWidth="1" />
+          <text x="656" y="64" textAnchor="middle" fill="var(--accent)" fontSize="10.5">today $747</text>
+
+          <polyline points="60,230 130,230 243,120 400,44 556,119 560,121 680,121"
+            fill="none" stroke="var(--accent-bright)" strokeWidth="2.5" strokeLinejoin="round" />
+
+          <circle cx="243" cy="120" r="4" fill="var(--amber)" />
+          <circle cx="400" cy="44" r="4.5" fill="var(--pos)" />
+
+          <text x="400" y="35" textAnchor="middle" fill="var(--pos)" fontSize="11.5" fontWeight="700">Body peak +$13,994</text>
+          <text x="243" y="138" textAnchor="middle" fill="var(--amber)" fontSize="10">breakeven ≈ $615</text>
+          <text x="95" y="220" textAnchor="middle" fill="var(--neg)" fontSize="11.5" fontWeight="700">−$10,006</text>
+          <text x="95" y="246" textAnchor="middle" fill="var(--text-dim)" fontSize="10">lower flat — it stays flat</text>
+
+          <rect x="498" y="140" width="190" height="50" rx="4" fill="var(--surface-inset)" stroke="var(--pos)" strokeWidth="1.5" />
+          <text x="593" y="158" textAnchor="middle" fill="var(--pos)" fontSize="11" fontWeight="700">Upper flat −$6</text>
+          <text x="593" y="174" textAnchor="middle" fill="var(--text-muted)" fontSize="10">the market staying up costs</text>
+          <text x="593" y="186" textAnchor="middle" fill="var(--text-muted)" fontSize="10">essentially nothing</text>
+        </svg>
+        <p style={captionStyle}>
+          The broken wing is what pushes the upper expiration line to roughly $0. A symmetric butterfly is bought for a
+          real debit, so a market that simply stays up loses it; widening the lower wing sells enough extra premium to
+          pay for the structure. You buy that with a much deeper loss on the far downside &mdash; and here the lower
+          flat really is <em>flat</em>, because the 4 lower longs exactly balance the remaining short exposure below $590.
+        </p>
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
+        Picture 2: the same shape with the wing doubled
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This is the one structural difference between this screen and the Double-Hedge Put Butterfly Scanner, and it is
+        worth seeing side by side. Both sell 8 body puts. The only change is how many lower puts are bought.
+      </p>
+      <div style={figureStyle}>
+        <svg viewBox="0 0 720 250" role="img" style={{ width: '100%', height: 'auto' }}
+          aria-label="Side by side comparison: the 4 by minus 8 by 4 butterfly whose downside loss stays flat, against the 4 by minus 8 by plus 8 double hedge whose downside turns back up into a recovering crash tail">
+          {[
+            {
+              x: 0, title: '4 / −8 / +4', sub: 'this screen', color: 'var(--accent-bright)',
+              path: 'M35 175 L 90 175 L 150 120 L 215 55 L 285 118 L 330 118',
+              note: 'the downside loss is a flat — it stops',
+              note2: 'falling, but it never comes back',
+            },
+            {
+              x: 360, title: '4 / −8 / +8', sub: 'Double-Hedge screen', color: 'var(--teal)',
+              path: 'M35 128 L 90 175 L 150 120 L 215 55 L 285 118 L 330 118',
+              note: 'the extra 4 puts turn that flat into a',
+              note2: 'recovering crash tail',
+            },
+          ].map(panel => (
+            <g key={panel.title} transform={`translate(${panel.x}, 0)`}>
+              <rect x="15" y="16" width="330" height="215" rx="6" fill="var(--surface-inset)" stroke={panel.color} strokeWidth="1.5" />
+              <text x="180" y="38" textAnchor="middle" fill={panel.color} fontSize="13" fontWeight="700">{panel.title}</text>
+              <text x="180" y="54" textAnchor="middle" fill="var(--text-dim)" fontSize="10.5">{panel.sub}</text>
+              <line x1="30" y1="118" x2="335" y2="118" stroke="var(--border)" strokeWidth="1" />
+              <path d={panel.path} fill="none" stroke={panel.color} strokeWidth="2.5" strokeLinejoin="round" />
+              <text x="180" y="200" textAnchor="middle" fill="var(--text-muted)" fontSize="10">{panel.note}</text>
+              <text x="180" y="214" textAnchor="middle" fill="var(--text-muted)" fontSize="10">{panel.note2}</text>
+            </g>
+          ))}
+        </svg>
+        <p style={captionStyle}>
+          Neither is better &mdash; they are different trades. The doubled hedge costs more premium and pulls the
+          structure&rsquo;s delta around, which is why that screen has to balance the lower strike into a bias band. The
+          version here is cheaper and simpler, and accepts that a genuine collapse is where the money goes.
+        </p>
+      </div>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img
@@ -7232,8 +9469,11 @@ function UnbalancedButterflyScannerHelp() {
         The current-date curve shows the rounded pre-expiration tent; the expiration curve shows
         the completed intrinsic-value payoff. Move the analysis date or drag the
         <strong> Vol surface</strong> bar to test how the tent develops. The bar proportionally
-        shocks every leg from its own starting IV, preserving the structure&rsquo;s current skew,
-        but every plotted value remains a model estimate.
+        shocks every leg from its own starting IV. Open the volatility-scenario panel to steepen
+        or flatten downside skew, shock the butterfly&rsquo;s expiration independently, switch between
+        sticky-strike and sticky-delta price paths, and verify each leg&rsquo;s market-to-modeled IV
+        reconciliation. These settings reprice the rounded pre-expiration tent; the intrinsic-value
+        expiration line itself is unchanged by IV. Every plotted value remains a model estimate.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img
@@ -7314,7 +9554,7 @@ function UnbalancedButterflyScannerHelp() {
         Practical workflow
       </h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Choose the complete-position quantity, then scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 180 DTE target.</li>
+        <li>Choose the complete-position quantity, then scan both 20- and 25-delta upper-long variants in the 120–240 DTE window around the 160 DTE target.</li>
         <li>Choose the desired market-bias range and compare the complete-position delta, theta, upper line, execution, and maximum loss.</li>
         <li>Expand a result to review success/failure, time-evolved tent values, reach/never-touch, and lower-tail risk.</li>
         <li>Use the risk graph and verify the exact displayed strikes and quantities before entry.</li>
@@ -8911,6 +11151,8 @@ const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
   options: OptionsHelp,
+  'option-dashboard': OptionDashboardHelp,
+  'option-trades': OptionTradesHelp,
   'put-selling-scanner': PutSellingScannerHelp,
   'bull-put-spread-scanner': BullPutSpreadScannerHelp,
   'covered-call-scanner': CoveredCallScannerHelp,
@@ -8919,6 +11161,9 @@ const CONTENT_MAP = {
   'iron-condor-scanner': IronCondorScannerHelp,
   'unbalanced-put-condor-scanner': UnbalancedPutCondorScannerHelp,
   'unbalanced-butterfly-scanner': UnbalancedButterflyScannerHelp,
+  'double-hedge-put-butterfly-scanner': DoubleHedgePutButterflyScannerHelp,
+  'road-trip-butterfly-scanner': RoadTripButterflyScannerHelp,
+  'sixty-forty-twenty-fly-scanner': SixtyFortyTwentyFlyScannerHelp,
   import: ImportHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,
@@ -8961,6 +11206,8 @@ const CONTENT_MAP = {
   'single-strategy': SingleStrategyHelp,
   'income-sim': IncomeSimHelp,
   correlation: CorrelationHelp,
+  diversification: DiversificationHelp,
+  'fund-definitions': FundDefinitionsHelp,
   analytics: AnalyticsHelp,
   'portfolio-builder': PortfolioBuilderHelp,
   'portfolio-tester': PortfolioTesterHelp,
@@ -9043,4 +11290,3 @@ export default function Help() {
     </div>
   )
 }
-

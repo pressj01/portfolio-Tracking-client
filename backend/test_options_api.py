@@ -1,4 +1,5 @@
 import sys
+import math
 import sqlite3
 import tempfile
 import unittest
@@ -311,6 +312,30 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertEqual(data["per_leg"][0]["opt_type"], "stock")
         self.assertIn("stock", data["supported_leg_types"])
 
+    @patch("options_api._fetch_quote", return_value={"last": 747.03, "div_yield": 0.011})
+    def test_broken_wing_butterfly_breakevens_are_exact_across_coarse_grid(self, _quote):
+        expiration = self.today + timedelta(days=77)
+        payload = self.payload(self.today)
+        payload["spot_override"] = 747.03
+        payload["price_range"] = {"low": 650, "high": 850, "steps": 9}
+        payload["day_step"] = 0
+        payload["legs"] = [
+            {"side": "BUY", "qty": 5, "opt_type": "PUT", "strike": 738,
+             "expiration": expiration.isoformat(), "entry_price": 20.0, "iv": 0.1403},
+            {"side": "SELL", "qty": 10, "opt_type": "PUT", "strike": 723,
+             "expiration": expiration.isoformat(), "entry_price": 12.0, "iv": 0.1561},
+            {"side": "BUY", "qty": 5, "opt_type": "PUT", "strike": 702,
+             "expiration": expiration.isoformat(), "entry_price": 4.24, "iv": 0.1783},
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["breakevens"], [708.24, 737.76])
+        self.assertEqual(data["theoretical_max_profit"], 7380.0)
+        self.assertEqual(data["theoretical_max_loss"], -3120.0)
+
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_covered_call_combines_stock_and_option_payoffs(self, _quote):
         expiration = self.today + timedelta(days=30)
@@ -447,6 +472,119 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         high_vol = options_api._lognormal_cdf(100, 110, 0.50, 30 / 365, 0.04, 0.01)
 
         self.assertGreater(low_vol, high_vol)
+
+    def test_sticky_delta_moves_a_fixed_strike_across_the_modeled_skew(self):
+        leg = {
+            "iv": 0.30,
+            "strike": 90,
+            "vol_dynamics": "sticky-delta",
+            "iv_reference_spot": 100,
+            "vol_skew_points_per_10pct": 5,
+        }
+
+        self.assertAlmostEqual(options_api._leg_scenario_iv(100, leg), 0.30)
+        self.assertLess(options_api._leg_scenario_iv(90, leg), 0.30)
+        self.assertGreater(options_api._leg_scenario_iv(110, leg), 0.30)
+        self.assertEqual(
+            options_api._leg_scenario_iv(110, {**leg, "vol_dynamics": "sticky-strike"}),
+            0.30,
+        )
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_risk_graph_reports_and_applies_volatility_surface_assumptions(self, _quote):
+        payload = self.payload(self.today)
+        payload["day_step"] = 0
+        payload["vol_surface"] = {
+            "dynamics": "sticky-delta",
+            "parallel_shock_pct": 10,
+            "downside_skew_change_points": 2,
+            "term_shocks": {self.expiration.isoformat(): -1},
+        }
+        for leg in payload["legs"]:
+            leg.update({
+                "market_iv": leg["iv"],
+                "adjusted_iv": leg["iv"],
+                "iv": leg["iv"] * 1.1,
+                "vol_dynamics": "sticky-delta",
+                "iv_reference_spot": 100,
+                "vol_skew_points_per_10pct": 4,
+                "parallel_change_points": leg["iv"] * 10,
+                "skew_change_points": 2,
+                "term_change_points": -1,
+            })
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+        sticky_strike_payload = {
+            **payload,
+            "vol_surface": {**payload["vol_surface"], "dynamics": "sticky-strike"},
+            "legs": [
+                {**leg, "vol_dynamics": "sticky-strike"}
+                for leg in payload["legs"]
+            ],
+        }
+        sticky_strike_response = self.client.post(
+            "/api/options/risk-graph",
+            json=sticky_strike_payload,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(sticky_strike_response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["volatility_surface"]["dynamics"], "sticky-delta")
+        self.assertEqual(data["volatility_surface"]["parallel_shock_pct"], 10)
+        self.assertEqual(data["volatility_surface"]["term_shocks"][self.expiration.isoformat()], -1)
+        self.assertEqual(data["per_leg"][0]["vol_dynamics"], "sticky-delta")
+        self.assertEqual(data["per_leg"][0]["market_iv"], payload["legs"][0]["market_iv"])
+        self.assertNotEqual(
+            data["curves"]["today"],
+            sticky_strike_response.get_json()["curves"]["today"],
+        )
+
+    @patch("options_api._fetch_quote", return_value={"last": 748.18, "div_yield": 0.0041})
+    def test_crash_level_and_skew_lift_double_hedge_put_marks(self, _quote):
+        expiration = self.today + timedelta(days=168)
+        spot = 748.18
+        base_legs = [
+            {"side": "BUY", "qty": 8, "opt_type": "PUT", "strike": 355,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.4919},
+            {"side": "SELL", "qty": 8, "opt_type": "PUT", "strike": 655,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.2124},
+            {"side": "BUY", "qty": 4, "opt_type": "PUT", "strike": 710,
+             "expiration": expiration.isoformat(), "entry_price": 0, "iv": 0.1687},
+        ]
+        payload = {
+            "underlying": "SPY",
+            "spot_override": spot,
+            "eval_date": self.today.isoformat(),
+            "model": "black-scholes",
+            "rate": 0.0375,
+            "div_yield": 0.0041,
+            "price_range": {"low": 300, "high": 800, "steps": 101},
+            "price_slices": [{"s": spot}, {"s": 600}],
+            "legs": base_legs,
+        }
+        baseline_response = self.client.post("/api/options/risk-graph", json=payload)
+
+        crash_legs = []
+        for leg in base_legs:
+            downside_units = -math.log(leg["strike"] / spot) / math.log(1.1)
+            crash_legs.append({
+                **leg,
+                # Same assumptions as the client preset: +50% parallel IV and
+                # +2 volatility points per 10% lower strike.
+                "iv": leg["iv"] * 1.5 + downside_units * 0.02,
+            })
+        crash_response = self.client.post(
+            "/api/options/risk-graph",
+            json={**payload, "legs": crash_legs},
+        )
+
+        self.assertEqual(baseline_response.status_code, 200)
+        self.assertEqual(crash_response.status_code, 200)
+        baseline_slices = baseline_response.get_json()["price_slices"]
+        crash_slices = crash_response.get_json()["price_slices"]
+        self.assertGreater(crash_slices[0]["pnl_open"], baseline_slices[0]["pnl_open"])
+        self.assertGreater(crash_slices[1]["pnl_open"], baseline_slices[1]["pnl_open"])
 
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_probability_mode_returns_adjustable_band_and_touch_probability(self, _quote):

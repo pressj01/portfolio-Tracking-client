@@ -64,7 +64,21 @@ const PRESETS = {
   },
 }
 
-const DEFAULT_FILTERS = { ...PRESETS.balanced.filters, custom_tickers: '' }
+// The structure choice deliberately sits outside the presets: a preset changes
+// how selective the scan is, not which trade it builds, so switching from
+// Conservative to Aggressive must not silently turn a Jeep back into a condor.
+const DEFAULT_FILTERS = {
+  ...PRESETS.balanced.filters,
+  custom_tickers: '',
+  market_bias: 'neutral',
+  construction: 'balanced',
+  index_set: 'core',
+  index_tickers: 'SPY,QQQ,IWM',
+  tilt_strength: 0.25,
+  ratio_contracts: 2,
+  variant_width_pct: 5,
+  variant_tickers: 'SPY,QQQ,IWM',
+}
 const FUND_UNIVERSE_IDS = new Set(['index_etf', 'sector_etf', 'etf_all', 'stocks_and_etfs'])
 
 const usd = (value, digits = 2) => value == null
@@ -73,6 +87,13 @@ const usd = (value, digits = 2) => value == null
 const pct = (value, digits = 1) => value == null ? '—' : `${Number(value).toFixed(digits)}%`
 const num = (value, digits = 1) => value == null ? '—' : Number(value).toFixed(digits)
 const sigma = (value, digits = 1) => value == null ? '—' : `${Number(value).toFixed(digits)}σ`
+const entryCashflow = structure => structure?.entry_cashflow ?? structure?.credit ?? null
+const cashflowText = (value, { compact = false } = {}) => {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  const amount = Number(value)
+  if (amount >= 0) return `${usd(amount)} ${compact ? 'cr' : 'credit'}`
+  return `${usd(Math.abs(amount))} ${compact ? 'db' : 'debit'}`
+}
 
 const GRADE_COLORS = {
   A: 'var(--pos-strong)', B: 'var(--pos)', C: 'var(--amber)', D: 'var(--warning)', F: 'var(--neg-strong)',
@@ -86,6 +107,53 @@ function GradeBadge({ row }) {
       borderRadius: '4px', padding: '0.12rem 0.35rem', fontWeight: 700, whiteSpace: 'nowrap',
     }}>
       {row.grade}{row.scored_on_partial ? '*' : ''} {num(row.score, 1)}
+    </span>
+  )
+}
+
+// A ticker now appears once per construction, so it can no longer identify a
+// row on its own — React would collide the keys and the expanded panel would
+// open against whichever variant rendered first.
+const rowKey = row => [
+  row.ticker,
+  row.spread?.variant || 'balanced',
+  row.spread?.direction || 'neutral',
+].join(':')
+
+const VARIANT_COLORS = {
+  balanced: 'var(--text-muted)',
+  strike_tilt: 'var(--teal)',
+  ratio_tilt: 'var(--teal)',
+  risk_ratio: 'var(--teal)',
+  weirdor_ratio: 'var(--amber)',
+  weirdor_hedged: 'var(--amber)',
+  jeep: 'var(--accent-bright)',
+}
+
+/** Which construction this row is, and which way it leans. */
+function VariantBadge({ row }) {
+  const spread = row.spread
+  if (!spread?.variant_label) return null
+  const color = VARIANT_COLORS[spread.variant] || 'var(--text-muted)'
+  const lean = spread.direction && spread.direction !== 'neutral' ? spread.direction : null
+  const ratio = spread.put_quantity != null && spread.call_quantity != null
+    && (spread.put_quantity !== 1 || spread.call_quantity !== 1)
+    ? `${spread.put_quantity}:${spread.call_quantity}`
+    : null
+  return (
+    <span title={spread.variant_blurb || ''} style={{ display: 'inline-flex', gap: '0.2rem', alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{
+        color, border: `1px solid ${color}`, borderRadius: 3,
+        padding: '0.06rem 0.28rem', fontSize: '0.64rem', whiteSpace: 'nowrap',
+      }}>{spread.variant_label}</span>
+      {lean && <span style={{
+        color: lean === 'bullish' ? 'var(--pos)' : 'var(--neg-strong)',
+        fontSize: '0.62rem', whiteSpace: 'nowrap',
+      }}>{lean === 'bullish' ? '▲' : '▼'}</span>}
+      {ratio && <span title={`${spread.put_quantity} put spread(s) against ${spread.call_quantity} call spread(s)`}
+        style={{ color: 'var(--text-dim)', fontSize: '0.62rem', whiteSpace: 'nowrap' }}>{ratio}</span>}
+      {spread.leg_count > 4 && <span title={`${spread.leg_count} legs`}
+        style={{ color: 'var(--text-dim)', fontSize: '0.62rem', whiteSpace: 'nowrap' }}>{spread.leg_count}L</span>}
     </span>
   )
 }
@@ -142,6 +210,148 @@ function Flags({ flags = [] }) {
   )
 }
 
+// Which way the user thinks the market is going, and how they want that
+// expressed. Direction and construction are separate choices on purpose: the
+// same bullish view can be built three different ways, and the whole point of
+// the screen is to let them be compared rather than picked blind.
+const DIRECTIONS = [
+  { id: 'neutral', label: 'Neutral', tip: 'No opinion — the classic balanced condor, equal contracts and delta-matched strikes.' },
+  { id: 'bullish', label: 'Bullish', tip: 'Expecting price up. Sells the call side further out and the put side closer in, so the structure moves up with the market.' },
+  { id: 'bearish', label: 'Bearish', tip: 'Expecting price down. Sells the put side further out and the call side closer in.' },
+]
+
+const CONSTRUCTIONS = [
+  {
+    id: 'balanced', label: 'Balanced', directional: false,
+    tip: 'Delta-matched short strikes, equal contracts, no directional opinion.',
+  },
+  {
+    id: 'strike_tilt', label: 'Strike tilt', directional: true,
+    tip: 'Equal contracts on both sides — the lean comes entirely from moving the strikes.',
+  },
+  {
+    id: 'ratio_tilt', label: 'Ratio tilt', directional: true,
+    tip: 'Tilted strikes AND fewer contracts on the side price is expected to move toward, so the wing most likely to be tested carries the least size.',
+  },
+  {
+    id: 'risk_ratio', label: 'Centred ratio', directional: true,
+    tip: 'Strikes stay centred and delta-matched; only the contract counts move. The side that measures riskier is cut back.',
+  },
+  {
+    id: 'weirdor_ratio', label: 'Weirdor', directional: false,
+    tip: 'Downside-heavy asymmetric condor. Equal wing widths, with the whole asymmetry carried by a put-heavy contract ratio solved toward a flat net delta.',
+  },
+  {
+    id: 'weirdor_hedged', label: 'Weirdor (hedged)', directional: false,
+    tip: 'A condor plus defensive butterflies just inside each short strike — long gamma bought as insurance against a late-cycle attack.',
+  },
+  {
+    id: 'jeep', label: 'Jeep', directional: false,
+    tip: 'A Weirdor whose put side carries a front debit spread, butterflying off the put credit spread to raise the profit shelf below the market.',
+  },
+  {
+    id: 'all', label: 'All variations', directional: false,
+    tip: 'Build every construction valid for the chosen direction and score them side by side, one row each.',
+  },
+]
+
+function StructurePicker({ filters, set }) {
+  const direction = filters.market_bias || 'neutral'
+  const construction = filters.construction || 'balanced'
+  const isVariant = construction !== 'balanced'
+  // A tilted construction has nothing to express without a direction, so
+  // switching back to Neutral drops a directional structure to Balanced rather
+  // than leaving the picker showing a selection the scan cannot honour.
+  const pickDirection = value => {
+    set('market_bias', value)
+    const current = CONSTRUCTIONS.find(item => item.id === construction)
+    if (value === 'neutral' && current?.directional) set('construction', 'balanced')
+  }
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.6rem 0.85rem',
+      background: 'var(--surface-sunken)', border: '1px solid var(--border)', borderRadius: 6,
+      marginBottom: '0.6rem',
+    }}>
+      <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ color: 'var(--text-muted)', fontSize: '0.78rem', minWidth: 74 }}>Market view:</strong>
+        {DIRECTIONS.map(item => (
+          <button key={item.id} title={item.tip}
+            className={`btn btn-xs ${item.id === direction ? 'btn-scan' : 'btn-outline'}`}
+            aria-pressed={item.id === direction}
+            onClick={() => pickDirection(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        <strong style={{ color: 'var(--text-muted)', fontSize: '0.78rem', minWidth: 74 }}>Structure:</strong>
+        {CONSTRUCTIONS.map(item => {
+          // Tilted constructions need a direction to lean toward.
+          const disabled = item.directional && direction === 'neutral'
+          return (
+            <button key={item.id}
+              title={disabled ? `${item.tip} — pick Bullish or Bearish to use this.` : item.tip}
+              disabled={disabled}
+              className={`btn btn-xs ${item.id === construction ? 'btn-scan' : 'btn-outline'}`}
+              aria-pressed={item.id === construction}
+              style={disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
+              onClick={() => set('construction', item.id)}>
+              {item.label}
+            </button>
+          )
+        })}
+      </div>
+
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+        {CONSTRUCTIONS.find(item => item.id === construction)?.tip}
+      </div>
+
+      {isVariant && (
+        <div style={{ display: 'flex', gap: '0.85rem', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Underlyings
+            <input value={filters.variant_tickers ?? 'SPY,QQQ,IWM'}
+              onChange={event => set('variant_tickers', event.target.value)}
+              style={{ width: 190, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Tilt strength
+            <input type="number" step="0.05" min="0" max="0.75"
+              value={filters.tilt_strength ?? 0.25}
+              onChange={event => set('tilt_strength', Number(event.target.value))}
+              style={{ width: 80, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Contract ratio
+            <input type="number" step="1" min="2" max="5"
+              value={filters.ratio_contracts ?? 2}
+              onChange={event => set('ratio_contracts', Number(event.target.value))}
+              style={{ width: 80, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+            Wing width
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+              <input type="number" step="0.5" min="0.5" max="25"
+                value={filters.variant_width_pct ?? 5}
+                onChange={event => set('variant_width_pct', Number(event.target.value))}
+                style={{ width: 70, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+              <span style={{ fontSize: '0.7rem' }}>% spot</span>
+            </span>
+          </label>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.71rem', maxWidth: 380 }}>
+            These structures need index-grade chains — a ratio'd six-leg order is not
+            fillable on a single name, so the variant scan runs on these tickers rather
+            than the stock universe above.
+          </span>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ScoreBar({ label, value, max }) {
   const fraction = max ? Math.max(0, Math.min(1, (value || 0) / max)) : 0
   return (
@@ -161,6 +371,12 @@ function ProfitZone({ condor, price }) {
   const lower = condor?.lower_breakeven
   const upper = condor?.upper_breakeven
   if (lower == null || upper == null || !price) return null
+  const classic = !condor.variant || condor.variant === 'balanced'
+  if (Array.isArray(condor.breakevens) && condor.breakevens.length > 2) {
+    return <div style={{ marginTop: '0.85rem', color: 'var(--text-muted)', fontSize: '0.72rem' }}>
+      This structure has {condor.breakevens.length} expiration breakevens ({condor.breakevens.map(value => usd(value)).join(', ')}), so a single shaded band would be misleading. Use the enabled Risk graph for the complete payoff shape.
+    </div>
+  }
   // Pad the drawn range past the long strikes so the wings stay visible.
   const left = Math.min(condor.put_long_strike, lower) * 0.985
   const right = Math.max(condor.call_long_strike, upper) * 1.015
@@ -185,11 +401,11 @@ function ProfitZone({ condor, price }) {
           width: `${(upper - lower) / (right - left) * 100}%`,
           background: 'var(--pos)', opacity: 0.22, borderRadius: 3,
         }} />
-        <div style={{
+        {classic && <div style={{
           position: 'absolute', top: 0, bottom: 0, left: at(condor.put_short_strike),
           width: `${(condor.call_short_strike - condor.put_short_strike) / (right - left) * 100}%`,
           background: 'var(--pos)', opacity: 0.32,
-        }} />
+        }} />}
         {mark(lower, 'var(--amber)', `BE ${usd(lower)}`, true)}
         {mark(upper, 'var(--amber)', `BE ${usd(upper)}`, true)}
         {mark(condor.put_short_strike, 'var(--pos-strong)', `${usd(condor.put_short_strike)}P`, false)}
@@ -197,8 +413,9 @@ function ProfitZone({ condor, price }) {
         {mark(price, 'var(--accent-bright)', `now ${usd(price)}`, false)}
       </div>
       <div style={{ marginTop: '1.15rem', color: 'var(--text-dim)', fontSize: '0.7rem' }}>
-        Full credit anywhere between {usd(condor.put_short_strike)} and {usd(condor.call_short_strike)};
-        {' '}profit anywhere between the breakevens, a {pct(condor.profit_zone_width_pct)} band.
+        {classic
+          ? <>Full credit anywhere between {usd(condor.put_short_strike)} and {usd(condor.call_short_strike)}; profit anywhere between the breakevens, a {pct(condor.profit_zone_width_pct)} band.</>
+          : <>Positive expiration P/L between the displayed breakevens, a {pct(condor.profit_zone_width_pct)} band. Maximum profit follows the complete multi-leg payoff rather than the space between the two base short strikes.</>}
         {condor.min_cushion_sigma != null && ` The nearer breakeven is ${sigma(condor.min_cushion_sigma)} away against a ${pct(condor.expected_move_pct_life)} expected move over ${condor.dte} days.`}
       </div>
     </div>
@@ -274,12 +491,18 @@ function DetailRow({ row, colSpan }) {
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.6rem' }}>
           <RiskGraphButton kind="iron-condor" row={row} source="Iron Condor Scanner" />
         </div>
+        {condor?.uses_last_trade_prices && <div style={{
+          marginBottom: '0.65rem', padding: '0.5rem 0.65rem', border: '1px solid var(--amber)',
+          borderRadius: 5, color: 'var(--amber)', fontSize: '0.75rem',
+        }}>
+          After-hours estimate from recent trades. Live bid/ask, natural fill, and slippage are intentionally unavailable; verify all legs when the market reopens.
+        </div>}
         <p style={{ maxWidth: '1100px', margin: '0 0 0.7rem', color: 'var(--text-muted)', lineHeight: 1.5 }}>{row.verdict}</p>
         {condor && (
           <OptionProbabilityCards
             schedule={condor.probability_schedule}
-            successHeadline="The complete iron condor has positive modeled P/L"
-            failureHeadline="The complete iron condor has negative modeled P/L"
+            successHeadline={`The complete ${condor.variant_label || 'iron condor'} has positive modeled P/L`}
+            failureHeadline={`The complete ${condor.variant_label || 'iron condor'} has negative modeled P/L`}
           />
         )}
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(200px, 0.7fr) minmax(420px, 2fr)', gap: '1rem' }}>
@@ -305,12 +528,14 @@ function DetailRow({ row, colSpan }) {
               {cell('Long put quote', `${usd(condor.put_leg_long?.bid)} × ${usd(condor.put_leg_long?.ask)} · Δ ${num(condor.put_leg_long?.delta, 2)}`)}
               {cell('Short call quote', `${usd(condor.call_leg_short?.bid)} × ${usd(condor.call_leg_short?.ask)} · Δ ${num(condor.call_leg_short?.delta, 2)}`)}
               {cell('Long call quote', `${usd(condor.call_leg_long?.bid)} × ${usd(condor.call_leg_long?.ask)} · Δ ${num(condor.call_leg_long?.delta, 2)}`)}
-              {cell('Mid / natural credit', `${usd(condor.credit)} / ${usd(condor.natural_credit)}`)}
-              {cell('Put / call credit', `${usd(condor.put_credit)} / ${usd(condor.call_credit)}`)}
-              {cell('Wings', `${usd(condor.put_width, 0)} / ${usd(condor.call_width, 0)} · risk on ${usd(condor.max_wing, 0)}`)}
+              {cell('Entry at mid / natural', `${cashflowText(entryCashflow(condor))} / ${cashflowText(condor.natural_cashflow ?? condor.natural_credit)}`)}
+              {cell('Put / call cashflow', `${cashflowText(condor.put_credit)} / ${cashflowText(condor.call_credit)}`)}
+              {cell('Base wing widths', `${usd(condor.put_width, 0)} / ${usd(condor.call_width, 0)}`)}
               {cell('Max profit / loss', `${usd(condor.max_profit_dollars, 0)} / ${usd(condor.max_loss_dollars, 0)}`)}
-              {cell('Credit / wing', `${pct(condor.credit_pct_of_width)} · ${pct(condor.return_on_risk_pct)} ROR`)}
-              {cell('Annualized ROR', pct(condor.annualized_return_on_risk_pct))}
+              {entryCashflow(condor) < 0
+                ? cell('Debit / max loss', `${pct(condor.entry_debit_pct_of_max_loss)} · ${pct(condor.return_on_risk_pct)} ROR`)
+                : cell(condor.variant && condor.variant !== 'balanced' ? 'Credit / payoff range' : 'Credit / wing', `${pct(condor.credit_pct_of_width)} · ${pct(condor.return_on_risk_pct)} ROR`)}
+              {cell('Annualized max ROR', pct(condor.annualized_return_on_risk_pct))}
               {cell('Delta gap / net Δ', `${num(condor.delta_gap, 3)} / ${num(condor.structure_delta, 3)}`)}
               {cell('IV / RV', row.iv_rv_ratio == null ? '—' : `${num(row.iv_rv_ratio, 2)}×`)}
               {cell('IV percentile', row.iv_percentile_vs_rv == null ? '—' : `${num(row.iv_percentile_vs_rv, 0)}th`)}
@@ -321,6 +546,24 @@ function DetailRow({ row, colSpan }) {
             </>}
           </div>
         </div>
+        {!!condor?.legs?.length && <div style={{ marginTop: '0.8rem' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.65rem', textTransform: 'uppercase', marginBottom: '0.3rem' }}>
+            Complete quantity-aware structure
+          </div>
+          <table className="sst" style={{ width: '100%' }}>
+            <thead><tr><th>Role</th><th>Side</th><th>Type</th><th style={{ textAlign: 'right' }}>Qty</th><th style={{ textAlign: 'right' }}>Strike</th><th style={{ textAlign: 'right' }}>Bid / ask</th><th style={{ textAlign: 'right' }}>Mid</th><th style={{ textAlign: 'right' }}>Delta</th></tr></thead>
+            <tbody>{condor.legs.map((leg, index) => <tr key={`${leg.role}-${leg.strike}-${index}`}>
+              <td>{String(leg.role || '').replaceAll('_', ' ')}</td>
+              <td style={{ color: leg.qty > 0 ? 'var(--pos)' : 'var(--amber)' }}>{leg.qty > 0 ? 'Buy' : 'Sell'}</td>
+              <td>{String(leg.option_type || '').toUpperCase()}</td>
+              <td style={{ textAlign: 'right' }}>{Math.abs(Number(leg.qty) || 0)}</td>
+              <td style={{ textAlign: 'right' }}>{usd(leg.strike)}</td>
+              <td style={{ textAlign: 'right' }}>{leg.quote_source === 'last_trade_estimate' ? 'recent trade' : `${usd(leg.bid)} / ${usd(leg.ask)}`}</td>
+              <td style={{ textAlign: 'right' }}>{usd(leg.mid)}</td>
+              <td style={{ textAlign: 'right' }}>{num(leg.delta, 3)}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
         {condor && <ProfitZone condor={condor} price={row.price} />}
         {plan && <div style={{
           marginTop: '0.75rem', padding: '0.65rem', border: '1px solid var(--accent)',
@@ -350,10 +593,10 @@ function DetailRow({ row, colSpan }) {
 const COLUMNS = [
   ['ticker', 'Ticker', 'left'], ['kind', 'Type', 'left'], ['score', 'Score', 'left'],
   ['price', 'Price', 'right'], ['range', 'Range', 'right'], ['rsi_14', 'RSI', 'right'],
-  ['iv', 'IV/RV', 'right'], ['spread', 'Sell This Condor', 'center'], ['dte', 'DTE', 'right'],
-  ['risk', 'Credit / Risk', 'right'], ['zone', 'Profit Zone', 'right'],
+  ['iv', 'IV/RV', 'right'], ['spread', 'Suggested Structure', 'center'], ['dte', 'DTE', 'right'],
+  ['risk', 'Max Profit / Risk', 'right'], ['zone', 'Profit Zone', 'right'],
   ['cushion', 'Cushion', 'right'], ['prob', 'Prob. Profit', 'right'],
-  ['ror', 'Ann. ROR', 'right'], ['manage', 'Manage', 'right'], ['flags', 'Warnings', 'left'],
+  ['ror', 'Ann. Max ROR', 'right'], ['manage', 'Manage', 'right'], ['flags', 'Warnings', 'left'],
 ]
 
 const SORT_ACCESSORS = {
@@ -406,6 +649,7 @@ export default function IronCondorScanner() {
 
   const set = (key, value) => setFilters(current => ({ ...current, [key]: value }))
   const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
+  const usesBalancedIndexes = filters.construction === 'balanced'
   const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
   const nothingSelected = !filters.include_stocks && !anyFunds
 
@@ -414,6 +658,11 @@ export default function IronCondorScanner() {
     setError(null)
     setExpanded(null)
     const body = { ...filters }
+    if (body.construction === 'balanced' && body.include_index_etfs) {
+      if (body.index_set === 'core') body.index_tickers = 'SPY,QQQ,IWM'
+    } else {
+      delete body.index_tickers
+    }
     if (body.universe === 'custom') {
       body.custom_tickers = String(filters.custom_tickers || '').split(/[\s,]+/).filter(Boolean)
     } else {
@@ -484,7 +733,10 @@ export default function IronCondorScanner() {
           exp {condor.expiration}
         </div>
         <div style={{ color: 'var(--text-dim)', fontSize: '0.66rem', whiteSpace: 'nowrap' }}>
-          {usd(condor.credit)} credit · {pct(condor.credit_pct_of_width, 0)} of wing
+          {cashflowText(entryCashflow(condor))}
+          {' · '}{entryCashflow(condor) < 0
+            ? `${pct(condor.entry_debit_pct_of_max_loss, 0)} of max loss`
+            : `${pct(condor.credit_pct_of_width, 0)} of ${condor.variant && condor.variant !== 'balanced' ? 'payoff range' : 'wing'}`}
         </div>
       </div> : '—'}</td>
       <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
@@ -533,8 +785,7 @@ export default function IronCondorScanner() {
       </div>
       <p style={{ color: 'var(--text-muted)', marginTop: 0 }}>
         Finds range-bound stocks and ETFs whose options are expensive relative to how far they actually travel, then
-        sells a four-leg condor with defined risk, both breakevens outside the expected move, and a balanced
-        pair of short strikes.
+        builds the selected defined-risk condor structure with quantity-aware payoff math.
       </p>
       <ScannerRiskNotice />
       {showHelp && <HelpPanel />}
@@ -555,6 +806,8 @@ export default function IronCondorScanner() {
         </span>
         {nothingSelected && <span style={{ color: 'var(--neg-strong)' }}>Pick at least one.</span>}
       </div>
+
+      <StructurePicker filters={filters} set={set} />
 
       <div style={{ display: 'flex', gap: '0.45rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.7rem' }}>
         <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>Preset:</span>
@@ -581,6 +834,23 @@ export default function IronCondorScanner() {
         {filters.include_stocks && filters.universe === 'custom' && <label style={{ flex: '1 1 230px', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
           Tickers<input value={filters.custom_tickers || ''} onChange={event => set('custom_tickers', event.target.value.toUpperCase())}
             placeholder="SPY, QQQ, IWM..." style={{ width: '100%', display: 'block', padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
+        </label>}
+        {usesBalancedIndexes && <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', color: 'var(--text-dim)', fontSize: '0.75rem', opacity: filters.include_index_etfs ? 1 : 0.45 }}>
+          Index ETFs
+          <select value={filters.index_set || 'core'} disabled={!filters.include_index_etfs}
+            onChange={event => {
+              const next = event.target.value
+              set('index_set', next)
+              if (next === 'core') set('index_tickers', 'SPY,QQQ,IWM')
+            }}
+            style={{ minWidth: 155, padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }}>
+            <option value="core">SPY, QQQ, IWM</option>
+            <option value="custom">Custom index tickers…</option>
+          </select>
+        </label>}
+        {usesBalancedIndexes && filters.include_index_etfs && filters.index_set === 'custom' && <label style={{ flex: '1 1 190px', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+          Index tickers<input value={filters.index_tickers || ''} onChange={event => set('index_tickers', event.target.value.toUpperCase())}
+            placeholder="SPY, QQQ, IWM" style={{ width: '100%', display: 'block', padding: '0.3rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4, color: 'var(--text-strong)' }} />
         </label>}
         {numField('Max efficiency', 'max_efficiency_ratio', { step: 0.05, max: 1, tip: 'Net distance travelled over total path length. Lower is more range-bound; above ~0.5 the name is trending' })}
         {numField('Max drift', 'max_drift_sigma', { step: 0.25, suffix: 'σ', tip: 'Net move over the lookback, as a magnitude — direction is irrelevant to a condor' })}
@@ -620,7 +890,7 @@ export default function IronCondorScanner() {
       {error && <div className="alert alert-error">{error}</div>}
       {loading && <p style={{ color: 'var(--text-dim)' }}>
         Screening for range-bound behaviour first, then pulling both the put and call chains for the finalists and
-        pairing every plausible four-leg structure.
+        pairing every plausible complete structure.
       </p>}
       {stats && !loading && <div style={{ color: 'var(--text-dim)', fontSize: '0.77rem', marginBottom: '0.55rem' }}>
         Scanned <strong>{stats.priced}</strong> of {stats.universe}
@@ -628,29 +898,30 @@ export default function IronCondorScanner() {
         {' → '}<strong>{stats.passed_fundamentals}</strong> passed size &amp; liquidity
         {' → '}<strong style={{ color: 'var(--pos-strong)' }}>{stats.actionable}</strong> actionable
         {stats.watchlist ? ` · ${stats.watchlist} watchlist` : ''}
-        {stats.chains_fetched ? ` · ${stats.chains_fetched} live condors found` : ''}
+        {stats.chains_fetched ? ` · ${stats.chains_fetched} complete structures found` : ''}
         {stats.dropped_for_earnings ? ` · ${stats.dropped_for_earnings} excluded for earnings` : ''}
         {asOf ? ` · ${new Date(asOf).toLocaleString()}` : ''}
       </div>}
 
       {sortedRows.length > 0 && <>
         <div style={{ display: 'flex', justifyContent: 'space-between', margin: '0.8rem 0 0.4rem' }}>
-          <h2 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--text-strong)' }}>Actionable Condors</h2>
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.74rem' }}>Live four-leg structures meeting every enabled risk gate</span>
+          <h2 style={{ margin: 0, fontSize: '1.05rem', color: 'var(--text-strong)' }}>Actionable Structures</h2>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.74rem' }}>Live complete structures meeting every enabled risk gate</span>
         </div>
         <div className="sst-wrap" style={{ maxHeight: '70vh' }}>
           <table className="sst">
             <thead><tr><th style={{ width: 24 }} />{COLUMNS.map(([key, label, align]) =>
               <th key={key} onClick={() => toggleSort(key)} style={{ cursor: 'pointer', textAlign: align }}>{label}{arrow(key)}</th>)}</tr></thead>
             <tbody>{sortedRows.map(row => {
-              const open = expanded === row.ticker
-              return <React.Fragment key={row.ticker}>
-                <tr onClick={() => setExpanded(open ? null : row.ticker)} style={{ cursor: 'pointer' }}>
+              const open = expanded === rowKey(row)
+              return <React.Fragment key={rowKey(row)}>
+                <tr onClick={() => setExpanded(open ? null : rowKey(row))} style={{ cursor: 'pointer' }}>
                   <td style={{ color: 'var(--text-dim)' }}>{open ? '▾' : '▸'}</td>
                   <td><a href="#" onClick={event => { event.preventDefault(); event.stopPropagation(); setChartTicker(row.ticker) }}
                     style={{ color: 'var(--accent-bright)', fontWeight: 700, textDecoration: 'none' }}>{row.ticker} 📈</a>
                     <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.name}</div></td>
-                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /></td>
+                  <td><KindBadge row={row} /><div style={{ marginTop: '0.15rem' }}><VariantBadge row={row} /></div></td>
+                  <td><GradeBadge row={row} /></td>
                   <td style={{ textAlign: 'right' }}>{usd(row.price)}</td>
                   <td style={{ textAlign: 'right' }} title="Efficiency ratio (net distance / path length) and net drift">
                     <div style={{ color: row.efficiency_ratio <= 0.3 ? 'var(--pos)' : 'var(--text-muted)' }}>
@@ -689,20 +960,23 @@ export default function IronCondorScanner() {
           <table className="sst">
             <thead><tr><th /><th>Ticker</th><th>Type</th><th>Score</th><th>Range</th><th>Status</th><th>Indicative Condor</th><th style={{ textAlign: 'right' }}>DTE</th><th>Warnings</th></tr></thead>
             <tbody>{watchlistRows.map(row => {
-              const open = expanded === row.ticker
-              const status = {
-                earnings: 'Earnings inside trade', constraints_relaxed: 'Structure limits missed',
-                unavailable: 'No quotable condor', not_priced: 'Awaiting live pricing',
-              }[row.chain_status] || 'Not actionable'
-              return <React.Fragment key={row.ticker}>
-                <tr onClick={() => setExpanded(open ? null : row.ticker)} style={{ cursor: 'pointer' }}>
+              const open = expanded === rowKey(row)
+              const status = row.chain_status === 'constraints_relaxed' && row.spread?.uses_last_trade_prices
+                ? 'After-hours estimate'
+                : ({
+                    earnings: 'Earnings inside trade', constraints_relaxed: 'Structure limits missed',
+                    unavailable: 'No quotable condor', not_priced: 'Awaiting live pricing',
+                  }[row.chain_status] || 'Not actionable')
+              return <React.Fragment key={rowKey(row)}>
+                <tr onClick={() => setExpanded(open ? null : rowKey(row))} style={{ cursor: 'pointer' }}>
                   <td>{open ? '▾' : '▸'}</td>
                   <td><strong style={{ color: 'var(--accent-bright)' }}>{row.ticker}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.name}</div></td>
-                  <td><KindBadge row={row} /></td><td><GradeBadge row={row} /></td>
+                  <td><KindBadge row={row} /><div style={{ marginTop: '0.15rem' }}><VariantBadge row={row} /></div></td>
+                  <td><GradeBadge row={row} /></td>
                   <td>{num(row.efficiency_ratio, 2)} · {sigma(row.drift_sigma)}</td>
                   <td style={{ color: 'var(--amber)', maxWidth: 300 }}><strong>{status}</strong><div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>{row.watchlist_reason}</div></td>
                   <td style={{ whiteSpace: 'nowrap' }}>{row.spread
-                    ? `$${row.spread.put_long_strike}/$${row.spread.put_short_strike}P — $${row.spread.call_short_strike}/$${row.spread.call_long_strike}C · ${usd(row.spread.credit)}`
+                    ? `$${row.spread.put_long_strike}/$${row.spread.put_short_strike}P — $${row.spread.call_short_strike}/$${row.spread.call_long_strike}C · ${cashflowText(entryCashflow(row.spread))}`
                     : '—'}</td>
                   <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>{row.spread ? `${row.spread.dte}d` : '—'}</td>
                   <td><Flags flags={row.flags} /></td>

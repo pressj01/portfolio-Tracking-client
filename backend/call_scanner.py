@@ -53,6 +53,7 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_probability import profit_probability_schedule
+from option_strike_targets import strike_for_delta
 from options_pricing import black_scholes
 from put_scanner import (
     BENCHMARK,
@@ -455,7 +456,8 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
                   target_delta: float, min_dte: int, max_dte: int,
                   earnings_date: str | None = None, earnings_buffer_days: int = 5,
                   cost_basis: float | None = None, respect_cost_basis: bool = True,
-                  min_otm_pct: float = 0.0, fund: dict | None = None) -> dict | None:
+                  min_otm_pct: float = 0.0, fund: dict | None = None,
+                  fallback_vol: float | None = None) -> dict | None:
     """Best short-call candidate: nearest the target delta, with real quotes.
 
     Two constraints beyond the put screen's mirror image:
@@ -523,8 +525,9 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
     if with_delta:
         pick = min(with_delta, key=lambda c: abs(c["delta"] - target_delta))
     else:
-        # No usable IV: fall back to a strike near the equivalent moneyness.
-        want = spot * (1.0 + (0.5 - target_delta) * 0.4)
+        # Preserve the requested delta's time scaling even when the chain has
+        # no usable IV/delta rather than falling back to a fixed percent OTM.
+        want = strike_for_delta(spot, target_delta, fallback_vol, dte, "call") or spot
         pick = min(pool, key=lambda c: abs(c["strike"] - want))
 
     # At-the-money IV drives the IV/RV comparison, not the OTM strike's skew.
@@ -1298,6 +1301,7 @@ def run_call_scan(payload: dict) -> dict:
                 respect_cost_basis=bool(p["respect_cost_basis"]),
                 min_otm_pct=min_otm,
                 fund=fund,
+                fallback_vol=_num(tech.get("rv_30")) or _num(tech.get("rv_252")),
             )
         except Exception:
             return None

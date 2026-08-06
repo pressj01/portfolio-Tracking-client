@@ -49,7 +49,13 @@ const PRESETS = {
   },
 }
 
-const DEFAULT_FILTERS = { ...PRESETS.balanced.filters, custom_tickers: '' }
+const DEFAULT_FILTERS = {
+  ...PRESETS.balanced.filters,
+  custom_tickers: '',
+  include_selected_funds: false,
+  selected_fund_tickers: 'SPY, QQQ, IWM, GLD',
+  include_lower_confidence_selected_funds: true,
+}
 
 // These come from the Include checkboxes, so they are hidden from the stock dropdown.
 const FUND_UNIVERSE_IDS = new Set(['index_etf', 'sector_etf', 'etf_all', 'stocks_and_etfs'])
@@ -111,6 +117,16 @@ function GradeBadge({ grade, score, partial }) {
   )
 }
 
+function ConfidenceBadge({ row }) {
+  if (row.candidate_status !== 'lower_confidence') return null
+  return (
+    <span title="This user-selected ETF missed one or more setup filters. The contract is shown for comparison, not as a fully qualified setup."
+      style={{ display: 'inline-flex', marginTop: '0.2rem', fontSize: '0.62rem', color: 'var(--warning-text)', border: '1px solid var(--warning)', borderRadius: 3, padding: '0.04rem 0.22rem', whiteSpace: 'nowrap' }}>
+      Lower confidence
+    </span>
+  )
+}
+
 const KIND_STYLES = {
   index: { label: 'Index', color: 'var(--teal)', tip: 'Broad index fund — no single-company risk to be assigned into' },
   sector: { label: 'Sector', color: 'var(--purple)', tip: 'Sector, commodity, or country fund — concentrated but still a basket' },
@@ -162,6 +178,7 @@ const FLAG_SHORT = {
   'Far below the 200-day average': 'Below 200d',
   'Leveraged or inverse fund': 'Leveraged',
   'Small fund': 'Small fund',
+  'Misses selected underlying filters — lower-confidence candidate': 'Lower confidence',
 }
 
 function shortFlag(f) {
@@ -240,9 +257,15 @@ function HelpPanel() {
           A 20% drop means very different things for a utility and a semiconductor stock, so nothing is ranked on the
           raw decline. Each name is measured against <em>its own</em> normal movement: the scanner takes the daily
           volatility of the period <em>before</em> the selloff, works out how far that name would ordinarily travel over
-          the lookback window, and reports the actual drop as a multiple of it. That is the <strong>Stretch</strong>,
-          in standard deviations (σ). 2.5σ means it fell two and a half deviations further than its own history calls
-          routine.
+          the lookback window, and reports the actual drop as a multiple of it. That is the <strong>Sigma Stretch</strong>:
+          <strong> recent log-return decline ÷ (prior daily volatility × √Lookback)</strong>. A positive result means
+          the price fell; 2.5σ means a decline equal to two and a half of its own normal lookback moves.
+        </p>
+        <p style={p}>
+          For example, with 1% daily volatility and a 21-day Lookback, one normal move is about
+          1% × √21 = 4.6%. A roughly 6.9% decline is therefore about 1.5σ. Increasing <strong>Lookback</strong> changes
+          both the historical return being measured and the √Lookback scaling. Increasing <strong>Target DTE</strong>
+          does not change Stretch; it only changes which option expiration the scanner seeks.
         </p>
         <p style={{ margin: 0 }}>
           The <strong>vs Market</strong> column then subtracts the market&rsquo;s move times the name&rsquo;s beta. A stock that
@@ -553,6 +576,7 @@ const COLUMNS = [
   { key: 'iv_rv_ratio', label: 'IV/RV', align: 'right', tip: 'Implied vol over realized vol — above 1.0 means sellers are paid above fair value' },
   { key: 'put_strike', label: 'Sell This Put', align: 'center', tip: 'The suggested strike and expiration to sell' },
   { key: 'dte', label: 'DTE', align: 'right', tip: 'Days to expiration for the suggested option chain' },
+  { key: 'put_prob', label: 'Prob. OTM', align: 'right', tip: 'Modeled probability that the short strike remains out of the money at expiration' },
   { key: 'days_to_earnings', label: 'Earnings', align: 'center', tip: 'Days until the next earnings report, and whether the suggested expiration closes before it' },
   { key: 'put_annualized', label: 'Ann. Return', align: 'right', tip: 'Annualized return on the cash securing the put' },
   { key: 'put_buyback', label: 'Buy Back At', align: 'right', tip: 'Suggested buy-to-close limit that retains 60–70% of the quoted entry credit' },
@@ -563,6 +587,7 @@ const COLUMNS = [
 const SORT_ACCESSORS = {
   put_strike: r => r.put?.strike ?? null,
   dte: r => r.put?.dte ?? null,
+  put_prob: r => r.put?.prob_otm ?? null,
   put_annualized: r => r.put?.annualized_pct ?? null,
   put_buyback: r => r.put?.buyback?.target_price ?? null,
   put_basis: r => r.put?.effective_basis ?? null,
@@ -606,15 +631,39 @@ export default function PutSellingScanner() {
   }, [filters])
 
   const set = (key, value) => setFilters(f => ({ ...f, [key]: value }))
+  const setInclude = (key, value) => {
+    if (key !== 'include_selected_funds' || !value) return set(key, value)
+    setFilters(current => ({
+      ...current,
+      include_stocks: false,
+      include_index_etfs: false,
+      include_sector_etfs: false,
+      include_selected_funds: true,
+    }))
+  }
 
   const applyPreset = (key) => {
     setFilters(f => ({ ...f, ...PRESETS[key].filters }))
   }
   const activePreset = useMemo(() => findActivePreset(PRESETS, filters), [filters])
 
-  const anyFunds = !!(filters.include_index_etfs || filters.include_sector_etfs)
+  const selectedFunds = String(filters.selected_fund_tickers || '').trim()
+  const anyFunds = !!(
+    filters.include_index_etfs
+    || filters.include_sector_etfs
+    || (filters.include_selected_funds && selectedFunds)
+  )
   const nothingSelected = !filters.include_stocks && !anyFunds
   const scanningFundsOnly = anyFunds && !filters.include_stocks
+  const useCoreFunds = () => setFilters(current => ({
+    ...current,
+    include_stocks: false,
+    include_index_etfs: false,
+    include_sector_etfs: false,
+    include_selected_funds: true,
+    selected_fund_tickers: 'SPY, QQQ, IWM, GLD',
+    include_lower_confidence_selected_funds: true,
+  }))
 
   const runScan = useCallback(() => {
     setLoading(true)
@@ -730,14 +779,15 @@ export default function PutSellingScanner() {
           ['include_stocks', 'Stocks', 'Scan the stock universe chosen below'],
           ['include_index_etfs', 'Index ETFs', 'SPY, QQQ, IWM, DIA, sector-neutral style and rates funds'],
           ['include_sector_etfs', 'Sector & commodity ETFs', 'XLK, XLE, GLD, SLV, SMH, GDX and the rest of the sector complex'],
+          ['include_selected_funds', 'Selected ETFs only', 'Scan only the exact index and commodity fund tickers entered below; re-enable another group to combine it'],
         ].map(([key, label, tip]) => (
           <label key={key} title={tip}
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', color: filters[key] ? 'var(--text-strong)' : 'var(--text-dim)' }}>
-            <input type="checkbox" checked={!!filters[key]} onChange={e => set(key, e.target.checked)} />
+            <input type="checkbox" checked={!!filters[key]} onChange={e => setInclude(key, e.target.checked)} />
             {label}
           </label>
         ))}
-        {!filters.include_stocks && !filters.include_index_etfs && !filters.include_sector_etfs && (
+        {nothingSelected && (
           <span style={{ fontSize: '0.78rem', color: 'var(--neg-strong)' }}>Pick at least one.</span>
         )}
         {scanningFundsOnly && (
@@ -809,6 +859,22 @@ export default function PutSellingScanner() {
         {anyFunds && numField('ETF min stretch', 'fund_min_stretch_sigma', { step: 0.1, suffix: 'σ', width: 65, tip: 'ETFs: minimum standard deviations beyond the fund’s normal move' })}
         {anyFunds && numField('ETF min AUM', 'fund_min_aum', { scale: 1e6, suffix: 'M', width: 65, tip: 'Funds report assets under management rather than a market cap' })}
 
+        {filters.include_selected_funds && (
+          <div style={{ flex: '1 1 330px', minWidth: 260 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', fontSize: '0.78rem', color: 'var(--text-dim)' }}>
+              Index / commodity ETFs to scan
+              <input type="text" value={filters.selected_fund_tickers || ''}
+                onChange={e => set('selected_fund_tickers', e.target.value.toUpperCase())}
+                placeholder="SPY, QQQ, IWM, GLD"
+                style={{ padding: '0.3rem 0.4rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-strong)', fontSize: '0.82rem', width: '100%' }} />
+            </label>
+            <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+              <button type="button" className="btn btn-xs btn-outline" onClick={useCoreFunds}>Use SPY, QQQ, IWM, GLD</button>
+              {checkField('Show best available if filters miss', 'include_lower_confidence_selected_funds', 'Returns selected index and commodity fund trades in a clearly lower-confidence state instead of hiding every technical near miss')}
+            </div>
+          </div>
+        )}
+
         {numField('Max RSI', 'max_rsi', { width: 65, tip: 'Only names this oversold or lower' })}
         {numField('Min $ volume', 'min_avg_dollar_volume', { scale: 1e6, suffix: 'M', width: 65, tip: 'Average daily dollar volume — a proxy for how tight the option market will be' })}
         {numField('Lookback', 'lookback_days', { width: 65, suffix: 'd', tip: 'Trading days in the decline window' })}
@@ -846,6 +912,7 @@ export default function PutSellingScanner() {
           {' → '}<strong style={{ color: 'var(--text-muted)' }}>{stats.passed_fundamentals}</strong> passed quality
           {' → '}<strong style={{ color: 'var(--text-muted)' }}>{stats.final}</strong> rated
           {stats.chains_fetched ? ` (${stats.chains_fetched} option chains priced)` : ''}
+          {stats.lower_confidence ? ` · ${stats.lower_confidence} lower-confidence selected ETF trade${stats.lower_confidence === 1 ? '' : 's'}` : ''}
           {asOf ? ` · ${new Date(asOf).toLocaleString()}` : ''}
         </div>
       )}
@@ -888,7 +955,7 @@ export default function PutSellingScanner() {
                         </div>
                       </td>
                       <td><KindBadge row={r} /></td>
-                      <td><GradeBadge grade={r.grade} score={r.score} partial={r.scored_on_partial} /></td>
+                      <td><GradeBadge grade={r.grade} score={r.score} partial={r.scored_on_partial} /><ConfidenceBadge row={r} /></td>
                       <td style={{ textAlign: 'right' }}>{usd(r.price)}</td>
                       <td style={{ textAlign: 'right', color: 'var(--neg-strong)' }}>{pct(r.drawdown_pct)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 600 }}>{num(r.stretch_sigma, 1)}&sigma;</td>
@@ -920,6 +987,9 @@ export default function PutSellingScanner() {
                       </td>
                       <td style={{ textAlign: 'right', fontWeight: 600, whiteSpace: 'nowrap' }}>
                         {r.put ? `${r.put.dte}d` : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', color: 'var(--pos-strong)', fontWeight: 600 }}>
+                        {r.put ? pct(r.put.prob_otm, 0) : '—'}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         {r.is_fund ? (

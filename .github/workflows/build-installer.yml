@@ -46,7 +46,7 @@ jobs:
       - name: Build Flask backend executable
         run: |
           cd backend
-          pyinstaller --noconfirm --clean --distpath ../installer/flask-dist --workpath ../installer/flask-build --name backend app.py --hidden-import flask --hidden-import flask_cors --hidden-import pandas --hidden-import openpyxl --hidden-import yfinance --hidden-import plotly --hidden-import scipy --hidden-import pypdf --hidden-import sqlite3 --hidden-import statistics --hidden-import decimal --hidden-import config --hidden-import database --hidden-import import_data --hidden-import normalize --hidden-import grading --hidden-import create_template --hidden-import tax_report --hidden-import dividend_safety --hidden-import transaction_import --hidden-import portfolio_tester --hidden-import options_pricing --hidden-import options_api --add-data "config.py;." --add-data "database.py;." --add-data "import_data.py;." --add-data "normalize.py;." --add-data "grading.py;." --add-data "create_template.py;." --add-data "tax_report.py;." --add-data "dividend_safety.py;." --add-data "transaction_import.py;." --add-data "portfolio_tester.py;." --add-data "options_pricing.py;." --add-data "options_api.py;." --add-data "seed;seed"
+          pyinstaller --noconfirm --clean --distpath ../installer/flask-dist --workpath ../installer/flask-build --name backend app.py --hidden-import flask --hidden-import flask_cors --hidden-import pandas --hidden-import openpyxl --hidden-import yfinance --hidden-import plotly --hidden-import scipy --hidden-import pypdf --hidden-import sqlite3 --hidden-import statistics --hidden-import decimal --hidden-import config --hidden-import database --hidden-import import_data --hidden-import normalize --hidden-import grading --hidden-import create_template --hidden-import tax_report --hidden-import dividend_safety --hidden-import transaction_import --hidden-import portfolio_tester --hidden-import options_pricing --hidden-import options_api --hidden-import diversification --add-data "config.py;." --add-data "database.py;." --add-data "import_data.py;." --add-data "normalize.py;." --add-data "grading.py;." --add-data "create_template.py;." --add-data "tax_report.py;." --add-data "dividend_safety.py;." --add-data "transaction_import.py;." --add-data "portfolio_tester.py;." --add-data "options_pricing.py;." --add-data "options_api.py;." --add-data "seed;seed"
 
       - name: Install Node dependencies
         run: npm ci
@@ -57,6 +57,28 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+
+      - name: Verify Windows signatures
+        shell: powershell
+        run: |
+          $files = @(
+            "release\win-unpacked\Portfolio Tracking Client.exe",
+            "release\win-unpacked\resources\flask-backend\backend.exe",
+            "release\Portfolio Tracking Client Setup $((Get-Content package.json | ConvertFrom-Json).version).exe"
+          )
+
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) {
+              throw "Expected signed file was not found: $file"
+            }
+
+            $signature = Get-AuthenticodeSignature -FilePath $file
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid signature for $file. Status: $($signature.Status)"
+            }
+
+            Write-Host "$file signed by $($signature.SignerCertificate.Subject)"
+          }
 
       - name: Smoke test packaged Windows app
         shell: powershell
@@ -95,6 +117,41 @@ jobs:
             if (-not (Test-Path (Join-Path $testData "portfolio.db"))) {
               throw "The packaged backend did not create its per-user database."
             }
+            # The database created above is brand new, exactly like a user's
+            # first launch. The X-Ray built-ins must already be in it before
+            # anything is requested -- when they were seeded only by a refresh
+            # run, an installed copy charted every position as "no holdings
+            # data" while a developer's long-lived database looked correct.
+            $kgld = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/fund/KGLD" `
+              -TimeoutSec 10
+            if (-not $kgld.exposure -or $kgld.exposure.Count -lt 1) {
+              throw "The packaged build did not seed built-in X-Ray exposure data."
+            }
+            $tspy = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/fund/TSPY" `
+              -TimeoutSec 10
+            if ($tspy.meta.status -ne "manual") {
+              throw "The packaged build did not seed built-in X-Ray wrapper definitions."
+            }
+            $issuers = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/issuers" `
+              -TimeoutSec 20
+            if (-not $issuers.issuers -or $issuers.issuers.Count -lt 10) {
+              throw "The packaged build did not seed the X-Ray issuer registry."
+            }
+            if (-not ($issuers.map | Where-Object { $_.ticker -eq "SPYI" })) {
+              throw "The packaged X-Ray issuer map is missing its seeded tickers."
+            }
+            $seedResult = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/seed-exposures" `
+              -Method Post `
+              -ContentType "application/json" `
+              -Body "{}" `
+              -TimeoutSec 10
+            if (-not $seedResult.ok) {
+              throw "The packaged X-Ray exposure seed failed."
+            }
             Get-Content $startupLog
           }
           finally {
@@ -123,7 +180,7 @@ jobs:
           files: |
             release/*.exe
             release/*.blockmap
-          generate_release_notes: true
+          body_path: RELEASE_NOTES_1.33.4.md
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
@@ -159,7 +216,7 @@ jobs:
       - name: Build Flask backend executable
         run: |
           cd backend
-          pyinstaller --noconfirm --clean --distpath ../installer/flask-dist --workpath ../installer/flask-build --name backend app.py --hidden-import flask --hidden-import flask_cors --hidden-import pandas --hidden-import openpyxl --hidden-import yfinance --hidden-import plotly --hidden-import scipy --hidden-import pypdf --hidden-import sqlite3 --hidden-import statistics --hidden-import decimal --hidden-import config --hidden-import database --hidden-import import_data --hidden-import normalize --hidden-import grading --hidden-import create_template --hidden-import tax_report --hidden-import dividend_safety --hidden-import transaction_import --hidden-import portfolio_tester --hidden-import options_pricing --hidden-import options_api --add-data "config.py:." --add-data "database.py:." --add-data "import_data.py:." --add-data "normalize.py:." --add-data "grading.py:." --add-data "create_template.py:." --add-data "tax_report.py:." --add-data "dividend_safety.py:." --add-data "transaction_import.py:." --add-data "portfolio_tester.py:." --add-data "options_pricing.py:." --add-data "options_api.py:." --add-data "seed:seed"
+          pyinstaller --noconfirm --clean --distpath ../installer/flask-dist --workpath ../installer/flask-build --name backend app.py --hidden-import flask --hidden-import flask_cors --hidden-import pandas --hidden-import openpyxl --hidden-import yfinance --hidden-import plotly --hidden-import scipy --hidden-import pypdf --hidden-import sqlite3 --hidden-import statistics --hidden-import decimal --hidden-import config --hidden-import database --hidden-import import_data --hidden-import normalize --hidden-import grading --hidden-import create_template --hidden-import tax_report --hidden-import dividend_safety --hidden-import transaction_import --hidden-import portfolio_tester --hidden-import options_pricing --hidden-import options_api --hidden-import diversification --add-data "config.py:." --add-data "database.py:." --add-data "import_data.py:." --add-data "normalize.py:." --add-data "grading.py:." --add-data "create_template.py:." --add-data "tax_report.py:." --add-data "dividend_safety.py:." --add-data "transaction_import.py:." --add-data "portfolio_tester.py:." --add-data "options_pricing.py:." --add-data "options_api.py:." --add-data "seed:seed"
 
       - name: Install Node dependencies
         run: npm ci
@@ -182,3 +239,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: release/*.dmg
+          body_path: RELEASE_NOTES_1.33.4.md

@@ -75,6 +75,21 @@ export function selectComparerTraces(traceMap = {}, mode = 'total', reinvestPct 
   return selected.length ? selected : Object.entries(traceMap)
 }
 
+// Keep comparer headings aligned with the traces selected by each return mode.
+// This is shared by the ETF and stock comparers so their chart and axis titles
+// cannot drift apart when modes are added or renamed.
+export function comparerReturnModeLabel(mode = 'total') {
+  const labels = {
+    total: 'Total Return',
+    price: 'Price Only',
+    pricediv: 'Price + Dividends',
+    both: 'Total Return & Price Only',
+    all3: 'Price Only, Reinvested & Total Return',
+    all4: 'Price Only, Price + Dividends, Reinvested & Total Return',
+  }
+  return labels[mode] || labels.total
+}
+
 export function shouldUseComparerLogScale(
   seriesBySymbol = {},
   symbols = Object.keys(seriesBySymbol),

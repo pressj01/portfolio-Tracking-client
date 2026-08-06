@@ -30,6 +30,8 @@ function ProbabilityCard({
   schedule,
   valueForPoint,
   footer,
+  horizonLabel,
+  scheduleTitle,
 }) {
   return (
     <div style={{
@@ -45,7 +47,7 @@ function ProbabilityCard({
         textTransform: 'uppercase',
         letterSpacing: '0.04em',
       }}>
-        {label} <span style={{ color: accent, fontWeight: 700 }}>· by expiration</span>
+        {label} <span style={{ color: accent, fontWeight: 700 }}>· {horizonLabel}</span>
       </div>
       <div style={{
         color: accent,
@@ -75,7 +77,7 @@ function ProbabilityCard({
             letterSpacing: '0.04em',
             marginBottom: '0.35rem',
           }}>
-            At the recommended management dates
+            {scheduleTitle}
           </div>
           <div style={{
             display: 'grid',
@@ -125,14 +127,28 @@ export default function OptionProbabilityCards({
   successFooter = 'Success means the complete position can be closed for more than $0 modeled P/L.',
   failureFooter = 'Failure is the complement: the complete position closes at or below $0 modeled P/L.',
   methodNote,
+  primaryPointLabel,
+  primaryHorizonLabel,
+  scheduleTitle = 'At the recommended management dates',
 }) {
   const points = Array.isArray(schedule) ? schedule : []
   const expiration = points.find(point => point.kind === 'expiration' || point.remaining_dte === 0)
   if (!expiration) return null
+  const requestedPrimaryPoint = (
+    primaryPointLabel
+      ? points.find(point => point.label === primaryPointLabel)
+      : null
+  )
+  const primaryPoint = requestedPrimaryPoint || expiration
   const plannedExits = points.filter(point => point !== expiration)
-  const success = expiration.probability_success_pct
-  const failure = failureProbability(expiration)
-  const expirationContext = `${formatDate(expiration.exit_date)} · modeled from today through expiration`
+  const success = primaryPoint.probability_success_pct
+  const failure = failureProbability(primaryPoint)
+  const horizonLabel = requestedPrimaryPoint
+    ? (primaryHorizonLabel || `at ${primaryPoint.label.toLowerCase()}`)
+    : 'by expiration'
+  const primaryContext = primaryPoint === expiration
+    ? `${formatDate(expiration.exit_date)} · modeled from today through expiration`
+    : `${formatDate(primaryPoint.exit_date)} · ${primaryPoint.remaining_dte} DTE remaining`
 
   return (
     <div style={{ marginBottom: '0.9rem' }}>
@@ -142,20 +158,24 @@ export default function OptionProbabilityCards({
           accent="var(--pos-strong)"
           probability={success}
           headline={successHeadline}
-          context={expirationContext}
+          context={primaryContext}
           schedule={plannedExits}
           valueForPoint={point => point.probability_success_pct}
           footer={successFooter}
+          horizonLabel={horizonLabel}
+          scheduleTitle={scheduleTitle}
         />
         <ProbabilityCard
           label="Probability of failure"
           accent="var(--neg-strong)"
           probability={failure}
           headline={failureHeadline}
-          context={expirationContext}
+          context={primaryContext}
           schedule={plannedExits}
           valueForPoint={failureProbability}
           footer={failureFooter}
+          horizonLabel={horizonLabel}
+          scheduleTitle={scheduleTitle}
         />
       </div>
       <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.5rem' }}>

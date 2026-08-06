@@ -33,6 +33,8 @@ import ManagePortfolios from './pages/ManagePortfolios'
 import Export from './pages/Export'
 import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
+import Diversification from './pages/Diversification'
+import FundDefinitions from './pages/FundDefinitions'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
@@ -67,6 +69,9 @@ import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
 import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
+import OptionDashboard from './pages/OptionDashboard'
+import OptionTrades from './pages/OptionTrades'
+import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
 import PutSellingScanner from './pages/PutSellingScanner'
 import CoveredCallScanner from './pages/CoveredCallScanner'
@@ -76,6 +81,10 @@ import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
 import IronCondorScanner from './pages/IronCondorScanner'
 import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
 import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
+import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
+import RoadTripButterflyScanner from './pages/RoadTripButterflyScanner'
+import SixtyFortyTwentyFlyScanner from './pages/SixtyFortyTwentyFlyScanner'
+import IronButterflyScanner from './pages/IronButterflyScanner'
 import GreeksGuide from './pages/GreeksGuide'
 
 function PlotlyThemeBridge() {
@@ -208,6 +217,8 @@ function App() {
         <Route path="/export" element={<Export />} />
         <Route path="/div-compare" element={<DividendCompare />} />
         <Route path="/consolidation" element={<ConsolidationAnalysis />} />
+        <Route path="/diversification" element={<Diversification />} />
+        <Route path="/fund-definitions" element={<FundDefinitions />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/dividend-history" element={<DividendHistory />} />
         <Route path="/reinvestment-impact" element={<ReinvestmentImpact />} />
@@ -235,6 +246,9 @@ function App() {
         <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
+        <Route path="/option-dashboard" element={<OptionDashboard />} />
+        <Route path="/option-trades" element={<OptionTrades />} />
+        <Route path="/option-trades/import" element={<OptionTradeImport />} />
         <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
         <Route path="/bull-put-spread-scanner" element={<BullPutSpreadScanner />} />
         <Route path="/covered-call-scanner" element={<CoveredCallScanner />} />
@@ -243,6 +257,10 @@ function App() {
         <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
         <Route path="/unbalanced-put-condor-scanner" element={<UnbalancedPutCondorScanner />} />
         <Route path="/unbalanced-butterfly-scanner" element={<UnbalancedButterflyScanner />} />
+        <Route path="/double-hedge-put-butterfly-scanner" element={<DoubleHedgePutButterflyScanner />} />
+        <Route path="/road-trip-butterfly-scanner" element={<RoadTripButterflyScanner />} />
+        <Route path="/sixty-forty-twenty-fly-scanner" element={<SixtyFortyTwentyFlyScanner />} />
+        <Route path="/iron-butterfly-scanner" element={<IronButterflyScanner />} />
         <Route path="/option-education" element={<OptionEducation />} />
         <Route path="/option-greeks" element={<GreeksGuide />} />
         <Route path="/help" element={<Help />} />
@@ -307,6 +325,9 @@ function Nav() {
       <NavLink to="/">Dashboard</NavLink>
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Options">
+        <NavLink to="/option-dashboard">Options Dashboard</NavLink>
+        <NavLink to="/option-trades">Option Trades</NavLink>
+        <NavLink to="/option-trades/import">Import Option Trades</NavLink>
         <NavLink to="/options">Strategy Lab</NavLink>
         <NavLink to="/put-selling-scanner">Put Selling Scanner</NavLink>
         <NavLink to="/bull-put-spread-scanner">Bull Put Spread Scanner</NavLink>
@@ -316,6 +337,10 @@ function Nav() {
         <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
         <NavLink to="/unbalanced-put-condor-scanner">Unbalanced Put Condor Scanner</NavLink>
         <NavLink to="/unbalanced-butterfly-scanner">Unbalanced Butterfly Scanner</NavLink>
+        <NavLink to="/double-hedge-put-butterfly-scanner">Double-Hedge Put Butterfly Scanner</NavLink>
+        <NavLink to="/road-trip-butterfly-scanner">Road Trip Unbalanced Butterfly Scanner</NavLink>
+        <NavLink to="/sixty-forty-twenty-fly-scanner">60/40/20 Fly Scanner</NavLink>
+        <NavLink to="/iron-butterfly-scanner">Iron Butterfly Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>
@@ -368,6 +393,8 @@ function Nav() {
         </NavMenuGroup>
         <NavMenuGroup title="Portfolio Diagnostics">
           <NavLink to="/analytics">Portfolio Analytics</NavLink>
+          <NavLink to="/diversification">Diversification</NavLink>
+          <NavLink to="/fund-definitions">Fund Definitions</NavLink>
           <NavLink to="/correlation">Correlation Matrix</NavLink>
           <NavLink to="/consolidation">Consolidation Analysis</NavLink>
           <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>

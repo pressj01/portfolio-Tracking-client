@@ -274,59 +274,120 @@ class SubcategoryApiTest(unittest.TestCase):
         self.assertEqual(row["name"], "Gold")  # name preserved
         self.assertEqual(row["target_pct"], 40)
 
-    # ── push to sub-accounts ─────────────────────────────────────────────────────
-    def _seed_subaccount(self, pid=2, name="Sub"):
+    # ── copy categories to other accounts ────────────────────────────────────────
+    # Copying the category *shell* into any account. Strictly additive: an
+    # account's own categories, targets and ticker assignments are never touched.
+    def _seed_account(self, pid=2, name="Sub", include_in_owner=1):
         conn = self._get_connection()
         try:
             conn.execute(
-                "INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (?, ?, 1)",
-                (pid, name),
+                "INSERT OR IGNORE INTO profiles (id, name, include_in_owner) VALUES (?, ?, ?)",
+                (pid, name, include_in_owner),
             )
             conn.commit()
         finally:
             conn.close()
 
-    def test_push_creates_categories_and_subcategories_in_subaccount(self):
-        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
-        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Silver", "target_pct": 40})
-        self._seed_subaccount(pid=2)
-        res = self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
-        self.assertEqual(res.status_code, 200)
-        cat = self._row("SELECT id, target_pct FROM categories WHERE name = 'Metals' AND profile_id = 2")
-        self.assertIsNotNone(cat)
-        self.assertEqual(cat["target_pct"], 10)
+    def _copy(self, profile_id=1, **body):
+        payload = {"category_ids": [1], "target_profile_ids": [2]}
+        payload.update(body)
+        return self.client.post(
+            f"/api/categories/copy-to-accounts?profile_id={profile_id}", json=payload
+        )
+
+    def _subs(self, profile_id):
         conn = self._get_connection()
         try:
-            subs = conn.execute(
-                "SELECT name, target_pct FROM subcategories WHERE profile_id = 2 ORDER BY name"
+            rows = conn.execute(
+                "SELECT name, target_pct FROM subcategories WHERE profile_id = ? ORDER BY name",
+                (profile_id,),
             ).fetchall()
+            return [(r["name"], r["target_pct"]) for r in rows]
         finally:
             conn.close()
-        self.assertEqual([(s["name"], s["target_pct"]) for s in subs], [("Gold", 60), ("Silver", 40)])
 
-    def test_push_overwrites_existing_subaccount_category(self):
+    def test_copy_creates_category_and_subcategories(self):
+        self._create_sub("Gold")
+        self._create_sub("Silver")
+        self._seed_account(pid=2)
+        res = self._copy()
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNotNone(self._row("SELECT id FROM categories WHERE name='Metals' AND profile_id=2"))
+        self.assertEqual([n for n, _ in self._subs(2)], ["Gold", "Silver"])
+
+    def test_copy_omits_targets_by_default(self):
         self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
-        self._seed_subaccount(pid=2)
-        # Pre-existing differing category + sub-category in the sub-account.
+        self._seed_account(pid=2)
+        self._copy()
+        # Source Metals has target 10 and Gold has 60; neither travels unless asked.
+        self.assertIsNone(self._row("SELECT target_pct FROM categories WHERE name='Metals' AND profile_id=2")["target_pct"])
+        self.assertEqual(self._subs(2), [("Gold", None)])
+
+    def test_copy_include_targets_carries_percentages(self):
+        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 60})
+        self._seed_account(pid=2)
+        self._copy(include_targets=True)
+        self.assertEqual(self._row("SELECT target_pct FROM categories WHERE name='Metals' AND profile_id=2")["target_pct"], 10)
+        self.assertEqual(self._subs(2), [("Gold", 60)])
+
+    def test_copy_skips_existing_category_and_keeps_its_target(self):
+        self._seed_account(pid=2)
         conn = self._get_connection()
         try:
             conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('Metals', 99, 2, 5)")
+            conn.commit()
+        finally:
+            conn.close()
+        res = self._copy(include_targets=True)
+        # The account's own target survives even though the source says 10.
+        self.assertEqual(self._row("SELECT target_pct FROM categories WHERE name='Metals' AND profile_id=2")["target_pct"], 99)
+        self.assertEqual(res.get_json()["categories_skipped"], 1)
+        self.assertEqual(res.get_json()["categories_created"], 0)
+
+    def test_copy_matches_existing_category_regardless_of_case(self):
+        # UNIQUE(name, profile_id) is case-sensitive, so a plain "=" match would
+        # create "Metals" alongside the account's own "metals" — a duplicate bucket.
+        self._create_sub("Gold")
+        self._seed_account(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('metals', 42, 2, 0)")
+            cat2 = conn.execute("SELECT id FROM categories WHERE name='metals' AND profile_id=2").fetchone()["id"]
+            conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'gold', 2)", (cat2,))
+            conn.commit()
+        finally:
+            conn.close()
+        res = self._copy()
+        conn = self._get_connection()
+        try:
+            names = [r["name"] for r in conn.execute(
+                "SELECT name FROM categories WHERE profile_id = 2"
+            ).fetchall()]
+        finally:
+            conn.close()
+        self.assertEqual(names, ["metals"])                    # no duplicate created
+        self.assertEqual(self._subs(2), [("gold", None)])      # no duplicate sub-category
+        self.assertEqual(res.get_json()["categories_skipped"], 1)
+        self.assertEqual(self._row("SELECT target_pct FROM categories WHERE profile_id=2")["target_pct"], 42)
+
+    def test_copy_adds_missing_subcategories_without_deleting_others(self):
+        self._create_sub("Gold")
+        self._seed_account(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('Metals', 99, 2, 0)")
             cat2 = conn.execute("SELECT id FROM categories WHERE name='Metals' AND profile_id=2").fetchone()["id"]
             conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'Platinum', 2)", (cat2,))
             conn.commit()
         finally:
             conn.close()
-        self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
-        # Target overwritten to owner's, old sub-category gone, owner's sub-category present.
-        self.assertEqual(self._row("SELECT target_pct FROM categories WHERE name='Metals' AND profile_id=2")["target_pct"], 10)
-        self.assertIsNone(self._row("SELECT id FROM subcategories WHERE name='Platinum' AND profile_id=2"))
-        self.assertIsNotNone(self._row("SELECT id FROM subcategories WHERE name='Gold' AND profile_id=2"))
+        self._copy()
+        # Platinum is not in the source but must survive; Gold is added alongside it.
+        self.assertEqual([n for n, _ in self._subs(2)], ["Gold", "Platinum"])
 
-    def test_push_preserves_existing_subaccount_assignments(self):
-        # Owner has Metals -> Gold. Sub-account already has Metals -> Gold with a
-        # ticker assigned to it. Pushing must keep that ticker in Gold (no id churn).
-        self.client.post("/api/categories/1/subcategories?profile_id=1", json={"name": "Gold", "target_pct": 70})
-        self._seed_subaccount(pid=2)
+    def test_copy_never_touches_ticker_assignments(self):
+        self._create_sub("Gold")
+        self._seed_account(pid=2)
         conn = self._get_connection()
         try:
             conn.execute("INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES ('Metals', 5, 2, 0)")
@@ -334,27 +395,106 @@ class SubcategoryApiTest(unittest.TestCase):
             conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'Gold', 2)", (cat2,))
             gold2 = conn.execute("SELECT id FROM subcategories WHERE name='Gold' AND profile_id=2").fetchone()["id"]
             conn.execute(
-                "INSERT INTO all_account_info (ticker, profile_id, description, classification_type, quantity, current_value, approx_monthly_income, div_frequency, nav_erosion_scope, gain_or_loss_percentage) "
-                "VALUES ('IAU', 2, 'IAU fund', 'ETF', 100, 1000, 0, 'M', 'auto', 0)"
-            )
-            conn.execute(
                 "INSERT INTO ticker_categories (ticker, category_id, subcategory_id, profile_id) VALUES ('IAU', ?, ?, 2)",
                 (cat2, gold2),
             )
             conn.commit()
         finally:
             conn.close()
-        self.client.post("/api/categories/push-to-subaccounts?profile_id=1")
-        # Same Gold sub-category id kept, IAU still assigned to it, target synced to owner's.
-        row = self._row("SELECT id, target_pct FROM subcategories WHERE name='Gold' AND profile_id=2")
-        self.assertEqual(row["id"], gold2)
-        self.assertEqual(row["target_pct"], 70)
-        self.assertEqual(self._row("SELECT subcategory_id FROM ticker_categories WHERE ticker='IAU'")["subcategory_id"], gold2)
+        self._copy()
+        row = self._row("SELECT category_id, subcategory_id FROM ticker_categories WHERE ticker='IAU' AND profile_id=2")
+        self.assertEqual((row["category_id"], row["subcategory_id"]), (cat2, gold2))
+        # The source's own tickers are not pushed into the target account.
+        self.assertIsNone(self._row("SELECT ticker FROM ticker_categories WHERE ticker='GLD' AND profile_id=2"))
 
-    def test_push_rejected_for_non_owner(self):
-        self._seed_subaccount(pid=2)
-        res = self.client.post("/api/categories/push-to-subaccounts?profile_id=2")
-        self.assertEqual(res.status_code, 403)
+    def test_copy_skips_subcategories_when_not_requested(self):
+        self._create_sub("Gold")
+        self._seed_account(pid=2)
+        self._copy(include_subcategories=False)
+        self.assertEqual(self._subs(2), [])
+
+    def test_copy_reaches_accounts_outside_owner_rollup(self):
+        self._seed_account(pid=3, name="Excluded", include_in_owner=0)
+        res = self._copy(target_profile_ids=[3])
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNotNone(self._row("SELECT id FROM categories WHERE name='Metals' AND profile_id=3"))
+
+    def test_copy_works_from_a_non_owner_account(self):
+        self._seed_account(pid=2)
+        self._seed_account(pid=3, name="Third")
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, profile_id, sort_order) VALUES ('Growth', 2, 0)")
+            cat2 = conn.execute("SELECT id FROM categories WHERE name='Growth' AND profile_id=2").fetchone()["id"]
+            conn.commit()
+        finally:
+            conn.close()
+        res = self._copy(profile_id=2, category_ids=[cat2], target_profile_ids=[3])
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNotNone(self._row("SELECT id FROM categories WHERE name='Growth' AND profile_id=3"))
+
+    def test_copy_appends_without_disturbing_existing_sort_order(self):
+        self._seed_account(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, profile_id, sort_order) VALUES ('Income', 2, 0)")
+            conn.commit()
+        finally:
+            conn.close()
+        self._copy()
+        self.assertEqual(self._row("SELECT sort_order FROM categories WHERE name='Income' AND profile_id=2")["sort_order"], 0)
+        self.assertEqual(self._row("SELECT sort_order FROM categories WHERE name='Metals' AND profile_id=2")["sort_order"], 1)
+
+    def test_copy_requires_a_category(self):
+        self._seed_account(pid=2)
+        self.assertEqual(self._copy(category_ids=[]).status_code, 400)
+
+    def test_copy_requires_a_target_account(self):
+        self._seed_account(pid=2)
+        self.assertEqual(self._copy(target_profile_ids=[]).status_code, 400)
+
+    def test_copy_rejects_copying_onto_itself(self):
+        self.assertEqual(self._copy(target_profile_ids=[1]).status_code, 400)
+
+    def test_copy_rejects_categories_from_another_account(self):
+        self._seed_account(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (id, name, profile_id, sort_order) VALUES (77, 'Foreign', 2, 0)")
+            conn.commit()
+        finally:
+            conn.close()
+        self.assertEqual(self._copy(category_ids=[77]).status_code, 404)
+
+    def test_copy_rejected_on_an_aggregate_view(self):
+        self._seed_account(pid=2)
+        res = self.client.post(
+            "/api/categories/copy-to-accounts?profile_id=1&aggregate_id=1",
+            json={"category_ids": [1], "target_profile_ids": [2]},
+        )
+        self.assertEqual(res.status_code, 400)
+
+    # ── copy targets listing ─────────────────────────────────────────────────────
+    def test_copy_targets_lists_other_accounts_with_their_categories(self):
+        self._seed_account(pid=2)
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO categories (name, profile_id, sort_order) VALUES ('Income', 2, 0)")
+            cat2 = conn.execute("SELECT id FROM categories WHERE name='Income' AND profile_id=2").fetchone()["id"]
+            conn.execute("INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'REITs', 2)", (cat2,))
+            conn.commit()
+        finally:
+            conn.close()
+        body = self.client.get("/api/categories/copy-targets?profile_id=1").get_json()
+        self.assertEqual([a["id"] for a in body["accounts"]], [2])
+        acct = body["accounts"][0]
+        self.assertEqual(acct["category_names"], ["Income"])
+        self.assertEqual(acct["subcategory_keys"], ["Income›REITs"])
+
+    def test_copy_targets_excludes_the_current_account(self):
+        self._seed_account(pid=2)
+        body = self.client.get("/api/categories/copy-targets?profile_id=2").get_json()
+        self.assertEqual([a["id"] for a in body["accounts"]], [1])
 
 
 class TickerCategorySchemaMigrationTest(unittest.TestCase):

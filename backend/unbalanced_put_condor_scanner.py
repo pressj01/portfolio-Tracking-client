@@ -74,7 +74,7 @@ DEFAULT_TICKERS = ["SPY", "IWM", "GLD", "QQQ"]
 DEFAULTS = {
     "tickers": ",".join(DEFAULT_TICKERS),
     "delta_preset": "all",
-    "target_dte": 180,
+    "target_dte": 160,
     "min_dte": 120,
     "max_dte": 240,
     "bought_width": 5.0,
@@ -1041,7 +1041,7 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
     presets = _preset_names(p.get("delta_preset"))
     target_dte = max(
         MIN_TARGET_DTE,
-        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 180) or 180)),
+        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 160) or 160)),
     )
     min_dte = max(
         MIN_TARGET_DTE,

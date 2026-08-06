@@ -5,14 +5,56 @@ import numpy as np
 import pandas as pd
 
 
+# Daily observations a ratio needs before it means anything. This is the right
+# guard for a 1Y grade, but it is more history than a short window can ever
+# contain, so every helper below takes it as an argument: callers grading a
+# user-picked window pass a floor scaled to that window (see
+# min_observations_for_window) instead of blanking every card.
+MIN_RATIO_OBSERVATIONS = 30
+
+# Below this many observations the annualization factor (x sqrt(252), or
+# ^(252/n)) amplifies a handful of days into a number nobody should act on, so
+# the ratios stay unreported no matter how short a window the caller asked for.
+ABSOLUTE_MIN_RATIO_OBSERVATIONS = 15
+
+
+def min_observations_for_window(available_observations,
+                                default=MIN_RATIO_OBSERVATIONS,
+                                floor=ABSOLUTE_MIN_RATIO_OBSERVATIONS,
+                                coverage=0.8):
+    """Observation floor to use when grading a window of a known length.
+
+    A 1-month window holds ~21 trading days, so the default 30-observation floor
+    rejects it outright and the caller gets a blank grade instead of a one-month
+    grade. Scale the floor down to what the window can actually supply, keeping
+    `coverage` of it so a holding that missed a day or two still grades, and
+    never going below `floor` — past that point the annualization turns a
+    handful of days into noise, and reporting nothing is more honest.
+
+    Returns None when even the floor is out of reach, which the caller should
+    surface as "this window is too short to grade" rather than as an empty card.
+    """
+    if available_observations is None:
+        return default
+    try:
+        available = int(available_observations)
+    except (TypeError, ValueError):
+        return default
+    if available >= default:
+        return default
+    if available < floor:
+        return None
+    return max(floor, int(available * coverage))
+
+
 # ── Metric functions ──────────────────────────────────────────────────────────
 
-def _sharpe(close, risk_free_annual=0.05):
+def _sharpe(close, risk_free_annual=0.05, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(close) < 30:
+        if len(close) < min_obs:
             return None
         daily_ret = close.pct_change().dropna()
-        if len(daily_ret) < 30:
+        if len(daily_ret) < min_obs:
             return None
         std = float(daily_ret.std())
         if std == 0 or np.isnan(std):
@@ -24,12 +66,12 @@ def _sharpe(close, risk_free_annual=0.05):
         return None
 
 
-def _sortino(close, risk_free_annual=0.05):
+def _sortino(close, risk_free_annual=0.05, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(close) < 30:
+        if len(close) < min_obs:
             return None
         daily_ret = close.pct_change().dropna()
-        if len(daily_ret) < 30:
+        if len(daily_ret) < min_obs:
             return None
         daily_rf = risk_free_annual / 252
         # Target downside deviation: sqrt(mean of squared shortfalls below MAR),
@@ -46,9 +88,9 @@ def _sortino(close, risk_free_annual=0.05):
         return None
 
 
-def _calmar(close):
+def _calmar(close, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(close) < 30:
+        if len(close) < min_obs:
             return None
         start = float(close.iloc[0])
         end = float(close.iloc[-1])
@@ -68,9 +110,9 @@ def _calmar(close):
         return None
 
 
-def _omega(daily_returns, threshold=0.0):
+def _omega(daily_returns, threshold=0.0, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(daily_returns) < 30:
+        if len(daily_returns) < min_obs:
             return None
         excess = daily_returns - threshold / 252
         gains = float(excess[excess > 0].sum())
@@ -82,11 +124,11 @@ def _omega(daily_returns, threshold=0.0):
         return None
 
 
-def _ulcer_index(close):
+def _ulcer_index(close, min_obs=MIN_RATIO_OBSERVATIONS):
     """Ulcer Index — measures depth and duration of drawdowns.
     Lower values indicate less downside risk."""
     try:
-        if len(close) < 30:
+        if len(close) < min_obs:
             return None
         running_max = close.cummax()
         pct_drawdown = ((close - running_max) / running_max) * 100
@@ -125,9 +167,9 @@ def _max_drawdown(close):
         return None
 
 
-def _capture_ratios(ticker_returns, bench_returns):
+def _capture_ratios(ticker_returns, bench_returns, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(ticker_returns) < 30:
+        if len(ticker_returns) < min_obs:
             return None, None
         up_days = bench_returns > 0
         down_days = bench_returns < 0
@@ -146,10 +188,10 @@ def _capture_ratios(ticker_returns, bench_returns):
 
 # ── Scoring helpers ───────────────────────────────────────────────────────────
 
-def _beta(asset_returns, bench_returns):
+def _beta(asset_returns, bench_returns, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
         aligned = pd.concat([asset_returns, bench_returns], axis=1).dropna()
-        if len(aligned) < 30:
+        if len(aligned) < min_obs:
             return None
         aligned.columns = ["asset", "bench"]
         bench_var = float(aligned["bench"].var())
@@ -221,7 +263,7 @@ def letter_grade(score):
 
 # ── Per-ticker grading ────────────────────────────────────────────────────────
 
-def _is_stale_or_dead(close, daily_ret):
+def _is_stale_or_dead(close, daily_ret, min_obs=MIN_RATIO_OBSERVATIONS):
     """Detect delisted / flat-lined / penny-stock series that would otherwise
     be rewarded for having zero volatility. Returns True if the series should
     be treated as un-gradeable junk."""
@@ -236,7 +278,7 @@ def _is_stale_or_dead(close, daily_ret):
         peak = float(close.max())
         if peak > 0 and last_price / peak < 0.1:
             return True
-        if daily_ret is None or len(daily_ret) < 30:
+        if daily_ret is None or len(daily_ret) < min_obs:
             return True
         std = float(daily_ret.std())
         # No variance at all (flat-lined)
@@ -251,21 +293,21 @@ def _is_stale_or_dead(close, daily_ret):
         return True
 
 
-def ticker_score(close, daily_ret, bench_ret=None):
+def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS):
     """Compute individual ticker risk score (0-100).
     Returns (score, sharpe, sortino, calmar, omega, mdd, down_capture, ulcer)."""
     # Guard: delisted / flat-lined / stale series must not score well just
     # because they have no measurable volatility.
-    if _is_stale_or_dead(close, daily_ret):
+    if _is_stale_or_dead(close, daily_ret, min_obs=min_obs):
         return 0.0, None, None, None, None, None, None, None
 
-    sharpe_v = _safe(_sharpe(close))
-    sortino_v = _safe(_sortino(close))
-    calmar_v = _safe(_calmar(close))
-    omega_v = _safe(_omega(daily_ret))
+    sharpe_v = _safe(_sharpe(close, min_obs=min_obs))
+    sortino_v = _safe(_sortino(close, min_obs=min_obs))
+    calmar_v = _safe(_calmar(close, min_obs=min_obs))
+    omega_v = _safe(_omega(daily_ret, min_obs=min_obs))
     mdd_v = _safe(_max_drawdown(close))
-    ulcer_v = _safe(_ulcer_index(close))
-    _, dc = _capture_ratios(daily_ret, bench_ret) if bench_ret is not None else (None, None)
+    ulcer_v = _safe(_ulcer_index(close, min_obs=min_obs))
+    _, dc = _capture_ratios(daily_ret, bench_ret, min_obs=min_obs) if bench_ret is not None else (None, None)
     dc = _safe(dc)
 
     mdd_pct = mdd_v * 100 if mdd_v is not None else None
@@ -292,13 +334,15 @@ def ticker_score(close, daily_ret, bench_ret=None):
 
 # ── Portfolio-level grading ───────────────────────────────────────────────────
 
-def grade_portfolio(returns_df, weights_arr, bench_ret=None):
+def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS):
     """Compute composite portfolio grade.
 
     Args:
         returns_df: DataFrame of daily returns (columns = tickers)
         weights_arr: numpy array of weights (will be normalized)
         bench_ret: optional Series of benchmark daily returns
+        min_obs: daily observations each ratio needs; lower it to grade a
+            window shorter than the default (see min_observations_for_window)
 
     Returns:
         dict with sharpe, sortino, calmar, omega, max_drawdown,
@@ -319,22 +363,22 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None):
 
     port_mdd = _safe(_max_drawdown(port_cum))
     metrics = {
-        "sharpe": _safe(_sharpe(port_cum)),
-        "sortino": _safe(_sortino(port_cum)),
-        "calmar": _safe(_calmar(port_cum)),
-        "omega": _safe(_omega(port_daily)),
+        "sharpe": _safe(_sharpe(port_cum, min_obs=min_obs)),
+        "sortino": _safe(_sortino(port_cum, min_obs=min_obs)),
+        "calmar": _safe(_calmar(port_cum, min_obs=min_obs)),
+        "omega": _safe(_omega(port_daily, min_obs=min_obs)),
         "max_drawdown": port_mdd,
-        "ulcer_index": _safe(_ulcer_index(port_cum)),
+        "ulcer_index": _safe(_ulcer_index(port_cum, min_obs=min_obs)),
     }
 
     if bench_ret is not None:
         aligned = pd.concat([port_daily, bench_ret], axis=1).dropna()
-        if len(aligned) > 30:
+        if len(aligned) > min_obs:
             aligned.columns = ["port", "bench"]
-            uc, dc = _capture_ratios(aligned["port"], aligned["bench"])
+            uc, dc = _capture_ratios(aligned["port"], aligned["bench"], min_obs=min_obs)
             metrics["up_capture"] = _safe(uc)
             metrics["down_capture"] = _safe(dc)
-            metrics["beta"] = _safe(_beta(aligned["port"], aligned["bench"]))
+            metrics["beta"] = _safe(_beta(aligned["port"], aligned["bench"], min_obs=min_obs))
 
     wt_sorted = sorted(w, reverse=True)
     metrics["top_weight"] = round(float(wt_sorted[0]) * 100, 2) if len(wt_sorted) else 0

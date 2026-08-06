@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import time
+import threading
 import sqlite3
 import json
 import hashlib
@@ -78,6 +79,15 @@ from transaction_import import (
 import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
+from option_dashboard import register_routes as register_option_dashboard_routes
+from diversification import (
+    bootstrap as bootstrap_diversification,
+    register_routes as register_diversification_routes,
+)
+from option_trade_tracker import (
+    realized_option_income,
+    register_routes as register_option_trade_routes,
+)
 from put_scanner import register_routes as register_put_scanner_routes
 from call_scanner import register_routes as register_call_scanner_routes
 from bear_put_spread_scanner import register_routes as register_bear_put_spread_scanner_routes
@@ -86,6 +96,10 @@ from bear_call_spread_scanner import register_routes as register_bear_call_sprea
 from iron_condor_scanner import register_routes as register_iron_condor_scanner_routes
 from unbalanced_put_condor_scanner import register_routes as register_unbalanced_put_condor_scanner_routes
 from unbalanced_butterfly_scanner import register_routes as register_unbalanced_butterfly_scanner_routes
+from four_eight_eight_scanner import register_routes as register_four_eight_eight_scanner_routes
+from road_trip_butterfly_scanner import register_routes as register_road_trip_butterfly_scanner_routes
+from sixty_forty_twenty_fly_scanner import register_routes as register_sixty_forty_twenty_fly_scanner_routes
+from iron_butterfly_scanner import register_routes as register_iron_butterfly_scanner_routes
 from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
 from market_calendar import (
     is_nyse_trading_day,
@@ -93,12 +107,26 @@ from market_calendar import (
     eastern_now,
     market_has_closed,
 )
+from nav_history import build_nav_history_payload
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
     summarize_dividend_safety,
 )
 from accumulation_sim import run_accumulation_comparison
+
+# yfinance stashes each download's frames in a module-level dict keyed by ticker
+# ALONE (yfinance.shared._DFS) — the date range is not part of the key. Two
+# yf.download calls running concurrently for overlapping tickers therefore read
+# each other's frames: ask for the Dashboard's 6M window while a 1Y download is
+# still in flight and BOTH come back holding the 1Y frame, so the grade / beta /
+# risk-ratio cards quietly report the wrong period instead of recalculating.
+# Serialize the yf.download calls — they are the only writers of that shared
+# state, and nothing in app.py fans them out across threads, so the only requests
+# that ever wait are the genuinely concurrent ones that would otherwise corrupt
+# each other.
+_YF_DOWNLOAD_LOCK = threading.Lock()
+
 
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     """Drop-in replacement for yf.download that batches large ticker lists.
@@ -122,7 +150,8 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # Do NOT default group_by — preserve caller's intent
 
     if len(tickers) <= chunk_size:
-        return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
+        with _YF_DOWNLOAD_LOCK:
+            return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
 
     # Multi-chunk path: use caller's group_by (if any) in each chunk.
     # Single-ticker chunks return flat columns and must be normalized to match
@@ -135,7 +164,8 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
             _time.sleep(1)
         chunk = tickers[i:i + chunk_size]
         try:
-            raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
+            with _YF_DOWNLOAD_LOCK:
+                raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
             if not raw.empty:
                 if len(chunk) == 1 and not isinstance(raw.columns, pd.MultiIndex):
                     if caller_group_by == "ticker":
@@ -711,11 +741,388 @@ def _portfolio_period_metrics(series_result):
     }
 
 
+def _xirr(cash_flows, guess=0.10):
+    """Return the annualized IRR for irregularly dated cash flows.
+
+    Cash paid into the investment is negative; proceeds, distributions, and
+    ending value are positive. Solving in log-rate space keeps the search
+    stable close to -100% and for unusually large positive returns. When a
+    non-conventional flow pattern has more than one solution, prefer the root
+    closest to the conventional 10% starting guess.
+    """
+    aggregated = {}
+    for flow_date, amount in cash_flows or []:
+        parsed_date = _portfolio_event_date(flow_date)
+        try:
+            parsed_amount = float(amount)
+        except (TypeError, ValueError):
+            continue
+        if parsed_date is None or not math.isfinite(parsed_amount):
+            continue
+        aggregated[parsed_date] = aggregated.get(parsed_date, 0.0) + parsed_amount
+
+    dated = sorted(
+        (flow_date, amount)
+        for flow_date, amount in aggregated.items()
+        if abs(amount) > 1e-9
+    )
+    if len(dated) < 2 or dated[0][0] == dated[-1][0]:
+        return None
+    if not any(amount < 0 for _, amount in dated) or not any(amount > 0 for _, amount in dated):
+        return None
+
+    origin = dated[0][0]
+    timed = [((flow_date - origin).days / 365.0, amount) for flow_date, amount in dated]
+
+    def npv_at_log_rate(log_rate):
+        total = 0.0
+        try:
+            for years, amount in timed:
+                exponent = -log_rate * years
+                if exponent > 700:
+                    return math.copysign(math.inf, amount)
+                if exponent < -700:
+                    continue
+                total += amount * math.exp(exponent)
+            return total
+        except (OverflowError, ValueError):
+            return math.nan
+
+    # Covers annual rates from about -99.9999% through +1,000,000%.
+    log_min = math.log(0.000001)
+    log_max = math.log(10001.0)
+    steps = 640
+    samples = [log_min + (log_max - log_min) * index / steps for index in range(steps + 1)]
+    roots = []
+    previous_log = samples[0]
+    previous_value = npv_at_log_rate(previous_log)
+
+    for current_log in samples[1:]:
+        current_value = npv_at_log_rate(current_log)
+        if math.isfinite(previous_value) and abs(previous_value) < 1e-7:
+            roots.append(previous_log)
+        if (
+            math.isfinite(previous_value)
+            and math.isfinite(current_value)
+            and previous_value * current_value < 0
+        ):
+            low, high = previous_log, current_log
+            low_value = previous_value
+            for _ in range(100):
+                middle = (low + high) / 2.0
+                middle_value = npv_at_log_rate(middle)
+                if not math.isfinite(middle_value) or abs(middle_value) < 1e-9:
+                    low = high = middle
+                    break
+                if low_value * middle_value <= 0:
+                    high = middle
+                else:
+                    low = middle
+                    low_value = middle_value
+            roots.append((low + high) / 2.0)
+        previous_log = current_log
+        previous_value = current_value
+
+    if math.isfinite(previous_value) and abs(previous_value) < 1e-7:
+        roots.append(previous_log)
+    if not roots:
+        return None
+
+    unique_roots = []
+    for root in roots:
+        if not any(abs(root - existing) < 1e-7 for existing in unique_roots):
+            unique_roots.append(root)
+    target = math.log1p(guess)
+    selected = min(unique_roots, key=lambda root: abs(root - target))
+    result = math.exp(selected) - 1.0
+    return result if math.isfinite(result) else None
+
+
+def _portfolio_irr_payload(conn, profile_ids, as_of_date=None, excluded_tickers=None):
+    """Build a strict money-weighted portfolio IRR.
+
+    No basis/date approximation is used. IRR is returned only when dated trade
+    quantities reconcile to the current holdings and recorded lifetime
+    dividends are represented by actual payment-ledger rows.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    excluded = {
+        str(ticker or "").strip().upper()
+        for ticker in (excluded_tickers or [])
+        if str(ticker or "").strip()
+    }
+    if not ids:
+        return {
+            "irr": None,
+            "irr_pct": None,
+            "coverage_complete": False,
+            "reason": "No portfolio was selected.",
+        }
+
+    as_of = _portfolio_event_date(as_of_date) or datetime.date.today()
+    placeholders = ",".join("?" * len(ids))
+    transaction_rows = conn.execute(
+        f"""SELECT ticker, profile_id, transaction_type, transaction_date,
+                   shares, price_per_share, fees, notes
+            FROM transactions
+            WHERE profile_id IN ({placeholders})
+            ORDER BY transaction_date, id""",
+        ids,
+    ).fetchall()
+    holding_rows = conn.execute(
+        f"""SELECT ticker, quantity, current_value, total_divs_received
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 1e-9""",
+        ids,
+    ).fetchall()
+
+    cash_flows = []
+    transaction_tickers = set()
+    net_transaction_shares = {}
+    transfer_share_deltas = {}
+    transaction_count = 0
+    invalid_transaction_count = 0
+    zero_value_transaction_count = 0
+    invalid_transaction_tickers = set()
+    zero_value_transaction_tickers = set()
+    for raw_row in transaction_rows:
+        row = dict(raw_row)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker in excluded:
+            continue
+        txn_type = str(row.get("transaction_type") or "BUY").strip().upper()
+        if txn_type not in {"BUY", "SELL"}:
+            continue
+        shares = abs(float(row.get("shares") or 0))
+        if not ticker or shares <= 0:
+            continue
+        share_delta = shares if txn_type == "BUY" else -shares
+        transaction_tickers.add(ticker)
+        net_transaction_shares[ticker] = net_transaction_shares.get(ticker, 0.0) + share_delta
+        if _is_transfer_txn(row.get("notes")):
+            transfer_share_deltas[ticker] = transfer_share_deltas.get(ticker, 0.0) + share_delta
+            continue
+
+        flow_date = _portfolio_event_date(row.get("transaction_date"))
+        if flow_date is None or flow_date > as_of:
+            invalid_transaction_count += 1
+            invalid_transaction_tickers.add(ticker)
+            continue
+        price = float(row.get("price_per_share") or 0)
+        fees = abs(float(row.get("fees") or 0))
+        gross = shares * price
+        amount = -(gross + fees) if txn_type == "BUY" else gross - fees
+        if abs(amount) <= 1e-9:
+            zero_value_transaction_count += 1
+            zero_value_transaction_tickers.add(ticker)
+            continue
+        cash_flows.append((flow_date, amount))
+        transaction_count += 1
+
+    current_quantities = {}
+    current_values = {}
+    current_value = 0.0
+    total_scope_current_value = 0.0
+    excluded_current_value = 0.0
+    total_recorded_dividends = 0.0
+    recorded_dividends_by_ticker = {}
+    for raw_row in holding_rows:
+        row = dict(raw_row)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        quantity = max(0.0, float(row.get("quantity") or 0))
+        holding_value = max(0.0, float(row.get("current_value") or 0))
+        total_scope_current_value += holding_value
+        if ticker in excluded:
+            excluded_current_value += holding_value
+            continue
+        current_quantities[ticker] = current_quantities.get(ticker, 0.0) + quantity
+        current_values[ticker] = current_values.get(ticker, 0.0) + holding_value
+        current_value += holding_value
+        recorded_dividends = max(0.0, float(row.get("total_divs_received") or 0))
+        total_recorded_dividends += recorded_dividends
+        recorded_dividends_by_ticker[ticker] = (
+            recorded_dividends_by_ticker.get(ticker, 0.0) + recorded_dividends
+        )
+
+    missing_transaction_tickers = sorted(
+        ticker for ticker, quantity in current_quantities.items()
+        if quantity > 1e-9 and ticker not in transaction_tickers
+    )
+    share_mismatches = []
+    for ticker in sorted(set(current_quantities) | set(net_transaction_shares)):
+        held = current_quantities.get(ticker, 0.0)
+        transacted = net_transaction_shares.get(ticker, 0.0)
+        tolerance = max(0.0001, abs(held) * 0.0001)
+        if abs(held - transacted) > tolerance:
+            share_mismatches.append({
+                "ticker": ticker,
+                "holding_shares": round(held, 6),
+                "transaction_shares": round(transacted, 6),
+                "difference": round(held - transacted, 6),
+            })
+
+    unpaired_transfer_tickers = sorted(
+        ticker for ticker, delta in transfer_share_deltas.items()
+        if abs(delta) > max(0.0001, abs(current_quantities.get(ticker, 0.0)) * 0.0001)
+    )
+
+    payment_ids = _dividend_payment_profile_ids_for_read(conn, ids)
+    payment_placeholders = ",".join("?" * len(payment_ids))
+    dividend_rows = conn.execute(
+        f"""SELECT ticker, profile_id, payment_date, amount, source
+            FROM dividend_payments
+            WHERE profile_id IN ({payment_placeholders})
+              AND payment_date IS NOT NULL
+              AND LOWER(COALESCE(source, '')) != ?
+            ORDER BY payment_date, id""",
+        [*payment_ids, REFRESH_ESTIMATE_DIVIDEND_SOURCE],
+    ).fetchall()
+    actual_dividend_total = 0.0
+    actual_dividends_by_ticker = {}
+    dividend_payment_count = 0
+    for raw_row in dividend_rows:
+        row = dict(raw_row)
+        flow_date = _portfolio_event_date(row.get("payment_date"))
+        amount = float(row.get("amount") or 0)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker in excluded:
+            continue
+        if flow_date is None or flow_date > as_of or amount <= 0:
+            continue
+        cash_flows.append((flow_date, amount))
+        actual_dividend_total += amount
+        actual_dividends_by_ticker[ticker] = actual_dividends_by_ticker.get(ticker, 0.0) + amount
+        dividend_payment_count += 1
+
+    missing_dividend_tickers = []
+    for ticker, recorded_amount in sorted(recorded_dividends_by_ticker.items()):
+        actual_amount = actual_dividends_by_ticker.get(ticker, 0.0)
+        missing_amount = max(0.0, recorded_amount - actual_amount)
+        tolerance = max(0.01, recorded_amount * 0.0001)
+        if missing_amount > tolerance:
+            missing_dividend_tickers.append({
+                "ticker": ticker,
+                "recorded_amount": round(recorded_amount, 2),
+                "dated_amount": round(actual_amount, 2),
+                "missing_amount": round(missing_amount, 2),
+            })
+    missing_dividend_amount = sum(item["missing_amount"] for item in missing_dividend_tickers)
+    dividend_history_complete = not missing_dividend_tickers
+
+    failure_reason = None
+    if missing_transaction_tickers:
+        sample = ", ".join(missing_transaction_tickers[:5])
+        suffix = "…" if len(missing_transaction_tickers) > 5 else ""
+        failure_reason = f"Import complete transaction history for: {sample}{suffix}."
+    elif invalid_transaction_count:
+        failure_reason = "Some investment transactions have missing or future dates."
+    elif zero_value_transaction_count:
+        failure_reason = "Some non-transfer investment transactions have no cash value."
+    elif unpaired_transfer_tickers:
+        sample = ", ".join(unpaired_transfer_tickers[:5])
+        suffix = "…" if len(unpaired_transfer_tickers) > 5 else ""
+        failure_reason = f"Transfer history is incomplete for: {sample}{suffix}."
+    elif share_mismatches:
+        sample = ", ".join(item["ticker"] for item in share_mismatches[:5])
+        suffix = "…" if len(share_mismatches) > 5 else ""
+        failure_reason = f"Transaction shares do not reconcile to current holdings for: {sample}{suffix}."
+    elif not dividend_history_complete:
+        sample = ", ".join(item["ticker"] for item in missing_dividend_tickers[:5])
+        suffix = "…" if len(missing_dividend_tickers) > 5 else ""
+        failure_reason = f"Dated dividend payment history is incomplete for: {sample}{suffix}."
+
+    coverage_complete = failure_reason is None
+    unreconciled_tickers = (
+        set(missing_transaction_tickers)
+        | {item["ticker"] for item in share_mismatches}
+        | set(unpaired_transfer_tickers)
+        | invalid_transaction_tickers
+        | zero_value_transaction_tickers
+        | {item["ticker"] for item in missing_dividend_tickers}
+    )
+    unreconciled_current_value = sum(
+        value for ticker, value in current_values.items()
+        if ticker in unreconciled_tickers
+    )
+    unreconciled_current_value_pct = (
+        unreconciled_current_value / current_value * 100.0
+        if current_value > 0 else 0.0
+    )
+    excluded_current_value_pct = (
+        excluded_current_value / total_scope_current_value * 100.0
+        if total_scope_current_value > 0 else 0.0
+    )
+    if coverage_complete and current_value > 0:
+        cash_flows.append((as_of, current_value))
+
+    irr = _xirr(cash_flows) if coverage_complete else None
+    valid_dates = sorted(
+        set(
+            parsed
+            for flow_date, amount in cash_flows
+            if abs(float(amount or 0)) > 1e-9
+            for parsed in [_portfolio_event_date(flow_date)]
+            if parsed is not None
+        )
+    )
+    reason = failure_reason
+    if coverage_complete and irr is None:
+        reason = "IRR needs cash flows on at least two dates with both investment and proceeds."
+
+    return {
+        "irr": round(irr, 8) if irr is not None else None,
+        "irr_pct": round(irr * 100.0, 4) if irr is not None else None,
+        "as_of_date": as_of.isoformat(),
+        "start_date": valid_dates[0].isoformat() if valid_dates else None,
+        "end_date": valid_dates[-1].isoformat() if valid_dates else None,
+        "transaction_count": transaction_count,
+        "dividend_payment_count": dividend_payment_count,
+        "missing_transaction_tickers": missing_transaction_tickers,
+        "invalid_transaction_count": invalid_transaction_count,
+        "invalid_transaction_tickers": sorted(invalid_transaction_tickers),
+        "zero_value_transaction_count": zero_value_transaction_count,
+        "zero_value_transaction_tickers": sorted(zero_value_transaction_tickers),
+        "unpaired_transfer_tickers": unpaired_transfer_tickers,
+        "share_mismatches": share_mismatches,
+        "recorded_dividend_total": round(total_recorded_dividends, 2),
+        "actual_dividend_total": round(actual_dividend_total, 2),
+        "missing_dividend_amount": round(missing_dividend_amount, 2),
+        "missing_dividend_tickers": missing_dividend_tickers,
+        "dividend_history_complete": dividend_history_complete,
+        "unreconciled_current_value": round(unreconciled_current_value, 2),
+        "unreconciled_current_value_pct": round(unreconciled_current_value_pct, 2),
+        "reconciled_current_value_pct": round(100.0 - unreconciled_current_value_pct, 2),
+        "excluded_tickers": sorted(excluded),
+        "excluded_current_value": round(excluded_current_value, 2),
+        "excluded_current_value_pct": round(excluded_current_value_pct, 2),
+        "included_current_value": round(current_value, 2),
+        "coverage_complete": coverage_complete,
+        "is_estimate": False,
+        "reason": reason,
+    }
+
+
 app = Flask(__name__)
 app.json = NanSafeJSONProvider(app)
 app.secret_key = "portfolio-tracking-client-secret-key"
 CORS(app)
 app.config["PROPAGATE_EXCEPTIONS"] = False
+
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """Identify the backend instance started by the desktop launcher.
+
+    A plain port check can accidentally attach an installed window to a
+    developer's Flask process already listening on port 5001.  The launcher
+    supplies a per-process token and waits for that same token here before it
+    opens the window.
+    """
+    return jsonify({
+        "ok": True,
+        "instance_token": os.environ.get("PORTFOLIO_BACKEND_TOKEN", ""),
+    })
 
 _PORTFOLIO_SUMMARY_CACHE = {}
 _PORTFOLIO_COVERAGE_CACHE = {}
@@ -863,7 +1270,11 @@ def handle_api_exception(e):
 def handle_404(e):
     return jsonify({"error": "Not found"}), 404
 
-UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), "uploads")
+# Everything created at runtime belongs beside the configured database.  In an
+# installed build ``__file__`` is inside Program Files, which is intentionally
+# read-only for a non-administrator; trying to create ``uploads`` there caused
+# the packaged backend to exit before Flask could start.
+UPLOAD_FOLDER = os.path.join(os.path.dirname(DB_PATH), "uploads")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
@@ -3351,15 +3762,28 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
     return metadata
 
 
-def _assign_position_category(conn, profile_id, ticker, category_name):
+def _assign_position_category(
+    conn,
+    profile_id,
+    ticker,
+    category_name,
+    preserve_existing_assignment=False,
+):
     category_name = (category_name or "").strip()
     if not category_name:
-        return
+        return {
+            "category_created": False,
+            "assignment_added": False,
+            "assignment_preserved": False,
+        }
 
     existing_cat = conn.execute(
-        "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-        (category_name, profile_id),
+        """SELECT id FROM categories
+           WHERE profile_id = ? AND LOWER(TRIM(name)) = LOWER(?)
+           ORDER BY id LIMIT 1""",
+        (profile_id, category_name),
     ).fetchone()
+    category_created = False
     if existing_cat:
         category_id = existing_cat["id"] if isinstance(existing_cat, dict) else existing_cat[0]
     else:
@@ -3373,8 +3797,31 @@ def _assign_position_category(conn, profile_id, ticker, category_name):
             (category_name, next_sort, profile_id),
         )
         category_id = cur.lastrowid
+        category_created = True
+
+    existing_assignment = conn.execute(
+        "SELECT category_id FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
+        ((ticker or "").strip().upper(), profile_id),
+    ).fetchone()
+    if existing_assignment:
+        existing_category_id = (
+            existing_assignment["category_id"]
+            if isinstance(existing_assignment, dict)
+            else existing_assignment[0]
+        )
+        if preserve_existing_assignment or existing_category_id == category_id:
+            return {
+                "category_created": category_created,
+                "assignment_added": False,
+                "assignment_preserved": preserve_existing_assignment,
+            }
 
     _replace_ticker_category(conn, profile_id, ticker, category_id)
+    return {
+        "category_created": category_created,
+        "assignment_added": True,
+        "assignment_preserved": False,
+    }
 
 
 def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id=None):
@@ -4949,11 +5396,17 @@ def _import_positions(parsed, profile_id, nav_date=None):
 
     positions = parsed["positions"]
     positions_by_ticker = {pos["ticker"]: pos for pos in positions}
-    preserve_existing_income = parsed.get("source_format") == "snowball_holdings"
+    is_snowball_holdings = parsed.get("source_format") == "snowball_holdings"
+    preserve_existing_income = is_snowball_holdings
     imported_tickers = set()
     updated = 0
     inserted = 0
     preserved_quantity = []
+    category_stats = {
+        "categories_created": 0,
+        "category_assignments_added": 0,
+        "category_assignments_preserved": 0,
+    }
 
     try:
         _set_profile_positions_managed(profile_id, True, conn)
@@ -5074,7 +5527,16 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 inserted += 1
 
             if pos.get("category"):
-                _assign_position_category(conn, profile_id, ticker, pos.get("category"))
+                category_result = _assign_position_category(
+                    conn,
+                    profile_id,
+                    ticker,
+                    pos.get("category"),
+                    preserve_existing_assignment=is_snowball_holdings,
+                )
+                category_stats["categories_created"] += int(category_result["category_created"])
+                category_stats["category_assignments_added"] += int(category_result["assignment_added"])
+                category_stats["category_assignments_preserved"] += int(category_result["assignment_preserved"])
 
         # Remove holdings no longer present in the imported positions file.
         removed = 0
@@ -5135,6 +5597,19 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 f"{'' if len(preserved_quantity) == 1 else 's'} with an unexplained large "
                 f"drop in the import: {kept}{f', +{more} more' if more > 0 else ''}."
             )
+        if is_snowball_holdings:
+            created = category_stats["categories_created"]
+            assigned = category_stats["category_assignments_added"]
+            preserved = category_stats["category_assignments_preserved"]
+            msg += (
+                f" Added {created} missing Snowball categor{'y' if created == 1 else 'ies'}"
+                f" and assigned {assigned} uncategorized holding{'s' if assigned != 1 else ''}."
+            )
+            if preserved:
+                msg += (
+                    f" Preserved {preserved} existing category assignment"
+                    f"{'s' if preserved != 1 else ''}."
+                )
         _snapshot_nav_after_profile_update(profile_id, nav_date=nav_date)
         return jsonify({
             "message": msg,
@@ -5142,6 +5617,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
             "inserted": inserted,
             "removed": removed,
             "preserved_quantity": preserved_quantity,
+            **category_stats,
         })
 
     except Exception as e:
@@ -5651,12 +6127,22 @@ def api_nav_history():
     def trim_incompatible_position_history(rows, profile_id, conn):
         return _trim_incompatible_position_nav_history(rows, profile_id, conn)
 
-    def history_payload(rows):
-        return [
-            {"date": r["nav_date"], "value": r["total_value"]}
-            for r in rows
-            if is_nyse_trading_day(r["nav_date"])
+    def history_payload(rows, payment_profile_ids, conn):
+        trading_day_rows = [
+            row for row in rows if is_nyse_trading_day(row["nav_date"])
         ]
+        if not trading_day_rows:
+            return []
+        placeholders = ",".join("?" * len(payment_profile_ids))
+        payment_rows = conn.execute(
+            f"""SELECT payment_date, amount, source
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                  AND payment_date IS NOT NULL
+                ORDER BY payment_date""",
+            payment_profile_ids,
+        ).fetchall()
+        return build_nav_history_payload(trading_day_rows, payment_rows)
 
     conn = get_connection()
     try:
@@ -5677,7 +6163,8 @@ def api_nav_history():
             query += " GROUP BY nav_date HAVING COUNT(DISTINCT profile_id) = ? ORDER BY nav_date"
             params.append(len(profile_ids))
             rows = conn.execute(query, params).fetchall()
-            return jsonify(history_payload(rows))
+            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+            return jsonify(history_payload(rows, payment_profile_ids, conn))
         else:
             profile_id = get_profile_id()
             query = "SELECT nav_date, total_value FROM portfolio_nav WHERE profile_id = ?"
@@ -5688,14 +6175,15 @@ def api_nav_history():
             query += " ORDER BY nav_date"
             rows = conn.execute(query, params).fetchall()
             rows = trim_incompatible_position_history(rows, profile_id, conn)
-            return jsonify(history_payload(rows))
+            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, [profile_id])
+            return jsonify(history_payload(rows, payment_profile_ids, conn))
     finally:
         conn.close()
 
 
 @app.route("/api/portfolio-value", methods=["GET"])
 def api_portfolio_value():
-    """Return holdings, cash, and total account value for the active view."""
+    """Return holdings, cash, account value, and IRR for the active view."""
     is_aggregate, profile_ids = get_profile_filter()
     conn = get_connection()
     try:
@@ -5723,10 +6211,29 @@ def api_portfolio_value():
             ).fetchone()
             cash_value = float(cash_row[0] if cash_row else 0)
 
+        irr_profile_ids = profile_ids
+        if not is_aggregate and profile_ids == [1]:
+            owner_source_ids = _get_owner_source_profile_ids(conn)
+            if owner_source_ids:
+                irr_profile_ids = owner_source_ids
+        irr_excluded_tickers = {
+            ticker.strip().upper()
+            for ticker in request.args.get("irr_exclude", "").split(",")
+            if ticker.strip()
+        }
+        irr_details = _portfolio_irr_payload(
+            conn,
+            irr_profile_ids,
+            excluded_tickers=irr_excluded_tickers,
+        )
+        irr_details["source_profile_ids"] = irr_profile_ids
         return jsonify({
             "holdings_value": round(holdings_value, 2),
             "cash_value": round(cash_value, 2),
             "account_value": round(holdings_value + cash_value, 2),
+            "irr": irr_details.get("irr"),
+            "irr_pct": irr_details.get("irr_pct"),
+            "irr_details": irr_details,
         })
     finally:
         conn.close()
@@ -8559,7 +9066,97 @@ def _xfunds_headers(accept="text/html,*/*"):
     }
 
 
-def _fetch_xfunds_distribution_snapshot(ticker):
+def _xfunds_distribution_frequency_from_page(page_html):
+    """Return the issuer's distribution-frequency code from fund-page metadata."""
+    page_html = str(page_html or "")
+    class_match = re.search(
+        r"distribution-frequency-taxonomy-([a-z-]+)",
+        page_html,
+        flags=re.IGNORECASE,
+    )
+    value = class_match.group(1).lower() if class_match else ""
+    mapping = {
+        "weekly": "W",
+        "monthly": "M",
+        "quarterly": "Q",
+        "semi-annual": "SA",
+        "semiannual": "SA",
+        "annual": "A",
+    }
+    if value in mapping:
+        return mapping[value]
+
+    # Keep a text fallback for pages that omit the WordPress taxonomy class.
+    visible_text = re.sub(r"(?is)<(script|style).*?</\1>", " ", page_html)
+    visible_text = re.sub(r"(?s)<[^>]+>", " ", visible_text)
+    visible_text = re.sub(r"\s+", " ", visible_text).lower()
+    for label, code in (
+        ("weekly", "W"),
+        ("monthly", "M"),
+        ("quarterly", "Q"),
+        ("semi-annual", "SA"),
+        ("semiannual", "SA"),
+        ("annual", "A"),
+    ):
+        if re.search(rf"\b{re.escape(label)}\s+(?:income|distribution)", visible_text):
+            return code
+    return None
+
+
+def _xfunds_distribution_schedule_from_page(page_html):
+    """Extract XFUNDS' published declaration/ex/payable schedule."""
+    schedule = []
+    for table_html in re.findall(r"(?is)<table\b[^>]*>(.*?)</table>", str(page_html or "")):
+        rows = _research_html_table_rows(table_html)
+        if not rows:
+            continue
+        header = [re.sub(r"[^a-z]", "", value.lower()) for value in rows[0]]
+        if not (
+            any(value.startswith("declarationdate") for value in header)
+            and any(value.startswith("exrecorddate") for value in header)
+            and any(value.startswith("payabledate") for value in header)
+        ):
+            continue
+        for row in rows[1:]:
+            if len(row) < 3:
+                continue
+            declaration = pd.to_datetime(row[0], errors="coerce")
+            ex_date = pd.to_datetime(row[1], errors="coerce")
+            payable = pd.to_datetime(row[2], errors="coerce")
+            if pd.isna(ex_date):
+                continue
+            schedule.append({
+                "declaration_date": declaration.strftime("%Y-%m-%d") if not pd.isna(declaration) else None,
+                "ex_dividend_date": ex_date.strftime("%Y-%m-%d"),
+                "payable_date": payable.strftime("%Y-%m-%d") if not pd.isna(payable) else None,
+            })
+        break
+    return schedule
+
+
+def _merge_official_distribution_snapshot(snapshot, official):
+    """Overlay issuer data while retaining Yahoo values for official gaps."""
+    merged = dict(snapshot or {})
+    if not official:
+        return merged
+    if official.get("has_dividend"):
+        merged.update(official)
+        return merged
+
+    # A newly launched fund can publish its cadence and future schedule before
+    # declaring an amount. Apply that metadata without replacing Yahoo history,
+    # last amount, or the fact that Yahoo may already know a distribution.
+    for key in (
+        "freq", "ex_div_date", "div_pay_date", "future_schedule",
+        "source", "source_url",
+    ):
+        value = official.get(key)
+        if value not in (None, "", []):
+            merged[key] = value
+    return merged
+
+
+def _fetch_xfunds_distribution_snapshot(ticker, session=None):
     """Fetch official X Funds distributions, with support for both site formats.
 
     Older pages publish a static ``TidalFG_Distribution_<TICKER>.csv`` file.
@@ -8581,8 +9178,9 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "https://nicholasx.com/wp-content/uploads/data/"
         f"TidalFG_Distribution_{ticker}.csv"
     )
-    session = requests.Session()
+    session = session or requests.Session()
     body = ""
+    page_html = ""
     try:
         resp = session.get(
             static_url,
@@ -8594,28 +9192,65 @@ def _fetch_xfunds_distribution_snapshot(ticker):
     except Exception:
         body = ""
 
+    try:
+        page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
+        page_resp.raise_for_status()
+        page_html = page_resp.content.decode("utf-8", errors="replace")
+    except Exception:
+        page_html = ""
+
     if not body or "ex date" not in body.splitlines()[0].lower():
+        body = ""
         try:
-            page_resp = session.get(page_url, timeout=10, headers=_xfunds_headers())
-            page_resp.raise_for_status()
-            page_html = page_resp.content.decode("utf-8", errors="replace")
             match = re.search(r'distributionCsvUrl\s*=\s*"([^"]+)"', page_html, flags=re.I)
-            if not match:
-                return None
-            download_url = html_lib.unescape(match.group(1))
-            download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
-            resp = session.get(
-                download_url,
-                timeout=10,
-                headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
-            )
-            resp.raise_for_status()
-            body = (resp.text or "").strip()
+            if match:
+                download_url = html_lib.unescape(match.group(1))
+                download_url = download_url.replace("\\/", "/").replace("\\u0026", "&")
+                resp = session.get(
+                    download_url,
+                    timeout=10,
+                    headers={**_xfunds_headers("text/csv,*/*"), "Referer": page_url},
+                )
+                resp.raise_for_status()
+                body = (resp.text or "").strip()
         except Exception:
-            return None
+            body = ""
+
+    page_freq = _xfunds_distribution_frequency_from_page(page_html)
+    future_schedule = _xfunds_distribution_schedule_from_page(page_html)
+    schedule_freq = _infer_dividend_frequency_from_dates(
+        [row["ex_dividend_date"] for row in future_schedule]
+    ) if future_schedule else None
+    official_freq = page_freq or schedule_freq
 
     if not body:
-        return None
+        if not official_freq and not future_schedule:
+            return None
+        next_row = next(
+            (
+                row for row in future_schedule
+                if pd.Timestamp(row["ex_dividend_date"]) >= pd.Timestamp.now().normalize()
+            ),
+            future_schedule[-1] if future_schedule else None,
+        )
+        return {
+            "known": True,
+            "has_dividend": False,
+            "div": None,
+            "ex_div_date": (
+                pd.Timestamp(next_row["ex_dividend_date"]).strftime("%m/%d/%y")
+                if next_row else None
+            ),
+            "div_pay_date": (
+                pd.Timestamp(next_row["payable_date"]).strftime("%m/%d/%y")
+                if next_row and next_row.get("payable_date") else None
+            ),
+            "freq": official_freq,
+            "history": pd.Series(dtype=float),
+            "future_schedule": future_schedule,
+            "source": "X Funds",
+            "source_url": page_url,
+        }
 
     try:
         reader = csv.DictReader(StringIO(body))
@@ -8651,7 +9286,20 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         entries.append((ex_ts, amt, pay_ts))
 
     if not entries:
-        return None
+        if not official_freq and not future_schedule:
+            return None
+        return {
+            "known": True,
+            "has_dividend": False,
+            "div": None,
+            "ex_div_date": None,
+            "div_pay_date": None,
+            "freq": official_freq,
+            "history": pd.Series(dtype=float),
+            "future_schedule": future_schedule,
+            "source": "X Funds",
+            "source_url": page_url,
+        }
 
     entries.sort(key=lambda item: item[0])
     history = pd.Series(
@@ -8689,8 +9337,9 @@ def _fetch_xfunds_distribution_snapshot(ticker):
         "div": float(history.iloc[-1]),
         "ex_div_date": latest_ex.strftime("%m/%d/%y"),
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": freq,
+        "freq": official_freq or freq,
         "history": history,
+        "future_schedule": future_schedule,
         "source": "X Funds",
         "source_url": page_url,
     }
@@ -9934,7 +10583,7 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
     official_pay_date = None
 
     if official:
-        snapshot.update(official)
+        snapshot = _merge_official_distribution_snapshot(snapshot, official)
         official_pay_date = official.get("div_pay_date")
 
     if not official_pay_date:
@@ -9980,8 +10629,7 @@ def _apply_official_snapshot_override(ticker, snapshot, description=None):
     if not official:
         return snapshot
 
-    snapshot.update(official)
-    return snapshot
+    return _merge_official_distribution_snapshot(snapshot, official)
 
 
 def _simulate_drip_refresh(div_series, close_series, base_qty, start_date=None, today=None):
@@ -10560,7 +11208,7 @@ def refresh_market_data():
         )
 
         snapshot = div_snapshot_map[t]
-        if snapshot.get("has_dividend"):
+        if snapshot.get("has_dividend") or snapshot.get("freq"):
             effective_freq[t] = _resolve_refresh_dividend_frequency(
                 t,
                 snapshot.get("freq"),
@@ -11334,6 +11982,7 @@ def _action_item(items, kind, priority, title, detail, route, **extra):
     priority_rank = {"critical": 0, "warning": 1, "info": 2, "success": 3}
     items.append({
         "id": extra.pop("id", f"{kind}-{len(items) + 1}"),
+        "can_complete": bool(extra.pop("can_complete", False)),
         "kind": kind,
         "priority": priority,
         "priority_rank": priority_rank.get(priority, 9),
@@ -11354,6 +12003,14 @@ def _action_center_profile_info(conn):
     names = {r["id"]: r["name"] for r in rows}
     profile_name = "Aggregate" if is_agg else names.get(pids[0], "Portfolio")
     return is_agg, pids, names, profile_name
+
+
+def _action_center_scope_key(is_agg, pids):
+    """Return the profile or aggregate scope that owns an action completion."""
+    aggregate_id = _request_aggregate_id()
+    if is_agg and aggregate_id is not None:
+        return f"aggregate:{aggregate_id}"
+    return f"profile:{int(pids[0]) if pids else 1}"
 
 
 def _action_center_refresh_profile_ids(conn, is_agg, pids):
@@ -11437,6 +12094,7 @@ def action_center():
                 "/holdings",
                 cta="Refresh Prices & Divs",
                 metric=oldest,
+                id="refresh-market-data",
             )
 
         upcoming = []
@@ -11444,6 +12102,7 @@ def action_center():
             iso, days = _action_days_from_today(h.get("div_pay_date"), today)
             if iso and days is not None and 0 <= days <= 14:
                 upcoming.append({
+                    "profile_id": h["profile_id"],
                     "ticker": h["ticker"],
                     "date": iso,
                     "days": days,
@@ -11462,6 +12121,7 @@ def action_center():
                 ticker=ev["ticker"],
                 date=ev["date"],
                 metric=ev["days"],
+                id=f"dividend-payment-{ev['profile_id']}-{ev['ticker']}-{ev['date']}",
             )
 
         missing_meta = [
@@ -11487,6 +12147,8 @@ def action_center():
                 "/holdings",
                 cta="Review holdings",
                 metric=len(missing_meta),
+                id="complete-dividend-metadata",
+                can_complete=True,
             )
 
         if total_monthly_income > 0 and holdings:
@@ -11507,6 +12169,8 @@ def action_center():
                     "/dividends",
                     ticker=top_income["ticker"],
                     metric=top_income_pct,
+                    id=f"income-concentration-{top_income['profile_id']}-{top_income['ticker']}",
+                    can_complete=True,
                 )
 
         if total_value > 0:
@@ -11547,6 +12211,8 @@ def action_center():
                     "/categories",
                     cta="Assign categories",
                     metric=unallocated_value,
+                    id="assign-unallocated-holdings",
+                    can_complete=True,
                 )
             for _, drift, category, actual, target, value in sorted(drift_rows, reverse=True)[:4]:
                 direction = "over" if drift > 0 else "under"
@@ -11559,6 +12225,8 @@ def action_center():
                     "/rebalance-wizard",
                     cta="Open Rebalance Wizard",
                     metric=abs(drift),
+                    id=f"allocation-drift-{re.sub(r'[^a-z0-9]+', '-', category.lower()).strip('-')}",
+                    can_complete=True,
                 )
 
         near_long_term = []
@@ -11569,9 +12237,9 @@ def action_center():
             held_days = (today - datetime.date.fromisoformat(iso)).days
             days_left = 366 - held_days
             if 0 <= days_left <= 45:
-                near_long_term.append((days_left, h))
+                near_long_term.append((days_left, h, iso))
         near_long_term.sort(key=lambda pair: pair[0])
-        for days_left, h in near_long_term[:3]:
+        for days_left, h, purchase_iso in near_long_term[:3]:
             _action_item(
                 items,
                 "tax",
@@ -11581,6 +12249,7 @@ def action_center():
                 "/tax-report",
                 ticker=h["ticker"],
                 metric=days_left,
+                id=f"long-term-status-{h['profile_id']}-{h['ticker']}-{purchase_iso}",
             )
 
         year_start = today.replace(month=1, day=1).isoformat()
@@ -11604,6 +12273,8 @@ def action_center():
                 "/tax-report",
                 cta="Open Tax Report",
                 metric=abs(realized),
+                id=f"review-realized-gains-{today.year}",
+                can_complete=True,
             )
 
         plan_rows = conn.execute(
@@ -11637,6 +12308,8 @@ def action_center():
                     metric=pending_work,
                     plan_id=row["id"],
                     updated_at=row["updated_at"],
+                    id=f"rebalance-plan-{row['id']}",
+                    can_complete=True,
                 )
 
         # Tax-loss harvest plans (status='planned')
@@ -11665,6 +12338,8 @@ def action_center():
                 cta="Open Tax-Loss Harvest",
                 metric=tax_saved,
                 plan_id=pr["id"],
+                id=f"tax-loss-plan-{pr['id']}",
+                can_complete=True,
             )
 
         if not items and holdings:
@@ -11676,11 +12351,30 @@ def action_center():
                 "Current data did not surface stale refreshes, large allocation drift, metadata gaps, or unfinished rebalance work.",
                 "/",
                 metric=0,
+                id="all-clear",
             )
 
         items.sort(key=lambda item: (item["priority_rank"], -float(item.get("metric") or 0), item["title"]))
         for item in items:
             item.pop("priority_rank", None)
+
+        scope_key = _action_center_scope_key(is_agg, pids)
+        completed_rows = conn.execute(
+            """SELECT action_id, completed_at
+               FROM action_center_completions
+               WHERE scope_key = ?""",
+            (scope_key,),
+        ).fetchall()
+        completed_at = {row["action_id"]: row["completed_at"] for row in completed_rows}
+        completed_items = [
+            {**item, "completed": True, "completed_at": completed_at[item["id"]]}
+            for item in items
+            if item["can_complete"] and item["id"] in completed_at
+        ]
+        items = [
+            item for item in items
+            if not (item["can_complete"] and item["id"] in completed_at)
+        ]
         counts = {}
         for item in items:
             counts[item["priority"]] = counts.get(item["priority"], 0) + 1
@@ -11691,10 +12385,61 @@ def action_center():
             "total_value": round(total_value, 2),
             "monthly_income": round(total_monthly_income, 2),
             "item_count": len(items),
+            "completed_count": len(completed_items),
             "counts": counts,
             "as_of": today.isoformat(),
         }
-        return jsonify({"summary": summary, "items": items[:limit]})
+        return jsonify({
+            "summary": summary,
+            "items": items[:limit],
+            "completed_items": completed_items[:limit],
+        })
+    finally:
+        conn.close()
+
+
+@app.route("/api/action-center/completions", methods=["POST"])
+def action_center_completion_create():
+    """Record that the user has completed a reviewable Action Center item."""
+    data = request.get_json(force=True, silent=True) or {}
+    action_id = str(data.get("action_id") or "").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9:-]{0,119}", action_id):
+        return jsonify({"error": "A valid action ID is required."}), 400
+
+    is_agg, pids = get_profile_filter()
+    scope_key = _action_center_scope_key(is_agg, pids)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO action_center_completions (scope_key, action_id)
+               VALUES (?, ?)
+               ON CONFLICT(scope_key, action_id)
+               DO UPDATE SET completed_at = CURRENT_TIMESTAMP""",
+            (scope_key, action_id),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "action_id": action_id})
+    finally:
+        conn.close()
+
+
+@app.route("/api/action-center/completions/<action_id>", methods=["DELETE"])
+def action_center_completion_delete(action_id):
+    """Restore a completed Action Center item to the active list."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9:-]{0,119}", action_id):
+        return jsonify({"error": "A valid action ID is required."}), 400
+
+    is_agg, pids = get_profile_filter()
+    scope_key = _action_center_scope_key(is_agg, pids)
+    conn = get_connection()
+    try:
+        conn.execute(
+            """DELETE FROM action_center_completions
+               WHERE scope_key = ? AND action_id = ?""",
+            (scope_key, action_id),
+        )
+        conn.commit()
+        return jsonify({"ok": True, "action_id": action_id})
     finally:
         conn.close()
 
@@ -15099,7 +15844,7 @@ def upcoming_dividends():
                 "color": freq_colors.get(freq, "#7ecfff"),
             })
 
-    events.sort(key=lambda e: e["ex_date"])
+    events.sort(key=lambda e: (e["ex_date"], e["ticker"]))
     _cache_set(_UPCOMING_DIVIDENDS_CACHE, cache_key, events)
     return jsonify(events)
 
@@ -15498,7 +16243,13 @@ def portfolio_summary_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import ticker_score, grade_portfolio, letter_grade, _beta
+    from grading import (
+        ticker_score,
+        grade_portfolio,
+        letter_grade,
+        min_observations_for_window,
+        _beta,
+    )
     warnings.filterwarnings("ignore")
 
     is_agg, pids = get_profile_filter()
@@ -15675,6 +16426,17 @@ def portfolio_summary_data():
     ticker_risk = {}
     available = []
 
+    # The ratio helpers default to needing 30 daily observations, which is more
+    # than a short window can ever hold — a 1-month grade would blank every card
+    # on a technicality rather than grade the month the user picked. Scale the
+    # floor to the history this window actually downloaded. None means even the
+    # absolute floor is out of reach (the 7-day window is ~5 trading days), which
+    # the response reports so the UI can say so instead of showing empty cards.
+    window_observations = max(len(close.index) - 1, 0)
+    min_obs = min_observations_for_window(window_observations)
+    window_too_short = min_obs is None
+    effective_min_obs = min_obs if min_obs is not None else 10 ** 9
+
     def _blank_risk():
         return {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
 
@@ -15685,20 +16447,26 @@ def portfolio_summary_data():
         the portfolio-level regression), False otherwise. Always populates
         ticker_grades[t] and ticker_risk[t].
         """
-        if tc is None or len(tc) < 30:
+        if tc is None or len(tc) < effective_min_obs:
             ticker_grades[t] = {"grade": "N/A", "score": None}
             ticker_risk[t] = _blank_risk()
             return False
         try:
             tr = tc.pct_change().dropna()
-            score, *_ = ticker_score(tc, tr, bench_ret)
+            score, *_ = ticker_score(tc, tr, bench_ret, min_obs=effective_min_obs)
             ticker_grades[t] = {"grade": letter_grade(score), "score": score}
+            # _best_fit_beta already regresses on a 15-observation floor, which
+            # is exactly the shortest window this endpoint will grade, so it
+            # needs no scaling of its own.
             computed_beta, beta_benchmark = _best_fit_beta(tc, benchmark_closes)
             delta_up = delta_down = None
             if beta_benchmark:
                 beta_close = dict(benchmark_closes).get(beta_benchmark)
                 if beta_close is not None:
-                    delta_up, delta_down = _capture_deltas(tc, beta_close)
+                    delta_up, delta_down = _capture_deltas(
+                        tc, beta_close,
+                        min_days=min(10, max(3, effective_min_obs // 3)),
+                    )
             ticker_risk[t] = {
                 "beta": computed_beta,
                 "beta_benchmark": beta_benchmark,
@@ -15767,7 +16535,7 @@ def portfolio_summary_data():
             returns_df = close[available].pct_change().fillna(0)
             val_map = {r["ticker"]: float(r["current_value"] or 0) for r in rows}
             weights_arr = np.array([val_map.get(t, 0.0) for t in available])
-            pm = grade_portfolio(returns_df, weights_arr, bench_ret)
+            pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs)
             portfolio_grade_info = pm.get("grade", {})
             portfolio_grade_info["sharpe"] = pm.get("sharpe")
             portfolio_grade_info["sortino"] = pm.get("sortino")
@@ -15780,7 +16548,10 @@ def portfolio_summary_data():
             benchmark_betas = {}
             if portfolio_daily is not None:
                 for benchmark_key, benchmark_ret in benchmark_returns.items():
-                    benchmark_betas[benchmark_key] = _beta(portfolio_daily, benchmark_ret) if benchmark_ret is not None else None
+                    benchmark_betas[benchmark_key] = (
+                        _beta(portfolio_daily, benchmark_ret, min_obs=effective_min_obs)
+                        if benchmark_ret is not None else None
+                    )
             portfolio_grade_info["beta_nasdaq"] = benchmark_betas.get("nasdaq")
             portfolio_grade_info["benchmark_betas"] = benchmark_betas
         except Exception:
@@ -15811,10 +16582,14 @@ def portfolio_summary_data():
                     portfolio_grade_info[_k] = cached_pg.get(_k)
             benchmark_betas_present = True
 
+    # Prefer the graded tickers' own span, but fall back to the downloaded frame
+    # so a window that was too short to grade still reports the dates it covered
+    # — otherwise the UI is left rendering "Loading dates..." forever for a
+    # request that already finished.
     actual_range = (
         close[available].dropna(how="all")
         if available
-        else pd.DataFrame()
+        else close.dropna(how="all")
     )
     actual_start_date = (
         pd.Timestamp(actual_range.index[0]).strftime("%Y-%m-%d")
@@ -15832,6 +16607,9 @@ def portfolio_summary_data():
     portfolio_grade_info["requested_end_date"] = period_range["end_date"]
     portfolio_grade_info["actual_start_date"] = actual_start_date
     portfolio_grade_info["actual_end_date"] = actual_end_date
+    portfolio_grade_info["window_observations"] = window_observations
+    portfolio_grade_info["min_observations"] = min_obs
+    portfolio_grade_info["window_too_short"] = window_too_short
     response = {
         "ticker_grades": ticker_grades,
         "ticker_risk": ticker_risk,
@@ -15843,6 +16621,9 @@ def portfolio_summary_data():
         "requested_end_date": period_range["end_date"],
         "actual_start_date": actual_start_date,
         "actual_end_date": actual_end_date,
+        "window_observations": window_observations,
+        "min_observations": min_obs,
+        "window_too_short": window_too_short,
     }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
@@ -15851,8 +16632,14 @@ def portfolio_summary_data():
     # as partial too, so a dropped SPY/QQQ doesn't pin a blank Beta card for the
     # full TTL — the next load retries the benchmark download. A genuinely
     # ungradeable portfolio (<2 priceable holdings) is still cached so we don't
-    # re-download on every load.
-    cacheable = (portfolio_grade_info and benchmark_betas_present) or len(tickers) < 2
+    # re-download on every load. A window too short to carry the ratios is cached
+    # for the same reason — that verdict is a property of the window, not a
+    # transient download failure, so re-downloading on every click buys nothing.
+    cacheable = (
+        (portfolio_grade_info and benchmark_betas_present)
+        or window_too_short
+        or len(tickers) < 2
+    )
     if cacheable:
         _PORTFOLIO_SUMMARY_CACHE[cache_key] = (time.time(), response)
     return jsonify(response)
@@ -17276,6 +18063,12 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
 
     summary = _xfunds_page_section(page_html, "Fund Summary", max_paragraphs=2)
     objective = _xfunds_page_section(page_html, "Fund Objective", max_paragraphs=2)
+    frequency_code = _xfunds_distribution_frequency_from_page(page_html)
+    future_schedule = _xfunds_distribution_schedule_from_page(page_html)
+    if not frequency_code and future_schedule:
+        frequency_code = _infer_dividend_frequency_from_dates(
+            [row["ex_dividend_date"] for row in future_schedule]
+        )
     distribution_rate = _research_pct(_xfunds_map_value(fund_info, "distribution rate"))
     sec_yield = _research_pct(_xfunds_map_value(fund_info, "30 day sec yield", "30-day sec yield"))
     net_assets = holdings_meta.get("net_assets") or _xfunds_money(_xfunds_map_value(daily_nav, "net assets"))
@@ -17294,6 +18087,11 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
         "nav_price": _xfunds_money(_xfunds_map_value(daily_nav, "nav")),
         "nav_label": "NAV",
         "inception_date": _xfunds_iso_date(_xfunds_map_value(fund_info, "fund inception", "inception")),
+        "dividend_frequency": {
+            "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+            "SA": "Semi-Annual", "A": "Annual",
+        }.get(frequency_code),
+        "future_distribution_schedule": future_schedule,
         "estimated_yield_pct": distribution_rate,
         "distribution_rate_pct": distribution_rate,
         "sec_30_day_yield_pct": sec_yield,
@@ -17843,6 +18641,14 @@ def security_research(kind, ticker):
             pass
 
         dist_history_series = None
+        if official_snapshot:
+            if official_snapshot.get("freq"):
+                response["dividend_frequency"] = {
+                    "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+                    "SA": "Semi-Annual", "A": "Annual",
+                }.get(official_snapshot["freq"], response.get("dividend_frequency"))
+            if official_snapshot.get("future_schedule"):
+                response["future_distribution_schedule"] = official_snapshot["future_schedule"]
         if official_snapshot and official_snapshot.get("history") is not None:
             h = official_snapshot["history"]
             if hasattr(h, "empty") and not h.empty:
@@ -18731,12 +19537,35 @@ def income_summary():
         current_month_reinvested = round(total_month * reinvest_fraction, 2)
         current_month_not_reinvested = round(total_month - current_month_reinvested, 2)
 
+    # Owner can contain trades recorded directly on profile 1 as well as trades
+    # tracked in its source accounts. Include both scopes without double-counting.
+    option_income_pids = sorted(set(pids + payment_pids))
+    option_income_mtd = realized_option_income(conn, option_income_pids, month_start, today_iso)
+    option_income_ytd = realized_option_income(
+        conn,
+        option_income_pids,
+        today.replace(month=1, day=1).isoformat(),
+        today_iso,
+    )
+    include_options = str(request.args.get("include_options") or "").strip().lower() in {"1", "true", "yes"}
+    combined_month = round(total_month + option_income_mtd, 2)
+    combined_ytd = round(total_ytd + option_income_ytd, 2)
+
     conn.close()
     return jsonify({
         "ytd_income": total_ytd,
+        "fund_ytd_income": total_ytd,
+        "realized_option_pnl_ytd": option_income_ytd,
+        "combined_ytd_income": combined_ytd,
+        "selected_ytd_income": combined_ytd if include_options else total_ytd,
         "ytd_income_source": ytd_income_source,
         "ytd_payment_rows": ytd_payment_rows,
         "current_month_income": total_month,
+        "fund_current_month_income": total_month,
+        "realized_option_pnl_mtd": option_income_mtd,
+        "combined_current_month_income": combined_month,
+        "selected_current_month_income": combined_month if include_options else total_month,
+        "include_options": include_options,
         "current_month_income_reinvested": current_month_reinvested,
         "current_month_income_not_reinvested": current_month_not_reinvested,
         "current_month_income_source": current_month_income_source,
@@ -19454,106 +20283,202 @@ def delete_subcategory(sub_id):
     return jsonify({"message": "Sub-category deleted"})
 
 
-@app.route("/api/categories/push-to-subaccounts", methods=["POST"])
-def push_categories_to_subaccounts():
-    """Owner-only: copy the Owner's categories + sub-categories (incl. targets)
-    down to every included sub-account. Same-named categories are overwritten:
-    their target is reset to the Owner's and their sub-categories are rebuilt to
-    match the Owner's, so any ticker assigned to a removed sub-category falls back
-    to unclassified within its parent category. Ticker→category assignments and
-    categories the Owner does not define are left untouched."""
-    if _request_aggregate_id() is not None or get_profile_id() != 1:
-        return jsonify({"error": "Only the Owner profile can push categories to sub-accounts"}), 403
+@app.route("/api/categories/copy-targets", methods=["GET"])
+def category_copy_targets():
+    """Every other account you can copy categories into, with the category and
+    sub-category names it already has. Powers the account picker and its
+    "already has N of M" badge."""
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
+    source_id = get_profile_id()
+    conn = get_connection()
+    profiles = conn.execute(
+        "SELECT id, name, include_in_owner FROM profiles WHERE id != ? ORDER BY id",
+        (source_id,),
+    ).fetchall()
+    cat_names_by_profile = {}
+    for r in conn.execute("SELECT profile_id, name FROM categories").fetchall():
+        cat_names_by_profile.setdefault(r["profile_id"], []).append(r["name"])
+    # Sub-categories are keyed by "category name › sub name" so the frontend can
+    # tell which of the source's sub-categories a target account is missing
+    # without needing that account's category ids.
+    sub_keys_by_profile = {}
+    for r in conn.execute(
+        "SELECT s.profile_id AS profile_id, c.name AS cat_name, s.name AS sub_name "
+        "FROM subcategories s JOIN categories c ON c.id = s.category_id"
+    ).fetchall():
+        sub_keys_by_profile.setdefault(r["profile_id"], []).append(
+            f"{r['cat_name']}›{r['sub_name']}"
+        )
+    conn.close()
+    return jsonify({
+        "source_profile_id": source_id,
+        "accounts": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "include_in_owner": bool(p["include_in_owner"]),
+                "category_names": cat_names_by_profile.get(p["id"], []),
+                "subcategory_keys": sub_keys_by_profile.get(p["id"], []),
+            }
+            for p in profiles
+        ],
+    })
+
+
+@app.route("/api/categories/copy-to-accounts", methods=["POST"])
+def copy_categories_to_accounts():
+    """Copy selected categories (optionally their sub-categories and targets)
+    from the current account into any other accounts.
+
+    Strictly additive: a same-named category in a target account is left exactly
+    as it is — its target is never rewritten and its sub-categories are never
+    deleted; only sub-categories it is missing get added. Ticker→category
+    assignments are never touched, so holdings still have to be assigned inside
+    each account."""
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
+    source_id = get_profile_id()
+    data = request.get_json() or {}
+
+    def _ints(raw):
+        out = []
+        for v in raw or []:
+            try:
+                out.append(int(v))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    category_ids = _ints(data.get("category_ids"))
+    target_ids = _ints(data.get("target_profile_ids"))
+    include_subs = bool(data.get("include_subcategories", True))
+    include_targets = bool(data.get("include_targets", False))
+
+    if not category_ids:
+        return jsonify({"error": "Select at least one category to copy"}), 400
+    target_ids = [pid for pid in dict.fromkeys(target_ids) if pid != source_id]
+    if not target_ids:
+        return jsonify({"error": "Select at least one account to copy into"}), 400
 
     conn = get_connection()
-    source_ids = _get_owner_source_profile_ids(conn)
-    if not source_ids:
-        conn.close()
-        return jsonify({"error": "No included sub-accounts to push to"}), 400
-
-    owner_cats = conn.execute(
-        "SELECT id, name, target_pct, sort_order FROM categories WHERE profile_id = 1 ORDER BY sort_order, name"
+    cph = ",".join("?" * len(category_ids))
+    src_cats = conn.execute(
+        f"SELECT id, name, target_pct FROM categories WHERE profile_id = ? AND id IN ({cph}) "
+        "ORDER BY sort_order, name",
+        [source_id, *category_ids],
     ).fetchall()
-    owner_subs_by_cat = {}
-    for s in conn.execute(
-        "SELECT category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = 1 ORDER BY sort_order, name"
-    ).fetchall():
-        owner_subs_by_cat.setdefault(s["category_id"], []).append(s)
+    if not src_cats:
+        conn.close()
+        return jsonify({"error": "No matching categories in this account"}), 404
 
-    cats_created = 0
-    cats_overwritten = 0
-    subs_pushed = 0
-    for pid in source_ids:
-        for oc in owner_cats:
-            name = (oc["name"] or "").strip()
+    src_subs_by_cat = {}
+    if include_subs:
+        for s in conn.execute(
+            f"SELECT category_id, name, target_pct FROM subcategories "
+            f"WHERE profile_id = ? AND category_id IN ({cph}) ORDER BY sort_order, name",
+            [source_id, *category_ids],
+        ).fetchall():
+            src_subs_by_cat.setdefault(s["category_id"], []).append(s)
+
+    tph = ",".join("?" * len(target_ids))
+    valid_targets = {
+        r["id"]: r["name"]
+        for r in conn.execute(
+            f"SELECT id, name FROM profiles WHERE id IN ({tph})", target_ids
+        ).fetchall()
+    }
+    if not valid_targets:
+        conn.close()
+        return jsonify({"error": "No matching accounts"}), 404
+
+    results = []
+    cats_created = subs_created = cats_skipped = 0
+    for pid in target_ids:
+        if pid not in valid_targets:
+            continue
+        next_sort = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM categories WHERE profile_id = ?",
+            (pid,),
+        ).fetchone()["n"]
+        acct_cats = acct_subs = acct_skipped = 0
+        for sc in src_cats:
+            name = (sc["name"] or "").strip()
             if not name:
                 continue
-            owner_subs = [s for s in owner_subs_by_cat.get(oc["id"], []) if (s["name"] or "").strip()]
-            owner_sub_names = {(s["name"] or "").strip() for s in owner_subs}
+            # Case-insensitive: the UNIQUE(name, profile_id) index would happily
+            # accept "anchors" next to an existing "Anchors", which is a duplicate
+            # bucket from the user's point of view.
             existing = conn.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
+                "SELECT id FROM categories WHERE name = ? COLLATE NOCASE AND profile_id = ?",
                 (name, pid),
             ).fetchone()
             if existing:
+                # Leave the account's own category and target alone.
                 cat_id = existing["id"]
-                conn.execute(
-                    "UPDATE categories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
-                    (oc["target_pct"], oc["sort_order"], cat_id, pid),
-                )
-                cats_overwritten += 1
-                # Existing sub-categories in this sub-account, keyed by name.
-                existing_subs = {
-                    (r["name"] or "").strip(): r["id"]
-                    for r in conn.execute(
-                        "SELECT id, name FROM subcategories WHERE category_id = ? AND profile_id = ?",
-                        (cat_id, pid),
-                    ).fetchall()
-                }
-                # Overwrite: remove only the sub-categories the Owner no longer has.
-                # Their tickers fall back to unclassified within the parent category.
-                stale_ids = [sid for sname, sid in existing_subs.items() if sname not in owner_sub_names]
-                if stale_ids:
-                    sph = ",".join("?" * len(stale_ids))
-                    conn.execute(
-                        f"UPDATE ticker_categories SET subcategory_id = NULL WHERE profile_id = ? AND subcategory_id IN ({sph})",
-                        [pid, *stale_ids],
-                    )
-                    conn.execute(
-                        f"DELETE FROM subcategories WHERE profile_id = ? AND id IN ({sph})",
-                        [pid, *stale_ids],
-                    )
+                acct_skipped += 1
             else:
                 cur = conn.execute(
                     "INSERT INTO categories (name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?)",
-                    (name, oc["target_pct"], pid, oc["sort_order"]),
+                    (name, sc["target_pct"] if include_targets else None, pid, next_sort),
                 )
                 cat_id = cur.lastrowid
-                cats_created += 1
-                existing_subs = {}
-            # Upsert the Owner's sub-categories BY NAME. Matching same-named
-            # sub-categories keep their id, so existing ticker -> sub-category
-            # assignments in the sub-account are preserved (only the target is synced).
-            for os in owner_subs:
-                sub_name = (os["name"] or "").strip()
-                if sub_name in existing_subs:
-                    conn.execute(
-                        "UPDATE subcategories SET target_pct = ?, sort_order = ? WHERE id = ? AND profile_id = ?",
-                        (os["target_pct"], os["sort_order"], existing_subs[sub_name], pid),
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
-                        (cat_id, sub_name, os["target_pct"], pid, os["sort_order"]),
-                    )
-                subs_pushed += 1
+                next_sort += 1
+                acct_cats += 1
+            src_subs = [s for s in src_subs_by_cat.get(sc["id"], []) if (s["name"] or "").strip()]
+            if not src_subs:
+                continue
+            existing_sub_names = {
+                (r["name"] or "").strip().lower()
+                for r in conn.execute(
+                    "SELECT name FROM subcategories WHERE category_id = ? AND profile_id = ?",
+                    (cat_id, pid),
+                ).fetchall()
+            }
+            next_sub_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM subcategories "
+                "WHERE category_id = ? AND profile_id = ?",
+                (cat_id, pid),
+            ).fetchone()["n"]
+            for ss in src_subs:
+                sub_name = (ss["name"] or "").strip()
+                if sub_name.lower() in existing_sub_names:
+                    continue  # additive only — never re-target an existing sub-category
+                conn.execute(
+                    "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (cat_id, sub_name, ss["target_pct"] if include_targets else None, pid, next_sub_sort),
+                )
+                next_sub_sort += 1
+                acct_subs += 1
+        cats_created += acct_cats
+        subs_created += acct_subs
+        cats_skipped += acct_skipped
+        results.append({
+            "profile_id": pid,
+            "name": valid_targets[pid],
+            "categories_created": acct_cats,
+            "subcategories_created": acct_subs,
+            "categories_skipped": acct_skipped,
+        })
     conn.commit()
     conn.close()
+
+    parts = [f"Created {cats_created} categor{'y' if cats_created == 1 else 'ies'}"]
+    if include_subs:
+        parts.append(f"{subs_created} sub-categor{'y' if subs_created == 1 else 'ies'}")
+    msg = " and ".join(parts) + f" across {len(results)} account{'' if len(results) == 1 else 's'}."
+    if cats_skipped:
+        msg += f" {cats_skipped} already existed and were left unchanged."
     return jsonify({
-        "message": f"Pushed {len(owner_cats)} categories to {len(source_ids)} sub-account(s)",
-        "subaccounts": len(source_ids),
+        "message": msg,
+        "accounts": len(results),
         "categories_created": cats_created,
-        "categories_overwritten": cats_overwritten,
-        "subcategories_pushed": subs_pushed,
+        "subcategories_created": subs_created,
+        "categories_skipped": cats_skipped,
+        "results": results,
     })
 
 
@@ -19585,6 +20510,8 @@ def dividend_analysis_data():
 
     profile_id = get_profile_id()
     conn = get_connection()
+    _ensure_basis_columns(conn)
+    basis_total = _basis_total_expr("")
 
     # Categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
@@ -19609,17 +20536,28 @@ def dividend_analysis_data():
     sub_param = request.args.get("subcategory", "").strip()
     sub_ids = [int(s) for s in sub_param.split(",") if s.strip().isdigit()] if sub_param else []
 
-    # Load holdings
+    # Load holdings. Every cost-basis-derived figure is recomputed from the
+    # basis selected in the header (original vs broker adjusted) rather than
+    # read from the stored columns, so yield on cost, gain/loss and
+    # paid-for-itself all move together when the selector changes.
     rows = conn.execute(
-        """SELECT ticker, description, classification_type,
-                  ytd_divs, total_divs_received, paid_for_itself,
+        f"""SELECT ticker, description, classification_type,
+                  ytd_divs, total_divs_received,
+                  CASE WHEN {basis_total} > 0
+                       THEN IFNULL(total_divs_received, 0) / {basis_total}
+                       ELSE 0 END as paid_for_itself,
                   dividend_paid, estim_payment_per_year, approx_monthly_income,
-                  annual_yield_on_cost, current_annual_yield,
-                  purchase_value, current_value, gain_or_loss,
+                  CASE WHEN {basis_total} > 0
+                       THEN IFNULL(estim_payment_per_year, 0) / {basis_total}
+                       ELSE 0 END as annual_yield_on_cost,
+                  current_annual_yield,
+                  {basis_total} as purchase_value,
+                  current_value,
+                  IFNULL(current_value, 0) - {basis_total} as gain_or_loss,
                   div_frequency, ex_div_date, div_pay_date, reinvest, div, current_price,
                   quantity
            FROM all_account_info
-           WHERE purchase_value IS NOT NULL AND purchase_value > 0
+           WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
              AND IFNULL(quantity, 0) > 0
              AND profile_id = ?
            ORDER BY IFNULL(total_divs_received, 0) DESC, ticker""",
@@ -19752,6 +20690,7 @@ def dividend_analysis_data():
             "current_annual_yield": _clean(row.get("current_annual_yield")),
             "gain_or_loss": _clean(row.get("gain_or_loss")),
             "current_value": _clean(row.get("current_value")),
+            "purchase_value": _clean(row.get("purchase_value")),
             "safety_score": _clean(safety.get("safety_score")),
             "safety_risk_level": safety.get("risk_level") or "Unknown",
             "cut_risk_flag": bool(safety.get("cut_risk_flag")),
@@ -22544,6 +23483,226 @@ def total_return_compare():
 
 # ── Gains & Losses ─────────────────────────────────────────────────────────────
 
+def _gains_losses_dividend_allocation(conn, profile_ids):
+    """Allocate imported dividends once between sold lots and open shares.
+
+    Broker transaction imports all write cash distributions to
+    ``dividend_payments``. The older G&L implementation instead read the
+    current-holdings ``dividends`` mirror and copied its ticker total onto every
+    SELL row. Besides duplicating income for multi-fill sales, that loses the
+    dividend history entirely when the last holding row is removed.
+
+    This replay follows the same specific-lot/FIFO order as the transaction
+    rollup. A payment is spread across the lots open on its payment date, and a
+    later sale carries only the dividend credit belonging to the shares it
+    consumes. Snapshot-only totals remain with the current holding, while ledger
+    payments that pre-date the available lot history are apportioned across the
+    remaining open shares and recorded sales as a conservative fallback. Every
+    supported import format therefore uses the same non-duplicating path.
+    """
+    profile_ids = sorted({int(pid) for pid in (profile_ids or [])})
+    empty = {
+        "sell_dividends": {},
+        "open_dividends": {},
+        "effective_totals": {},
+        "current_position_keys": set(),
+    }
+    if not profile_ids:
+        return empty
+
+    placeholders = ",".join("?" * len(profile_ids))
+    transaction_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT id, ticker, profile_id, transaction_type,
+                       transaction_date, shares, notes
+                FROM transactions
+                WHERE profile_id IN ({placeholders})
+                  AND transaction_type IN ('BUY', 'SELL')
+                ORDER BY ticker, profile_id, transaction_date, id""",
+            profile_ids,
+        ).fetchall()
+    ]
+    payment_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT id, ticker, profile_id, payment_date, amount
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                ORDER BY ticker, profile_id, payment_date, id""",
+            profile_ids,
+        ).fetchall()
+    ]
+    holding_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT ticker, profile_id,
+                       SUM(COALESCE(quantity, 0)) AS quantity,
+                       SUM(COALESCE(total_divs_received, 0)) AS total_divs_received
+                FROM all_account_info
+                WHERE profile_id IN ({placeholders})
+                  AND COALESCE(quantity, 0) > 1e-9
+                GROUP BY ticker, profile_id""",
+            profile_ids,
+        ).fetchall()
+    ]
+
+    grouped_transactions = {}
+    sell_ids = []
+    for row in transaction_rows:
+        key = (row["ticker"], int(row["profile_id"]))
+        grouped_transactions.setdefault(key, []).append(row)
+        if row["transaction_type"] == "SELL":
+            sell_ids.append(row["id"])
+
+    grouped_payments = {}
+    for row in payment_rows:
+        key = (row["ticker"], int(row["profile_id"]))
+        grouped_payments.setdefault(key, []).append(row)
+
+    holdings = {
+        (row["ticker"], int(row["profile_id"])): {
+            "quantity": max(0.0, float(row.get("quantity") or 0)),
+            "total_divs_received": max(0.0, float(row.get("total_divs_received") or 0)),
+        }
+        for row in holding_rows
+    }
+    alloc_map = _load_lot_alloc_map(conn, sell_ids)
+    sell_dividends = {}
+    open_dividends = {}
+    effective_totals = {}
+
+    def consume_lots(lots, shares, allocations=None):
+        """Consume dividend-bearing lots and return (credit, uncovered shares)."""
+        remaining = max(0.0, float(shares or 0))
+        credit = 0.0
+
+        def consume_from(lot, requested):
+            nonlocal credit
+            before = float(lot["shares"] or 0)
+            take = min(max(0.0, requested), before)
+            if take <= 1e-9 or before <= 1e-9:
+                return 0.0
+            lot_credit = float(lot.get("dividend_credit") or 0)
+            moved_credit = lot_credit * (take / before)
+            credit += moved_credit
+            lot["dividend_credit"] = lot_credit - moved_credit
+            lot["shares"] = before - take
+            return take
+
+        if allocations:
+            for allocation in allocations:
+                requested = min(
+                    remaining,
+                    max(0.0, float(allocation.get("shares") or 0)),
+                )
+                if requested <= 1e-9:
+                    continue
+                for lot in lots:
+                    if lot["id"] == allocation.get("buy_txn_id"):
+                        remaining -= consume_from(lot, requested)
+                        break
+        else:
+            while remaining > 1e-9 and lots:
+                lot = lots[0]
+                remaining -= consume_from(lot, remaining)
+                if lot["shares"] <= 1e-9:
+                    lots.pop(0)
+
+        lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
+        return credit, max(0.0, remaining)
+
+    all_keys = set(grouped_transactions) | set(grouped_payments) | set(holdings)
+    for key in all_keys:
+        transactions = grouped_transactions.get(key, [])
+        payments = grouped_payments.get(key, [])
+        holding = holdings.get(key, {})
+        current_shares = float(holding.get("quantity") or 0)
+        snapshot_total = float(holding.get("total_divs_received") or 0)
+        payment_total = sum(max(0.0, float(row.get("amount") or 0)) for row in payments)
+        effective_total = max(payment_total, snapshot_total)
+        if effective_total > 1e-9:
+            effective_totals[key] = effective_total
+
+        real_sells = [
+            row for row in transactions
+            if row["transaction_type"] == "SELL" and not _is_transfer_txn(row.get("notes"))
+        ]
+        for row in real_sells:
+            sell_dividends.setdefault(row["id"], 0.0)
+
+        events = []
+        for row in payments:
+            # A payment received on a sale date belongs to the pre-sale shares;
+            # processing payments before same-day transactions preserves it.
+            events.append((str(row.get("payment_date") or ""), 0, int(row["id"]), "PAYMENT", row))
+        for row in transactions:
+            events.append((str(row.get("transaction_date") or ""), 1, int(row["id"]), "TRANSACTION", row))
+        events.sort(key=lambda event: event[:3])
+
+        lots = []
+        share_deficit = 0.0
+        for _, _, _, event_type, row in events:
+            if event_type == "PAYMENT":
+                amount = max(0.0, float(row.get("amount") or 0))
+                open_shares = sum(float(lot["shares"] or 0) for lot in lots)
+                if amount > 0 and open_shares > 1e-9:
+                    for lot in lots:
+                        lot["dividend_credit"] += amount * float(lot["shares"] or 0) / open_shares
+                continue
+
+            shares = abs(float(row.get("shares") or 0))
+            if row["transaction_type"] == "BUY":
+                if share_deficit > 1e-9:
+                    covered = min(share_deficit, shares)
+                    share_deficit -= covered
+                    shares -= covered
+                if shares > 1e-9:
+                    lots.append({
+                        "id": row["id"],
+                        "shares": shares,
+                        "dividend_credit": 0.0,
+                    })
+                continue
+
+            credit, uncovered = consume_lots(lots, shares, alloc_map.get(row["id"]))
+            share_deficit += uncovered
+            if not _is_transfer_txn(row.get("notes")):
+                sell_dividends[row["id"]] = sell_dividends.get(row["id"], 0.0) + credit
+
+        tracked_ledger_open = (
+            sum(float(lot.get("dividend_credit") or 0) for lot in lots)
+            if current_shares > 1e-9 else 0.0
+        )
+        # A holdings snapshot's lifetime total describes the still-open
+        # position. Preserve any portion that is not backed by itemized payment
+        # history instead of inventing realized income for an older sale.
+        snapshot_only_open = (
+            max(0.0, snapshot_total - payment_total)
+            if current_shares > 1e-9 else 0.0
+        )
+        tracked_open = tracked_ledger_open + snapshot_only_open
+        open_dividends[key] = tracked_open
+        tracked_sold = sum(sell_dividends.get(row["id"], 0.0) for row in real_sells)
+        residual = max(0.0, payment_total - tracked_ledger_open - tracked_sold)
+
+        # Missing early lots are common in bounded broker exports. Allocate only
+        # the otherwise-unclaimed residual, using share counts as the neutral
+        # fallback, so the imported cash total is still conserved exactly once.
+        if residual > 1e-9:
+            sell_weight = sum(abs(float(row.get("shares") or 0)) for row in real_sells)
+            total_weight = sell_weight + current_shares
+            if total_weight > 1e-9:
+                for row in real_sells:
+                    weight = abs(float(row.get("shares") or 0))
+                    sell_dividends[row["id"]] += residual * weight / total_weight
+                open_dividends[key] += residual * current_shares / total_weight
+
+    return {
+        "sell_dividends": sell_dividends,
+        "open_dividends": open_dividends,
+        "effective_totals": effective_totals,
+        "current_position_keys": set(holdings),
+    }
+
+
 @app.route("/api/gains-losses/summary", methods=["GET"])
 def gains_losses_summary():
     """Unified unrealized + realized gains/losses with price-only and total (price+divs) columns."""
@@ -22604,6 +23763,29 @@ def gains_losses_summary():
     ).fetchall()
     udf = pd.DataFrame([dict(r) for r in rows])
 
+    dividend_allocation = _gains_losses_dividend_allocation(
+        conn,
+        set(holding_profile_ids) | set(transaction_profile_ids),
+    )
+    allocated_open_by_ticker = {}
+    allocated_open_tickers = set()
+    holding_profile_id_set = set(holding_profile_ids)
+    for key in dividend_allocation["current_position_keys"]:
+        ticker, allocated_profile_id = key
+        if allocated_profile_id not in holding_profile_id_set:
+            continue
+        if key in dividend_allocation["effective_totals"]:
+            allocated_open_tickers.add(ticker)
+            allocated_open_by_ticker[ticker] = (
+                allocated_open_by_ticker.get(ticker, 0.0)
+                + dividend_allocation["open_dividends"].get(key, 0.0)
+            )
+    if not udf.empty and allocated_open_tickers:
+        allocated_mask = udf["ticker"].isin(allocated_open_tickers)
+        udf.loc[allocated_mask, "total_divs_received"] = (
+            udf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
+        )
+
     # Enrich category names
     if not udf.empty:
         try:
@@ -22643,9 +23825,9 @@ def gains_losses_summary():
 
     # 2) Transactions-based SELL records for the selected account scope.
     txn_sell_rows = conn.execute(
-        f"""SELECT t.ticker, t.profile_id, t.price_per_share AS sell_price,
-                  t.shares AS shares_sold, t.transaction_date AS sell_date,
-                  t.realized_gain, t.fees, t.notes
+        f"""SELECT t.id AS sell_txn_id, t.ticker, t.profile_id, t.price_per_share AS sell_price,
+                   t.shares AS shares_sold, t.transaction_date AS sell_date,
+                   t.realized_gain, t.fees, t.notes
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
@@ -22653,26 +23835,18 @@ def gains_losses_summary():
         transaction_profile_ids,
     ).fetchall()
     if txn_sell_rows:
-        # Look up total_divs_received per ticker/profile from dividends table
-        div_lookup = {}
-        div_rows = conn.execute(
-            "SELECT ticker, profile_id, total_divs_received FROM dividends"
-        ).fetchall()
-        for dr in div_rows:
-            dr = dict(dr)
-            div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
-
         txn_rows = []
         for tr in txn_sell_rows:
             tr = dict(tr)
+            if _is_transfer_txn(tr.get("notes")):
+                continue
             sp = float(tr.get("sell_price") or 0)
             sh = float(tr.get("shares_sold") or 0)
             rg = float(tr.get("realized_gain") or 0)
-            fees = float(tr.get("fees") or 0)
             proceeds = sp * sh
-            cost = proceeds - rg + fees
+            cost = proceeds - rg
             bp = cost / sh if sh else 0
-            divs = div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            divs = dividend_allocation["sell_dividends"].get(tr["sell_txn_id"], 0.0)
             txn_rows.append({
                 "ticker": tr["ticker"],
                 "buy_price": bp,
@@ -22682,8 +23856,9 @@ def gains_losses_summary():
                 "divs_received": divs,
                 "notes": tr.get("notes") or "",
             })
-        txn_df = pd.DataFrame(txn_rows)
-        rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
+        if txn_rows:
+            txn_df = pd.DataFrame(txn_rows)
+            rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
 
     conn.close()
 
@@ -22904,6 +24079,29 @@ def gains_losses_chart():
         conn.close()
         return jsonify({"error": "No portfolio data"}), 404
 
+    dividend_allocation = _gains_losses_dividend_allocation(
+        conn,
+        set(holding_profile_ids) | set(transaction_profile_ids),
+    )
+    allocated_open_by_ticker = {}
+    allocated_open_tickers = set()
+    holding_profile_id_set = set(holding_profile_ids)
+    for key in dividend_allocation["current_position_keys"]:
+        ticker, allocated_profile_id = key
+        if allocated_profile_id not in holding_profile_id_set:
+            continue
+        if key in dividend_allocation["effective_totals"]:
+            allocated_open_tickers.add(ticker)
+            allocated_open_by_ticker[ticker] = (
+                allocated_open_by_ticker.get(ticker, 0.0)
+                + dividend_allocation["open_dividends"].get(key, 0.0)
+            )
+    if allocated_open_tickers:
+        allocated_mask = hdf["ticker"].isin(allocated_open_tickers)
+        hdf.loc[allocated_mask, "total_divs_received"] = (
+            hdf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
+        )
+
     # Category / sub-category filter
     if cat_ids or sub_ids:
         try:
@@ -22960,8 +24158,8 @@ def gains_losses_chart():
 
     # Also include SELL transactions for the selected account scope.
     txn_sell = conn.execute(
-        f"""SELECT t.ticker, t.profile_id, t.price_per_share, t.shares,
-                  t.transaction_date, t.realized_gain
+        f"""SELECT t.id AS sell_txn_id, t.ticker, t.profile_id, t.price_per_share, t.shares,
+                   t.transaction_date, t.realized_gain, t.notes
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
@@ -22969,20 +24167,14 @@ def gains_losses_chart():
            ORDER BY t.transaction_date""",
         transaction_profile_ids,
     ).fetchall()
-    # Look up dividends for total G/L
-    chart_div_lookup = {}
-    chart_div_rows = conn.execute(
-        "SELECT ticker, profile_id, total_divs_received FROM dividends"
-    ).fetchall()
-    for dr in chart_div_rows:
-        dr = dict(dr)
-        chart_div_lookup[(dr["ticker"], dr["profile_id"])] = float(dr.get("total_divs_received") or 0)
 
     for tr in txn_sell:
         tr = dict(tr)
+        if _is_transfer_txn(tr.get("notes")):
+            continue
         try:
             rg = float(tr.get("realized_gain") or 0)
-            divs = chart_div_lookup.get((tr["ticker"], tr["profile_id"]), 0)
+            divs = dividend_allocation["sell_dividends"].get(tr["sell_txn_id"], 0.0)
             realized_events.append({
                 "date": tr["transaction_date"], "ticker": tr["ticker"],
                 "price_gl": round(rg, 2), "total_gl": round(rg + divs, 2),
@@ -24528,6 +25720,8 @@ def etf_screen_data():
                     official_snapshot = _fetch_official_distribution_snapshot(dl_sym, description_text)
                 except Exception:
                     official_snapshot = None
+            if official_snapshot and official_snapshot.get("freq"):
+                distribution_frequency = official_snapshot.get("freq")
             if official_snapshot and official_snapshot.get("has_dividend"):
                 official_source = official_snapshot.get("source") or "Fund Site"
                 official_history = official_snapshot.get("history")
@@ -24601,7 +25795,11 @@ def etf_screen_data():
                                 continue
                         if distribution_history:
                             distribution_source = "Yahoo Finance"
-                            distribution_frequency = freq_code or _div_calc_infer_frequency(yahoo_history)
+                            distribution_frequency = (
+                                distribution_frequency
+                                or freq_code
+                                or _div_calc_infer_frequency(yahoo_history)
+                            )
                 except Exception:
                     pass
             try:
@@ -24877,7 +26075,9 @@ def _build_cal_events():
             "pay_estimated": pay_estimated,
         })
 
-    events.sort(key=lambda e: e["pay_date"])
+    # Calendar cards lead with the ex-dividend date, so keep the grid in that
+    # chronological order rather than ordering by the (secondary) pay date.
+    events.sort(key=lambda e: (e["date"], e["ticker"]))
     _cache_set(_DIVIDEND_CALENDAR_CACHE, cache_key, events)
     return events
 
@@ -25447,13 +26647,8 @@ def _build_earnings_events():
             except Exception:
                 pass
 
-    # Upcoming first (soonest first), then past (most recent first).
-    def _sort_key(ev):
-        if ev["is_upcoming"]:
-            return (0, ev["days_until"] if ev["days_until"] is not None else 9999)
-        return (1, -datetime.fromisoformat(ev["date"]).toordinal())
-
-    events.sort(key=_sort_key)
+    # Every calendar grid progresses from earlier to later dates, left to right.
+    events.sort(key=lambda ev: (ev["date"], ev["ticker"]))
     _cache_set(_EARNINGS_CALENDAR_CACHE, cache_key, events)
     return events
 
@@ -40688,6 +41883,9 @@ def cef_scan():
 
 
 register_options_routes(app)
+register_option_dashboard_routes(app, download_history=_chunked_yf_download)
+register_diversification_routes(app)
+register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)
 register_bear_put_spread_scanner_routes(app)
@@ -40696,6 +41894,10 @@ register_bear_call_spread_scanner_routes(app)
 register_iron_condor_scanner_routes(app)
 register_unbalanced_put_condor_scanner_routes(app)
 register_unbalanced_butterfly_scanner_routes(app)
+register_four_eight_eight_scanner_routes(app)
+register_road_trip_butterfly_scanner_routes(app)
+register_sixty_forty_twenty_fly_scanner_routes(app)
+register_iron_butterfly_scanner_routes(app)
 
 
 # ── Portfolio Growth 2 ──────────────────────────────────────────────────────────
@@ -42148,6 +43350,13 @@ if __name__ == "__main__":
     conn = get_connection()
     try:
         ensure_tables_exist(conn)
+        # Built-in fund issuer registry, economic exposures and wrapper
+        # definitions.  A freshly installed copy has none of these until they
+        # are seeded, which is what made the X-Ray screen report every position
+        # as "no holdings data" on a new machine while a developer's long-lived
+        # database looked fine.
+        for _seed_name, _seed_problem in bootstrap_diversification(conn).items():
+            print(f"Fund look-through {_seed_name} seed failed: {_seed_problem}")
     finally:
         conn.close()
     app.run(debug=not is_packaged, port=5001, use_reloader=False)

@@ -23,8 +23,47 @@ const HOLDINGS_COLUMN_PREF_KEY = 'dashboard_holdings_visible_columns_v1'
 // Ticker → Purchased pinned while the rest scroll under them.
 const FROZEN_HOLDING_COLS = 5
 const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
+// Mirrors grading.ABSOLUTE_MIN_RATIO_OBSERVATIONS — the shortest window the
+// backend will annualize a risk ratio over. Only used to explain the 7D tab.
+const SHORT_WINDOW_MIN_TRADING_DAYS = 15
+const OVERVIEW_RETURN_MODE_KEY = 'dashboard_overview_return_mode_v1'
+const NAV_RETURN_MODE_KEY = 'dashboard_nav_return_mode_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
+const IRR_EXCLUSIONS_KEY_PREFIX = 'dashboard_irr_exclusions_v1_'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
+
+const normalizeIrrExclusions = tickers => [...new Set((tickers || [])
+  .map(ticker => String(ticker || '').trim().toUpperCase())
+  .filter(Boolean))].sort()
+
+const readIrrExclusions = selection => {
+  if (typeof window === 'undefined' || !selection) return []
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(`${IRR_EXCLUSIONS_KEY_PREFIX}${selection}`) || '[]')
+    return Array.isArray(parsed) ? normalizeIrrExclusions(parsed) : []
+  } catch {
+    return []
+  }
+}
+
+const persistIrrExclusions = (selection, tickers) => {
+  if (typeof window === 'undefined' || !selection) return
+  try {
+    window.localStorage.setItem(
+      `${IRR_EXCLUSIONS_KEY_PREFIX}${selection}`,
+      JSON.stringify(normalizeIrrExclusions(tickers)),
+    )
+  } catch {
+    // best-effort
+  }
+}
+
+const portfolioValuePath = (selection, tickers = readIrrExclusions(selection)) => {
+  const exclusions = normalizeIrrExclusions(tickers)
+  if (!exclusions.length) return '/api/portfolio-value'
+  const params = new URLSearchParams({ irr_exclude: exclusions.join(',') })
+  return `/api/portfolio-value?${params}`
+}
 
 const DEFAULT_HOLDINGS_COLUMN_IDS = [
   'ticker',
@@ -112,6 +151,38 @@ const persistHoldingColumnPreference = (ids) => {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(HOLDINGS_COLUMN_PREF_KEY, JSON.stringify(ids))
+  } catch {}
+}
+
+const readOverviewReturnMode = () => {
+  if (typeof window === 'undefined') return 'price'
+  try {
+    return window.localStorage.getItem(OVERVIEW_RETURN_MODE_KEY) === 'total' ? 'total' : 'price'
+  } catch {
+    return 'price'
+  }
+}
+
+const persistOverviewReturnMode = (mode) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(OVERVIEW_RETURN_MODE_KEY, mode)
+  } catch {}
+}
+
+const readNavReturnMode = () => {
+  if (typeof window === 'undefined') return 'price'
+  try {
+    return window.localStorage.getItem(NAV_RETURN_MODE_KEY) === 'total' ? 'total' : 'price'
+  } catch {
+    return 'price'
+  }
+}
+
+const persistNavReturnMode = (mode) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(NAV_RETURN_MODE_KEY, mode)
   } catch {}
 }
 
@@ -257,12 +328,13 @@ function DismissibleBanner({ storageKey, signature, collapsedContent, children }
   )
 }
 
-function SummaryCard({ label, value, sub, color, className, title }) {
+function SummaryCard({ label, value, sub, color, className, title, action }) {
   return (
     <div className={`summary-card ${className || ''}`} title={title}>
       <div className="summary-label">{label}</div>
       <div className="summary-value" style={color ? { color } : undefined}>{value}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+      {action && <div style={{ marginTop: '0.45rem' }}>{action}</div>}
     </div>
   )
 }
@@ -340,6 +412,10 @@ function UpcomingDividends({ events }) {
     )
   }
 
+  const sortedEvents = [...events].sort((a, b) => (
+    (a.ex_date || '').localeCompare(b.ex_date || '')
+    || (a.ticker || '').localeCompare(b.ticker || '')
+  ))
   const totalEst = events.reduce((s, e) => s + e.est_payment, 0)
 
   return (
@@ -349,7 +425,7 @@ function UpcomingDividends({ events }) {
         <span style={{ color: 'var(--pos)', fontWeight: 700, fontSize: '0.95rem' }}>Est. Total: {fmt(totalEst)}</span>
       </div>
       <div className="upcoming-grid">
-        {events.map((e, i) => (
+        {sortedEvents.map((e, i) => (
           <div key={i} className="upcoming-event" style={{ borderLeft: `3px solid ${e.color}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>{e.ticker}</span>
@@ -372,13 +448,67 @@ function UpcomingDividends({ events }) {
   )
 }
 
+// Per-holding pieces behind the Portfolio overview's two return views. Price
+// return is just value − invested; total return adds lifetime dividends and
+// gains already realized on trimmed shares, over the same invested-cost floor
+// the holdings table uses (see backend _apply_basis_mode_to_holdings).
+const overviewReturnParts = (h) => {
+  const value = Number(h?.current_value) || 0
+  const invested = Number(h?.purchase_value) || 0
+  // Use the backend's gain_or_loss (recomputed against the selected basis) so
+  // these rows match the holdings table exactly; value − invested drifts by a
+  // few cents because price_paid is stored rounded.
+  const gain = invested > 0 && Number.isFinite(Number(h?.gain_or_loss))
+    ? Number(h.gain_or_loss)
+    : value - invested
+  return {
+    value,
+    invested,
+    gain,
+    income: Number(h?.total_return_divs_component ?? h?.total_divs_received) || 0,
+    realized: Number(h?.total_return_realized_component) || 0,
+    trBasis: Number(h?.total_return_basis || h?.purchase_value) || 0,
+  }
+}
+
+const addReturnParts = (bucket, parts) => {
+  bucket.value += Number(parts.value) || 0
+  bucket.invested += Number(parts.invested) || 0
+  bucket.gain += Number(parts.gain ?? ((Number(parts.value) || 0) - (Number(parts.invested) || 0))) || 0
+  bucket.income += Number(parts.income) || 0
+  bucket.realized += Number(parts.realized) || 0
+  bucket.trBasis += Number(parts.trBasis) || Number(parts.invested) || 0
+  bucket.count += 1
+  return bucket
+}
+
+const emptyReturnBucket = (name) => ({ name, value: 0, invested: 0, gain: 0, income: 0, realized: 0, trBasis: 0, count: 0 })
+
+const sumReturnParts = (name, items) => items.reduce(addReturnParts, emptyReturnBucket(name))
+
+// Gain shown for one row, in the selected mode. Groups cached before this
+// feature existed have no income/basis fields, so both fall back to the
+// price-return numbers rather than rendering blanks.
+const groupGain = (g, mode) => {
+  const priceGain = Number(g.gain ?? ((Number(g.value) || 0) - (Number(g.invested) || 0))) || 0
+  if (mode !== 'total') {
+    const basis = Number(g.invested) || 0
+    return { gain: priceGain, income: 0, realized: 0, pct: basis ? (priceGain / basis) * 100 : 0 }
+  }
+  const income = Number(g.income) || 0
+  const realized = Number(g.realized) || 0
+  const basis = Number(g.trBasis) || Number(g.invested) || 0
+  const gain = priceGain + income + realized
+  return { gain, income, realized, pct: basis ? (gain / basis) * 100 : 0 }
+}
+
 const DONUT_COLORS = [
   '#4fc3f7', '#81c784', '#ffb74d', '#e57373', '#ba68c8',
   '#4dd0e1', '#aed581', '#fff176', '#f06292', '#7986cb',
   '#90a4ae', '#a1887f',
 ]
 
-function PortfolioOverview({ groups, categories, totalValue, categoryId, subcategoryId, onFilterChange }) {
+function PortfolioOverview({ groups, categories, totalValue, categoryId, subcategoryId, onFilterChange, returnMode, onReturnModeChange }) {
   const chartRef = React.useRef(null)
   const { isDark } = useTheme()
   const catId = categoryId ?? null
@@ -399,20 +529,18 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
     if (subId != null) {
       return selectedCat.tickers
         .filter(t => String(t.subcategory_id ?? '') === String(subId))
-        .map(t => ({ name: t.ticker, value: t.value, invested: t.invested, count: 1 }))
+        .map(t => sumReturnParts(t.ticker, [t]))
         .sort((a, b) => b.value - a.value)
     }
 
     const subcats = selectedCat.subcategories || []
     if (subcats.length) {
       const bySub = new Map()
-      subcats.forEach(s => bySub.set(s.id, { name: s.name, value: 0, invested: 0, count: 0 }))
-      const unassigned = { name: 'Unassigned', value: 0, invested: 0, count: 0 }
+      subcats.forEach(s => bySub.set(s.id, emptyReturnBucket(s.name)))
+      const unassigned = emptyReturnBucket('Unassigned')
       selectedCat.tickers.forEach(t => {
         const bucket = (t.subcategory_id != null && bySub.get(t.subcategory_id)) || unassigned
-        bucket.value += t.value
-        bucket.invested += t.invested
-        bucket.count += 1
+        addReturnParts(bucket, t)
       })
       return [...bySub.values(), unassigned]
         .filter(g => g.count > 0)
@@ -420,7 +548,7 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
     }
 
     return selectedCat.tickers
-      .map(t => ({ name: t.ticker, value: t.value, invested: t.invested, count: 1 }))
+      .map(t => sumReturnParts(t.ticker, [t]))
       .sort((a, b) => b.value - a.value)
   }, [groups, selectedCat, subId])
 
@@ -515,12 +643,14 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
     borderRadius: 6, padding: '0.3rem 0.5rem', fontSize: '0.8rem',
   }
   const canFilter = categories && categories.length > 0
+  const isTotalMode = returnMode === 'total'
 
   return (
     <div className="portfolio-overview card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
       <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.75rem', fontSize: '1rem' }}>Portfolio</h3>
-      {canFilter && (
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+        {canFilter && (
+          <>
           <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Category:</span>
           <select
             value={catId ?? ''}
@@ -556,8 +686,19 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
               Clear
             </button>
           )}
-        </div>
-      )}
+          </>
+        )}
+        <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Gain:</span>
+        <select
+          value={isTotalMode ? 'total' : 'price'}
+          onChange={e => onReturnModeChange?.(e.target.value === 'total' ? 'total' : 'price')}
+          style={selectStyle}
+          title="Price return counts share-price change only. Total return adds lifetime dividends received and gains already realized on shares that were sold."
+        >
+          <option value="price">Price return</option>
+          <option value="total">Total return (with dividends)</option>
+        </select>
+      </div>
       <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
         <div ref={chartRef} style={{ width: 280, flexShrink: 0 }} />
         <div style={{ flex: 1, overflowX: 'auto', minWidth: 0 }}>
@@ -566,7 +707,14 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Name</th>
                 <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Value/Invested</th>
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Gain</th>
+                <th
+                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}
+                  title={isTotalMode
+                    ? 'Price change + lifetime dividends received + gains realized on shares already sold'
+                    : 'Share-price change only — dividends received are excluded'}
+                >
+                  {isTotalMode ? 'Gain (total return)' : 'Gain (price return)'}
+                </th>
                 {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Target</th>}
                 <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Allocation</th>
                 {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Diff</th>}
@@ -575,8 +723,7 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
             <tbody>
               {displayGroups.map((g, i) => {
                 const color = DONUT_COLORS[i % DONUT_COLORS.length]
-                const gain = g.value - g.invested
-                const gainPct = g.invested ? ((gain / g.invested) * 100) : 0
+                const { gain, income, realized, pct: gainPct } = groupGain(g, returnMode)
                 const alloc = totalValue ? ((g.value / totalValue) * 100) : 0
                 const target = Number(g.target_pct) || 0
                 const diff = showTargetRing && target > 0 ? alloc - target : null
@@ -600,6 +747,11 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                       <div style={{ color: gain >= 0 ? 'var(--pos)' : 'var(--neg)', fontSize: '0.75rem' }}>
                         {gain >= 0 ? '▲' : '▼'} {Math.abs(gainPct).toFixed(2)}%
                       </div>
+                      {isTotalMode && (income > 0 || realized !== 0) && (
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>
+                          incl. {fmt(income)} divs{realized !== 0 ? ` · ${fmt(realized)} realized` : ''}
+                        </div>
+                      )}
                     </td>
                     {showTargetRing && (
                       <td style={{ textAlign: 'right', padding: '0.5rem', color: 'var(--text-dim)' }}>
@@ -770,13 +922,14 @@ export default function Dashboard() {
   const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
   const [gradeCustomEnd, setGradeCustomEnd] = useState(initialGradeCustomDates.end)
   const [gradeRefreshToken, setGradeRefreshToken] = useState(0)
-  const gradePeriodRef = useRef(gradePeriod)
-  const gradePeriodEffectReady = useRef(false)
-  gradePeriodRef.current = gradePeriod
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
   const [portfolioValue, setPortfolioValue] = useState(null)
+  const [irrExcludedTickers, setIrrExcludedTickers] = useState([])
+  const [irrExclusionDraft, setIrrExclusionDraft] = useState([])
+  const [irrExclusionOpen, setIrrExclusionOpen] = useState(false)
+  const [irrExclusionLoading, setIrrExclusionLoading] = useState(false)
   const [brokerImportStatus, setBrokerImportStatus] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
@@ -790,9 +943,11 @@ export default function Dashboard() {
   const [overviewCategories, setOverviewCategories] = useState(null)
   const [overviewCategoryId, setOverviewCategoryId] = useState(null)
   const [overviewSubcategoryId, setOverviewSubcategoryId] = useState(null)
+  const [overviewReturnMode, setOverviewReturnMode] = useState(readOverviewReturnMode)
   const [sp500, setSp500] = useState(null)
   const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
+  const [navReturnMode, setNavReturnMode] = useState(readNavReturnMode)
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
@@ -850,6 +1005,10 @@ export default function Dashboard() {
 
   useEffect(() => {
     let stale = false
+    const selectionExclusions = readIrrExclusions(selection)
+    setIrrExcludedTickers(selectionExclusions)
+    setIrrExclusionDraft(selectionExclusions)
+    setIrrExclusionOpen(false)
     const cached = readDashboardCache(dashboardCacheKey)
     if (cached) {
       // Holding rows are editable and are also changed by imports/refreshes.
@@ -857,7 +1016,13 @@ export default function Dashboard() {
       // /api/holdings read is the source of truth for every editable field.
       setHoldings([])
       setIncomeSummary(cached.incomeSummary || null)
-      setPortfolioValue(cached.portfolioValue || null)
+      const cachedExclusions = normalizeIrrExclusions(cached.portfolioValue?.irr_details?.excluded_tickers)
+      const savedExclusions = readIrrExclusions(selection)
+      setPortfolioValue(
+        JSON.stringify(cachedExclusions) === JSON.stringify(savedExclusions)
+          ? (cached.portfolioValue || null)
+          : null,
+      )
       setUpcomingDivs(cached.upcomingDivs || [])
       setTickerGrades(cached.tickerGrades || {})
       setTickerRisk(cached.tickerRisk || {})
@@ -910,7 +1075,7 @@ export default function Dashboard() {
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
             .catch(() => {})
-          pf('/api/portfolio-value')
+          pf(portfolioValuePath(selection))
             .then(safeJson)
             .then(d => { if (!stale) setPortfolioValue(d) })
             .catch(() => {})
@@ -951,16 +1116,12 @@ export default function Dashboard() {
                       ticker: t.ticker,
                       description: t.description || holdingMap[t.ticker]?.description || '',
                       subcategory_id: t.subcategory_id ?? null,
-                      value: holdingMap[t.ticker]?.current_value || 0,
-                      invested: holdingMap[t.ticker]?.purchase_value || 0,
+                      ...overviewReturnParts(holdingMap[t.ticker]),
                     })),
                 }))
                 const groups = enrichedCats
                   .map(c => ({
-                    name: c.name,
-                    value: c.tickers.reduce((s, t) => s + t.value, 0),
-                    invested: c.tickers.reduce((s, t) => s + t.invested, 0),
-                    count: c.tickers.length,
+                    ...sumReturnParts(c.name, c.tickers),
                     target_pct: c.target_pct,
                   }))
                   .filter(g => g.count > 0)
@@ -973,10 +1134,8 @@ export default function Dashboard() {
                 data.forEach(h => {
                   if (h.quantity <= 0) return
                   const ct = h.classification_type || 'Other'
-                  if (!byType[ct]) byType[ct] = { name: ct, value: 0, invested: 0, count: 0 }
-                  byType[ct].value += h.current_value || 0
-                  byType[ct].invested += h.purchase_value || 0
-                  byType[ct].count += 1
+                  if (!byType[ct]) byType[ct] = emptyReturnBucket(ct)
+                  addReturnParts(byType[ct], overviewReturnParts(h))
                 })
                 setOverviewGroups(Object.values(byType).sort((a, b) => b.value - a.value))
                 setOverviewCategories(null)
@@ -1013,21 +1172,13 @@ export default function Dashboard() {
               }
             })
             .catch(() => {})
-          setTickerRiskLoading(true)
-          pf('/api/portfolio-summary/data')
-            .then(safeJson)
-            .then(g => {
-              if (stale || !g) return
-              if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-              if (g.ticker_risk) setTickerRisk(g.ticker_risk)
-              if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
-              // {} is truthy — only overwrite when grades were actually computed,
-              // so an empty/failed response never blanks good grade tiles.
-              if (gradePeriodRef.current === '1y' && g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
-            })
-            .catch(() => {})
-            .finally(() => { if (!stale) setTickerRiskLoading(false) })
-
+          // Grades are NOT fetched here. The grade-period effect below owns every
+          // /api/portfolio-summary/data call so exactly one window is ever in
+          // flight: this effect used to fire its own un-parameterised (1Y)
+          // request alongside the period-scoped one, and because yfinance keys
+          // its download cache on ticker alone, the two crossed — pick 6M while
+          // the 1Y request was still running and both came back holding 1Y
+          // prices, so the cards never recalculated for the period you clicked.
           setRefreshStatus('Updating prices & dividends...')
           runMarketRefresh({ statusMessage: 'Updating prices & dividends...' })
             .then(r => {
@@ -1037,7 +1188,7 @@ export default function Dashboard() {
               return Promise.all([
                 pf('/api/holdings').then(safeJson),
                 pf('/api/income-summary').then(safeJson).catch(() => null),
-                pf('/api/portfolio-value').then(safeJson).catch(() => null),
+                pf(portfolioValuePath(selection)).then(safeJson).catch(() => null),
               ])
             })
             .then(result => {
@@ -1047,25 +1198,11 @@ export default function Dashboard() {
               setHoldings(normalizeDashboardHoldings(updated))
               if (summary) setIncomeSummary(summary)
               if (valueSummary) setPortfolioValue(valueSummary)
+              // Prices just moved, so re-grade — but hand the work to the
+              // grade-period effect rather than issuing a second request here,
+              // whatever period is selected.
               setGradeStatus('Loading risk grades...')
-              if (gradePeriodRef.current !== '1y') setGradeRefreshToken(token => token + 1)
-              setTickerRiskLoading(true)
-              return pf('/api/portfolio-summary/data')
-                .then(safeJson)
-                .then(g => {
-                  if (stale || !g) return
-                  if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-                  if (g.ticker_risk) setTickerRisk(g.ticker_risk)
-                  if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
-                  // {} is truthy — only overwrite when grades were actually
-                  // computed, so the post-refresh fetch can't clobber the good
-                  // grades the first fetch already set with an empty response.
-                  if (gradePeriodRef.current === '1y' && g.portfolio_grade && Object.keys(g.portfolio_grade).length) setPortfolioGrade(g.portfolio_grade)
-                  setGradeStatus('Grades loaded.')
-                  setTimeout(() => { if (!stale) setGradeStatus(null) }, 3000)
-                })
-                .catch(() => { if (!stale) setGradeStatus('Grade loading failed.') })
-                .finally(() => { if (!stale) setTickerRiskLoading(false) })
+              setGradeRefreshToken(token => token + 1)
             })
             .catch(() => {
               if (!stale) {
@@ -1079,14 +1216,19 @@ export default function Dashboard() {
     return () => { stale = true }
   }, [pf, selection, dashboardCacheKey, runMarketRefresh])
 
+  // Depend on the boolean, not the array: this tracks "is there anything to
+  // grade", which flips once per account, where `holdings` is replaced again on
+  // every market refresh and would re-fetch grades each time.
+  const hasHoldings = holdings.length > 0
+
   useEffect(() => {
-    // The existing Dashboard load owns the initial 1Y request. Subsequent
-    // period, account, custom-range, or market-refresh changes are handled
-    // here without reloading every unrelated Dashboard data source.
-    if (!gradePeriodEffectReady.current) {
-      gradePeriodEffectReady.current = true
-      return undefined
-    }
+    // Sole owner of /api/portfolio-summary/data — the initial load as well as
+    // every period, account, custom-range, and market-refresh change. Keeping
+    // it in one effect means only one grade window is ever in flight, and the
+    // AbortController below cancels the previous one the moment you switch
+    // periods, so a slow response can never land on top of a newer selection.
+    // It re-fetches without reloading any unrelated Dashboard data source.
+    if (!hasHoldings) return undefined
     if (gradePeriod === 'custom' && (
       !gradeCustomStart
       || !gradeCustomEnd
@@ -1104,7 +1246,18 @@ export default function Dashboard() {
     addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
     setGradeStatus('Loading risk grades...')
     setTickerRiskLoading(true)
-    setPortfolioGrade({})
+    // Drop the displayed grade only when it belongs to a different window —
+    // showing one period's ratios under another period's label is the bug this
+    // screen had. A plain refresh of the same window keeps its cards up (and
+    // the cached grade visible on first paint) instead of flashing to dashes.
+    setPortfolioGrade(previous => {
+      if (!previous || previous.period_key !== gradePeriod) return {}
+      if (gradePeriod === 'custom' && (
+        previous.requested_start_date !== gradeCustomStart
+        || previous.requested_end_date !== gradeCustomEnd
+      )) return {}
+      return previous
+    })
     pf(`/api/portfolio-summary/data?${params}`, { signal: controller.signal })
       .then(safeJson)
       .then(g => {
@@ -1134,6 +1287,7 @@ export default function Dashboard() {
     gradeCustomStart,
     gradeCustomEnd,
     gradeRefreshToken,
+    hasHoldings,
     selection,
     pf,
   ])
@@ -1339,6 +1493,68 @@ export default function Dashboard() {
   const dailyChangeTitle = dailyChange?.holdings_total > dailyChange?.holdings_covered
     ? `Price move from the previous market close. Based on ${dailyChange.holdings_covered} of ${dailyChange.holdings_total} holdings with available prices.`
     : 'Price move from the previous market close, based on current share counts.'
+  const irrDetails = portfolioValue?.irr_details || null
+  const portfolioIrr = portfolioValue?.irr == null ? null : Number(portfolioValue.irr)
+  const hasPortfolioIrr = Number.isFinite(portfolioIrr)
+  const unreconciledIrrValuePct = Number(irrDetails?.unreconciled_current_value_pct)
+  const excludedIrrValuePct = Number(irrDetails?.excluded_current_value_pct)
+  const appliedIrrExclusions = useMemo(
+    () => normalizeIrrExclusions(irrDetails?.excluded_tickers || irrExcludedTickers),
+    [irrDetails?.excluded_tickers, irrExcludedTickers],
+  )
+  const irrSub = hasPortfolioIrr && irrDetails?.start_date
+    ? `Money-weighted${Number.isFinite(excludedIrrValuePct) && excludedIrrValuePct > 0 ? ` · ${excludedIrrValuePct.toFixed(1)}% excluded` : ''} · since ${shortDate(irrDetails.start_date)}`
+    : irrDetails?.coverage_complete === false && Number.isFinite(unreconciledIrrValuePct) && unreconciledIrrValuePct > 0
+      ? `${unreconciledIrrValuePct.toFixed(1)}% of value lacks reconciled history`
+      : irrDetails?.coverage_complete === false
+        ? 'Cash-flow history is incomplete'
+      : null
+  const irrTitle = hasPortfolioIrr
+    ? `Annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value. Idle account cash is excluded.${appliedIrrExclusions.length ? ` Filtered result excludes: ${appliedIrrExclusions.join(', ')}.` : ''}`
+    : irrDetails?.reason || 'Complete dated investment cash flows are required to calculate IRR.'
+  const irrExclusionOptions = useMemo(() => {
+    const reasonsByTicker = new Map()
+    const addReason = (ticker, reason) => {
+      const key = String(ticker || '').trim().toUpperCase()
+      if (!key) return
+      const reasons = reasonsByTicker.get(key) || []
+      if (reason && !reasons.includes(reason)) reasons.push(reason)
+      reasonsByTicker.set(key, reasons)
+    }
+    ;(irrDetails?.missing_transaction_tickers || []).forEach(ticker => addReason(ticker, 'No complete trade history'))
+    ;(irrDetails?.invalid_transaction_tickers || []).forEach(ticker => addReason(ticker, 'Missing or future trade date'))
+    ;(irrDetails?.zero_value_transaction_tickers || []).forEach(ticker => addReason(ticker, 'Trade has no cash value'))
+    ;(irrDetails?.unpaired_transfer_tickers || []).forEach(ticker => addReason(ticker, 'Transfer history is incomplete'))
+    ;(irrDetails?.share_mismatches || []).forEach(item => addReason(item.ticker, 'Trade shares do not match current shares'))
+    ;(irrDetails?.missing_dividend_tickers || []).forEach(item => addReason(item.ticker, `Missing ${fmt(item.missing_amount)} of dated dividends`))
+    appliedIrrExclusions.forEach(ticker => addReason(ticker, 'Currently excluded'))
+
+    const holdingByTicker = new Map(holdings.map(holding => [
+      String(holding.ticker || '').toUpperCase(),
+      holding,
+    ]))
+    return [...reasonsByTicker.entries()]
+      .map(([ticker, reasons]) => ({
+        ticker,
+        reasons,
+        description: holdingByTicker.get(ticker)?.description || '',
+        currentValue: Number(holdingByTicker.get(ticker)?.current_value || 0),
+      }))
+      .sort((a, b) => b.currentValue - a.currentValue || a.ticker.localeCompare(b.ticker))
+  }, [appliedIrrExclusions, holdings, irrDetails])
+
+  const applyIrrExclusions = useCallback(() => {
+    const next = normalizeIrrExclusions(irrExclusionDraft)
+    persistIrrExclusions(selection, next)
+    setIrrExcludedTickers(next)
+    setIrrExclusionOpen(false)
+    setIrrExclusionLoading(true)
+    pf(portfolioValuePath(selection, next))
+      .then(safeJson)
+      .then(setPortfolioValue)
+      .catch(() => {})
+      .finally(() => setIrrExclusionLoading(false))
+  }, [irrExclusionDraft, pf, selection])
 
   const filteredEnrichedHoldings = useMemo(() => {
     if (!filteredTickerSet) return enrichedHoldings
@@ -1809,8 +2025,13 @@ export default function Dashboard() {
   useEffect(() => {
     const el = navChartRef.current
     if (!el || !window.Plotly || navHistory.length < 1) return
+    const isTotalReturn = navReturnMode === 'total'
     const points = navHistory
-      .map(r => ({ date: r.date, value: Number(r.value) }))
+      .map(r => ({
+        date: r.date,
+        value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
+        dividends: Number(r.cumulative_dividends) || 0,
+      }))
       .filter(r => r.date && Number.isFinite(r.value))
     if (points.length < 1) return
 
@@ -1847,10 +2068,14 @@ export default function Dashboard() {
     const valueTrace = {
       x: dates, y: values,
       mode: singlePoint ? 'markers+text' : denseHistory ? 'lines' : 'lines+markers',
-      line: { color: '#7ecfff', width: 2 },
-      marker: { color: '#7ecfff', size: markerSize },
+      name: isTotalReturn ? 'Total Return' : 'Price Return',
+      line: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', width: 2 },
+      marker: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', size: markerSize },
       textposition: 'top center',
-      hovertemplate: '%{x|%b %d, %Y}<br>$%{y:,.2f}<extra></extra>',
+      customdata: points.map(point => point.dividends),
+      hovertemplate: isTotalReturn
+        ? '%{x|%b %d, %Y}<br>Total return value: $%{y:,.2f}<br>Dividends added: $%{customdata:,.2f}<extra></extra>'
+        : '%{x|%b %d, %Y}<br>Portfolio value: $%{y:,.2f}<extra></extra>',
     }
     if (singlePoint) {
       valueTrace.text = values.map(v => fmt(v))
@@ -1880,7 +2105,7 @@ export default function Dashboard() {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
       xaxis,
-      yaxis: { title: { text: 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
+      yaxis: { title: { text: isTotalReturn ? 'Value + Dividends ($)' : 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
       margin: { l: 90, r: 20, t: 10, b: 52 },
       height: 300,
       hovermode: 'x unified',
@@ -1897,7 +2122,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory, isDark])
+  }, [navHistory, navReturnMode, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -2239,7 +2464,7 @@ export default function Dashboard() {
         {formatPerformanceRange(
           portfolioGrade.actual_start_date,
           portfolioGrade.actual_end_date,
-        ) || 'Loading dates...'}
+        ) || (tickerRiskLoading ? 'Loading dates...' : 'Dates unavailable')}
         {portfolioGrade.requested_start_date
           && portfolioGrade.actual_start_date !== portfolioGrade.requested_start_date
           ? ` (requested from ${formatPerformanceRange(
@@ -2248,6 +2473,20 @@ export default function Dashboard() {
           )})`
           : ''}
         . These dates apply to the Portfolio Grade, beta, and risk-ratio cards below.
+        {/* A window this short can't carry the ratios — say so, rather than
+            leaving a strip of dashes that reads like a failed load. */}
+        {portfolioGrade.window_too_short && (
+          <>
+            {' '}
+            <strong style={{ color: 'var(--warning-money)' }}>
+              Only {portfolioGrade.window_observations ?? 0} trading{' '}
+              {portfolioGrade.window_observations === 1 ? 'day' : 'days'} in this window.
+            </strong>{' '}
+            The risk ratios annualize daily returns, so they need at least{' '}
+            {SHORT_WINDOW_MIN_TRADING_DAYS} trading days before they mean anything — pick a
+            longer period to grade this portfolio.
+          </>
+        )}
       </p>
 
       {/* Summary Cards Strip */}
@@ -2286,6 +2525,27 @@ export default function Dashboard() {
           color="var(--accent-bright)"
           sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
         />
+        <SummaryCard
+          label={appliedIrrExclusions.length ? 'Filtered IRR' : 'Portfolio IRR'}
+          value={irrExclusionLoading ? 'Updating…' : hasPortfolioIrr ? pct(portfolioIrr) : 'Unavailable'}
+          color={hasPortfolioIrr ? gradeColor(portfolioIrr) : undefined}
+          sub={irrSub}
+          title={irrTitle}
+          action={(irrExclusionOptions.length > 0 || appliedIrrExclusions.length > 0) ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ padding: '0.2rem 0.45rem', fontSize: '0.7rem' }}
+              disabled={irrExclusionLoading}
+              onClick={() => {
+                setIrrExclusionDraft(appliedIrrExclusions)
+                setIrrExclusionOpen(true)
+              }}
+            >
+              Manage exclusions
+            </button>
+          ) : null}
+        />
         <SummaryCard label="Avg Yield on Cost" value={pct(totals.avgYoc)} />
         <SummaryCard label="Current Yield" value={pct(totals.currentYield)} />
         {sp500 && (
@@ -2313,10 +2573,122 @@ export default function Dashboard() {
         )}
       </div>
 
+      {irrExclusionOpen && (
+        <div className="modal-overlay" onClick={() => setIrrExclusionOpen(false)}>
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="irr-exclusion-title"
+            onClick={event => event.stopPropagation()}
+            style={{ maxWidth: 760, maxHeight: '85vh', overflow: 'auto' }}
+          >
+            <h3 id="irr-exclusion-title" style={{ marginTop: 0, color: 'var(--accent-2)' }}>
+              Filter incomplete tickers from IRR
+            </h3>
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              A filtered IRR measures only the included, fully documented holdings. It is not the
+              IRR of the entire account. The Dashboard will label it <strong>Filtered IRR</strong> and
+              disclose the percentage of portfolio value excluded.
+            </div>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIrrExclusionDraft(irrExclusionOptions.map(option => option.ticker))}
+              >
+                Select all incomplete
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setIrrExclusionDraft([])}
+              >
+                Clear exclusions
+              </button>
+            </div>
+            <div style={{ display: 'grid', gap: '0.45rem' }}>
+              {irrExclusionOptions.map(option => {
+                const checked = irrExclusionDraft.includes(option.ticker)
+                return (
+                  <label
+                    key={option.ticker}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                      gap: '0.65rem',
+                      alignItems: 'start',
+                      padding: '0.6rem 0.7rem',
+                      border: '1px solid var(--border)',
+                      borderRadius: 6,
+                      background: checked ? 'var(--surface-inset)' : 'transparent',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => setIrrExclusionDraft(previous => checked
+                        ? previous.filter(ticker => ticker !== option.ticker)
+                        : normalizeIrrExclusions([...previous, option.ticker]))}
+                    />
+                    <span>
+                      <strong>{option.ticker}</strong>
+                      {option.description ? <span style={{ color: 'var(--text-dim)' }}> — {option.description}</span> : null}
+                      <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.76rem', marginTop: 2 }}>
+                        {option.reasons.join(' · ')}
+                      </span>
+                    </span>
+                    <span style={{ whiteSpace: 'nowrap', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                      {option.currentValue > 0 ? fmt(option.currentValue) : 'No current value'}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '1rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setIrrExclusionOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn-primary" onClick={applyIrrExclusions}>
+                Apply {irrExclusionDraft.length} exclusion{irrExclusionDraft.length === 1 ? '' : 's'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Portfolio Equity Curve */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.5rem' }}>
           <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
+          <div
+            role="group"
+            aria-label="Portfolio value chart return type"
+            style={{ display: 'flex', marginLeft: 'auto' }}
+          >
+            {[
+              { value: 'price', label: 'Price Return', title: 'Show recorded portfolio value without adding dividend payments' },
+              { value: 'total', label: 'Total Return', title: 'Add actual recorded dividend payments since the first chart date' },
+            ].map((option, index, options) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`btn btn-sm${navReturnMode === option.value ? ' btn-active' : ''}`}
+                style={{
+                  borderRadius: index === 0 ? '4px 0 0 4px' : index === options.length - 1 ? '0 4px 4px 0' : 0,
+                }}
+                aria-pressed={navReturnMode === option.value}
+                title={option.title}
+                onClick={() => {
+                  setNavReturnMode(option.value)
+                  persistNavReturnMode(option.value)
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
@@ -2461,6 +2833,11 @@ export default function Dashboard() {
           onFilterChange={(categoryId, subcategoryId) => {
             setOverviewCategoryId(categoryId)
             setOverviewSubcategoryId(subcategoryId)
+          }}
+          returnMode={overviewReturnMode}
+          onReturnModeChange={mode => {
+            setOverviewReturnMode(mode)
+            persistOverviewReturnMode(mode)
           }}
         />
       )}

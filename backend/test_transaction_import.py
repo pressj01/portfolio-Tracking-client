@@ -9,14 +9,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from transaction_import import (
     parse_etrade_transactions_xlsx,
     parse_fidelity_positions_xlsx,
+    parse_fidelity_transactions_xlsx,
     parse_generic_transactions,
     parse_schwab_csv,
     parse_shear_group_activity,
     parse_shear_group_positions,
+    parse_snowball_holdings_csv,
 )
 
 
 class TransactionImportParserTest(unittest.TestCase):
+    def test_snowball_holdings_reads_category_heading(self):
+        content = "\n".join([
+            "Holding,Holdings' name,Shares,Cost basis,Current value,Share price,Sector,Category",
+            "ARCC,Ares Capital,10,200,220,22,Financial Services,BDC",
+            "ADX,Adams Diversified Equity Fund,5,100,110,22,Funds,CORE EQUITY",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Snowball_Export_Holdings.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_snowball_holdings_csv(str(path), path.name)
+
+        self.assertEqual(
+            {position["ticker"]: position["category"] for position in result["positions"]},
+            {"ARCC": "BDC", "ADX": "CORE EQUITY"},
+        )
+
     def _write_etrade_all_transactions_csv(self, path):
         rows = [
             ["All Transactions Activity Types"],
@@ -189,6 +208,27 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["holdings"], 1)
         self.assertEqual(result["summary"]["filtered"], 0)
         self.assertEqual(result["positions"][0]["ticker"], "AVDV")
+
+    def test_fidelity_transactions_keeps_closed_position_dividend_history(self):
+        content = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '04/02/2025,Trust - Fidelity - No MM*,DIVIDEND RECEIVED as of 04/02/2025,OXLC,OXFORD LANE CAPITAL CORP,Cash,,,0,0,356.40',
+            '05/01/2025,Trust - Fidelity - No MM*,DIVIDEND RECEIVED as of 05/01/2025,OXLC,OXFORD LANE CAPITAL CORP,Cash,,,0,0,882.49',
+            '02/03/2026,Trust - Fidelity - No MM*,YOU SOLD SRV,SRV,S RV INC,Cash,-798,40.95,0,0,32678.10',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "History.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["summary"]["dividends"], 2)
+        self.assertEqual(result["summary"]["sells"], 1)
+        dividends = [txn for txn in result["transactions"] if txn["type"] == "DIVIDEND"]
+        self.assertEqual([txn["ticker"] for txn in dividends], ["OXLC", "OXLC"])
+        self.assertEqual([txn["date"] for txn in dividends], ["2025-04-02", "2025-05-01"])
+        self.assertEqual([txn["dividend_amount"] for txn in dividends], [356.40, 882.49])
 
     def test_generic_transactions_csv_parses_trades_dividends_and_drips(self):
         content = "\n".join([
