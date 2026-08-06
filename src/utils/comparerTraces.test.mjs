@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  COMPARER_SERIES_COLORS,
   comparerLogHoverData,
   comparerReturnModeLabel,
+  comparerSeriesColor,
   comparerStatsForMode,
   computeBlendTrace,
   selectComparerTraces,
@@ -147,4 +149,78 @@ test('preformats log-scale hover values to two decimal places', () => {
       ['-12.35%', '87.65'],
     ],
   )
+})
+
+// --- series palette --------------------------------------------------------
+// The predecessor was seven colors, so an eight-ticker comparison drew two
+// lines in the same blue. These guard the properties that fix earns.
+
+const srgb = hex => [0, 2, 4].map(i => parseInt(hex.slice(i + 1, i + 3), 16) / 255)
+const toLinear = c => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
+const linear = hex => srgb(hex).map(toLinear)
+
+function oklab(hex) {
+  const [r, g, b] = linear(hex)
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ]
+}
+
+// Euclidean distance in OKLab x100, the same measure the data-viz validator uses.
+function deltaE(a, b) {
+  const [l1, a1, b1] = oklab(a)
+  const [l2, a2, b2] = oklab(b)
+  return 100 * Math.hypot(l1 - l2, a1 - a2, b1 - b2)
+}
+
+function contrast(a, b) {
+  const lum = hex => { const [r, g, bl] = linear(hex); return 0.2126 * r + 0.7152 * g + 0.0722 * bl }
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+test('every series color is distinct', () => {
+  assert.equal(new Set(COMPARER_SERIES_COLORS).size, COMPARER_SERIES_COLORS.length)
+  assert.ok(COMPARER_SERIES_COLORS.length >= 14, 'palette carries at least 14 tickers')
+  COMPARER_SERIES_COLORS.forEach(hex => assert.match(hex, /^#[0-9a-f]{6}$/))
+})
+
+test('no two series colors collapse together for a full-color reader', () => {
+  let worst = [Infinity, '', '']
+  for (let a = 0; a < COMPARER_SERIES_COLORS.length; a += 1) {
+    for (let b = a + 1; b < COMPARER_SERIES_COLORS.length; b += 1) {
+      const d = deltaE(COMPARER_SERIES_COLORS[a], COMPARER_SERIES_COLORS[b])
+      if (d < worst[0]) worst = [d, COMPARER_SERIES_COLORS[a], COMPARER_SERIES_COLORS[b]]
+    }
+  }
+  assert.ok(worst[0] >= 15, `worst pair ${worst[1]}/${worst[2]} is only ΔE ${worst[0].toFixed(1)}, floor is 15`)
+})
+
+test('series colors read on both the dark and the light chart surface', () => {
+  // One palette serves both themes, and the ticker chips sit on white either way.
+  COMPARER_SERIES_COLORS.forEach(hex => {
+    assert.ok(contrast(hex, '#0e1117') >= 3, `${hex} is ${contrast(hex, '#0e1117').toFixed(2)}:1 on the dark surface`)
+    assert.ok(contrast(hex, '#ffffff') >= 3, `${hex} is ${contrast(hex, '#ffffff').toFixed(2)}:1 on white`)
+  })
+})
+
+test('assigns each ticker index its own slot, then shifts lightness per lap', () => {
+  const n = COMPARER_SERIES_COLORS.length
+  COMPARER_SERIES_COLORS.forEach((hex, i) => assert.equal(comparerSeriesColor(i), hex))
+  // A 15th ticker must not be handed back the 1st ticker's exact color.
+  assert.notEqual(comparerSeriesColor(n), comparerSeriesColor(0))
+  assert.notEqual(comparerSeriesColor(2 * n), comparerSeriesColor(0))
+  assert.notEqual(comparerSeriesColor(2 * n), comparerSeriesColor(n))
+  // Odd laps lighten, even laps darken.
+  const lum = hex => { const [r, g, b] = linear(hex); return 0.2126 * r + 0.7152 * g + 0.0722 * b }
+  assert.ok(lum(comparerSeriesColor(n)) > lum(comparerSeriesColor(0)))
+  assert.ok(lum(comparerSeriesColor(2 * n)) < lum(comparerSeriesColor(0)))
+  // Junk indices fall back to the first slot rather than emitting undefined.
+  assert.equal(comparerSeriesColor(-1), COMPARER_SERIES_COLORS[0])
+  assert.equal(comparerSeriesColor(NaN), COMPARER_SERIES_COLORS[0])
 })

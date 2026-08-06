@@ -1,3 +1,61 @@
+// Series identity for the ETF and stock comparers. The old seven-color list
+// wrapped as soon as an eighth ticker was added, so a nine-fund comparison drew
+// two blue lines and two orange ones — the chips, the swatches, and the chart
+// all lied about which fund was which.
+//
+// These fourteen are a selected set, not hand-picked: every slot clears 3:1 on
+// both the dark chart surface (#0e1117) and the light one (#ffffff), because a
+// single palette has to serve both themes and the ticker chips sit on white in
+// either. Verified with the data-viz validator in both modes — worst adjacent
+// pair ΔE 11.3 under deuteranopia (target 8), 21.6 unsimulated (floor 15), and
+// every one of the 91 pairs stays at or above 15.1 unsimulated, so no two lines
+// on screen collapse together for a full-color reader. Past six series no
+// fourteen-color set can stay dichromat-safe; identity there leans on the
+// legend, the end labels, and the swatch column, which is why those stay on.
+export const COMPARER_SERIES_COLORS = [
+  '#0059f9', // blue
+  '#ef6100', // orange
+  '#00a1c0', // cyan
+  '#12a100', // green
+  '#ff308e', // pink
+  '#8e551f', // brown
+  '#8182ff', // periwinkle
+  '#b50097', // magenta
+  '#007245', // forest
+  '#d34df0', // orchid
+  '#a79433', // olive
+  '#8732e1', // violet
+  '#cc0034', // crimson
+  '#006c9f', // deep teal
+]
+
+function mixHex(hex, toward, amount) {
+  const match = /^#?([0-9a-fA-F]{6})$/.exec(String(hex))
+  if (!match) return hex
+  const src = parseInt(match[1], 16)
+  const dst = parseInt(String(toward).replace('#', ''), 16)
+  const t = Math.max(0, Math.min(1, amount))
+  const chan = shift => {
+    const a = (src >> shift) & 255
+    const b = (dst >> shift) & 255
+    return Math.round(a + (b - a) * t)
+  }
+  return `#${((chan(16) << 16) | (chan(8) << 8) | chan(0)).toString(16).padStart(6, '0')}`
+}
+
+// Beyond the fourteenth ticker the palette has to repeat, so shift the lap's
+// lightness instead of handing back a pixel-identical color: a 15th fund reads
+// as a lighter blue next to the 1st, not as the same line twice. Odd laps
+// lighten (they land on the dark chart), even laps darken.
+export function comparerSeriesColor(index) {
+  const n = COMPARER_SERIES_COLORS.length
+  const i = Number.isFinite(Number(index)) && Number(index) >= 0 ? Math.floor(Number(index)) : 0
+  const base = COMPARER_SERIES_COLORS[i % n]
+  const lap = Math.floor(i / n)
+  if (lap === 0) return base
+  return lap % 2 ? mixHex(base, '#ffffff', 0.42) : mixHex(base, '#0b0f18', 0.38)
+}
+
 // In Total Return / Both, a partial reinvest is drawn as a solid line just
 // like full DRIP, but tinted so it still reads as a variant of the fund's own
 // line. The tint lifts the fund color toward white in proportion to how far

@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerLogHoverData, comparerReturnModeLabel, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -34,7 +34,6 @@ const RETURN_MODES = [
   { value: 'all4', label: 'All Four' },
 ]
 
-const COLORS = ['#2f7df6', '#ef7426', '#26a69a', '#b39ddb', '#ffb74d', '#4dd0e1', '#f06292']
 const DIMMED_COLOR = '#7c8595'
 
 const TRACE_STYLES = {
@@ -539,7 +538,7 @@ export default function StockComparer() {
         // headline line — render it solid like full DRIP (no dashes) and only
         // tint the color so it still reads as this fund's line.
         const blendAsTotal = key === 'blend' && ['total', 'both'].includes(returnMode)
-        const baseColor = isDimmed ? DIMMED_COLOR : COLORS[idx % COLORS.length]
+        const baseColor = isDimmed ? DIMMED_COLOR : comparerSeriesColor(idx)
         const color = blendAsTotal && !isDimmed
           ? shiftColorForReinvest(baseColor, effectiveReinvest)
           : baseColor
@@ -801,7 +800,7 @@ export default function StockComparer() {
         y: available.map(p => p.returns?.[sym] ?? null),
         type: 'bar',
         name: sym,
-        marker: { color: COLORS[idx % COLORS.length] },
+        marker: { color: comparerSeriesColor(idx) },
         text: available.map(p => p.returns?.[sym] == null ? '' : `${p.returns[sym].toFixed(2)}%`),
         textposition: 'outside',
         hovertemplate: `<b>${sym}</b><br>%{x}: %{y:.2f}%<extra></extra>`,
@@ -842,7 +841,7 @@ export default function StockComparer() {
             <span
               key={sym}
               className={`etfc-chip${highlightedSymbol === sym ? ' etfc-chip-highlighted' : ''}`}
-              style={{ borderColor: COLORS[idx % COLORS.length] }}
+              style={{ borderColor: comparerSeriesColor(idx) }}
             >
               <button
                 type="button"
@@ -1043,7 +1042,7 @@ export default function StockComparer() {
               <tbody>
                 {(averageData.symbols || symbols).map((sym, idx) => (
                   <tr key={sym}>
-                    <td><span className="etfc-series-swatch" style={{ background: COLORS[idx % COLORS.length] }} />{sym}</td>
+                    <td><span className="etfc-series-swatch" style={{ background: comparerSeriesColor(idx) }} />{sym}</td>
                     {averageTablePeriods
                       .map(p => <td key={p.label}>{pct(p.returns?.[sym])}</td>)}
                   </tr>
@@ -1081,7 +1080,7 @@ export default function StockComparer() {
                     key={sym}
                     type="button"
                     className={`btn btn-sm${distributionSymbol === sym ? ' btn-active' : ''}`}
-                    style={{ borderColor: COLORS[idx % COLORS.length] }}
+                    style={{ borderColor: comparerSeriesColor(idx) }}
                     onClick={() => setDistributionSymbol(sym)}
                   >
                     {sym}
