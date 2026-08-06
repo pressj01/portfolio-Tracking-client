@@ -546,9 +546,19 @@ class GapKindTest(unittest.TestCase):
 
 
 class PackagedFallbackTest(unittest.TestCase):
+    def _with_fake_main(self, fake_main, call):
+        original_main = sys.modules.get("__main__")
+        sys.modules["__main__"] = fake_main
+        try:
+            return call()
+        finally:
+            if original_main is None:
+                sys.modules.pop("__main__", None)
+            else:
+                sys.modules["__main__"] = original_main
+
     def test_app_fetchers_are_reused_from_frozen_main_module(self):
         """PyInstaller exposes app.py as __main__, not as importable app."""
-        original_main = sys.modules.get("__main__")
         fake_main = SimpleNamespace(
             _fetch_stockanalysis_top_holdings=lambda ticker, limit=None: [
                 {"symbol": "AAA", "name": "Alpha", "weight_pct": 50.0},
@@ -556,18 +566,153 @@ class PackagedFallbackTest(unittest.TestCase):
                 {"symbol": "CCC", "name": "Gamma", "weight_pct": 20.0},
             ],
         )
-        sys.modules["__main__"] = fake_main
-        try:
-            rows, source = dv._fetch_via_app("TEST")
-        finally:
-            if original_main is None:
-                sys.modules.pop("__main__", None)
-            else:
-                sys.modules["__main__"] = original_main
+        rows, source = self._with_fake_main(fake_main, lambda: dv._fetch_via_app("TEST"))
 
         self.assertEqual(source, "stockanalysis")
         self.assertEqual([row["symbol"] for row in rows], ["AAA", "BBB", "CCC"])
         self.assertAlmostEqual(sum(row["weight_pct"] for row in rows), 100.0)
+
+    def test_profile_scope_is_read_from_the_frozen_main_module(self):
+        """Scope silently widening to every profile is the worst failure here.
+
+        ``import app`` inside a packaged build returns a second copy of app.py,
+        not the module serving the request, so the scope lookup has to go
+        through __main__ like the fetchers do.
+        """
+        fake_main = SimpleNamespace(get_profile_filter=lambda: (False, [7, 9]))
+        self.assertEqual(
+            self._with_fake_main(fake_main, dv._scope_profile_ids), [7, 9]
+        )
+
+    def test_cef_detection_is_read_from_the_frozen_main_module(self):
+        """A CEF misread as EQUITY is stored as its own constituent, not a fund."""
+        fake_main = SimpleNamespace(_cef_row_map=lambda: {"ASGI": {"ticker": "ASGI"}})
+        self.assertEqual(
+            self._with_fake_main(fake_main, lambda: dv._security_type("ASGI")), "CEF"
+        )
+
+    def test_unrelated_main_module_is_not_mistaken_for_the_app(self):
+        """A test runner or REPL as __main__ must fall through, not answer."""
+        self.assertIsNone(dv._app_module("_this_attribute_does_not_exist"))
+
+
+class BootstrapTest(unittest.TestCase):
+    """A new installation has to arrive with the built-ins already loaded.
+
+    These used to be seeded only from inside a refresh run, so a fresh database
+    charted every position as "no holdings data" until one completed.
+    """
+
+    def test_fresh_database_gets_issuers_exposures_and_wrappers(self):
+        conn = _memory_db()
+        self.assertEqual(dv.bootstrap(conn), {})
+
+        self.assertGreater(
+            conn.execute("SELECT COUNT(*) FROM fund_issuers").fetchone()[0], 0
+        )
+        self.assertGreater(
+            conn.execute("SELECT COUNT(*) FROM fund_issuer_map").fetchone()[0], 0
+        )
+        # KGLD files T-bills, so without its exposure row it charts as cash.
+        self.assertEqual(
+            conn.execute(
+                "SELECT name FROM fund_exposure_map WHERE fund_ticker='KGLD'"
+            ).fetchone()[0],
+            "Gold",
+        )
+        # TSPY is a wrapper around VOO and has no issuer holdings file at all.
+        self.assertEqual(
+            conn.execute(
+                "SELECT status FROM fund_holdings_meta WHERE fund_ticker='TSPY'"
+            ).fetchone()[0],
+            "manual",
+        )
+
+    def test_bootstrap_is_idempotent_and_keeps_user_edits(self):
+        conn = _memory_db()
+        dv.bootstrap(conn)
+        conn.execute(
+            "UPDATE fund_exposure_map SET name='Bullion', source='manual' "
+            "WHERE fund_ticker='KGLD'"
+        )
+        conn.commit()
+        before = conn.execute("SELECT COUNT(*) FROM fund_exposure_map").fetchone()[0]
+
+        dv.bootstrap(conn)
+
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM fund_exposure_map").fetchone()[0], before
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT name FROM fund_exposure_map WHERE fund_ticker='KGLD'"
+            ).fetchone()[0],
+            "Bullion",
+        )
+
+    def test_seed_failure_is_reported_rather_than_raised(self):
+        conn = _memory_db()
+        conn.execute("DROP TABLE fund_exposure_map")
+        conn.commit()
+
+        problems = dv.bootstrap(conn)
+
+        self.assertIn("exposures", problems)
+        # The other two still have to land -- one broken table cannot take the
+        # whole registry down with it.
+        self.assertGreater(
+            conn.execute("SELECT COUNT(*) FROM fund_issuers").fetchone()[0], 0
+        )
+
+
+class RefreshJobReportingTest(unittest.TestCase):
+    def test_a_job_that_dies_early_is_reported_as_finished_with_an_error(self):
+        """Silence used to be indistinguishable from never pressing the button.
+
+        The job was only marked running *after* seeding, so anything that threw
+        before that left the status endpoint reporting the never-run state: the
+        page polled once, saw running=False and 0/0, and said nothing.
+        """
+        original = dv.get_connection
+        dv.get_connection = lambda: (_ for _ in ()).throw(RuntimeError("no database"))
+        try:
+            dv._run_refresh(["AAA", "BBB"], False)
+        finally:
+            dv.get_connection = original
+
+        self.assertFalse(dv._JOB["running"])
+        self.assertIsNotNone(dv._JOB["started"])
+        self.assertIsNotNone(dv._JOB["finished"])
+        self.assertEqual(dv._JOB["total"], 2)
+        self.assertTrue(any("no database" in e for e in dv._JOB["errors"]))
+
+
+class FirstRunReportingTest(unittest.TestCase):
+    def test_an_unresolved_cache_is_flagged_separately_from_a_failed_one(self):
+        conn = _memory_db()
+        # Bootstrap writes manual wrapper definitions, so "any meta row at all"
+        # would report a filled cache on a database that has never fetched a
+        # thing -- the exact state this flag exists to detect.
+        dv.bootstrap(conn)
+        _add_position(conn, "FUNDA", 1000)
+
+        empty = dv.build_diversification(conn, None, xray=True, mode="literal")
+        self.assertTrue(empty["cache_empty"])
+
+        _add_fund(conn, "FUNDA", [("NVDA", "NVIDIA Corp", 100.0)])
+        filled = dv.build_diversification(conn, None, xray=True, mode="literal")
+        self.assertFalse(filled["cache_empty"])
+
+    def test_a_fully_failed_resolve_is_not_reported_as_a_first_run(self):
+        conn = _memory_db()
+        dv.bootstrap(conn)
+        _add_position(conn, "FUNDA", 1000)
+        _add_fund(conn, "FUNDA", [], status="unresolved", source=None)
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertFalse(result["cache_empty"])
+        self.assertEqual(result["coverage"]["unresolved_funds"], 1)
 
 
 class SymbolNormalisationTest(unittest.TestCase):

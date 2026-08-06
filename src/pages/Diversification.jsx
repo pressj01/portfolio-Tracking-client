@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
@@ -87,7 +87,7 @@ export default function Diversification() {
     return () => clearInterval(id)
   }, [job?.running, pf, load])
 
-  const runRefresh = (force) => {
+  const runRefresh = useCallback((force) => {
     setError(null)
     pf('/api/diversification/refresh', {
       method: 'POST',
@@ -100,7 +100,21 @@ export default function Diversification() {
         setJob({ running: true, done: 0, total: d.total, current: '' })
       })
       .catch(e => setError('Request failed: ' + e.message))
-  }
+  }, [pf])
+
+  // A new installation has never downloaded any fund holdings, so X-Ray opens
+  // on a chart that is 100% "no holdings data" — indistinguishable from funds
+  // whose issuers publish nothing. Kick the first resolve off automatically so
+  // the feature works on a fresh machine without knowing to press a button.
+  // Once per mount, and only when nothing has ever been resolved: every later
+  // refresh stays a deliberate click.
+  const autoResolveTried = useRef(false)
+  useEffect(() => {
+    if (!xray || job?.running || autoResolveTried.current) return
+    if (!data?.cache_empty || !data?.position_count) return
+    autoResolveTried.current = true
+    runRefresh(false)
+  }, [xray, data, job?.running, runRefresh])
 
   const rows = data?.constituents || []
   const shown = useMemo(() => rows.slice(0, 60), [rows])
@@ -135,6 +149,20 @@ export default function Diversification() {
   const undisclosedPct = cov?.undisclosed_pct ?? 0
   const undefinedPct = cov?.undefined_pct ?? 0
   const collateral = rows.find(r => r.kind === 'collateral')
+  // Nothing has ever been resolved here, so every fund reads as a gap. That is
+  // a cache that has not been filled, not twenty funds that publish nothing,
+  // and it needs the opposite advice.
+  const cacheEmpty = !!data?.cache_empty
+  const jobErrors = (!job?.running && job?.errors) || []
+  // Fetch failures are swallowed per fund by design — one throttled publisher
+  // must not fail the sweep. But a pass where *every* fund came back with
+  // nothing is not twenty unlucky publishers, it is this machine not reaching
+  // any of them, and that reads identically to "the feature is broken".
+  const lastSummary = (!job?.running && job?.summary) || null
+  const attempted = lastSummary
+    ? Object.values(lastSummary).reduce((a, n) => a + n, 0)
+    : 0
+  const reachedNothing = attempted > 0 && (lastSummary.unresolved || 0) === attempted
 
   return (
     <div className="page">
@@ -198,6 +226,55 @@ export default function Diversification() {
 
       {error && <div className="card" style={{ color: 'var(--neg-strong)' }}>{error}</div>}
 
+      {reachedNothing && (
+        <div className="card" style={{ borderLeft: '3px solid var(--neg-strong)' }}>
+          <strong>
+            The last resolve reached none of the {attempted} fund publishers.
+          </strong>{' '}
+          <span style={{ color: 'var(--text-muted)' }}>
+            Holdings are read from each issuer's own website, so this is almost always
+            the computer rather than the funds — check its internet connection, and that
+            a firewall or security product is not blocking Portfolio Tracker's backend.
+          </span>
+        </div>
+      )}
+
+      {jobErrors.length > 0 && (
+        <div className="card" style={{ borderLeft: '3px solid var(--neg-strong)' }}>
+          <strong>
+            The last resolve reported {jobErrors.length} problem
+            {jobErrors.length === 1 ? '' : 's'}.
+          </strong>
+          <ul style={{
+            margin: '0.4rem 0 0', paddingLeft: '1.1rem',
+            color: 'var(--text-muted)', fontSize: '0.85rem',
+          }}>
+            {jobErrors.slice(0, 8).map((message, i) => <li key={i}>{message}</li>)}
+          </ul>
+          {jobErrors.length > 8 && (
+            <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              …and {jobErrors.length - 8} more.
+            </div>
+          )}
+        </div>
+      )}
+
+      {xray && cacheEmpty && !job?.running && (
+        <div className="card" style={{ borderLeft: '3px solid ' + UNDEFINED_COLOR }}>
+          <strong>Fund holdings have not been downloaded on this computer yet.</strong>{' '}
+          <span style={{ color: 'var(--text-muted)' }}>
+            Nothing is wrong with these funds — the look-through cache is empty until
+            it is resolved once. Reading each fund's published holdings takes a couple
+            of minutes the first time, and the result is cached from then on.
+          </span>
+          <div style={{ marginTop: '0.6rem' }}>
+            <button className="btn btn-sm" onClick={() => runRefresh(false)}>
+              Resolve now
+            </button>
+          </div>
+        </div>
+      )}
+
       {xray && collateral?.weight_pct >= 0.25 && (
         <div className="card" style={{ borderLeft: '3px solid ' + COLLATERAL_COLOR }}>
           <strong>{collateral.weight_pct.toFixed(1)}% is cash and Treasury collateral inside funds, not account cash.</strong>{' '}
@@ -215,7 +292,7 @@ export default function Diversification() {
         </div>
       )}
 
-      {xray && cov && (undisclosedPct + undefinedPct) >= 0.5 && (
+      {xray && !cacheEmpty && cov && (undisclosedPct + undefinedPct) >= 0.5 && (
         <div className="card" style={{ borderLeft: '3px solid ' + UNDEFINED_COLOR }}>
           <div>
             <span style={{

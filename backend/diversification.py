@@ -104,6 +104,31 @@ def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
 
 
+def _app_module(attr):
+    """The live app.py module, or None if it does not provide `attr`.
+
+    PyInstaller runs app.py as ``__main__``, so ``import app`` inside a packaged
+    build does not hand back the running module -- it executes a *second* copy
+    of a 43,000-line file, building a duplicate Flask application and a
+    duplicate set of module caches inside whichever request asked first. That is
+    slow and it silently splits state that is supposed to be shared. Prefer the
+    entry module; importing by name is only for tests and callers that imported
+    this module on its own.
+
+    `attr` is the function the caller actually needs, so an unrelated or
+    half-initialised ``__main__`` (a test runner, a REPL) is rejected instead of
+    being mistaken for the application.
+    """
+    main = sys.modules.get("__main__")
+    if main is not None and hasattr(main, attr):
+        return main
+    try:
+        import app as _app
+    except Exception:
+        return None
+    return _app if hasattr(_app, attr) else None
+
+
 def _norm_symbol(sym):
     """Normalise a ticker so BRK.B / BRK-B / BRKB aggregate together."""
     if not sym:
@@ -1359,17 +1384,9 @@ def _fetch_via_app(ticker, limit=25):
     totalling 69.8% -- first-match would have silently kept the worse half and
     inflated the Undisclosed slice.
     """
-    # When app.py is frozen by PyInstaller it runs as ``__main__`` and is not
-    # importable under the name ``app``.  Re-importing app.py in source builds
-    # also creates a second Flask application and a second set of route state.
-    # Reuse the running entry module first; importing by name is only a fallback
-    # for tests and callers that imported diversification independently.
-    _app = sys.modules.get("__main__")
-    if not _app or not hasattr(_app, "_fetch_stockanalysis_top_holdings"):
-        try:
-            import app as _app
-        except Exception:
-            return [], None
+    _app = _app_module("_fetch_stockanalysis_top_holdings")
+    if _app is None:
+        return [], None
 
     sym = ticker.strip().upper()
     candidates = []
@@ -1460,13 +1477,13 @@ def _security_type(ticker):
     # up and previously left a normal security as a 100% undefined "fund".
     if re.match(r"^[A-Z]{1,6}(?:PR|P)[A-Z]$", sym):
         return "EQUITY"
-    try:
-        import app as _app
-        cef_rows = _app._cef_row_map() or {}
-        if sym in cef_rows:
-            return "CEF"
-    except Exception:
-        pass
+    _app = _app_module("_cef_row_map")
+    if _app is not None:
+        try:
+            if sym in (_app._cef_row_map() or {}):
+                return "CEF"
+        except Exception:
+            pass
     try:
         import yfinance as yf
         info = yf.Ticker(sym).info or {}
@@ -1586,6 +1603,54 @@ def _seed_exposures(conn):
     if added:
         conn.commit()
     return added
+
+
+_BOOTSTRAPPED = False
+_BOOTSTRAP_LOCK = threading.Lock()
+
+
+def bootstrap(conn):
+    """Install the built-in issuer registry, exposures and wrapper definitions.
+
+    These were previously seeded only from inside a refresh run, which is fine
+    on a developer machine whose database has been refreshed for months and
+    wrong everywhere else: a freshly installed copy started with an empty
+    registry, so every position reported "no holdings data", KGLD/BTCI/KSLV had
+    no economic exposure to show, and the wrapper funds had no definition. The
+    screen looked broken when it was merely un-seeded.
+
+    Every seeder here skips rows that already exist and never overwrites a
+    user's own edits, so running it on each launch is safe. Failures are
+    returned rather than raised -- a seeding problem must not stop the backend
+    from starting, but it must not be invisible either.
+    """
+    problems = {}
+    for name, fn in (("exposures", _seed_exposures),
+                     ("issuers", _seed_issuers),
+                     ("wrappers", _seed_wrappers)):
+        try:
+            fn(conn)
+        except Exception as exc:
+            problems[name] = f"{type(exc).__name__}: {str(exc)[:160]}"
+    return problems
+
+
+def _ensure_bootstrapped(conn):
+    """Seed the built-ins once per process, on whichever request arrives first.
+
+    Done lazily rather than at import time because the tables are created after
+    this module is imported, and lazily rather than only at startup so the
+    seeds also land for a process that was pointed at a different database.
+    """
+    global _BOOTSTRAPPED
+    if _BOOTSTRAPPED:
+        return {}
+    with _BOOTSTRAP_LOCK:
+        if _BOOTSTRAPPED:
+            return {}
+        problems = bootstrap(conn)
+        _BOOTSTRAPPED = True
+    return problems
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1735,9 +1800,16 @@ def _portfolio_positions(conn, profile_ids=None):
 
 
 def _scope_profile_ids():
-    """Resolve the request's portfolio scope using app.py's shared helper."""
+    """Resolve the request's portfolio scope using app.py's shared helper.
+
+    Falling back to None means "every profile", so losing this lookup does not
+    fail loudly -- it quietly charts the wrong portfolio. That is what a
+    packaged build did while this reached for ``import app``.
+    """
+    _app = _app_module("get_profile_filter")
+    if _app is None:
+        return None
     try:
-        import app as _app
         _is_agg, ids = _app.get_profile_filter()
         return ids
     except Exception:
@@ -1782,14 +1854,20 @@ def _discover_nested_candidates(conn, already, min_weight=5.0, limit=40):
 
 
 def _run_refresh(tickers, force):
-    conn = get_connection()
+    # Published before any work starts. The job used to be marked running only
+    # after seeding, so anything that threw before that point left _JOB in its
+    # never-run state: the page polled once, saw running=False with zero
+    # progress, and reported nothing at all -- identical to a refresh that was
+    # never requested. A failure has to be distinguishable from a no-op.
+    with _JOB_LOCK:
+        _JOB.update(running=True, done=0, total=len(tickers), current="",
+                    started=_now(), finished=None, errors=[], summary=None)
+    conn = None
     try:
-        _seed_exposures(conn)
-        _seed_issuers(conn)
-        _seed_wrappers(conn)
-        with _JOB_LOCK:
-            _JOB.update(running=True, done=0, total=len(tickers), current="",
-                        started=_now(), finished=None, errors=[], summary=None)
+        conn = get_connection()
+        for name, problem in bootstrap(conn).items():
+            with _JOB_LOCK:
+                _JOB["errors"].append(f"built-in {name} seed: {problem}")
 
         results = {}
         lock = threading.Lock()
@@ -1836,12 +1914,18 @@ def _run_refresh(tickers, force):
         for r in results.values():
             counts[r.get("status", "?")] = counts.get(r.get("status", "?"), 0) + 1
         with _JOB_LOCK:
-            _JOB.update(running=False, finished=_now(), summary=counts)
+            _JOB["summary"] = counts
+    except Exception as exc:
+        with _JOB_LOCK:
+            _JOB["errors"].append(f"refresh failed: {type(exc).__name__}: {str(exc)[:200]}")
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        with _JOB_LOCK:
+            _JOB.update(running=False, finished=_now())
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2073,6 +2157,13 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
         "position_count": len(positions),
         "xray": xray,
         "mode": mode,
+        # Nothing has ever been *fetched* on this installation. Distinct from
+        # "every fund failed to resolve": the first is a cache that has not been
+        # filled yet, which is what a new install looks like, and the advice for
+        # it ("run a resolve") is the opposite of the advice for the second
+        # ("map an issuer or define the fund by hand"). Built-in wrapper
+        # definitions are seeded at startup and do not count as a filled cache.
+        "cache_empty": not any(not m.get("is_manual") for m in meta.values()),
         "constituents": out,
         "funds": sorted(fund_detail, key=lambda r: -r["value"]),
         "coverage": {
@@ -2103,6 +2194,7 @@ def register_routes(app):
         scope = _scope_profile_ids()
         conn = get_connection()
         try:
+            _ensure_bootstrapped(conn)
             return jsonify(build_diversification(conn, scope, xray, mode, top))
         finally:
             conn.close()
@@ -2113,6 +2205,7 @@ def register_routes(app):
         scope = _scope_profile_ids()
         conn = get_connection()
         try:
+            _ensure_bootstrapped(conn)
             positions = _portfolio_positions(conn, scope)
             total = sum(v for _, v in positions)
             _holdings, meta, exposure = _load_cache(conn)
@@ -2141,6 +2234,7 @@ def register_routes(app):
         sym = ticker.strip().upper()
         conn = get_connection()
         try:
+            _ensure_bootstrapped(conn)
             rows = conn.execute(
                 "SELECT symbol, name, weight_pct, source FROM fund_holdings "
                 "WHERE fund_ticker=? ORDER BY weight_pct DESC", (sym,)
@@ -2245,6 +2339,7 @@ def register_routes(app):
     def api_diversification_issuers():
         conn = get_connection()
         try:
+            _ensure_bootstrapped(conn)
             _seed_issuers(conn)
             issuers = [
                 {"issuer_key": r[0], "label": r[1], "url_template": r[2], "parser": r[3],

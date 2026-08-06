@@ -80,7 +80,10 @@ import tax_report
 import tax_loss
 from options_api import register_routes as register_options_routes
 from option_dashboard import register_routes as register_option_dashboard_routes
-from diversification import register_routes as register_diversification_routes
+from diversification import (
+    bootstrap as bootstrap_diversification,
+    register_routes as register_diversification_routes,
+)
 from option_trade_tracker import (
     realized_option_income,
     register_routes as register_option_trade_routes,
@@ -43347,6 +43350,13 @@ if __name__ == "__main__":
     conn = get_connection()
     try:
         ensure_tables_exist(conn)
+        # Built-in fund issuer registry, economic exposures and wrapper
+        # definitions.  A freshly installed copy has none of these until they
+        # are seeded, which is what made the X-Ray screen report every position
+        # as "no holdings data" on a new machine while a developer's long-lived
+        # database looked fine.
+        for _seed_name, _seed_problem in bootstrap_diversification(conn).items():
+            print(f"Fund look-through {_seed_name} seed failed: {_seed_problem}")
     finally:
         conn.close()
     app.run(debug=not is_packaged, port=5001, use_reloader=False)

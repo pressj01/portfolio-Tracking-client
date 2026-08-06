@@ -117,6 +117,32 @@ jobs:
             if (-not (Test-Path (Join-Path $testData "portfolio.db"))) {
               throw "The packaged backend did not create its per-user database."
             }
+            # The database created above is brand new, exactly like a user's
+            # first launch. The X-Ray built-ins must already be in it before
+            # anything is requested -- when they were seeded only by a refresh
+            # run, an installed copy charted every position as "no holdings
+            # data" while a developer's long-lived database looked correct.
+            $kgld = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/fund/KGLD" `
+              -TimeoutSec 10
+            if (-not $kgld.exposure -or $kgld.exposure.Count -lt 1) {
+              throw "The packaged build did not seed built-in X-Ray exposure data."
+            }
+            $tspy = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/fund/TSPY" `
+              -TimeoutSec 10
+            if ($tspy.meta.status -ne "manual") {
+              throw "The packaged build did not seed built-in X-Ray wrapper definitions."
+            }
+            $issuers = Invoke-RestMethod `
+              -Uri "http://127.0.0.1:5001/api/diversification/issuers" `
+              -TimeoutSec 20
+            if (-not $issuers.issuers -or $issuers.issuers.Count -lt 10) {
+              throw "The packaged build did not seed the X-Ray issuer registry."
+            }
+            if (-not ($issuers.map | Where-Object { $_.ticker -eq "SPYI" })) {
+              throw "The packaged X-Ray issuer map is missing its seeded tickers."
+            }
             $seedResult = Invoke-RestMethod `
               -Uri "http://127.0.0.1:5001/api/diversification/seed-exposures" `
               -Method Post `
@@ -125,12 +151,6 @@ jobs:
               -TimeoutSec 10
             if (-not $seedResult.ok) {
               throw "The packaged X-Ray exposure seed failed."
-            }
-            $kgld = Invoke-RestMethod `
-              -Uri "http://127.0.0.1:5001/api/diversification/fund/KGLD" `
-              -TimeoutSec 10
-            if (-not $kgld.exposure -or $kgld.exposure.Count -lt 1) {
-              throw "The packaged X-Ray routes did not persist built-in exposure data."
             }
             Get-Content $startupLog
           }
@@ -160,7 +180,7 @@ jobs:
           files: |
             release/*.exe
             release/*.blockmap
-          body_path: RELEASE_NOTES_1.33.3.md
+          body_path: RELEASE_NOTES_1.33.4.md
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
@@ -219,4 +239,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: release/*.dmg
-          body_path: RELEASE_NOTES_1.33.3.md
+          body_path: RELEASE_NOTES_1.33.4.md
