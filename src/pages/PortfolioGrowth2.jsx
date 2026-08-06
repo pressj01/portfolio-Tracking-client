@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
-import { chartTheme } from '../utils/chartTheme'
+import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 import {
   PERFORMANCE_PERIODS,
@@ -171,6 +171,9 @@ export default function PortfolioGrowth2() {
     const ct = chartTheme(isDark)
     const el = document.getElementById('g2-value-chart')
     if (!el) return
+    // Open the unified hover box on the last date so the current value reads
+    // without hovering. Guarded: cleanup can purge the plot before newPlot lands.
+    let cancelled = false
 
     const traces = [
       {
@@ -223,9 +226,12 @@ export default function PortfolioGrowth2() {
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
       xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
       yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: '$,.0f', title: '', automargin: true },
-    }, { responsive: true })
+    }, { responsive: true }).then(() => { if (!cancelled) hoverLastPoint(el) })
 
-    return () => { if (document.getElementById('g2-value-chart')) Plotly.purge(el) }
+    return () => {
+      cancelled = true
+      if (document.getElementById('g2-value-chart')) Plotly.purge(el)
+    }
   }, [data, showCostBasis, showTrades, isDark])
 
   // ── Chart 2: Portfolio Performance ──
@@ -235,6 +241,7 @@ export default function PortfolioGrowth2() {
     const ct = chartTheme(isDark)
     const el = document.getElementById('g2-perf-chart')
     if (!el) return
+    let cancelled = false
 
     const perf = data.performance
     const unit = data.profit_unit
@@ -281,9 +288,12 @@ export default function PortfolioGrowth2() {
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
       xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
       yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, tickformat: axisFmt, tickprefix: prefix, ticksuffix: suffix, title: '', automargin: true },
-    }, { responsive: true })
+    }, { responsive: true }).then(() => { if (!cancelled) hoverLastPoint(el) })
 
-    return () => { if (document.getElementById('g2-perf-chart')) Plotly.purge(el) }
+    return () => {
+      cancelled = true
+      if (document.getElementById('g2-perf-chart')) Plotly.purge(el)
+    }
   }, [data, groupProfitSource, profitMode, isDark])
 
   return (

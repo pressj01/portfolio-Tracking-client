@@ -46,6 +46,7 @@ export default function GainsLosses() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
+  const [expandedRealized, setExpandedRealized] = useState({})
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -254,8 +255,15 @@ export default function GainsLosses() {
     return sorted
   }
 
-  // Reset sort when changing tabs
-  useEffect(() => { setSortCol(null) }, [tab])
+  // Reset sort and lot expansion when changing tabs
+  useEffect(() => { setSortCol(null); setExpandedRealized({}) }, [tab])
+
+  const toggleLots = (ticker) => setExpandedRealized(prev => {
+    const next = { ...prev }
+    if (next[ticker]) delete next[ticker]
+    else next[ticker] = true
+    return next
+  })
 
   const t = data?.totals || {}
 
@@ -277,7 +285,7 @@ export default function GainsLosses() {
 
   const realizedCols = [
     { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
-    { key: 'sell_date', label: 'Sell Date', tip: 'Date the shares were sold' },
+    { key: 'sell_date', label: 'Sell Date', sortKey: 'sell_date_sort', tip: 'Date the shares were sold — a grouped row shows the range from first to last sell' },
     { key: 'buy_price', label: 'Buy Price', tip: 'Price per share when originally purchased', fmt, numeric: true },
     { key: 'sell_price', label: 'Sell Price', tip: 'Price per share when sold', fmt, numeric: true },
     { key: 'shares_sold', label: 'Shares', tip: 'Number of shares sold in this transaction', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
@@ -314,13 +322,115 @@ export default function GainsLosses() {
     })
   }, [data, rvyMode])
 
+  // One realized row per ticker. A ticker sold in many fills (weekly assignments,
+  // DRIP lots) otherwise floods the tab with hundreds of near-identical rows, so
+  // the individual sells move behind an expander and the row shows their roll-up.
+  // Weighted buy/sell price is exact: each source row's cost is buy_price x shares,
+  // so total cost / total shares reproduces the per-share price.
+  const groupedRealized = useMemo(() => {
+    const rows = data?.realized || []
+    const byTicker = new Map()
+    rows.forEach(r => {
+      if (!byTicker.has(r.ticker)) byTicker.set(r.ticker, [])
+      byTicker.get(r.ticker).push(r)
+    })
+    return Array.from(byTicker.entries()).map(([ticker, lots]) => {
+      const sum = key => lots.reduce((acc, r) => acc + (Number(r[key]) || 0), 0)
+      const shares = sum('shares_sold')
+      const cost = sum('cost_basis')
+      const proceeds = sum('proceeds')
+      const priceGl = sum('price_gl')
+      const divs = sum('divs_received')
+      const totalGl = sum('total_gl')
+      const dates = lots.map(r => r.sell_date).filter(Boolean).sort()
+      const first = dates[0] || ''
+      const last = dates[dates.length - 1] || ''
+      return {
+        ticker,
+        lots,
+        lot_count: lots.length,
+        sell_date: first && last && first !== last ? `${first} → ${last}` : first,
+        sell_date_sort: last,
+        buy_price: shares ? cost / shares : 0,
+        sell_price: shares ? proceeds / shares : 0,
+        shares_sold: shares,
+        cost_basis: cost,
+        proceeds,
+        price_gl: priceGl,
+        price_gl_pct: cost ? (priceGl / cost) * 100 : 0,
+        divs_received: divs,
+        total_gl: totalGl,
+        total_gl_pct: cost ? (totalGl / cost) * 100 : 0,
+      }
+    })
+  }, [data])
+
+  const multiLotTickers = groupedRealized.filter(r => r.lot_count > 1).map(r => r.ticker)
+  const allLotsExpanded = multiLotTickers.length > 0
+    && multiLotTickers.every(ticker => expandedRealized[ticker])
+  const toggleAllLots = () => setExpandedRealized(
+    allLotsExpanded ? {} : Object.fromEntries(multiLotTickers.map(ticker => [ticker, true]))
+  )
+  const realizedLotCount = groupedRealized.reduce((acc, r) => acc + r.lot_count, 0)
+
   const tabConfig = {
     unrealized: { cols: unrealizedCols, rows: enrichedUnrealized },
-    realized: { cols: realizedCols, rows: data?.realized },
+    realized: { cols: realizedCols, rows: groupedRealized },
     combined: { cols: combinedCols, rows: data?.combined },
   }
   const activeCols = tabConfig[tab].cols
   const activeRows = sortRows(tabConfig[tab].rows || [])
+
+  // Shared by the roll-up row and its expanded lot rows so the two always use the
+  // same columns and formatting — the lots sit in the parent table rather than a
+  // nested one, which keeps them aligned and avoids inheriting the sticky header.
+  const renderCells = (row, isLot = false) => activeCols.map(col => {
+    const val = row[col.key]
+    let display = col.fmt ? col.fmt(val) : (val ?? '')
+    let style = (col.numeric || col.gl) ? { textAlign: 'right' } : {}
+    if (col.key === 'ticker') {
+      if (isLot) {
+        display = <span className="gl-lot-marker">↳</span>
+        style = { paddingLeft: '1.6rem' }
+      } else if (tab === 'realized') {
+        const expandable = row.lot_count > 1
+        display = (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+            <span
+              onClick={expandable ? () => toggleLots(row.ticker) : undefined}
+              title={expandable ? `Show/hide the ${row.lot_count} individual sells` : undefined}
+              style={{
+                width: '12px', fontSize: '0.7rem', userSelect: 'none',
+                opacity: expandable ? 0.7 : 0,
+                cursor: expandable ? 'pointer' : 'default',
+              }}
+            >
+              {expandedRealized[row.ticker] ? '▼' : '▶'}
+            </span>
+            <strong>{val}</strong>
+            {expandable && <span className="gl-lot-count">&times;{row.lot_count}</span>}
+          </span>
+        )
+      } else {
+        display = <strong>{val}</strong>
+      }
+    }
+    if (col.gl) style = { ...style, textAlign: 'right', color: glColor(val) }
+    if (col.rvy) {
+      const rvy = row.ret_vs_yld
+      display = rvy ? rvy.label : '—'
+      style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
+    }
+    return (
+      <td
+        key={col.key}
+        style={style}
+        title={col.rvy && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}
+      >
+        {display}
+      </td>
+    )
+  })
 
   const renderTable = () => {
     if (!activeRows.length) {
@@ -335,7 +445,7 @@ export default function GainsLosses() {
           <thead>
             <tr>
               {activeCols.map(col => {
-                const sk = col.rvy ? 'ret_vs_yld_sort' : col.key
+                const sk = col.rvy ? 'ret_vs_yld_sort' : (col.sortKey || col.key)
                 if (col.rvy) {
                   return (
                     <th key={col.key} title={col.tip} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }}>
@@ -364,21 +474,15 @@ export default function GainsLosses() {
           </thead>
           <tbody>
             {activeRows.map((row, i) => (
-              <tr key={`${row.ticker}-${i}`}>
-                {activeCols.map(col => {
-                  const val = row[col.key]
-                  let display = col.fmt ? col.fmt(val) : (val ?? '')
-                  let style = (col.numeric || col.gl) ? { textAlign: 'right' } : {}
-                  if (col.key === 'ticker') display = <strong>{val}</strong>
-                  if (col.gl) style = { textAlign: 'right', color: glColor(val) }
-                  if (col.rvy) {
-                    const rvy = row.ret_vs_yld
-                    display = rvy ? rvy.label : '—'
-                    style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
-                  }
-                  return <td key={col.key} style={style} title={col.rvy && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}>{display}</td>
-                })}
-              </tr>
+              <React.Fragment key={`${row.ticker}-${i}`}>
+                <tr>{renderCells(row)}</tr>
+                {tab === 'realized' && expandedRealized[row.ticker] && row.lots?.length > 1
+                  && row.lots.map((lot, j) => (
+                    <tr key={`${row.ticker}-${i}-lot-${j}`} className="gl-lot-row">
+                      {renderCells(lot, true)}
+                    </tr>
+                  ))}
+              </React.Fragment>
             ))}
           </tbody>
           {tab === 'unrealized' && (
@@ -498,7 +602,7 @@ export default function GainsLosses() {
           </div>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
             {[
               { key: 'unrealized', label: 'Unrealized' },
               { key: 'realized', label: 'Realized' },
@@ -511,6 +615,21 @@ export default function GainsLosses() {
                 {t.label}
               </button>
             ))}
+            {tab === 'realized' && multiLotTickers.length > 0 && (
+              <>
+                <button
+                  className="btn btn-secondary"
+                  style={{ marginLeft: '0.75rem', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                  onClick={toggleAllLots}
+                >
+                  {allLotsExpanded ? 'Collapse all lots' : 'Expand all lots'}
+                </button>
+                <span style={{ marginLeft: '0.5rem', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                  {groupedRealized.length} ticker{groupedRealized.length === 1 ? '' : 's'} &middot;{' '}
+                  {realizedLotCount} sell{realizedLotCount === 1 ? '' : 's'}
+                </span>
+              </>
+            )}
           </div>
 
           {renderTable()}

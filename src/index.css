@@ -1733,6 +1733,25 @@ label {
   background: var(--p-1a2744);
 }
 
+/* Gains & Losses — individual sells expanded under a rolled-up ticker row */
+.gl-lot-row td {
+  background: var(--surface-sunken);
+  font-size: 0.74rem;
+  opacity: 0.85;
+}
+.gl-lot-marker {
+  color: var(--text-dim-2);
+}
+.gl-lot-count {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 4px;
+}
+
 .holdings-table {
   font-size: 0.74rem;
   width: 100%;

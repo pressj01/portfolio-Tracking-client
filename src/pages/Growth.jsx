@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
-import { chartTheme } from '../utils/chartTheme'
+import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import {
   PERFORMANCE_PERIODS,
   addCustomRangeParams,
@@ -22,6 +22,41 @@ function MetricCard({ label, value, sub }) {
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '—'}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+    </div>
+  )
+}
+
+const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
+const fmtSignedPct = v => v != null ? `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%` : '—'
+
+// Both index charts are normalized to 100 at the start of the period, so the
+// benchmark's return over the window is simply its last plotted value minus 100.
+// That keeps the tile and the line it summarizes in exact agreement.
+function lastIndexReturn(series) {
+  const values = series?.values
+  if (!Array.isArray(values)) return null
+  for (let i = values.length - 1; i >= 0; i--) {
+    const v = Number(values[i])
+    if (values[i] != null && Number.isFinite(v)) return v - 100
+  }
+  return null
+}
+
+// Portfolio return large, benchmark comparison on the sub-line, so neither
+// number needs a trip to the chart.
+function ReturnCard({ label, value, benchLabel, benchValue }) {
+  const diff = value != null && benchValue != null ? value - benchValue : null
+  return (
+    <div className="summary-card">
+      <div className="summary-label">{label}</div>
+      <div className="summary-value" style={{ color: (value ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+        {fmtPct(value)}
+      </div>
+      <div className="summary-sub">
+        {benchValue != null
+          ? <>{benchLabel} {fmtPct(benchValue)} &middot; <span style={{ color: (diff ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtSignedPct(diff)} vs {benchLabel}</span></>
+          : `No ${benchLabel} data for this range`}
+      </div>
     </div>
   )
 }
@@ -112,6 +147,11 @@ export default function Growth() {
       },
     }
     const ids = []
+    // The two index charts open with their unified hover box pinned to the last
+    // date so the latest values read without a mouse. Guarded because the plot
+    // is purged on cleanup while newPlot's promise may still be in flight.
+    let cancelled = false
+    const popLastReadout = (el) => { if (!cancelled) hoverLastPoint(el) }
 
     // ── Price-only chart ──
     const priceEl = document.getElementById('growth-price-chart')
@@ -131,7 +171,7 @@ export default function Growth() {
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
         yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Indexed (100)' },
-      }, { responsive: true })
+      }, { responsive: true }).then(() => popLastReadout(priceEl))
     }
 
     // ── Total return chart ──
@@ -152,7 +192,7 @@ export default function Growth() {
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
         yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Indexed (100)' },
-      }, { responsive: true })
+      }, { responsive: true }).then(() => popLastReadout(totalEl))
     }
 
     // ── Performance by ticker (grouped horizontal bars) ──
@@ -207,6 +247,7 @@ export default function Growth() {
     }
 
     return () => {
+      cancelled = true
       ids.forEach(id => {
         const el = document.getElementById(id)
         if (el) Plotly.purge(el)
@@ -378,12 +419,17 @@ export default function Growth() {
                 </div>
               )}
             </div>
-            <MetricCard
+            <ReturnCard
               label="Total Return %"
-              value={data.portfolio_metrics?.total_return_pct != null
-                ? `${Number(data.portfolio_metrics.total_return_pct).toFixed(2)}%`
-                : '—'}
-              sub={formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
+              value={data.portfolio_metrics?.total_return_pct}
+              benchLabel={data.benchmark_ticker}
+              benchValue={lastIndexReturn(data.benchmark_total)}
+            />
+            <ReturnCard
+              label="Price Return %"
+              value={data.portfolio_metrics?.price_return_pct}
+              benchLabel={data.benchmark_ticker}
+              benchValue={lastIndexReturn(data.benchmark_price)}
             />
             <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} />
             <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} />

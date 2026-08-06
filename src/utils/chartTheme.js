@@ -41,6 +41,41 @@ export function chartTheme(isDark) {
   }
 }
 
+// Pop the unified hover box open at the right-most point so the latest values
+// are readable without moving the mouse. Charts that use hovermode 'x unified'
+// only need one trace hovered — Plotly gathers every series sharing that x.
+// Purely cosmetic, so a failure here must never break the chart.
+export function hoverLastPoint(el, curveNumber = 0) {
+  const Plotly = typeof window !== 'undefined' ? window.Plotly : null
+  if (!Plotly || !Plotly.Fx || !el || !Array.isArray(el.data)) return
+  const trace = el.data[curveNumber]
+  const xs = trace && trace.x
+  const ys = trace && trace.y
+  if (!xs || !ys || !ys.length) return
+  // Trailing gaps are common (a benchmark series can end a day short), so walk
+  // back to the last point that actually has a value.
+  let idx = -1
+  for (let i = ys.length - 1; i >= 0; i--) {
+    if (ys[i] != null && Number.isFinite(Number(ys[i]))) { idx = i; break }
+  }
+  if (idx < 0) return
+  try {
+    // Hovering by x *value* is what makes 'x unified' draw its combined box —
+    // date header plus every series. Hovering by {curveNumber, pointNumber}
+    // only labels that one trace. d2c converts the date string to the axis
+    // coordinate Plotly expects; fall back to the single point if the private
+    // full layout isn't there.
+    const xaxis = el._fullLayout && el._fullLayout.xaxis
+    if (xaxis && typeof xaxis.d2c === 'function') {
+      Plotly.Fx.hover(el, { xval: xaxis.d2c(xs[idx]) }, 'xy')
+    } else {
+      Plotly.Fx.hover(el, [{ curveNumber, pointNumber: idx }], 'xy')
+    }
+  } catch {
+    /* hover is cosmetic — ignore */
+  }
+}
+
 const DARK_TEXT_COLORS = new Set([
   '#e0e8f5', '#e0e8f0', '#e0e0e0', '#d0dde8', '#c0cdd8',
   '#b8c7d9', '#b8c8e0', '#c7d4e8', '#cfd8e3', '#aaa', '#90caf9',
