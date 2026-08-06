@@ -7,6 +7,12 @@ dividend_tax_overrides) and produce a per-tax-year breakdown of:
   - Dividend income split into qualified / ordinary / ROC
   - Realized capital gains split into short-term (<= 365 days) and long-term
 
+The holding period runs from a lot's acquired_date when one is recorded,
+falling back to its transaction_date. The two differ for shares that arrived
+by transfer: the transaction date is the day they landed at the receiving
+broker, while the holding period carries over from the delivering broker, so
+a long-held position moved and then sold is still long-term.
+
 The report is an estimate — wash-sale rules and the strict 60-day qualified
 holding-period test are not enforced. Treatment defaults follow asset-class
 heuristics and may be overridden per ticker (and optionally per year) via
@@ -38,6 +44,87 @@ _DEFAULT_TREATMENT = {
     "MLP": "ordinary",
     "PREFERRED": "ordinary",
 }
+
+
+def _is_transfer_note(notes):
+    """True for the '[Transfer in]' / '[Transfer out]' tag the importers write."""
+    return bool(notes) and "[transfer" in str(notes).lower()
+
+
+def _uniform_buy_price(conn, ticker, profile_id):
+    """The single price every purchase of this position was made at, if there is one.
+
+    Mirrors app._uniform_buy_price; see that docstring for why stable-NAV cash
+    funds need it. Zero-priced buys are excluded so a transferred-in lot stays
+    unknown rather than resolving to free.
+    """
+    rows = conn.execute(
+        """SELECT DISTINCT price_per_share FROM transactions
+            WHERE ticker = ? AND profile_id = ?
+              AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+              AND price_per_share IS NOT NULL
+              AND price_per_share > 0""",
+        (ticker, profile_id),
+    ).fetchall()
+    if len(rows) != 1:
+        return None
+    try:
+        price = float(rows[0]["price_per_share"] if hasattr(rows[0], "keys") else rows[0][0])
+    except (TypeError, ValueError):
+        return None
+    return price if price > 0 else None
+
+
+def _holding_basis(conn, ticker, profile_id):
+    """The position's own cost per share, or None when nothing is recorded.
+
+    Mirrors app._untracked_share_basis. It is duplicated rather than imported
+    because app.py imports this module, and it is the substitute basis both for
+    transferred-in shares (see _buy_cost_per_share) and for sold shares the
+    FIFO walk cannot match to a purchase.
+    """
+    # The split-basis columns arrive via a migration, and the report is a pure
+    # read — so ask only for the columns this database actually has.
+    available = {r[1] for r in conn.execute("PRAGMA table_info(all_account_info)").fetchall()}
+    candidates = [
+        c for c in ("price_paid", "broker_price_paid", "original_price_paid")
+        if c in available
+    ]
+    if not candidates:
+        return _uniform_buy_price(conn, ticker, profile_id)
+    expr = candidates[0] if len(candidates) == 1 else f"COALESCE({', '.join(candidates)})"
+    row = conn.execute(
+        f"SELECT {expr} AS basis FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not row:
+        return _uniform_buy_price(conn, ticker, profile_id)
+    try:
+        basis = float(row["basis"] if hasattr(row, "keys") else row[0])
+    except (TypeError, ValueError):
+        basis = 0.0
+    if basis > 0:
+        return basis
+    return _uniform_buy_price(conn, ticker, profile_id)
+
+
+def _buy_cost_per_share(buy, fallback_basis):
+    """Cost per share for a BUY lot, resolving transferred-in shares.
+
+    A '[Transfer in]' row carries a quantity but no price, so it is stored at
+    price_per_share = 0 — indistinguishable from shares that cost nothing.
+    Left alone it makes a later sale look like 100% profit. The carried-over
+    basis is what the receiving broker reports on the position, so that is the
+    substitute. Returns (cost_per_share, basis_unknown); a closed position has
+    no holding row left to read, and an unknown basis must be reported as
+    unknown rather than as zero.
+    """
+    price = float(buy.get("price_per_share") or 0)
+    if price > 0 or not _is_transfer_note(buy.get("notes")):
+        return price, False
+    if fallback_basis and fallback_basis > 0:
+        return float(fallback_basis), False
+    return 0.0, True
 
 
 def _parse_date(s):
@@ -300,7 +387,8 @@ def compute_realized_lots(conn, profile_id, year):
     if buy_ids_needed:
         bplaceholders = ",".join("?" for _ in buy_ids_needed)
         for br in conn.execute(
-            f"SELECT id, ticker, transaction_date, price_per_share, fees, shares "
+            f"SELECT id, ticker, profile_id, transaction_date, acquired_date, "
+            f"price_per_share, fees, shares, notes "
             f"FROM transactions WHERE id IN ({bplaceholders})",
             list(buy_ids_needed),
         ).fetchall():
@@ -308,6 +396,13 @@ def compute_realized_lots(conn, profile_id, year):
 
     fifo_buys = defaultdict(list)
     fifo_loaded = set()
+    basis_cache = {}
+
+    def _fallback_basis(ticker, pid):
+        key = (ticker, pid)
+        if key not in basis_cache:
+            basis_cache[key] = _holding_basis(conn, ticker, pid)
+        return basis_cache[key]
 
     def _load_fifo(ticker, sell_profile_id):
         # Cache per (ticker, profile_id) — buys must come from the same profile
@@ -317,7 +412,8 @@ def compute_realized_lots(conn, profile_id, year):
             return
         fifo_loaded.add(key)
         rows = conn.execute(
-            """SELECT id, transaction_date, price_per_share, fees, shares
+            """SELECT id, transaction_date, acquired_date, price_per_share,
+                      fees, shares, notes
                  FROM transactions
                 WHERE ticker = ? AND profile_id = ? AND transaction_type = 'BUY'
                 ORDER BY transaction_date, id""",
@@ -328,22 +424,28 @@ def compute_realized_lots(conn, profile_id, year):
     lots = []
     totals = {"short_term": 0.0, "long_term": 0.0, "total": 0.0,
               "st_proceeds": 0.0, "st_cost": 0.0,
-              "lt_proceeds": 0.0, "lt_cost": 0.0}
+              "lt_proceeds": 0.0, "lt_cost": 0.0,
+              "unknown_basis_lots": 0, "unknown_basis_proceeds": 0.0}
 
-    def _emit(ticker, sell_date, sp, fee_per_share, buy_date, buy_price, shares):
+    def _emit(ticker, sell_date, sp, fee_per_share, buy_date, buy_price, shares,
+              acquired_date=None, basis_unknown=False):
         if not shares:
             return
-        bd = _parse_date(buy_date)
+        # Transferred shares keep the holding period they had at the delivering
+        # broker, so acquired_date wins over the day they landed here.
+        holding_start = acquired_date or buy_date
+        bd = _parse_date(holding_start)
         sd = _parse_date(sell_date)
         days = (sd - bd).days if (bd and sd) else None
         term = "LT" if (days is not None and days > 365) else "ST"
         proceeds = sp * shares
         cost = (buy_price or 0) * shares
         gain = proceeds - cost - fee_per_share * shares
-        lots.append({
+        row = {
             "ticker": ticker,
             "sell_date": str(sell_date) if sell_date else None,
             "buy_date": str(buy_date) if buy_date else None,
+            "acquired_date": str(acquired_date) if acquired_date else None,
             "shares": round(shares, 6),
             "sell_price": round(sp, 4),
             "buy_price": round(buy_price or 0, 4),
@@ -352,7 +454,22 @@ def compute_realized_lots(conn, profile_id, year):
             "gain": round(gain, 2),
             "holding_days": days,
             "term": term,
-        })
+            "basis_unknown": bool(basis_unknown),
+        }
+        if basis_unknown:
+            # Cost was never established for these shares, so proceeds minus
+            # zero is not a gain — it is the absence of one. Reporting it would
+            # overstate the year's gains by the entire sale amount, which is
+            # exactly the defect this flag exists to stop. Keep the row visible
+            # and countable, but out of the ST/LT totals until a basis is set.
+            row["gain"] = None
+            row["cost"] = None
+            row["needs_basis"] = True
+            lots.append(row)
+            totals["unknown_basis_lots"] += 1
+            totals["unknown_basis_proceeds"] += proceeds
+            return
+        lots.append(row)
         if term == "LT":
             totals["long_term"] += gain
             totals["lt_proceeds"] += proceeds
@@ -376,11 +493,16 @@ def compute_realized_lots(conn, profile_id, year):
         if allocs:
             for a in allocs:
                 buy = buy_lookup.get(a["buy_txn_id"]) or {}
+                buy_price, basis_unknown = _buy_cost_per_share(
+                    buy, _fallback_basis(ticker, buy.get("profile_id") or profile_id)
+                )
                 _emit(
                     ticker, sell_date, sp, fee_per_share,
                     buy.get("transaction_date"),
-                    float(buy.get("price_per_share") or 0),
+                    buy_price,
                     float(a["shares"] or 0),
+                    acquired_date=buy.get("acquired_date"),
+                    basis_unknown=basis_unknown,
                 )
         else:
             sell_profile = s.get("profile_id") or profile_id
@@ -400,16 +522,29 @@ def compute_realized_lots(conn, profile_id, year):
                 take = min(avail, remaining)
                 buy["_consumed"] = float(buy.get("_consumed", 0)) + take
                 remaining -= take
+                buy_price, basis_unknown = _buy_cost_per_share(
+                    buy, _fallback_basis(ticker, sell_profile)
+                )
                 _emit(
                     ticker, sell_date, sp, fee_per_share,
                     buy.get("transaction_date"),
-                    float(buy.get("price_per_share") or 0),
+                    buy_price,
                     take,
+                    acquired_date=buy.get("acquired_date"),
+                    basis_unknown=basis_unknown,
                 )
             if remaining > 1e-6:
-                # Couldn't match all shares — emit a row with no buy info so the
-                # user sees the gap rather than silently dropping it.
-                _emit(ticker, sell_date, sp, fee_per_share, None, 0, remaining)
+                # Couldn't match all shares to a purchase. Emitting them at a
+                # cost of zero reports the whole sale as gain, which is how the
+                # money-market sweeps produced $1.85M of invented gains. Charge
+                # the position's own basis — or the single price every purchase
+                # was made at — and only call it unknown when neither exists.
+                unmatched_basis = _fallback_basis(ticker, sell_profile)
+                _emit(
+                    ticker, sell_date, sp, fee_per_share, None,
+                    unmatched_basis or 0, remaining,
+                    basis_unknown=not unmatched_basis,
+                )
 
     for k in totals:
         totals[k] = round(totals[k], 2)

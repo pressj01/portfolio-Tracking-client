@@ -422,7 +422,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(!isNew)
   const [form, setForm] = useState({
-    ticker: ticker || '', transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', notes: '',
+    ticker: ticker || '', transaction_type: 'BUY', shares: '', price_per_share: '', fees: '', transaction_date: '', acquired_date: '', notes: '',
     // Fields for new ticker creation (lookup data)
     description: '', classification_type: '', current_price: '',
     div: '', div_frequency: 'M', ex_div_date: '', div_pay_date: '', reinvest: 'N', category: '',
@@ -492,6 +492,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       price_per_share: '',
       fees: '',
       transaction_date: '',
+      acquired_date: '',
       notes: '',
     }))
     setEditId(null)
@@ -538,6 +539,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       price_per_share: form.price_per_share ? parseFloat(form.price_per_share) : null,
       fees: form.fees ? parseFloat(form.fees) : 0,
       transaction_date: form.transaction_date || null,
+      acquired_date: form.acquired_date || null,
       notes: form.notes || null,
     }
     if (!Number.isFinite(payload.shares) || payload.shares <= 0) {
@@ -615,6 +617,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       price_per_share: txn.price_per_share || '',
       fees: txn.fees || '',
       transaction_date: txn.transaction_date || '',
+      acquired_date: txn.acquired_date || '',
       notes: txn.raw_notes ?? txn.notes ?? '',
     }))
     if ((txn.transaction_type || 'BUY') === 'SELL') {
@@ -688,10 +691,24 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                     <td style={{ color: isSell ? 'var(--p-ef9a9a)' : 'var(--p-81c784)', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
                     <td>
                       <div>{txn.transaction_date || '-'}</div>
+                      {txn.acquired_date && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}
+                          title="Originally acquired at the delivering broker; the holding period runs from this date.">
+                          held since {txn.acquired_date}
+                        </div>
+                      )}
                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                     </td>
                     <td>{fmt(txn.shares, 3)}</td>
-                    <td>{fmtM(txn.price_per_share)}</td>
+                    <td>
+                      {fmtM(txn.price_per_share)}
+                      {txn.basis_unknown && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--p-ffb74d, #ffb74d)', marginTop: '0.15rem' }}
+                          title={txn.basis_note || ''}>
+                          needs cost basis
+                        </div>
+                      )}
+                    </td>
                     <td>{fmtM(txn.fees)}</td>
                     <td>{fmtM(amount)}</td>
                     <td style={{ color: txn.realized_gain > 0 ? 'var(--p-81c784)' : txn.realized_gain < 0 ? 'var(--p-ef9a9a)' : undefined }}>
@@ -883,6 +900,21 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
               <input type="number" step="0.01" value={form.fees} onChange={(e) => setForm(prev => ({ ...prev, fees: e.target.value }))} placeholder="0.00" style={{ width: '100%' }} />
             </div>
           </div>
+          {form.transaction_type === 'BUY' && (
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Originally Acquired</label>
+                <input type="date" min="1900-01-01" max="2099-12-31" value={form.acquired_date || ''}
+                  onChange={(e) => setForm(prev => ({ ...prev, acquired_date: e.target.value }))}
+                  style={{ width: '100%' }} />
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', marginTop: '0.25rem' }}>
+                  Only for shares transferred in from another broker. Set this to the
+                  date they were originally bought so the long-term holding period
+                  carries over. Leave blank otherwise.
+                </div>
+              </div>
+            </div>
+          )}
           <div className="form-row">
             <div className="form-group" style={{ flex: 1 }}>
               <label>Notes</label>

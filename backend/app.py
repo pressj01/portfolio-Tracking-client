@@ -13107,6 +13107,39 @@ def _is_transfer_txn(notes):
     return bool(notes) and "[transfer" in str(notes).lower()
 
 
+def _transfer_in_cost_per_share(txn_type, price, notes, fallback_basis):
+    """Resolve the per-share cost of a '[Transfer in]' BUY.
+
+    Shares that arrive by ACAT keep the cost basis they had at the delivering
+    broker, but an activity export reports only the quantity — the row has no
+    price on it. The importers therefore store price_per_share = 0 (see the
+    ACATI branch in transaction_import.py), which the lot queue cannot tell
+    apart from shares that genuinely cost nothing. Every later SELL consumes a
+    $0 lot and books the whole proceeds as gain: JNJ's 2026-06-29 sale of
+    38.3 shares recorded $9,761.21 of proceeds as $9,761.21 of profit.
+
+    This is the transfer-*in* twin of the bug _untracked_share_basis fixes for
+    transfer-outs. That guard only fires once the lot queue runs empty (see
+    _consume_sell_lots_with_fallback), so it never covered a queue seeded with
+    worthless lots — the queue is full, just valueless.
+
+    The receiving broker reports the carried-over basis on the position
+    itself, so the holding's own cost per share is the right substitute: same
+    source, same reasoning, as the transfer-out path. Returns
+    (cost_per_share, basis_unknown). A position that has since been closed
+    leaves no holding row to read, so the basis can be genuinely
+    unrecoverable — callers must surface that rather than invent a number.
+    """
+    price = float(price or 0)
+    if (txn_type or "BUY").upper() != "BUY":
+        return price, False
+    if not _is_transfer_txn(notes) or price > 0:
+        return price, False
+    if fallback_basis and float(fallback_basis) > 0:
+        return float(fallback_basis), False
+    return 0.0, True
+
+
 def _refresh_transaction_realized_gains(ticker, profile_id, conn):
     """Recompute realized gains from transactions without changing holdings."""
     rows = conn.execute(
@@ -13144,7 +13177,11 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
                 covered = min(share_deficit, shares)
                 share_deficit -= covered
                 shares -= covered
-            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            price, basis_unknown = _transfer_in_cost_per_share(
+                txn_type, price, notes, untracked_basis
+            )
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate,
+                               basis_unknown=basis_unknown)
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         elif _is_transfer_txn(notes):
             # Shares moved accounts, not sold: still consume the lots so the
@@ -13155,16 +13192,26 @@ def _refresh_transaction_realized_gains(ticker, profile_id, conn):
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
+            unknown_out = [0.0]
             cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
                 untracked_basis,
+                unknown_out=unknown_out,
             )
             share_deficit += sell_remaining
+            # Shares whose basis was never recoverable make the gain unknowable.
+            # Reporting proceeds-minus-zero here is what produced the phantom
+            # 100%-profit sales, so record nothing instead and let the
+            # transfer-basis report surface the transaction for repair.
+            realized = (
+                None if unknown_out[0] > 1e-9
+                else round(sell_proceeds - cost_of_sold, 2)
+            )
             conn.execute(
                 "UPDATE transactions SET realized_gain = ? WHERE id = ?",
-                (round(sell_proceeds - cost_of_sold, 2), txn_id),
+                (realized, txn_id),
             )
 
 
@@ -13365,7 +13412,11 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
                 covered = min(share_deficit, shares)
                 share_deficit -= covered
                 shares -= covered
-            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            price, basis_unknown = _transfer_in_cost_per_share(
+                txn_type, price, notes, untracked_basis
+            )
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate,
+                               basis_unknown=basis_unknown)
             if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
@@ -13379,19 +13430,29 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:
             sell_proceeds = (shares * price) - fees
+            unknown_out = [0.0]
             cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
                 untracked_basis,
+                unknown_out=unknown_out,
             )
             share_deficit += sell_remaining
-            realized = sell_proceeds - cost_of_sold
-            total_realized += realized
-            conn.execute(
-                "UPDATE transactions SET realized_gain = ? WHERE id = ?",
-                (round(realized, 2), txn_id),
-            )
+            if unknown_out[0] > 1e-9:
+                # Basis never established — see the SELL branch in
+                # _refresh_transaction_realized_gains. Leave it out of the
+                # running total rather than inflating realized_gains.
+                conn.execute(
+                    "UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,)
+                )
+            else:
+                realized = sell_proceeds - cost_of_sold
+                total_realized += realized
+                conn.execute(
+                    "UPDATE transactions SET realized_gain = ? WHERE id = ?",
+                    (round(realized, 2), txn_id),
+                )
 
     # Closed position (no current holding row) — realized_gain on transactions
     # has been recomputed above; nothing to update on all_account_info.
@@ -13582,7 +13643,11 @@ def _rollup_transactions(ticker, profile_id, conn):
                 covered = min(share_deficit, shares)
                 share_deficit -= covered
                 shares -= covered
-            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate)
+            price, basis_unknown = _transfer_in_cost_per_share(
+                txn_type, price, notes, untracked_basis
+            )
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id, txn_date=tdate,
+                               basis_unknown=basis_unknown)
             if shares > 1e-9 and tdate and (earliest_buy is None or tdate < earliest_buy):
                 earliest_buy = tdate
             # Clear any realized_gain on BUY rows
@@ -13596,18 +13661,27 @@ def _rollup_transactions(ticker, profile_id, conn):
             conn.execute("UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,))
         else:  # SELL
             sell_proceeds = (shares * price) - fees  # fees reduce proceeds
+            unknown_out = [0.0]
             cost_of_sold, sell_remaining = _consume_sell_lots_with_fallback(
                 lots,
                 shares,
                 alloc_map.get(txn_id),
                 untracked_basis,
+                unknown_out=unknown_out,
             )
             share_deficit += sell_remaining
 
-            realized = sell_proceeds - cost_of_sold
-            total_realized += realized
-            conn.execute("UPDATE transactions SET realized_gain = ? WHERE id = ?",
-                         (round(realized, 2), txn_id))
+            if unknown_out[0] > 1e-9:
+                # Basis never established — see the SELL branch in
+                # _refresh_transaction_realized_gains.
+                conn.execute(
+                    "UPDATE transactions SET realized_gain = NULL WHERE id = ?", (txn_id,)
+                )
+            else:
+                realized = sell_proceeds - cost_of_sold
+                total_realized += realized
+                conn.execute("UPDATE transactions SET realized_gain = ? WHERE id = ?",
+                             (round(realized, 2), txn_id))
 
     # Remaining lots = current position
     total_shares = sum(lot["shares"] for lot in lots) - share_deficit
@@ -13734,10 +13808,23 @@ def _load_lot_alloc_map(conn, sell_ids):
     return alloc_map
 
 
-def _consume_sell_lots(lots, sell_shares, allocations=None):
-    """Consume lots for a sell and return (cost_of_sold, remaining_sell_shares)."""
+def _consume_sell_lots(lots, sell_shares, allocations=None, unknown_out=None):
+    """Consume lots for a sell and return (cost_of_sold, remaining_sell_shares).
+
+    Pass a single-element list as `unknown_out` to learn whether any consumed
+    lot carried an unestablished basis (see _apply_buy_to_lots); it is set to
+    the share count taken from such lots. Callers that don't care omit it, so
+    the return shape stays as it was.
+    """
     cost_of_sold = 0.0
     sell_remaining = float(sell_shares or 0)
+    unknown_shares = 0.0
+
+    def _take(lot, take):
+        nonlocal cost_of_sold, unknown_shares
+        cost_of_sold += take * lot["cost_per_share"]
+        if lot.get("basis_unknown"):
+            unknown_shares += take
 
     if allocations:
         for alloc in allocations:
@@ -13747,7 +13834,7 @@ def _consume_sell_lots(lots, sell_shares, allocations=None):
                 if lot["id"] != buy_id:
                     continue
                 take = min(alloc_shares, lot["shares"])
-                cost_of_sold += take * lot["cost_per_share"]
+                _take(lot, take)
                 lot["shares"] -= take
                 sell_remaining -= take
                 break
@@ -13755,15 +13842,17 @@ def _consume_sell_lots(lots, sell_shares, allocations=None):
         while sell_remaining > 1e-9 and lots:
             lot = lots[0]
             if lot["shares"] <= sell_remaining + 1e-9:
-                cost_of_sold += lot["shares"] * lot["cost_per_share"]
+                _take(lot, lot["shares"])
                 sell_remaining -= lot["shares"]
                 lots.pop(0)
             else:
-                cost_of_sold += sell_remaining * lot["cost_per_share"]
+                _take(lot, sell_remaining)
                 lot["shares"] -= sell_remaining
                 sell_remaining = 0
 
     lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
+    if unknown_out is not None:
+        unknown_out[0] = unknown_shares
     return cost_of_sold, max(0.0, sell_remaining)
 
 
@@ -13780,39 +13869,113 @@ def _untracked_share_basis(conn, ticker, profile_id):
 
     The broker's own cost per share on the surviving position is the best
     available basis for those shares, so charge the uncovered remainder at that
-    rate instead of at zero. Returns None when there is nothing to fall back on
-    (no holding row, or no basis recorded), which preserves the old behaviour
-    rather than inventing a number.
+    rate instead of at zero. Failing that, a position whose every purchase
+    happened at one single price has that price as its basis by definition —
+    see _uniform_buy_price. Returns None when neither is available, which
+    preserves the old behaviour rather than inventing a number.
     """
-    row = conn.execute(
-        """SELECT COALESCE(price_paid, broker_price_paid, original_price_paid) AS basis
-           FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
+    # Read paths call this too, and a database that has not yet been through
+    # _ensure_basis_columns has only price_paid. Ask for the columns that are
+    # actually there rather than letting a GET fail on a legacy schema.
+    available = {r[1] for r in conn.execute("PRAGMA table_info(all_account_info)").fetchall()}
+    candidates = [
+        c for c in ("price_paid", "broker_price_paid", "original_price_paid")
+        if c in available
+    ]
+    expr = None
+    if candidates:
+        expr = candidates[0] if len(candidates) == 1 else f"COALESCE({', '.join(candidates)})"
+    if expr:
+        row = conn.execute(
+            f"SELECT {expr} AS basis FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchone()
+        if row:
+            basis = row["basis"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+            try:
+                basis = float(basis)
+            except (TypeError, ValueError):
+                basis = 0.0
+            if basis > 0:
+                return basis
+    return _uniform_buy_price(conn, ticker, profile_id)
+
+
+def _uniform_buy_price(conn, ticker, profile_id):
+    """The single price every purchase of this position was made at, if there is one.
+
+    A stable-NAV cash fund is the case that forces this. SPAXX is Fidelity's
+    core sweep: it is always worth exactly $1.00, and the account's whole cash
+    flow runs through it as buys and sells. Money also reaches the sweep by
+    routes the activity export does not record as SPAXX purchases (dividends,
+    trade settlements), so the ledger ends up with far more shares sold than
+    bought — 4.07M against 2.45M in profile 18. The lot queue drains, the
+    position is not a holding so there is no basis to fall back on, and every
+    later sale books its full proceeds as capital gain: $1.85M of invented
+    gains across ten money-market positions, on funds that mathematically
+    cannot produce one.
+
+    Uniform purchase price answers it without special-casing cash. When every
+    recorded buy is at the same price, that price is the cost of any share the
+    queue lost track of — true of a $1.00 sweep fund, and equally true of any
+    position bought repeatedly at one price. Zero-priced buys are excluded so
+    a transferred-in lot stays 'basis unknown' instead of resolving to free.
+    """
+    rows = conn.execute(
+        """SELECT DISTINCT price_per_share FROM transactions
+            WHERE ticker = ? AND profile_id = ?
+              AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+              AND price_per_share IS NOT NULL
+              AND price_per_share > 0""",
         (ticker, profile_id),
-    ).fetchone()
-    if not row:
+    ).fetchall()
+    if len(rows) != 1:
         return None
-    basis = row["basis"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+    price = rows[0]["price_per_share"] if hasattr(rows[0], "keys") else rows[0][0]
     try:
-        basis = float(basis)
+        price = float(price)
     except (TypeError, ValueError):
         return None
-    return basis if basis > 0 else None
+    return price if price > 0 else None
 
 
-def _consume_sell_lots_with_fallback(lots, shares, allocations, fallback_cost_per_share):
+def _consume_sell_lots_with_fallback(lots, shares, allocations, fallback_cost_per_share,
+                                     unknown_out=None):
     """_consume_sell_lots, but uncovered shares cost `fallback_cost_per_share`.
 
     Returns (cost_of_sold, sell_remaining). `sell_remaining` is still reported
     so callers keep their share-deficit bookkeeping — only the cost changes.
+
+    Uncovered shares with no fallback to charge them at are counted into
+    `unknown_out` alongside the unknown-basis lots. Their basis is missing for
+    a different reason — the queue ran empty rather than filling with $0 lots —
+    but the consequence is identical: costing them at zero reports the whole
+    sale as profit. JNJ reached this path after a transfer-out drained its
+    queue and the position was later closed, leaving no holding row to read a
+    basis from, and booked $9,761.21 of proceeds as $9,761.21 of gain.
     """
-    cost_of_sold, sell_remaining = _consume_sell_lots(lots, shares, allocations)
-    if sell_remaining > 1e-9 and fallback_cost_per_share:
-        cost_of_sold += sell_remaining * fallback_cost_per_share
+    cost_of_sold, sell_remaining = _consume_sell_lots(
+        lots, shares, allocations, unknown_out=unknown_out
+    )
+    if sell_remaining > 1e-9:
+        if fallback_cost_per_share:
+            cost_of_sold += sell_remaining * fallback_cost_per_share
+        elif unknown_out is not None:
+            unknown_out[0] = (unknown_out[0] or 0.0) + sell_remaining
     return cost_of_sold, sell_remaining
 
 
-def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None):
-    """Append a BUY lot and return its weighted cost per share."""
+def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None,
+                       basis_unknown=False):
+    """Append a BUY lot and return its weighted cost per share.
+
+    `basis_unknown` marks a lot whose cost could not be established at all —
+    a transfer-in on a position that has since been closed, leaving no holding
+    row to read the carried-over basis from. Such a lot still holds shares (so
+    the queue stays share-accurate) but its $0 cost is a placeholder, not a
+    fact, and any sell that consumes it must decline to report a gain rather
+    than book the entire proceeds as profit.
+    """
     shares = float(shares or 0)
     price = float(price or 0)
     fees = float(fees or 0)
@@ -13824,6 +13987,8 @@ def _apply_buy_to_lots(lots, shares, price, fees, txn_id=None, txn_date=None):
             lot["id"] = txn_id
         if txn_date is not None:
             lot["date"] = txn_date
+        if basis_unknown:
+            lot["basis_unknown"] = True
         lots.append(lot)
     return cost_per
 
@@ -14015,8 +14180,13 @@ def _normalize_lot_allocations(conn, ticker, profile_id, shares, lot_allocations
     ]
 
 
-def _annotate_transaction_rows(rows, alloc_map):
-    """Attach lot metadata and running position/cost info to transaction rows."""
+def _annotate_transaction_rows(rows, alloc_map, fallback_basis=None):
+    """Attach lot metadata and running position/cost info to transaction rows.
+
+    `fallback_basis` is the holding's own cost per share, used to price
+    transfer-in rows that arrived without one so the running average cost
+    shown on the holdings screen matches what the rollup computed.
+    """
     annotated = []
     lots = []
     share_deficit = 0.0
@@ -14042,7 +14212,17 @@ def _annotate_transaction_rows(rows, alloc_map):
                 covered = min(share_deficit, shares)
                 share_deficit -= covered
                 shares -= covered
-            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id)
+            price, basis_unknown = _transfer_in_cost_per_share(
+                txn_type, price, txn.get("notes"), fallback_basis
+            )
+            txn["basis_unknown"] = basis_unknown
+            if basis_unknown:
+                txn["basis_note"] = (
+                    "Transferred in without a cost basis. Enter the original "
+                    "cost per share so gains on these shares can be calculated."
+                )
+            _apply_buy_to_lots(lots, shares, price, fees, txn_id=txn_id,
+                               basis_unknown=basis_unknown)
         else:
             _, sell_remaining = _consume_sell_lots(lots, shares, txn_allocs)
             share_deficit += sell_remaining
@@ -14070,6 +14250,166 @@ def open_lots(ticker):
     return jsonify(result)
 
 
+def _scan_cost_basis_gaps(conn, profile_ids):
+    """Find transferred-in lots and report whether their basis is recoverable.
+
+    A '[Transfer in]' row stores price_per_share = 0 because the broker's
+    activity export has no price on it. Where the position is still open the
+    carried-over basis can be read off the holding; where it has since been
+    closed there is nothing left to read and the user has to supply the
+    number. Returns both groups plus the sells that consumed them.
+
+    `targets` is every position holding a sell, because no static condition
+    reliably identifies which ones need the replay. A transfer-out drains the
+    lot queue; so does a cash sweep recording more shares sold than bought
+    (money reaches SPAXX by routes the activity export never files as a
+    purchase); and so does a sell merely dated ahead of the buy that covers
+    it, on a position whose totals balance perfectly. Only replaying tells you.
+    That is safe to do broadly: _refresh_transaction_realized_gains recomputes
+    realized_gain from the ledger and touches nothing else, which is exactly
+    what every transaction edit already triggers.
+    """
+    ids = list(dict.fromkeys(int(p) for p in (profile_ids or []) if p is not None))
+    if not ids:
+        return {"resolved": [], "unresolved": [], "affected_sells": [], "targets": []}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT id, ticker, profile_id, transaction_date, shares, notes
+              FROM transactions
+             WHERE profile_id IN ({placeholders})
+               AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+               AND COALESCE(price_per_share, 0) <= 0
+               AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') > 0
+             ORDER BY ticker, transaction_date""",
+        ids,
+    ).fetchall()
+
+    resolved, unresolved, affected = [], [], []
+    for r in rows:
+        row = dict(r)
+        basis = _untracked_share_basis(conn, row["ticker"], row["profile_id"])
+        entry = {
+            "transaction_id": row["id"],
+            "ticker": row["ticker"],
+            "profile_id": row["profile_id"],
+            "transfer_date": row["transaction_date"],
+            "shares": round(float(row["shares"] or 0), 6),
+            "notes": row["notes"],
+            "resolved_basis": round(float(basis), 4) if basis else None,
+        }
+        if basis:
+            resolved.append(entry)
+            continue
+        unresolved.append(entry)
+        for s in conn.execute(
+            """SELECT id, transaction_date, shares, price_per_share, realized_gain
+                 FROM transactions
+                WHERE ticker = ? AND profile_id = ?
+                  AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+                  AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0
+                  AND transaction_date >= ?
+                ORDER BY transaction_date""",
+            (row["ticker"], row["profile_id"], row["transaction_date"] or ""),
+        ).fetchall():
+            sell = dict(s)
+            affected.append({
+                "transaction_id": sell["id"],
+                "ticker": row["ticker"],
+                "profile_id": row["profile_id"],
+                "sell_date": sell["transaction_date"],
+                "shares": round(float(sell["shares"] or 0), 6),
+                "proceeds": round(
+                    float(sell["shares"] or 0) * float(sell["price_per_share"] or 0), 2
+                ),
+                "realized_gain": sell["realized_gain"],
+            })
+
+    targets = [
+        (r["ticker"], r["profile_id"])
+        for r in conn.execute(
+            f"""SELECT DISTINCT ticker, profile_id FROM transactions
+                 WHERE profile_id IN ({placeholders})
+                   AND UPPER(COALESCE(transaction_type, 'BUY')) = 'SELL'
+                 ORDER BY ticker, profile_id""",
+            ids,
+        ).fetchall()
+    ]
+    return {
+        "resolved": resolved,
+        "unresolved": unresolved,
+        "affected_sells": affected,
+        "targets": targets,
+    }
+
+
+@app.route("/api/transactions/cost-basis-report", methods=["GET"])
+def cost_basis_report():
+    """Report positions whose realized gains rest on a missing cost basis.
+
+    'resolved' transfer-in lots are priced automatically from the position's
+    own basis. 'unresolved' ones belong to closed positions with no basis left
+    to read; their sells report no gain until a cost per share is entered by
+    hand. 'targets' additionally covers positions whose lot queue runs dry —
+    transfers out, and cash sweeps that record more shares sold than bought.
+    """
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        report = _scan_cost_basis_gaps(conn, read_pids)
+    finally:
+        conn.close()
+    report["counts"] = {
+        "resolved": len(report["resolved"]),
+        "unresolved": len(report["unresolved"]),
+        "affected_sells": len(report["affected_sells"]),
+    }
+    return jsonify(report)
+
+
+@app.route("/api/transactions/repair-cost-basis", methods=["POST"])
+def repair_cost_basis():
+    """Recompute realized gains for positions whose basis went missing.
+
+    Existing databases carry gains computed when transferred-in lots were
+    priced at $0, and when a drained lot queue left sold shares costing
+    nothing — both of which booked whole sale proceeds as profit. This replays
+    the realized gain for those positions with the recovered basis applied. It
+    rewrites transactions.realized_gain only — holdings, quantities and lot
+    allocations are left alone — so it is safe to run repeatedly.
+    """
+    is_agg, pids = get_profile_filter()
+    backup_path = _create_import_backup()
+    conn = get_connection()
+    try:
+        read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        report = _scan_cost_basis_gaps(conn, read_pids)
+        targets = report["targets"]
+        for ticker, profile_id in targets:
+            _refresh_transaction_realized_gains(ticker, profile_id, conn)
+        conn.commit()
+        # Count what the replay could not price, so the caller knows how much
+        # still needs a basis entered by hand rather than assuming it is done.
+        unpriced = conn.execute(
+            f"""SELECT COUNT(*) AS n FROM transactions
+                 WHERE profile_id IN ({",".join("?" * len(read_pids))})
+                   AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+                   AND realized_gain IS NULL
+                   AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0""",
+            read_pids,
+        ).fetchone()["n"]
+    finally:
+        conn.close()
+    return jsonify({
+        "repaired_positions": len(targets),
+        "tickers": sorted({t for t, _ in targets}),
+        "sells_still_unpriced": unpriced,
+        "transfer_lots_needing_basis": len(report["unresolved"]),
+        "unresolved": report["unresolved"],
+        "backup": os.path.basename(backup_path) if backup_path else None,
+    })
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["GET"])
 def list_transactions(ticker):
     """List all transactions for a ticker."""
@@ -14089,8 +14429,9 @@ def list_transactions(ticker):
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
     profile_names = _load_profile_name_map(conn, read_pids) if include_account_note else {}
+    fallback_basis = _untracked_share_basis(conn, ticker, read_pids[0]) if read_pids else None
     conn.close()
-    transactions = _annotate_transaction_rows(rows, alloc_map)
+    transactions = _annotate_transaction_rows(rows, alloc_map, fallback_basis)
     return jsonify(_add_transaction_source_notes(transactions, profile_names, include_account_note))
 
 
@@ -14190,10 +14531,11 @@ def add_transaction(ticker):
         return jsonify({"error": str(e)}), 400
 
     cur = conn.execute(
-        "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, acquired_date) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (ticker, profile_id, txn_type, data.get("transaction_date"), shares,
-         data.get("price_per_share"), data.get("fees", 0), data.get("notes")),
+         data.get("price_per_share"), data.get("fees", 0), data.get("notes"),
+         data.get("acquired_date") or None),
     )
     new_txn_id = cur.lastrowid
     conn.commit()
@@ -14302,10 +14644,18 @@ def update_transaction(ticker, txn_id):
 
     updates = []
     vals = []
-    for field in ["transaction_type", "transaction_date", "shares", "price_per_share", "fees", "notes"]:
+    for field in ["transaction_type", "transaction_date", "shares", "price_per_share",
+                  "fees", "notes", "acquired_date"]:
         if field in data:
             updates.append(f"{field} = ?")
-            vals.append(new_shares if field == "shares" else data[field])
+            if field == "shares":
+                vals.append(new_shares)
+            elif field == "acquired_date":
+                # Blank clears it, restoring "holding period starts at the
+                # transaction date" rather than storing an empty string.
+                vals.append(data[field] or None)
+            else:
+                vals.append(data[field])
 
     if not updates:
         conn.close()

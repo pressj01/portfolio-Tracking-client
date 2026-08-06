@@ -1015,6 +1015,7 @@ def ensure_tables_exist(conn=None):
             fees            REAL DEFAULT 0,
             realized_gain   REAL,
             notes           TEXT,
+            acquired_date   TEXT,
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -1024,6 +1025,14 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'BUY'")
     if "realized_gain" not in _txn_cols:
         cur.execute("ALTER TABLE transactions ADD COLUMN realized_gain REAL")
+    # When shares arrive by transfer the transaction_date is the day they
+    # landed at the receiving broker, not the day they were bought. The
+    # holding period for capital-gains purposes carries over from the
+    # delivering broker, so a transferred position sold months later is still
+    # long-term. acquired_date holds that original date when it is known;
+    # NULL means "same as transaction_date", which is the ordinary case.
+    if "acquired_date" not in _txn_cols:
+        cur.execute("ALTER TABLE transactions ADD COLUMN acquired_date TEXT")
     # Index for fast rollup queries
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_transactions_ticker_profile

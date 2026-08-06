@@ -592,9 +592,28 @@ export default function AnnualTaxReport() {
                   </tbody>
                 </table>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-dim)', marginTop: '0.5rem' }}>
-                  Long-term = held more than 365 days. Cost basis comes from explicit lot
-                  allocations on each sell, falling back to FIFO.
+                  Long-term = held more than 365 days, counted from the original purchase
+                  date for shares transferred in from another broker. Cost basis comes from
+                  explicit lot allocations on each sell, falling back to FIFO.
                 </p>
+                {(data.realized?.totals?.unknown_basis_lots > 0) && (
+                  <div style={{
+                    marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: 4,
+                    background: 'rgba(255,184,108,0.12)', border: '1px solid rgba(255,184,108,0.35)',
+                    fontSize: '0.82rem',
+                  }}>
+                    <strong style={{ color: 'var(--p-ffb86c)' }}>
+                      {data.realized.totals.unknown_basis_lots} lot
+                      {data.realized.totals.unknown_basis_lots === 1 ? '' : 's'} need a cost basis.
+                    </strong>{' '}
+                    {fmt(data.realized.totals.unknown_basis_proceeds)} of proceeds came from
+                    shares with no recorded purchase behind them — transferred in without a
+                    basis, or sold beyond what the imported buy history covers. Their gain
+                    cannot be calculated and is excluded from the totals above. Open the
+                    position in Manage Holdings and set the price per share on the buy, or
+                    import the missing purchase history.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -714,14 +733,30 @@ export default function AnnualTaxReport() {
                     <tr key={i}>
                       <td><strong>{row.ticker}</strong></td>
                       <td>{row.sell_date || '—'}</td>
-                      <td>{row.buy_date || <span style={{ color: 'var(--neg)' }}>unmatched</span>}</td>
+                      <td>
+                        {row.buy_date || <span style={{ color: 'var(--neg)' }}>unmatched</span>}
+                        {row.acquired_date && (
+                          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}
+                            title="Transferred in; the holding period runs from the original purchase.">
+                            held since {row.acquired_date}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'right' }}>{Number(row.shares).toFixed(3)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(row.buy_price)}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        {row.basis_unknown
+                          ? <span style={{ color: 'var(--p-ffb86c)' }}>unknown</span>
+                          : fmt(row.buy_price)}
+                      </td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.sell_price)}</td>
-                      <td style={{ textAlign: 'right' }}>{fmt(row.cost)}</td>
+                      <td style={{ textAlign: 'right' }}>
+                        {row.cost == null ? <span style={{ color: 'var(--p-ffb86c)' }}>—</span> : fmt(row.cost)}
+                      </td>
                       <td style={{ textAlign: 'right' }}>{fmt(row.proceeds)}</td>
                       <td style={{ textAlign: 'right', color: glColor(row.gain) }}>
-                        <strong>{fmt(row.gain)}</strong>
+                        {row.gain == null
+                          ? <span style={{ color: 'var(--p-ffb86c)' }} title="Cost basis unknown — set it on the Manage Holdings transaction.">needs basis</span>
+                          : <strong>{fmt(row.gain)}</strong>}
                       </td>
                       <td style={{ textAlign: 'right', color: 'var(--text-dim)' }}>
                         {row.holding_days != null ? row.holding_days : '—'}
