@@ -22563,6 +22563,159 @@ def accumulation_compare_run():
         ), 500
 
 
+def _total_return_realized_rows(
+    conn,
+    scope,
+    period_range,
+    category_names,
+    sub_tickers,
+    cat_by_ticker,
+):
+    """Closed positions expressed in the Total Return column vocabulary.
+
+    A sale is a recorded fact, so a realized row's return comes from its own
+    buy/sell prices instead of the market index used for open holdings. Cost
+    basis stands in for start value and proceeds for end value, which keeps the
+    realized table sortable against the unrealized one. Rows are kept when the
+    sale settled inside the selected window.
+    """
+    import math
+
+    transaction_profile_ids = scope["transaction_profile_ids"]
+    holding_profile_ids = scope["holding_profile_ids"]
+    txn_placeholders = ",".join("?" * len(transaction_profile_ids))
+
+    dividend_allocation = _gains_losses_dividend_allocation(
+        conn,
+        set(holding_profile_ids) | set(transaction_profile_ids),
+    )
+
+    raw_sales = []
+    for row in conn.execute(
+        "SELECT ticker, buy_price, sell_price, shares_sold, sell_date, divs_received, notes "
+        "FROM watchlist_sold ORDER BY sell_date DESC, id DESC"
+    ).fetchall():
+        row = dict(row)
+        raw_sales.append({
+            "ticker": row.get("ticker"),
+            "buy_price": row.get("buy_price"),
+            "sell_price": row.get("sell_price"),
+            "shares_sold": row.get("shares_sold"),
+            "sell_date": row.get("sell_date"),
+            "divs_received": row.get("divs_received"),
+        })
+
+    for row in conn.execute(
+        f"""SELECT t.id AS sell_txn_id, t.ticker, t.price_per_share AS sell_price,
+                   t.shares AS shares_sold, t.transaction_date AS sell_date,
+                   t.realized_gain, t.notes
+           FROM transactions t
+           WHERE t.transaction_type = 'SELL'
+             AND t.profile_id IN ({txn_placeholders})
+           ORDER BY t.transaction_date DESC, t.id DESC""",
+        transaction_profile_ids,
+    ).fetchall():
+        row = dict(row)
+        if _is_transfer_txn(row.get("notes")):
+            continue
+        sell_price = float(row.get("sell_price") or 0)
+        shares = float(row.get("shares_sold") or 0)
+        realized_gain = float(row.get("realized_gain") or 0)
+        proceeds = sell_price * shares
+        cost = proceeds - realized_gain
+        raw_sales.append({
+            "ticker": row.get("ticker"),
+            "buy_price": cost / shares if shares else 0,
+            "sell_price": sell_price,
+            "shares_sold": shares,
+            "sell_date": row.get("sell_date"),
+            "divs_received": dividend_allocation["sell_dividends"].get(
+                row["sell_txn_id"], 0.0
+            ),
+        })
+
+    def _num(value):
+        try:
+            number = float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return 0.0 if (math.isnan(number) or math.isinf(number)) else number
+
+    def _round(value):
+        number = _num(value)
+        return round(number, 2)
+
+    window_start = period_range.get("start_date") if period_range else None
+    window_end = period_range.get("end_date") if period_range else None
+    filter_active = bool(category_names or sub_tickers)
+    # A sale whose lots were drained by an unmatched transfer books its whole
+    # proceeds as gain against ~zero cost. The dollars are still reportable, but
+    # the ratio is not, so the percentage is withheld instead of printing
+    # something like 271,802,500%.
+    min_basis = 1.0
+
+    rows = []
+    totals = {
+        "start_value": 0.0,
+        "end_value": 0.0,
+        "price_return_dollar": 0.0,
+        "distribution_dollar": 0.0,
+        "total_return_dollar": 0.0,
+    }
+    for sale in raw_sales:
+        ticker = str(sale.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        sell_date = str(sale.get("sell_date") or "")[:10]
+        if window_start and sell_date and sell_date < window_start:
+            continue
+        if window_end and sell_date and sell_date > window_end:
+            continue
+        category_name = cat_by_ticker.get(ticker, "Other")
+        if filter_active and category_name not in category_names and ticker not in sub_tickers:
+            continue
+
+        shares = _num(sale.get("shares_sold"))
+        cost = _num(sale.get("buy_price")) * shares
+        proceeds = _num(sale.get("sell_price")) * shares
+        price_return = proceeds - cost
+        distributions = _num(sale.get("divs_received"))
+        total_return = price_return + distributions
+
+        totals["start_value"] += cost
+        totals["end_value"] += proceeds
+        totals["price_return_dollar"] += price_return
+        totals["distribution_dollar"] += distributions
+        totals["total_return_dollar"] += total_return
+
+        rows.append({
+            "ticker": ticker,
+            "category_name": category_name,
+            "sell_date": sell_date,
+            "shares_sold": _round(shares),
+            "start_value": _round(cost),
+            "end_value": _round(proceeds),
+            "price_return_dollar": _round(price_return),
+            "price_return_pct": _round(price_return / cost * 100) if cost >= min_basis else None,
+            "distribution_dollar": _round(distributions),
+            "total_return_dollar": _round(total_return),
+            "total_return_pct": _round(total_return / cost * 100) if cost >= min_basis else None,
+            "basis_missing": cost < min_basis,
+        })
+
+    rows.sort(key=lambda r: (r["sell_date"] or "", r["ticker"]), reverse=True)
+    totals = {key: round(value, 2) for key, value in totals.items()}
+    basis = totals["start_value"]
+    totals["price_return_pct"] = (
+        round(totals["price_return_dollar"] / basis * 100, 2) if basis >= min_basis else None
+    )
+    totals["total_return_pct"] = (
+        round(totals["total_return_dollar"] / basis * 100, 2) if basis >= min_basis else None
+    )
+    totals["sale_count"] = len(rows)
+    return rows, totals
+
+
 @app.route("/api/total-return/summary", methods=["GET"])
 def total_return_summary():
     """DB-based summary: cards, scatter chart, table rows. No yfinance needed."""
@@ -22587,6 +22740,44 @@ def total_return_summary():
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
     sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
     sub_tickers = _subcategory_ticker_set(conn, profile_ids, sub_ids)
+    selected_cat_names = {c["name"] for c in categories if str(c["id"]) in cat_ids}
+
+    # Closed positions are period-scoped by their sell date. An unusable custom
+    # range is not fatal here: the charts endpoint already reports it, and the
+    # category lists on this payload still have to render.
+    try:
+        realized_period = _resolve_total_return_period(
+            request.args.get("period", "all"),
+            start_date=request.args.get("start_date", "").strip(),
+            end_date=request.args.get("end_date", "").strip(),
+        )
+    except ValueError:
+        realized_period = None
+
+    # Sold tickers are gone from all_account_info, so their category has to come
+    # from the assignment table rather than the holdings join below.
+    cat_by_ticker = {}
+    try:
+        for row in conn.execute(
+            "SELECT tc.ticker, c.name AS category_name "
+            "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+            f"WHERE tc.profile_id IN ({placeholders})",
+            profile_ids,
+        ).fetchall():
+            ticker = str(row["ticker"] or "").strip().upper()
+            if ticker and ticker not in cat_by_ticker:
+                cat_by_ticker[ticker] = row["category_name"]
+    except Exception:
+        cat_by_ticker = {}
+
+    realized_rows, realized_totals = _total_return_realized_rows(
+        conn,
+        _get_gains_losses_profile_scope(conn),
+        realized_period,
+        selected_cat_names,
+        sub_tickers,
+        cat_by_ticker,
+    )
 
     rows = conn.execute(
         f"""SELECT ticker,
@@ -22623,7 +22814,10 @@ def total_return_summary():
 
     if df.empty:
         conn.close()
-        return jsonify({"rows": [], "totals": {}, "scatter": None, "categories": categories})
+        return jsonify({
+            "rows": [], "totals": {}, "scatter": None, "categories": categories,
+            "realized": realized_rows, "realized_totals": realized_totals,
+        })
 
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
     payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
@@ -22662,7 +22856,10 @@ def total_return_summary():
         df = df[df["category_name"].isin(cat_names) | df["ticker"].isin(sub_tickers)]
 
     if df.empty:
-        return jsonify({"rows": [], "totals": {}, "scatter": None, "categories": categories})
+        return jsonify({
+            "rows": [], "totals": {}, "scatter": None, "categories": categories,
+            "realized": realized_rows, "realized_totals": realized_totals,
+        })
 
     def _safe(v):
         if v is None:
@@ -22757,7 +22954,10 @@ def total_return_summary():
     except Exception:
         pass
 
-    return jsonify(rows=table_rows, totals=totals, scatter=scatter_json, categories=categories)
+    return jsonify(
+        rows=table_rows, totals=totals, scatter=scatter_json, categories=categories,
+        realized=realized_rows, realized_totals=realized_totals,
+    )
 
 
 @app.route("/api/total-return/charts", methods=["GET"])

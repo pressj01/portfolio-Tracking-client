@@ -28,6 +28,16 @@ const roundForDisplay = v => {
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
 const fmtInt = v => formatMoneyWhole(v)
 
+// Below this, a return percentage is a divide-by-nothing artifact rather than a
+// measurement, so the dollars are shown without it.
+const MIN_BASIS = 1
+
+const POSITION_VIEWS = [
+  { key: 'unrealized', label: 'Unrealized', title: 'Open positions only — market performance over the selected range' },
+  { key: 'realized', label: 'Realized', title: 'Closed positions — sales that settled inside the selected range' },
+  { key: 'combined', label: 'Combined', title: 'One row per ticker: open performance plus realized sales' },
+]
+
 const COMPARISON_RETURN_MODES = [
   { key: 'total', label: 'Total Return', title: 'Full dividend-reinvested total return' },
   { key: 'price', label: 'Price Only', title: 'Share-price change only; distributions are excluded' },
@@ -76,6 +86,7 @@ export default function TotalReturn() {
 
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
+  const [positionView, setPositionView] = useState('unrealized')
   const [rvyMode, setRvyMode] = useState('cur')
   const [scatterReturnMode, setScatterReturnMode] = useState('pct')
   const initialCustomDates = useRef(defaultCustomDates()).current
@@ -131,7 +142,10 @@ export default function TotalReturn() {
   useEffect(() => {
     setSummaryLoading(true)
     setSummaryError(null)
-    const params = new URLSearchParams()
+    // Realized sales are filtered by sell date, so the summary needs the same
+    // window as the charts. Open holdings on this payload stay since-purchase.
+    const params = new URLSearchParams({ period: dashboardPeriod })
+    addCustomRangeParams(params, dashboardPeriod, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
     pf(`/api/total-return/summary?${params}`)
@@ -142,7 +156,7 @@ export default function TotalReturn() {
       })
       .catch(e => setSummaryError(e.message))
       .finally(() => setSummaryLoading(false))
-  }, [categories, subcategories, selection, basisMode])
+  }, [categories, subcategories, selection, basisMode, dashboardPeriod, customStart, customEnd])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -486,16 +500,6 @@ export default function TotalReturn() {
     setCmpExtraInput('')
   }
 
-  // Table sorting
-  const handleSort = (col) => {
-    if (sortCol === col) { setSortAsc(a => !a) }
-    else {
-      setSortCol(col)
-      const numCols = ['start_value', 'end_value', 'price_return_dollar', 'price_return_pct', 'distribution_dollar', 'total_return_dollar', 'total_return_pct', 'ret_vs_yld_sort']
-      setSortAsc(!numCols.includes(col))
-    }
-  }
-
   const enrichedRows = useMemo(() => {
     if (!dashboardRows.length) return []
     return dashboardRows.map(r => {
@@ -506,10 +510,131 @@ export default function TotalReturn() {
     })
   }, [dashboardRows, rvyMode])
 
+  const realizedRows = useMemo(() => summary?.realized || [], [summary])
+  const realizedTotals = summary?.realized_totals || {}
+
+  // One row per ticker. Open legs carry the period's market performance and
+  // closed legs carry the recorded sale, so they are summed in dollars only \u2014
+  // the two percentages have different bases and cannot be added.
+  const combinedRows = useMemo(() => {
+    const byTicker = new Map()
+    const entryFor = (row) => {
+      const key = String(row.ticker || '').toUpperCase()
+      let entry = byTicker.get(key)
+      if (!entry) {
+        entry = {
+          ticker: row.ticker,
+          category_name: row.category_name || '',
+          net_basis: 0,
+          unrealized_total_dollar: 0,
+          realized_total_dollar: 0,
+          net_distribution_dollar: 0,
+          isOpen: false,
+          isClosed: false,
+        }
+        byTicker.set(key, entry)
+      }
+      if (!entry.category_name) entry.category_name = row.category_name || ''
+      return entry
+    }
+    enrichedRows.forEach(row => {
+      const entry = entryFor(row)
+      entry.isOpen = true
+      entry.net_basis += row.start_value || 0
+      entry.unrealized_total_dollar += row.total_return_dollar || 0
+      entry.net_distribution_dollar += row.distribution_dollar || 0
+    })
+    realizedRows.forEach(row => {
+      const entry = entryFor(row)
+      entry.isClosed = true
+      entry.net_basis += row.start_value || 0
+      entry.realized_total_dollar += row.total_return_dollar || 0
+      entry.net_distribution_dollar += row.distribution_dollar || 0
+    })
+    return [...byTicker.values()].map(entry => {
+      const net = entry.unrealized_total_dollar + entry.realized_total_dollar
+      return {
+        ...entry,
+        status: entry.isOpen && entry.isClosed ? 'Open + Closed' : entry.isOpen ? 'Open' : 'Closed',
+        net_total_dollar: net,
+        // Withheld rather than printed when the basis is missing — see the
+        // matching guard in the realized endpoint.
+        net_total_pct: entry.net_basis >= MIN_BASIS ? (net / entry.net_basis) * 100 : null,
+      }
+    })
+  }, [enrichedRows, realizedRows])
+
+  const unrealizedColumns = [
+    { key: 'ticker', label: 'Ticker' },
+    { key: 'category_name', label: 'Category' },
+    { key: 'start_value', label: 'Start Value', fmt, numeric: true },
+    { key: 'end_value', label: 'End Value', fmt, numeric: true },
+    { key: 'price_return_dollar', label: 'Price Return', fmt, numeric: true, gl: true },
+    { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'total_return_dollar', label: 'Total Return', fmt, numeric: true, gl: true },
+    { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'period_range', label: 'Effective Range' },
+    { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
+  ]
+  const realizedColumns = [
+    { key: 'ticker', label: 'Ticker' },
+    { key: 'category_name', label: 'Category' },
+    { key: 'sell_date', label: 'Sell Date' },
+    { key: 'shares_sold', label: 'Shares', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
+    { key: 'start_value', label: 'Cost Basis', fmt, numeric: true },
+    { key: 'end_value', label: 'Proceeds', fmt, numeric: true },
+    { key: 'price_return_dollar', label: 'Price Return', fmt, numeric: true, gl: true },
+    { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'total_return_dollar', label: 'Total Return', fmt, numeric: true, gl: true },
+    { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct, numeric: true, gl: true },
+  ]
+  const combinedColumns = [
+    { key: 'ticker', label: 'Ticker' },
+    { key: 'category_name', label: 'Category' },
+    { key: 'status', label: 'Status' },
+    { key: 'net_basis', label: 'Basis', fmt, numeric: true },
+    { key: 'unrealized_total_dollar', label: 'Unreal. Total Return', fmt, numeric: true, gl: true },
+    { key: 'realized_total_dollar', label: 'Real. Total Return', fmt, numeric: true, gl: true },
+    { key: 'net_distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'net_total_dollar', label: 'Net Total Return', fmt, numeric: true, gl: true },
+    { key: 'net_total_pct', label: 'Net Ret %', fmt: fmtPct, numeric: true, gl: true },
+  ]
+
+  const viewConfig = {
+    unrealized: { columns: unrealizedColumns, rows: enrichedRows, defaultSort: 'total_return_pct' },
+    realized: { columns: realizedColumns, rows: realizedRows, defaultSort: 'sell_date' },
+    combined: { columns: combinedColumns, rows: combinedRows, defaultSort: 'net_total_dollar' },
+  }
+  const columns = viewConfig[positionView].columns
+  const viewRows = viewConfig[positionView].rows
+  const numericSortKeys = new Set(
+    columns.filter(col => col.numeric).map(col => col.sortKey || col.key),
+  )
+  numericSortKeys.add('ret_vs_yld_sort')
+  const columnAlign = (col) => col.numeric ? 'right' : 'left'
+
+  // Table sorting
+  const handleSort = (col) => {
+    if (sortCol === col) { setSortAsc(a => !a) }
+    else {
+      setSortCol(col)
+      setSortAsc(!numericSortKeys.has(col) && col !== 'sell_date')
+    }
+  }
+
+  const switchPositionView = (key) => {
+    if (key === positionView) return
+    setPositionView(key)
+    setSortCol(viewConfig[key].defaultSort)
+    setSortAsc(false)
+  }
+
   const sortedRows = useMemo(() => {
-    if (!enrichedRows.length) return []
-    if (!sortCol) return enrichedRows
-    const rows = [...enrichedRows]
+    if (!viewRows.length) return []
+    if (!sortCol) return viewRows
+    const rows = [...viewRows]
     rows.sort((a, b) => {
       let av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
       if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av
@@ -517,40 +642,38 @@ export default function TotalReturn() {
       return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av)
     })
     return rows
-  }, [enrichedRows, sortCol, sortAsc])
+  }, [viewRows, sortCol, sortAsc])
 
   const sortIcon = (col) => {
     if (sortCol !== col) return ' \u21C5'
     return sortAsc ? ' \u25B2' : ' \u25BC'
   }
 
+  const missingBasis = (row) => (
+    positionView === 'realized'
+      ? !!row.basis_missing
+      : positionView === 'combined' && (row.net_basis || 0) < MIN_BASIS
+  )
+
   const allTickers = useMemo(() => summary?.rows?.map(r => r.ticker) || [], [summary])
 
-  const columns = [
-    { key: 'ticker', label: 'Ticker' },
-    { key: 'category_name', label: 'Category' },
-    { key: 'start_value', label: 'Start Value', fmt },
-    { key: 'end_value', label: 'End Value', fmt },
-    { key: 'price_return_dollar', label: 'Price Return', fmt },
-    { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct },
-    { key: 'distribution_dollar', label: 'Distributions', fmt },
-    { key: 'total_return_dollar', label: 'Total Return', fmt },
-    { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct },
-    { key: 'period_range', label: 'Effective Range' },
-    { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
-  ]
-  const numericColumns = new Set([
-    'start_value',
-    'end_value',
-    'price_return_dollar',
-    'price_return_pct',
-    'distribution_dollar',
-    'total_return_dollar',
-    'total_return_pct',
-  ])
-  const columnAlign = (key) => numericColumns.has(key) ? 'right' : 'left'
-
   const t = chartData?.portfolio_metrics || {}
+
+  // The open leg uses the portfolio-level metrics behind the cards above, not a
+  // sum of the visible rows, so the footer agrees with the Total Return card.
+  const combinedTotals = (() => {
+    const basis = (t.start_value || 0) + (realizedTotals.start_value || 0)
+    const net = (t.total_return_dollar || 0) + (realizedTotals.total_return_dollar || 0)
+    return {
+      net_basis: basis,
+      unrealized_total_dollar: t.total_return_dollar || 0,
+      realized_total_dollar: realizedTotals.total_return_dollar || 0,
+      net_distribution_dollar: (t.distribution_dollar || 0) + (realizedTotals.distribution_dollar || 0),
+      net_total_dollar: net,
+      net_total_pct: basis >= MIN_BASIS ? (net / basis) * 100 : null,
+    }
+  })()
+
   const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
   const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
   const dashboardCardRange = dashboardActualRange || dashboardRequestedRange
@@ -862,12 +985,46 @@ export default function TotalReturn() {
       )}
 
       {/* Table */}
-      {summary && !summaryLoading && !chartLoading && dashboardRows.length > 0 && (
+      {summary && !summaryLoading && !chartLoading && (dashboardRows.length > 0 || realizedRows.length > 0) && (
         <>
-          <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>Holdings — {chartData?.period_label} Total Return Summary</h2>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', marginBottom: '0.25rem' }}>
+            <h2 style={{ margin: 0 }}>
+              {positionView === 'realized' ? 'Closed Positions' : positionView === 'combined' ? 'Open + Closed Positions' : 'Holdings'}
+              {' — '}{chartData?.period_label || 'Selected period'} Total Return Summary
+            </h2>
+            <div className="growth-filter-group" style={{ alignItems: 'flex-start' }}>
+              <label>Positions</label>
+              <div style={{ display: 'flex', gap: '0.25rem' }}>
+                {POSITION_VIEWS.map(view => (
+                  <button
+                    type="button"
+                    key={view.key}
+                    title={view.title}
+                    className={`tr-pbtn${positionView === view.key ? ' tr-pbtn-active' : ''}`}
+                    style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                    onClick={() => switchPositionView(view.key)}
+                  >
+                    {view.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
           <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-            Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>. Each row lists its effective held-period range. Click any column header to sort.
+            Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>.{' '}
+            {positionView === 'unrealized' && 'Open positions only. Each row lists its effective held-period range.'}
+            {positionView === 'realized' && `Sales that settled inside this range, priced off the recorded buy and sell. Distributions are the dividends those shares earned before the sale.${realizedTotals.sale_count ? ` ${realizedTotals.sale_count} sale${realizedTotals.sale_count === 1 ? '' : 's'}.` : ''}`}
+            {positionView === 'combined' && 'Open and closed legs summed per ticker. Net Ret % is money-weighted over basis (period start value plus realized cost), so it will not match the time-weighted Total Ret % in the Unrealized view.'}
+            {' '}Click any column header to sort.
           </p>
+          {!sortedRows.length && (
+            <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
+              {positionView === 'realized'
+                ? 'No sales settled in this range. Widen the Dashboard Date Range, or record sales as SELL transactions.'
+                : 'No positions in this range.'}
+            </p>
+          )}
+          {sortedRows.length > 0 && (
           <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
             <table>
               <thead>
@@ -890,7 +1047,7 @@ export default function TotalReturn() {
                       )
                     }
                     return (
-                      <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col.key) }} onClick={() => handleSort(sk)}>
+                      <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col) }} onClick={() => handleSort(sk)}>
                         {col.label}
                         <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(sk)}
@@ -901,16 +1058,20 @@ export default function TotalReturn() {
                 </tr>
               </thead>
               <tbody>
-                {sortedRows.map(row => (
-                  <tr key={row.ticker}>
+                {sortedRows.map((row, rowIndex) => (
+                  <tr key={positionView === 'realized' ? `${row.ticker}-${row.sell_date}-${rowIndex}` : row.ticker}>
                     {columns.map(col => {
                       const val = row[col.key]
                       let display = col.fmt ? col.fmt(val) : (val ?? '')
-                      let style = { textAlign: columnAlign(col.key) }
+                      let style = { textAlign: columnAlign(col) }
 
                       if (col.key === 'ticker') display = <strong>{val}</strong>
-                      if (col.key === 'price_return_dollar' || col.key === 'price_return_pct' || col.key === 'total_return_dollar' || col.key === 'total_return_pct') {
+                      if (col.key === 'sell_date') display = formatComparisonDate(val) || (val ?? '')
+                      if (col.gl) {
                         style = { textAlign: 'right', color: (val || 0) >= 0 ? '#4dff91' : '#ff6b6b' }
+                      }
+                      if (missingBasis(row) && (col.key === 'start_value' || col.key === 'net_basis')) {
+                        display = <span title="No cost basis on record for these shares, so the return percentage cannot be computed. Usually an unmatched transfer that drained the lot history." style={{ color: 'var(--warn, #ffb86c)' }}>{display} ⚠</span>
                       }
                       if (col.key === 'ret_vs_yld') {
                         const rvy = row.ret_vs_yld
@@ -924,20 +1085,48 @@ export default function TotalReturn() {
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
-                  <td colSpan={2}><strong>Portfolio Total</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.start_value)}</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.end_value)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_return_dollar)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.price_return_pct)}</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{fmt(t.distribution_dollar)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
-                  <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
-                  <td>{dashboardCardRange}</td>
-                  <td></td>
+                  {positionView === 'unrealized' && (
+                    <>
+                      <td colSpan={2}><strong>Portfolio Total</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.start_value)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.end_value)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.price_return_pct)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.distribution_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
+                      <td>{dashboardCardRange}</td>
+                      <td></td>
+                    </>
+                  )}
+                  {positionView === 'realized' && (
+                    <>
+                      <td colSpan={4}><strong>Realized Total</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(realizedTotals.start_value)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(realizedTotals.end_value)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (realizedTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(realizedTotals.price_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (realizedTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(realizedTotals.price_return_pct)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(realizedTotals.distribution_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (realizedTotals.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(realizedTotals.total_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (realizedTotals.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(realizedTotals.total_return_pct)}</strong></td>
+                    </>
+                  )}
+                  {positionView === 'combined' && (
+                    <>
+                      <td colSpan={3}><strong>Net Total</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(combinedTotals.net_basis)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (combinedTotals.unrealized_total_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(combinedTotals.unrealized_total_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (combinedTotals.realized_total_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(combinedTotals.realized_total_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(combinedTotals.net_distribution_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (combinedTotals.net_total_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(combinedTotals.net_total_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (combinedTotals.net_total_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(combinedTotals.net_total_pct)}</strong></td>
+                    </>
+                  )}
                 </tr>
               </tfoot>
             </table>
           </div>
+          )}
         </>
       )}
     </div>
