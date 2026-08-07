@@ -239,7 +239,13 @@ function AddTradeForm({ onCancel, onSaved }) {
 function CloseTradeForm({ trade, onCancel, onSaved }) {
   const pf = useProfileFetch()
   const openLegs = trade.legs.filter(leg => Number(leg.open_contracts) > 0)
-  const [closedAt, setClosedAt] = useState(todayIso)
+  // When every open leg is already past expiration this is a late entry for
+  // something that finished on a known date, so default to that date rather
+  // than to today, which would book it into the wrong month.
+  const [closedAt, setClosedAt] = useState(() => {
+    const latest = openLegs.map(leg => String(leg.expiration).slice(0, 10)).sort().at(-1)
+    return latest && latest <= todayIso() ? latest : todayIso()
+  })
   const [rows, setRows] = useState(() => openLegs.map(leg => ({
     leg_id: leg.id,
     action: String(leg.expiration).slice(0, 10) <= todayIso() ? 'EXPIRE' : leg.position_side === 'LONG' ? 'STC' : 'BTC',
@@ -382,6 +388,93 @@ function TradeDetails({ trade }) {
   )
 }
 
+/**
+ * A broker's trade-activity export only contains fills. An option that simply
+ * expires never produces one, so nothing arrives to close the leg and the trade
+ * stays OPEN indefinitely. Assignment and exercise do leave records, so a leg
+ * sitting past its expiration with nothing recorded after it expired.
+ */
+function ExpiredTradeReconciler({ expired, busy, disabled, onSettle, onReload }) {
+  const [open, setOpen] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const legs = expired?.legs || []
+  if (!legs.length) return null
+
+  const byTrade = new Map()
+  for (const leg of legs) {
+    if (!byTrade.has(leg.trade_id)) byTrade.set(leg.trade_id, { ...leg, legs: [] })
+    byTrade.get(leg.trade_id).legs.push(leg)
+  }
+  const trades = [...byTrade.values()].sort((a, b) => String(a.expiration).localeCompare(String(b.expiration)))
+  const oldest = trades[0]
+
+  return (
+    <section className="ot-alert ot-alert-expired">
+      <div className="ot-expired-summary">
+        <div>
+          <strong>{legs.length} leg{legs.length === 1 ? '' : 's'} across {trades.length} trade{trades.length === 1 ? '' : 's'} expired with no recorded outcome.</strong>
+          <p>
+            These still count as open positions and as open risk. The oldest expired {oldest.days_past_expiration} days ago
+            ({shortDate(oldest.expiration)}). Recording them as expired closes each leg at zero on its own expiration date,
+            so realized P/L lands in the month it actually happened.
+          </p>
+          <p className="ot-expired-caveat">
+            Any leg that actually finished in the money should be recorded through <strong>Close</strong> instead, with its
+            settlement price — expiring it here books the full opening premium as the result.
+          </p>
+        </div>
+        <div className="ot-expired-actions">
+          <button className="btn btn-secondary" onClick={() => setOpen(value => !value)}>{open ? 'Hide' : 'Review'} {legs.length} leg{legs.length === 1 ? '' : 's'}</button>
+          <button
+            className={`btn ${confirming ? 'btn-danger' : 'btn-primary'}`}
+            disabled={busy || disabled}
+            onBlur={() => setConfirming(false)}
+            onClick={() => {
+              if (!confirming) { setConfirming(true); return }
+              setConfirming(false)
+              onSettle(null)
+            }}
+          >
+            {busy ? 'Recording…' : confirming ? `Confirm — expire all ${trades.length}` : 'Mark all expired'}
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="table-scroll ot-expired-detail">
+          <table className="ot-detail-table">
+            <thead><tr><th>Underlying</th><th>Strategy</th><th>Leg</th><th>Strike</th><th>Expired</th><th>Days past</th><th>Open</th><th>Account</th><th /></tr></thead>
+            <tbody>
+              {trades.map(trade => trade.legs.map((leg, index) => (
+                <tr key={leg.leg_id}>
+                  {index === 0
+                    ? <td rowSpan={trade.legs.length}><strong>{trade.underlying}</strong></td>
+                    : null}
+                  {index === 0
+                    ? <td rowSpan={trade.legs.length}>{trade.strategy_type}</td>
+                    : null}
+                  <td>{leg.position_side} {leg.option_type}</td>
+                  <td>{Number(leg.strike).toLocaleString('en-US', { maximumFractionDigits: 2 })}</td>
+                  <td>{shortDate(leg.expiration)}</td>
+                  <td>{leg.days_past_expiration}</td>
+                  <td>{leg.open_contracts}</td>
+                  <td>{leg.profile_name}</td>
+                  {index === 0
+                    ? <td rowSpan={trade.legs.length}>
+                        <button className="btn btn-secondary" disabled={busy || disabled} onClick={() => onSettle([trade.trade_id])}>Expire this trade</button>
+                      </td>
+                    : null}
+                </tr>
+              )))}
+            </tbody>
+          </table>
+          <button className="btn btn-secondary" onClick={onReload} disabled={busy}>Refresh list</button>
+        </div>
+      )}
+    </section>
+  )
+}
+
 export default function OptionTrades() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
@@ -392,6 +485,7 @@ export default function OptionTrades() {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('ALL')
   const [purpose, setPurpose] = useState('ALL')
+  const [year, setYear] = useState('ALL')
   const [search, setSearch] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [expanded, setExpanded] = useState(new Set())
@@ -399,6 +493,8 @@ export default function OptionTrades() {
   const [classifyingId, setClassifyingId] = useState(null)
   const [deleteConfirmId, setDeleteConfirmId] = useState(null)
   const [expireConfirmId, setExpireConfirmId] = useState(null)
+  const [expired, setExpired] = useState(null)
+  const [settling, setSettling] = useState(false)
   const [includeOptionsIncome, setIncludeOptionsIncome] = useState(() => localStorage.getItem('option_income_combined') === 'true')
 
   const load = useCallback(async () => {
@@ -420,14 +516,53 @@ export default function OptionTrades() {
     }
   }, [pf, status, purpose, search, includeOptionsIncome])
 
+  const loadExpired = useCallback(async () => {
+    try {
+      setExpired(await jsonOrError(await pf('/api/option-trades/expired')))
+    } catch {
+      setExpired(null)
+    }
+  }, [pf])
+
+  const settleExpired = useCallback(async (tradeIds) => {
+    setSettling(true)
+    setError('')
+    try {
+      await jsonOrError(await pf('/api/option-trades/settle-expired', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tradeIds ? { trade_ids: tradeIds } : {}),
+      }))
+      await Promise.all([load(), loadExpired()])
+    } catch (requestError) {
+      setError(requestError.message)
+    } finally {
+      setSettling(false)
+    }
+  }, [pf, load, loadExpired])
+
   useEffect(() => {
     const timer = window.setTimeout(load, 0)
     return () => window.clearTimeout(timer)
   }, [load])
+  useEffect(() => {
+    const timer = window.setTimeout(loadExpired, 0)
+    return () => window.clearTimeout(timer)
+  }, [loadExpired])
   useEffect(() => { localStorage.setItem('option_income_combined', String(includeOptionsIncome)) }, [includeOptionsIncome])
 
   const metrics = data.metrics || {}
-  const filteredTrades = data.trades || []
+  const loadedTrades = data.trades || []
+  // A trade belongs to the year it was opened and the year it was closed, so a
+  // position opened in December and closed in February shows under both. It
+  // deliberately does NOT span the years in between: an open trade would then
+  // run to today and every stale one would pile into the current year.
+  const tradeYears = trade => [
+    String(trade.opened_at || '').slice(0, 4),
+    String(trade.closed_at || '').slice(0, 4),
+  ].filter(value => value.length === 4)
+  const yearOptions = [...new Set(loadedTrades.flatMap(tradeYears))].sort().reverse()
+  const filteredTrades = year === 'ALL' ? loadedTrades : loadedTrades.filter(trade => tradeYears(trade).includes(year))
   const scope = data.scope || { type: isAggregate ? 'aggregate' : 'profile', accounts: [] }
   const isOwnerRollup = scope.type === 'owner'
   const showsSourceAccounts = scope.type === 'owner' || scope.type === 'aggregate'
@@ -473,15 +608,25 @@ export default function OptionTrades() {
       setError('This trade has no expired open legs.')
       return
     }
+    // Each leg expired on its own expiration date, which is what the execution
+    // has to be stamped with -- realized P/L lands in that month and days-held
+    // is measured to it. Stamping "today" books an old expiration into the
+    // current month and inflates the holding period by however long it sat.
+    const executions = expiredOpenLegs.map(leg => ({
+      leg_id: leg.id,
+      action: 'EXPIRE',
+      contracts: leg.open_contracts,
+      price: 0,
+      fees: 0,
+      executed_at: String(leg.expiration).slice(0, 10),
+    }))
     try {
       await jsonOrError(await pf(`/api/option-trades/${trade.id}/close`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          closed_at: todayIso(),
-          executions: expiredOpenLegs.map(leg => ({
-            leg_id: leg.id, action: 'EXPIRE', contracts: leg.open_contracts, price: 0, fees: 0,
-          })),
+          closed_at: executions.map(row => row.executed_at).sort().at(-1),
+          executions,
         }),
       }))
       setExpireConfirmId(null)
@@ -508,6 +653,15 @@ export default function OptionTrades() {
       {isAggregate && <div className="ot-alert">Aggregate view is read-only. Select an individual portfolio to add, close, import, or delete option trades.</div>}
       {isOwnerRollup && <div className="ot-alert ot-alert-owner">Owner includes option trades from {ownerSourceAccounts.map(account => account.name).join(', ')}. Trades stored in those source accounts are read-only here; select the source account to edit or close them.</div>}
       {error && <div className="ot-alert ot-alert-error">{error}</div>}
+
+      <ExpiredTradeReconciler
+        expired={expired}
+        busy={settling}
+        disabled={isAggregate}
+        onSettle={settleExpired}
+        onReload={loadExpired}
+      />
+
 
       <section className="ot-metrics" aria-label="Option trade summary">
         <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} explanation="Number of trades whose status is Open. The smaller line shows how many have an entered or derived maximum risk." />
@@ -546,6 +700,7 @@ export default function OptionTrades() {
             <input aria-label="Filter by underlying" value={search} onChange={event => setSearch(event.target.value.toUpperCase())} placeholder="Ticker" />
             <select aria-label="Filter by status" value={status} onChange={event => setStatus(event.target.value)}><option value="ALL">All statuses</option><option value="OPEN">Open</option><option value="CLOSED">Closed</option></select>
             <select aria-label="Filter by purpose" value={purpose} onChange={event => setPurpose(event.target.value)}><option value="ALL">All purposes</option>{PURPOSES.map(item => <option key={item}>{item}</option>)}</select>
+            <select aria-label="Filter by year" value={year} onChange={event => setYear(event.target.value)}><option value="ALL">All years</option>{yearOptions.map(item => <option key={item} value={item}>{item}</option>)}</select>
           </div>
         </div>
 

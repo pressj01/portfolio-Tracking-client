@@ -325,6 +325,140 @@ class OptionTradeLedgerTest(unittest.TestCase):
         }])
 
 
+class ExpiredTradeReconcileTest(unittest.TestCase):
+    """A broker export has no row for an option that simply expired."""
+
+    def setUp(self):
+        self.conn = memory_database()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _spread(self, opened_at, expiration):
+        return tracker.create_trade(self.conn, 1, {
+            "underlying": "SPX", "strategy_type": "Bear Call Spread", "purpose": "Income",
+            "opened_at": opened_at,
+            "legs": [
+                {"position_side": "SHORT", "option_type": "CALL", "expiration": expiration,
+                 "strike": 6300, "contracts": 1, "price": 13.37, "fees": 0},
+                {"position_side": "LONG", "option_type": "CALL", "expiration": expiration,
+                 "strike": 6400, "contracts": 1, "price": 9.47, "fees": 0},
+            ],
+        })
+
+    def test_late_expire_is_dated_at_expiration_not_at_entry_time(self):
+        """The bug: recording an old expiration today booked it into today's month."""
+        trade_id = self._spread("2024-04-01", "2024-07-19")
+        trade = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2026-08-07",
+            "executions": [
+                {"leg_id": leg["id"], "action": "EXPIRE", "contracts": 1, "price": 0, "fees": 0,
+                 "executed_at": "2024-07-19"}
+                for leg in trade["legs"]
+            ],
+        })
+        closed = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        self.assertEqual(closed["status"], "CLOSED")
+        self.assertEqual(closed["closed_at"], "2024-07-19")
+        self.assertEqual(closed["days_held"], 109)
+        metrics = tracker.trade_metrics([closed], today=tracker.date(2026, 8, 7))
+        self.assertEqual(metrics["realized_mtd"], 0)
+
+    def test_omitting_execution_date_still_uses_the_trade_close_date(self):
+        trade_id = self._spread("2026-06-01", "2026-07-17")
+        trade = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2026-07-20",
+            "executions": [
+                {"leg_id": leg["id"], "action": "EXPIRE", "contracts": 1, "price": 0, "fees": 0}
+                for leg in trade["legs"]
+            ],
+        })
+        closed = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        self.assertEqual(closed["closed_at"], "2026-07-20")
+
+    def test_execution_date_before_expiration_is_still_rejected(self):
+        trade_id = self._spread("2026-06-01", "2026-09-18")
+        trade = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        with self.assertRaisesRegex(ValueError, "does not expire until"):
+            tracker.close_trade(self.conn, 1, trade_id, {
+                "closed_at": "2026-12-01",
+                "executions": [{
+                    "leg_id": trade["legs"][0]["id"], "action": "EXPIRE",
+                    "contracts": 1, "price": 0, "fees": 0, "executed_at": "2026-08-07",
+                }],
+            })
+
+    def test_settle_expired_closes_stale_trades_at_their_own_expirations(self):
+        stale = self._spread("2024-04-01", "2024-07-19")
+        calendar = tracker.create_trade(self.conn, 1, {
+            "underlying": "QQQ", "strategy_type": "Calendar", "purpose": "Directional",
+            "opened_at": "2024-05-01",
+            "legs": [
+                {"position_side": "SHORT", "option_type": "CALL", "expiration": "2024-08-16",
+                 "strike": 500, "contracts": 1, "price": 1, "fees": 0},
+                {"position_side": "LONG", "option_type": "CALL", "expiration": "2024-09-20",
+                 "strike": 500, "contracts": 1, "price": 2, "fees": 0},
+            ],
+        })
+        live = self._spread("2026-08-01", "2026-12-18")
+
+        today = tracker.date(2026, 8, 7)
+        pending = tracker.expired_open_legs(self.conn, [1], today=today)
+        self.assertEqual({row["trade_id"] for row in pending}, {stale, calendar})
+        self.assertEqual(len(pending), 4)
+        self.assertEqual(
+            next(row["days_past_expiration"] for row in pending if row["expiration"] == "2024-07-19"),
+            749,
+        )
+
+        result = tracker.settle_expired_legs(self.conn, [1], today=today)
+        self.assertEqual(result["trades_settled"], 2)
+        self.assertEqual(result["legs_settled"], 4)
+
+        trades = {item["id"]: item for item in tracker.load_trades(self.conn, [1])}
+        self.assertEqual(trades[stale]["status"], "CLOSED")
+        self.assertEqual(trades[stale]["closed_at"], "2024-07-19")
+        # Each leg of the calendar is stamped with its own expiration, so the
+        # trade closes on the later one rather than on a single blanket date.
+        self.assertEqual(trades[calendar]["status"], "CLOSED")
+        self.assertEqual(trades[calendar]["closed_at"], "2024-09-20")
+        self.assertEqual(trades[live]["status"], "OPEN")
+        self.assertEqual(tracker.expired_open_legs(self.conn, [1], today=today), [])
+
+    def test_settle_expired_can_target_one_trade(self):
+        first = self._spread("2024-04-01", "2024-07-19")
+        second = self._spread("2024-05-01", "2024-08-16")
+        today = tracker.date(2026, 8, 7)
+        result = tracker.settle_expired_legs(self.conn, [1], trade_ids=[first], today=today)
+        self.assertEqual(result["trade_ids"], [first])
+        trades = {item["id"]: item for item in tracker.load_trades(self.conn, [1])}
+        self.assertEqual(trades[first]["status"], "CLOSED")
+        self.assertEqual(trades[second]["status"], "OPEN")
+
+    def test_settle_expired_leaves_partially_closed_contracts_alone(self):
+        trade_id = self._spread("2024-04-01", "2024-07-19")
+        trade = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        short_leg = next(leg for leg in trade["legs"] if leg["position_side"] == "SHORT")
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2024-06-10",
+            "executions": [{"leg_id": short_leg["id"], "action": "BTC", "contracts": 1, "price": 2, "fees": 0}],
+        })
+        today = tracker.date(2026, 8, 7)
+        pending = tracker.expired_open_legs(self.conn, [1], today=today)
+        self.assertEqual([row["position_side"] for row in pending], ["LONG"])
+        tracker.settle_expired_legs(self.conn, [1], today=today)
+        closed = next(item for item in tracker.load_trades(self.conn, [1]) if item["id"] == trade_id)
+        self.assertEqual(closed["status"], "CLOSED")
+        bought_back = [
+            execution for leg in closed["legs"] for execution in leg["executions"]
+            if execution["action"] == "BTC"
+        ]
+        self.assertEqual(len(bought_back), 1)
+        self.assertEqual(bought_back[0]["executed_at"], "2024-06-10")
+
+
 class OptionTradeApiTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

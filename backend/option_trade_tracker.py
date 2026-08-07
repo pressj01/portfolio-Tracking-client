@@ -629,7 +629,13 @@ def close_trade(conn, profile_id, trade_id, payload):
         action = str(raw.get("action") or default_action).strip().upper()
         if action not in CLOSE_ACTIONS:
             raise ValueError("Closing action must be BTC, STC, EXPIRE, ASSIGN, or EXERCISE")
-        if action == "EXPIRE" and str(leg["expiration"] or "")[:10] > closed_at:
+        # Legs of one trade can expire on different days, and a leg that expired
+        # in the past must be stamped with the day it actually expired -- not the
+        # day the user got around to recording it. Realized P/L is attributed by
+        # closing-execution date and days-held is measured from it, so a late
+        # entry dated "today" books an old expiration into the current month.
+        executed_at = _iso_date(raw.get("executed_at"), "Execution date") or closed_at
+        if action == "EXPIRE" and str(leg["expiration"] or "")[:10] > executed_at:
             raise ValueError(f"Leg {leg_id} does not expire until {str(leg['expiration'])[:10]}")
         price = _number(raw.get("price"), 0)
         fees = _number(raw.get("fees"), 0)
@@ -639,10 +645,100 @@ def close_trade(conn, profile_id, trade_id, payload):
             """INSERT INTO option_executions
                   (trade_id, leg_id, action, executed_at, contracts, price, fees, source, notes)
                VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', ?)""",
-            (trade_id, leg_id, action, closed_at, contracts, price, fees, str(raw.get("notes") or "").strip() or None),
+            (trade_id, leg_id, action, executed_at, contracts, price, fees, str(raw.get("notes") or "").strip() or None),
         )
     _refresh_trade_status(conn, trade_id)
     conn.commit()
+
+
+def expired_open_legs(conn, profile_ids, today=None):
+    """Legs whose expiration has passed but that still carry open contracts.
+
+    A broker's trade-activity export only contains fills. An option that simply
+    expires produces no fill, so nothing ever arrives to close the leg and the
+    trade sits OPEN forever. Assignment and exercise do produce records, so a
+    leg that is past expiration with no later execution against it expired.
+    """
+    if not profile_ids:
+        return []
+    cutoff = (today or date.today()).isoformat()
+    placeholders = ",".join("?" for _ in profile_ids)
+    rows = conn.execute(
+        f"""SELECT l.id AS leg_id, l.trade_id, l.option_type, l.position_side,
+                   l.expiration, l.strike, l.multiplier,
+                   t.underlying, t.strategy_type, t.purpose, t.profile_id,
+                   t.opened_at, p.name AS profile_name
+              FROM option_trade_legs l
+              JOIN option_trades t ON t.id = l.trade_id
+              LEFT JOIN profiles p ON p.id = t.profile_id
+             WHERE t.profile_id IN ({placeholders})
+               AND t.status = 'OPEN'
+               AND substr(l.expiration, 1, 10) < ?
+             ORDER BY l.expiration, t.underlying, l.strike""",
+        [*profile_ids, cutoff],
+    ).fetchall()
+
+    stale = []
+    for row in rows:
+        open_contracts = _open_contracts_for_leg(conn, int(row["leg_id"]))
+        if open_contracts <= 0:
+            continue
+        expiration = str(row["expiration"])[:10]
+        try:
+            days_past = (date.fromisoformat(cutoff) - date.fromisoformat(expiration)).days
+        except ValueError:
+            days_past = None
+        stale.append({
+            "leg_id": int(row["leg_id"]),
+            "trade_id": int(row["trade_id"]),
+            "profile_id": int(row["profile_id"]),
+            "profile_name": row["profile_name"],
+            "underlying": row["underlying"],
+            "strategy_type": row["strategy_type"],
+            "purpose": row["purpose"],
+            "opened_at": row["opened_at"],
+            "option_type": row["option_type"],
+            "position_side": row["position_side"],
+            "strike": float(row["strike"]),
+            "expiration": expiration,
+            "open_contracts": open_contracts,
+            "days_past_expiration": days_past,
+        })
+    return stale
+
+
+def settle_expired_legs(conn, profile_ids, trade_ids=None, today=None):
+    """Record the expiration of every stale open leg, dated at its expiration.
+
+    Writes EXPIRE at zero: the leg is gone and kept or lost whatever the opening
+    premium was. A leg that actually finished in the money should be recorded
+    through the close form instead, which takes a settlement price.
+    """
+    stale = expired_open_legs(conn, profile_ids, today=today)
+    if trade_ids is not None:
+        wanted = {int(value) for value in trade_ids}
+        stale = [leg for leg in stale if leg["trade_id"] in wanted]
+    if not stale:
+        return {"trades_settled": 0, "legs_settled": 0, "contracts_settled": 0, "trade_ids": []}
+
+    for leg in stale:
+        conn.execute(
+            """INSERT INTO option_executions
+                  (trade_id, leg_id, action, executed_at, contracts, price, fees, source, notes)
+               VALUES (?, ?, 'EXPIRE', ?, ?, 0, 0, 'auto_expire',
+                       'Expired with no closing record in the broker import')""",
+            (leg["trade_id"], leg["leg_id"], leg["expiration"], leg["open_contracts"]),
+        )
+    touched = sorted({leg["trade_id"] for leg in stale})
+    for trade_id in touched:
+        _refresh_trade_status(conn, trade_id)
+    conn.commit()
+    return {
+        "trades_settled": len(touched),
+        "legs_settled": len(stale),
+        "contracts_settled": sum(leg["open_contracts"] for leg in stale),
+        "trade_ids": touched,
+    }
 
 
 def _contract_key(row, side=None):
@@ -951,6 +1047,44 @@ def register_routes(app, get_profile_filter, get_profile_id):
                 conn.commit()
             updated = next(item for item in load_trades(conn, [get_profile_id()]) if int(item["id"]) == trade_id)
             return jsonify(updated)
+        finally:
+            conn.close()
+
+    @app.get("/api/option-trades/expired")
+    def api_expired_option_legs():
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            profile_ids, scope = _option_trade_read_scope(conn, is_aggregate, profile_ids)
+            legs = expired_open_legs(conn, profile_ids)
+            return jsonify({
+                "legs": legs,
+                "leg_count": len(legs),
+                "trade_count": len({leg["trade_id"] for leg in legs}),
+                "scope": scope,
+            })
+        finally:
+            conn.close()
+
+    @app.post("/api/option-trades/settle-expired")
+    def api_settle_expired_option_legs():
+        if request.args.get("aggregate_id") not in (None, ""):
+            return jsonify({"error": "Option trades can only be edited in an individual portfolio."}), 400
+        payload = request.get_json(silent=True) or {}
+        raw_ids = payload.get("trade_ids")
+        try:
+            trade_ids = None if raw_ids is None else [int(value) for value in raw_ids]
+        except (TypeError, ValueError):
+            return jsonify({"error": "trade_ids must be a list of trade ids"}), 400
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            profile_ids, _ = _option_trade_read_scope(conn, is_aggregate, profile_ids)
+            result = settle_expired_legs(conn, profile_ids, trade_ids=trade_ids)
+            return jsonify(result)
+        except ValueError as exc:
+            conn.rollback()
+            return jsonify({"error": str(exc)}), 400
         finally:
             conn.close()
 

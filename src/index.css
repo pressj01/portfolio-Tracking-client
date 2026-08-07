@@ -9058,6 +9058,23 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   background: color-mix(in srgb, var(--accent-bright) 9%, var(--surface));
   border-color: color-mix(in srgb, var(--accent-bright) 42%, var(--border));
 }
+.ot-alert-expired { padding: .85rem .9rem; }
+.ot-expired-summary {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .9rem;
+  justify-content: space-between;
+}
+.ot-expired-summary > div:first-child { flex: 1 1 22rem; }
+.ot-expired-summary strong { color: var(--text-strong); display: block; }
+.ot-expired-summary p { color: var(--text-dim); font-size: .72rem; line-height: 1.45; margin: .3rem 0 0; }
+.ot-expired-caveat { color: color-mix(in srgb, var(--warning) 70%, var(--text-dim)) !important; }
+.ot-expired-actions { display: flex; flex-wrap: wrap; gap: .45rem; }
+.ot-expired-detail { margin-top: .85rem; }
+/* Detail tables set nowrap for their own columns; these rows wrap freely. */
+.ot-expired-detail td, .ot-expired-detail th { white-space: nowrap; }
+.ot-expired-detail > button { margin-top: .6rem; }
 .ot-metrics {
   display: grid;
   gap: .75rem;
