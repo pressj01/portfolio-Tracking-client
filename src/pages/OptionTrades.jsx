@@ -677,7 +677,11 @@ export default function OptionTrades() {
   const tradeTableRef = useFrozenColumnOffsets(filteredTrades)
   const monthLabel = metrics.month_label || 'MTD'
   const periodLabel = metrics.period_label || 'all time'
-  const periodScope = metrics.period_scope || 'all'
+  // Derive the scope from the label when the response has no explicit one, so
+  // a backend that predates this field cannot produce a card whose heading and
+  // its own description disagree -- "Realized YTD" over "Every recorded date".
+  const periodScope = metrics.period_scope
+    || (periodLabel === 'YTD' ? 'ytd' : periodLabel === 'all time' ? 'all' : 'year')
   const periodDetail = {
     all: 'Every recorded date',
     ytd: 'January 1 through today',
