@@ -41,6 +41,7 @@ import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
 import RetirementReadiness from './pages/RetirementReadiness'
 import CashFlowSustainability from './pages/CashFlowSustainability'
 import DividendHistory from './pages/DividendHistory'
+import DividendLedger from './pages/DividendLedger'
 import ReinvestmentImpact from './pages/ReinvestmentImpact'
 import GainsLosses from './pages/GainsLosses'
 import TaxLossHarvest from './pages/TaxLossHarvest'
@@ -221,6 +222,7 @@ function App() {
         <Route path="/fund-definitions" element={<FundDefinitions />} />
         <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
         <Route path="/dividend-history" element={<DividendHistory />} />
+        <Route path="/dividend-ledger" element={<DividendLedger />} />
         <Route path="/reinvestment-impact" element={<ReinvestmentImpact />} />
         <Route path="/scanner" element={<TechnicalScanner />} />
         <Route path="/general-scanner" element={<GeneralScanner />} />
@@ -354,6 +356,7 @@ function Nav() {
         <NavLink to="/retirement-readiness">Retirement Readiness</NavLink>
         <NavLink to="/cash-flow">Cash Flow &amp; Sustainability</NavLink>
         <NavLink to="/dividends">Dividends</NavLink>
+        <NavLink to="/dividend-ledger">Daily, Weekly &amp; Monthly Payments</NavLink>
         <NavLink to="/div-calendar">Dividend Calendar</NavLink>
         <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>
         <NavLink to="/div-compare">Dividend Compare</NavLink>

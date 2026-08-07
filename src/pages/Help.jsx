@@ -65,6 +65,7 @@ const GROUPS = [
       { id: 'earnings-calendar', label: 'Earnings Calendar' },
       { id: 'div-compare', label: 'Div Compare' },
       { id: 'dividend-history', label: 'Dividend History' },
+      { id: 'dividend-ledger', label: 'Daily, Weekly & Monthly Payments' },
       { id: 'total-return', label: 'Total Return' },
       { id: 'gains-losses', label: 'Gains & Losses' },
       { id: 'safe-withdrawal', label: 'Safe Withdrawal' },
@@ -2954,6 +2955,78 @@ function DividendHistoryHelp() {
         <li><strong>CHANGE VS FIRST YEAR</strong> - Yearly view compares the latest completed year to the first year when enough completed yearly data exists.</li>
         <li><strong>CHANGE VS FIRST PERIOD</strong> - Weekly view compares the latest completed period to the first period in the selected range.</li>
         <li><strong>Partial periods are excluded when possible</strong> - The current incomplete month, year, or day is not used as the ending point for the change calculation when there are at least two completed periods. This prevents a partial current period from looking like a dividend-income collapse.</li>
+      </ul>
+    </div>
+  )
+}
+
+function DividendLedgerHelp() {
+  return (
+    <div>
+      <h2>Daily, Weekly &amp; Monthly Payments</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This page answers three questions off the same payment records: what was I paid today, what
+        has this week paid out so far, and what has this month paid out so far. Every dividend lands
+        on exactly one day, so the weekly and monthly figures are running totals over the daily ones
+        — a day with payments pushes both totals up by that day&apos;s amount, and a day with nothing
+        paid leaves both where they were. Where <strong>Dividend History</strong> looks at long-run
+        trends, this page is the day-by-day record.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The four cards</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The cards at the top are always <em>as of today</em>, no matter which month you are browsing
+        below. Each one compares itself to the same point in the period before it, so a period still
+        in progress is never judged against a finished one.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Paid today</strong> — today&apos;s total and how many holdings paid. When nothing has been paid yet, it shows what the same weekday paid last week, and the Today panel names the last day money actually arrived.</li>
+        <li><strong>Week to date</strong> — the running total for the current week, with the day number out of 7 and the change against the same point last week.</li>
+        <li><strong>Month to date</strong> — the running total for the current month, compared with the prior month over the same number of days.</li>
+        <li><strong>Year to date</strong> — the calendar-year total, compared with the same date last year.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The ledger</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Paid that day</strong> — the day&apos;s own total. Click any day with payments to expand the per-holding breakdown; when the view covers more than one account, each holding also shows the split across them.</li>
+        <li><strong>Week to date / Month to date</strong> — the running balances. A day that added money shows its new total in full colour; a quiet day shows the carried-forward value dimmed, so you can see at a glance that nothing changed.</li>
+        <li><strong>Week subtotal rows</strong> — after each week&apos;s last day, with the number of paying days in that week.</li>
+        <li><strong>Month total</strong> — the footer row, split into confirmed and projected amounts.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Owner and aggregate selections</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A dividend is recorded against the account that received it, so a selection covering several
+        accounts — <strong>Owner</strong>, which reads the accounts linked to it, or any aggregate —
+        reports the sum of its members. The intro line names the accounts being added together, and
+        a <strong>by account</strong> strip under the month summary breaks the month&apos;s total
+        back out per account with each one&apos;s share, so you can see which account the money came
+        from. An account that paid nothing that month is left out of the strip.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Weeks that cross a month boundary</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A week total always covers a full seven days, so the ledger includes the few adjacent-month
+        days a straddling week needs to add up. Those rows are marked <em>other month</em> and their
+        Month to date cell is blank — they count toward the week but not the month. The week chips
+        above the table spell out how much of a straddling week actually fell inside the month you
+        are viewing.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Confirmed vs projected</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Confirmed</strong> — payments imported from a broker (Schwab, E*TRADE, Fidelity, Robinhood, Snowball, generic files). These are money that actually landed.</li>
+        <li><strong>Projected</strong> — rows Refresh Prices &amp; Divs wrote with source <code>refresh_estimate</code> because a holding&apos;s expected pay date had arrived but no broker file has confirmed it yet. They are marked <code>est</code> and reported separately in every total, so a projected week is never mistaken for a paid one.</li>
+        <li><strong>Include projected payments</strong> — turn this off for a confirmed-only view. Recent days will read low until the next broker import lands.</li>
+        <li>When a broker import later brings in the actual payment for the same ticker, account, and date, it replaces the estimate rather than adding to it.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Controls</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Month navigation</strong> — step back and forward, or jump straight to any month that has payments. <em>This month</em> returns to the current one.</li>
+        <li><strong>Week starts</strong> — Monday or Sunday. This changes where every week boundary falls, and therefore the weekly totals. The choice is remembered.</li>
+        <li><strong>Show every payment</strong> — expands the per-holding detail for every paying day at once.</li>
+        <li><strong>Chart</strong> — daily bars stacked as confirmed plus projected, with the month-to-date running line on the right axis.</li>
       </ul>
     </div>
   )
@@ -11393,6 +11466,7 @@ const CONTENT_MAP = {
   'earnings-calendar': EarningsCalendarHelp,
   'div-compare': DivCompareHelp,
   'dividend-history': DividendHistoryHelp,
+  'dividend-ledger': DividendLedgerHelp,
   'total-return': TotalReturnHelp,
   'gains-losses': GainsLossesHelp,
   'safe-withdrawal': SafeWithdrawalHelp,

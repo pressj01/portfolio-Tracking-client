@@ -110,6 +110,7 @@ from market_calendar import (
     market_has_closed,
 )
 from nav_history import build_nav_history_payload
+from dividend_ledger import build_ledger as build_dividend_ledger
 from dividend_safety import (
     apply_nav_coverage_overlay,
     get_dividend_safety_for_holdings,
@@ -39555,6 +39556,33 @@ def dividend_history_data():
             "trend_basis": trend_basis,
         },
     })
+
+
+# ── Daily / weekly / monthly payment ledger ───────────────────────────────────
+
+@app.route("/api/dividend-ledger", methods=["GET"])
+def dividend_ledger():
+    """Day-by-day dividend payments with running week- and month-to-date totals."""
+    _, pids = get_profile_filter()
+    include_estimates = request.args.get("include_estimates", "1") not in ("0", "false", "no")
+
+    conn = get_connection()
+    try:
+        # A payment is recorded against the account that received it, never
+        # against the Owner roll-up, so reading profile 1 literally returns
+        # nothing. Owner has to sum its linked accounts, the same scope the
+        # refresh writes those payments into.
+        read_ids = _dividend_payment_profile_ids_for_read(conn, pids)
+        payload = build_dividend_ledger(
+            conn,
+            read_ids,
+            month=request.args.get("month"),
+            week_start=request.args.get("week_start"),
+            include_estimates=include_estimates,
+        )
+    finally:
+        conn.close()
+    return jsonify(payload)
 
 
 # ── 4-Quadrant Regime & Markov Chain ──────────────────────────────────────────
