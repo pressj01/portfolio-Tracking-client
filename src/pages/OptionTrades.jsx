@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { stageTrackedTrade } from '../utils/optionTradeHandoff'
@@ -26,6 +26,71 @@ const percent = (value) => {
   if (value == null || value === '') return '—'
   const number = Number(value)
   return Number.isFinite(number) ? `${number.toFixed(1)}%` : '—'
+}
+
+const signClass = value => (Number(value) >= 0 ? 'ot-positive' : 'ot-negative')
+
+// Number(null) is 0 and passes isFinite, which would silently count a trade
+// with no recorded maximum risk as one that has $0 of it.
+const finite = (value) => {
+  if (value == null || value === '') return null
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+/**
+ * Column totals for the ledger footer. Money adds up, so entry, risk, and
+ * realized P/L are summed. Percentages do not: return on risk is re-derived
+ * from the summed dollars, and the two annualized columns pool P/L over
+ * risk-years rather than averaging the row percentages, because a mean of
+ * annualized returns is dominated by whichever trade happened to close in a
+ * day. Pooling one row reproduces that row's own percentage exactly.
+ */
+const ledgerTotals = (trades) => {
+  const totals = {
+    count: trades.length, open: 0, closed: 0,
+    entryNet: 0, maxRisk: 0, riskRows: 0, realized: 0,
+    returnOnRiskRows: 0, entryAnnualizedRows: 0, realizedAnnualizedRows: 0,
+  }
+  let closedRealizedOnRisk = 0
+  let closedRiskBase = 0
+  let entryPremium = 0
+  let entryRiskYears = 0
+  let realizedOnRisk = 0
+  let realizedRiskYears = 0
+  for (const trade of trades) {
+    if (trade.status === 'OPEN') totals.open += 1
+    else totals.closed += 1
+    const entry = finite(trade.entry_net_amount)
+    if (entry != null) totals.entryNet += entry
+    const risk = finite(trade.max_risk)
+    if (risk != null) { totals.maxRisk += risk; totals.riskRows += 1 }
+    const realized = finite(trade.realized_pnl)
+    if (realized != null) totals.realized += realized
+    // Each pooled figure covers exactly the rows whose own column shows a
+    // value, so the footer never averages over a wider set than the column.
+    if (finite(trade.return_on_risk_pct) != null && risk) {
+      closedRealizedOnRisk += realized ?? 0
+      closedRiskBase += risk
+      totals.returnOnRiskRows += 1
+    }
+    const openingDte = finite(trade.opening_dte)
+    if (finite(trade.annualized_return_pct) != null && risk && openingDte) {
+      entryPremium += entry ?? 0
+      entryRiskYears += risk * (openingDte / 365)
+      totals.entryAnnualizedRows += 1
+    }
+    const daysHeld = finite(trade.days_held)
+    if (finite(trade.realized_annualized_return_pct) != null && risk && daysHeld) {
+      realizedOnRisk += realized ?? 0
+      realizedRiskYears += risk * (daysHeld / 365)
+      totals.realizedAnnualizedRows += 1
+    }
+  }
+  totals.returnOnRiskPct = closedRiskBase > 0 ? (closedRealizedOnRisk / closedRiskBase) * 100 : null
+  totals.entryAnnualizedPct = entryRiskYears > 0 ? (entryPremium / entryRiskYears) * 100 : null
+  totals.realizedAnnualizedPct = realizedRiskYears > 0 ? (realizedOnRisk / realizedRiskYears) * 100 : null
+  return totals
 }
 
 const signedMoney = (value) => {
@@ -89,9 +154,45 @@ function IncomeValue({ label, value, explanation, tone = '' }) {
   )
 }
 
+const FROZEN_COLUMNS = 6
+
+/**
+ * Pin the leading columns at their measured widths.
+ *
+ * The CSS widths are only a preference: auto table layout widens a column when
+ * its content needs more room, and shares any slack out when the rows are
+ * narrower than the table's minimum. Either one leaves hard-coded `left`
+ * offsets stale, which shows up as frozen columns overlapping each other once
+ * the ledger is scrolled sideways. Measuring the header row instead keeps the
+ * offsets correct whatever the rows contain.
+ */
+function useFrozenColumnOffsets(rowSignature) {
+  const tableRef = useRef(null)
+  useLayoutEffect(() => {
+    const table = tableRef.current
+    if (!table) return undefined
+    const apply = () => {
+      const headers = table.querySelectorAll(':scope > thead > tr > th')
+      let offset = 0
+      for (let index = 0; index < FROZEN_COLUMNS; index += 1) {
+        table.style.setProperty(`--ot-freeze-${index + 1}`, `${offset}px`)
+        offset += headers[index]?.getBoundingClientRect().width || 0
+      }
+    }
+    apply()
+    if (typeof ResizeObserver !== 'function') return undefined
+    const observer = new ResizeObserver(apply)
+    observer.observe(table)
+    return () => observer.disconnect()
+  }, [rowSignature])
+  return tableRef
+}
+
 function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
   const mtdEvents = metrics.realized_mtd_events || []
   const ytdEvents = metrics.realized_ytd_events || []
+  const monthLabel = metrics.month_label || 'MTD'
+  const periodLabel = metrics.period_label || 'YTD'
   return (
     <details className="ot-help card">
       <summary>
@@ -105,7 +206,7 @@ function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
           <p>Opening premium by itself and changing market value are unrealized, so neither is included. The date of the final closing execution determines the month and year. A summary-only imported trade uses its stored realized P/L and close date.</p>
         </section>
         <section>
-          <h3>Current MTD audit</h3>
+          <h3>Realized {monthLabel} audit</h3>
           {mtdEvents.length ? (
             <div className="table-scroll">
               <table className="ot-help-table">
@@ -120,17 +221,18 @@ function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
                     </tr>
                   ))}
                 </tbody>
-                <tfoot><tr><th colSpan="3">Realized MTD</th><th className={Number(metrics.realized_mtd) >= 0 ? 'ot-positive' : 'ot-negative'}>{signedMoney(metrics.realized_mtd)}</th></tr></tfoot>
+                <tfoot><tr><th colSpan="3">Realized {monthLabel}</th><th className={signClass(metrics.realized_mtd)}>{signedMoney(metrics.realized_mtd)}</th></tr></tfoot>
               </table>
             </div>
-          ) : <p>No option legs have a realization date in the current month.</p>}
+          ) : <p>No option legs in this view have a realization date in {monthLabel === 'MTD' ? 'the current month' : monthLabel}.</p>}
         </section>
         <section>
           <h3>Scope and income rules</h3>
           <ul>
-            <li>The six summary cards use every option trade in the selected account or aggregate, not just the rows remaining after the table filters.</li>
-            <li>MTD runs from the first day of this calendar month through today. YTD runs from January 1 through today. The current YTD total contains {ytdEvents.length} realization event{ytdEvents.length === 1 ? '' : 's'}.</li>
-            <li>Win rate and profit factor use only fully closed trades. Realized legs from a still-open trade affect MTD/YTD but not those two statistics.</li>
+            <li>The six summary cards describe the rows the ticker, status, purpose, and year filters leave behind, so narrowing the ledger restates open risk, realized P/L, win rate, and profit factor for that slice.</li>
+            <li>The two realized cards cover the selected year and that year&rsquo;s final month. With <strong>All years</strong> or the current year selected they are month-to-date and year-to-date; picking an earlier year moves both windows back to it. The current {periodLabel} total contains {ytdEvents.length} realization event{ytdEvents.length === 1 ? '' : 's'}.</li>
+            <li>A trade counts in the year it opened and the year it closed, so one opened in December and closed in February appears under both. Its realized P/L still lands only in the year of the closing execution.</li>
+            <li>Win rate and profit factor use only fully closed trades. Realized legs from a still-open trade affect the realized cards but not those two statistics.</li>
             <li>Only trades classified as <strong>Income</strong> can be added to fund income. The toggle is currently <strong>{includeOptionsIncome ? 'on' : 'off'}</strong>; it changes the selected income total but does not change the option ledger.</li>
             <li>Fund YTD is currently sourced from <strong>{String(income?.ytd_income_source || 'the available income records').replaceAll('_', ' ')}</strong>. If recorded dividend payments are unavailable, the app falls back to monthly payouts or holding estimates.</li>
           </ul>
@@ -500,7 +602,7 @@ export default function OptionTrades() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const query = new URLSearchParams({ status, purpose })
+    const query = new URLSearchParams({ status, purpose, year })
     if (search.trim()) query.set('underlying', search.trim())
     try {
       const [tradeData, incomeData] = await Promise.all([
@@ -514,7 +616,7 @@ export default function OptionTrades() {
     } finally {
       setLoading(false)
     }
-  }, [pf, status, purpose, search, includeOptionsIncome])
+  }, [pf, status, purpose, year, search, includeOptionsIncome])
 
   const loadExpired = useCallback(async () => {
     try {
@@ -552,17 +654,31 @@ export default function OptionTrades() {
   useEffect(() => { localStorage.setItem('option_income_combined', String(includeOptionsIncome)) }, [includeOptionsIncome])
 
   const metrics = data.metrics || {}
-  const loadedTrades = data.trades || []
-  // A trade belongs to the year it was opened and the year it was closed, so a
-  // position opened in December and closed in February shows under both. It
-  // deliberately does NOT span the years in between: an open trade would then
-  // run to today and every stale one would pile into the current year.
-  const tradeYears = trade => [
-    String(trade.opened_at || '').slice(0, 4),
-    String(trade.closed_at || '').slice(0, 4),
-  ].filter(value => value.length === 4)
-  const yearOptions = [...new Set(loadedTrades.flatMap(tradeYears))].sort().reverse()
-  const filteredTrades = year === 'ALL' ? loadedTrades : loadedTrades.filter(trade => tradeYears(trade).includes(year))
+  // Every filter is applied server-side now, so these rows are exactly what the
+  // summary cards and the footer totals describe.
+  const filteredTrades = useMemo(() => data.trades || [], [data.trades])
+  // The server sends the full year list, including the current year even before
+  // it has a trade, so the picker rolls forward on its own. The union with the
+  // loaded rows and the live selection is a no-op against that list and keeps
+  // the picker populated if the response ever arrives without one.
+  const yearOptions = useMemo(() => {
+    const years = new Set(data.years || [])
+    for (const trade of filteredTrades) {
+      for (const value of [trade.opened_at, trade.closed_at]) {
+        const yearPart = String(value || '').slice(0, 4)
+        if (yearPart.length === 4) years.add(yearPart)
+      }
+    }
+    years.add(String(new Date().getFullYear()))
+    if (year !== 'ALL') years.add(year)
+    return [...years].sort().reverse()
+  }, [data.years, filteredTrades, year])
+  const totals = useMemo(() => ledgerTotals(filteredTrades), [filteredTrades])
+  const tradeTableRef = useFrozenColumnOffsets(filteredTrades)
+  const monthLabel = metrics.month_label || 'MTD'
+  const periodLabel = metrics.period_label || 'YTD'
+  const filtersActive = status !== 'ALL' || purpose !== 'ALL' || year !== 'ALL' || Boolean(search.trim())
+  const totalTrades = data.total_trades ?? filteredTrades.length
   const scope = data.scope || { type: isAggregate ? 'aggregate' : 'profile', accounts: [] }
   const isOwnerRollup = scope.type === 'owner'
   const showsSourceAccounts = scope.type === 'owner' || scope.type === 'aggregate'
@@ -664,13 +780,19 @@ export default function OptionTrades() {
 
 
       <section className="ot-metrics" aria-label="Option trade summary">
-        <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} explanation="Number of trades whose status is Open. The smaller line shows how many have an entered or derived maximum risk." />
-        <MetricCard label="Known open risk" value={money(metrics.known_open_risk, '$0.00')} detail="Entered or derived defined risk" explanation="Sum of maximum risk for open trades where risk is known. Trades with unlimited or unavailable risk are omitted, so this is not necessarily total account risk." />
-        <MetricCard label="Realized MTD" value={money(metrics.realized_mtd, '$0.00')} tone={Number(metrics.realized_mtd) >= 0 ? 'positive' : 'negative'} explanation="Net realized option P/L dated from the first day of this calendar month through today. It includes fully completed legs from trades that may still be open." />
-        <MetricCard label="Realized YTD" value={money(metrics.realized_ytd, '$0.00')} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} explanation="Net realized option P/L dated January 1 through today, across every trade purpose." />
-        <MetricCard label="Win rate" value={percent(metrics.win_rate_pct)} detail={`${metrics.closed_trades ?? 0} closed trades`} explanation="Fully closed winning trades divided by all fully closed trades. Open trades are excluded; breakeven trades remain in the closed-trade count." />
-        <MetricCard label="Profit factor" value={metrics.profit_factor == null ? '—' : Number(metrics.profit_factor).toFixed(2)} detail="Gross wins ÷ gross losses" explanation="Total profit from fully closed winning trades divided by the absolute total loss from fully closed losing trades. A dash means there are no closed losses yet." />
+        <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} explanation="Number of trades in this filtered view whose status is Open. The smaller line shows how many have an entered or derived maximum risk." />
+        <MetricCard label="Known open risk" value={money(metrics.known_open_risk, '$0.00')} detail="Entered or derived defined risk" explanation="Sum of maximum risk for the open trades in this view where risk is known. Trades with unlimited or unavailable risk are omitted, so this is not necessarily total account risk." />
+        <MetricCard label={`Realized ${monthLabel}`} value={money(metrics.realized_mtd, '$0.00')} detail={monthLabel === 'MTD' ? 'This calendar month' : `Final month of ${periodLabel}`} tone={Number(metrics.realized_mtd) >= 0 ? 'positive' : 'negative'} explanation={monthLabel === 'MTD' ? 'Net realized option P/L in this view, dated from the first day of this calendar month through today. It includes fully completed legs from trades that may still be open.' : `Net realized option P/L in this view dated inside ${monthLabel}, the final month of the year you selected.`} />
+        <MetricCard label={`Realized ${periodLabel}`} value={money(metrics.realized_ytd, '$0.00')} detail={periodLabel === 'YTD' ? 'January 1 through today' : `Jan 1 – Dec 31, ${periodLabel}`} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} explanation={periodLabel === 'YTD' ? 'Net realized option P/L in this view dated January 1 through today.' : `Net realized option P/L in this view dated inside ${periodLabel}. A trade opened that year but closed later realizes in the later year, so it is listed here without adding to this total.`} />
+        <MetricCard label="Win rate" value={percent(metrics.win_rate_pct)} detail={`${metrics.closed_trades ?? 0} closed trades`} explanation="Fully closed winning trades in this view divided by all fully closed trades in it. Open trades are excluded; breakeven trades remain in the closed-trade count." />
+        <MetricCard label="Profit factor" value={metrics.profit_factor == null ? '—' : Number(metrics.profit_factor).toFixed(2)} detail="Gross wins ÷ gross losses" explanation="Total profit from the fully closed winning trades in this view divided by the absolute total loss from its fully closed losing trades. A dash means there are no closed losses yet." />
       </section>
+
+      <p className="ot-metric-scope">
+        {filtersActive
+          ? <>These cards, and the totals under the ledger, cover the <strong>{filteredTrades.length.toLocaleString()}</strong> of {totalTrades.toLocaleString()} trades matching the filters below{year === 'ALL' ? '' : <> in <strong>{year}</strong></>}.</>
+          : <>These cards, and the totals under the ledger, cover all <strong>{totalTrades.toLocaleString()}</strong> trades in this account. Filter the ledger below to restate them for a ticker, status, purpose, or year.</>}
+      </p>
 
       <section className="ot-income card">
         <div>
@@ -707,8 +829,8 @@ export default function OptionTrades() {
         {loading ? <div className="ot-empty"><span className="spinner" /> Loading option trades…</div> : filteredTrades.length === 0 ? (
           <div className="ot-empty"><strong>No option trades match this view.</strong><span>Add a trade manually or import broker option transactions to begin.</span></div>
         ) : (
-          <div className="table-scroll">
-            <table className="ot-trade-table">
+          <div className="table-scroll ot-ledger-scroll">
+            <table className="ot-trade-table" ref={tradeTableRef}>
               <thead><tr><th /><th>Underlying</th><th>Strategy / purpose</th><th>Opened</th><th>Expiration / DTE</th><th>Entry</th><th>Max risk</th><th>Realized P/L</th><th>Return on risk</th><th title="Entry Annualized Return = (Premium ÷ Capital at Risk) × (365 ÷ opening Days to Expiration)">Entry annualized</th><th title="Realized Annualized Return = (Realized P/L ÷ Capital at Risk) × (365 ÷ Actual Days Held)">Realized annualized</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>{filteredTrades.map(trade => {
                 const openExpirations = trade.legs.filter(leg => leg.open_contracts > 0).map(leg => leg.expiration).sort()
@@ -747,6 +869,23 @@ export default function OptionTrades() {
                   expanded.has(trade.id) ? <tr key={`detail-${trade.id}`}><td colSpan="13"><TradeDetails trade={trade} /></td></tr> : null,
                 ]
               })}</tbody>
+              <tfoot className="ot-trade-totals">
+                <tr>
+                  <td />
+                  <td><strong>Totals</strong><small>{totals.count.toLocaleString()} trade{totals.count === 1 ? '' : 's'} shown</small></td>
+                  <td />
+                  <td />
+                  <td />
+                  <td title="Opening credits less opening debits across the rows shown."><span className={totals.entryNet >= 0 ? 'ot-positive' : 'ot-negative'}>{totals.entryNet >= 0 ? 'CREDIT' : 'DEBIT'} {money(Math.abs(totals.entryNet))}</span><small>net opening cash</small></td>
+                  <td title="Sum of maximum risk over the rows that have one. Trades with unlimited or unrecorded risk contribute nothing.">{money(totals.maxRisk, '$0.00')}<small>{totals.riskRows} of {totals.count} with known risk</small></td>
+                  <td className={signClass(totals.realized)} title="Sum of realized P/L across the rows shown, including completed legs of trades that are still open.">{money(totals.realized, '$0.00')}<small>realized to date</small></td>
+                  <td title="Total realized P/L divided by total maximum risk, over the rows that show a return on risk.">{percent(totals.returnOnRiskPct)}<small>P/L ÷ risk over {totals.returnOnRiskRows}</small></td>
+                  <td title="Total premium divided by total risk-years (risk × opening DTE ÷ 365). Pooling instead of averaging keeps one short-dated trade from dominating the figure.">{percent(totals.entryAnnualizedPct)}<small>pooled over {totals.entryAnnualizedRows}</small></td>
+                  <td title="Total realized P/L divided by total risk-years (risk × days held ÷ 365). Pooling instead of averaging keeps one trade closed after a day from dominating the figure.">{percent(totals.realizedAnnualizedPct)}<small>pooled over {totals.realizedAnnualizedRows}</small></td>
+                  <td>{totals.open} open<small>{totals.closed} closed</small></td>
+                  <td />
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}

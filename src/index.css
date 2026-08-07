@@ -9110,6 +9110,13 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .ot-metric-negative { border-top: 3px solid var(--neg); }
 .ot-metric-positive > strong, .ot-positive { color: var(--pos) !important; }
 .ot-metric-negative > strong, .ot-negative { color: var(--neg) !important; }
+.ot-metric-scope {
+  color: var(--text-muted);
+  font-size: .7rem;
+  line-height: 1.45;
+  margin: -.4rem 0 1rem;
+}
+.ot-metric-scope strong { color: var(--text-strong); }
 .ot-info-tip {
   align-items: center;
   background: color-mix(in srgb, var(--accent-bright) 14%, var(--surface-inset));
@@ -9284,6 +9291,14 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .ot-ledger-heading { align-items: flex-end; }
 .ot-filters { display: flex; flex-wrap: wrap; gap: .45rem; justify-content: flex-end; }
 .ot-filters input { max-width: 105px; }
+.table-scroll { overflow-x: auto; }
+/* The ledger is wider than most monitors, so it scrolls inside its own box
+   rather than pushing the page sideways. That box is what the sticky header,
+   totals row, and frozen left columns anchor to. */
+.ot-ledger-scroll {
+  max-height: min(74vh, 940px);
+  overflow: auto;
+}
 .ot-trade-table { min-width: 1500px; width: 100%; }
 .ot-trade-table th, .ot-detail-table th, .oti-preview-table th {
   color: var(--text-muted);
@@ -9292,6 +9307,64 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   text-transform: uppercase;
   white-space: nowrap;
 }
+/* Frozen leading columns: the expander through Entry, so a row keeps its
+   ticker, strategy, dates, and opening price while the result columns are
+   scrolled into view. The widths below are only a preference; the page
+   measures what the browser actually gave each column and writes the matching
+   offset into --ot-freeze-N. Every selector uses child combinators because the
+   expanded detail row nests a whole table inside a cell of this one, and its
+   first header would otherwise be pinned as if it were column 1. */
+.ot-trade-table > thead > tr > th:nth-child(1),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(1),
+.ot-trade-totals > tr > td:nth-child(1) { left: var(--ot-freeze-1, 0px); width: 42px; }
+.ot-trade-table > thead > tr > th:nth-child(2),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(2),
+.ot-trade-totals > tr > td:nth-child(2) { left: var(--ot-freeze-2, 51px); width: 118px; }
+.ot-trade-table > thead > tr > th:nth-child(3),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(3),
+.ot-trade-totals > tr > td:nth-child(3) { left: var(--ot-freeze-3, 169px); width: 152px; }
+.ot-trade-table > thead > tr > th:nth-child(4),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(4),
+.ot-trade-totals > tr > td:nth-child(4) { left: var(--ot-freeze-4, 321px); width: 104px; }
+.ot-trade-table > thead > tr > th:nth-child(5),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(5),
+.ot-trade-totals > tr > td:nth-child(5) { left: var(--ot-freeze-5, 425px); width: 128px; }
+.ot-trade-table > thead > tr > th:nth-child(6),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(6),
+.ot-trade-totals > tr > td:nth-child(6) { left: var(--ot-freeze-6, 553px); width: 130px; }
+.ot-trade-table > thead > tr > th:nth-child(-n+6),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(-n+6),
+.ot-trade-totals > tr > td:nth-child(-n+6) { position: sticky; z-index: 2; }
+/* border-collapse hands the borders to the table, so a pinned cell scrolls
+   away from its own rule; paint the bottom one back on as an inset. */
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(-n+6) {
+  background: var(--surface);
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+/* Layering the same overlay the global row hover uses keeps the pinned cells
+   from reading as a lighter block than the rest of the row. */
+.ot-trade-table > tbody > tr.ot-trade-row:hover > td:nth-child(-n+6) {
+  background: linear-gradient(rgba(15, 52, 96, .3), rgba(15, 52, 96, .3)), var(--surface);
+}
+.ot-trade-table > thead > tr > th:nth-child(6),
+.ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(6),
+.ot-trade-totals > tr > td:nth-child(6) { border-right: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); }
+/* The header and the totals row pin against the scroll box too, and must
+   outrank the frozen columns in the corners where the two overlap. */
+.ot-trade-table > thead > tr > th { top: 0; z-index: 3; }
+.ot-trade-table > thead > tr > th:nth-child(-n+6) { z-index: 5; }
+.ot-trade-totals > tr > td {
+  background: var(--surface-inset);
+  border-top: 2px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  bottom: 0;
+  color: var(--text-strong);
+  font-weight: 700;
+  position: sticky;
+  z-index: 3;
+}
+.ot-trade-totals > tr > td:nth-child(-n+6) { z-index: 5; }
+.ot-trade-totals > tr > td small { font-weight: 500; }
+.ot-trade-totals > tr:hover { background: transparent; }
 .ot-trade-table td { vertical-align: middle; }
 .ot-trade-table td strong, .ot-trade-table td small, .ot-trade-table td > span { display: block; }
 .ot-trade-table td small { color: var(--text-muted); font-size: .63rem; margin-top: .14rem; }
@@ -9447,6 +9520,19 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   .ot-leg-labels { display: none; }
   .ot-leg-inputs { grid-template-columns: repeat(4, 1fr) 32px; }
   .oti-summary-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 900px) {
+  /* Six frozen columns are wider than the viewport here, which would leave
+     nothing to scroll into. Pin the ticker alone and let the rest move. */
+  .ot-trade-table > thead > tr > th:nth-child(n+3):nth-child(-n+6),
+  .ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(n+3):nth-child(-n+6),
+  .ot-trade-totals > tr > td:nth-child(n+3):nth-child(-n+6) { position: static; }
+  .ot-trade-table > thead > tr > th:nth-child(6),
+  .ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(6),
+  .ot-trade-totals > tr > td:nth-child(6) { border-right: 0; }
+  .ot-trade-table > thead > tr > th:nth-child(2),
+  .ot-trade-table > tbody > tr.ot-trade-row > td:nth-child(2),
+  .ot-trade-totals > tr > td:nth-child(2) { border-right: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); }
 }
 @media (max-width: 800px) {
   .ot-page { padding: .85rem .7rem 2rem; }

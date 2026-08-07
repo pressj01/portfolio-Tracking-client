@@ -550,6 +550,85 @@ class OptionTradeApiTest(unittest.TestCase):
         self.assertEqual(payload["trades"][0]["profile_id"], 2)
         self.assertEqual(payload["trades"][0]["profile_name"], "Owner Source")
 
+    def _closed_put(self, underlying, opened_at, closed_at, price, close_price, purpose="Income"):
+        created = self.client.post("/api/option-trades?profile_id=1", json={
+            "underlying": underlying, "strategy_type": "Short Put", "purpose": purpose,
+            "opened_at": opened_at, "max_risk": 1000,
+            "legs": [{
+                "position_side": "SHORT", "option_type": "PUT",
+                "expiration": closed_at, "strike": 100, "contracts": 1,
+                "price": price, "fees": 0,
+            }],
+        })
+        trade = created.get_json()
+        self.client.post(f"/api/option-trades/{trade['id']}/close?profile_id=1", json={
+            "closed_at": closed_at,
+            "executions": [{
+                "leg_id": trade["legs"][0]["id"], "action": "BTC",
+                "contracts": 1, "price": close_price, "fees": 0,
+            }],
+        })
+        return trade["id"]
+
+    def test_summary_metrics_follow_the_table_filters(self):
+        """The cards describe the filtered rows, not the whole account."""
+        self._closed_put("AAA", "2025-03-03", "2025-04-04", 2.00, 0.50)
+        self._closed_put("BBB", "2026-03-03", "2026-04-04", 3.00, 1.00, purpose="Directional")
+
+        everything = self.client.get("/api/option-trades?profile_id=1").get_json()
+        self.assertEqual(everything["metrics"]["closed_trades"], 2)
+        self.assertEqual(everything["total_trades"], 2)
+        self.assertEqual(everything["years"], ["2026", "2025"])
+
+        by_year = self.client.get("/api/option-trades?profile_id=1&year=2025").get_json()
+        self.assertEqual([trade["underlying"] for trade in by_year["trades"]], ["AAA"])
+        self.assertEqual(by_year["metrics"]["closed_trades"], 1)
+        self.assertEqual(by_year["metrics"]["realized_ytd"], 150.0)
+        self.assertEqual(by_year["metrics"]["period_label"], "2025")
+        self.assertEqual(by_year["metrics"]["period_start"], "2025-01-01")
+        self.assertEqual(by_year["metrics"]["period_end"], "2025-12-31")
+        # A past year has no month-to-date, so the narrow card slides back to
+        # that year's final month rather than reporting an empty current month.
+        self.assertEqual(by_year["metrics"]["month_label"], "Dec 2025")
+        self.assertEqual(by_year["metrics"]["realized_mtd"], 0.0)
+        self.assertFalse(by_year["metrics"]["is_current_period"])
+        # The picker still offers every year the account has, so the selected
+        # one cannot disappear out from under the filter.
+        self.assertEqual(by_year["years"], ["2026", "2025"])
+        self.assertEqual(by_year["total_trades"], 2)
+
+        by_purpose = self.client.get("/api/option-trades?profile_id=1&purpose=Directional").get_json()
+        self.assertEqual([trade["underlying"] for trade in by_purpose["trades"]], ["BBB"])
+        self.assertEqual(by_purpose["metrics"]["closed_trades"], 1)
+
+        by_ticker = self.client.get("/api/option-trades?profile_id=1&underlying=AAA").get_json()
+        self.assertEqual(by_ticker["metrics"]["closed_trades"], 1)
+        self.assertEqual(by_ticker["metrics"]["known_open_risk"], 0)
+
+    def test_year_picker_offers_the_current_year_before_it_has_a_trade(self):
+        """The list rolls forward each January without waiting for a fill."""
+        conn = self.connection()
+        try:
+            self.assertEqual(tracker.trade_years(conn, [1], today=tracker.date(2027, 1, 2)), ["2027"])
+            self._closed_put("DDD", "2025-03-03", "2025-04-04", 2.00, 0.50)
+            self.assertEqual(
+                tracker.trade_years(conn, [1], today=tracker.date(2027, 1, 2)),
+                ["2027", "2025"],
+            )
+        finally:
+            conn.close()
+
+    def test_year_filter_keeps_a_trade_that_spans_two_years(self):
+        self._closed_put("CCC", "2025-12-01", "2026-02-02", 2.00, 0.00)
+
+        opened_in = self.client.get("/api/option-trades?profile_id=1&year=2025").get_json()
+        closed_in = self.client.get("/api/option-trades?profile_id=1&year=2026").get_json()
+        self.assertEqual(len(opened_in["trades"]), 1)
+        self.assertEqual(len(closed_in["trades"]), 1)
+        # It is listed under both years, but it realized in 2026 alone.
+        self.assertEqual(opened_in["metrics"]["realized_ytd"], 0.0)
+        self.assertEqual(closed_in["metrics"]["realized_ytd"], 200.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -307,7 +307,7 @@ def _attach_stock_positions(conn, trades):
     return trades
 
 
-def load_trades(conn, profile_ids, status=None, purpose=None, underlying=None):
+def load_trades(conn, profile_ids, status=None, purpose=None, underlying=None, year=None):
     if not profile_ids:
         return []
     placeholders = ",".join("?" for _ in profile_ids)
@@ -322,6 +322,13 @@ def load_trades(conn, profile_ids, status=None, purpose=None, underlying=None):
     if underlying:
         where.append("underlying LIKE ?")
         params.append(f"%{str(underlying).strip().upper()}%")
+    if year and str(year).upper() != "ALL":
+        # A trade belongs to the year it opened and the year it closed, so a
+        # position opened in December and closed in February shows under both.
+        # It deliberately does not span the years between: an open trade would
+        # then run to today and every stale one would pile into this year.
+        where.append("(substr(opened_at, 1, 4) = ? OR substr(closed_at, 1, 4) = ?)")
+        params.extend([str(year), str(year)])
     trade_rows = conn.execute(
         f"SELECT * FROM option_trades WHERE {' AND '.join(where)} ORDER BY COALESCE(opened_at, created_at) DESC, id DESC",
         params,
@@ -360,6 +367,44 @@ def load_trades(conn, profile_ids, status=None, purpose=None, underlying=None):
     return _attach_stock_positions(conn, trades)
 
 
+def _trade_count(conn, profile_ids):
+    """How many trades the account holds before any filter narrows the ledger."""
+    if not profile_ids:
+        return 0
+    placeholders = ",".join("?" for _ in profile_ids)
+    row = conn.execute(
+        f"SELECT COUNT(*) AS total FROM option_trades WHERE profile_id IN ({placeholders})",
+        list(profile_ids),
+    ).fetchone()
+    return int(row["total"] or 0)
+
+
+def trade_years(conn, profile_ids, today=None):
+    """Every year the account has activity in, newest first.
+
+    Built from the whole account rather than from the rows the other filters
+    leave behind, so choosing a status or purpose never makes a year silently
+    vanish from the picker while it is still selected. The current year is
+    always offered, so the list rolls forward on its own each January instead
+    of waiting for that year's first trade to be recorded.
+    """
+    today = today or date.today()
+    if not profile_ids:
+        return [str(today.year)]
+    placeholders = ",".join("?" for _ in profile_ids)
+    rows = conn.execute(
+        f"""SELECT DISTINCT substr(opened_at, 1, 4) AS year FROM option_trades
+             WHERE profile_id IN ({placeholders}) AND opened_at IS NOT NULL
+            UNION
+            SELECT DISTINCT substr(closed_at, 1, 4) FROM option_trades
+             WHERE profile_id IN ({placeholders}) AND closed_at IS NOT NULL""",
+        [*profile_ids, *profile_ids],
+    ).fetchall()
+    years = {str(row["year"]) for row in rows if row["year"] and len(str(row["year"])) == 4}
+    years.add(str(today.year))
+    return sorted(years, reverse=True)
+
+
 def _option_trade_read_scope(conn, is_aggregate, profile_ids):
     """Expand Owner reads to the same source accounts used by income totals."""
     resolved_ids = list(dict.fromkeys(int(profile_id) for profile_id in (profile_ids or [1])))
@@ -389,10 +434,49 @@ def _option_trade_read_scope(conn, is_aggregate, profile_ids):
     }
 
 
-def trade_metrics(trades, today=None):
+MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _metric_window(today, year):
+    """The two realized-P/L windows the summary cards report.
+
+    The wide window is the selected year and the narrow one is that year's final
+    month, which for the current year is exactly year-to-date and month-to-date.
+    Picking an earlier year slides both windows back instead of leaving the cards
+    reporting a month that has nothing in it.
+    """
+    selected = None
+    if year not in (None, "") and str(year).upper() != "ALL":
+        try:
+            selected = int(year)
+        except (TypeError, ValueError):
+            selected = None
+    if selected is None or selected == today.year:
+        return {
+            "period_start": today.replace(month=1, day=1).isoformat(),
+            "period_end": today.isoformat(),
+            "period_label": "YTD",
+            "month_start": today.replace(day=1).isoformat(),
+            "month_end": today.isoformat(),
+            "month_label": "MTD",
+            "is_current_period": True,
+        }
+    return {
+        "period_start": date(selected, 1, 1).isoformat(),
+        "period_end": date(selected, 12, 31).isoformat(),
+        "period_label": str(selected),
+        "month_start": date(selected, 12, 1).isoformat(),
+        "month_end": date(selected, 12, 31).isoformat(),
+        "month_label": f"{MONTH_NAMES[11]} {selected}",
+        "is_current_period": False,
+    }
+
+
+def trade_metrics(trades, today=None, year=None):
     today = today or date.today()
-    month_start = today.replace(day=1).isoformat()
-    year_start = today.replace(month=1, day=1).isoformat()
+    window = _metric_window(today, year)
+    month_start, month_end = window["month_start"], window["month_end"]
+    year_start, year_end = window["period_start"], window["period_end"]
     closed = [trade for trade in trades if trade["status"] == "CLOSED"]
     wins = [trade for trade in closed if trade["realized_pnl"] > 0.005]
     losses = [trade for trade in closed if trade["realized_pnl"] < -0.005]
@@ -413,32 +497,33 @@ def trade_metrics(trades, today=None):
         for event in trade.get("realized_events") or []
     ]
 
-    def events_in_window(start, purpose=None):
+    def events_in_window(start, end, purpose=None):
         return sorted(
             [
                 event
                 for event in realized_events
-                if start <= str(event.get("date") or "")[:10] <= today.isoformat()
+                if start <= str(event.get("date") or "")[:10] <= end
                 and (purpose is None or event.get("purpose") == purpose)
             ],
             key=lambda event: (str(event.get("date") or ""), int(event.get("trade_id") or 0), int(event.get("leg_id") or 0)),
         )
 
-    def event_total(start, purpose=None):
+    def event_total(start, end, purpose=None):
         return sum(
             float(event.get("amount") or 0)
-            for event in events_in_window(start, purpose)
+            for event in events_in_window(start, end, purpose)
         )
 
     return {
+        **window,
         "open_trades": sum(trade["status"] == "OPEN" for trade in trades),
         "known_open_risk": round(sum(trade["max_risk"] or 0 for trade in trades if trade["status"] == "OPEN"), 2),
         "open_risk_coverage": sum(trade["max_risk"] is not None for trade in trades if trade["status"] == "OPEN"),
-        "realized_mtd": round(event_total(month_start), 2),
-        "realized_mtd_events": events_in_window(month_start),
-        "realized_ytd": round(event_total(year_start), 2),
-        "realized_ytd_events": events_in_window(year_start),
-        "income_realized_ytd": round(event_total(year_start, "Income"), 2),
+        "realized_mtd": round(event_total(month_start, month_end), 2),
+        "realized_mtd_events": events_in_window(month_start, month_end),
+        "realized_ytd": round(event_total(year_start, year_end), 2),
+        "realized_ytd_events": events_in_window(year_start, year_end),
+        "income_realized_ytd": round(event_total(year_start, year_end, "Income"), 2),
         "win_rate_pct": round(len(wins) / len(closed) * 100, 1) if closed else None,
         "average_winner": round(gross_profit / len(wins), 2) if wins else None,
         "average_loser": round(-gross_loss / len(losses), 2) if losses else None,
@@ -980,18 +1065,25 @@ def register_routes(app, get_profile_filter, get_profile_id):
         conn = get_connection()
         try:
             profile_ids, scope = _option_trade_read_scope(conn, is_aggregate, profile_ids)
+            year = request.args.get("year")
             trades = load_trades(
                 conn,
                 profile_ids,
                 status=request.args.get("status"),
                 purpose=request.args.get("purpose"),
                 underlying=request.args.get("underlying"),
+                year=year,
             )
-            all_trades = load_trades(conn, profile_ids)
+            # The summary cards describe the rows the filters left behind, so
+            # narrowing the ledger to one ticker, status, purpose, or year
+            # restates open risk, realized P/L, win rate, and profit factor for
+            # that slice instead of for the whole account.
             return jsonify({
                 "trades": trades,
-                "metrics": trade_metrics(all_trades),
+                "metrics": trade_metrics(trades, year=year),
                 "count": len(trades),
+                "total_trades": _trade_count(conn, profile_ids),
+                "years": trade_years(conn, profile_ids),
                 "scope": scope,
             })
         finally:
