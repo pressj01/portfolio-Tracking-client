@@ -42,6 +42,7 @@ const GROUPS = [
     label: 'Admin',
     sections: [
       { id: 'import', label: 'Import' },
+      { id: 'realized-gain-repair', label: 'Realized Gain Repair' },
       { id: 'export', label: 'Export' },
       { id: 'etf-provider-update', label: 'ETF Provider Update' },
       { id: 'portfolios', label: 'Portfolios' },
@@ -11147,6 +11148,213 @@ function HoldingTargetsHelp() {
   )
 }
 
+function RealizedGainRepairHelp() {
+  return (
+    <div>
+      <h2>Realized Gain Repair &amp; Missing Cost Basis</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        This is a one-time cleanup for portfolios imported before the cost-basis fix, plus an
+        ongoing way to supply cost information the app cannot work out on its own. It corrects
+        the realized gain or loss recorded against past <strong>sales</strong>. It does not
+        change what you own, what you paid for what you still hold, or any price.
+      </p>
+
+      <div className="alert alert-warning" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Expect your reported realized gains to go down.</strong> The old figures were
+        too high. Some sales come back with a smaller, correct gain; others end up with no gain
+        at all, because the information needed to calculate one does not exist in your data.
+        That is the correct result — see <em>Why some sales end up blank</em> below.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>What This Fixes</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A capital gain is the sale proceeds minus what the shares cost you. When the app could
+        not establish what shares cost, it used <strong>zero</strong> — which turned the entire
+        proceeds of the sale into profit. A position sold for $9,761 reported $9,761 of gain
+        even if it lost money.
+      </p>
+      <p style={{ marginBottom: '0.5rem' }}>Three situations produced that, and all three are corrected:</p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Shares transferred in from another broker.</strong> A broker's activity export
+          records an incoming transfer with no price, which is indistinguishable from shares that
+          genuinely cost nothing. These now use the cost carried over with the position.
+        </li>
+        <li>
+          <strong>Sales after a transfer out.</strong> Moving shares to another broker empties
+          the record of what remained, so every later sale had nothing to cost against.
+        </li>
+        <li>
+          <strong>Cash sweep and money market funds.</strong> Cash arrives in them by routes the
+          activity export never files as a purchase, so the history shows far more shares sold
+          than bought. A position where every recorded purchase happened at one price now uses
+          that price, which is why a $1.00 sweep fund correctly reports no gain.
+        </li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Do I need to do this?</strong> Open <strong>Action Center</strong>. If a
+        <strong> Recalculate realized gains</strong> item appears, sales in your data are still
+        reporting their whole proceeds as profit. The item disappears once the recalculation has
+        run. You can also check at any time from the Import page — see below.
+      </div>
+
+      <HelpScreenshot
+        src="./help-screenshots/realized-gain-repair/action-center-item.png"
+        alt="Action Center item reading Recalculate realized gains, with the count of affected sales and the tickers involved"
+        caption="The Action Center raises the problem without you having to look for it, and the item clears itself once the recalculation has run."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Step 1 — Run the Recalculation</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Go to <strong>Import</strong> and find the <strong>Realized Gain Repair</strong> panel
+        near the bottom of the page, just above Database Backups.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/realized-gain-repair/repair-panel.png"
+        alt="Realized Gain Repair panel on the Import page with Check for Problems and Recalculate Realized Gains buttons and a findings summary"
+        caption="Check for Problems changes nothing — it reports how many sales are affected, the amount involved, and which tickers, so you can see the scale before deciding."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Check for Problems</strong> — read-only. It reports how many sales are
+          reporting their entire proceeds as profit, the dollar amount involved, and which
+          tickers. Nothing is changed. If it says nothing looks outstanding, you are done.
+        </li>
+        <li>
+          <strong>Recalculate Realized Gains</strong> — rebuilds the gain or loss on every past
+          sale from your transaction history. It asks for confirmation first and takes a
+          database backup before it writes anything.
+        </li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Afterwards the panel reports what actually changed: how many sales were corrected, how
+        much in proceeds that represented, how many now show no gain, and the name of the backup
+        it saved. If a backup could not be written, it says so rather than staying silent.
+      </p>
+
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>No input is required for this step</strong>, and it is safe to run more than
+        once — it recalculates from your existing transactions and produces the same answer every
+        time. Shares, prices, holdings, and specific-lot assignments are never touched; only the
+        recorded gain on each sale is rewritten.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Why Some Sales End Up Blank</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A sale can only be costed against a purchase. Where a purchase was never imported, no
+        cost exists to use, and the app now reports <strong>no gain</strong> rather than
+        inventing one. Those sales are excluded from the totals on the Annual Tax Report instead
+        of counting the whole proceeds as profit, and the report tells you how many lots and how
+        much in proceeds are affected.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        This is common if you have been investing longer than the history your broker lets you
+        export. A position can easily show 200 shares sold against 80 shares bought — the other
+        120 were bought before the exported window begins. Step 2 is how you fill that in.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Step 2 — Supply the Missing Cost (What Input Is Needed)</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        After the recalculation, the Import panel lists every position that still needs
+        attention. <strong>Click a ticker there to open it</strong> — most of these positions are
+        closed, so they no longer appear on the Holdings table and this link is the way in. You
+        can also open any position from <strong>Manage Holdings</strong> using its
+        <strong> Txn</strong> button.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The transaction window shows a panel explaining what that position needs. There are two
+        cases, and they need different information from you.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/realized-gain-repair/basis-gap-panel.png"
+        alt="Cost basis panel in the transaction window showing the affected account, a Set cost button for a transferred-in purchase, and a Record opening lot button for the share shortfall"
+        caption="Both cases on one position: a transferred-in purchase that needs a price, and a shortfall of shares with no purchase behind them. The account that owns the gap is named above them."
+      />
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Case A — A transferred-in purchase with no price</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The panel offers a <strong>Set cost</strong> button naming the share count and date.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>What you must supply:</strong> <em>Price Per Share</em> — what those shares originally cost at the delivering broker.</li>
+        <li><strong>Where to find it:</strong> your old broker's statement or 1099-B for that position. If your statement gives a total cost, divide it by the share count shown on the button.</li>
+        <li><strong>Optional but recommended:</strong> <em>Originally Acquired</em> — the date the shares were first bought. A transfer's date is when they arrived at the new broker, but the holding period for long-term versus short-term carries over from the original purchase. Leave it blank and the transfer date is used.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Save, and every sale that drew on those shares recalculates immediately.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Case B — More shares sold than were ever bought</h4>
+      <p style={{ marginBottom: '0.5rem' }}>
+        There is no purchase to correct here, because the purchase was never imported. The panel
+        shows the arithmetic — shares bought against shares sold and transferred out — and the
+        resulting shortfall. You have two ways to resolve it:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li>
+          <strong>Import the missing history</strong> (preferred when you can get it). Request a
+          longer transaction history from your broker and import it on the Import page. Real
+          purchase records give exact per-lot costs.
+        </li>
+        <li>
+          <strong>Record an opening lot</strong> when the history is not available. The
+          <strong> Record opening lot</strong> button pre-fills a purchase for the exact shortfall,
+          dated the day before your earliest record for that position.
+          <br />
+          <strong>What you must supply:</strong> <em>Price Per Share</em> — your best estimate of
+          the average cost of those shares. Everything else is filled in for you, and the note
+          marks the row as an opening lot so you can find it later.
+        </li>
+      </ul>
+      <div className="alert alert-warning" style={{ marginTop: '0.5rem', marginBottom: '1.25rem' }}>
+        <strong>An estimated opening lot produces an estimated gain.</strong> It is far closer to
+        the truth than treating the shares as free, but do not file taxes from a figure you
+        estimated. Use your broker's 1099-B as the authority for tax reporting.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>One Account at a Time</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A position's transactions can span several linked accounts, but a change you make applies
+        to <strong>one</strong> account. The panel therefore groups what it finds by account and
+        names the owner of each gap.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>If a gap belongs to the account you have selected, the buttons appear and work.</li>
+        <li>
+          If it belongs to another account, the panel says <em>&ldquo;switch to this account to
+          make changes&rdquo;</em> instead of offering a button. Change the account in the
+          selector at the top of the screen and reopen the position.
+        </li>
+      </ul>
+      <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1.25rem' }}>
+        <strong>Why this matters:</strong> an opening lot recorded against the wrong account is
+        accepted but has no effect — it joins a different account's records, where the sales you
+        are trying to fix never look for it. Following the account label avoids that.
+      </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Where the Corrected Numbers Appear</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Annual Tax Report</strong> — short- and long-term totals, with unpriced lots flagged and excluded rather than counted as profit.</li>
+        <li><strong>Gains &amp; Losses</strong> — the Realized tab.</li>
+        <li><strong>Total Return</strong> — the Realized and Combined position views.</li>
+        <li><strong>Manage Holdings</strong> — the Realized G/L column on each transaction.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>If Something Looks Wrong</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Undo everything:</strong> restore the backup taken before the recalculation, from Database Backups on the Import page.</li>
+        <li><strong>A sale still shows no gain:</strong> that position still has a shortfall. Reopen it and check the panel — it names what is missing.</li>
+        <li><strong>Nothing changed after recording an opening lot:</strong> it most likely went to the wrong account. Check the account named in the panel.</li>
+        <li><strong>A transfer out shows no gain:</strong> that is correct. Moving shares between your own accounts is not a sale and realizes nothing.</li>
+        <li><strong>A sale really did have no cost</strong> (a spinoff, or a fully written-off position): leave it. On the Action Center you can mark the item done and it will not return.</li>
+      </ul>
+    </div>
+  )
+}
+
 const CONTENT_MAP = {
   overview: Overview,
   'action-center': ActionCenterHelp,
@@ -11165,6 +11373,7 @@ const CONTENT_MAP = {
   'road-trip-butterfly-scanner': RoadTripButterflyScannerHelp,
   'sixty-forty-twenty-fly-scanner': SixtyFortyTwentyFlyScannerHelp,
   import: ImportHelp,
+  'realized-gain-repair': RealizedGainRepairHelp,
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,
   portfolios: PortfoliosHelp,
