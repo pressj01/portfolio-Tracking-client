@@ -579,6 +579,12 @@ class OptionTradeApiTest(unittest.TestCase):
         self.assertEqual(everything["metrics"]["closed_trades"], 2)
         self.assertEqual(everything["total_trades"], 2)
         self.assertEqual(everything["years"], ["2026", "2025"])
+        # The bug: All years reported only the current year on the wide card
+        # while every other card counted all 2 trades. It now spans both years
+        # (150 realized in 2025 plus 200 in 2026).
+        self.assertEqual(everything["metrics"]["period_scope"], "all")
+        self.assertEqual(everything["metrics"]["period_label"], "all time")
+        self.assertEqual(everything["metrics"]["realized_ytd"], 350.0)
 
         by_year = self.client.get("/api/option-trades?profile_id=1&year=2025").get_json()
         self.assertEqual([trade["underlying"] for trade in by_year["trades"]], ["AAA"])

@@ -440,10 +440,12 @@ MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "O
 def _metric_window(today, year):
     """The two realized-P/L windows the summary cards report.
 
-    The wide window is the selected year and the narrow one is that year's final
-    month, which for the current year is exactly year-to-date and month-to-date.
-    Picking an earlier year slides both windows back instead of leaving the cards
-    reporting a month that has nothing in it.
+    The wide window is whatever the year filter selects and the narrow one is
+    that window's final month. Selecting a year reports it and its December;
+    the current year is exactly year-to-date and month-to-date. All years means
+    every date on record, so the card agrees with the ledger totals underneath
+    it rather than quietly reporting only this year while the rest of the cards
+    count every trade.
     """
     selected = None
     if year not in (None, "") and str(year).upper() != "ALL":
@@ -451,8 +453,20 @@ def _metric_window(today, year):
             selected = int(year)
         except (TypeError, ValueError):
             selected = None
-    if selected is None or selected == today.year:
+    if selected is None:
         return {
+            "period_scope": "all",
+            "period_start": "0001-01-01",
+            "period_end": "9999-12-31",
+            "period_label": "all time",
+            "month_start": today.replace(day=1).isoformat(),
+            "month_end": today.isoformat(),
+            "month_label": "MTD",
+            "is_current_period": True,
+        }
+    if selected == today.year:
+        return {
+            "period_scope": "ytd",
             "period_start": today.replace(month=1, day=1).isoformat(),
             "period_end": today.isoformat(),
             "period_label": "YTD",
@@ -462,6 +476,7 @@ def _metric_window(today, year):
             "is_current_period": True,
         }
     return {
+        "period_scope": "year",
         "period_start": date(selected, 1, 1).isoformat(),
         "period_end": date(selected, 12, 31).isoformat(),
         "period_label": str(selected),

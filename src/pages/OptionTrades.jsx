@@ -192,7 +192,7 @@ function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
   const mtdEvents = metrics.realized_mtd_events || []
   const ytdEvents = metrics.realized_ytd_events || []
   const monthLabel = metrics.month_label || 'MTD'
-  const periodLabel = metrics.period_label || 'YTD'
+  const periodLabel = metrics.period_label || 'all time'
   return (
     <details className="ot-help card">
       <summary>
@@ -230,7 +230,7 @@ function OptionTradeHelp({ metrics, income, includeOptionsIncome }) {
           <h3>Scope and income rules</h3>
           <ul>
             <li>The six summary cards describe the rows the ticker, status, purpose, and year filters leave behind, so narrowing the ledger restates open risk, realized P/L, win rate, and profit factor for that slice.</li>
-            <li>The two realized cards cover the selected year and that year&rsquo;s final month. With <strong>All years</strong> or the current year selected they are month-to-date and year-to-date; picking an earlier year moves both windows back to it. The current {periodLabel} total contains {ytdEvents.length} realization event{ytdEvents.length === 1 ? '' : 's'}.</li>
+            <li>The two realized cards cover the window the year filter selects and that window&rsquo;s final month. <strong>All years</strong> means every date on record with the current month beside it; the current year is year-to-date and month-to-date; an earlier year is that year and its December. The {periodLabel} total contains {ytdEvents.length} realization event{ytdEvents.length === 1 ? '' : 's'}.</li>
             <li>A trade counts in the year it opened and the year it closed, so one opened in December and closed in February appears under both. Its realized P/L still lands only in the year of the closing execution.</li>
             <li>Win rate and profit factor use only fully closed trades. Realized legs from a still-open trade affect the realized cards but not those two statistics.</li>
             <li>Only trades classified as <strong>Income</strong> can be added to fund income. The toggle is currently <strong>{includeOptionsIncome ? 'on' : 'off'}</strong>; it changes the selected income total but does not change the option ledger.</li>
@@ -676,7 +676,18 @@ export default function OptionTrades() {
   const totals = useMemo(() => ledgerTotals(filteredTrades), [filteredTrades])
   const tradeTableRef = useFrozenColumnOffsets(filteredTrades)
   const monthLabel = metrics.month_label || 'MTD'
-  const periodLabel = metrics.period_label || 'YTD'
+  const periodLabel = metrics.period_label || 'all time'
+  const periodScope = metrics.period_scope || 'all'
+  const periodDetail = {
+    all: 'Every recorded date',
+    ytd: 'January 1 through today',
+    year: `Jan 1 – Dec 31, ${periodLabel}`,
+  }[periodScope]
+  const periodExplanation = {
+    all: 'Net realized option P/L in this view across every date on record. With no filters applied it matches the realized total under the ledger.',
+    ytd: 'Net realized option P/L in this view dated January 1 through today.',
+    year: `Net realized option P/L in this view dated inside ${periodLabel}. A trade opened that year but closed later realizes in the later year, so it is listed here without adding to this total.`,
+  }[periodScope]
   const filtersActive = status !== 'ALL' || purpose !== 'ALL' || year !== 'ALL' || Boolean(search.trim())
   const totalTrades = data.total_trades ?? filteredTrades.length
   const scope = data.scope || { type: isAggregate ? 'aggregate' : 'profile', accounts: [] }
@@ -783,7 +794,7 @@ export default function OptionTrades() {
         <MetricCard label="Open trades" value={metrics.open_trades ?? 0} detail={`${metrics.open_risk_coverage ?? 0} with known risk`} explanation="Number of trades in this filtered view whose status is Open. The smaller line shows how many have an entered or derived maximum risk." />
         <MetricCard label="Known open risk" value={money(metrics.known_open_risk, '$0.00')} detail="Entered or derived defined risk" explanation="Sum of maximum risk for the open trades in this view where risk is known. Trades with unlimited or unavailable risk are omitted, so this is not necessarily total account risk." />
         <MetricCard label={`Realized ${monthLabel}`} value={money(metrics.realized_mtd, '$0.00')} detail={monthLabel === 'MTD' ? 'This calendar month' : `Final month of ${periodLabel}`} tone={Number(metrics.realized_mtd) >= 0 ? 'positive' : 'negative'} explanation={monthLabel === 'MTD' ? 'Net realized option P/L in this view, dated from the first day of this calendar month through today. It includes fully completed legs from trades that may still be open.' : `Net realized option P/L in this view dated inside ${monthLabel}, the final month of the year you selected.`} />
-        <MetricCard label={`Realized ${periodLabel}`} value={money(metrics.realized_ytd, '$0.00')} detail={periodLabel === 'YTD' ? 'January 1 through today' : `Jan 1 – Dec 31, ${periodLabel}`} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} explanation={periodLabel === 'YTD' ? 'Net realized option P/L in this view dated January 1 through today.' : `Net realized option P/L in this view dated inside ${periodLabel}. A trade opened that year but closed later realizes in the later year, so it is listed here without adding to this total.`} />
+        <MetricCard label={`Realized ${periodLabel}`} value={money(metrics.realized_ytd, '$0.00')} detail={periodDetail} tone={Number(metrics.realized_ytd) >= 0 ? 'positive' : 'negative'} explanation={periodExplanation} />
         <MetricCard label="Win rate" value={percent(metrics.win_rate_pct)} detail={`${metrics.closed_trades ?? 0} closed trades`} explanation="Fully closed winning trades in this view divided by all fully closed trades in it. Open trades are excluded; breakeven trades remain in the closed-trade count." />
         <MetricCard label="Profit factor" value={metrics.profit_factor == null ? '—' : Number(metrics.profit_factor).toFixed(2)} detail="Gross wins ÷ gross losses" explanation="Total profit from the fully closed winning trades in this view divided by the absolute total loss from its fully closed losing trades. A dash means there are no closed losses yet." />
       </section>
