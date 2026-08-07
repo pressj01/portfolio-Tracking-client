@@ -46,6 +46,7 @@ from database import ensure_tables_exist
 from cash_flow import (
     HOLDING_SCENARIO_PROFILES,
     OPTION_INCOME_TICKERS,
+    backfill_owner_subaccount_sources as _backfill_owner_subaccount_sources,
     classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
     get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
@@ -53,6 +54,7 @@ from cash_flow import (
     next_bill_schedule as _next_cash_flow_bill,
     parse_month as _parse_cash_flow_month,
     portfolio_scenario_assumptions as _cash_flow_scenario_assumptions,
+    resolve_source_plan_id as _resolve_cash_flow_source,
     serialize_item as _serialize_cash_flow_item,
     serialize_plan as _serialize_cash_flow_plan,
     settings_for_plan as _cash_flow_settings_for_plan,
@@ -1515,7 +1517,7 @@ def cash_flow_plans():
             conn.rollback()
             conn.close()
             return jsonify(error="A cash-flow plan with that name already exists."), 409
-        result = _serialize_cash_flow_plan(row)
+        result = _serialize_cash_flow_plan(row, conn)
         conn.close()
         return jsonify(plan=result), 201
 
@@ -1526,7 +1528,7 @@ def cash_flow_plans():
            ORDER BY is_default DESC, name, id""",
         (scope_type, scope_id),
     ).fetchall()
-    result = [_serialize_cash_flow_plan(row) for row in rows]
+    result = [_serialize_cash_flow_plan(row, conn) for row in rows]
     conn.close()
     return jsonify(plans=result)
 
@@ -1593,7 +1595,108 @@ def cash_flow_plan_detail(plan_id):
     row = conn.execute(
         "SELECT * FROM cash_flow_plans WHERE id = ?", (plan_id,)
     ).fetchone()
-    result = _serialize_cash_flow_plan(row)
+    result = _serialize_cash_flow_plan(row, conn)
+    conn.close()
+    return jsonify(plan=result)
+
+
+def _cash_flow_scope_label(conn, scope_type, scope_id):
+    table = "aggregates" if scope_type == "aggregate" else "profiles"
+    row = conn.execute(
+        f"SELECT name FROM {table} WHERE id = ?", (int(scope_id),)
+    ).fetchone()
+    name = row["name"] if row else f"{scope_type} {scope_id}"
+    return f"{name} (aggregate)" if scope_type == "aggregate" else name
+
+
+@app.route("/api/cash-flow/plan-sources", methods=["GET"])
+def cash_flow_plan_sources():
+    """Plans that the current selection could borrow bills and income from."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    rows = conn.execute(
+        """SELECT p.*, COUNT(i.id) AS item_count
+           FROM cash_flow_plans p
+           LEFT JOIN cash_flow_items i
+             ON i.plan_id = p.id AND i.active = 1
+           GROUP BY p.id
+           ORDER BY p.scope_type, p.scope_id, p.name"""
+    ).fetchall()
+    options = []
+    for row in rows:
+        # Cannot borrow from itself, and only one hop is followed, so a plan
+        # that already borrows is not offered as a source.
+        if row["id"] == plan["id"]:
+            continue
+        if _resolve_cash_flow_source(conn, row["id"]) != row["id"]:
+            continue
+        if not row["item_count"]:
+            continue
+        options.append({
+            "id": row["id"],
+            "name": row["name"],
+            "scope_type": row["scope_type"],
+            "scope_id": row["scope_id"],
+            "item_count": row["item_count"],
+            "label": _cash_flow_scope_label(
+                conn, row["scope_type"], row["scope_id"]
+            ),
+        })
+    plan_result = _serialize_cash_flow_plan(plan, conn)
+    conn.close()
+    return jsonify(plan=plan_result, sources=options)
+
+
+@app.route("/api/cash-flow/plans/<int:plan_id>/source", methods=["PUT"])
+def cash_flow_plan_source(plan_id):
+    """Point a plan at another plan's bills and income, or unlink it."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, plan_id)
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    data = request.get_json(silent=True) or {}
+    raw = data.get("source_plan_id")
+    source_id = None
+    if raw not in (None, "", "own"):
+        try:
+            source_id = int(raw)
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify(error="Invalid source plan."), 400
+        if source_id == plan_id:
+            conn.close()
+            return jsonify(error="A plan cannot borrow from itself."), 400
+        source = conn.execute(
+            "SELECT id FROM cash_flow_plans WHERE id = ?", (source_id,)
+        ).fetchone()
+        if not source:
+            conn.close()
+            return jsonify(error="Source plan not found."), 404
+        # Only one hop is followed during expansion, so refuse to build a chain
+        # that would silently resolve to something else.
+        if _resolve_cash_flow_source(conn, source_id) != source_id:
+            conn.close()
+            return jsonify(
+                error="That plan already borrows its bills from another plan."
+            ), 400
+    conn.execute(
+        """UPDATE cash_flow_plans
+           SET source_plan_id = ?, version = version + 1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?""",
+        (source_id, plan_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM cash_flow_plans WHERE id = ?", (plan_id,)
+    ).fetchone()
+    result = _serialize_cash_flow_plan(row, conn)
     conn.close()
     return jsonify(plan=result)
 
@@ -1607,15 +1710,24 @@ def cash_flow_items():
         if not plan:
             conn.close()
             return jsonify(error="Cash-flow plan not found."), 404
+        # A borrowed plan lists the source's bills so the screen shows what is
+        # actually being modelled. They stay read-only here: writes resolve to
+        # the scope that owns them.
+        items_plan_id = _resolve_cash_flow_source(conn, plan["id"])
         rows = conn.execute(
             """SELECT * FROM cash_flow_items
                WHERE plan_id = ?
                ORDER BY kind, active DESC, name, id""",
-            (plan["id"],),
+            (items_plan_id,),
         ).fetchall()
         result = [_cash_flow_item_result(conn, row) for row in rows]
+        plan_result = _serialize_cash_flow_plan(plan, conn)
         conn.close()
-        return jsonify(items=result)
+        return jsonify(
+            items=result,
+            plan=plan_result,
+            read_only=items_plan_id != plan["id"],
+        )
 
     data = request.get_json(silent=True) or {}
     plan = _cash_flow_plan_for_scope(conn, data.get("plan_id"))
@@ -2042,7 +2154,7 @@ def cash_flow_summary():
     average_income = sum(row["additional_income_net"] for row in series) / len(series)
     result = {
         **current,
-        "plan": _serialize_cash_flow_plan(plan),
+        "plan": _serialize_cash_flow_plan(plan, conn),
         "portfolio_value": portfolio["value"],
         "portfolio_profile_count": portfolio["profile_count"],
         "portfolio_annual_income": portfolio["annual_income"],
@@ -2081,10 +2193,11 @@ def cash_flow_series():
     except (ValueError, TypeError) as exc:
         conn.close()
         return jsonify(error=str(exc)), 400
+    plan_result = _serialize_cash_flow_plan(plan, conn)
     conn.commit()
     conn.close()
     return jsonify(
-        plan=_serialize_cash_flow_plan(plan),
+        plan=plan_result,
         start_month=start_month,
         months=months,
         series=series,
@@ -2143,10 +2256,11 @@ def cash_flow_simulate():
     portfolio_public["distribution_yield_pct"] = round(
         portfolio["annual_income"] / portfolio["value"] * 100.0, 2
     ) if portfolio["value"] > 0 else 0.0
+    plan_result = _serialize_cash_flow_plan(plan, conn)
     conn.commit()
     conn.close()
     return jsonify(
-        plan=_serialize_cash_flow_plan(plan),
+        plan=plan_result,
         settings=settings,
         start_month=start_month,
         horizon_years=horizon,
@@ -4204,10 +4318,16 @@ def set_include_in_owner(pid):
     data = request.get_json() or {}
     val = 1 if data.get("include") else 0
     conn = get_connection()
+    ensure_tables_exist(conn)
     conn.execute("UPDATE profiles SET include_in_owner = ? WHERE id = ?", (val, pid))
     conn.commit()
+    # Newly included sub-accounts share Owner's household bills, so their
+    # cash-flow plan follows the flag instead of falling back to placeholders.
+    # Only empty, unlinked plans are touched; unflagging leaves the link alone
+    # so a budget that was already borrowed does not vanish.
+    linked = _backfill_owner_subaccount_sources(conn) if val else 0
     conn.close()
-    return jsonify({"id": pid, "include_in_owner": val})
+    return jsonify({"id": pid, "include_in_owner": val, "cash_flow_plans_linked": linked})
 
 
 @app.route("/api/profiles/summary", methods=["GET"])

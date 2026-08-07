@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -250,6 +250,7 @@ function ItemTable({
   onSaveOff,
   onRestore,
   saved = false,
+  readOnly = false,
 }) {
   const frequencyLabel = Object.fromEntries(FREQUENCIES)
   if (!items.length) {
@@ -299,8 +300,11 @@ function ItemTable({
                       <input
                         type="checkbox"
                         checked={Boolean(item.paid)}
+                        disabled={readOnly}
                         onChange={e => onTogglePaid(item, e.target.checked)}
-                        title={`Mark the bill due ${item.current_due_date} as paid`}
+                        title={readOnly
+                          ? 'Borrowed from another plan — mark it paid there'
+                          : `Mark the bill due ${item.current_due_date} as paid`}
                       />
                     ) : (
                       <span className="cf-muted-dash" title="No remaining occurrence">—</span>
@@ -308,15 +312,21 @@ function ItemTable({
                   </td>
                 )}
                 <td className="cf-actions">
-                  {!saved && <button type="button" onClick={() => onEdit(item)}>Edit</button>}
-                  {onMove && <button type="button" onClick={() => onMove(item)}>Move</button>}
-                  {!saved && onSaveOff && (
-                    <button type="button" onClick={() => onSaveOff(item)}>Save off</button>
+                  {readOnly ? (
+                    <span className="cf-muted-dash" title="Borrowed from another plan — edit it there">Borrowed</span>
+                  ) : (
+                    <>
+                      {!saved && <button type="button" onClick={() => onEdit(item)}>Edit</button>}
+                      {onMove && <button type="button" onClick={() => onMove(item)}>Move</button>}
+                      {!saved && onSaveOff && (
+                        <button type="button" onClick={() => onSaveOff(item)}>Save off</button>
+                      )}
+                      {saved && onRestore && (
+                        <button type="button" onClick={() => onRestore(item)}>Restore</button>
+                      )}
+                      <button type="button" className="cf-delete" onClick={() => onDelete(item)}>Delete</button>
+                    </>
                   )}
-                  {saved && onRestore && (
-                    <button type="button" onClick={() => onRestore(item)}>Restore</button>
-                  )}
-                  <button type="button" className="cf-delete" onClick={() => onDelete(item)}>Delete</button>
                 </td>
               </tr>
             )
@@ -418,6 +428,7 @@ export default function CashFlowSustainability() {
   const pf = useProfileFetch()
   const {
     selection,
+    profileQueryString,
     currentProfileName,
     isAggregate,
     profileId,
@@ -431,7 +442,14 @@ export default function CashFlowSustainability() {
 
   const [plans, setPlans] = useState([])
   const [planId, setPlanId] = useState(null)
+  // Which scope planId was loaded for. `selection` is not the discriminator:
+  // it reads 'a:1' from the first render while the request scope is still
+  // profile 1, so the query string is what actually flips.
+  const [planScope, setPlanScope] = useState(null)
   const [items, setItems] = useState([])
+  const [sourceOptions, setSourceOptions] = useState([])
+  const [sourcePlan, setSourcePlan] = useState(null)
+  const [borrowed, setBorrowed] = useState(false)
   const [settings, setSettings] = useState(null)
   const [summary, setSummary] = useState(null)
   const [simulation, setSimulation] = useState(null)
@@ -460,42 +478,80 @@ export default function CashFlowSustainability() {
     setSummary(data.summary)
   }, [apiJson, month])
 
+  // The selection resolves to profile 1 for one render before the aggregate
+  // list loads, so a plan id from the old scope can still be in flight against
+  // the new one (a guaranteed 404). Only the newest load may write.
+  const planRequestRef = useRef(0)
+
   const loadPlanData = useCallback(async (activePlanId) => {
     if (!activePlanId) return
+    const token = planRequestRef.current + 1
+    planRequestRef.current = token
     setLoading(true)
     setError('')
     try {
-      const [itemData, settingData] = await Promise.all([
+      const [itemData, settingData, sourceData] = await Promise.all([
         apiJson(`/api/cash-flow/items?plan_id=${activePlanId}`),
         apiJson(`/api/cash-flow/settings?plan_id=${activePlanId}`),
+        apiJson(`/api/cash-flow/plan-sources?plan_id=${activePlanId}`),
       ])
+      if (planRequestRef.current !== token) return
       setItems(itemData.items || [])
       setSettings(settingData.settings)
+      setBorrowed(Boolean(itemData.read_only))
+      setSourceOptions(sourceData.sources || [])
+      setSourcePlan(sourceData.plan || null)
       await loadSummary(activePlanId)
       setSimulation(null)
     } catch (err) {
+      if (planRequestRef.current !== token) return
       setError(err.message)
     } finally {
-      setLoading(false)
+      if (planRequestRef.current === token) setLoading(false)
     }
   }, [apiJson, loadSummary])
+
+  // Household bills belong to a person, not an account, so a plan can borrow
+  // another plan's entries instead of duplicating them.
+  const changeSource = useCallback(async (nextSourceId) => {
+    if (!planId) return
+    setLoading(true)
+    setError('')
+    try {
+      await apiJson(`/api/cash-flow/plans/${planId}/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_plan_id: nextSourceId || null }),
+      })
+      await loadPlanData(planId)
+    } catch (err) {
+      setError(err.message)
+      setLoading(false)
+    }
+  }, [apiJson, planId, loadPlanData])
 
   useEffect(() => {
     setLoading(true)
     setError('')
+    // Plans belong to one scope, so the previous selection's plan id must not
+    // survive the switch — every effect keyed on planId would fire against the
+    // new scope and 404 before the real id arrives.
+    setPlanId(null)
+    setPlanScope(null)
     apiJson('/api/cash-flow/plans')
       .then(data => {
         const nextPlans = data.plans || []
         setPlans(nextPlans)
         setPlanId(nextPlans[0]?.id || null)
+        setPlanScope(profileQueryString)
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
-  }, [apiJson, selection])
+  }, [apiJson, profileQueryString])
 
   useEffect(() => {
-    if (planId) loadPlanData(planId)
-  }, [planId, loadPlanData, calendarDay])
+    if (planId && planScope === profileQueryString) loadPlanData(planId)
+  }, [planId, planScope, profileQueryString, loadPlanData, calendarDay])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -506,7 +562,7 @@ export default function CashFlowSustainability() {
   }, [])
 
   useEffect(() => {
-    if (planId) {
+    if (planId && planScope === profileQueryString) {
       loadSummary(planId, month).catch(err => setError(err.message))
       setExpenseDraft(prev => {
         if (prev.id) return prev
@@ -786,6 +842,34 @@ export default function CashFlowSustainability() {
         <strong>Portfolio source:</strong> {currentProfileName}{isAggregate ? ' aggregate' : ''}. Portfolio income is loaded automatically; the entries below are only expenses and non-portfolio income.
       </div>
 
+      {(sourceOptions.length > 0 || borrowed) && (
+        <div className="cf-source-note cf-borrow-note">
+          <label>
+            <strong>Bills &amp; income source:</strong>{' '}
+            <select
+              value={sourcePlan?.source_plan_id || ''}
+              onChange={e => changeSource(e.target.value ? Number(e.target.value) : null)}
+              disabled={loading}
+            >
+              <option value="">This selection&apos;s own entries</option>
+              {sourceOptions.map(option => (
+                <option key={option.id} value={option.id}>
+                  {option.label} — {option.name} ({option.item_count} entries)
+                </option>
+              ))}
+            </select>
+          </label>
+          {borrowed && (
+            <span>
+              {' '}Showing <strong>{sourcePlan?.source_plan_name}</strong> from{' '}
+              <strong>{sourcePlan?.source_scope_type === 'aggregate' ? 'an aggregate' : 'another portfolio'}</strong>.
+              These entries are read-only here — switch to that selection to edit them.
+              Assumptions below (horizon, tax, cash reserve) stay with {currentProfileName}.
+            </span>
+          )}
+        </div>
+      )}
+
       {error && <div className="cf-error">{error}</div>}
 
       <div className="cf-summary-guide" role="note">
@@ -858,14 +942,16 @@ export default function CashFlowSustainability() {
           </div>
           <strong>{money(summary?.expenses)} in {month}</strong>
         </div>
-        <ItemEditor
-          kind="expense"
-          value={expenseDraft}
-          onChange={setExpenseDraft}
-          onSubmit={event => saveItem('expense', event)}
-          onCancel={() => setExpenseDraft(blankItem('expense', month))}
-          saving={saving}
-        />
+        {!borrowed && (
+          <ItemEditor
+            kind="expense"
+            value={expenseDraft}
+            onChange={setExpenseDraft}
+            onSubmit={event => saveItem('expense', event)}
+            onCancel={() => setExpenseDraft(blankItem('expense', month))}
+            saving={saving}
+          />
+        )}
         {loading ? <div className="cf-empty">Loading expenses...</div> : (
           <>
             <ItemTable
@@ -876,6 +962,7 @@ export default function CashFlowSustainability() {
               onTogglePaid={togglePaid}
               onMove={openMoveItem}
               onSaveOff={saveOffItem}
+              readOnly={borrowed}
             />
             {savedExpenses.length > 0 && (
               <details className="cf-saved-expenses">
@@ -890,6 +977,7 @@ export default function CashFlowSustainability() {
                   onMove={openMoveItem}
                   onRestore={restoreItem}
                   saved
+                  readOnly={borrowed}
                 />
               </details>
             )}
@@ -905,14 +993,16 @@ export default function CashFlowSustainability() {
           </div>
           <strong>{money(summary?.additional_income_net)} net in {month}</strong>
         </div>
-        <ItemEditor
-          kind="income"
-          value={incomeDraft}
-          onChange={setIncomeDraft}
-          onSubmit={event => saveItem('income', event)}
-          onCancel={() => setIncomeDraft(blankItem('income', month))}
-          saving={saving}
-        />
+        {!borrowed && (
+          <ItemEditor
+            kind="income"
+            value={incomeDraft}
+            onChange={setIncomeDraft}
+            onSubmit={event => saveItem('income', event)}
+            onCancel={() => setIncomeDraft(blankItem('income', month))}
+            saving={saving}
+          />
+        )}
         {loading ? <div className="cf-empty">Loading income...</div> : (
           <>
             <ItemTable
@@ -922,6 +1012,7 @@ export default function CashFlowSustainability() {
               onDelete={deleteItem}
               onMove={openMoveItem}
               onSaveOff={saveOffItem}
+              readOnly={borrowed}
             />
             {savedIncomes.length > 0 && (
               <details className="cf-saved-expenses">
@@ -936,6 +1027,7 @@ export default function CashFlowSustainability() {
                   onMove={openMoveItem}
                   onRestore={restoreItem}
                   saved
+                  readOnly={borrowed}
                 />
               </details>
             )}

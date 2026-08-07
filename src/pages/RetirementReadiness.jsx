@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
@@ -17,6 +17,9 @@ const fmtPct = (v, digits = 1) => {
 
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v))
 const num = v => Number.isFinite(Number(v)) ? Number(v) : 0
+// Averaging a 12-month expansion leaves binary-float tails (5218.060833333333).
+// Round to cents so the inputs stay readable and still match the Cash Flow screen.
+const round2 = v => Math.round(num(v) * 100) / 100
 
 function StatTile({ label, value, sub, tone = 'default' }) {
   return (
@@ -42,10 +45,115 @@ function ReadinessBadge({ status }) {
   return <span className={`rr-status rr-status-${key}`}>{status}</span>
 }
 
+// Cash-flow income categories mapped onto the inflow boxes on this screen.
+// Anything unrecognized (Rental, Business, Other, blank) lands in "Other Recurring".
+const INFLOW_BOX_BY_CATEGORY = {
+  'employment': 'employment',
+  'pension': 'companyPension',
+  'social security': 'govPension',
+  'annuity': 'annuities',
+}
+
+const INFLOW_BOX_LABELS = {
+  employment: 'Employment Income',
+  companyPension: 'Company Pension',
+  govPension: 'Gov. Pension / Soc. Sec.',
+  annuities: 'Annuities',
+  other: 'Other Recurring',
+}
+
+function inflowBoxFor(category) {
+  const key = String(category || '').trim().toLowerCase()
+  return INFLOW_BOX_BY_CATEGORY[key] || 'other'
+}
+
+// Average the 12-month expansion so quarterly/annual bills and inflows normalize
+// to a monthly figure. This is the same method behind the Cash Flow screen's
+// "normalized monthly expenses", so the two screens agree.
+function summarizeCashFlowPlan(payload) {
+  const series = Array.isArray(payload?.series) ? payload.series : []
+  if (!series.length) return null
+
+  const boxes = { employment: 0, companyPension: 0, govPension: 0, annuities: 0, other: 0 }
+  let expenseTotal = 0
+  let grossTotal = 0
+  let netTotal = 0
+
+  series.forEach(month => {
+    expenseTotal += num(month.expenses)
+    grossTotal += num(month.additional_income_gross)
+    netTotal += num(month.additional_income_net)
+    const items = Array.isArray(month.items) ? month.items : []
+    items.forEach(item => {
+      if (item.kind !== 'income') return
+      boxes[inflowBoxFor(item.category)] += num(item.amount)
+    })
+  })
+
+  const months = series.length
+  Object.keys(boxes).forEach(key => { boxes[key] = round2(boxes[key] / months) })
+  const monthlyExpenses = round2(expenseTotal / months)
+  const inflowsGross = round2(grossTotal / months)
+  const inflowsNet = round2(netTotal / months)
+
+  if (monthlyExpenses <= 0 && inflowsGross <= 0) return null
+
+  return {
+    planName: payload?.plan?.name || 'Cash-flow plan',
+    months,
+    monthlyExpenses,
+    boxes,
+    inflowsGross,
+    inflowsNet,
+    // Blend the per-item tax rates into the single rate this screen applies, so
+    // the after-tax inflow total matches the Cash Flow screen exactly.
+    taxPct: inflowsGross > 0
+      ? round2(clamp((inflowsGross - inflowsNet) / inflowsGross * 100, 0, 95))
+      : null,
+  }
+}
+
+// The Cash Flow screen's saved assumptions, mapped onto the matching inputs
+// here so both screens stress the portfolio the same way.
+function summarizeCashFlowSettings(payload) {
+  const s = payload?.settings
+  if (!s) return null
+  return {
+    years: clamp(Math.round(num(s.horizon_years)), 1, 50),
+    inflationPct: round2(s.expense_inflation_pct),
+    investmentTaxPct: round2(clamp(num(s.portfolio_tax_pct), 0, 95)),
+    startingCash: round2(s.starting_cash),
+    // "Unused income after bills" is a two-way choice there; here it is a
+    // reinvest/withdraw split, so map the endpoints.
+    surplusReinvestPct: s.surplus_mode === 'cash' ? 0 : 100,
+    surplusWithdrawPct: s.surplus_mode === 'cash' ? 100 : 0,
+  }
+}
+
+// Falling back to these keeps the screen honest when the current selection has
+// no plan: the boxes must not keep values pulled for a different selection.
+const RR_DEFAULTS = {
+  monthlyExpenses: 4500,
+  bufferRatio: 3,
+  surplusWithdrawPct: 0,
+  surplusReinvestPct: 100,
+  startingCash: 0,
+  targetCashMonths: 6,
+  years: 10,
+  inflationPct: 3,
+  employmentIncome: 0,
+  companyPension: 0,
+  govPension: 0,
+  annuities: 0,
+  otherRecurringIncome: 0,
+  nonInvestmentTaxPct: 10,
+  investmentTaxPct: 15,
+}
+
 const INPUT_HELP = {
-  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target.',
-  nonInvestmentIncome: 'Monthly income that does not come from the portfolio, before taxes. Examples: employment income, pensions, annuities, and other recurring inflows.',
-  nonInvestmentTaxPct: 'Estimated tax rate applied to non-investment monthly inflows.',
+  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. Pulled from your Cash Flow & Sustainability plan, averaged over 12 months so annual and quarterly bills are normalized.',
+  nonInvestmentIncome: 'Monthly income that does not come from the portfolio, before taxes. Examples: employment income, pensions, Social Security, annuities, and other recurring inflows. Pulled from the income entries in your Cash Flow & Sustainability plan.',
+  nonInvestmentTaxPct: 'Estimated tax rate applied to non-investment monthly inflows. Pulled from your cash-flow plan as the blended rate across its income entries.',
   incomeIndexPct: 'Annual indexing or cost-of-living increase applied to non-investment inflows.',
   bufferRatio: 'Monthly Expense Protection Buffer multiplier. A ratio of 3 means stressed income should be three times monthly expenses.',
   surplusWithdrawPct: 'Percent of excess portfolio income, after expenses are paid, that is withdrawn and not reinvested.',
@@ -113,6 +221,8 @@ export default function RetirementReadiness() {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [cashFlowPlan, setCashFlowPlan] = useState(null)
+  const [cashFlowError, setCashFlowError] = useState(null)
 
   const [monthlyExpenses, setMonthlyExpenses] = useState(4500)
   const [bufferRatio, setBufferRatio] = useState(3)
@@ -150,6 +260,67 @@ export default function RetirementReadiness() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [pf, selection])
+
+  const applyCashFlowPlan = useCallback((plan, settings) => {
+    // No plan for this selection: fall back to this screen's own defaults
+    // rather than leaving numbers pulled for a different selection on screen.
+    const d = RR_DEFAULTS
+    setMonthlyExpenses(plan ? plan.monthlyExpenses : d.monthlyExpenses)
+    setEmploymentIncome(plan ? plan.boxes.employment : d.employmentIncome)
+    setCompanyPension(plan ? plan.boxes.companyPension : d.companyPension)
+    setGovPension(plan ? plan.boxes.govPension : d.govPension)
+    setAnnuities(plan ? plan.boxes.annuities : d.annuities)
+    setOtherRecurringIncome(plan ? plan.boxes.other : d.otherRecurringIncome)
+    setNonInvestmentTaxPct(plan && plan.taxPct != null ? plan.taxPct : d.nonInvestmentTaxPct)
+
+    // The saved assumptions only mean something alongside real plan items, so
+    // an untouched plan leaves this screen's own defaults in place.
+    const s = plan && settings ? settings : null
+    setYears(s ? s.years : d.years)
+    setInflationPct(s ? s.inflationPct : d.inflationPct)
+    setInvestmentTaxPct(s ? s.investmentTaxPct : d.investmentTaxPct)
+    setStartingCash(s ? s.startingCash : d.startingCash)
+    setSurplusReinvestPct(s ? s.surplusReinvestPct : d.surplusReinvestPct)
+    setSurplusWithdrawPct(s ? s.surplusWithdrawPct : d.surplusWithdrawPct)
+  }, [])
+
+  // The selection resolves to profile 1 for a tick before the aggregate list
+  // loads, so an early response can land after a later one. Only the newest
+  // request is allowed to write.
+  const cashFlowRequestRef = useRef(0)
+
+  const loadCashFlowPlan = useCallback(() => {
+    const token = cashFlowRequestRef.current + 1
+    cashFlowRequestRef.current = token
+    return Promise.all([
+      pf('/api/cash-flow/series?months=12').then(r => r.json()),
+      pf('/api/cash-flow/settings').then(r => r.json()),
+    ])
+      .then(([seriesData, settingsData]) => {
+        if (seriesData.error) throw new Error(seriesData.error)
+        if (cashFlowRequestRef.current !== token) return null
+        const plan = summarizeCashFlowPlan(seriesData)
+        const settings = summarizeCashFlowSettings(settingsData)
+        setCashFlowPlan(plan)
+        setCashFlowError(null)
+        return { plan, settings }
+      })
+      .catch(e => {
+        if (cashFlowRequestRef.current !== token) return null
+        setCashFlowPlan(null)
+        setCashFlowError(e.message)
+        return { plan: null, settings: null }
+      })
+  }, [pf])
+
+  // Seed expenses, non-investment inflows, and the saved assumptions from the
+  // cash-flow plan so this screen models the same budget the Cash Flow screen
+  // does. Typing over a field still wins; "Re-sync" puts the plan's numbers back.
+  useEffect(() => {
+    loadCashFlowPlan().then(result => {
+      if (result) applyCashFlowPlan(result.plan, result.settings)
+    })
+  }, [loadCashFlowPlan, applyCashFlowPlan, selection])
 
   const holdings = useMemo(() => rows.map(buildHolding).filter(h => h.currentValue > 0 || h.annualIncome > 0), [rows])
 
@@ -532,6 +703,54 @@ export default function RetirementReadiness() {
 
       {!loading && !error && (
         <>
+          <div className="rr-source">
+            {cashFlowPlan ? (
+              <>
+                <div className="rr-source-main">
+                  <span className="rr-source-title">Pulled from your cash-flow plan</span>
+                  <span className="rr-source-detail">
+                    <strong>{cashFlowPlan.planName}</strong> — {fmtMoney(cashFlowPlan.monthlyExpenses)}/mo expenses
+                    {cashFlowPlan.inflowsGross > 0
+                      ? <> and {fmtMoney(cashFlowPlan.inflowsGross)}/mo non-investment inflows</>
+                      : <>, no non-investment income entries</>}
+                    , averaged over {cashFlowPlan.months} months. Its saved assumptions
+                    (horizon, expense inflation, portfolio tax, cash reserve, and what
+                    happens to unused income) fill in below too.
+                  </span>
+                </div>
+                {cashFlowPlan.inflowsGross > 0 && (
+                  <div className="rr-source-boxes">
+                    {Object.keys(INFLOW_BOX_LABELS)
+                      .filter(key => cashFlowPlan.boxes[key] > 0)
+                      .map(key => (
+                        <span key={key} className="rr-source-chip">
+                          {INFLOW_BOX_LABELS[key]}: {fmtMoney(cashFlowPlan.boxes[key])}
+                        </span>
+                      ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  className="rr-source-btn"
+                  onClick={() => loadCashFlowPlan().then(result => {
+                    if (result) applyCashFlowPlan(result.plan, result.settings)
+                  })}
+                >
+                  Re-sync from plan
+                </button>
+              </>
+            ) : (
+              <div className="rr-source-main">
+                <span className="rr-source-title">No cash-flow plan to pull from</span>
+                <span className="rr-source-detail">
+                  {cashFlowError
+                    ? `Could not read your plan: ${cashFlowError}`
+                    : <>Cash-flow plans are saved per selection, and <strong>{currentProfileName}</strong> has no bills or income entered yet, so the boxes below are showing defaults. Add them on the Cash Flow &amp; Sustainability screen while <strong>{currentProfileName}</strong> is selected and they will fill in here.</>}
+                </span>
+              </div>
+            )}
+          </div>
+
           <InputSection title="Critical Monthly Inputs">
             <InputField label="Monthly Expenses" help={INPUT_HELP.monthlyExpenses}>
               <input title={INPUT_HELP.monthlyExpenses} className="rr-input" type="number" min="0" step="100" value={monthlyExpenses} onChange={e => setMonthlyExpenses(num(e.target.value))} />
@@ -566,7 +785,7 @@ export default function RetirementReadiness() {
             <InputField label="Company Pension" help={INPUT_HELP.nonInvestmentIncome}>
               <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={companyPension} onChange={e => setCompanyPension(num(e.target.value))} />
             </InputField>
-            <InputField label="Gov. Pension" help={INPUT_HELP.nonInvestmentIncome}>
+            <InputField label="Gov. Pension / Soc. Sec." help={INPUT_HELP.nonInvestmentIncome}>
               <input title={INPUT_HELP.nonInvestmentIncome} className="rr-input" type="number" min="0" step="100" value={govPension} onChange={e => setGovPension(num(e.target.value))} />
             </InputField>
             <InputField label="Annuities" help={INPUT_HELP.nonInvestmentIncome}>

@@ -1186,7 +1186,32 @@ export default function GrowthIncomeFreedom() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [cashFlowPlan, setCashFlowPlan] = useState(null)
   const initialized = useRef(false)
+
+  // The freedom target is the monthly amount the portfolio itself has to
+  // cover, which is exactly what the cash-flow plan already works out:
+  // normalized expenses minus non-investment income (Social Security, pensions).
+  const loadCashFlowTarget = useCallback(() => {
+    return pf('/api/cash-flow/summary')
+      .then(response => response.json())
+      .then(data => {
+        const summary = data?.summary
+        if (!summary || data.error) return null
+        const required = Number(summary.normalized_portfolio_required)
+        const expenses = Number(summary.normalized_monthly_expenses)
+        if (!Number.isFinite(required) || expenses <= 0) return null
+        const plan = {
+          name: summary.plan?.name || 'Cash-flow plan',
+          required: Math.round(required * 100) / 100,
+          expenses: Math.round(expenses * 100) / 100,
+          inflows: Math.round((expenses - required) * 100) / 100,
+        }
+        setCashFlowPlan(plan)
+        return plan
+      })
+      .catch(() => null)
+  }, [pf])
 
   const patchStrategy = useCallback((index, patch) => {
     setDirty(true)
@@ -1243,7 +1268,10 @@ export default function GrowthIncomeFreedom() {
     initialized.current = true
     loadPortfolio(0, `profile:${profiles[0].id}`)
     loadPortfolio(1, `profile:${(profiles[1] || profiles[0]).id}`)
-  }, [profiles, loadPortfolio])
+    loadCashFlowTarget().then(plan => {
+      if (plan) setFreedomTarget(plan.required)
+    })
+  }, [profiles, loadPortfolio, loadCashFlowTarget])
 
   const requestStrategies = useMemo(() => {
     const base = strategies.map(strategy => ({
@@ -1511,6 +1539,27 @@ export default function GrowthIncomeFreedom() {
                   setDirty(true)
                 }} />
             </div>
+            {cashFlowPlan && (
+              <small className="gif-field-note">
+                From {cashFlowPlan.name}: {money(cashFlowPlan.expenses)} expenses
+                {cashFlowPlan.inflows > 0 && <> − {money(cashFlowPlan.inflows)} non-investment income</>}.
+                {Math.abs(freedomTarget - cashFlowPlan.required) > 0.5 && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="gif-link-btn"
+                      onClick={() => {
+                        setFreedomTarget(cashFlowPlan.required)
+                        setDirty(true)
+                      }}
+                    >
+                      Use {money(cashFlowPlan.required)}
+                    </button>
+                  </>
+                )}
+              </small>
+            )}
           </div>
           <div className="gif-field">
             <label>FI confidence · share of paths that must last</label>

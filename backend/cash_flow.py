@@ -547,6 +547,71 @@ def cents_to_money(value):
     return round(int(value or 0) / 100.0, 2)
 
 
+OWNER_PROFILE_ID = 1
+
+
+def owner_default_plan_id(conn):
+    """The Owner profile's default plan, or None if it has no entries yet."""
+    row = conn.execute(
+        """SELECT p.id FROM cash_flow_plans p
+           WHERE p.scope_type = 'profile' AND p.scope_id = ?
+             AND EXISTS (SELECT 1 FROM cash_flow_items i
+                          WHERE i.plan_id = p.id AND i.active = 1)
+           ORDER BY p.is_default DESC, p.id ASC LIMIT 1""",
+        (OWNER_PROFILE_ID,),
+    ).fetchone()
+    return row["id"] if row else None
+
+
+def inherits_owner_budget(conn, scope_type, scope_id):
+    """Whether a scope is one of Owner's own sub-accounts.
+
+    ``include_in_owner`` already means "this account's holdings roll up into
+    the Owner view", so those accounts share Owner's household bills.  Other
+    people's portfolios are never matched, and aggregates are left alone
+    because their membership can span more than one household.
+    """
+    if scope_type != "profile" or int(scope_id) == OWNER_PROFILE_ID:
+        return False
+    row = conn.execute(
+        "SELECT include_in_owner FROM profiles WHERE id = ?", (int(scope_id),)
+    ).fetchone()
+    return bool(row and row["include_in_owner"])
+
+
+def backfill_owner_subaccount_sources(conn):
+    """Point Owner's sub-account plans at Owner's budget.
+
+    Only plans with no entries of their own and no existing link are touched,
+    so a deliberate unlink or a sub-account with its own bills is preserved.
+    Returns the number of plans linked.
+    """
+    owner_plan_id = owner_default_plan_id(conn)
+    if not owner_plan_id:
+        return 0
+    rows = conn.execute(
+        """SELECT p.id FROM cash_flow_plans p
+           JOIN profiles pr ON pr.id = p.scope_id
+           WHERE p.scope_type = 'profile'
+             AND p.scope_id != ?
+             AND pr.include_in_owner = 1
+             AND p.source_plan_id IS NULL
+             AND NOT EXISTS (SELECT 1 FROM cash_flow_items i
+                              WHERE i.plan_id = p.id AND i.active = 1)""",
+        (OWNER_PROFILE_ID,),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            """UPDATE cash_flow_plans
+               SET source_plan_id = ?, version = version + 1
+               WHERE id = ?""",
+            (owner_plan_id, row["id"]),
+        )
+    if rows:
+        conn.commit()
+    return len(rows)
+
+
 def get_or_create_default_plan(conn, scope_type, scope_id):
     row = conn.execute(
         """SELECT * FROM cash_flow_plans
@@ -558,11 +623,16 @@ def get_or_create_default_plan(conn, scope_type, scope_id):
         ensure_settings(conn, row["id"])
         return row
 
+    # A brand-new sub-account plan starts pointed at Owner's budget so the
+    # screen does not fall back to placeholder defaults on first open.
+    source_plan_id = None
+    if inherits_owner_budget(conn, scope_type, scope_id):
+        source_plan_id = owner_default_plan_id(conn)
     cur = conn.execute(
         """INSERT INTO cash_flow_plans
-           (name, scope_type, scope_id, is_default)
-           VALUES ('Monthly Cash Flow', ?, ?, 1)""",
-        (scope_type, int(scope_id)),
+           (name, scope_type, scope_id, is_default, source_plan_id)
+           VALUES ('Monthly Cash Flow', ?, ?, 1, ?)""",
+        (scope_type, int(scope_id), source_plan_id),
     )
     ensure_settings(conn, cur.lastrowid)
     conn.commit()
@@ -597,8 +667,39 @@ def settings_for_plan(conn, plan_id):
     }
 
 
-def serialize_plan(row):
-    return {
+def _plan_value(row, key, default=None):
+    """Read a column that older databases may not have yet."""
+    try:
+        value = row[key]
+    except (IndexError, KeyError):
+        return default
+    return default if value is None else value
+
+
+def resolve_source_plan_id(conn, plan_id):
+    """The plan whose line items a plan actually uses.
+
+    A plan may borrow another plan's bills and income (see the
+    ``source_plan_id`` migration).  Only one hop is followed so a chain cannot
+    loop, and a dangling link falls back to the plan's own items.
+    """
+    row = conn.execute(
+        "SELECT * FROM cash_flow_plans WHERE id = ?", (int(plan_id),)
+    ).fetchone()
+    if row is None:
+        return int(plan_id)
+    source_id = _plan_value(row, "source_plan_id")
+    if not source_id or int(source_id) == int(plan_id):
+        return int(plan_id)
+    exists = conn.execute(
+        "SELECT 1 FROM cash_flow_plans WHERE id = ?", (int(source_id),)
+    ).fetchone()
+    return int(source_id) if exists else int(plan_id)
+
+
+def serialize_plan(row, conn=None):
+    source_plan_id = _plan_value(row, "source_plan_id")
+    result = {
         "id": row["id"],
         "name": row["name"],
         "scope_type": row["scope_type"],
@@ -607,7 +708,22 @@ def serialize_plan(row):
         "version": row["version"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "source_plan_id": int(source_plan_id) if source_plan_id else None,
+        "source_plan_name": None,
     }
+    if conn is not None and result["source_plan_id"]:
+        source = conn.execute(
+            "SELECT name, scope_type, scope_id FROM cash_flow_plans WHERE id = ?",
+            (result["source_plan_id"],),
+        ).fetchone()
+        if source is not None:
+            result["source_plan_name"] = source["name"]
+            result["source_scope_type"] = source["scope_type"]
+            result["source_scope_id"] = source["scope_id"]
+        else:
+            # Dangling link: report it as unset so the UI matches expansion.
+            result["source_plan_id"] = None
+    return result
 
 
 def serialize_item(row):
@@ -847,18 +963,22 @@ def expand_plan(conn, plan_id, start_month, months):
     """Expand saved cash-flow rules into exact monthly totals."""
     start = parse_month(start_month) if not isinstance(start_month, datetime.date) else start_month.replace(day=1)
     month_count = max(1, min(600, int(months)))
+    # Assumptions stay with the plan being viewed; only the bills and income
+    # come from the source, so an aggregate can borrow a budget while keeping
+    # its own tax and horizon settings.
     settings = settings_for_plan(conn, plan_id)
+    items_plan_id = resolve_source_plan_id(conn, plan_id)
     items = conn.execute(
         """SELECT * FROM cash_flow_items
            WHERE plan_id = ? AND active = 1
            ORDER BY kind, name, id""",
-        (int(plan_id),),
+        (items_plan_id,),
     ).fetchall()
     overrides = conn.execute(
         """SELECT o.* FROM cash_flow_month_overrides o
            JOIN cash_flow_items i ON i.id = o.item_id
            WHERE i.plan_id = ?""",
-        (int(plan_id),),
+        (items_plan_id,),
     ).fetchall()
     override_map = {(row["item_id"], row["month"]): row for row in overrides}
 

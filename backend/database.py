@@ -115,6 +115,31 @@ def ensure_tables_exist(conn=None):
         CREATE INDEX IF NOT EXISTS idx_cash_flow_plans_scope
         ON cash_flow_plans (scope_type, scope_id, is_default)
     """)
+    # Household bills belong to a person, not to a brokerage account, so a plan
+    # may borrow another plan's line items instead of duplicating them.  The
+    # link is explicit per plan: an aggregate of your own accounts can point at
+    # your budget without a family member's aggregate silently inheriting it.
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(cash_flow_plans)").fetchall()]
+    if "source_plan_id" not in cols:
+        cur.execute("ALTER TABLE cash_flow_plans ADD COLUMN source_plan_id INTEGER")
+        # Sub-accounts that roll up into Owner share Owner's household bills.
+        # Runs once, on the column migration, so a later deliberate unlink is
+        # never undone.  Empty plans only — a sub-account with its own entries
+        # keeps them.
+        cur.execute("""
+            UPDATE cash_flow_plans
+               SET source_plan_id = (
+                   SELECT op.id FROM cash_flow_plans op
+                    WHERE op.scope_type = 'profile' AND op.scope_id = 1
+                      AND EXISTS (SELECT 1 FROM cash_flow_items oi
+                                   WHERE oi.plan_id = op.id AND oi.active = 1)
+                    ORDER BY op.is_default DESC, op.id ASC LIMIT 1)
+             WHERE scope_type = 'profile'
+               AND scope_id != 1
+               AND scope_id IN (SELECT id FROM profiles WHERE include_in_owner = 1)
+               AND NOT EXISTS (SELECT 1 FROM cash_flow_items i
+                                WHERE i.plan_id = cash_flow_plans.id AND i.active = 1)
+        """)
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cash_flow_items (
