@@ -27,6 +27,10 @@ A recalculated sale that still has no basis needs a number that only you have. T
 - Positions needing a basis are usually closed and so appear nowhere on the holdings table. The repair result now links directly to each one, and those links open the position's transaction window even when the position is long gone.
 - The "needs cost basis" marker on a transaction is now clickable and opens that transaction for editing.
 
+### Help
+
+- Added an illustrated **Realized Gain Repair** section under Admin in Help. It covers what the correction fixes, how to tell whether your portfolio is affected, what to expect from the recalculation, and exactly what information you need to supply for each of the two cases that need it — including the warning that an estimated opening lot produces an estimated gain that should not be used for tax filing.
+
 ## New in v1.33.5
 
 ### Cost Basis Lost to Transfers, Emptied Lots, and Cash Sweeps
