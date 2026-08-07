@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 import tax_report
 from app import (
+    _count_full_proceeds_sells,
+    _positions_needing_basis,
     _refresh_transaction_realized_gains,
     _scan_cost_basis_gaps,
     _transfer_in_cost_per_share,
@@ -360,6 +362,137 @@ class TransferBasisReportTest(TransferBasisTestCase):
 
         self.assertEqual(report["resolved"], [])
         self.assertEqual(report["unresolved"], [])
+
+
+class FullProceedsDetectionTest(TransferBasisTestCase):
+    """The signal that tells an outstanding repair from a completed one.
+
+    `targets` cannot do this job: it lists every position holding a sell and
+    never shrinks, so an Action Center item keyed to it would never clear.
+    """
+
+    def test_a_sale_costed_against_nothing_is_counted(self):
+        self._txn("NTSX", "BUY", "2025-07-25", 1, 0, notes="[Transfer in] ACAT")
+        sell_id = self._txn("NTSX", "SELL", "2025-09-26", 1, 53.24)
+        # The pre-fix state: whole proceeds recorded as profit.
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = 53.24 WHERE id = ?", (sell_id,)
+        )
+
+        found = _count_full_proceeds_sells(self.conn, [7])
+
+        self.assertEqual(found["count"], 1)
+        self.assertEqual(found["proceeds"], 53.24)
+        self.assertEqual(found["tickers"], ["NTSX"])
+
+    def test_the_count_clears_once_the_replay_has_run(self):
+        # The property the Action Center item depends on.
+        self._holding("CAOS", price_paid=62.50)
+        self._txn("CAOS", "BUY", "2025-07-25", 8, 0, notes="[Transfer in] ACAT")
+        sell_id = self._txn("CAOS", "SELL", "2025-11-14", 8, 90.07)
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = 720.56 WHERE id = ?", (sell_id,)
+        )
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 1)
+
+        _refresh_transaction_realized_gains("CAOS", 7, self.conn)
+
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 0)
+
+    def test_an_ordinary_profitable_sale_is_not_counted(self):
+        self._holding("VTI", price_paid=100.00)
+        self._txn("VTI", "BUY", "2024-01-02", 10, 100.00)
+        self._txn("VTI", "SELL", "2025-06-02", 10, 150.00)
+
+        _refresh_transaction_realized_gains("VTI", 7, self.conn)
+
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 0)
+
+    def test_an_unpriced_sale_is_not_counted(self):
+        # After the fix these carry NULL, not proceeds. They are Job B work
+        # (a basis to enter by hand), not evidence of an outstanding replay.
+        self._txn("GONE", "BUY", "2025-07-25", 3, 0, notes="[Transfer in] ACAT")
+        self._txn("GONE", "SELL", "2025-10-01", 3, 15.00)
+
+        _refresh_transaction_realized_gains("GONE", 7, self.conn)
+
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 0)
+
+    def test_transfers_out_are_ignored(self):
+        self._holding("SENT", price_paid=12.00)
+        self._txn("SENT", "BUY", "2024-01-02", 100, 12.00)
+        self._txn("SENT", "SELL", "2024-05-13", 100, 30.00, notes="[Transfer out] ACAT")
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = 3000.00 "
+            "WHERE ticker = 'SENT' AND transaction_type = 'SELL'"
+        )
+
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 0)
+
+    def test_other_profiles_are_out_of_scope(self):
+        self.conn.execute("INSERT INTO profiles (id, name) VALUES (9, 'Other')")
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+            "transaction_date, shares, price_per_share, fees, realized_gain) "
+            "VALUES ('ELSE', 9, 'SELL', '2025-01-02', 5, 20.00, 0, 100.00)"
+        )
+
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [7])["count"], 0)
+        self.assertEqual(_count_full_proceeds_sells(self.conn, [9])["count"], 1)
+
+
+class PositionsNeedingBasisTest(TransferBasisTestCase):
+    """The list that gives closed positions a way back onto the screen."""
+
+    def test_unpriced_sells_are_grouped_by_ticker_and_account(self):
+        self.conn.execute("INSERT INTO profiles (id, name) VALUES (9, 'IRA')")
+        for pid in (7, 9):
+            self.conn.execute(
+                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                "transaction_date, shares, price_per_share, fees, realized_gain) "
+                "VALUES ('MSFT', ?, 'SELL', '2025-01-02', 10, 400.00, 0, NULL)",
+                (pid,),
+            )
+
+        found = _positions_needing_basis(self.conn, [7, 9])
+
+        self.assertEqual(len(found), 2)
+        self.assertEqual({f["ticker"] for f in found}, {"MSFT"})
+        self.assertEqual({f["profile_id"] for f in found}, {7, 9})
+        self.assertEqual(found[0]["unpriced_proceeds"], 4000.00)
+
+    def test_a_priced_sell_is_not_listed(self):
+        self._holding("VTI", price_paid=100.00)
+        self._txn("VTI", "BUY", "2024-01-02", 10, 100.00)
+        self._txn("VTI", "SELL", "2025-06-02", 10, 150.00)
+
+        _refresh_transaction_realized_gains("VTI", 7, self.conn)
+
+        self.assertEqual(_positions_needing_basis(self.conn, [7]), [])
+
+    def test_transfers_out_are_not_listed_as_needing_a_basis(self):
+        # A transfer out is not a sale; reporting no gain is correct for it and
+        # there is nothing for the user to supply.
+        self._holding("SENT", price_paid=12.00)
+        self._txn("SENT", "BUY", "2024-01-02", 100, 12.00)
+        self._txn("SENT", "SELL", "2024-05-13", 100, 0, notes="[Transfer out] ACAT")
+
+        _refresh_transaction_realized_gains("SENT", 7, self.conn)
+
+        self.assertEqual(_positions_needing_basis(self.conn, [7]), [])
+
+    def test_the_list_is_ordered_by_proceeds(self):
+        for ticker, price in (("SMALL", 10.00), ("BIG", 900.00), ("MID", 100.00)):
+            self.conn.execute(
+                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
+                "transaction_date, shares, price_per_share, fees, realized_gain) "
+                "VALUES (?, 7, 'SELL', '2025-01-02', 10, ?, 0, NULL)",
+                (ticker, price),
+            )
+
+        found = _positions_needing_basis(self.conn, [7])
+
+        self.assertEqual([f["ticker"] for f in found], ["BIG", "MID", "SMALL"])
 
 
 class AcquiredDateHoldingPeriodTest(TransferBasisTestCase):

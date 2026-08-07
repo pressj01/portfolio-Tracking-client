@@ -436,6 +436,7 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   const [openLots, setOpenLots] = useState([])
   const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
   const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
+  const [basisGap, setBasisGap] = useState(null)
   const lotTotal = Object.values(lotAlloc).reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
   const openLotTotal = openLots.reduce((sum, lot) => sum + (parseFloat(lot.shares_remaining) || 0), 0)
 
@@ -455,6 +456,10 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       const data = await res.json()
       setTransactions(data)
     } catch { /* ignore */ } finally { setLoading(false) }
+    try {
+      const res = await pf(`/api/holdings/${ticker}/basis-gap`)
+      setBasisGap(await res.json())
+    } catch { /* the gap panel is advisory; failing to load it is not an error */ }
   }
   useEffect(() => { if (ticker) fetchTxns() }, [ticker])
 
@@ -703,8 +708,16 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
                     <td>
                       {fmtM(txn.price_per_share)}
                       {txn.basis_unknown && (
-                        <div style={{ fontSize: '0.7rem', color: 'var(--p-ffb74d, #ffb74d)', marginTop: '0.15rem' }}
-                          title={txn.basis_note || ''}>
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => handleEditTxn(txn)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleEditTxn(txn) } }}
+                          style={{
+                            fontSize: '0.7rem', color: 'var(--p-ffb74d, #ffb74d)', marginTop: '0.15rem',
+                            cursor: 'pointer', textDecoration: 'underline dotted',
+                          }}
+                          title={txn.basis_note || 'Set the cost per share for these shares'}>
                           needs cost basis
                         </div>
                       )}
@@ -732,6 +745,114 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
           </div>
         )}
         {!isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
+
+        {/* Cost basis gap: why sells here report no gain, and what fixes it */}
+        {!isNew && basisGap?.unpriced_sells > 0 && (
+          <div style={{
+            marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 4,
+            background: 'rgba(255,184,108,0.10)', border: '1px solid rgba(255,184,108,0.35)',
+            fontSize: '0.85rem', lineHeight: 1.5,
+          }}>
+            <strong style={{ color: 'var(--p-ffb86c)' }}>
+              {basisGap.unpriced_sells} sale{basisGap.unpriced_sells === 1 ? '' : 's'} here
+              report no gain
+            </strong>{' '}
+            ({fmtM(basisGap.unpriced_proceeds)} of proceeds). Their cost basis could not be
+            established, so no gain is calculated rather than the whole proceeds being counted
+            as profit. The Annual Tax Report leaves them out of its totals.
+
+            {(basisGap.accounts || []).map(acct => (
+              <div key={acct.profile_id} style={{
+                marginTop: '0.6rem', paddingTop: '0.5rem',
+                borderTop: '1px solid rgba(255,184,108,0.25)',
+              }}>
+                <div style={{ fontWeight: 600 }}>
+                  {acct.profile_name || `Account ${acct.profile_id}`}
+                  {!acct.editable_here && (
+                    <span style={{ fontWeight: 400, color: 'var(--text-dim-2)' }}>
+                      {' '}— switch to this account to make changes
+                    </span>
+                  )}
+                </div>
+
+                {acct.zero_priced_buys.length > 0 && (
+                  <div style={{ marginTop: '0.35rem' }}>
+                    {acct.zero_priced_buys.length} transferred-in buy
+                    {acct.zero_priced_buys.length === 1 ? '' : 's'} arrived with no price.
+                    Enter what the shares originally cost and the sales behind them recalculate.
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.35rem' }}>
+                      {acct.zero_priced_buys.map(b => (
+                        acct.editable_here ? (
+                          <button
+                            key={b.transaction_id}
+                            type="button"
+                            className="btn btn-primary"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem' }}
+                            onClick={() => {
+                              const txn = transactions.find(t => t.id === b.transaction_id)
+                              if (txn) handleEditTxn(txn)
+                            }}
+                          >
+                            Set cost — {fmt(b.shares, 3)} sh on {b.transaction_date}
+                          </button>
+                        ) : (
+                          <span key={b.transaction_id} style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>
+                            {fmt(b.shares, 3)} sh on {b.transaction_date}
+                          </span>
+                        )
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {acct.shares_missing_purchase > 0 && (
+                  <div style={{ marginTop: '0.35rem' }}>
+                    Only {fmt(acct.shares_bought, 3)} shares were ever recorded as bought here,
+                    but {fmt(acct.shares_sold, 3)} were sold
+                    {acct.shares_transferred_out > 0 &&
+                      <>{' '}and {fmt(acct.shares_transferred_out, 3)} transferred out</>}
+                    {' '}— leaving <strong>{fmt(acct.shares_missing_purchase, 3)} shares with no
+                    purchase behind them</strong>. There is no buy to correct, so import the
+                    missing history, or record the opening lot if you know what those shares cost.
+                    {acct.editable_here && (
+                      <div>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem', marginTop: '0.35rem' }}
+                          onClick={() => {
+                            const base = acct.earliest_transaction || acct.first_unpriced_sell
+                            let openingDate = ''
+                            if (base) {
+                              const d = new Date(`${base}T00:00:00`)
+                              d.setDate(d.getDate() - 1)
+                              openingDate = d.toISOString().slice(0, 10)
+                            }
+                            setEditId(null)
+                            setForm(prev => ({
+                              ...prev,
+                              transaction_type: 'BUY',
+                              shares: String(acct.shares_missing_purchase),
+                              price_per_share: '',
+                              fees: '',
+                              transaction_date: openingDate,
+                              acquired_date: '',
+                              notes: '[Opening lot] Purchase history before this date not imported',
+                            }))
+                            setSuccessMsg('Opening lot prefilled below — enter the cost per share and save.')
+                            setTimeout(() => setSuccessMsg(null), 6000)
+                          }}
+                        >
+                          Record opening lot ({fmt(acct.shares_missing_purchase, 3)} sh)
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Add/Edit transaction form */}
         <h3 style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem' }}>
@@ -1374,6 +1495,19 @@ export default function ManageHoldings() {
   const [applyingRepair, setApplyingRepair] = useState(false)
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
+
+  // ?txn=TICKER opens the transaction modal directly. Positions needing a cost
+  // basis are usually closed, so they have no holdings row to click — without
+  // this the repair advice points at a screen the ticker cannot be reached on.
+  useEffect(() => {
+    const query = window.location.hash.split('?')[1]
+    if (!query) return
+    const wanted = new URLSearchParams(query).get('txn')
+    if (wanted) {
+      setTxnTicker(wanted.toUpperCase())
+      setTxnIsNew(false)
+    }
+  }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
 

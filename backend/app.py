@@ -12097,6 +12097,35 @@ def action_center():
                 id="refresh-market-data",
             )
 
+        # Sales costed against nothing report their whole proceeds as profit.
+        # Databases built before the cost-basis fix carry those gains until the
+        # replay is run, and nothing else in the app volunteers that.
+        try:
+            basis_read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+            full_proceeds = _count_full_proceeds_sells(conn, basis_read_pids)
+        except Exception:
+            full_proceeds = {"count": 0, "proceeds": 0.0, "tickers": []}
+        if full_proceeds["count"]:
+            shown = ", ".join(full_proceeds["tickers"][:4])
+            if len(full_proceeds["tickers"]) > 4:
+                shown += f" +{len(full_proceeds['tickers']) - 4} more"
+            _action_item(
+                items,
+                "data",
+                "warning",
+                "Recalculate realized gains",
+                f"{full_proceeds['count']} sale"
+                f"{'s' if full_proceeds['count'] != 1 else ''} report their entire "
+                f"proceeds as profit ({shown}), which is what a sale costed against "
+                "a missing basis looks like. Recalculating rebuilds the gain from "
+                "your transactions. If the basis really was zero, mark this done.",
+                "/import",
+                cta="Open Import & Repair",
+                metric=full_proceeds["count"],
+                can_complete=True,
+                id="recalculate-realized-gains",
+            )
+
         upcoming = []
         for h in holdings:
             iso, days = _action_days_from_today(h.get("div_pay_date"), today)
@@ -14342,6 +14371,102 @@ def _scan_cost_basis_gaps(conn, profile_ids):
     }
 
 
+def _positions_needing_basis(conn, profile_ids):
+    """List ticker/account pairs whose sells report no gain, worst first.
+
+    These are almost always closed positions, so they have no holdings row to
+    click; the caller needs this list to offer a way in at all.
+    """
+    ids = list(dict.fromkeys(int(p) for p in (profile_ids or []) if p is not None))
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    labels = _load_profile_name_map(conn, ids)
+    return [
+        {
+            "ticker": r["ticker"],
+            "profile_id": r["profile_id"],
+            "profile_name": labels.get(int(r["profile_id"])),
+            "unpriced_sells": r["n"],
+            "unpriced_proceeds": round(float(r["proceeds"] or 0), 2),
+        }
+        for r in conn.execute(
+            f"""SELECT ticker, profile_id, COUNT(*) AS n,
+                       COALESCE(SUM(ABS(shares) * COALESCE(price_per_share,0)), 0) AS proceeds
+                  FROM transactions
+                 WHERE profile_id IN ({placeholders})
+                   AND UPPER(COALESCE(transaction_type,'')) = 'SELL'
+                   AND realized_gain IS NULL
+                   AND INSTR(LOWER(COALESCE(notes,'')), '[transfer') = 0
+                 GROUP BY ticker, profile_id
+                 ORDER BY proceeds DESC""",
+            ids,
+        ).fetchall()
+    ]
+
+
+def _count_unpriced_sells(conn, profile_ids):
+    """Count sells carrying no realized gain because no basis could be found."""
+    ids = list(dict.fromkeys(int(p) for p in (profile_ids or []) if p is not None))
+    if not ids:
+        return 0
+    placeholders = ",".join("?" * len(ids))
+    return conn.execute(
+        f"""SELECT COUNT(*) AS n FROM transactions
+             WHERE profile_id IN ({placeholders})
+               AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+               AND realized_gain IS NULL
+               AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0""",
+        ids,
+    ).fetchone()["n"]
+
+
+def _count_full_proceeds_sells(conn, profile_ids):
+    """Count sells whose realized gain is their entire proceeds.
+
+    That is the fingerprint of a sale costed against nothing — a transferred-in
+    lot priced at zero, or a lot queue that ran dry. It is deliberately not the
+    same thing as `targets`, which is every position holding a sell: `targets`
+    is what the replay has to walk to find out, and never shrinks, so it cannot
+    tell anyone whether a repair is still outstanding. This can, which is what
+    lets the Action Center item clear itself once the repair has run.
+
+    A genuinely zero-basis sale looks identical from here, so this reports what
+    to review rather than what is wrong.
+    """
+    ids = list(dict.fromkeys(int(p) for p in (profile_ids or []) if p is not None))
+    if not ids:
+        return {"count": 0, "proceeds": 0.0, "tickers": []}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker, shares, price_per_share, fees, realized_gain
+              FROM transactions
+             WHERE profile_id IN ({placeholders})
+               AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+               AND realized_gain IS NOT NULL
+               AND realized_gain > 0
+               AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0""",
+        ids,
+    ).fetchall()
+    count, proceeds_total, tickers = 0, 0.0, set()
+    for r in rows:
+        row = dict(r)
+        proceeds = (
+            float(row["shares"] or 0) * float(row["price_per_share"] or 0)
+        ) - float(row["fees"] or 0)
+        if proceeds <= 0:
+            continue
+        if abs(float(row["realized_gain"]) - proceeds) <= 0.01:
+            count += 1
+            proceeds_total += proceeds
+            tickers.add(row["ticker"])
+    return {
+        "count": count,
+        "proceeds": round(proceeds_total, 2),
+        "tickers": sorted(tickers),
+    }
+
+
 @app.route("/api/transactions/cost-basis-report", methods=["GET"])
 def cost_basis_report():
     """Report positions whose realized gains rest on a missing cost basis.
@@ -14357,12 +14482,19 @@ def cost_basis_report():
     try:
         read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
         report = _scan_cost_basis_gaps(conn, read_pids)
+        # What still looks wrong right now, so a caller can tell an outstanding
+        # repair from one that has already been run. `targets` cannot: it lists
+        # every position with a sell whether or not anything is amiss.
+        full_proceeds = _count_full_proceeds_sells(conn, read_pids)
     finally:
         conn.close()
+    report["full_proceeds_sells"] = full_proceeds
     report["counts"] = {
         "resolved": len(report["resolved"]),
         "unresolved": len(report["unresolved"]),
         "affected_sells": len(report["affected_sells"]),
+        "full_proceeds_sells": full_proceeds["count"],
+        "positions_to_replay": len(report["targets"]),
     }
     return jsonify(report)
 
@@ -14384,20 +14516,19 @@ def repair_cost_basis():
     try:
         read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
         report = _scan_cost_basis_gaps(conn, read_pids)
+        # Measured before the replay so the caller can report what actually
+        # changed rather than asserting that something did.
+        before = _count_full_proceeds_sells(conn, read_pids)
+        unpriced_before = _count_unpriced_sells(conn, read_pids)
         targets = report["targets"]
         for ticker, profile_id in targets:
             _refresh_transaction_realized_gains(ticker, profile_id, conn)
         conn.commit()
+        after = _count_full_proceeds_sells(conn, read_pids)
         # Count what the replay could not price, so the caller knows how much
         # still needs a basis entered by hand rather than assuming it is done.
-        unpriced = conn.execute(
-            f"""SELECT COUNT(*) AS n FROM transactions
-                 WHERE profile_id IN ({",".join("?" * len(read_pids))})
-                   AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
-                   AND realized_gain IS NULL
-                   AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0""",
-            read_pids,
-        ).fetchone()["n"]
+        unpriced = _count_unpriced_sells(conn, read_pids)
+        needs_basis = _positions_needing_basis(conn, read_pids)
     finally:
         conn.close()
     return jsonify({
@@ -14407,6 +14538,21 @@ def repair_cost_basis():
         "transfer_lots_needing_basis": len(report["unresolved"]),
         "unresolved": report["unresolved"],
         "backup": os.path.basename(backup_path) if backup_path else None,
+        # _create_import_backup swallows its own failures and returns None, so
+        # say so outright. The replay is recoverable from the ledger either way,
+        # but the caller should not be told a backup exists when none does.
+        "backup_failed": backup_path is None,
+        "corrected_sells": max(0, before["count"] - after["count"]),
+        "full_proceeds_sells_before": before["count"],
+        "full_proceeds_sells_after": after["count"],
+        # A sale the replay could not price goes from a number to a blank. That
+        # is the visible change users will actually notice, so report it rather
+        # than only the corrections.
+        "sells_newly_unpriced": max(0, unpriced - unpriced_before),
+        "positions_needing_basis": needs_basis,
+        "corrected_proceeds": round(
+            max(0.0, before["proceeds"] - after["proceeds"]), 2
+        ),
     })
 
 
@@ -14433,6 +14579,142 @@ def list_transactions(ticker):
     conn.close()
     transactions = _annotate_transaction_rows(rows, alloc_map, fallback_basis)
     return jsonify(_add_transaction_source_notes(transactions, profile_names, include_account_note))
+
+
+@app.route("/api/holdings/<ticker>/basis-gap", methods=["GET"])
+def holding_basis_gap(ticker):
+    """Explain why a position's sells report no gain, and what would fix it.
+
+    Two different causes land in the same place and need different remedies.
+    A transferred-in BUY priced at zero can be fixed by typing the carried-over
+    cost on that row. A position that records more shares sold than bought has
+    no row to edit at all -- the purchase history simply does not reach back far
+    enough -- and needs the missing opening lot supplied instead. Reporting only
+    the first would leave most affected positions with advice that fits nothing
+    on their screen.
+
+    Everything is reported per account. The transaction list spans linked
+    profiles, but a write resolves to exactly one, so a gap belonging to another
+    account cannot be fixed from the current selection -- an opening lot entered
+    against the wrong profile joins a lot queue no unpriced sell ever draws
+    from, and silently does nothing. The caller needs to know which account owns
+    each gap to avoid offering that.
+
+    The shortfall counts only shares consumed by sells and transfers out, never
+    shares still held. Held shares are a basis question of their own, and
+    including them made the number partly cancel its own fix: recording the
+    opening lot raises the holding quantity too, so the gap appeared to shrink
+    by less than the shares just supplied.
+    """
+    ticker = ticker.upper()
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        if not read_pids:
+            return jsonify({"ticker": ticker, "unpriced_sells": 0, "accounts": []})
+        placeholders = ",".join("?" * len(read_pids))
+        args = [ticker] + read_pids
+
+        totals = {
+            int(r["profile_id"]): dict(r)
+            for r in conn.execute(
+                f"""SELECT profile_id,
+                      COALESCE(SUM(CASE WHEN UPPER(COALESCE(transaction_type,'BUY'))='BUY'
+                                        THEN ABS(shares) END), 0) AS bought,
+                      COALESCE(SUM(CASE WHEN UPPER(COALESCE(transaction_type,''))='SELL'
+                                         AND INSTR(LOWER(COALESCE(notes,'')),'[transfer')=0
+                                        THEN ABS(shares) END), 0) AS sold,
+                      COALESCE(SUM(CASE WHEN UPPER(COALESCE(transaction_type,''))='SELL'
+                                         AND INSTR(LOWER(COALESCE(notes,'')),'[transfer')>0
+                                        THEN ABS(shares) END), 0) AS transferred_out,
+                      MIN(transaction_date) AS earliest
+                    FROM transactions
+                   WHERE ticker = ? AND profile_id IN ({placeholders})
+                   GROUP BY profile_id""",
+                args,
+            ).fetchall()
+        }
+
+        unpriced = {
+            int(r["profile_id"]): dict(r)
+            for r in conn.execute(
+                f"""SELECT profile_id, COUNT(*) AS n,
+                           COALESCE(SUM(ABS(shares) * COALESCE(price_per_share,0)), 0) AS proceeds,
+                           MIN(transaction_date) AS first_sell
+                      FROM transactions
+                     WHERE ticker = ? AND profile_id IN ({placeholders})
+                       AND UPPER(COALESCE(transaction_type,''))='SELL'
+                       AND realized_gain IS NULL
+                       AND INSTR(LOWER(COALESCE(notes,'')),'[transfer')=0
+                     GROUP BY profile_id""",
+                args,
+            ).fetchall()
+        }
+
+        zero_buys = {}
+        for r in conn.execute(
+            f"""SELECT id AS transaction_id, profile_id, transaction_date, shares, notes
+                  FROM transactions
+                 WHERE ticker = ? AND profile_id IN ({placeholders})
+                   AND UPPER(COALESCE(transaction_type,'BUY'))='BUY'
+                   AND COALESCE(price_per_share, 0) <= 0
+                 ORDER BY transaction_date""",
+            args,
+        ).fetchall():
+            row = dict(r)
+            zero_buys.setdefault(int(row["profile_id"]), []).append(row)
+
+        held = {
+            int(r["profile_id"]): float(r["q"] or 0)
+            for r in conn.execute(
+                f"""SELECT profile_id, COALESCE(SUM(quantity), 0) AS q
+                      FROM all_account_info
+                     WHERE ticker = ? AND profile_id IN ({placeholders})
+                     GROUP BY profile_id""",
+                args,
+            ).fetchall()
+        }
+        profile_labels = _load_profile_name_map(conn, read_pids)
+    finally:
+        conn.close()
+
+    writable_pid = _resolve_aggregate_profile(ticker, pids) if is_agg else pids[0]
+
+    accounts = []
+    for pid in read_pids:
+        t = totals.get(pid, {})
+        u = unpriced.get(pid, {})
+        bought = float(t.get("bought") or 0)
+        sold = float(t.get("sold") or 0)
+        tout = float(t.get("transferred_out") or 0)
+        shortfall = round(sold + tout - bought, 6)
+        entry = {
+            "profile_id": pid,
+            "profile_name": profile_labels.get(pid),
+            "editable_here": pid == writable_pid,
+            "shares_bought": round(bought, 6),
+            "shares_sold": round(sold, 6),
+            "shares_transferred_out": round(tout, 6),
+            "shares_held": round(held.get(pid, 0.0), 6),
+            "shares_missing_purchase": shortfall if shortfall > 1e-6 else 0,
+            "unpriced_sells": int(u.get("n") or 0),
+            "unpriced_proceeds": round(float(u.get("proceeds") or 0), 2),
+            "first_unpriced_sell": u.get("first_sell"),
+            "earliest_transaction": t.get("earliest"),
+            "zero_priced_buys": zero_buys.get(pid, []),
+        }
+        if entry["unpriced_sells"] or entry["zero_priced_buys"]:
+            accounts.append(entry)
+
+    return jsonify({
+        "ticker": ticker,
+        "writable_profile_id": writable_pid,
+        "writable_profile_name": profile_labels.get(writable_pid),
+        "unpriced_sells": sum(a["unpriced_sells"] for a in accounts),
+        "unpriced_proceeds": round(sum(a["unpriced_proceeds"] for a in accounts), 2),
+        "accounts": accounts,
+    })
 
 
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])

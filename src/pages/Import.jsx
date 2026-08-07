@@ -120,6 +120,13 @@ export default function Import() {
   const [backups, setBackups] = useState([])
   const [restoring, setRestoring] = useState(false)
 
+  // Cost-basis repair state
+  const [basisReport, setBasisReport] = useState(null)
+  const [basisChecking, setBasisChecking] = useState(false)
+  const [basisRepairing, setBasisRepairing] = useState(false)
+  const [basisResult, setBasisResult] = useState(null)
+  const [basisError, setBasisError] = useState(null)
+
   // Watchlist import state
   const [wlFile, setWlFile] = useState(null)
   const [wlReplace, setWlReplace] = useState(false)
@@ -129,6 +136,50 @@ export default function Import() {
 
   const loadBackups = () => {
     pf('/api/import/backups').then(r => r.json()).then(d => setBackups(d.backups || [])).catch(() => {})
+  }
+
+  const checkCostBasis = async () => {
+    setBasisChecking(true)
+    setBasisError(null)
+    setBasisResult(null)
+    try {
+      const res = await pf('/api/transactions/cost-basis-report')
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not check cost basis.')
+      setBasisReport(data)
+    } catch (e) {
+      setBasisError(e.message)
+    } finally {
+      setBasisChecking(false)
+    }
+  }
+
+  const repairCostBasis = async () => {
+    if (!window.confirm(
+      'Recalculate realized gains?\n\n' +
+      'This rebuilds the gain or loss on every past sale from your transaction ' +
+      'history, applying the recovered cost basis.\n\n' +
+      'Expect some totals to go DOWN. Sales that were reporting their whole ' +
+      'proceeds as profit were wrong, and where the basis cannot be recovered ' +
+      'at all the gain becomes blank rather than a made-up number.\n\n' +
+      'Only the recorded gain is rewritten — shares, prices and holdings are ' +
+      'untouched, and a database backup is taken first.'
+    )) return
+    setBasisRepairing(true)
+    setBasisError(null)
+    setBasisResult(null)
+    try {
+      const res = await pf('/api/transactions/repair-cost-basis', { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Repair failed.')
+      setBasisResult(data)
+      setBasisReport(null)
+      loadBackups()
+    } catch (e) {
+      setBasisError(e.message)
+    } finally {
+      setBasisRepairing(false)
+    }
   }
 
   useEffect(() => {
@@ -1139,6 +1190,167 @@ export default function Import() {
           ))}
         </div>
       )}
+
+      {/* ── Cost Basis Repair ─────────────────────────────────────────── */}
+      <div className="card" style={{ marginTop: '1.5rem' }}>
+        <h3>Realized Gain Repair</h3>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+          A sale whose cost basis could not be established used to be priced at zero, so its
+          entire proceeds were booked as capital gain. That happened to shares transferred in
+          from another broker, to sales that followed a transfer out, and to cash sweep funds.
+          This rebuilds the gain or loss on every past sale from your transaction history.
+        </p>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          <strong style={{ color: 'var(--p-ffb86c)' }}>Expect your realized gains to go down.</strong>{' '}
+          The inflated gains were wrong. Most sales get a correct basis, but where none can be
+          recovered — usually because more shares were sold than the imported purchase history
+          covers — the gain is left blank rather than invented, and the Annual Tax Report leaves
+          those out of its totals. Only the recorded gain is rewritten: shares, prices, and
+          holdings are untouched, and a database backup is taken first.
+        </p>
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-secondary"
+            disabled={basisChecking || basisRepairing}
+            onClick={checkCostBasis}
+          >
+            {basisChecking ? 'Checking...' : 'Check for Problems'}
+          </button>
+          <button
+            className="btn btn-primary"
+            disabled={basisChecking || basisRepairing}
+            onClick={repairCostBasis}
+          >
+            {basisRepairing ? 'Recalculating...' : 'Recalculate Realized Gains'}
+          </button>
+        </div>
+
+        {basisError && (
+          <div className="alert alert-error" style={{ marginTop: '0.75rem' }}>{basisError}</div>
+        )}
+
+        {basisReport && (
+          <div style={{
+            marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: 4,
+            background: 'var(--surface-2, rgba(255,255,255,0.04))',
+            border: '1px solid var(--border)', fontSize: '0.88rem',
+          }}>
+            {basisReport.counts?.full_proceeds_sells > 0 ? (
+              <div style={{ marginBottom: '0.4rem' }}>
+                <strong style={{ color: 'var(--p-ffb86c)' }}>
+                  {basisReport.counts.full_proceeds_sells} sale
+                  {basisReport.counts.full_proceeds_sells === 1 ? '' : 's'} report their entire
+                  proceeds as profit
+                </strong>{' '}
+                ({formatMoney(basisReport.full_proceeds_sells?.proceeds)} across{' '}
+                {(basisReport.full_proceeds_sells?.tickers || []).join(', ') || 'no tickers'}).
+                That is what a sale costed against a missing basis looks like. If the basis
+                really was zero, no repair is needed.
+              </div>
+            ) : (
+              <div style={{ marginBottom: '0.4rem', color: 'var(--p-81c784)' }}>
+                No sale is reporting its entire proceeds as profit. Nothing looks outstanding.
+              </div>
+            )}
+            {basisReport.counts?.unresolved > 0 && (
+              <div style={{ marginBottom: '0.4rem' }}>
+                {basisReport.counts.unresolved} transferred-in lot
+                {basisReport.counts.unresolved === 1 ? '' : 's'} on closed positions
+                {' '}({[...new Set((basisReport.unresolved || []).map(u => u.ticker))].join(', ')})
+                {' '}{basisReport.counts.unresolved === 1 ? 'has' : 'have'} no basis left to read
+                and {basisReport.counts.unresolved === 1 ? 'needs' : 'need'} a cost per share
+                entered by hand. Recalculating cannot price those.
+              </div>
+            )}
+            {basisReport.counts?.resolved > 0 && (
+              <div style={{ marginBottom: '0.4rem', color: 'var(--text-dim-2)' }}>
+                {basisReport.counts.resolved} transferred-in lot
+                {basisReport.counts.resolved === 1 ? '' : 's'} can be priced automatically from
+                the position they are still held in.
+              </div>
+            )}
+            <div style={{ color: 'var(--text-dim-2)' }}>
+              Recalculating replays {basisReport.counts?.positions_to_replay || 0} position
+              {basisReport.counts?.positions_to_replay === 1 ? '' : 's'} — every position with a
+              sell, because only the replay reveals which ones were affected.
+            </div>
+          </div>
+        )}
+
+        {basisResult && (
+          <div className="alert alert-success" style={{ marginTop: '0.75rem' }}>
+            <div>
+              Replayed {basisResult.repaired_positions} position
+              {basisResult.repaired_positions === 1 ? '' : 's'}.{' '}
+              {basisResult.corrected_sells > 0
+                ? `Corrected ${basisResult.corrected_sells} sale${basisResult.corrected_sells === 1 ? '' : 's'} that had been reporting ${formatMoney(basisResult.corrected_proceeds)} of proceeds as profit.`
+                : 'No sale needed correcting.'}
+            </div>
+            {basisResult.sells_still_unpriced > 0 && (
+              <div style={{ marginTop: '0.4rem' }}>
+                {basisResult.sells_newly_unpriced > 0 && (
+                  <>{basisResult.sells_newly_unpriced} sale
+                    {basisResult.sells_newly_unpriced === 1 ? '' : 's'} that previously showed a
+                    gain now show none, because no cost basis for them exists to compute one
+                    from. </>
+                )}
+                {basisResult.sells_still_unpriced} sale
+                {basisResult.sells_still_unpriced === 1 ? '' : 's'} in total report no gain, and
+                the Annual Tax Report excludes them from its totals.
+                {basisResult.transfer_lots_needing_basis > 0 && (
+                  <> {basisResult.transfer_lots_needing_basis} of these
+                    {' '}{basisResult.transfer_lots_needing_basis === 1 ? 'is a' : 'are'}
+                    {' '}transferred-in lot
+                    {basisResult.transfer_lots_needing_basis === 1 ? '' : 's'}
+                    {' '}({[...new Set((basisResult.unresolved || []).map(u => u.ticker))].join(', ')})
+                    {' '}you can fix by setting the price per share on that buy in Manage
+                    Holdings.</>
+                )}
+                {' '}The rest are positions where more shares were sold than the imported
+                purchase history covers — importing the missing buys is what fixes those.
+              </div>
+            )}
+            {basisResult.positions_needing_basis?.length > 0 && (
+              <div style={{ marginTop: '0.5rem' }}>
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)', marginBottom: '0.3rem' }}>
+                  Open a position to see what it needs — most are closed, so they are not on the
+                  holdings table:
+                </div>
+                <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+                  {basisResult.positions_needing_basis.slice(0, 24).map(p => (
+                    <a
+                      key={`${p.ticker}-${p.profile_id}`}
+                      href={`#/holdings?txn=${encodeURIComponent(p.ticker)}`}
+                      className="btn btn-secondary"
+                      style={{ padding: '0.15rem 0.45rem', fontSize: '0.76rem', textDecoration: 'none' }}
+                      title={`${p.unpriced_sells} sale${p.unpriced_sells === 1 ? '' : 's'} · ${p.profile_name || 'account ' + p.profile_id}`}
+                    >
+                      {p.ticker}
+                    </a>
+                  ))}
+                  {basisResult.positions_needing_basis.length > 24 && (
+                    <span style={{ fontSize: '0.76rem', color: 'var(--text-dim-2)', alignSelf: 'center' }}>
+                      +{basisResult.positions_needing_basis.length - 24} more
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
+            <div style={{ marginTop: '0.4rem' }}>
+              {basisResult.backup_failed
+                ? <span style={{ color: 'var(--p-ffb86c)' }}>
+                    Warning: the database backup could not be written, so this ran without one.
+                    The recalculation is rebuilt from your transactions and can be run again,
+                    but check your disk space before the next import.
+                  </span>
+                : <span style={{ color: 'var(--text-dim-2)' }}>
+                    Backup saved as {basisResult.backup}.
+                  </span>}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Backup / Restore ──────────────────────────────────────────── */}
       {backups.length > 0 && (
