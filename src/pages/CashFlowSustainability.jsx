@@ -78,6 +78,12 @@ function money(value, digits = 0) {
   return formatMoney(value, { digits, zeroIfInvalid: true })
 }
 
+// This month's totals are exact sums of the entry table, which lists cents, and
+// Retirement Readiness reads the same figures to the cent. Rounding them to whole
+// dollars made one number look like two. Multi-year projections stay whole-dollar
+// -- they are modelled, not counted.
+const exact = value => money(value, 2)
+
 function movementCopy(value, subject) {
   const number = Number(value || 0)
   if (Math.abs(number) < 0.05) return `${subject} stay about the same`
@@ -1104,39 +1110,39 @@ export default function CashFlowSustainability() {
       <section className="cf-summary">
         <SummaryTile
           label="Expenses this month"
-          value={money(summary?.expenses)}
+          value={exact(summary?.expenses)}
           sub="Bills scheduled in the selected month"
           detail={`${scheduledExpenseCount} scheduled expense${scheduledExpenseCount === 1 ? '' : 's'}`}
         />
         <SummaryTile
           label="Portfolio income (gross)"
-          value={money(summary?.portfolio_monthly_income_gross)}
+          value={exact(summary?.portfolio_monthly_income_gross)}
           sub="Before tax; expenses not deducted"
           detail={summary?.portfolio_profile_count > 1 ? `${summary.portfolio_profile_count} linked accounts` : 'Portfolio income only'}
         />
         <SummaryTile
           label="Portfolio income (after tax)"
-          value={money(summary?.portfolio_monthly_income_net)}
+          value={exact(summary?.portfolio_monthly_income_net)}
           sub={`After ${Number(settings?.portfolio_tax_pct || 0).toFixed(0)}% tax; expenses not deducted`}
           detail="Portfolio income only"
         />
         <SummaryTile
           label={grossLeftover >= 0 ? 'Gross leftover' : 'Gross shortfall'}
-          value={money(Math.abs(grossLeftover))}
+          value={exact(Math.abs(grossLeftover))}
           sub="Before tax; after expenses"
           detail="Gross portfolio + gross other income − expenses"
           tone={grossLeftoverTone}
         />
         <SummaryTile
           label={gap >= 0 ? 'After-tax leftover' : 'After-tax shortfall'}
-          value={money(Math.abs(gap))}
+          value={exact(Math.abs(gap))}
           sub="Spendable income after expenses"
           detail={coverageLabel}
           tone={coverageTone}
         />
         <SummaryTile
           label="Other income (after tax)"
-          value={money(summary?.additional_income_net)}
+          value={exact(summary?.additional_income_net)}
           sub="Non-portfolio income only"
           detail={incomes.length ? 'After each source’s tax rate' : 'No other income entered'}
         />
@@ -1147,12 +1153,12 @@ export default function CashFlowSustainability() {
         <div>
           <strong>
             {summary?.covered
-              ? `Income covers ${month}'s expenses${gap > 0 ? ` with ${money(gap)} left over.` : '.'}`
-              : `Income is short by ${money(Math.abs(gap))} for ${month}.`}
+              ? `Income covers ${month}'s expenses${gap > 0 ? ` with ${exact(gap)} left over.` : '.'}`
+              : `Income is short by ${exact(Math.abs(gap))} for ${month}.`}
           </strong>
           <small>
-            Portfolio-only funding need: {money(summary?.portfolio_required)} this month.
-            Twelve-month normalized need: {money(summary?.normalized_portfolio_required)}.
+            Portfolio-only funding need: {exact(summary?.portfolio_required)} this month.
+            Twelve-month normalized need: {exact(summary?.normalized_portfolio_required)}.
           </small>
         </div>
       </div>
@@ -1164,7 +1170,7 @@ export default function CashFlowSustainability() {
             <h2>Expenses</h2>
             <small className="cf-rollover-note">Paid checks follow each due date and advance automatically after it passes.</small>
           </div>
-          <strong>{money(summary?.expenses)} in {month}</strong>
+          <strong>{exact(summary?.expenses)} in {month}</strong>
         </div>
         {!borrowed && (
           <ItemEditor
@@ -1215,7 +1221,7 @@ export default function CashFlowSustainability() {
             <span className="cf-section-kicker">Optional inflows</span>
             <h2>Additional income</h2>
           </div>
-          <strong>{money(summary?.additional_income_net)} net in {month}</strong>
+          <strong>{exact(summary?.additional_income_net)} net in {month}</strong>
         </div>
         {!borrowed && (
           <ItemEditor

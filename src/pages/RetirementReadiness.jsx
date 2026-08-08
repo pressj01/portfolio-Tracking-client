@@ -68,8 +68,10 @@ function inflowBoxFor(category) {
 }
 
 // Average the 12-month expansion so quarterly/annual bills and inflows normalize
-// to a monthly figure. This is the same method behind the Cash Flow screen's
-// "normalized monthly expenses", so the two screens agree.
+// to a monthly figure. The series is requested in today's dollars, so a budget of
+// plain monthly bills averages to exactly what the Cash Flow screen shows for this
+// month. This is the same method behind that screen's "normalized monthly
+// expenses", so the two screens agree.
 function summarizeCashFlowPlan(payload) {
   const series = Array.isArray(payload?.series) ? payload.series : []
   if (!series.length) return null
@@ -151,7 +153,7 @@ const RR_DEFAULTS = {
 }
 
 const INPUT_HELP = {
-  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. Pulled from your Cash Flow & Sustainability plan, averaged over 12 months so annual and quarterly bills are normalized.',
+  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. Pulled from your Cash Flow & Sustainability plan, averaged over 12 months in today’s dollars so annual and quarterly bills are normalized. Expense inflation is applied forward from here, not baked in, so a budget of plain monthly bills matches the Cash Flow screen exactly.',
   nonInvestmentIncome: 'Monthly income that does not come from the portfolio, before taxes. Examples: employment income, pensions, Social Security, annuities, and other recurring inflows. Pulled from the income entries in your Cash Flow & Sustainability plan.',
   nonInvestmentTaxPct: 'Estimated tax rate applied to non-investment monthly inflows. Pulled from your cash-flow plan as the blended rate across its income entries.',
   incomeIndexPct: 'Annual indexing or cost-of-living increase applied to non-investment inflows.',
@@ -293,7 +295,10 @@ export default function RetirementReadiness() {
     const token = cashFlowRequestRef.current + 1
     cashFlowRequestRef.current = token
     return Promise.all([
-      pf('/api/cash-flow/series?months=12').then(r => r.json()),
+      // hold_growth keeps the twelve months in today's dollars. This screen
+      // inflates expenses forward itself, so an escalating series would charge
+      // inflation twice and start the model above the Cash Flow screen.
+      pf('/api/cash-flow/series?months=12&hold_growth=1').then(r => r.json()),
       pf('/api/cash-flow/settings').then(r => r.json()),
     ])
       .then(([seriesData, settingsData]) => {
@@ -711,9 +716,13 @@ export default function RetirementReadiness() {
                   <span className="rr-source-detail">
                     <strong>{cashFlowPlan.planName}</strong> — {fmtMoney(cashFlowPlan.monthlyExpenses)}/mo expenses
                     {cashFlowPlan.inflowsGross > 0
-                      ? <> and {fmtMoney(cashFlowPlan.inflowsGross)}/mo non-investment inflows</>
+                      ? <> and {fmtMoney(cashFlowPlan.inflowsGross)}/mo non-investment inflows before tax
+                          {cashFlowPlan.inflowsNet !== cashFlowPlan.inflowsGross
+                            ? <> ({fmtMoney(cashFlowPlan.inflowsNet)} after tax)</>
+                            : null}</>
                       : <>, no non-investment income entries</>}
-                    , averaged over {cashFlowPlan.months} months. Its saved assumptions
+                    , averaged over {cashFlowPlan.months} months in today's dollars so
+                    quarterly and annual bills are normalized. Its saved assumptions
                     (horizon, expense inflation, portfolio tax, cash reserve, and what
                     happens to unused income) fill in below too.
                   </span>

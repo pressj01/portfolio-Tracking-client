@@ -447,6 +447,98 @@ class CashFlowApiTest(unittest.TestCase):
         self.assertEqual(series[0]["expenses"], 1700)  # annual + five Thursdays
         self.assertEqual(series[1]["expenses"], 400)
 
+    def test_hold_growth_normalizes_lumps_without_inflating(self):
+        # Retirement Readiness inflates expenses itself, so the series it reads
+        # must stay in start-month dollars while still spreading the annual bill.
+        self.client.put(
+            "/api/cash-flow/settings?profile_id=1",
+            json={
+                "plan_id": self.plan_id,
+                "horizon_years": 20,
+                "expense_inflation_pct": 12,
+                "portfolio_tax_pct": 15,
+                "starting_cash": 0,
+                "surplus_mode": "cash",
+            },
+        )
+        self._add(name="Rent", amount=1000, start_date="2026-01-01")
+        self._add(
+            name="Property tax",
+            amount=1200,
+            frequency="annual",
+            start_date="2026-01-15",
+        )
+        conn = self._get_connection()
+        try:
+            escalating = expand_plan(conn, self.plan_id, "2026-06", 12)
+            level = expand_plan(conn, self.plan_id, "2026-06", 12, hold_growth=True)
+        finally:
+            conn.close()
+
+        # Five months past the bills' start date, the opening month still bills
+        # exactly what was entered. Escalating from each bill's own start date
+        # instead left the month disagreeing with its own entry table.
+        self.assertEqual(escalating[0]["expenses"], 1000)
+        self.assertEqual(level[0]["expenses"], 1000)
+
+        # Held flat, every month is the untouched rent except the January the
+        # annual property tax lands in -- seven months into a June window.
+        self.assertEqual(level[7]["month"], "2027-01")
+        self.assertEqual(level[7]["expenses"], 2200)
+        self.assertEqual(
+            [row["expenses"] for i, row in enumerate(level) if i != 7], [1000] * 11
+        )
+        # The lump still normalizes: 12,000 rent + 1,200 tax over twelve months.
+        self.assertAlmostEqual(
+            sum(row["expenses"] for row in level) / 12, 1100, places=2
+        )
+        # The escalating series climbs, which is why averaging it overstates
+        # today's cost and left this screen above the Cash Flow screen.
+        self.assertGreater(escalating[-1]["expenses"], escalating[1]["expenses"])
+        self.assertGreater(
+            sum(row["expenses"] for row in escalating) / 12,
+            sum(row["expenses"] for row in level) / 12,
+        )
+
+        response = self.client.get(
+            f"/api/cash-flow/series?profile_id=1&plan_id={self.plan_id}"
+            "&start_month=2026-06&months=12&hold_growth=1"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [row["expenses"] for row in response.get_json()["series"]],
+            [row["expenses"] for row in level],
+        )
+
+    def test_normalized_summary_stays_in_this_months_dollars(self):
+        # A budget of plain monthly bills must report a normalized month equal to
+        # the month it is standing in, or the two screens disagree on expenses.
+        self.client.put(
+            "/api/cash-flow/settings?profile_id=1",
+            json={
+                "plan_id": self.plan_id,
+                "horizon_years": 20,
+                "expense_inflation_pct": 3,
+                "portfolio_tax_pct": 15,
+                "starting_cash": 0,
+                "surplus_mode": "cash",
+            },
+        )
+        self._add(name="Rent", amount=1000, start_date="2026-01-01")
+        summary = self.client.get(
+            f"/api/cash-flow/summary?profile_id=1&plan_id={self.plan_id}"
+            "&month=2026-06"
+        ).get_json()["summary"]
+        # And both equal the rent as entered, so the screen agrees with the
+        # entry table it is summing.
+        self.assertEqual(summary["expenses"], 1000)
+        self.assertEqual(
+            summary["normalized_monthly_expenses"], summary["expenses"]
+        )
+        self.assertEqual(
+            summary["normalized_portfolio_required"], summary["portfolio_required"]
+        )
+
     def test_simulate_endpoint_returns_six_comparisons(self):
         self._add()
         response = self.client.post(

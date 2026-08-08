@@ -1519,8 +1519,17 @@ def next_bill_schedule(item, today=None):
     }
 
 
-def expand_plan(conn, plan_id, start_month, months):
-    """Expand saved cash-flow rules into exact monthly totals."""
+def expand_plan(conn, plan_id, start_month, months, hold_growth=False):
+    """Expand saved cash-flow rules into exact monthly totals.
+
+    The opening month carries the amounts exactly as they were entered; later
+    months escalate from there. ``hold_growth`` drops that escalation, leaving
+    every month at the entered level. The months still differ wherever
+    quarterly, annual, or ending bills fall, so averaging the series normalizes
+    the lumps without also baking in inflation. Callers that apply their own
+    inflation on top -- Retirement Readiness -- need that, or they charge it
+    twice.
+    """
     start = parse_month(start_month) if not isinstance(start_month, datetime.date) else start_month.replace(day=1)
     month_count = max(1, min(600, int(months)))
     # Assumptions stay with the plan being viewed; only the bills and income
@@ -1570,9 +1579,14 @@ def expand_plan(conn, plan_id, start_month, months):
                         if row["kind"] == "expense"
                         else 0.0
                     )
-                anchor_month = datetime.date.fromisoformat(row["start_date"]).replace(day=1)
-                elapsed_years = max(0, month_difference(anchor_month, month)) / 12.0
-                factor = (1.0 + float(annual_change) / 100.0) ** elapsed_years
+                # Saved amounts are current money, so escalation runs forward
+                # from the month the series opens on. Measuring it from each
+                # bill's own start date restated figures the user had just
+                # typed -- the month being viewed stopped adding up to its own
+                # entry table -- and pushed the plan further from those entries
+                # every month it went untouched.
+                elapsed_months = 0 if hold_growth else max(0, month_difference(start, month))
+                factor = (1.0 + float(annual_change) / 100.0) ** (elapsed_months / 12.0)
                 amount_cents = int(round(int(row["amount_cents"]) * count * factor))
 
             if row["kind"] == "expense":

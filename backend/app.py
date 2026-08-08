@@ -1457,6 +1457,11 @@ def _cash_flow_portfolio_snapshot(conn, profile_ids):
                 holding[field] = row[field]
 
     holdings = []
+    # Total the full-precision figures and round once. Rounding each ticker first
+    # and adding those left the plan a few cents off the same portfolio measured
+    # on Retirement Readiness, which sums the rows as they come.
+    value = 0.0
+    annual_income = 0.0
     for holding in holdings_by_ticker.values():
         override = income_overrides.get(holding["ticker"])
         if override and override != "Excluded":
@@ -1467,14 +1472,13 @@ def _cash_flow_portfolio_snapshot(conn, profile_ids):
                 holding["classification_type"],
                 holding["description"],
             )
+        value += holding["value"]
+        annual_income += holding["annual_income"]
         holding["value"] = round(holding["value"], 2)
         holding["annual_income"] = round(holding["annual_income"], 2)
         holding["scenario_type"] = _classify_cash_flow_holding(holding)
         holdings.append(holding)
     holdings.sort(key=lambda row: (-row["annual_income"], -row["value"], row["ticker"]))
-
-    value = sum(row["value"] for row in holdings)
-    annual_income = sum(row["annual_income"] for row in holdings)
     return {
         "value": round(value, 2),
         "annual_income": round(annual_income, 2),
@@ -2396,6 +2400,11 @@ def cash_flow_summary():
         return jsonify(error=str(exc)), 400
     settings = _cash_flow_settings_for_plan(conn, plan["id"])
     series = _expand_cash_flow_plan(conn, plan["id"], month, 12)
+    # The normalized figures answer "what does a typical month cost right now",
+    # so they smooth quarterly and annual bills while staying in this month's
+    # dollars. Escalating them would make a plan of plain monthly bills report a
+    # normalized month that is dearer than the month it is standing in.
+    level_series = _expand_cash_flow_plan(conn, plan["id"], month, 12, hold_growth=True)
     current = series[0]
     is_aggregate, profile_ids = get_profile_filter()
     portfolio = _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids)
@@ -2405,8 +2414,10 @@ def cash_flow_summary():
     )
     total_spendable = portfolio_monthly_net + current["additional_income_net"]
     gap = total_spendable - current["expenses"]
-    average_expenses = sum(row["expenses"] for row in series) / len(series)
-    average_income = sum(row["additional_income_net"] for row in series) / len(series)
+    average_expenses = sum(row["expenses"] for row in level_series) / len(level_series)
+    average_income = sum(
+        row["additional_income_net"] for row in level_series
+    ) / len(level_series)
     result = {
         **current,
         "plan": _serialize_cash_flow_plan(plan, conn),
@@ -2444,7 +2455,12 @@ def cash_flow_series():
     try:
         start_month = _cash_flow_month_or_current(request.args.get("start_month"))
         months = max(1, min(600, int(request.args.get("months", 12))))
-        series = _expand_cash_flow_plan(conn, plan["id"], start_month, months)
+        # Callers that inflate the result themselves ask for start-month dollars
+        # so the plan's own escalation is not charged a second time.
+        hold_growth = request.args.get("hold_growth") in {"1", "true", "yes"}
+        series = _expand_cash_flow_plan(
+            conn, plan["id"], start_month, months, hold_growth=hold_growth
+        )
     except (ValueError, TypeError) as exc:
         conn.close()
         return jsonify(error=str(exc)), 400
