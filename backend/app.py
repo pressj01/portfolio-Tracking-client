@@ -2933,6 +2933,13 @@ def _ensure_basis_columns(conn):
         # (SEPI pays monthly, Yahoo's history says quarterly) is reverted within
         # minutes, and "no distributions" could never be expressed at all.
         "div_frequency_locked": "INTEGER DEFAULT 0",
+        # Set when Div/Share is typed on the holdings screen. The refresh writes
+        # Yahoo's per-share amount back on every run and the dashboard fires one
+        # on load, so a hand correction used to be gone before it could be seen.
+        # Unlike the cadence lock this one expires: div_manual_until is the date
+        # the next declared distribution makes the market value right again.
+        "div_manual_until": "TEXT",
+        "div_manual_set_at": "TEXT",
     }
     for col, col_type in needed.items():
         if col not in cols:
@@ -4061,7 +4068,7 @@ _SECURITY_LEVEL_HOLDING_FIELDS = (
 )
 
 
-def _propagate_security_level_fields(conn, ticker, data, source_profile_id):
+def _propagate_security_level_fields(conn, ticker, data, source_profile_id, extra_shared=None):
     """Copy security-level metadata from one holding row to every other one.
 
     update_holding writes a single row: the selected profile, or for an
@@ -4076,9 +4083,14 @@ def _propagate_security_level_fields(conn, ticker, data, source_profile_id):
     account's sheet carries its own frequency, so the read side is fixed
     separately in _security_level_metadata_by_ticker.
 
+    extra_shared carries fields that are only security-level once the caller has
+    established it — a Div/Share that actually changed, with the override dates
+    that pin it — rather than on every edit that happens to resubmit them.
+
     Returns the profile ids updated.
     """
     shared = {f: data[f] for f in _SECURITY_LEVEL_HOLDING_FIELDS if f in data}
+    shared.update(extra_shared or {})
     if not shared:
         return []
     if "div_frequency" in shared:
@@ -4125,7 +4137,8 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
         return {}
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
-        f"""SELECT ticker, div_frequency, ex_div_date, div_pay_date
+        f"""SELECT ticker, div_frequency, ex_div_date, div_pay_date,
+                   div, div_manual_until
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
               AND COALESCE(quantity, 0) > 1e-9
@@ -4136,6 +4149,13 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
     for row in rows:
         ticker = row["ticker"]
         entry = metadata.setdefault(ticker, {})
+        # The aggregate derives Div/Share from cash paid per share, which is an
+        # average across accounts and reads low when one of them bought after
+        # the ex-date. A hand-typed amount is a statement about the security, so
+        # it replaces that average for as long as it is pinned.
+        if "div" not in entry and _holding_dividend_override_active(row):
+            entry["div"] = row["div"]
+            entry["div_manual_until"] = row["div_manual_until"]
         # Rows arrive largest-position-first, so the biggest holder decides.
         # NULL means the field was never recorded for that account and falls
         # through to a smaller one; '' is an explicit "no distributions" chosen
@@ -8450,7 +8470,14 @@ def _build_repair_metrics_from_series(
     }
 
 
-def _apply_dividend_repair_metrics(conn, profile_id, ticker, metrics, existing_freq=None):
+def _apply_dividend_repair_metrics(
+    conn,
+    profile_id,
+    ticker,
+    metrics,
+    existing_freq=None,
+    div_override_active=False,
+):
     sets = [
         "total_divs_received = ?",
         "ytd_divs = ?",
@@ -8474,6 +8501,10 @@ def _apply_dividend_repair_metrics(conn, profile_id, ticker, metrics, existing_f
         "annual_yield_on_cost",
         "current_annual_yield",
     ]
+    if div_override_active:
+        # Actuals above are history and always land; these are the forward rate,
+        # which a hand-typed Div/Share owns until its override expires.
+        optional_fields = []
     for field in optional_fields:
         if metrics.get(field) is not None:
             sets.append(f"{field} = ?")
@@ -8551,6 +8582,92 @@ def _holding_frequency_locked(holding):
     return "div_frequency_locked" in keys and bool(holding["div_frequency_locked"])
 
 
+# How long a hand-typed Div/Share outranks the market. A manual amount corrects
+# the distribution being paid now, so it expires once the fund declares the next
+# one — Yahoo is right again from that point. Without an expiry an override
+# nobody remembers setting would freeze a holding's income forever.
+MANUAL_DIVIDEND_OVERRIDE_GRACE_DAYS = 3
+MANUAL_DIVIDEND_OVERRIDE_FALLBACK_DAYS = 45
+MANUAL_DIVIDEND_CHANGE_TOLERANCE = 1e-6
+
+
+def _manual_dividend_override_expiry(ex_div_date, div_frequency, today=None):
+    """Return the ISO date a hand-edited Div/Share stops outranking the market.
+
+    Holdings record the *last* ex-dividend date, so step it forward a cycle at a
+    time to find the next one and add a few days for the amount to be published.
+    That makes the window cadence-aware: about a week for a weekly payer, about
+    a quarter for a quarterly one — the override covers exactly the distribution
+    it was typed to correct. Falls back to a fixed window when the holding has
+    no usable ex-date or cadence to project from.
+    """
+    today = today or datetime.date.today()
+    ex_dt = _date_from_value(ex_div_date)
+    payments_per_year = _frequency_to_payments_per_year(div_frequency)
+    if ex_dt is not None and payments_per_year > 0:
+        cycle_days = max(1, round(365.0 / payments_per_year))
+        next_ex = ex_dt
+        # Bounded rather than a while loop: a years-stale ex-date on a weekly
+        # payer would otherwise step 52 times a year to catch up.
+        for _ in range(500):
+            if next_ex > today:
+                break
+            next_ex = next_ex + datetime.timedelta(days=cycle_days)
+        if next_ex > today:
+            return (
+                next_ex + datetime.timedelta(days=MANUAL_DIVIDEND_OVERRIDE_GRACE_DAYS)
+            ).isoformat()
+    return (
+        today + datetime.timedelta(days=MANUAL_DIVIDEND_OVERRIDE_FALLBACK_DAYS)
+    ).isoformat()
+
+
+def _holding_dividend_override_active(holding, today=None):
+    """True when this row's Div/Share is pinned to a hand-typed amount.
+
+    Reads the column defensively for the same reason _holding_frequency_locked
+    does: not every query in here selects it.
+    """
+    if holding is None:
+        return False
+    try:
+        keys = holding.keys()
+    except AttributeError:
+        return False
+    if "div_manual_until" not in keys:
+        return False
+    return _manual_dividend_override_active(holding["div_manual_until"], today)
+
+
+def _manual_dividend_override_active(until_value, today=None):
+    """True while a hand-edited Div/Share still outranks the market snapshot."""
+    if not until_value:
+        return False
+    until = _date_from_value(until_value)
+    if until is None:
+        return False
+    return until >= (today or datetime.date.today())
+
+
+def _manual_dividend_value_changed(old_value, new_value):
+    """True when a submitted Div/Share differs from what is already stored.
+
+    The edit modal posts every field it renders, so an unrelated change (share
+    count, category) resubmits the same dividend. Only a real change should pin
+    the value, or routine edits would quietly freeze the holding on Yahoo's
+    current number for a whole distribution cycle.
+    """
+    try:
+        old = float(old_value or 0)
+    except (TypeError, ValueError):
+        old = 0.0
+    try:
+        new = float(new_value or 0)
+    except (TypeError, ValueError):
+        new = 0.0
+    return abs(new - old) > MANUAL_DIVIDEND_CHANGE_TOLERANCE
+
+
 def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata):
     if not metadata:
         return False
@@ -8582,22 +8699,28 @@ def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata)
         except Exception:
             pass
 
-    sets = [
-        "div = ?",
-        "dividend_paid = ?",
-        "estim_payment_per_year = ?",
-        "approx_monthly_income = ?",
-        "annual_yield_on_cost = ?",
-        "current_annual_yield = ?",
-    ]
-    vals = [
-        metadata["div"],
-        metadata["dividend_paid"],
-        metadata["estim_payment_per_year"],
-        metadata["approx_monthly_income"],
-        metadata["annual_yield_on_cost"],
-        metadata["current_annual_yield"],
-    ]
+    if _holding_dividend_override_active(holding):
+        # The schedule below still refreshes — only the amount and the income it
+        # implies are pinned to what was typed on the holdings screen.
+        sets = []
+        vals = []
+    else:
+        sets = [
+            "div = ?",
+            "dividend_paid = ?",
+            "estim_payment_per_year = ?",
+            "approx_monthly_income = ?",
+            "annual_yield_on_cost = ?",
+            "current_annual_yield = ?",
+        ]
+        vals = [
+            metadata["div"],
+            metadata["dividend_paid"],
+            metadata["estim_payment_per_year"],
+            metadata["approx_monthly_income"],
+            metadata["annual_yield_on_cost"],
+            metadata["current_annual_yield"],
+        ]
 
     optional_fields = [
         ("ex_div_date", new_exdiv),
@@ -8610,6 +8733,10 @@ def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata)
         if value:
             sets.append(f"{field} = ?")
             vals.append(value)
+
+    if not sets:
+        # An override with nothing new in the schedule leaves nothing to write.
+        return False
 
     vals.extend([ticker, profile_id])
     conn.execute(
@@ -8718,7 +8845,7 @@ def _recompute_dividend_fields_from_payments(
                   total_divs_received,
                   ytd_divs, current_month_income, paid_for_itself,
                   dividend_actuals_source, description, ex_div_date,
-                  div_pay_date
+                  div_pay_date, div_manual_until
            FROM all_account_info
            WHERE profile_id IN ({placeholders})
              AND COALESCE(quantity, 0) > 0
@@ -8928,6 +9055,9 @@ def _recompute_dividend_fields_from_payments(
                     ticker,
                     metrics,
                     existing_freq=holding["div_frequency"],
+                    div_override_active=_manual_dividend_override_active(
+                        holding["div_manual_until"]
+                    ),
                 )
             updated += 1
             broker_updated += 1 if metrics["source"] in IMPORTED_DIVIDEND_SOURCES else 0
@@ -11280,7 +11410,7 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, div_manual_until, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
@@ -11336,6 +11466,7 @@ def refresh_market_data():
             "div_frequency": r["div_frequency"] or None,
             "div_frequency_locked": bool(r["div_frequency_locked"]),
             "div": r["div"] or 0,
+            "div_manual_until": r["div_manual_until"],
             "dividend_paid": r["dividend_paid"] or 0,
             "estim_payment_per_year": r["estim_payment_per_year"] or 0,
             "approx_monthly_income": r["approx_monthly_income"] or 0,
@@ -11758,6 +11889,19 @@ def refresh_market_data():
             # monthly, and re-deriving on every refresh silently undid the fix.
             if h["div_frequency_locked"]:
                 new_freq = old_freq
+            # Same idea for the amount, but time-boxed: a Div/Share typed on the
+            # holdings screen describes the distribution being paid now, so it
+            # outranks the snapshot until the fund declares the next one.
+            div_override_until = h.get("div_manual_until")
+            div_override_active = _manual_dividend_override_active(
+                div_override_until,
+                refresh_date,
+            )
+            div_override_expired = bool(div_override_until) and not div_override_active
+            if div_override_active:
+                # Including a deliberate $0 ("this fund stopped paying"), which
+                # falls through to the zeroing branch below and stays there.
+                new_div = float(h.get("div") or 0) or None
             existing_estim_annual = float(h.get("estim_payment_per_year") or 0)
             # Preserve the existing income estimate when:
             #  (a) this profile is positions-managed (broker-supplied income)
@@ -11784,9 +11928,18 @@ def refresh_market_data():
                 (pid in positions_managed_ids and broker_data_fresh)
                 or not (fresh_div and float(fresh_div) > 0)
             ) and not (fresh_div and float(fresh_div) > 0 and existing_income_is_run_rate)
+            if div_override_active:
+                # Income has to track the corrected rate, not a broker estimate
+                # that was built from the amount being corrected.
+                preserve_income_estimate = False
             sets = []
             vals = []
             dividend_row_updated = False
+            if div_override_expired:
+                # The next distribution has been declared, so the market speaks
+                # for this holding again.
+                sets.extend(["div_manual_until = ?", "div_manual_set_at = ?"])
+                vals.extend([None, None])
 
             # Backfill purchase_value if missing
             if not purchase_value and price_paid and qty:
@@ -11910,10 +12063,16 @@ def refresh_market_data():
 
                 if new_div:
                     cur_freq = (new_freq or 'Q').upper()
-                    annual_div = _annual_dividend_per_share_from_snapshot(
-                        snapshot,
-                        cur_freq,
-                    )
+                    if div_override_active:
+                        # Annualize the hand-typed amount at the holding's own
+                        # cadence. The snapshot's payment history belongs to the
+                        # value being overridden and would undo the correction.
+                        annual_div = new_div * _refresh_frequency_multiplier(cur_freq)
+                    else:
+                        annual_div = _annual_dividend_per_share_from_snapshot(
+                            snapshot,
+                            cur_freq,
+                        )
                     if preserve_income_estimate:
                         estim_annual = float(h.get("estim_payment_per_year") or 0)
                         estim_monthly = float(h.get("approx_monthly_income") or 0) or (
@@ -13235,15 +13394,19 @@ def update_holding(ticker):
     conn = get_connection()
     _ensure_basis_columns(conn)
     existing = conn.execute(
+        # The dividend columns trail the basis ones because the recompute below
+        # reads estim_payment_per_year positionally.
         "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
         "       total_divs_received, estim_payment_per_year, broker_price_paid, "
-        "       broker_purchase_value, original_price_paid, original_purchase_value "
+        "       broker_purchase_value, original_price_paid, original_purchase_value, "
+        "       div, div_frequency, ex_div_date "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
     if not existing:
         conn.close()
         return jsonify({"error": f"{ticker} not found"}), 404
+    clear_div_override = bool(data.pop("div_manual_clear", False))
     data = _prepare_manual_holding_payload(data, existing)
 
     allowed_fields = [
@@ -13270,6 +13433,26 @@ def update_holding(ticker):
     if "div_frequency" in data:
         updates.append("div_frequency_locked = ?")
         vals.append(1)
+
+    # Same for a hand-typed Div/Share, except this pin expires. Without it the
+    # refresh puts Yahoo's amount straight back — and the dashboard runs one on
+    # load, so the edit never survived long enough to be seen anywhere.
+    div_override = {}
+    if clear_div_override:
+        div_override = {"div_manual_until": None, "div_manual_set_at": None}
+    elif "div" in data and _manual_dividend_value_changed(existing["div"], data["div"]):
+        today = datetime.date.today()
+        div_override = {
+            "div_manual_until": _manual_dividend_override_expiry(
+                data.get("ex_div_date", existing["ex_div_date"]),
+                data.get("div_frequency", existing["div_frequency"]),
+                today=today,
+            ),
+            "div_manual_set_at": today.isoformat(),
+        }
+    for field, value in div_override.items():
+        updates.append(f"{field} = ?")
+        vals.append(value)
 
     # When quantity is manually changed, reset base_quantity and import_date
     # so DRIP simulation restarts from this point (the user's new share count
@@ -13315,7 +13498,16 @@ def update_holding(ticker):
         previous_quantity=previous_quantity,
         previous_annual_income=previous_annual_income,
     )
-    propagated_pids = _propagate_security_level_fields(conn, ticker, data, profile_id)
+    # A fund pays the same amount per share into every account that holds it, so
+    # a corrected Div/Share — and the pin keeping it — belongs to all of them.
+    # Only when it actually changed: an unchanged resubmit must not overwrite
+    # what other accounts recorded.
+    div_shared = dict(div_override)
+    if div_override and not clear_div_override:
+        div_shared["div"] = data["div"]
+    propagated_pids = _propagate_security_level_fields(
+        conn, ticker, data, profile_id, extra_shared=div_shared
+    )
     conn.commit()
 
     for pid in [profile_id] + propagated_pids:

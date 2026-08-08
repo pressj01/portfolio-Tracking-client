@@ -28,6 +28,19 @@ function paymentsPerYear(freq) {
   return FREQ_PAYMENTS_PER_YEAR[String(freq || '').toUpperCase()] || 0
 }
 
+// Override expiry arrives as a plain ISO date. Split it by hand rather than
+// letting Date parse it, which reads bare YYYY-MM-DD as UTC and shows the day
+// before for anyone west of Greenwich.
+function formatOverrideDate(value) {
+  const parts = String(value || '').split('-')
+  if (parts.length !== 3) return value
+  const [y, m, d] = parts.map(Number)
+  if (!y || !m || !d) return value
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+  })
+}
+
 function invalidateDashboardCache() {
   try {
     // A holding can feed its individual account, Owner, and one or more
@@ -107,6 +120,10 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   const [lookupMsg, setLookupMsg] = useState(null)
   const [categories, setCategories] = useState([])
   const [hasTxns, setHasTxns] = useState(false)
+  // A hand-typed Div/Share holds off the market refresh until the fund declares
+  // its next distribution. Show when that is, and let it be handed back early.
+  const [clearDivOverride, setClearDivOverride] = useState(false)
+  const divOverrideUntil = holding?.div_manual_until || null
 
   useEffect(() => {
     pf('/api/categories/data')
@@ -227,6 +244,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (payload.total_divs_received && payload.purchase_value) {
       payload.paid_for_itself = payload.total_divs_received / payload.purchase_value
     }
+    if (clearDivOverride) payload.div_manual_clear = true
 
     onSave(payload)
   }
@@ -326,6 +344,30 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             <div className="form-group">
               <label>Div/Share</label>
               <input type="number" step="any" value={form.div || ''} onChange={(e) => set('div', e.target.value)} style={{ width: '100%' }} />
+              {divOverrideUntil && !clearDivOverride && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.25rem', lineHeight: 1.35 }}>
+                  Your amount is in use through {formatOverrideDate(divOverrideUntil)}, then market data resumes.{' '}
+                  <button
+                    type="button"
+                    onClick={() => setClearDivOverride(true)}
+                    style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
+                  >
+                    Use market data now
+                  </button>
+                </div>
+              )}
+              {clearDivOverride && (
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.25rem', lineHeight: 1.35 }}>
+                  Market data resumes on the next refresh.{' '}
+                  <button
+                    type="button"
+                    onClick={() => setClearDivOverride(false)}
+                    style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
+                  >
+                    Undo
+                  </button>
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label>Frequency</label>

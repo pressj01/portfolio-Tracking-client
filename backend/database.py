@@ -267,6 +267,11 @@ def ensure_tables_exist(conn=None):
             ex_div_date                TEXT,
             div_pay_date               TEXT,
             div                        REAL,
+            -- Set when div is typed by hand on the holdings screen. Unlike the
+            -- cadence lock above this one expires: the date here is when the
+            -- fund's next distribution makes the market value right again.
+            div_manual_until           TEXT,
+            div_manual_set_at          TEXT,
             dividend_paid              REAL,
             estim_payment_per_year     REAL,
             approx_monthly_income      REAL,
