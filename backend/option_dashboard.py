@@ -71,6 +71,12 @@ STRATEGIES = (
         "thesis": "Sell both tails only when trend strength is low and implied volatility pays for the range risk.",
     },
     {
+        "key": "put_call_condor", "name": "Put / Call Condor", "scanner": "Put / Call Condor Scanner",
+        "route": "/put-call-condor-scanner", "stance": "Selectable bullish, bearish, or paired", "risk": "Risk-budgeted defined risk",
+        "trend_range": (-25, 25), "macro_range": (-50, 50), "volatility": "medium",
+        "thesis": "Choose one directional condor or pair both sides when the debit shelves and separately capped tail risks fit the outlook.",
+    },
+    {
         "key": "iron_butterfly", "name": "Iron Butterfly", "scanner": "Iron Butterfly Scanner",
         "route": "/iron-butterfly-scanner", "stance": "Pinned / very neutral", "risk": "Defined two-sided risk",
         "trend_range": (-10, 10), "macro_range": (-25, 25), "volatility": "high",

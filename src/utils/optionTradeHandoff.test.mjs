@@ -122,6 +122,79 @@ test('builds the complete three-strike iron butterfly for Strategy Lab', () => {
   assert.deepEqual(trade.legs.map(leg => leg.strike), [90, 100, 100, 110])
 })
 
+test('builds the risk-budgeted put condor with its exact four strikes', () => {
+  const row = {
+    ticker: '^XSP',
+    price: 775.76,
+    expiration,
+    upper_long_strike: 773,
+    upper_short_strike: 772,
+    lower_short_strike: 748,
+    lower_long_strike: 745,
+    upper_long_leg: quote('upper_long', 'put', 773, 1),
+    upper_short_leg: quote('upper_short', 'put', 772, -1),
+    lower_short_leg: quote('lower_short', 'put', 748, -1),
+    lower_long_leg: quote('lower_long', 'put', 745, 1),
+  }
+
+  const trade = buildScannerTrade('put-condor', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, 'put condor')
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.strike), [773, 772, 748, 745])
+  assert.ok(trade.legs.every(leg => leg.qty === 1))
+})
+
+test('builds the risk-budgeted call condor with its exact four strikes', () => {
+  const row = {
+    ticker: '^XSP',
+    price: 775.76,
+    expiration,
+    debit_long_strike: 776,
+    debit_short_strike: 777,
+    credit_short_strike: 802,
+    credit_long_strike: 805,
+    debit_long_leg: quote('debit_long', 'call', 776, 1),
+    debit_short_leg: quote('debit_short', 'call', 777, -1),
+    credit_short_leg: quote('credit_short', 'call', 802, -1),
+    credit_long_leg: quote('credit_long', 'call', 805, 1),
+  }
+
+  const trade = buildScannerTrade('call-condor', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, 'call condor')
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.strike), [776, 777, 802, 805])
+  assert.ok(trade.legs.every(leg => leg.qty === 1))
+})
+
+test('builds the complete eight-leg put and call condor package', () => {
+  const strikes = [773, 772, 748, 745, 778, 779, 804, 807]
+  const types = ['put', 'put', 'put', 'put', 'call', 'call', 'call', 'call']
+  const quantities = [1, -1, -1, 1, 1, -1, -1, 1]
+  const row = {
+    ticker: '^XSP',
+    price: 775.76,
+    expiration,
+    legs: strikes.map((strike, index) => ({
+      ...quote(`combined_${index}`, types[index], strike, quantities[index]),
+      option_type: types[index],
+      expiration,
+      qty: quantities[index],
+    })),
+  }
+
+  const trade = buildScannerTrade('put-call-condor', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, 'put / call condor')
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY', 'BUY', 'SELL', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.opt_type), ['PUT', 'PUT', 'PUT', 'PUT', 'CALL', 'CALL', 'CALL', 'CALL'])
+  assert.deepEqual(trade.legs.map(leg => leg.strike), strikes)
+})
+
 test('preserves unequal tracked quantities and net opening fills', () => {
   const executions = (action, contracts, price, fees) => [{ action, contracts, price, fees }]
   const trade = buildTrackedTrade({

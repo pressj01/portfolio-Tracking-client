@@ -157,6 +157,38 @@ const BUILDERS = {
     ])
   },
 
+  'put-condor': row => {
+    if (!row?.expiration) return null
+    return trade(row, 'put condor', [
+      optionLeg(row.upper_long_leg, 'BUY', 'PUT', row.expiration, row.upper_long_strike),
+      optionLeg(row.upper_short_leg, 'SELL', 'PUT', row.expiration, row.upper_short_strike),
+      optionLeg(row.lower_short_leg, 'SELL', 'PUT', row.expiration, row.lower_short_strike),
+      optionLeg(row.lower_long_leg, 'BUY', 'PUT', row.expiration, row.lower_long_strike),
+    ])
+  },
+
+  'call-condor': row => {
+    if (!row?.expiration) return null
+    return trade(row, 'call condor', [
+      optionLeg(row.debit_long_leg, 'BUY', 'CALL', row.expiration, row.debit_long_strike),
+      optionLeg(row.debit_short_leg, 'SELL', 'CALL', row.expiration, row.debit_short_strike),
+      optionLeg(row.credit_short_leg, 'SELL', 'CALL', row.expiration, row.credit_short_strike),
+      optionLeg(row.credit_long_leg, 'BUY', 'CALL', row.expiration, row.credit_long_strike),
+    ])
+  },
+
+  'put-call-condor': row => {
+    if (!row?.expiration || !Array.isArray(row.legs)) return null
+    return trade(row, 'put / call condor', row.legs.map(leg => optionLeg(
+      leg,
+      Number(leg.qty) > 0 ? 'BUY' : 'SELL',
+      String(leg.option_type).toUpperCase(),
+      leg.expiration || row.expiration,
+      leg.strike,
+      Math.abs(Number(leg.qty) || 1),
+    )))
+  },
+
   'unbalanced-butterfly': row => {
     if (!row?.expiration) return null
     return trade(row, 'unbalanced butterfly', [
@@ -228,6 +260,9 @@ export function buildScannerTrade(kind, row) {
     'bear-call-spread': 2,
     'iron-condor': 4,
     'iron-butterfly': 4,
+    'put-condor': 4,
+    'call-condor': 4,
+    'put-call-condor': 8,
     'unbalanced-put-condor': 4,
     'unbalanced-butterfly': 3,
     'double-hedge-put-butterfly': 3,

@@ -8,7 +8,7 @@ const CUSTOM_STRATEGY = '__custom_strategy__'
 const STRATEGIES = [
   'Covered Call', 'Cash-Secured Put', 'Short Call', 'Short Put',
   'Bull Put Spread', 'Bear Call Spread', 'Bull Call Spread', 'Bear Put Spread',
-  'Iron Condor', 'Unbalanced Iron Condor', 'Unbalanced Put Condor',
+  'Iron Condor', 'Put Condor', 'Call Condor', 'Put / Call Condor', 'Unbalanced Iron Condor', 'Unbalanced Put Condor',
   'Iron Butterfly', 'Butterfly', 'Unbalanced Butterfly', 'Double-Hedge Put Butterfly',
   'Road Trip Butterfly', '60/40/20 Butterfly', 'Calendar', 'Diagonal',
   'Long Call', 'Long Put', 'Long Straddle', 'Long Strangle',

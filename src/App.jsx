@@ -80,6 +80,7 @@ import BearPutSpreadScanner from './pages/BearPutSpreadScanner'
 import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
 import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
 import IronCondorScanner from './pages/IronCondorScanner'
+import PutCondorScanner from './pages/PutCondorScanner'
 import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
 import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
 import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
@@ -257,6 +258,8 @@ function App() {
         <Route path="/bear-put-spread-scanner" element={<BearPutSpreadScanner />} />
         <Route path="/bear-call-spread-scanner" element={<BearCallSpreadScanner />} />
         <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
+        <Route path="/put-condor-scanner" element={<PutCondorScanner />} />
+        <Route path="/put-call-condor-scanner" element={<PutCondorScanner />} />
         <Route path="/unbalanced-put-condor-scanner" element={<UnbalancedPutCondorScanner />} />
         <Route path="/unbalanced-butterfly-scanner" element={<UnbalancedButterflyScanner />} />
         <Route path="/double-hedge-put-butterfly-scanner" element={<DoubleHedgePutButterflyScanner />} />
@@ -337,6 +340,7 @@ function Nav() {
         <NavLink to="/bear-put-spread-scanner">Bear Put Spread Scanner</NavLink>
         <NavLink to="/bear-call-spread-scanner">Bear Call Spread Scanner</NavLink>
         <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
+        <NavLink to="/put-call-condor-scanner">Put / Call Condor Scanner</NavLink>
         <NavLink to="/unbalanced-put-condor-scanner">Unbalanced Put Condor Scanner</NavLink>
         <NavLink to="/unbalanced-butterfly-scanner">Unbalanced Butterfly Scanner</NavLink>
         <NavLink to="/double-hedge-put-butterfly-scanner">Double-Hedge Put Butterfly Scanner</NavLink>
