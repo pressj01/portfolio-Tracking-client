@@ -180,7 +180,7 @@ jobs:
           files: |
             release/*.exe
             release/*.blockmap
-          body_path: RELEASE_NOTES_1.33.10.md
+          body_path: RELEASE_NOTES_1.33.11.md
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
@@ -239,4 +239,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: release/*.dmg
-          body_path: RELEASE_NOTES_1.33.10.md
+          body_path: RELEASE_NOTES_1.33.11.md

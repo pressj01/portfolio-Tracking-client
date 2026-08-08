@@ -4056,6 +4056,96 @@ label {
 .dc-amount { font-size: .78rem; color: var(--p-7a8899); }
 .dc-freq { color: var(--p-5a6a7a); }
 .dc-paid-badge { font-size: .62rem; color: var(--p-2a9975); font-weight: 600; letter-spacing: .04em; margin-left: 4px; }
+.dc-calendar-page-wide { max-width: none; }
+.dc-month-view { min-width: 0; }
+.dc-month-toolbar {
+  display: grid; grid-template-columns: minmax(210px, 1fr) auto minmax(210px, 1fr);
+  align-items: center; gap: 16px; margin-bottom: 12px;
+}
+.dc-month-toolbar h2 {
+  margin: 0; color: var(--text-strong); font-size: 1.2rem; text-align: center;
+}
+.dc-month-nav { display: flex; align-items: center; gap: 6px; }
+.dc-month-nav-btn,
+.dc-month-today-btn {
+  border: 1px solid var(--border); background: var(--surface-2); color: var(--text-soft);
+  border-radius: 6px; min-height: 32px; cursor: pointer; transition: border-color .15s, background .15s, color .15s;
+}
+.dc-month-nav-btn { width: 34px; padding: 0; font-size: 1.45rem; line-height: 1; }
+.dc-month-today-btn { padding: 0 12px; font-size: .78rem; font-weight: 600; }
+.dc-month-nav-btn:hover,
+.dc-month-today-btn:hover { border-color: var(--accent-bright); background: var(--surface); color: var(--accent-bright); }
+.dc-month-summary { display: flex; flex-direction: column; align-items: flex-end; min-width: 0; }
+.dc-month-summary strong { color: var(--pos-bright); font-size: .95rem; }
+.dc-month-summary span { color: var(--text-dim); font-size: .7rem; }
+.dc-month-scroll {
+  overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-sunken);
+}
+.dc-month-grid {
+  display: grid; grid-template-columns: repeat(7, minmax(160px, 1fr)); min-width: 1120px;
+}
+.dc-month-weekday {
+  padding: 8px 10px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  background: var(--surface); color: var(--text-dim); font-size: .67rem; font-weight: 700;
+  letter-spacing: .08em; text-align: center; text-transform: uppercase;
+}
+.dc-month-weekday:nth-child(7) { border-right: 0; }
+.dc-month-cell {
+  min-height: 196px; padding: 8px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  background: var(--surface-2); min-width: 0;
+}
+.dc-month-cell:nth-child(7n) { border-right: 0; }
+.dc-month-cell.outside { background: var(--surface-sunken); }
+.dc-month-cell.today { background: rgba(0, 201, 167, .07); box-shadow: inset 0 0 0 1px rgba(0, 201, 167, .55); }
+.dc-month-cell-head {
+  display: flex; align-items: center; justify-content: space-between; min-height: 25px; gap: 6px; margin-bottom: 4px;
+}
+.dc-month-day-number { color: var(--text-muted); font-size: .76rem; font-weight: 700; }
+.dc-month-cell.outside .dc-month-day-number { color: var(--text-faint); opacity: .55; }
+.dc-month-cell.today .dc-month-day-number {
+  display: inline-flex; align-items: center; justify-content: center; width: 25px; height: 25px;
+  margin: -2px 0; border-radius: 50%; background: var(--accent-bright); color: var(--surface-sunken);
+}
+.dc-month-day-total { color: var(--pos-bright); font-size: .72rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dc-month-cell-events { display: flex; flex-direction: column; gap: 5px; }
+.dc-month-event {
+  display: flex; align-items: flex-start; gap: 6px; min-width: 0; padding: 6px;
+  border-radius: 6px; border-left: 2px solid var(--purple); background: var(--panel-dim);
+}
+.dc-month-event-icon {
+  display: flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px;
+  border-radius: 5px; font-size: .55rem; font-weight: 800; letter-spacing: -.03em;
+}
+.dc-month-event-body { flex: 1; min-width: 0; }
+.dc-month-event-title { display: flex; align-items: baseline; gap: 4px; min-width: 0; }
+.dc-month-event-title strong { flex: 0 0 auto; color: var(--text-strong); font-size: .67rem; }
+.dc-month-event-title span {
+  min-width: 0; overflow: hidden; color: var(--text-muted); font-size: .62rem; text-overflow: ellipsis; white-space: nowrap;
+}
+.dc-month-event-meta {
+  display: flex; align-items: center; gap: 4px; min-width: 0; margin-top: 3px;
+  color: var(--text-dim); font-size: .61rem; white-space: nowrap;
+}
+.dc-month-event-meta > strong { color: var(--text-strong); font-size: .66rem; font-variant-numeric: tabular-nums; }
+.dc-month-date-status {
+  display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px;
+  border-radius: 50%; font-size: .55rem; font-weight: 800;
+}
+.dc-month-date-status.confirmed { background: var(--purple); color: var(--surface-sunken); }
+.dc-month-date-status.estimated { border: 1px solid var(--text-dim); color: var(--text-muted); }
+.dc-month-meta-dot { color: var(--text-faint); }
+.dc-month-empty {
+  margin: 0; padding: 1rem; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--surface-2); color: var(--text-dim);
+}
+.dc-month-legend { display: flex; flex-wrap: wrap; gap: 7px 18px; margin-top: 10px; color: var(--text-dim); font-size: .69rem; }
+.dc-month-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.dc-month-legend i {
+  display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+  border-radius: 50%; font-size: .58rem; font-style: normal; font-weight: 800;
+}
+.dc-month-legend i.confirmed { background: var(--purple); color: var(--surface-sunken); }
+.dc-month-legend i.estimated { border: 1px solid var(--text-dim); color: var(--text-muted); }
 .dc-opt { display: flex; flex-direction: column; gap: 14px; }
 .dc-opt-stats {
   display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px;
@@ -4201,6 +4291,10 @@ label {
   .dc-page { padding: 1rem; }
   .dc-tabs { display: flex; }
   .dc-tab { flex: 1; min-width: 0; }
+  .dc-month-toolbar { grid-template-columns: 1fr auto; gap: 8px; }
+  .dc-month-toolbar h2 { grid-column: 1 / -1; grid-row: 1; }
+  .dc-month-nav { grid-column: 1; grid-row: 2; }
+  .dc-month-summary { grid-column: 2; grid-row: 2; }
   .dc-opt-stats { grid-template-columns: 1fr; }
   .dc-heatmap { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dc-opt-head { display: block; }
