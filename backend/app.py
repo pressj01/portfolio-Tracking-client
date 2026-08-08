@@ -47,11 +47,15 @@ from cash_flow import (
     HOLDING_SCENARIO_PROFILES,
     OPTION_INCOME_TICKERS,
     backfill_owner_subaccount_sources as _backfill_owner_subaccount_sources,
+    build_plan_export as _build_cash_flow_export,
     classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
     get_or_create_default_plan as _get_or_create_default_cash_flow_plan,
+    import_signature as _cash_flow_import_signature,
+    items_to_csv as _cash_flow_items_to_csv,
     money_to_cents as _cash_flow_money_to_cents,
     next_bill_schedule as _next_cash_flow_bill,
+    parse_import_document as _parse_cash_flow_import,
     parse_month as _parse_cash_flow_month,
     portfolio_scenario_assumptions as _cash_flow_scenario_assumptions,
     resolve_source_plan_id as _resolve_cash_flow_source,
@@ -59,6 +63,7 @@ from cash_flow import (
     serialize_plan as _serialize_cash_flow_plan,
     settings_for_plan as _cash_flow_settings_for_plan,
     simulate_sustainability as _simulate_cash_flow_sustainability,
+    validate_import_entries as _validate_cash_flow_import_entries,
     validate_item_payload as _validate_cash_flow_item,
 )
 from import_data import (
@@ -2125,6 +2130,255 @@ def cash_flow_settings():
     result = _cash_flow_settings_for_plan(conn, plan["id"])
     conn.close()
     return jsonify(settings=result)
+
+
+def _cash_flow_backup_filename(scope_label, plan_name, extension):
+    parts = [str(scope_label or ""), str(plan_name or "")]
+    slug = "-".join(
+        re.sub(r"[^a-z0-9]+", "-", part.lower()).strip("-") for part in parts if part
+    ).strip("-")
+    stamp = datetime.date.today().isoformat()
+    return f"cash-flow-{slug or 'plan'}-{stamp}.{extension}"
+
+
+@app.route("/api/cash-flow/export", methods=["GET"])
+def cash_flow_export():
+    """Download one plan as a restorable backup or as a spreadsheet."""
+    from io import BytesIO
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    export_format = (request.args.get("format") or "json").strip().lower()
+    if export_format not in {"json", "csv"}:
+        conn.close()
+        return jsonify(error="Export format must be json or csv."), 400
+
+    scope_label = _cash_flow_scope_label(conn, plan["scope_type"], plan["scope_id"])
+    try:
+        document = _build_cash_flow_export(conn, plan["id"], scope_label=scope_label)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 404
+    conn.close()
+
+    if export_format == "csv":
+        # The BOM keeps Excel from mangling non-ASCII names in a bill list.
+        payload = _cash_flow_items_to_csv(document["items"]).encode("utf-8-sig")
+        mimetype = "text/csv"
+    else:
+        payload = json.dumps(document, indent=2).encode("utf-8")
+        mimetype = "application/json"
+
+    return send_file(
+        BytesIO(payload),
+        as_attachment=True,
+        download_name=_cash_flow_backup_filename(
+            scope_label, plan["name"], export_format
+        ),
+        mimetype=mimetype,
+    )
+
+
+@app.route("/api/cash-flow/import", methods=["POST"])
+def cash_flow_import():
+    """Restore or merge saved cash-flow entries from an exported file."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    body = request.get_json(silent=True) or {}
+    upload = request.files.get("file")
+    source = request.form if upload or request.form else body
+
+    plan = _cash_flow_plan_for_scope(conn, source.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    # Writes always resolve to the scope that owns the entries, so importing
+    # into a borrowed plan would file the rows somewhere the screen never shows.
+    if _resolve_cash_flow_source(conn, plan["id"]) != plan["id"]:
+        conn.close()
+        return jsonify(
+            error="This plan borrows its entries from another selection. "
+                  "Switch to that selection to import."
+        ), 400
+
+    mode = str(source.get("mode") or "add").strip().lower()
+    if mode not in {"add", "replace"}:
+        conn.close()
+        return jsonify(error="Import mode must be add or replace."), 400
+
+    raw = upload.read() if upload else body.get("content")
+    if raw in (None, ""):
+        conn.close()
+        return jsonify(error="No file uploaded."), 400
+
+    try:
+        parsed = _parse_cash_flow_import(raw)
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+
+    prepared, errors = _validate_cash_flow_import_entries(parsed["items"])
+    # Unreadable rows are found during parsing and invalid ones during
+    # validation, so the two lists have to be merged back into file order or
+    # the user is asked to fix line 4 before line 3.
+    def _error_line(message):
+        match = re.search(r"\d+", str(message))
+        return int(match.group()) if match else 0
+
+    errors = sorted(parsed["errors"] + errors, key=_error_line)
+    # A backup restore is all-or-nothing: importing the readable half of a file
+    # would leave a plan that looks complete but is not.
+    if errors:
+        conn.close()
+        return jsonify(
+            error=f"{len(errors)} entr{'y' if len(errors) == 1 else 'ies'} could not be read. Nothing was imported.",
+            errors=errors[:20],
+        ), 400
+    if not prepared:
+        conn.close()
+        return jsonify(error="That file has no cash-flow entries."), 400
+
+    replaced = 0
+    try:
+        if mode == "replace":
+            old_ids = [
+                row["id"] for row in conn.execute(
+                    "SELECT id FROM cash_flow_items WHERE plan_id = ?", (plan["id"],)
+                ).fetchall()
+            ]
+            replaced = len(old_ids)
+            if old_ids:
+                placeholders = ",".join("?" * len(old_ids))
+                conn.execute(
+                    f"DELETE FROM cash_flow_item_payments WHERE item_id IN ({placeholders})",
+                    old_ids,
+                )
+                conn.execute(
+                    f"DELETE FROM cash_flow_month_overrides WHERE item_id IN ({placeholders})",
+                    old_ids,
+                )
+            conn.execute(
+                "DELETE FROM cash_flow_items WHERE plan_id = ?", (plan["id"],)
+            )
+            existing = set()
+        else:
+            existing = {
+                _cash_flow_import_signature(dict(row))
+                for row in conn.execute(
+                    "SELECT * FROM cash_flow_items WHERE plan_id = ?", (plan["id"],)
+                ).fetchall()
+            }
+
+        imported = skipped = payments_restored = overrides_restored = 0
+        for record in prepared:
+            signature = _cash_flow_import_signature(record)
+            if signature in existing:
+                skipped += 1
+                continue
+            existing.add(signature)
+            cur = conn.execute(
+                """INSERT INTO cash_flow_items
+                   (plan_id, kind, name, category, amount_cents, frequency,
+                    start_date, end_date, due_date, pay_date, essential,
+                    tax_rate_pct, annual_change_pct, notes, active)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    plan["id"],
+                    record["kind"],
+                    record["name"],
+                    record["category"],
+                    record["amount_cents"],
+                    record["frequency"],
+                    record["start_date"],
+                    record["end_date"],
+                    record["due_date"],
+                    record["pay_date"],
+                    record["essential"],
+                    record["tax_rate_pct"],
+                    record["annual_change_pct"],
+                    record["notes"],
+                    record["active"],
+                ),
+            )
+            item_id = cur.lastrowid
+            imported += 1
+            for override in record["month_overrides"]:
+                conn.execute(
+                    """INSERT OR REPLACE INTO cash_flow_month_overrides
+                       (item_id, month, amount_cents, excluded, paid, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        item_id,
+                        override["month"],
+                        override["amount_cents"],
+                        override["excluded"],
+                        override["paid"],
+                        override["notes"],
+                    ),
+                )
+                overrides_restored += 1
+            for payment in record["payments"]:
+                conn.execute(
+                    """INSERT OR IGNORE INTO cash_flow_item_payments
+                       (item_id, due_date, paid_at)
+                       VALUES (?, ?, COALESCE(?, CURRENT_TIMESTAMP))""",
+                    (item_id, payment["due_date"], payment["paid_at"]),
+                )
+                payments_restored += 1
+
+        # Assumptions ride along only on a restore. A merge is adding entries to
+        # a plan the user is already using, so its horizon and tax stay put.
+        settings_restored = False
+        if mode == "replace" and parsed["settings"]:
+            settings = _cash_flow_settings_for_plan(conn, plan["id"])
+            settings.update(parsed["settings"])
+            conn.execute(
+                """INSERT INTO cash_flow_settings
+                   (plan_id, horizon_years, expense_inflation_pct,
+                    portfolio_tax_pct, starting_cash_cents, surplus_mode,
+                    updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(plan_id) DO UPDATE SET
+                       horizon_years = excluded.horizon_years,
+                       expense_inflation_pct = excluded.expense_inflation_pct,
+                       portfolio_tax_pct = excluded.portfolio_tax_pct,
+                       starting_cash_cents = excluded.starting_cash_cents,
+                       surplus_mode = excluded.surplus_mode,
+                       updated_at = CURRENT_TIMESTAMP""",
+                (
+                    plan["id"],
+                    settings["horizon_years"],
+                    settings["expense_inflation_pct"],
+                    settings["portfolio_tax_pct"],
+                    settings["starting_cash_cents"],
+                    settings["surplus_mode"],
+                ),
+            )
+            settings_restored = True
+
+        _cash_flow_touch_plan(conn, plan["id"])
+        conn.commit()
+    except sqlite3.Error as exc:
+        conn.rollback()
+        conn.close()
+        return jsonify(error=f"Import failed: {exc}"), 500
+    conn.close()
+
+    return jsonify(
+        ok=True,
+        mode=mode,
+        source_format=parsed["kind"],
+        imported=imported,
+        skipped=skipped,
+        replaced=replaced,
+        payments_restored=payments_restored,
+        overrides_restored=overrides_restored,
+        settings_restored=settings_restored,
+    )
 
 
 @app.route("/api/cash-flow/summary", methods=["GET"])

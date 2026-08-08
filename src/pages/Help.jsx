@@ -5981,6 +5981,30 @@ function CashFlowHelp() {
         <li><strong>Save off</strong> - archives the income source without deleting it so it can be restored later.</li>
       </ul>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Backing up and restoring your plan</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Everything you type on this page is stored only in this app&apos;s database, so the
+        <strong> Save or restore this plan</strong> section lets you keep your own copy of it.
+        Exports and imports always apply to the plan for the currently selected account or aggregate.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Download backup (.json)</strong> - the complete plan: every expense and additional-income entry, saved-off entries, paid checkmarks, per-month amount edits, and the saved assumptions. Use this file to restore the plan exactly.</li>
+        <li><strong>Download spreadsheet (.csv)</strong> - the same entries in a spreadsheet you can open in Excel to review or bulk edit. It holds entries only; paid history and assumptions are not included.</li>
+        <li><strong>Due date (recurring) vs Next due</strong> - the spreadsheet has both. <strong>Due date (recurring)</strong> and <strong>Pay by (recurring)</strong> are the dates the bill&apos;s schedule is anchored to, which is what gets saved and restored. <strong>Next due</strong> is the upcoming occurrence as of the moment you exported the file - the same date the expenses table shows - and it is there for reading only. Editing it has no effect on import.</li>
+        <li><strong>Add to this plan</strong> - loads the file alongside what is already saved. An entry that matches one already in the plan (same type, name, frequency, amount, and start date) is skipped instead of duplicated.</li>
+        <li><strong>Replace everything</strong> - deletes the plan&apos;s current entries, paid history, and per-month edits, then loads the file. A .json backup also restores the saved assumptions. You are asked to confirm first.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A hand-edited CSV works too, as long as it has <strong>Type</strong>, <strong>Name</strong>, and <strong>Amount</strong> columns.
+        Extra columns are matched by their headings, dollar signs and commas in amounts are fine, and dates can be written either
+        as 2026-08-15 or 8/15/2026. Any row the importer cannot read is listed by line number and <strong>nothing at all is imported</strong>,
+        so a restore never leaves a half-loaded plan behind.
+      </p>
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Borrowed plans:</strong> if this account borrows its bills and income from another selection, those entries are read-only here.
+        You can still download a backup of what is being modelled, but importing has to be done from the selection that owns the entries.
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Running the sustainability test</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Forward Stress Test section projects whether the selected portfolio can continue paying your bills for the chosen horizon.

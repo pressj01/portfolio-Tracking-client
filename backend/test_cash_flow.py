@@ -1,4 +1,7 @@
+import csv
 import datetime
+import io
+import json
 import sqlite3
 import sys
 import tempfile
@@ -493,6 +496,338 @@ class CashFlowApiTest(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(schedule, [750, 750, 750])
         self.assertEqual(meta["plan_id"], self.plan_id)
+
+    # ── backup: export and import ────────────────────────────────────────────
+
+    def _export(self, export_format="json"):
+        response = self.client.get(
+            f"/api/cash-flow/export?profile_id=1&plan_id={self.plan_id}"
+            f"&format={export_format}"
+        )
+        self.assertEqual(response.status_code, 200)
+        return response
+
+    def _import(self, content, mode="add", filename="backup.json"):
+        return self.client.post(
+            f"/api/cash-flow/import?profile_id=1",
+            data={
+                "plan_id": str(self.plan_id),
+                "mode": mode,
+                "file": (io.BytesIO(content.encode("utf-8")), filename),
+            },
+            content_type="multipart/form-data",
+        )
+
+    def _plan_items(self):
+        return self.client.get(
+            f"/api/cash-flow/items?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["items"]
+
+    def test_json_backup_round_trips_entries_history_and_settings(self):
+        expense = self._add(
+            name="Mortgage",
+            amount=1500,
+            start_date="2026-01-01",
+            due_date="2026-01-05",
+            pay_date="2026-01-03",
+            notes="First of the month",
+        ).get_json()["item"]
+        self._add(
+            kind="income", name="Pension", amount=800, tax_rate_pct=12,
+            essential=False,
+        )
+        saved_off = self._add(name="Boat storage", amount=95).get_json()["item"]
+        saved_off["active"] = False
+        self.client.put(
+            f"/api/cash-flow/items/{saved_off['id']}?profile_id=1", json=saved_off
+        )
+        self.client.put(
+            f"/api/cash-flow/items/{expense['id']}/months/2026-02?profile_id=1",
+            json={"amount": 1400},
+        )
+        # Only the open occurrence can be checked off, so use the one the API
+        # reports rather than a hard-coded date.
+        paid_due_date = expense["current_due_date"]
+        paid = self.client.put(
+            f"/api/cash-flow/items/{expense['id']}/payments/{paid_due_date}?profile_id=1",
+            json={"paid": True},
+        )
+        self.assertEqual(paid.status_code, 200)
+        self.client.put(
+            "/api/cash-flow/settings?profile_id=1",
+            json={
+                "plan_id": self.plan_id,
+                "horizon_years": 12,
+                "expense_inflation_pct": 2.5,
+                "portfolio_tax_pct": 22,
+                "starting_cash": 4200,
+                "surplus_mode": "cash",
+            },
+        )
+
+        document = json.loads(self._export("json").data.decode("utf-8"))
+        self.assertEqual(document["format"], "portfolio-tracker-cash-flow")
+        self.assertEqual(len(document["items"]), 3)
+        self.assertEqual(document["settings"]["horizon_years"], 12)
+        self.assertEqual(document["settings"]["starting_cash"], 4200)
+
+        # Wipe the plan the way a lost database would, then restore the file.
+        for item in self._plan_items():
+            self.client.delete(f"/api/cash-flow/items/{item['id']}?profile_id=1")
+        self.client.put(
+            "/api/cash-flow/settings?profile_id=1",
+            json={
+                "plan_id": self.plan_id,
+                "horizon_years": 20,
+                "expense_inflation_pct": 3,
+                "portfolio_tax_pct": 15,
+                "starting_cash": 0,
+                "surplus_mode": "reinvest",
+            },
+        )
+        self.assertEqual(self._plan_items(), [])
+
+        result = self._import(json.dumps(document), mode="replace")
+        self.assertEqual(result.status_code, 200)
+        body = result.get_json()
+        self.assertEqual(body["imported"], 3)
+        self.assertEqual(body["source_format"], "json")
+        self.assertTrue(body["settings_restored"])
+        self.assertEqual(body["payments_restored"], 1)
+        self.assertEqual(body["overrides_restored"], 1)
+
+        restored = self._plan_items()
+        self.assertEqual(len(restored), 3)
+        by_name = {row["name"]: row for row in restored}
+        self.assertEqual(by_name["Mortgage"]["amount"], 1500)
+        self.assertEqual(by_name["Mortgage"]["due_date"], "2026-01-05")
+        self.assertEqual(by_name["Mortgage"]["pay_date"], "2026-01-03")
+        self.assertEqual(by_name["Mortgage"]["notes"], "First of the month")
+        self.assertEqual(by_name["Pension"]["kind"], "income")
+        self.assertEqual(by_name["Pension"]["tax_rate_pct"], 12)
+        self.assertFalse(by_name["Boat storage"]["active"])
+        self.assertEqual(by_name["Mortgage"]["current_due_date"], paid_due_date)
+        self.assertTrue(by_name["Mortgage"]["paid"])
+
+        settings = self.client.get(
+            f"/api/cash-flow/settings?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["settings"]
+        self.assertEqual(settings["horizon_years"], 12)
+        self.assertEqual(settings["starting_cash"], 4200)
+        self.assertEqual(settings["surplus_mode"], "cash")
+
+        conn = self._get_connection()
+        try:
+            series = expand_plan(conn, self.plan_id, "2026-02", 1)
+        finally:
+            conn.close()
+        self.assertEqual(series[0]["expenses"], 1400)  # the per-month edit came back
+
+    def test_csv_export_round_trips_through_a_spreadsheet_edit(self):
+        self._add(name="Mortgage", amount=1500)
+        self._add(
+            kind="income", name="Pension", amount=800, tax_rate_pct=12,
+            essential=False,
+        )
+        stored = self._add(
+            name="Boat storage", amount=95, frequency="quarterly"
+        ).get_json()["item"]
+        stored["active"] = False
+        self.client.put(
+            f"/api/cash-flow/items/{stored['id']}?profile_id=1", json=stored
+        )
+
+        text = self._export("csv").data.decode("utf-8-sig")
+        rows = {row["Name"]: row for row in csv.DictReader(io.StringIO(text))}
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows["Mortgage"]["Type"], "Expense")
+        self.assertEqual(rows["Mortgage"]["Amount"], "1500.00")
+        self.assertEqual(rows["Mortgage"]["Frequency"], "Monthly")
+        self.assertEqual(rows["Mortgage"]["Status"], "Active")
+        self.assertEqual(rows["Boat storage"]["Status"], "Saved off")
+        self.assertEqual(rows["Boat storage"]["Frequency"], "Quarterly")
+        self.assertEqual(rows["Pension"]["Tax %"], "12")
+        # Income has no bill schedule, so its Next due stays blank.
+        self.assertEqual(rows["Pension"]["Next due"], "")
+
+        edited = text.replace("1500.00", "1625.00")
+        result = self._import(edited, mode="replace", filename="plan.csv")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.get_json()["source_format"], "csv")
+        by_name = {row["name"]: row for row in self._plan_items()}
+        self.assertEqual(by_name["Mortgage"]["amount"], 1625)
+        self.assertEqual(by_name["Pension"]["tax_rate_pct"], 12)
+        self.assertEqual(by_name["Boat storage"]["frequency"], "quarterly")
+        self.assertFalse(by_name["Boat storage"]["active"])
+
+    def test_csv_separates_the_recurring_anchor_from_the_next_occurrence(self):
+        """The two columns answer different questions and only one imports.
+
+        The expenses table shows the upcoming bill under the heading "Due
+        date", while the file has to carry the recurrence anchor or every
+        restore would walk the schedule forward.
+        """
+        created = self._add(
+            name="Mortgage",
+            amount=1500,
+            start_date="2026-01-01",
+            due_date="2026-01-05",
+            pay_date="2026-01-03",
+        ).get_json()["item"]
+        next_due = created["current_due_date"]
+        self.assertNotEqual(next_due, "2026-01-05")  # months have passed
+
+        row = list(csv.DictReader(io.StringIO(
+            self._export("csv").data.decode("utf-8-sig")
+        )))[0]
+        self.assertEqual(row["Due date (recurring)"], "2026-01-05")
+        self.assertEqual(row["Pay by (recurring)"], "2026-01-03")
+        self.assertEqual(row["Next due"], next_due)
+
+        # Next due is a snapshot for reading: editing it changes nothing.
+        edited = (
+            "Type,Name,Amount,Frequency,Due date (recurring),Next due\r\n"
+            "Expense,Mortgage,1500,Monthly,2026-01-05,2029-12-31\r\n"
+        )
+        self.assertEqual(
+            self._import(edited, mode="replace", filename="plan.csv").status_code,
+            200,
+        )
+        restored = self._plan_items()[0]
+        self.assertEqual(restored["due_date"], "2026-01-05")
+        self.assertEqual(restored["current_due_date"], next_due)
+
+    def test_files_exported_before_the_headers_were_renamed_still_import(self):
+        old_style = (
+            "Type,Name,Category,Amount,Frequency,Start date,End date,"
+            "Due date,Pay by,Essential,Tax %,Annual change %,Notes,Status\r\n"
+            "Expense,Mortgage,Housing,1500.00,Monthly,2026-01-01,,"
+            "2026-01-05,2026-01-03,Yes,,,,Active\r\n"
+        )
+        result = self._import(old_style, mode="replace", filename="old.csv")
+        self.assertEqual(result.status_code, 200, result.get_json())
+        restored = self._plan_items()[0]
+        self.assertEqual(restored["due_date"], "2026-01-05")
+        self.assertEqual(restored["pay_date"], "2026-01-03")
+
+    def test_add_mode_keeps_existing_entries_and_skips_duplicates(self):
+        self._add(name="Mortgage", amount=1500)
+        text = self._export("csv").data.decode("utf-8-sig")
+        self._add(name="Groceries", amount=600)
+
+        result = self._import(text, mode="add", filename="plan.csv")
+        self.assertEqual(result.status_code, 200)
+        body = result.get_json()
+        self.assertEqual(body["imported"], 0)
+        self.assertEqual(body["skipped"], 1)
+        self.assertEqual(body["replaced"], 0)
+        names = sorted(row["name"] for row in self._plan_items())
+        self.assertEqual(names, ["Groceries", "Mortgage"])
+
+        added = self._import(
+            text.replace("Mortgage", "Second mortgage"),
+            mode="add",
+            filename="plan.csv",
+        )
+        self.assertEqual(added.get_json()["imported"], 1)
+        self.assertEqual(len(self._plan_items()), 3)
+
+    def test_hand_written_csv_columns_and_us_dates_are_accepted(self):
+        text = (
+            "Type,Name,Amount,Frequency,Due date,Category\r\n"
+            "Expense,Water bill,$62.40,Every two weeks,8/15/2026,Utilities\r\n"
+            "income,Rental,\"1,250\",Monthly,,Rental\r\n"
+        )
+        result = self._import(text, mode="add", filename="bills.csv")
+        self.assertEqual(result.status_code, 200, result.get_json())
+        by_name = {row["name"]: row for row in self._plan_items()}
+        self.assertEqual(by_name["Water bill"]["amount"], 62.4)
+        self.assertEqual(by_name["Water bill"]["frequency"], "biweekly")
+        self.assertEqual(by_name["Water bill"]["due_date"], "2026-08-15")
+        self.assertEqual(by_name["Water bill"]["start_date"], "2026-08-15")
+        self.assertEqual(by_name["Rental"]["kind"], "income")
+        self.assertEqual(by_name["Rental"]["amount"], 1250)
+
+    def test_a_bad_row_imports_nothing_and_names_the_line(self):
+        self._add(name="Mortgage", amount=1500)
+        text = (
+            "Type,Name,Amount,Frequency\r\n"
+            "Expense,Water bill,62.40,Monthly\r\n"
+            "Expense,,25,Monthly\r\n"
+            "Expense,Cable,-30,Every fortnight or so\r\n"
+        )
+        result = self._import(text, mode="replace", filename="bills.csv")
+        self.assertEqual(result.status_code, 400)
+        body = result.get_json()
+        self.assertEqual(len(body["errors"]), 2)
+        # Parse failures and validation failures are found in separate passes
+        # but must be reported in file order.
+        self.assertTrue(body["errors"][0].startswith("Row 3"))
+        self.assertTrue(body["errors"][1].startswith("Row 4"))
+        # The replace must not have run: the existing plan is untouched.
+        self.assertEqual([row["name"] for row in self._plan_items()], ["Mortgage"])
+
+    def test_unreadable_files_are_rejected_with_a_usable_message(self):
+        empty = self._import("   ", filename="plan.csv")
+        self.assertEqual(empty.status_code, 400)
+        self.assertIn("empty", empty.get_json()["error"].lower())
+
+        wrong = self._import(
+            "Ticker,Shares\r\nSCHD,100\r\n", filename="holdings.csv"
+        )
+        self.assertEqual(wrong.status_code, 400)
+        self.assertIn("column", wrong.get_json()["error"])
+
+        broken = self._import("{not json", filename="backup.json")
+        self.assertEqual(broken.status_code, 400)
+        self.assertIn("JSON", broken.get_json()["error"])
+
+    def test_import_into_a_borrowed_plan_is_refused(self):
+        self._add(name="Mortgage", amount=1500)
+        text = self._export("csv").data.decode("utf-8-sig")
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (2, 'Roth')")
+            conn.commit()
+        finally:
+            conn.close()
+        borrower = self.client.get(
+            "/api/cash-flow/plans?profile_id=2"
+        ).get_json()["plans"][0]["id"]
+        linked = self.client.put(
+            f"/api/cash-flow/plans/{borrower}/source?profile_id=2",
+            json={"source_plan_id": self.plan_id},
+        )
+        self.assertEqual(linked.status_code, 200)
+
+        refused = self.client.post(
+            "/api/cash-flow/import?profile_id=2",
+            data={
+                "plan_id": str(borrower),
+                "mode": "replace",
+                "file": (io.BytesIO(text.encode("utf-8")), "plan.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("borrows", refused.get_json()["error"])
+        # Borrowing means the export still shows the entries being modelled.
+        borrowed_export = self.client.get(
+            f"/api/cash-flow/export?profile_id=2&plan_id={borrower}&format=json"
+        )
+        document = json.loads(borrowed_export.data.decode("utf-8"))
+        self.assertEqual(len(document["items"]), 1)
+        self.assertEqual(document["plan"]["borrowed_from_plan_id"], self.plan_id)
+
+    def test_export_filename_and_format_guard(self):
+        response = self._export("csv")
+        disposition = response.headers.get("Content-Disposition", "")
+        self.assertIn("cash-flow-owner-monthly-cash-flow-", disposition)
+        self.assertIn(".csv", disposition)
+        bad = self.client.get(
+            f"/api/cash-flow/export?profile_id=1&plan_id={self.plan_id}&format=pdf"
+        )
+        self.assertEqual(bad.status_code, 400)
 
 
 class SustainabilityMathTest(unittest.TestCase):

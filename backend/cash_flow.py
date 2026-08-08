@@ -6,7 +6,10 @@ silently calculating different monthly spending needs.
 """
 
 import calendar
+import csv
 import datetime
+import io
+import json
 import math
 
 
@@ -832,6 +835,563 @@ def validate_item_payload(data, today=None):
         "notes": notes or None,
         "active": 0 if data.get("active") is False else 1,
     }
+
+
+# ── backup: export and import ────────────────────────────────────────────────
+# A cash-flow plan is hand-entered data that exists nowhere else, so it needs a
+# file the user can keep. Two formats, one parser:
+#
+#   JSON  a complete backup — assumptions, saved-off entries, per-month
+#         overrides and paid history — meant to restore the plan exactly.
+#   CSV   the same entries as a spreadsheet, for reviewing or bulk editing in
+#         Excel. History and assumptions do not survive a CSV round trip.
+
+EXPORT_FORMAT = "portfolio-tracker-cash-flow"
+EXPORT_VERSION = 1
+
+FREQUENCY_LABELS = {
+    "one_time": "One time",
+    "weekly": "Weekly",
+    "biweekly": "Every two weeks",
+    "monthly": "Monthly",
+    "quarterly": "Quarterly",
+    "semiannual": "Twice a year",
+    "annual": "Annual",
+}
+
+# Anything a spreadsheet is likely to hold after a human has edited it.
+FREQUENCY_ALIASES = {
+    "one time": "one_time", "onetime": "one_time", "once": "one_time",
+    "single": "one_time", "one off": "one_time",
+    "weekly": "weekly", "every week": "weekly", "week": "weekly",
+    "every two weeks": "biweekly", "biweekly": "biweekly",
+    "every 2 weeks": "biweekly", "fortnightly": "biweekly",
+    "twice a month": "biweekly",
+    "monthly": "monthly", "every month": "monthly", "month": "monthly",
+    "quarterly": "quarterly", "every quarter": "quarterly",
+    "every 3 months": "quarterly", "quarter": "quarterly",
+    "twice a year": "semiannual", "semiannual": "semiannual",
+    "semi annually": "semiannual", "every six months": "semiannual",
+    "every 6 months": "semiannual", "half yearly": "semiannual",
+    "annual": "annual", "annually": "annual", "yearly": "annual",
+    "every year": "annual", "year": "annual",
+}
+
+# "Due date" and "Pay by" are the recurrence anchors, not the upcoming bill:
+# they are what recreates the schedule on import, and writing the next
+# occurrence into them would walk every bill forward on each restore. The
+# expenses table shows the next occurrence under the same two words, so the
+# headers say which one this is and "Next due" carries the other meaning as a
+# read-only snapshot taken when the file was exported.
+CSV_COLUMNS = [
+    "Type", "Name", "Category", "Amount", "Frequency", "Start date",
+    "End date", "Due date (recurring)", "Pay by (recurring)", "Next due",
+    "Essential", "Tax %", "Annual change %", "Notes", "Status",
+]
+
+# Header spellings accepted on import, compared with punctuation and spaces
+# removed so "Tax %", "tax_rate_pct" and "Tax Rate" all land on one field.
+CSV_FIELD_ALIASES = {
+    "type": "kind", "kind": "kind", "entrytype": "kind",
+    "name": "name", "item": "name", "expense": "name", "description": "name",
+    "label": "name",
+    "category": "category",
+    "amount": "amount", "amountusd": "amount", "cost": "amount",
+    "value": "amount",
+    "frequency": "frequency", "howoften": "frequency", "repeats": "frequency",
+    "startdate": "start_date", "start": "start_date",
+    "activefrom": "start_date", "starts": "start_date",
+    "enddate": "end_date", "end": "end_date", "stopafter": "end_date",
+    "ends": "end_date",
+    # Plain "Due date"/"Pay by" stay mapped so files exported before the
+    # headers were disambiguated still import.
+    "duedate": "due_date", "due": "due_date",
+    "duedaterecurring": "due_date", "recurringduedate": "due_date",
+    "payby": "pay_date", "paydate": "pay_date", "paybydate": "pay_date",
+    "paybyrecurring": "pay_date", "recurringpayby": "pay_date",
+    "essential": "essential", "required": "essential",
+    "tax": "tax_rate_pct", "taxrate": "tax_rate_pct",
+    "taxratepct": "tax_rate_pct", "estimatedtax": "tax_rate_pct",
+    "annualchange": "annual_change_pct",
+    "annualchangepct": "annual_change_pct", "inflation": "annual_change_pct",
+    "notes": "notes", "note": "notes", "memo": "notes",
+    "status": "active", "active": "active",
+}
+
+_TRUE_WORDS = {"1", "y", "yes", "true", "t", "x", "on", "essential"}
+_FALSE_WORDS = {"0", "n", "no", "false", "f", "off", ""}
+_INACTIVE_WORDS = {
+    "saved off", "saved", "inactive", "off", "no", "false", "0",
+    "archived", "paused", "hidden",
+}
+
+
+def _header_key(name):
+    return "".join(ch for ch in str(name or "").lower() if ch.isalnum())
+
+
+def _clean_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _parse_bool_cell(value, field_name):
+    text = _clean_text(value).lower()
+    if text in _TRUE_WORDS:
+        return True
+    if text in _FALSE_WORDS:
+        return False
+    raise ValueError(f"{field_name} must be Yes or No.")
+
+
+def _parse_amount_cell(value):
+    """Read a money cell the way a spreadsheet is likely to have written it."""
+    text = _clean_text(value).replace("$", "").replace(",", "").replace(" ", "")
+    if text.startswith("(") and text.endswith(")"):
+        text = f"-{text[1:-1]}"
+    if not text:
+        raise ValueError("Amount is required.")
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError(f'"{_clean_text(value)}" is not a valid amount.')
+
+
+def _parse_number_cell(value, field_name):
+    text = _clean_text(value).replace("%", "").replace(",", "")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError(f'{field_name} "{_clean_text(value)}" is not a number.')
+
+
+def _normalize_date_cell(value, field_name):
+    """Accept ISO dates plus what Excel writes for a date-formatted cell."""
+    text = _clean_text(value)
+    if not text:
+        return ""
+    text = text.split("T")[0].split(" ")[0]
+    try:
+        return datetime.date.fromisoformat(text).isoformat()
+    except ValueError:
+        pass
+    for pattern in ("%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%d-%b-%Y", "%b %d, %Y"):
+        try:
+            return datetime.datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError(f'{field_name} "{text}" is not a date the importer can read.')
+
+
+def frequency_key(value):
+    """Map a frequency label or key onto a stored key, or None if unknown."""
+    raw = _clean_text(value).lower()
+    if not raw:
+        return "monthly"
+    if raw in FREQUENCIES:
+        return raw
+    compact = " ".join(raw.replace("-", " ").replace("_", " ").split())
+    if compact in FREQUENCIES:
+        return compact
+    return FREQUENCY_ALIASES.get(compact)
+
+
+def _parse_kind_cell(value):
+    text = _clean_text(value).lower().rstrip("s")
+    if not text:
+        raise ValueError("Type is required — use Expense or Income.")
+    if text in {"expense", "bill", "outflow", "spending", "cost"}:
+        return "expense"
+    if text in {"income", "inflow", "earning", "revenue"}:
+        return "income"
+    raise ValueError(f'Type "{_clean_text(value)}" must be Expense or Income.')
+
+
+def _month_overrides_for_item(conn, item_id):
+    rows = conn.execute(
+        """SELECT month, amount_cents, excluded, paid, notes
+           FROM cash_flow_month_overrides
+           WHERE item_id = ? ORDER BY month""",
+        (int(item_id),),
+    ).fetchall()
+    result = []
+    for row in rows:
+        result.append(
+            {
+                "month": row["month"],
+                "amount": (
+                    cents_to_money(row["amount_cents"])
+                    if row["amount_cents"] is not None
+                    else None
+                ),
+                "excluded": bool(row["excluded"]),
+                "paid": bool(_item_value(row, "paid", 0)),
+                "notes": row["notes"] or "",
+            }
+        )
+    return result
+
+
+def _payments_for_item(conn, item_id):
+    rows = conn.execute(
+        """SELECT due_date, paid_at FROM cash_flow_item_payments
+           WHERE item_id = ? ORDER BY due_date""",
+        (int(item_id),),
+    ).fetchall()
+    return [
+        {"due_date": row["due_date"], "paid_at": row["paid_at"]} for row in rows
+    ]
+
+
+def build_plan_export(conn, plan_id, *, scope_label=None):
+    """Everything needed to rebuild one plan: entries, history, assumptions."""
+    plan = conn.execute(
+        "SELECT * FROM cash_flow_plans WHERE id = ?", (int(plan_id),)
+    ).fetchone()
+    if plan is None:
+        raise ValueError("Cash-flow plan not found.")
+
+    # A borrowed plan shows the source's entries on screen, so that is what a
+    # backup of it has to contain.
+    items_plan_id = resolve_source_plan_id(conn, plan["id"])
+    rows = conn.execute(
+        """SELECT * FROM cash_flow_items
+           WHERE plan_id = ?
+           ORDER BY kind, active DESC, name, id""",
+        (items_plan_id,),
+    ).fetchall()
+
+    items = []
+    for row in rows:
+        item = serialize_item(row)
+        for field in ("id", "plan_id", "created_at", "updated_at"):
+            item.pop(field, None)
+        item["month_overrides"] = _month_overrides_for_item(conn, row["id"])
+        item["payments"] = _payments_for_item(conn, row["id"])
+        items.append(item)
+
+    settings = settings_for_plan(conn, plan["id"])
+    settings.pop("plan_id", None)
+    settings.pop("starting_cash_cents", None)
+
+    return {
+        "format": EXPORT_FORMAT,
+        "version": EXPORT_VERSION,
+        "exported_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "amounts_are": "the amounts entered on the Cash Flow screen",
+        "plan": {
+            "name": plan["name"],
+            "scope_type": plan["scope_type"],
+            "scope_id": plan["scope_id"],
+            "scope_label": scope_label,
+            "borrowed_from_plan_id": (
+                items_plan_id if items_plan_id != plan["id"] else None
+            ),
+        },
+        "settings": settings,
+        "items": items,
+    }
+
+
+def items_to_csv(items, today=None):
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(CSV_COLUMNS)
+    for item in items or []:
+        kind = str(item.get("kind") or "expense")
+        # Blank rather than "Complete" for a finished or non-recurring entry:
+        # a word in a date column breaks sorting in a spreadsheet.
+        next_due = next_bill_schedule(item, today=today)["due_date"] or ""
+        writer.writerow(
+            [
+                "Expense" if kind == "expense" else "Income",
+                item.get("name") or "",
+                item.get("category") or "",
+                f"{float(item.get('amount') or 0):.2f}",
+                FREQUENCY_LABELS.get(
+                    item.get("frequency"), item.get("frequency") or ""
+                ),
+                item.get("start_date") or "",
+                item.get("end_date") or "",
+                item.get("due_date") or "",
+                item.get("pay_date") or "",
+                next_due,
+                "Yes" if item.get("essential") else "No",
+                (
+                    ""
+                    if kind != "income" or item.get("tax_rate_pct") is None
+                    else f"{float(item['tax_rate_pct']):g}"
+                ),
+                (
+                    ""
+                    if item.get("annual_change_pct") is None
+                    else f"{float(item['annual_change_pct']):g}"
+                ),
+                item.get("notes") or "",
+                "Active" if item.get("active", True) else "Saved off",
+            ]
+        )
+    return buffer.getvalue()
+
+
+def _row_to_entry(raw_row, label):
+    """Turn one spreadsheet row into a payload validate_item_payload accepts."""
+    values = {}
+    for header, cell in (raw_row or {}).items():
+        field = CSV_FIELD_ALIASES.get(_header_key(header))
+        if field and field not in values:
+            values[field] = cell
+
+    if "name" not in values and "kind" not in values:
+        raise ValueError("no recognizable columns.")
+
+    kind = _parse_kind_cell(values.get("kind", "expense"))
+    frequency = frequency_key(values.get("frequency", "monthly"))
+    if frequency is None:
+        raise ValueError(f'Frequency "{_clean_text(values.get("frequency"))}" is not one of the supported options.')
+
+    entry = {
+        "kind": kind,
+        "name": _clean_text(values.get("name")),
+        "category": _clean_text(values.get("category")),
+        "amount": _parse_amount_cell(values.get("amount")),
+        "frequency": frequency,
+        "start_date": _normalize_date_cell(values.get("start_date"), "Start date"),
+        "end_date": _normalize_date_cell(values.get("end_date"), "End date"),
+        "due_date": _normalize_date_cell(values.get("due_date"), "Due date"),
+        "pay_date": _normalize_date_cell(values.get("pay_date"), "Pay by"),
+        "notes": _clean_text(values.get("notes")),
+        "essential": (
+            _parse_bool_cell(values.get("essential"), "Essential")
+            if _clean_text(values.get("essential"))
+            else kind == "expense"
+        ),
+        "tax_rate_pct": _parse_number_cell(values.get("tax_rate_pct"), "Tax %"),
+        "annual_change_pct": _parse_number_cell(
+            values.get("annual_change_pct"), "Annual change %"
+        ),
+        "active": True,
+        "_label": label,
+    }
+
+    status = _clean_text(values.get("active")).lower()
+    if status:
+        entry["active"] = status not in _INACTIVE_WORDS
+
+    # A start date is optional in the file: an expense can anchor on its due
+    # date, and validate_item_payload falls back to today for the rest.
+    if not entry["start_date"] and entry["due_date"]:
+        entry["start_date"] = entry["due_date"]
+    for field in ("start_date", "end_date", "due_date", "pay_date"):
+        if not entry[field]:
+            entry[field] = None
+    return entry
+
+
+def _parse_csv_document(text):
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return {"kind": "csv", "items": [], "settings": None, "errors": []}
+    recognized = [
+        name for name in reader.fieldnames
+        if CSV_FIELD_ALIASES.get(_header_key(name))
+    ]
+    if not recognized:
+        raise ValueError(
+            "That spreadsheet has no Type, Name or Amount column. Export a "
+            "copy from this screen to see the expected columns."
+        )
+
+    entries, errors = [], []
+    for index, raw_row in enumerate(reader, start=2):
+        if not any(_clean_text(cell) for cell in raw_row.values()):
+            continue
+        label = f"Row {index}"
+        try:
+            entries.append(_row_to_entry(raw_row, label))
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+    return {"kind": "csv", "items": entries, "settings": None, "errors": errors}
+
+
+def _clean_history_entries(raw_overrides, raw_payments):
+    """Keep only per-month edits and paid marks that still parse.
+
+    History is a convenience, not the plan itself, so a damaged entry is
+    dropped rather than failing a restore that would otherwise succeed.
+    """
+    overrides = []
+    for row in raw_overrides or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            month = parse_month(row.get("month")).strftime("%Y-%m")
+        except ValueError:
+            continue
+        amount_cents = None
+        if row.get("amount") not in (None, ""):
+            try:
+                amount_cents = money_to_cents(row.get("amount"))
+            except ValueError:
+                continue
+        overrides.append(
+            {
+                "month": month,
+                "amount_cents": amount_cents,
+                "excluded": 1 if row.get("excluded") else 0,
+                "paid": 1 if row.get("paid") else 0,
+                "notes": _clean_text(row.get("notes")) or None,
+            }
+        )
+
+    payments = []
+    for row in raw_payments or []:
+        due_date = row.get("due_date") if isinstance(row, dict) else row
+        try:
+            due_date = parse_date(due_date, "Paid date", required=True).isoformat()
+        except ValueError:
+            continue
+        paid_at = _clean_text(row.get("paid_at")) if isinstance(row, dict) else ""
+        payments.append({"due_date": due_date, "paid_at": paid_at or None})
+    return overrides, payments
+
+
+def _clean_import_settings(raw):
+    """Assumptions from a backup, bounded the same way the settings API is."""
+    if not isinstance(raw, dict):
+        return None
+    result = {}
+    try:
+        if raw.get("horizon_years") not in (None, ""):
+            result["horizon_years"] = max(1, min(50, int(float(raw["horizon_years"]))))
+        if raw.get("expense_inflation_pct") not in (None, ""):
+            result["expense_inflation_pct"] = max(
+                -10.0, min(30.0, float(raw["expense_inflation_pct"]))
+            )
+        if raw.get("portfolio_tax_pct") not in (None, ""):
+            result["portfolio_tax_pct"] = max(
+                0.0, min(95.0, float(raw["portfolio_tax_pct"]))
+            )
+        if raw.get("starting_cash") not in (None, ""):
+            result["starting_cash_cents"] = money_to_cents(
+                raw["starting_cash"], "Starting cash"
+            )
+        elif raw.get("starting_cash_cents") not in (None, ""):
+            result["starting_cash_cents"] = max(
+                0, int(float(raw["starting_cash_cents"]))
+            )
+    except (TypeError, ValueError):
+        return None
+    mode = _clean_text(raw.get("surplus_mode")).lower()
+    if mode in {"cash", "reinvest"}:
+        result["surplus_mode"] = mode
+    return result or None
+
+
+def _parse_json_document(text):
+    try:
+        document = json.loads(text)
+    except (TypeError, ValueError):
+        raise ValueError("That file is not readable JSON.")
+
+    if isinstance(document, list):
+        raw_items, raw_settings = document, None
+    elif isinstance(document, dict):
+        raw_items = document.get("items")
+        if raw_items is None:
+            raw_items = document.get("expenses")
+        raw_settings = document.get("settings")
+    else:
+        raise ValueError("That file does not contain a cash-flow backup.")
+
+    if not isinstance(raw_items, list):
+        raise ValueError(
+            "That backup has no entries list. Use a file exported from the "
+            "Cash Flow screen."
+        )
+
+    entries, errors = [], []
+    for index, raw in enumerate(raw_items, start=1):
+        name = _clean_text(raw.get("name")) if isinstance(raw, dict) else ""
+        label = f"Entry {index}" + (f' ("{name}")' if name else "")
+        if not isinstance(raw, dict):
+            errors.append(f"{label}: entry is not a record.")
+            continue
+        frequency = frequency_key(raw.get("frequency", "monthly"))
+        if frequency is None:
+            errors.append(
+                f'{label}: frequency "{_clean_text(raw.get("frequency"))}" is not supported.'
+            )
+            continue
+        amount = raw.get("amount")
+        if amount in (None, "") and raw.get("amount_cents") not in (None, ""):
+            amount = cents_to_money(raw.get("amount_cents"))
+        overrides, payments = _clean_history_entries(
+            raw.get("month_overrides"), raw.get("payments")
+        )
+        entries.append(
+            {
+                **raw,
+                "amount": amount,
+                "frequency": frequency,
+                "active": raw.get("active", True) is not False,
+                "month_overrides": overrides,
+                "payments": payments,
+                "_label": label,
+            }
+        )
+    return {
+        "kind": "json",
+        "items": entries,
+        "settings": _clean_import_settings(raw_settings),
+        "errors": errors,
+    }
+
+
+def parse_import_document(raw):
+    """Read a backup file. Raises ValueError when nothing can be read at all."""
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            text = bytes(raw).decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = bytes(raw).decode("latin-1")
+    else:
+        text = str(raw or "")
+    if not text.strip():
+        raise ValueError("That file is empty.")
+    if text.lstrip()[:1] in {"{", "["}:
+        return _parse_json_document(text)
+    return _parse_csv_document(text)
+
+
+def validate_import_entries(entries, today=None):
+    """Validate parsed entries with the same rules the entry form uses."""
+    prepared, errors = [], []
+    for index, entry in enumerate(entries or [], start=1):
+        label = entry.get("_label") or f"Entry {index}"
+        try:
+            record = validate_item_payload(entry, today=today)
+        except ValueError as exc:
+            errors.append(f"{label}: {exc}")
+            continue
+        record["month_overrides"] = entry.get("month_overrides") or []
+        record["payments"] = entry.get("payments") or []
+        prepared.append(record)
+    return prepared, errors
+
+
+def import_signature(record):
+    """Identify the same entry twice so a merge does not duplicate it."""
+    return (
+        str(record.get("kind") or ""),
+        str(record.get("name") or "").strip().lower(),
+        str(record.get("frequency") or ""),
+        int(record.get("amount_cents") or 0),
+        str(record.get("start_date") or ""),
+    )
 
 
 def _weekly_occurrences(anchor, month_start, month_end, interval_days, end_date):

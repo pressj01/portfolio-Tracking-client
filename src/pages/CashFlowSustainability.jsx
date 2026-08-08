@@ -53,7 +53,6 @@ function shiftIsoDate(value, days) {
 }
 
 function blankItem(kind, month = currentMonth()) {
-  const dueDate = `${month}-01`
   return {
     kind,
     name: '',
@@ -62,8 +61,11 @@ function blankItem(kind, month = currentMonth()) {
     frequency: 'monthly',
     start_date: `${month}-01`,
     end_date: '',
-    due_date: kind === 'expense' ? dueDate : '',
-    pay_date: kind === 'expense' ? shiftIsoDate(dueDate, -2) : '',
+    // Deliberately blank. Defaulting the due date to the 1st of the viewed
+    // month meant every bill anchored to the 1st unless someone noticed and
+    // changed it, which then drives every future occurrence and pay-by date.
+    due_date: '',
+    pay_date: '',
     essential: kind === 'expense',
     tax_rate_pct: kind === 'income' ? 0 : '',
     annual_change_pct: '',
@@ -116,7 +118,10 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
 
   return (
     <form className="cf-item-editor" onSubmit={onSubmit}>
-      <div className="cf-quick-fields">
+      {/* Due date sits out here rather than in the details drawer: it anchors
+          every future occurrence, and behind a collapsed toggle it silently
+          kept whatever the view month defaulted to. */}
+      <div className={`cf-quick-fields${kind === 'expense' ? ' cf-has-due' : ''}`}>
         <label className="cf-grow">
           <span>{kind === 'expense' ? 'What do you spend money on?' : 'Income source'}</span>
           <input
@@ -148,6 +153,12 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
             {FREQUENCIES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
         </label>
+        {kind === 'expense' && (
+          <label>
+            <span>Due date</span>
+            <input type="date" value={value.due_date || ''} onInput={e => setDueDate(e.target.value)} required />
+          </label>
+        )}
         <label>
           <span>Category <em>optional</em></span>
           <input
@@ -175,17 +186,14 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
 
       {detailsOpen && (
         <div className="cf-detail-fields">
+          {/* Pay by is not `required`: it fills itself in from the due date,
+              and a blank required field inside the collapsed drawer would
+              block submit with an error the browser cannot even show. */}
           {kind === 'expense' && (
-            <>
-              <label>
-                <span>Due date</span>
-                <input type="date" value={value.due_date || ''} onInput={e => setDueDate(e.target.value)} required />
-              </label>
-              <label>
-                <span>Pay by <em>defaults 2 days early</em></span>
-                <input type="date" value={value.pay_date || ''} onInput={e => set('pay_date', e.target.value)} required />
-              </label>
-            </>
+            <label>
+              <span>Pay by <em>defaults 2 days early</em></span>
+              <input type="date" value={value.pay_date || ''} onInput={e => set('pay_date', e.target.value)} />
+            </label>
           )}
           <label>
             <span>{value.frequency === 'one_time' ? 'Active on' : 'Active from'}</span>
@@ -337,6 +345,139 @@ function ItemTable({
   )
 }
 
+function BackupPanel({
+  itemCount,
+  borrowed,
+  busy,
+  note,
+  errors,
+  mode,
+  onModeChange,
+  fileName,
+  onFileChange,
+  onExport,
+  onImport,
+  inputRef,
+  disabled,
+}) {
+  return (
+    <section className="cf-entry-panel cf-backup-panel">
+      <div className="cf-section-head">
+        <div>
+          <span className="cf-section-kicker">Backup</span>
+          <h2>Save or restore this plan</h2>
+          <small className="cf-rollover-note">
+            Every expense you type in lives only in this app&apos;s database. Download a copy after you change anything you would not want to re-enter.
+          </small>
+        </div>
+        <strong>{itemCount} saved {itemCount === 1 ? 'entry' : 'entries'}</strong>
+      </div>
+
+      <div className="cf-backup-grid">
+        <div className="cf-backup-card">
+          <h3>Download a copy</h3>
+          <div className="cf-backup-actions">
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => onExport('json')}
+              disabled={disabled || Boolean(busy)}
+            >
+              {busy === 'json' ? 'Preparing...' : 'Download backup (.json)'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => onExport('csv')}
+              disabled={disabled || Boolean(busy)}
+            >
+              {busy === 'csv' ? 'Preparing...' : 'Download spreadsheet (.csv)'}
+            </button>
+          </div>
+          <ul className="cf-backup-facts">
+            <li>
+              <b>.json</b> is the full backup: expenses, additional income, saved-off entries,
+              paid checkmarks, per-month edits and the assumptions below.
+            </li>
+            <li>
+              <b>.csv</b> opens in Excel for reviewing or bulk editing. Entries only—paid history
+              and assumptions are not in it.
+            </li>
+          </ul>
+        </div>
+
+        <form className="cf-backup-card" onSubmit={onImport}>
+          <h3>Restore from a file</h3>
+          {borrowed ? (
+            <p className="cf-backup-blocked">
+              This plan borrows its entries from another selection, so they are read-only here.
+              Switch to that selection to import.
+            </p>
+          ) : (
+            <>
+              <label className="cf-backup-file">
+                <span>Backup file <em>.json or .csv</em></span>
+                <input
+                  ref={inputRef}
+                  type="file"
+                  accept=".json,.csv,application/json,text/csv"
+                  onChange={onFileChange}
+                  disabled={disabled || Boolean(busy)}
+                />
+              </label>
+              <div className="cf-backup-modes">
+                <label>
+                  <input
+                    type="radio"
+                    name="cf-import-mode"
+                    value="add"
+                    checked={mode === 'add'}
+                    onChange={() => onModeChange('add')}
+                  />
+                  <span>
+                    <b>Add to this plan</b>
+                    Keeps what is here. Entries that already match are skipped.
+                  </span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="cf-import-mode"
+                    value="replace"
+                    checked={mode === 'replace'}
+                    onChange={() => onModeChange('replace')}
+                  />
+                  <span>
+                    <b>Replace everything</b>
+                    Deletes this plan&apos;s entries first, then loads the file. A .json backup also
+                    restores the saved assumptions.
+                  </span>
+                </label>
+              </div>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={disabled || Boolean(busy) || !fileName}
+              >
+                {busy === 'import' ? 'Importing...' : 'Import file'}
+              </button>
+              {fileName && <small className="cf-backup-filename">Selected: {fileName}</small>}
+            </>
+          )}
+        </form>
+      </div>
+
+      {note && <div className="cf-backup-note">{note}</div>}
+      {errors.length > 0 && (
+        <div className="cf-backup-errors">
+          <strong>Nothing was imported. Fix these entries and try again:</strong>
+          <ul>{errors.map((message, index) => <li key={index}>{message}</li>)}</ul>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function MoveCashFlowItemDialog({
   item,
   profiles,
@@ -464,6 +605,12 @@ export default function CashFlowSustainability() {
   const [moveItem, setMoveItem] = useState(null)
   const [moveTargetDestination, setMoveTargetDestination] = useState('')
   const [movingItem, setMovingItem] = useState(false)
+  const [backupBusy, setBackupBusy] = useState('')
+  const [backupNote, setBackupNote] = useState('')
+  const [backupErrors, setBackupErrors] = useState([])
+  const [importMode, setImportMode] = useState('add')
+  const [importFileName, setImportFileName] = useState('')
+  const importInputRef = useRef(null)
 
   const apiJson = useCallback(async (path, options) => {
     const response = await pf(path, options)
@@ -564,16 +711,10 @@ export default function CashFlowSustainability() {
   useEffect(() => {
     if (planId && planScope === profileQueryString) {
       loadSummary(planId, month).catch(err => setError(err.message))
-      setExpenseDraft(prev => {
-        if (prev.id) return prev
-        const dueDate = `${month}-01`
-        return {
-          ...prev,
-          start_date: dueDate,
-          due_date: dueDate,
-          pay_date: shiftIsoDate(dueDate, -2),
-        }
-      })
+      // Only "Active from" follows the viewed month. Due date stays whatever
+      // was typed — or empty — so switching months cannot quietly re-anchor a
+      // bill to the 1st.
+      setExpenseDraft(prev => prev.id ? prev : { ...prev, start_date: `${month}-01` })
       setIncomeDraft(prev => prev.id ? prev : { ...prev, start_date: `${month}-01` })
     }
   }, [month, planId, loadSummary])
@@ -698,6 +839,89 @@ export default function CashFlowSustainability() {
     if (item.kind === 'expense') setExpenseDraft({ ...item })
     else setIncomeDraft({ ...item })
     window.scrollTo({ top: 300, behavior: 'smooth' })
+  }
+
+  const clearImportFile = () => {
+    if (importInputRef.current) importInputRef.current.value = ''
+    setImportFileName('')
+  }
+
+  const downloadBackup = async format => {
+    if (!planId) return
+    setBackupBusy(format)
+    setBackupNote('')
+    setBackupErrors([])
+    setError('')
+    try {
+      const response = await pf(`/api/cash-flow/export?plan_id=${planId}&format=${format}`)
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Export failed')
+      }
+      const disposition = response.headers.get('Content-Disposition') || ''
+      const match = disposition.match(/filename=([^;]+)/)
+      const filename = match
+        ? match[1].trim().replace(/^"|"$/g, '')
+        : `cash-flow-backup.${format}`
+      const blob = await response.blob()
+      const link = document.createElement('a')
+      link.href = URL.createObjectURL(blob)
+      link.download = filename
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(link.href)
+      setBackupNote(`Saved ${filename} to your downloads folder.`)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBackupBusy('')
+    }
+  }
+
+  const importBackup = async event => {
+    event.preventDefault()
+    const file = importInputRef.current?.files?.[0]
+    if (!planId || !file) return
+    if (importMode === 'replace') {
+      const confirmed = await dialog.confirm(
+        `Replace this plan with "${file.name}"?\n\n` +
+        `${items.length} ${items.length === 1 ? 'entry' : 'entries'} in this plan—including saved-off entries, ` +
+        'paid history and per-month edits—will be deleted first, then the file is loaded. This cannot be undone.',
+      )
+      if (!confirmed) return
+    }
+    setBackupBusy('import')
+    setBackupNote('')
+    setBackupErrors([])
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('plan_id', String(planId))
+      form.append('mode', importMode)
+      const response = await pf('/api/cash-flow/import', { method: 'POST', body: form })
+      const data = await response.json()
+      if (!response.ok || data.error) {
+        setBackupErrors(data.errors || [])
+        throw new Error(data.error || 'Import failed')
+      }
+      clearImportFile()
+      const parts = [`Imported ${data.imported} ${data.imported === 1 ? 'entry' : 'entries'} from ${file.name}.`]
+      if (data.replaced) parts.push(`${data.replaced} previous ${data.replaced === 1 ? 'entry was' : 'entries were'} replaced.`)
+      if (data.skipped) parts.push(`${data.skipped} already in this plan ${data.skipped === 1 ? 'was' : 'were'} skipped.`)
+      if (data.payments_restored) parts.push(`${data.payments_restored} paid ${data.payments_restored === 1 ? 'mark' : 'marks'} restored.`)
+      if (data.overrides_restored) parts.push(`${data.overrides_restored} per-month ${data.overrides_restored === 1 ? 'edit' : 'edits'} restored.`)
+      if (data.settings_restored) parts.push('Saved assumptions restored.')
+      setBackupNote(parts.join(' '))
+      setExpenseDraft(blankItem('expense', month))
+      setIncomeDraft(blankItem('income', month))
+      await loadPlanData(planId)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBackupBusy('')
+    }
   }
 
   const saveSettings = async () => {
@@ -1034,6 +1258,22 @@ export default function CashFlowSustainability() {
           </>
         )}
       </section>
+
+      <BackupPanel
+        itemCount={items.length}
+        borrowed={borrowed}
+        busy={backupBusy}
+        note={backupNote}
+        errors={backupErrors}
+        mode={importMode}
+        onModeChange={setImportMode}
+        fileName={importFileName}
+        onFileChange={event => setImportFileName(event.target.files?.[0]?.name || '')}
+        onExport={downloadBackup}
+        onImport={importBackup}
+        inputRef={importInputRef}
+        disabled={!planId || loading}
+      />
 
       <MoveCashFlowItemDialog
         item={moveItem}
