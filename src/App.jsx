@@ -71,6 +71,7 @@ import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
 import OptionDashboard from './pages/OptionDashboard'
+import OptionProbabilityCalculator from './pages/OptionProbabilityCalculator'
 import OptionTrades from './pages/OptionTrades'
 import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
@@ -250,6 +251,7 @@ function App() {
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
         <Route path="/option-dashboard" element={<OptionDashboard />} />
+        <Route path="/option-probability-calculator" element={<OptionProbabilityCalculator />} />
         <Route path="/option-trades" element={<OptionTrades />} />
         <Route path="/option-trades/import" element={<OptionTradeImport />} />
         <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
@@ -331,6 +333,7 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Options">
         <NavLink to="/option-dashboard">Options Dashboard</NavLink>
+        <NavLink to="/option-probability-calculator">Probability Calculator</NavLink>
         <NavLink to="/option-trades">Option Trades</NavLink>
         <NavLink to="/option-trades/import">Import Option Trades</NavLink>
         <NavLink to="/options">Strategy Lab</NavLink>
