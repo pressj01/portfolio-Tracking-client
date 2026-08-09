@@ -1,10 +1,22 @@
-# Portfolio Tracking Client v1.33.11
+# Portfolio Tracking Client v1.33.12
 
 Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Mac.
 
 This release carries forward everything shipped after v1.32.1, adds a day-by-day record of what your holdings paid, feeds your saved budget into the retirement models, settles option trades a broker export can never close, and makes the cost-basis correction from v1.33.5 something you can actually run and finish. The Windows installer is code signed.
 
-v1.33.6 was prepared but never published, so everything described for it is included here and is new to anyone coming from v1.33.5. v1.33.8 corrected the realized total on the Option Trades summary, which reported only the current year while every other card on it counted every trade. v1.33.9 adds a backup and restore for your cash-flow plan, so the expenses you typed in by hand can be saved to a file and loaded back. v1.33.10 makes Retirement Readiness and Cash Flow & Sustainability report the same monthly expenses, and stops the plan reporting more than the bills you entered. v1.33.11 adds a Put / Call Condor Scanner and a full dividend-payment Month calendar that follows the selected account or aggregate, uses imported transaction history when available, and still works when no transactions have been imported.
+v1.33.6 was prepared but never published, so everything described for it is included here and is new to anyone coming from v1.33.5. v1.33.8 corrected the realized total on the Option Trades summary, which reported only the current year while every other card on it counted every trade. v1.33.9 adds a backup and restore for your cash-flow plan, so the expenses you typed in by hand can be saved to a file and loaded back. v1.33.10 makes Retirement Readiness and Cash Flow & Sustainability report the same monthly expenses, and stops the plan reporting more than the bills you entered. v1.33.11 adds a Put / Call Condor Scanner and a full dividend-payment Month calendar that follows the selected account or aggregate, uses imported transaction history when available, and still works when no transactions have been imported. v1.33.12 carries that same accurate pay-date pipeline into the rest of the application, so the Dashboard, holdings, analysis, Action Center, refresh, and accrual views agree with the calendar.
+
+## New in v1.33.12
+
+### One Dividend Pay-Date Pipeline Everywhere
+
+The pay date shown in the Month calendar is now the same pay date used throughout the application.
+
+- **Imported dividend history drives recurring dates.** Genuine payment transactions establish the schedule for each ticker and account, including weekly, ordinal-weekday, and month-end patterns. Snowball, broker, generic, and portfolio-export dividend payments all count as actual history.
+- **Every screen agrees.** Dashboard upcoming dividends, holdings tables, Manage Holdings, Common Info, Dividend Analysis, Action Center, refresh results, and accrual summaries now consume the same resolved payment date.
+- **Confirmed dates stay authoritative.** Issuer-published and otherwise confirmed dates are never replaced by an inferred transaction pattern.
+- **No-history users keep the prior behavior.** If no usable dividend payments have been imported, the existing saved schedule and frequency estimator remain the fallback, with estimated dates clearly marked.
+- **Imports switch immediately.** Importing the first genuine dividend payment invalidates the schedule cache, so the next request uses the new history-aware projection without restarting the desktop app.
 
 ## New in v1.33.11
 
