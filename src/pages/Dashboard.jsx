@@ -1838,7 +1838,14 @@ export default function Dashboard() {
     { id: 'div_frequency', label: 'Freq', name: 'Dividend Frequency', sortKey: 'div_frequency', group: 'Current', defaultVisible: true, align: 'center', tip: 'Dividend payment frequency (M=Monthly, Q=Quarterly, W=Weekly)', render: h => <td style={{ textAlign: 'center' }}>{textOrDash(h.div_frequency)}</td> },
     { id: 'purchase_date', label: 'Purchased', name: 'Date Purchased', sortKey: 'purchase_date', group: 'Current', defaultVisible: true, render: h => <td>{dateOrDash(h.purchase_date)}</td> },
     { id: 'ex_div_date', label: 'Ex-Div', name: 'Ex-Dividend Date', sortKey: '_ex_div_sort', group: 'Current', defaultVisible: true, tip: 'Ex-dividend date — own the shares before this date to receive the dividend', render: h => <td style={{ whiteSpace: 'nowrap' }}>{exPayDisplay(h.ex_div_date)}</td> },
-    { id: 'div_pay_date', label: 'Pay Date', name: 'Dividend Pay Date', sortKey: '_pay_date_sort', group: 'Current', defaultVisible: true, tip: 'Dividend payment (pay) date', render: h => <td style={{ whiteSpace: 'nowrap' }}>{exPayDisplay(h.div_pay_date)}</td> },
+    { id: 'div_pay_date', label: 'Pay Date', name: 'Dividend Pay Date', sortKey: '_pay_date_sort', group: 'Current', defaultVisible: true, tip: 'Dividend payment (pay) date resolved from confirmed schedules, imported transaction patterns, or the saved schedule fallback', render: h => (
+      <td
+        style={{ whiteSpace: 'nowrap' }}
+        title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}
+      >
+        {h.div_pay_date_estimated ? '~' : ''}{exPayDisplay(h.div_pay_date)}
+      </td>
+    ) },
     { id: 'quantity', label: 'Qty', name: 'Quantity', sortKey: 'quantity', group: 'Current', defaultVisible: true, align: 'right', tip: 'Number of shares held', render: h => <td style={{ textAlign: 'right' }}>{quantityOrDash(h.quantity)}</td> },
     { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
     { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },

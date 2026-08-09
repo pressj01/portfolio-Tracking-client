@@ -97,7 +97,10 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (!holding) return EMPTY_HOLDING
     const f = {}
     for (const key of Object.keys(EMPTY_HOLDING)) {
-      f[key] = holding[key] != null ? holding[key] : ''
+      const value = key === 'div_pay_date' && holding.stored_div_pay_date != null
+        ? holding.stored_div_pay_date
+        : holding[key]
+      f[key] = value != null ? value : ''
     }
     // An existing holding keeps a blank frequency as "no distributions".
     // Only a brand-new holding falls back to the EMPTY_HOLDING default.
@@ -2229,7 +2232,9 @@ export default function ManageHoldings() {
                   <td>{fmtM(h.div, 4)}</td>
                   <td>{h.div_frequency || '-'}</td>
                   <td>{h.ex_div_date || '-'}</td>
-                  <td>{h.div_pay_date || '-'}</td>
+                  <td title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}>
+                    {h.div_pay_date_estimated ? '~' : ''}{h.div_pay_date || '-'}
+                  </td>
                   <td style={{ textAlign: 'center' }}>
                     <input
                       type="checkbox"

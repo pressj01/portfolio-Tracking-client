@@ -227,248 +227,6 @@ function shiftMonthKey(key, amount) {
   return monthKey(date)
 }
 
-function shiftFrequency(date, freq, direction) {
-  const f = String(freq || '').toUpperCase()
-  const next = new Date(date)
-  if (f === '52' || f === 'W') {
-    next.setDate(next.getDate() + (7 * direction))
-    return next
-  }
-  if (f === 'Q') return addMonths(next, 3 * direction)
-  if (f === 'SA' || f === 'S') return addMonths(next, 6 * direction)
-  if (f === 'A') return addMonths(next, 12 * direction)
-  return addMonths(next, direction)
-}
-
-function nextBusinessDate(date) {
-  const next = new Date(date)
-  if (next.getDay() === 6) next.setDate(next.getDate() + 2)
-  if (next.getDay() === 0) next.setDate(next.getDate() + 1)
-  return next
-}
-
-function previousBusinessDate(date) {
-  const previous = new Date(date)
-  if (previous.getDay() === 6) previous.setDate(previous.getDate() - 1)
-  if (previous.getDay() === 0) previous.setDate(previous.getDate() - 2)
-  return previous
-}
-
-function lastBusinessDate(year, monthIndex) {
-  return previousBusinessDate(new Date(year, monthIndex + 1, 0))
-}
-
-function shiftBusinessDays(date, amount) {
-  const shifted = new Date(date)
-  const direction = amount < 0 ? -1 : 1
-  let remaining = Math.abs(amount)
-  while (remaining > 0) {
-    shifted.setDate(shifted.getDate() + direction)
-    if (shifted.getDay() !== 0 && shifted.getDay() !== 6) remaining -= 1
-  }
-  return shifted
-}
-
-function median(values) {
-  if (!values.length) return null
-  const sorted = [...values].sort((a, b) => a - b)
-  const middle = Math.floor(sorted.length / 2)
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
-}
-
-function mode(values) {
-  const counts = new Map()
-  values.forEach(value => counts.set(value, (counts.get(value) || 0) + 1))
-  return [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0]
-}
-
-function daysBetween(a, b) {
-  return Math.round((b.getTime() - a.getTime()) / 86400000)
-}
-
-function businessDaysAfter(date) {
-  const end = new Date(date.getFullYear(), date.getMonth() + 1, 0)
-  let count = 0
-  const cursor = new Date(date)
-  while (cursor < end) {
-    cursor.setDate(cursor.getDate() + 1)
-    if (cursor.getDay() !== 0 && cursor.getDay() !== 6) count += 1
-  }
-  return count
-}
-
-function inferredFrequency(history, fallback) {
-  const fallbackFreq = String(fallback || '').toUpperCase()
-  if (history.length < 2) return fallbackFreq || 'M'
-  const gaps = history.slice(1).map((date, index) => daysBetween(history[index], date)).filter(gap => gap > 0)
-  const typicalGap = median(gaps.slice(-12))
-  if (typicalGap == null) return fallbackFreq || 'M'
-  if (typicalGap <= 11) return 'W'
-  if (typicalGap <= 50) return 'M'
-  if (typicalGap <= 125) return 'Q'
-  if (typicalGap <= 220) return 'SA'
-  return 'A'
-}
-
-function monthlyPatternDate(history, year, monthIndex) {
-  const targetStart = new Date(year, monthIndex, 1)
-  const usable = history.filter(date => date < targetStart).slice(-12)
-  if (!usable.length) return null
-
-  const nearMonthEnd = usable.filter(date => businessDaysAfter(date) <= 1).length
-  if (nearMonthEnd >= Math.max(2, Math.ceil(usable.length * 0.6))) {
-    const typicalBusinessDayOffset = Math.max(0, Math.round(median(
-      usable.filter(date => businessDaysAfter(date) <= 3).map(businessDaysAfter),
-    ) || 0))
-    return shiftBusinessDays(lastBusinessDate(year, monthIndex), -typicalBusinessDayOffset)
-  }
-
-  const weekdayOrdinal = usable.map(date => `${date.getDay()}-${Math.ceil(date.getDate() / 7)}`)
-  const commonPattern = mode(weekdayOrdinal)
-  const matchingCount = weekdayOrdinal.filter(value => value === commonPattern).length
-  if (commonPattern && matchingCount >= Math.max(2, Math.ceil(usable.length * 0.5))) {
-    const [weekday, ordinal] = commonPattern.split('-').map(Number)
-    const first = new Date(year, monthIndex, 1)
-    const offset = (weekday - first.getDay() + 7) % 7
-    const candidate = new Date(year, monthIndex, 1 + offset + ((ordinal - 1) * 7))
-    if (candidate.getMonth() === monthIndex) return candidate
-  }
-
-  const typicalDay = Math.max(1, Math.round(median(usable.map(date => date.getDate())) || 1))
-  const lastDay = new Date(year, monthIndex + 1, 0).getDate()
-  return nextBusinessDate(new Date(year, monthIndex, Math.min(typicalDay, lastDay)))
-}
-
-function closestActualDate(actualDates, target, toleranceDays) {
-  if (!actualDates.length || !target) return null
-  const sorted = [...actualDates].sort((a, b) => (
-    Math.abs(daysBetween(target, a)) - Math.abs(daysBetween(target, b))
-  ))
-  return Math.abs(daysBetween(target, sorted[0])) <= toleranceDays ? sorted[0] : null
-}
-
-function projectWeeklyDates(history, anchorDate, start, end) {
-  if (!anchorDate) return []
-  const commonWeekday = history.length ? Number(mode(history.slice(-16).map(date => date.getDay()))) : anchorDate.getDay()
-  let anchor = [...history].reverse().find(date => date.getDay() === commonWeekday) || anchorDate
-  anchor = new Date(anchor)
-  while (anchor > start) anchor.setDate(anchor.getDate() - 7)
-  while (anchor < start) anchor.setDate(anchor.getDate() + 7)
-
-  const projected = []
-  for (let cursor = new Date(anchor); cursor <= end; cursor.setDate(cursor.getDate() + 7)) {
-    const actual = closestActualDate(history.filter(date => date >= start && date <= end), cursor, 2)
-    projected.push({ date: actual || nextBusinessDate(cursor), actual: !!actual })
-  }
-  return projected
-}
-
-function projectCyclicalDate(history, anchorDate, freq, year, monthIndex) {
-  const monthsPerCycle = { Q: 3, SA: 6, S: 6, A: 12 }[freq] || 1
-  const base = history.length ? history[history.length - 1] : anchorDate
-  if (!base) return null
-  const monthDistance = ((year - base.getFullYear()) * 12) + monthIndex - base.getMonth()
-  if (((monthDistance % monthsPerCycle) + monthsPerCycle) % monthsPerCycle !== 0) return null
-  return monthlyPatternDate(history, year, monthIndex)
-    || nextBusinessDate(new Date(year, monthIndex, Math.min(base.getDate(), new Date(year, monthIndex + 1, 0).getDate())))
-}
-
-function projectPaymentsForMonth(holdings, events, selectedMonth) {
-  const [year, month] = String(selectedMonth || '').split('-').map(Number)
-  if (!year || !month) return []
-  const start = new Date(year, month - 1, 1)
-  const end = new Date(year, month, 0)
-  const projected = []
-  const eventByTicker = new Map(events.map(event => [String(event.ticker || '').toUpperCase(), event]))
-  const universe = holdings.length ? holdings : events
-
-  universe.forEach(holding => {
-    const ticker = String(holding.ticker || '').toUpperCase()
-    const event = eventByTicker.get(ticker)
-    const ev = event ? {
-      ...holding,
-      ...event,
-      quantity: holding.quantity ?? event.quantity,
-      annual_income: holding.annual_income ?? event.annual_income,
-      current_value: holding.current_value ?? event.current_value,
-      current_price: holding.current_price ?? event.current_price,
-      payment_income: holding.payment_income ?? event.payment_income,
-      payment_history: holding.payment_history || [],
-      description: holding.description || event.description,
-    } : holding
-    if (!ticker || calendarPaymentIncome(ev) <= 0) return
-
-    const history = [...new Set(ev.payment_history || [])]
-      .map(dateFromIso)
-      .filter(Boolean)
-      .sort((a, b) => a - b)
-    const selectedActuals = history.filter(date => date >= start && date <= end)
-    const eventPayDate = dateFromIso(event?.pay_date || ev.pay_date)
-    const confirmedEventDate = eventPayDate && event?.pay_estimated === false
-      && eventPayDate >= start && eventPayDate <= end
-      ? eventPayDate
-      : null
-    const freq = inferredFrequency(history, event?.freq || ev.freq)
-    const addPayment = (date, source) => {
-      if (!date || date < start || date > end) return
-      projected.push({
-        ...ev,
-        ticker,
-        freq,
-        calendar_pay_date: isoDate(date),
-        calendar_source: source,
-        calendar_projected: source === 'projected',
-        calendar_estimated: source === 'projected',
-      })
-    }
-
-    if (freq === 'W' || freq === '52') {
-      const anchor = history[history.length - 1] || eventPayDate || dateFromIso(ev.date)
-      projectWeeklyDates(history, anchor, start, end).forEach(item => {
-        const source = confirmedEventDate && isoDate(item.date) === isoDate(confirmedEventDate)
-          ? 'confirmed'
-          : item.actual ? 'history' : 'projected'
-        addPayment(item.date, source)
-      })
-      return
-    }
-
-    if (confirmedEventDate) {
-      addPayment(confirmedEventDate, 'confirmed')
-      return
-    }
-
-    let predictedDate
-    if (freq === 'M') {
-      predictedDate = monthlyPatternDate(history, year, month - 1)
-      if (!predictedDate && eventPayDate) {
-        let cursor = new Date(eventPayDate)
-        let guard = 0
-        while (cursor < start && guard < 120) {
-          cursor = shiftFrequency(cursor, 'M', 1)
-          guard += 1
-        }
-        while (cursor > end && guard < 240) {
-          cursor = shiftFrequency(cursor, 'M', -1)
-          guard += 1
-        }
-        if (cursor >= start && cursor <= end) predictedDate = nextBusinessDate(cursor)
-      }
-      predictedDate = predictedDate || lastBusinessDate(year, month - 1)
-    } else {
-      predictedDate = projectCyclicalDate(history, eventPayDate || dateFromIso(ev.date), freq, year, month - 1)
-    }
-
-    const matchingActual = closestActualDate(selectedActuals, predictedDate, 4)
-    addPayment(matchingActual || predictedDate, matchingActual ? 'history' : 'projected')
-  })
-
-  return projected.sort((a, b) => (
-    a.calendar_pay_date.localeCompare(b.calendar_pay_date)
-    || String(a.ticker || '').localeCompare(String(b.ticker || ''))
-  ))
-}
-
 function buildMonthCells(selectedMonth, payments) {
   const [year, month] = String(selectedMonth || '').split('-').map(Number)
   if (!year || !month) return []
@@ -764,8 +522,10 @@ export default function DividendCalendar() {
   const [filter, setFilter] = useState('all')
   const [tab, setTab] = useState('calendar')
   const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()))
+  const [monthPayments, setMonthPayments] = useState([])
+  const [monthLoading, setMonthLoading] = useState(false)
   const [loading, setLoading] = useState(true)
-  const cacheKey = useMemo(() => `portfolio_div_calendar_v4_${selection}`, [selection])
+  const cacheKey = useMemo(() => `portfolio_div_calendar_v5_${selection}`, [selection])
 
   useEffect(() => {
     let stale = false
@@ -804,6 +564,27 @@ export default function DividendCalendar() {
       .catch(() => { if (!stale) setLoading(false) })
     return () => { stale = true }
   }, [pf, selection, cacheKey])
+
+  useEffect(() => {
+    if (tab !== 'month' || !selectedMonth) return undefined
+    let stale = false
+    pf(`/api/div-calendar?month=${encodeURIComponent(selectedMonth)}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Request failed (${r.status})`)
+        return r.json()
+      })
+      .then(data => {
+        if (stale) return
+        setMonthPayments(data.payments || [])
+        setMonthLoading(false)
+      })
+      .catch(() => {
+        if (stale) return
+        setMonthPayments([])
+        setMonthLoading(false)
+      })
+    return () => { stale = true }
+  }, [pf, selection, tab, selectedMonth])
 
   useEffect(() => {
     let stale = false
@@ -876,7 +657,10 @@ export default function DividendCalendar() {
             role="tab"
             aria-selected={tab === t.key}
             className={`dc-tab${tab === t.key ? ' active' : ''}`}
-            onClick={() => setTab(t.key)}
+            onClick={() => {
+              setTab(t.key)
+              if (t.key === 'month') setMonthLoading(true)
+            }}
           >
             {t.label}
           </button>
@@ -982,9 +766,14 @@ export default function DividendCalendar() {
         <DividendMonthView
           events={events}
           holdings={holdings}
+          payments={monthPayments}
+          loading={monthLoading}
           today={today}
           selectedMonth={selectedMonth}
-          onMonthChange={setSelectedMonth}
+          onMonthChange={month => {
+            setMonthLoading(true)
+            setSelectedMonth(month)
+          }}
         />
       )}
 
@@ -995,13 +784,9 @@ export default function DividendCalendar() {
   )
 }
 
-function DividendMonthView({ events, holdings, today, selectedMonth, onMonthChange }) {
+function DividendMonthView({ events, holdings, payments, loading, today, selectedMonth, onMonthChange }) {
   const fallbackMonth = (today || isoDate(new Date())).slice(0, 7)
   const activeMonth = selectedMonth || fallbackMonth
-  const payments = useMemo(
-    () => projectPaymentsForMonth(holdings, events, activeMonth),
-    [holdings, events, activeMonth],
-  )
   const cells = useMemo(
     () => buildMonthCells(activeMonth, payments),
     [activeMonth, payments],
@@ -1046,7 +831,9 @@ function DividendMonthView({ events, holdings, today, selectedMonth, onMonthChan
         </div>
       </div>
 
-      {holdings.length === 0 && events.length === 0 ? (
+      {loading ? (
+        <p className="dc-month-empty">Loading payment schedule...</p>
+      ) : holdings.length === 0 && events.length === 0 ? (
         <p className="dc-month-empty">No dividend payment data found. Import data first.</p>
       ) : (
         <div className="dc-month-scroll">

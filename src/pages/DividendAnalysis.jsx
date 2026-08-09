@@ -812,7 +812,7 @@ export default function DividendAnalysis() {
     // \u2500\u2500 Dividend mechanics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     { key: 'div_frequency', label: 'Freq', fmt: v => DIV_FREQ_LABELS[v] || v || '\u2014', align: 'center', tip: 'Dividend payment frequency' },
     { key: 'ex_div_date', label: 'Ex-Div Date', align: 'center', tip: 'Ex-dividend date' },
-    { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Dividend payment date' },
+    { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Resolved dividend payment date; ~ marks an estimate' },
     { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '\u2014', align: 'right', tip: 'Number of shares held' },
     { key: 'div_per_share', label: 'Dist./Share', fmt: v => formatMoney(v, { digits: 4 }), align: 'right', tip: 'Dividend amount per share' },
     // \u2500\u2500 Income estimates (derived from the above) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -1042,6 +1042,7 @@ export default function DividendAnalysis() {
                         let style = col.align ? { textAlign: col.align } : {}
 
                         if (col.key === 'ticker') display = <strong>{val}</strong>
+                        if (col.key === 'div_pay_date') display = `${row.div_pay_date_estimated ? '~' : ''}${val || '\u2014'}`
                         if (col.key === 'safety_score') display = <SafetyScore score={val} />
                         if (col.key === 'safety_risk_level') display = <SafetyBadge level={val} />
                         if (col.key === 'total_divs_received') display = <strong>{fmt(val)}</strong>
