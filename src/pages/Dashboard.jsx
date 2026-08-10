@@ -838,10 +838,10 @@ function TickerModal({ ticker, onClose }) {
           },
           {
             x: data.dates, y: data.total_return,
-            mode: 'lines', name: 'Total Return %',
+            mode: 'lines', name: 'Price + Cash Distributions %',
             line: { color: isDark ? '#4dff91' : '#15803d', width: 2 },
             fill: 'tonexty', fillcolor: isDark ? 'rgba(77,255,145,0.08)' : 'rgba(21,128,61,0.10)',
-            hovertemplate: '%{y:.2f}%<extra>Total</extra>',
+            hovertemplate: '%{y:.2f}%<extra>Price + cash distributions</extra>',
           },
         ]
       : [
@@ -856,7 +856,7 @@ function TickerModal({ ticker, onClose }) {
     const layout = {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
-      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Return Since Purchase' : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
+      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Since Purchase (Price + Cash Distributions)' : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
       xaxis: { title: '', gridcolor: ct.grid },
       yaxis: hasTotalReturn
         ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
@@ -886,6 +886,11 @@ function TickerModal({ ticker, onClose }) {
             <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
               Purchased {localDateString(data.purchase_date) || '—'} at {fmt(data.price_paid)}
             </p>
+            {data.total_return_available !== false && Array.isArray(data.total_return) && (
+              <p style={{ color: 'var(--text-dim)', marginTop: '-0.5rem', marginBottom: '1rem', fontSize: '0.82rem' }}>
+                Return since purchase uses your recorded cost basis. Distributions are included as cash, not assumed reinvested.
+              </p>
+            )}
             {data.note && (
               <p style={{ color: 'var(--p-ffcc80)', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
             )}
