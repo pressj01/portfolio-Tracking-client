@@ -21,11 +21,14 @@ const num = v => Number.isFinite(Number(v)) ? Number(v) : 0
 // Round to cents so the inputs stay readable and still match the Cash Flow screen.
 const round2 = v => Math.round(num(v) * 100) / 100
 
-function StatTile({ label, value, sub, tone = 'default' }) {
+function StatTile({ label, value, sub, tone = 'default', help }) {
   return (
-    <div className={`nep-stat-tile rr-stat-${tone}`}>
+    <div className={`nep-stat-tile rr-stat-${tone}`} title={help}>
       <div className="nep-stat-val">{value}</div>
-      <div className="nep-stat-lbl">{label}</div>
+      <div className="nep-stat-lbl">
+        {label}
+        {help && <span className="rr-help" style={{ marginLeft: 4 }}>?</span>}
+      </div>
       {sub && <div className="nep-stat-sub">{sub}</div>}
     </div>
   )
@@ -395,6 +398,10 @@ export default function RetirementReadiness() {
     const bufferGap = Math.max(0, bufferTargetNow - bearIncomeProtected)
     const shortfallNow = Math.max(0, expensesPortfolioMustPay - bearIncomeProtected)
     const cashRunwayMonths = shortfallNow > 0 ? startingCash / shortfallNow : Infinity
+    // Only meaningful opposite a shortfall: how much bear-market income is left
+    // over after portfolio-paid expenses, i.e. the cushion before the reserve
+    // would need to be touched at all.
+    const bearMarginNow = Math.max(0, bearIncomeProtected - expensesPortfolioMustPay)
     const incomeOverUnderTarget = targetIncomeAfterTax - bufferTargetNow
     const excessAfterExpensesAndReinvestGood = targetIncomeAfterTax - expensesPortfolioMustPay - minimumMonthlyReinvest
     const excessAfterExpensesAndReinvestBear = bearIncomeProtected - expensesPortfolioMustPay - minimumMonthlyReinvest
@@ -526,6 +533,7 @@ export default function RetirementReadiness() {
       bufferGap,
       shortfallNow,
       cashRunwayMonths,
+      bearMarginNow,
       incomeOverUnderTarget,
       excessAfterExpensesAndReinvestGood,
       excessAfterExpensesAndReinvestBear,
@@ -890,7 +898,13 @@ export default function RetirementReadiness() {
             <StatTile label="Bear Buffer Ratio" value={Number.isFinite(model.bearBufferRatio) ? `${model.bearBufferRatio.toFixed(2)}x` : 'Covered'} tone={model.bearBufferRatio >= bufferRatio ? 'good' : model.bearBufferRatio >= 1 ? 'warn' : 'bad'} />
             <StatTile label="Buffer Gap" value={fmtMoney(model.bufferGap)} tone={model.bufferGap <= 0 ? 'good' : 'warn'} />
             <StatTile label="Cash Target" value={fmtMoney(model.targetCash)} sub={`${targetCashMonths} months`} />
-            <StatTile label="Cash Runway" value={Number.isFinite(model.cashRunwayMonths) ? `${model.cashRunwayMonths.toFixed(1)} mo` : 'Covered'} tone={model.cashRunwayMonths < 12 ? 'bad' : 'good'} />
+            <StatTile
+              label="Cash Runway"
+              value={Number.isFinite(model.cashRunwayMonths) ? `${model.cashRunwayMonths.toFixed(1)} mo` : 'No Shortfall'}
+              sub={Number.isFinite(model.cashRunwayMonths) ? 'until reserve runs out' : `+${fmtMoney(model.bearMarginNow)}/mo bear-market cushion`}
+              tone={model.cashRunwayMonths < 12 ? 'bad' : 'good'}
+              help="How long your cash reserve lasts if today's bear-market shortfall (bear-market income after tax minus portfolio-paid expenses) continues every month. 'No Shortfall' means bear-market income already covers portfolio-paid expenses on its own, so the reserve isn't being drawn down at all right now. This is one input into readiness, not a verdict that your savings are sufficient for retirement -- see the status badge above for that."
+            />
           </div>
 
           <div className="rr-panel-grid">

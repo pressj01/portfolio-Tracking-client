@@ -60,6 +60,7 @@ const GROUPS = [
       { id: 'holding-targets', label: 'Holding Targets' },
       { id: 'growth', label: 'Growth' },
       { id: 'growth-2', label: 'Portfolio Growth 2' },
+      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'dividends', label: 'Dividends' },
       { id: 'div-calendar', label: 'Div Calendar' },
       { id: 'earnings-calendar', label: 'Earnings Calendar' },
@@ -122,7 +123,6 @@ const GROUPS = [
       { id: 'portfolio-builder', label: 'Portfolio Builder' },
       { id: 'portfolio-tester', label: 'Portfolio Tester' },
       { id: 'cash-flow', label: 'Cash Flow & Sustainability' },
-      { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'rebalance-wizard', label: 'Rebalance Wizard' },
     ],
   },
@@ -767,7 +767,7 @@ function DashboardHelp() {
         Key columns include:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Ticker</strong> — click to open a detailed ticker modal with charts and dividend history.</li>
+        <li><strong>Ticker</strong> — click to open a detailed ticker modal. Its Shared Performance Date Range is the same saved range used by Growth &amp; Performance, Portfolio Growth 2, and Total Return. The modal prints the effective dates and ending Price Return and Total Return so the holding can be reconciled directly.</li>
         <li><strong>Freq</strong> — dividend payment frequency (W=Weekly, M=Monthly, Q=Quarterly, SA=Semi-Annual, A=Annual).</li>
         <li><strong>%Acct</strong> — percentage of total portfolio value.</li>
         <li><strong>G/L%</strong> — unrealized gain/loss percentage.</li>
@@ -2127,6 +2127,15 @@ function GrowthHelp() {
         The page also grades your portfolio's risk-adjusted returns using industry-standard metrics
         and provides per-ticker breakdowns via bar charts and heatmaps.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>How this ties to the other tracking pages:</strong> the <strong>Tracker Total Return %</strong>
+        here uses the same transaction-aware return calculation as Total Return and the Tracker Total Return %
+        card on Portfolio Growth 2. With the same portfolio, holdings filter, and effective date range, the
+        percentage should match. Purchases and sales change the amount invested; they are not counted as gain
+        or loss. The Dashboard holding chart uses this same calculation for that individual holding. The
+        Shared Performance Date Range is remembered across all four screens; only a later purchase date or
+        unavailable market day can make a holding&apos;s effective start later than the requested start.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/growth/filters-and-metrics.jpg" alt="Growth page filters and metrics strip" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
@@ -2172,8 +2181,9 @@ function GrowthHelp() {
           holdings and period are selected. The exact effective dates appear on the grade card.
         </li>
         <li>
-          <strong>Total Return %</strong> — The portfolio&apos;s dividend-reinvested return over the selected
-          period. The exact effective start and end dates appear on the card and above the charts.
+          <strong>Tracker Total Return %</strong> — The portfolio&apos;s transaction-aware, dividend-reinvested
+          return over the selected period. The exact effective start and end dates appear on the card and
+          above the charts. This is the percentage to compare with Total Return and Portfolio Growth 2.
         </li>
         <li>
           <strong>Portfolio Sharpe</strong> — The Sharpe ratio measures excess return per unit of total risk
@@ -2270,6 +2280,14 @@ function PortfolioGrowth2Help() {
       <p style={{ marginBottom: '1rem' }}>
         Both charts and the headline cards share the same period selector and ticker filter. The exact
         effective dates are printed above them, so every view stays in sync as you explore a range.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>How this ties to the other tracking pages:</strong> <strong>Tracker Total Return %</strong>
+        is the common transaction-aware, dividend-reinvested percentage used by Growth &amp; Performance and
+        Total Return. It should match when the portfolio, ticker scope, and effective date range match.
+        The dollar charts below intentionally answer a different question: how portfolio value and dollar
+        profit/loss changed, including the effect of cash invested or withdrawn. The Shared Performance Date
+        Range is remembered across Dashboard, Growth &amp; Performance, this page, and Total Return.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3043,6 +3061,14 @@ function TotalReturnHelp() {
         since dividends can represent a significant portion of total returns for income-focused investors.
         A page-wide broker-style date selector keeps the summary cards, holding-return chart,
         side-by-side comparison, scatter plot, and detailed holdings table on the same window.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>This is the tracker-return reference:</strong> its transaction-aware Total Return % is the
+        same percentage used by Growth &amp; Performance and the Tracker Total Return % card on Portfolio Growth
+        2. Match the portfolio, holdings filter, and effective dates to reconcile the figure. The Dashboard
+        holding modal uses the same method for a single holding; dollar P&amp;L views elsewhere can differ because
+        deposits, withdrawals, and position size are meaningful in dollars but are excluded from return. The
+        Shared Performance Date Range is remembered across all four tracking screens.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -5681,6 +5707,11 @@ function RetirementReadinessHelp() {
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Core Inputs</h3>
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/01-inputs-panel.png"
+        alt="Critical Monthly Inputs, Non-Investment Monthly Inflows, and Passive Income Assumptions input panels"
+        caption="All three input groups, top to bottom: Core Inputs, Non-Investment Inflows, Passive-Income Assumptions."
+      />
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target.</li>
         <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. It is applied to the expenses the <em>portfolio</em> must pay after non-investment inflows, not to total expenses. If that remainder is $4,500 and MEPB is 3, the stressed-income target is $13,500 per month.</li>
@@ -5727,18 +5758,55 @@ function RetirementReadinessHelp() {
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results, Status, and Displays</h3>
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/02-status-and-coverage.png"
+        alt="Retirement Readiness header with the readiness badge and the row of coverage stat tiles including Current Monthly Income, Good and Bear Market After Tax, Cash Target, and Cash Runway"
+        caption="The readiness badge (top right) and every coverage stat tile, including the redesigned Cash Runway tile."
+      />
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Current Monthly Income</strong> - annual estimated distributions from the selected holdings ÷ 12. It is an imported snapshot, distinct from the target-yield projection.</li>
         <li><strong>Good / Bear Market After Tax</strong> - projected monthly income under the target-yield and bear assumptions. Bear income includes the NAV decline, tax, and income haircut.</li>
         <li><strong>Good / Bear Buffer Ratio</strong> - corresponding after-tax portfolio income ÷ portfolio-paid expenses. A value of 1.00× covers that expense remainder; a value at or above the MEPB ratio reaches the safety target.</li>
         <li><strong>Buffer Gap</strong> - max(0, MEPB target - bear protected income): the additional stressed monthly income required for the selected buffer.</li>
-        <li><strong>Cash Target</strong> - monthly expenses × Cash Reserve Months. <strong>Cash Runway</strong> = current cash reserve ÷ current bear shortfall; it displays Covered when there is no current shortfall.</li>
-        <li><strong>Readiness badge</strong> - Covered means after-tax non-investment inflows pay all expenses. Ready means bear income reaches MEPB and the cash target is met (or no current bear shortfall exists). Close means the bear case or good-market case reaches MEPB. Building means bear income covers portfolio-paid expenses but not MEPB. Risky means bear income is short and current cash runway is under twelve months.</li>
+        <li><strong>Cash Target</strong> - monthly expenses × Cash Reserve Months. <strong>Cash Runway</strong> = current cash reserve ÷ current bear shortfall (bear-market income after tax minus portfolio-paid expenses): how long the reserve would last if that shortfall continued every month. It displays <strong>No Shortfall</strong>, with the bear-market cushion in dollars, when bear-market income already covers portfolio-paid expenses on its own — the reserve isn&apos;t being drawn down. Either way it is one input into readiness, not a standalone verdict that savings are sufficient for retirement; that judgment is the readiness badge below.</li>
+        <li><strong>Readiness badge</strong> - <strong>Covered</strong> means after-tax non-investment inflows (pensions, Social Security, etc.) pay all expenses on their own, so the portfolio isn&apos;t required at all — a different condition from Cash Runway&apos;s No-Shortfall state, which is about the bear-market shortfall specifically. <strong>Ready</strong> means bear income reaches MEPB and the cash target is met (or no current bear shortfall exists). <strong>Close</strong> means the bear case or good-market case reaches MEPB. <strong>Building</strong> means bear income covers portfolio-paid expenses but not MEPB. <strong>Risky</strong> means bear income is short and current cash runway is under twelve months.</li>
+      </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/03-passive-income-and-metrics.png"
+        alt="Passive Income Calculations and Important Monthly Metrics panels showing the monthly formula outputs and 3-year averages"
+        caption="Passive Income Calculations (left) and Important Monthly Metrics (right)."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Passive Income Calculations</strong> - shows the starting values and monthly formula outputs before the projection begins. “After Tax and Minimum Reinvestment” is the good-market income left after its planning reinvestment reserve.</li>
         <li><strong>Important Monthly Metrics</strong> - shows the present buffer math plus averages over the first 36 modeled months. “Excess After Expenses &amp; Reinvest” is income left after net expenses and minimum reinvestment; “3Y Avg Annual Withdrawals” combines projected cash transfers and portfolio-paid expenses.</li>
+      </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/04-trend-and-milestones.png"
+        alt="Passive Income - MEPB Trend Lines chart plotting expenses and income scenarios over the projection, next to the Milestones panel"
+        caption="The trend chart (left) and Milestones (right)."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Trend lines</strong> - plots total expenses, net expenses after inflows, good after-tax income, bear after-tax income, and the MEPB target for every modeled month.</li>
         <li><strong>Milestones</strong> - the first month bear income covers net expenses, the first month it reaches MEPB, the first month cash is exhausted by a bear shortfall, and ending monthly values. “Not in horizon” means the event does not occur during the selected years.</li>
+      </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/05-yearly-projection.png"
+        alt="Yearly Projection table with one row per modeled year showing Book NAV, Current NAV, income, expenses, coverage ratios, and cash reserve"
+        caption="Yearly Projection, the audit trail's summary view. The Monthly MEPB Projection Table beneath it isn't pictured — it runs 25 columns wide and scrolls horizontally the same way in the app."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Yearly and Monthly Projection tables</strong> - the audit trail. Yearly rows use ending monthly values for NAV, income, expenses, ratios, and cash, while annual surplus/reinvestment/cash-transfer columns are totals. The detailed table shows every monthly formula output and inserts a total row after each year.</li>
+      </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/retirement-readiness/06-top-income-sources.png"
+        alt="Top Income Sources table listing the largest holdings by current monthly income, with value, stress income, yield, and income share"
+        caption="Top Income Sources, ranked by current monthly income."
+      />
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Top Income Sources</strong> - the 15 holdings with the largest current monthly estimated distributions. Stress Income applies the overall bear-to-current-income factor, so it is an allocation aid rather than an independent ticker forecast.</li>
       </ul>
     </div>
