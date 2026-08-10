@@ -5670,37 +5670,76 @@ function RetirementReadinessHelp() {
     <div>
       <h2>Retirement Readiness</h2>
       <p style={{ marginBottom: '1rem' }}>
-        Retirement Readiness compares your current portfolio income against monthly living expenses and a
-        Monthly Expense Protection Buffer (MEPB). It starts from the currently selected portfolio, applies stress
-        assumptions, then projects how surplus reinvestment can change the income path over time.
+        <strong>What this screen shows:</strong> after employment, pensions, Social Security, annuities, and
+        other recurring income pay their share of your monthly bills, would the selected portfolio&apos;s
+        <em> after-tax distributions</em> cover the remaining gap—and cover it with your selected safety
+        buffer? Current Monthly Income is the imported holdings estimate. Good Market and Bear Market
+        income are separate projected values under your stated assumptions. This is a monthly planning
+        model, not a prediction or a withdrawal recommendation. <strong>MEPB</strong> stands for
+        <strong> Monthly Expense Protection Buffer</strong>: the multiple of portfolio-paid monthly expenses
+        you want income to cover as a safety margin.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Core Inputs</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target.</li>
-        <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. If expenses are $4,500 and MEPB is 3, the model wants stressed portfolio income of $13,500 per month.</li>
-        <li><strong>Reinvest Surplus</strong> - the percent of income above monthly expenses that gets reinvested. If income is $6,000, expenses are $4,500, and this is 100%, the extra $1,500 is reinvested.</li>
+        <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. It is applied to the expenses the <em>portfolio</em> must pay after non-investment inflows, not to total expenses. If that remainder is $4,500 and MEPB is 3, the stressed-income target is $13,500 per month.</li>
+        <li><strong>Excess Withdrawn %</strong> - the share of good-market income above portfolio-paid expenses that goes into the cash reserve instead of being reinvested.</li>
+        <li><strong>Excess Reinvested %</strong> - the share of that same surplus eligible for reinvestment. The two percentage controls are independent; the model removes the withdrawal share first, so entering totals above 100% does not spend more than the available surplus.</li>
         <li><strong>Cash Reserve</strong> - cash you already have set aside outside the portfolio for shortfalls or emergencies.</li>
         <li><strong>Cash Target Months</strong> - how many months of expenses you want in reserve. If expenses are $4,500 and this is 6, the target reserve is $27,000.</li>
-        <li><strong>Years</strong> - how far forward the model projects income, expenses, surplus reinvestment, and cash reserve.</li>
+        <li><strong>Years</strong> - how far forward the model projects income, expenses, surplus reinvestment, NAV, and cash reserve. Each year contains twelve compounding monthly steps.</li>
       </ul>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Stress Inputs</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Non-Investment Inflows</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Expense Inflation %</strong> - annual rate at which monthly expenses increase over time.</li>
-        <li><strong>Income Growth %</strong> - annual growth or decline assumption for portfolio income after the initial stress cuts.</li>
-        <li><strong>Dividend Cut %</strong> - immediate stress cut to current income. If current income is $8,000 per month and this is 20%, stressed income starts at $6,400 per month.</li>
-        <li><strong>Income Haircut %</strong> - an extra safety discount after the dividend cut, useful for volatile funds where distributions may vary month to month.</li>
-        <li><strong>Price Drawdown %</strong> - stress reduction to portfolio value. It mainly affects the assumed yield of reinvested surplus during the stressed period.</li>
+        <li><strong>Employment Income, Company Pension, Gov. Pension / Social Security, Annuities, and Other Recurring</strong> - monthly gross inflows outside the portfolio. When a Cash Flow &amp; Sustainability plan exists for the selected portfolio, the screen averages its twelve-month schedule into these boxes so quarterly and annual items are normalized.</li>
+        <li><strong>Indexing Factor %</strong> - annual growth applied to those after-tax inflows as the model moves forward.</li>
+        <li><strong>Inflows Tax Rate %</strong> - tax applied to the combined non-investment inflows. A connected cash-flow plan supplies its blended rate.</li>
+        <li><strong>Portfolio Must Pay</strong> = max(0, monthly expenses - after-tax non-investment inflows). This is the denominator for the coverage ratios and MEPB target.</li>
       </ul>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Passive-Income Assumptions</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Readiness badge</strong> - Covered, Ready, Close, Building, or Risky based on stressed income, buffer target, cash runway, and whether non-investment inflows already cover expenses.</li>
-        <li><strong>Bear Buffer Ratio</strong> - bear-market after-tax income divided by the expenses the portfolio must pay.</li>
-        <li><strong>Buffer Gap</strong> - additional stressed monthly income needed to reach the selected MEPB target.</li>
-        <li><strong>Passive Income - MEPB Trend Lines</strong> - compares total expenses, expenses after non-investment inflows, good-market income, bear-market income, and the MEPB target.</li>
-        <li><strong>Monthly MEPB Projection Table</strong> - month-by-month good and bear market projections with yearly totals.</li>
+        <li><strong>Portfolio Book NAV</strong> - starting capital used by the projection. Zero means use the current value of the selected holdings.</li>
+        <li><strong>Target Yield Good %</strong> - annual good-market distribution yield. Good-market income before tax = book NAV × target yield ÷ 12; after-tax income then applies Investment Tax %.</li>
+        <li><strong>NAV Erosion %</strong> - annual amount treated as capital erosion that must be replenished. The model reserves book NAV × NAV erosion % ÷ 12 each month.</li>
+        <li><strong>Bear Decline %</strong> - the one-time stress reduction to NAV for the bear snapshot. Bear NAV = book NAV × (1 - bear decline %).</li>
+        <li><strong>Bear Yield %</strong> - annual yield used with the stressed NAV. In the monthly projection, bear distributions use the current projected NAV after that decline.</li>
+        <li><strong>Investment Tax %</strong> - tax applied to good and bear portfolio distributions before the model calculates excess, reinvestment, or withdrawals.</li>
+        <li><strong>Income Haircut %</strong> - an additional conservative reduction to bear after-tax income for distribution volatility. Bear protected income = bear income before tax × (1 - investment tax %) × (1 - income haircut %).</li>
+        <li><strong>Direct Contribution</strong> - new outside money added to the portfolio every month, separate from reinvested distributions.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Projection Mechanics and Stress Case</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Expense Inflation %</strong> - annual rate at which monthly expenses increase. The model converts it to a monthly compound rate: (1 + annual inflation)<sup>1/12</sup> - 1.</li>
+        <li><strong>Minimum reinvestment</strong> - not a separate input: every month it is book NAV × (NAV erosion % + positive expense inflation %) ÷ 12. It combines the reinvestment reserve for erosion with the reserve intended to preserve purchasing power against inflation.</li>
+        <li><strong>Cash reserve</strong> - bear shortfalls draw down cash; good-market excess sent to cash builds it. The model does not sell portfolio shares to refill it.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How the Monthly Projection Works</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Expenses and inflows</strong> - each month, expenses grow at the monthly inflation rate and after-tax non-investment inflows grow at the monthly indexing rate. Net expenses are never below zero.</li>
+        <li><strong>Good-market surplus</strong> = max(0, good after-tax income - net expenses). The withdrawal portion first goes to cash. The remaining surplus can be reinvested, alongside the minimum reinvestment reserve, but actual reinvestment never exceeds that month&apos;s good-market income.</li>
+        <li><strong>Bear shortfall</strong> = max(0, net expenses - bear after-tax income). It reduces the cash reserve up to the cash available. A bear scenario does not add cash withdrawals to NAV.</li>
+        <li><strong>Book NAV</strong> increases by direct contributions and actual reinvestment. <strong>Current NAV</strong> also subtracts the monthly NAV-erosion reserve and never falls below zero. These projected values drive later months&apos; distributions.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results, Status, and Displays</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Current Monthly Income</strong> - annual estimated distributions from the selected holdings ÷ 12. It is an imported snapshot, distinct from the target-yield projection.</li>
+        <li><strong>Good / Bear Market After Tax</strong> - projected monthly income under the target-yield and bear assumptions. Bear income includes the NAV decline, tax, and income haircut.</li>
+        <li><strong>Good / Bear Buffer Ratio</strong> - corresponding after-tax portfolio income ÷ portfolio-paid expenses. A value of 1.00× covers that expense remainder; a value at or above the MEPB ratio reaches the safety target.</li>
+        <li><strong>Buffer Gap</strong> - max(0, MEPB target - bear protected income): the additional stressed monthly income required for the selected buffer.</li>
+        <li><strong>Cash Target</strong> - monthly expenses × Cash Reserve Months. <strong>Cash Runway</strong> = current cash reserve ÷ current bear shortfall; it displays Covered when there is no current shortfall.</li>
+        <li><strong>Readiness badge</strong> - Covered means after-tax non-investment inflows pay all expenses. Ready means bear income reaches MEPB and the cash target is met (or no current bear shortfall exists). Close means the bear case or good-market case reaches MEPB. Building means bear income covers portfolio-paid expenses but not MEPB. Risky means bear income is short and current cash runway is under twelve months.</li>
+        <li><strong>Passive Income Calculations</strong> - shows the starting values and monthly formula outputs before the projection begins. “After Tax and Minimum Reinvestment” is the good-market income left after its planning reinvestment reserve.</li>
+        <li><strong>Important Monthly Metrics</strong> - shows the present buffer math plus averages over the first 36 modeled months. “Excess After Expenses &amp; Reinvest” is income left after net expenses and minimum reinvestment; “3Y Avg Annual Withdrawals” combines projected cash transfers and portfolio-paid expenses.</li>
+        <li><strong>Trend lines</strong> - plots total expenses, net expenses after inflows, good after-tax income, bear after-tax income, and the MEPB target for every modeled month.</li>
+        <li><strong>Milestones</strong> - the first month bear income covers net expenses, the first month it reaches MEPB, the first month cash is exhausted by a bear shortfall, and ending monthly values. “Not in horizon” means the event does not occur during the selected years.</li>
+        <li><strong>Yearly and Monthly Projection tables</strong> - the audit trail. Yearly rows use ending monthly values for NAV, income, expenses, ratios, and cash, while annual surplus/reinvestment/cash-transfer columns are totals. The detailed table shows every monthly formula output and inserts a total row after each year.</li>
+        <li><strong>Top Income Sources</strong> - the 15 holdings with the largest current monthly estimated distributions. Stress Income applies the overall bear-to-current-income factor, so it is an allocation aid rather than an independent ticker forecast.</li>
       </ul>
     </div>
   )

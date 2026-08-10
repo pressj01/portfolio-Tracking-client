@@ -197,6 +197,35 @@ function InputSection({ title, children }) {
   )
 }
 
+function RetirementReadinessQuickHelp() {
+  return (
+    <div className="alert alert-info" style={{ marginBottom: '1.25rem', lineHeight: 1.55 }}>
+      <h3 style={{ marginTop: 0 }}>How Retirement Readiness works</h3>
+      <p>
+        <strong>This screen answers:</strong> “After my other recurring income pays its share, can my
+        portfolio&apos;s after-tax distributions cover the remaining monthly bills, with a safety buffer?”
+        It is a monthly planning model, not a prediction or a withdrawal recommendation. It starts with
+        your selected holdings and cash-flow plan, then shows the answer at the target yield and under a
+        bear-market stress case. <strong>MEPB</strong> means <strong>Monthly Expense Protection Buffer</strong>:
+        the multiple of portfolio-paid monthly expenses you want income to cover for added safety.
+      </p>
+      <ul style={{ paddingLeft: '1.35rem', marginBottom: '0.75rem' }}>
+        <li><strong>The top tiles are the headline:</strong> Current Monthly Income is the holdings&apos; imported estimate. Good Market After Tax and Bear Market After Tax are modelled values, not today&apos;s income. Portfolio Must Pay is the expense gap left after non-investment inflows; MEPB Target is the desired safety-buffer income for that gap.</li>
+        <li><strong>Portfolio must pay</strong> = monthly expenses minus after-tax non-investment inflows, never below zero.</li>
+        <li><strong>MEPB target</strong> = portfolio-paid expenses × MEPB ratio. The Good and Bear buffer ratios divide their respective after-tax income by portfolio-paid expenses.</li>
+        <li><strong>Good income</strong> = book NAV × target yield ÷ 12, then reduced by investment tax. <strong>Bear income</strong> first reduces NAV by the bear decline, applies the bear yield and tax, then applies the income haircut.</li>
+        <li><strong>Minimum reinvestment</strong> = book NAV × (NAV erosion rate + positive expense-inflation rate) ÷ 12. It is the planning amount reserved before treating income as spendable excess.</li>
+        <li>Every month, expenses and non-investment inflows compound from their annual rates. Surplus can be split between reinvestment and the cash reserve; bear shortfalls draw from that reserve. Reinvested income and direct contributions increase projected NAV.</li>
+      </ul>
+      <p style={{ marginBottom: 0 }}>
+        Read the chart as a coverage comparison: income lines above the net-expense line cover the gap;
+        a bear-income line at or above the MEPB line meets the selected safety target. The tables are the
+        month-by-month audit trail, while the full Help page explains each input, metric, status, and column.
+      </p>
+    </div>
+  )
+}
+
 function buildHolding(row) {
   const shares = num(row.quantity)
   const price = num(row.current_price || row.price)
@@ -225,6 +254,7 @@ export default function RetirementReadiness() {
   const [error, setError] = useState(null)
   const [cashFlowPlan, setCashFlowPlan] = useState(null)
   const [cashFlowError, setCashFlowError] = useState(null)
+  const [showHelp, setShowHelp] = useState(false)
 
   const [monthlyExpenses, setMonthlyExpenses] = useState(4500)
   const [bufferRatio, setBufferRatio] = useState(3)
@@ -699,9 +729,20 @@ export default function RetirementReadiness() {
           <p className="rr-subtitle">
             {currentProfileName}{isAggregate ? ' aggregate' : ''} income measured against monthly expenses and a monthly expense protection buffer.
           </p>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline"
+            onClick={() => setShowHelp(value => !value)}
+            aria-expanded={showHelp}
+            aria-controls="retirement-readiness-help"
+          >
+            {showHelp ? 'Hide help' : 'How this works'}
+          </button>
         </div>
         <ReadinessBadge status={model.status} />
       </div>
+
+      {showHelp && <div id="retirement-readiness-help"><RetirementReadinessQuickHelp /></div>}
 
       {loading && <p className="rr-loading">Loading holdings...</p>}
       {error && <p className="rr-error">{error}</p>}
