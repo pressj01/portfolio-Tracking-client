@@ -5,8 +5,9 @@ import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 import {
   PERFORMANCE_PERIODS,
-  defaultCustomDates,
   formatPerformanceRange,
+  readSharedPerformanceRange,
+  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
 function TickerFilter({ tickers, selected, onChange }) {
@@ -107,14 +108,18 @@ export default function PortfolioGrowth2() {
   const { isDark } = useTheme()
 
   // Shared state
-  const initialCustomDates = useRef(defaultCustomDates()).current
-  const [period, setPeriod] = useState('1y')
+  const [initialCustomDates] = useState(() => readSharedPerformanceRange())
+  const [period, setPeriod] = useState(initialCustomDates.period)
   const [customStart, setCustomStart] = useState(initialCustomDates.start)
   const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
   const [selectedTickers, setSelectedTickers] = useState([])
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  useEffect(() => {
+    writeSharedPerformanceRange(period, customStart, customEnd)
+  }, [period, customStart, customEnd])
 
   // Chart 1 controls
   const [showCostBasis, setShowCostBasis] = useState(true)
@@ -303,7 +308,7 @@ export default function PortfolioGrowth2() {
       {/* ── Shared filters ── */}
       <div className="growth-filters">
         <div className="growth-filter-group">
-          <label>Period</label>
+          <label>Shared Performance Date Range</label>
           <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
@@ -351,6 +356,12 @@ export default function PortfolioGrowth2() {
 
       <details className="g2-help">
         <summary>What are these charts showing?</summary>
+        <p className="g2-help-footer">
+          <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
+          transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
+          the account, date range, and holdings scope match. The Total Profit chart is a separate
+          dollar P/L explanation, so it is not expected to equal that percentage.
+        </p>
         <div className="g2-help-grid">
           <section>
             <h3>Portfolio value</h3>
@@ -408,6 +419,13 @@ export default function PortfolioGrowth2() {
               ? ' All begins with the first recorded trade and uses the same basis as “From the first trade.”'
               : ' Both charts and the summary below use this exact range.'}
           </p>
+          <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+            <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
+            this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure.
+            <strong> Total Profit</strong> and the performance chart remain flexible dollar/P&amp;L views that
+            explain the result, so they are intentionally not alternative return percentages.
+            {' '}The selected range is remembered across all four tracking screens.
+          </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card">
               <div className="summary-label">Start Value</div>
@@ -428,11 +446,11 @@ export default function PortfolioGrowth2() {
               <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
             </div>
             <div className="summary-card">
-              <div className="summary-label">Total Return %</div>
+              <div className="summary-label">Tracker Total Return %</div>
               <div className="summary-value">
                 {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
               </div>
-              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+              <div className="summary-sub">Same return standard as Growth &amp; Total Return</div>
             </div>
           </div>
           {/* ── Chart 1: Portfolio Value ── */}

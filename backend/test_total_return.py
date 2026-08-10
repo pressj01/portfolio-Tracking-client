@@ -187,6 +187,64 @@ class TotalReturnComparisonTest(unittest.TestCase):
         self.assertEqual(data["actual_start_date"], "2026-01-02")
         self.assertEqual(data["portfolio_coverage"]["transaction_count"], 1)
 
+    def test_selected_holding_uses_owned_period_transaction_aware_series(self):
+        dates = pd.to_datetime(["2025-12-31", "2026-01-02", "2026-01-05"])
+        close = pd.DataFrame({"AAA": [90.0, 100.0, 110.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        market_data = pd.concat({
+            "Close": close,
+            "Adj Close": close,
+            "Dividends": zeros,
+            "Capital Gains": zeros,
+        }, axis=1)
+
+        class FakeRows(list):
+            def fetchall(self):
+                return self
+
+        class FakeConnection:
+            def execute(self, sql, _params=None):
+                if "FROM transactions" in sql:
+                    return FakeRows([{
+                        "ticker": "AAA",
+                        "profile_id": 1,
+                        "transaction_type": "BUY",
+                        "transaction_date": "2026-01-02",
+                        "shares": 1,
+                        "price_per_share": 100,
+                        "fees": 0,
+                        "notes": "",
+                    }])
+                if "FROM all_account_info" in sql:
+                    return FakeRows([{
+                        "ticker": "AAA",
+                        "profile_id": 1,
+                        "quantity": 1,
+                        "purchase_date": "2026-01-02",
+                        "import_date": None,
+                    }])
+                return FakeRows()
+
+            def close(self):
+                return None
+
+        with (
+            patch("app.get_profile_filter", return_value=(False, [1])),
+            patch("app.get_connection", return_value=FakeConnection()),
+            patch("app.ensure_tables_exist"),
+            patch("app._chunked_yf_download", return_value=market_data),
+        ):
+            response = app.test_client().get(
+                "/api/total-return/compare?tickers=AAA&period=custom"
+                "&start_date=2025-12-31&end_date=2026-01-05"
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        data = response.get_json()
+        self.assertEqual(data["dates"], ["2026-01-02", "2026-01-05"])
+        self.assertEqual(data["price"]["AAA"], [100.0, 110.0])
+        self.assertEqual(data["total"]["AAA"], [100.0, 110.0])
+
 
 class TotalReturnDashboardPeriodTest(unittest.TestCase):
     def test_dashboard_cards_and_rows_share_transaction_aware_period(self):

@@ -5,8 +5,9 @@ import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import {
   PERFORMANCE_PERIODS,
   addCustomRangeParams,
-  defaultCustomDates,
   formatPerformanceRange,
+  readSharedPerformanceRange,
+  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
 function GradeBadge({ grade, large }) {
@@ -65,8 +66,8 @@ export default function Growth() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
-  const initialCustomDates = useRef(defaultCustomDates()).current
-  const [period, setPeriod] = useState('1y')
+  const [initialCustomDates] = useState(() => readSharedPerformanceRange())
+  const [period, setPeriod] = useState(initialCustomDates.period)
   const [customStart, setCustomStart] = useState(initialCustomDates.start)
   const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
   const [benchmark, setBenchmark] = useState('SPY')
@@ -84,6 +85,10 @@ export default function Growth() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  useEffect(() => {
+    writeSharedPerformanceRange(period, customStart, customEnd)
+  }, [period, customStart, customEnd])
 
   useEffect(() => {
     if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
@@ -165,7 +170,7 @@ export default function Growth() {
       }
       Plotly.newPlot(priceEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Price Return Index', font: { size: 14, color: ct.title } },
+        title: { text: 'Transaction-Aware Price Return Index', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
@@ -186,7 +191,7 @@ export default function Growth() {
       }
       Plotly.newPlot(totalEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Total Return Index (Dividends Reinvested)', font: { size: 14, color: ct.title } },
+        title: { text: 'Transaction-Aware Total Return Index (Dividends Reinvested)', font: { size: 14, color: ct.title } },
         margin: { l: 50, r: 20, t: 50, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
@@ -354,7 +359,7 @@ export default function Growth() {
           </div>
         </div>
         <div className="growth-filter-group">
-          <label>Period</label>
+          <label>Shared Performance Date Range</label>
           <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
@@ -406,6 +411,15 @@ export default function Growth() {
               : ''}
             . The period and category filters apply to every metric and chart below.
           </p>
+          <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+            <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
+            ticker bars use the same transaction-aware calculation as the Total Return Dashboard. With
+            the same account, date range, and holdings scope, <strong>Total Return %</strong> here matches
+            Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong>. Buys and sells
+            change portfolio weights; they are not counted as gains or losses. The index starts at 100,
+            so its final value minus 100 is the displayed return percentage.
+            {' '}The selected range is remembered across all four tracking screens.
+          </div>
           {/* Metrics strip */}
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card summary-card-grade">
@@ -420,7 +434,7 @@ export default function Growth() {
               )}
             </div>
             <ReturnCard
-              label="Total Return %"
+              label="Tracker Total Return %"
               value={data.portfolio_metrics?.total_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}

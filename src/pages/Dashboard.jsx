@@ -11,8 +11,9 @@ import { formatMoney } from '../utils/money'
 import {
   PERFORMANCE_PERIODS,
   addCustomRangeParams,
-  defaultCustomDates,
   formatPerformanceRange,
+  readSharedPerformanceRange,
+  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
@@ -788,7 +789,17 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
   )
 }
 
-function TickerModal({ ticker, onClose }) {
+function TickerModal({
+  ticker,
+  onClose,
+  period,
+  customStart,
+  customEnd,
+  onPeriodChange,
+  onCustomStartChange,
+  onCustomEndChange,
+  maxDate,
+}) {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
   const { selection } = useProfile()
@@ -798,10 +809,20 @@ function TickerModal({ ticker, onClose }) {
 
   useEffect(() => {
     if (!ticker) return
+    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+      setData(null)
+      setLoading(false)
+      setError(!customStart || !customEnd
+        ? 'Choose both a custom start date and end date.'
+        : 'Custom start date must be on or before the end date.')
+      return
+    }
     setLoading(true)
     setError(null)
     setData(null)
-    pf(`/api/ticker-return/${encodeURIComponent(ticker)}`)
+    const params = new URLSearchParams({ period })
+    addCustomRangeParams(params, period, customStart, customEnd)
+    pf(`/api/ticker-return/${encodeURIComponent(ticker)}?${params}`)
       .then(async r => {
         const payload = await r.json().catch(() => null)
         if (!r.ok) throw new Error(payload?.error || `Could not load return data for ${ticker}`)
@@ -814,7 +835,7 @@ function TickerModal({ ticker, onClose }) {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [ticker, pf, selection])
+  }, [ticker, pf, selection, period, customStart, customEnd])
 
   useEffect(() => {
     const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
@@ -856,7 +877,7 @@ function TickerModal({ ticker, onClose }) {
     const layout = {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
-      title: { text: `${data.ticker} — ${hasTotalReturn ? 'Return Since Purchase' : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
+      title: { text: `${data.ticker} — ${hasTotalReturn ? `${data.period_label || 'Selected Period'} Return` : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
       xaxis: { title: '', gridcolor: ct.grid },
       yaxis: hasTotalReturn
         ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
@@ -874,18 +895,96 @@ function TickerModal({ ticker, onClose }) {
 
   if (!ticker) return null
 
+  const lastNumber = values => {
+    for (let index = (values || []).length - 1; index >= 0; index -= 1) {
+      const value = Number(values[index])
+      if (Number.isFinite(value)) return value
+    }
+    return null
+  }
+  const endingTotalReturn = lastNumber(data?.total_return)
+  const endingPriceReturn = lastNumber(data?.price_return)
+  const effectiveRange = formatPerformanceRange(
+    data?.effective_start_date,
+    data?.effective_end_date,
+  )
+  const requestedRange = formatPerformanceRange(
+    data?.requested_start_date,
+    data?.requested_end_date,
+  )
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>&times;</button>
+        <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>
+          {data ? `${data.ticker} — ${data.description}` : ticker}
+        </h2>
+        {data && (
+          <p style={{ color: 'var(--text-dim)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+            Purchased {localDateString(data.purchase_date) || '—'} at {fmt(data.price_paid)}
+          </p>
+        )}
+        <div className="growth-filter-group" style={{ marginBottom: '0.75rem', paddingRight: '2rem' }}>
+          <label>Shared Performance Date Range</label>
+          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+            {PERFORMANCE_PERIODS.map(option => (
+              <button
+                type="button"
+                key={option.key}
+                className={`tr-pbtn${period === option.key ? ' tr-pbtn-active' : ''}`}
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                onClick={() => onPeriodChange(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        {period === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom holding return date range" style={{ marginBottom: '0.75rem' }}>
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={customStart}
+                max={customEnd || maxDate}
+                onChange={event => onCustomStartChange(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || undefined}
+                max={maxDate}
+                onChange={event => onCustomEndChange(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
         {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
         {error && <div className="alert alert-error">{error}</div>}
         {data && (
           <>
-            <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
-            <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-              Purchased {localDateString(data.purchase_date) || '—'} at {fmt(data.price_paid)}
-            </p>
+            {data.calculation_method && (
+              <p style={{ color: 'var(--text-dim)', margin: '-0.5rem 0 1rem', fontSize: '0.82rem', lineHeight: 1.45 }}>
+                <strong>Matches Total Return for {data.period_label || 'the selected period'}:</strong>{' '}
+                {data.calculation_method}
+              </p>
+            )}
+            <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+              <strong>{data.period_label || 'Selected period'}:</strong>{' '}
+              {effectiveRange || requestedRange || 'Dates unavailable'}
+              {requestedRange && effectiveRange && requestedRange !== effectiveRange
+                ? ` (requested ${requestedRange})`
+                : ''}
+              {endingTotalReturn != null && (
+                <> — <strong>Total Return {endingTotalReturn.toFixed(2)}%</strong></>
+              )}
+              {endingPriceReturn != null && `; Price Return ${endingPriceReturn.toFixed(2)}%`}
+            </div>
             {data.note && (
               <p style={{ color: 'var(--p-ffcc80)', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
             )}
@@ -917,8 +1016,8 @@ export default function Dashboard() {
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
-  const initialGradeCustomDates = useRef(defaultCustomDates()).current
-  const [gradePeriod, setGradePeriod] = useState('1y')
+  const [initialGradeCustomDates] = useState(() => readSharedPerformanceRange())
+  const [gradePeriod, setGradePeriod] = useState(initialGradeCustomDates.period)
   const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
   const [gradeCustomEnd, setGradeCustomEnd] = useState(initialGradeCustomDates.end)
   const [gradeRefreshToken, setGradeRefreshToken] = useState(0)
@@ -972,6 +1071,10 @@ export default function Dashboard() {
     'generic',
     'other',
   ].includes(String(currentProfile?.broker_source || '').toLowerCase())
+
+  useEffect(() => {
+    writeSharedPerformanceRange(gradePeriod, gradeCustomStart, gradeCustomEnd)
+  }, [gradePeriod, gradeCustomStart, gradeCustomEnd])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -2421,7 +2524,7 @@ export default function Dashboard() {
 
       <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
         <div className="growth-filter-group">
-          <label>Grade &amp; Risk Period</label>
+          <label>Shared Performance Date Range</label>
           <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
@@ -2957,7 +3060,19 @@ export default function Dashboard() {
       </div>
 
       {/* Ticker Modal */}
-      {modalTicker && <TickerModal ticker={modalTicker} onClose={() => setModalTicker(null)} />}
+      {modalTicker && (
+        <TickerModal
+          ticker={modalTicker}
+          onClose={() => setModalTicker(null)}
+          period={gradePeriod}
+          customStart={gradeCustomStart}
+          customEnd={gradeCustomEnd}
+          onPeriodChange={setGradePeriod}
+          onCustomStartChange={setGradeCustomStart}
+          onCustomEndChange={setGradeCustomEnd}
+          maxDate={initialGradeCustomDates.end}
+        />
+      )}
     </div>
   )
 }

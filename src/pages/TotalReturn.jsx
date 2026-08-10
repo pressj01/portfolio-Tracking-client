@@ -7,9 +7,10 @@ import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 import {
   PERFORMANCE_PERIODS,
   addCustomRangeParams,
-  defaultCustomDates,
   formatPerformanceDate,
   formatPerformanceRange,
+  readSharedPerformanceRange,
+  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
 // 30 bright, high-contrast colors for dark backgrounds
@@ -89,8 +90,8 @@ export default function TotalReturn() {
   const [positionView, setPositionView] = useState('unrealized')
   const [rvyMode, setRvyMode] = useState('cur')
   const [scatterReturnMode, setScatterReturnMode] = useState('pct')
-  const initialCustomDates = useRef(defaultCustomDates()).current
-  const [dashboardPeriod, setDashboardPeriod] = useState('1y')
+  const [initialCustomDates] = useState(() => readSharedPerformanceRange())
+  const [dashboardPeriod, setDashboardPeriod] = useState(initialCustomDates.period)
   const [customStart, setCustomStart] = useState(initialCustomDates.start)
   const [customEnd, setCustomEnd] = useState(initialCustomDates.end)
 
@@ -105,6 +106,10 @@ export default function TotalReturn() {
   const [cmpData, setCmpData] = useState(null)
   const [cmpLoading, setCmpLoading] = useState(false)
   const [cmpError, setCmpError] = useState(null)
+
+  useEffect(() => {
+    writeSharedPerformanceRange(dashboardPeriod, customStart, customEnd)
+  }, [dashboardPeriod, customStart, customEnd])
 
   const dashboardRows = useMemo(() => {
     if (!summary?.rows || !chartData?.performance_rows) return []
@@ -655,7 +660,15 @@ export default function TotalReturn() {
       : positionView === 'combined' && (row.net_basis || 0) < MIN_BASIS
   )
 
-  const allTickers = useMemo(() => summary?.rows?.map(r => r.ticker) || [], [summary])
+  const allTickers = useMemo(() => (
+    [...new Set((summary?.rows || [])
+      .map(row => String(row.ticker || '').trim().toUpperCase())
+      .filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right, undefined, {
+        sensitivity: 'base',
+        numeric: true,
+      }))
+  ), [summary])
 
   const t = chartData?.portfolio_metrics || {}
 
@@ -745,7 +758,7 @@ export default function TotalReturn() {
         )}
 
         <div className="growth-filter-group">
-          <label>Dashboard Date Range</label>
+          <label>Shared Performance Date Range</label>
           <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
             {PERFORMANCE_PERIODS.map(periodOption => (
               <button
@@ -804,6 +817,14 @@ export default function TotalReturn() {
             {t.distribution_source ? ` Distribution dollars use ${t.distribution_source.toLowerCase()}.` : ''}
             {' '}Because capital changes during the period, dollar return divided by start value may not equal the time-weighted return percentage.
           </p>
+          <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+            <strong>Tracker performance standard:</strong> this page is the reference calculation for
+            transaction-aware Total Return. Growth &amp; Performance uses the same return index, and
+            Portfolio Growth 2 shows the same figure as <strong>Tracker Total Return %</strong> when the
+            account, date range, and holdings scope match. Its dollar P/L chart answers a different
+            question: where the dollar profit or loss came from.
+            {' '}The selected range is remembered across all four tracking screens.
+          </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={dashboardCardRange} />
             <MetricCard label="End Value" value={fmtInt(t.end_value)} range={dashboardCardRange} />
@@ -812,7 +833,7 @@ export default function TotalReturn() {
             <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange} />
             <MetricCard label="Total Return" range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
-            <MetricCard label="Total Return %" range={dashboardCardRange}
+            <MetricCard label="Tracker Total Return %" range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
@@ -903,7 +924,7 @@ export default function TotalReturn() {
           </form>
 
           <div className="growth-filter-group">
-            <label>Dashboard Date Range</label>
+            <label>Shared Performance Date Range</label>
             <div style={{ color: 'var(--accent-bright)', fontSize: '0.85rem', padding: '0.35rem 0' }}>
               {chartData?.period_label || 'Selected period'}{dashboardCardRange ? ` · ${dashboardCardRange}` : ''}
             </div>
