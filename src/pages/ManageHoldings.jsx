@@ -41,6 +41,14 @@ function formatOverrideDate(value) {
   })
 }
 
+const OVERRIDE_NOTE_STYLE = {
+  fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.25rem', lineHeight: 1.35,
+}
+const OVERRIDE_LINK_STYLE = {
+  background: 'none', border: 'none', padding: 0, color: 'var(--accent)',
+  cursor: 'pointer', font: 'inherit', textDecoration: 'underline',
+}
+
 function invalidateDashboardCache() {
   try {
     // A holding can feed its individual account, Owner, and one or more
@@ -124,6 +132,10 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   // its next distribution. Show when that is, and let it be handed back early.
   const [clearDivOverride, setClearDivOverride] = useState(false)
   const divOverrideUntil = holding?.div_manual_until || null
+  // Hand-typed ex-div/pay dates hold until the pay date they name has passed,
+  // after which the projected schedule is the better answer again.
+  const [clearDatesOverride, setClearDatesOverride] = useState(false)
+  const datesOverrideUntil = holding?.div_dates_manual_until || null
 
   useEffect(() => {
     pf('/api/categories/data')
@@ -245,6 +257,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
       payload.paid_for_itself = payload.total_divs_received / payload.purchase_value
     }
     if (clearDivOverride) payload.div_manual_clear = true
+    if (clearDatesOverride) payload.div_dates_manual_clear = true
 
     onSave(payload)
   }
@@ -345,25 +358,17 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
               <label>Div/Share</label>
               <input type="number" step="any" value={form.div || ''} onChange={(e) => set('div', e.target.value)} style={{ width: '100%' }} />
               {divOverrideUntil && !clearDivOverride && (
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.25rem', lineHeight: 1.35 }}>
+                <div style={OVERRIDE_NOTE_STYLE}>
                   Your amount is in use through {formatOverrideDate(divOverrideUntil)}, then market data resumes.{' '}
-                  <button
-                    type="button"
-                    onClick={() => setClearDivOverride(true)}
-                    style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
-                  >
+                  <button type="button" onClick={() => setClearDivOverride(true)} style={OVERRIDE_LINK_STYLE}>
                     Use market data now
                   </button>
                 </div>
               )}
               {clearDivOverride && (
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-dim-2)', marginTop: '0.25rem', lineHeight: 1.35 }}>
+                <div style={OVERRIDE_NOTE_STYLE}>
                   Market data resumes on the next refresh.{' '}
-                  <button
-                    type="button"
-                    onClick={() => setClearDivOverride(false)}
-                    style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}
-                  >
+                  <button type="button" onClick={() => setClearDivOverride(false)} style={OVERRIDE_LINK_STYLE}>
                     Undo
                   </button>
                 </div>
@@ -399,6 +404,22 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             <div className="form-group">
               <label>Pay Date</label>
               <input value={form.div_pay_date || ''} onChange={(e) => set('div_pay_date', e.target.value)} placeholder="MM/DD/YY" style={{ width: '100%' }} />
+              {datesOverrideUntil && !clearDatesOverride && (
+                <div style={OVERRIDE_NOTE_STYLE}>
+                  Your dates are in use through {formatOverrideDate(datesOverrideUntil)}, then projected dates resume.{' '}
+                  <button type="button" onClick={() => setClearDatesOverride(true)} style={OVERRIDE_LINK_STYLE}>
+                    Use market data now
+                  </button>
+                </div>
+              )}
+              {clearDatesOverride && (
+                <div style={OVERRIDE_NOTE_STYLE}>
+                  Projected dates resume on the next refresh.{' '}
+                  <button type="button" onClick={() => setClearDatesOverride(false)} style={OVERRIDE_LINK_STYLE}>
+                    Undo
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

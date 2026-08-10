@@ -272,6 +272,12 @@ def ensure_tables_exist(conn=None):
             -- fund's next distribution makes the market value right again.
             div_manual_until           TEXT,
             div_manual_set_at          TEXT,
+            -- Same treatment for hand-typed ex-div/pay dates, but anchored to
+            -- the pay date the user entered: those dates describe one specific
+            -- distribution, so once that pay date is in the past the derived
+            -- schedule is the better answer again.
+            div_dates_manual_until     TEXT,
+            div_dates_manual_set_at    TEXT,
             dividend_paid              REAL,
             estim_payment_per_year     REAL,
             approx_monthly_income      REAL,

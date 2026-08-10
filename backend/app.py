@@ -2940,6 +2940,12 @@ def _ensure_basis_columns(conn):
         # the next declared distribution makes the market value right again.
         "div_manual_until": "TEXT",
         "div_manual_set_at": "TEXT",
+        # Same again for the ex-div/pay dates. Kept separate from the amount pin
+        # because the two expire on different clocks: an amount is stale once the
+        # next distribution is declared, whereas a hand-typed schedule is stale
+        # only once the pay date it names has actually passed.
+        "div_dates_manual_until": "TEXT",
+        "div_dates_manual_set_at": "TEXT",
     }
     for col, col_type in needed.items():
         if col not in cols:
@@ -4138,7 +4144,7 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
     placeholders = ",".join("?" * len(ids))
     rows = conn.execute(
         f"""SELECT ticker, div_frequency, ex_div_date, div_pay_date,
-                   div, div_manual_until
+                   div, div_manual_until, div_dates_manual_until
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
               AND COALESCE(quantity, 0) > 1e-9
@@ -4146,6 +4152,18 @@ def _security_level_metadata_by_ticker(conn, profile_ids):
         ids,
     ).fetchall()
     metadata = {}
+    # Pinned schedules are resolved first, ahead of the largest-position rule
+    # below. A hand-typed ex-div/pay pair is a statement about the security
+    # itself, so it should still win when a later import adds a bigger position
+    # in another account that never carried the pin.
+    for row in rows:
+        if not _holding_dividend_dates_override_active(row):
+            continue
+        entry = metadata.setdefault(row["ticker"], {})
+        for field in ("ex_div_date", "div_pay_date"):
+            if field not in entry and row[field] is not None:
+                entry[field] = row[field]
+        entry.setdefault("div_dates_manual_until", row["div_dates_manual_until"])
     for row in rows:
         ticker = row["ticker"]
         entry = metadata.setdefault(ticker, {})
@@ -8668,6 +8686,60 @@ def _manual_dividend_value_changed(old_value, new_value):
     return abs(new - old) > MANUAL_DIVIDEND_CHANGE_TOLERANCE
 
 
+def _manual_dividend_dates_override_expiry(
+    div_pay_date, ex_div_date, div_frequency, today=None
+):
+    """Return the ISO date a hand-typed ex-div/pay pair stops outranking the market.
+
+    The pay date the user entered is the anchor. Those two dates describe one
+    specific scheduled distribution, so the pin lasts exactly until that payment
+    is in the past — after which the projected schedule really is the better
+    answer and should take back over.
+
+    A pay date already in the past is returned as-is, which reads as an
+    immediately-expired pin. That is deliberate: correcting a historical record
+    should not freeze the upcoming schedule. Only when no pay date is available
+    at all do we fall back to the amount pin's cadence projection, so that an
+    ex-date-only edit still survives its own cycle.
+    """
+    today = today or datetime.date.today()
+    pay_dt = _date_from_value(div_pay_date)
+    if pay_dt is not None:
+        return pay_dt.isoformat()
+    return _manual_dividend_override_expiry(ex_div_date, div_frequency, today=today)
+
+
+def _holding_dividend_dates_override_active(holding, today=None):
+    """True when this row's ex-div/pay dates are pinned to hand-typed values.
+
+    Reads the column defensively for the same reason _holding_frequency_locked
+    does: not every query in here selects it.
+    """
+    if holding is None:
+        return False
+    try:
+        keys = holding.keys()
+    except AttributeError:
+        return False
+    if "div_dates_manual_until" not in keys:
+        return False
+    return _manual_dividend_override_active(holding["div_dates_manual_until"], today)
+
+
+def _manual_dividend_date_changed(old_value, new_value):
+    """True when a submitted ex-div/pay date differs from what is stored.
+
+    Compared as dates rather than as text: the edit modal renders '09/02/26'
+    while an import may have stored '2026-09-02', so a string compare would read
+    every resubmit of an untouched field as a fresh edit and pin it.
+    """
+    old = _date_from_value(old_value)
+    new = _date_from_value(new_value)
+    if old is not None or new is not None:
+        return old != new
+    return str(old_value or "").strip() != str(new_value or "").strip()
+
+
 def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata):
     if not metadata:
         return False
@@ -8678,6 +8750,13 @@ def _apply_dividend_repair_metadata(conn, profile_id, ticker, holding, metadata)
     new_exdiv = metadata.get("ex_div_date")
     new_pay_date = metadata.get("div_pay_date")
     new_freq = metadata.get("div_frequency")
+    if _holding_dividend_dates_override_active(holding):
+        # A hand-typed schedule outranks the repair while the pay date it names
+        # is still ahead of us, same rule the refresh follows. Dropping the
+        # values here rather than at the write below also keeps the archiving
+        # above from recording a schedule change that never happens.
+        new_exdiv = None
+        new_pay_date = None
     effective_exdiv = new_exdiv or old_exdiv
     effective_pay_date = new_pay_date or old_pay_date
     effective_freq = new_freq or old_freq
@@ -8845,7 +8924,7 @@ def _recompute_dividend_fields_from_payments(
                   total_divs_received,
                   ytd_divs, current_month_income, paid_for_itself,
                   dividend_actuals_source, description, ex_div_date,
-                  div_pay_date, div_manual_until
+                  div_pay_date, div_manual_until, div_dates_manual_until
            FROM all_account_info
            WHERE profile_id IN ({placeholders})
              AND COALESCE(quantity, 0) > 0
@@ -11410,7 +11489,7 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, div_manual_until, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, div_manual_until, div_dates_manual_until, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
@@ -11467,6 +11546,7 @@ def refresh_market_data():
             "div_frequency_locked": bool(r["div_frequency_locked"]),
             "div": r["div"] or 0,
             "div_manual_until": r["div_manual_until"],
+            "div_dates_manual_until": r["div_dates_manual_until"],
             "dividend_paid": r["dividend_paid"] or 0,
             "estim_payment_per_year": r["estim_payment_per_year"] or 0,
             "approx_monthly_income": r["approx_monthly_income"] or 0,
@@ -11898,6 +11978,26 @@ def refresh_market_data():
                 refresh_date,
             )
             div_override_expired = bool(div_override_until) and not div_override_active
+            # Same treatment for a hand-typed schedule, on its own clock: the
+            # entered pay date. While that payment is still ahead of us the user
+            # has looked the dates up and the snapshot has not caught up yet.
+            dates_override_until = h.get("div_dates_manual_until")
+            dates_override_active = _manual_dividend_override_active(
+                dates_override_until,
+                refresh_date,
+            )
+            dates_override_expired = (
+                bool(dates_override_until) and not dates_override_active
+            )
+            if dates_override_active:
+                # Pinned exactly the way the cadence lock above is: fold the
+                # stored values into the "new" names rather than skipping the
+                # write. The columns then get their own value written back —
+                # a no-op — while everything downstream that reads new_exdiv
+                # (schedule-history archiving, change detection, the projected
+                # pay date) sees the schedule the user actually entered.
+                new_exdiv = old_exdiv
+                new_pay_date = old_pay_date
             if div_override_active:
                 # Including a deliberate $0 ("this fund stopped paying"), which
                 # falls through to the zeroing branch below and stays there.
@@ -11939,6 +12039,14 @@ def refresh_market_data():
                 # The next distribution has been declared, so the market speaks
                 # for this holding again.
                 sets.extend(["div_manual_until = ?", "div_manual_set_at = ?"])
+                vals.extend([None, None])
+            if dates_override_expired:
+                # The pay date the user typed has passed, so the projected
+                # schedule is the better answer again.
+                sets.extend([
+                    "div_dates_manual_until = ?",
+                    "div_dates_manual_set_at = ?",
+                ])
                 vals.extend([None, None])
 
             # Backfill purchase_value if missing
@@ -13399,7 +13507,7 @@ def update_holding(ticker):
         "SELECT quantity, price_paid, current_price, purchase_value, current_value, "
         "       total_divs_received, estim_payment_per_year, broker_price_paid, "
         "       broker_purchase_value, original_price_paid, original_purchase_value, "
-        "       div, div_frequency, ex_div_date "
+        "       div, div_frequency, ex_div_date, div_pay_date "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
@@ -13407,6 +13515,9 @@ def update_holding(ticker):
         conn.close()
         return jsonify({"error": f"{ticker} not found"}), 404
     clear_div_override = bool(data.pop("div_manual_clear", False))
+    # Released separately from the amount: the two pins answer different
+    # questions and the modal offers each its own "use market data now".
+    clear_dates_override = bool(data.pop("div_dates_manual_clear", False))
     data = _prepare_manual_holding_payload(data, existing)
 
     allowed_fields = [
@@ -13451,6 +13562,36 @@ def update_holding(ticker):
             "div_manual_set_at": today.isoformat(),
         }
     for field, value in div_override.items():
+        updates.append(f"{field} = ?")
+        vals.append(value)
+
+    # And the same for a hand-typed schedule. Looking up the real ex-div/pay
+    # dates is the most common correction users make here, and every one of them
+    # was being thrown away: the refresh rewrites both columns unconditionally,
+    # and the dividend calendar re-derives them from the issuer feed on top of
+    # that. Anchored on the entered pay date per the rule above.
+    dates_override = {}
+    if clear_dates_override:
+        dates_override = {
+            "div_dates_manual_until": None,
+            "div_dates_manual_set_at": None,
+        }
+    elif ("ex_div_date" in data and _manual_dividend_date_changed(
+        existing["ex_div_date"], data["ex_div_date"]
+    )) or ("div_pay_date" in data and _manual_dividend_date_changed(
+        existing["div_pay_date"], data["div_pay_date"]
+    )):
+        today = datetime.date.today()
+        dates_override = {
+            "div_dates_manual_until": _manual_dividend_dates_override_expiry(
+                data.get("div_pay_date", existing["div_pay_date"]),
+                data.get("ex_div_date", existing["ex_div_date"]),
+                data.get("div_frequency", existing["div_frequency"]),
+                today=today,
+            ),
+            "div_dates_manual_set_at": today.isoformat(),
+        }
+    for field, value in dates_override.items():
         updates.append(f"{field} = ?")
         vals.append(value)
 
@@ -13505,6 +13646,11 @@ def update_holding(ticker):
     div_shared = dict(div_override)
     if div_override and not clear_div_override:
         div_shared["div"] = data["div"]
+    # A fund declares one schedule for every account holding it, so the date pin
+    # travels with the ex-div/pay dates that _SECURITY_LEVEL_HOLDING_FIELDS
+    # already copies. Without it the edited account holds the typed dates while
+    # every other one keeps letting the refresh rewrite them.
+    div_shared.update(dates_override)
     propagated_pids = _propagate_security_level_fields(
         conn, ticker, data, profile_id, extra_shared=div_shared
     )
@@ -27328,6 +27474,7 @@ def _build_cal_events():
     try:
         df = pd.read_sql("""
             SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency,
+                   div_frequency_locked, div_manual_until, div_dates_manual_until,
                    quantity, current_price, estim_payment_per_year
             FROM all_account_info
             WHERE ex_div_date IS NOT NULL
@@ -27345,6 +27492,9 @@ def _build_cal_events():
     today_d = datetime.today().date()
     cache_columns = (
         "ticker", "description", "ex_div_date", "div_pay_date", "div", "div_frequency",
+        # The pin columns belong in the signature too, or releasing an override
+        # would leave the calendar serving the pinned dates from cache.
+        "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
         "quantity", "current_price", "estim_payment_per_year",
     )
     cache_rows = df.to_dict("records")
@@ -27398,28 +27548,42 @@ def _build_cal_events():
         official_pay_ts = None
         official_lag = None
 
+        # What the holdings screen recorded outranks the issuer feed, on exactly
+        # the same terms the dashboard refresh applies. This screen re-derived
+        # everything from the feed independently, so an edit could survive the
+        # refresh and still be invisible here.
+        # via pandas, so a NULL in the column arrives as NaN — and bool(NaN) is
+        # True, which would pin every unlocked row.
+        freq_locked_raw = row.get("div_frequency_locked")
+        freq_pinned = bool(freq_locked_raw) if pd.notna(freq_locked_raw) else False
+        amount_pinned = _manual_dividend_override_active(row.get("div_manual_until"))
+        dates_pinned = _manual_dividend_override_active(
+            row.get("div_dates_manual_until")
+        )
+
         official = official_snapshot_for(ticker, description)
         if official and official.get("has_dividend"):
             official_freq = (official.get("freq") or "").strip().upper()
-            if official_freq:
+            if official_freq and not freq_pinned:
                 freq = official_freq
             try:
                 official_div = official.get("div")
-                if official_div is not None and float(official_div) > 0:
+                if official_div is not None and float(official_div) > 0 and not amount_pinned:
                     amount = float(official_div)
             except Exception:
                 pass
-            if official.get("ex_div_date"):
-                ex_value = official.get("ex_div_date")
-            if official.get("div_pay_date"):
-                pay_value = official.get("div_pay_date")
-                official_pay_ts = _parse_timestamp_value(pay_value)
-            lag_val = official.get("pay_lag_days")
-            if lag_val is not None:
-                try:
-                    official_lag = int(lag_val)
-                except (TypeError, ValueError):
-                    official_lag = None
+            if not dates_pinned:
+                if official.get("ex_div_date"):
+                    ex_value = official.get("ex_div_date")
+                if official.get("div_pay_date"):
+                    pay_value = official.get("div_pay_date")
+                    official_pay_ts = _parse_timestamp_value(pay_value)
+                lag_val = official.get("pay_lag_days")
+                if lag_val is not None:
+                    try:
+                        official_lag = int(lag_val)
+                    except (TypeError, ValueError):
+                        official_lag = None
 
         dt_ts = _parse_timestamp_value(ex_value)
         if dt_ts is None:
@@ -27433,7 +27597,11 @@ def _build_cal_events():
         threshold = today_d - timedelta(days=1)
         is_weekly = freq in ("52", "W")
         cycle_steps = 0
-        if (is_weekly or profile_id != 1) and dt < threshold and freq:
+        # Pinned dates name one specific distribution, so hold that pair intact
+        # rather than rolling it to the next cycle. Between ex-date and pay date
+        # the ex-date is already behind us and would otherwise advance, leaving
+        # the card showing next month's ex-date against this month's pay date.
+        if (is_weekly or profile_id != 1) and dt < threshold and freq and not dates_pinned:
             while dt < threshold:
                 next_dt = _advance_dividend_cycle(pd.Timestamp(dt), freq, 1)
                 if next_dt is None:
@@ -27444,7 +27612,13 @@ def _build_cal_events():
         # Determine pay date
         pay_estimated = True
 
-        if official_pay_ts is not None and cycle_steps == 0:
+        if dates_pinned and stored_pay_ts is not None:
+            # Typed on the holdings screen, so it is a looked-up fact rather than
+            # a projection: skip the issuer feed, the Yahoo lookup and the lag
+            # pattern, all of which would re-derive it back to a guess.
+            pay_dt = stored_pay_ts
+            pay_estimated = False
+        elif official_pay_ts is not None and cycle_steps == 0:
             # Issuer-published pay dates supersede Yahoo calendar values.
             pay_dt = official_pay_ts
             pay_estimated = False
