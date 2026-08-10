@@ -8,6 +8,7 @@ import json
 import hashlib
 import datetime
 import calendar
+import statistics
 from html.parser import HTMLParser
 
 # Ensure backend directory is on the Python path so sibling imports work
@@ -101,6 +102,7 @@ from bear_put_spread_scanner import register_routes as register_bear_put_spread_
 from bull_put_spread_scanner import register_routes as register_bull_put_spread_scanner_routes
 from bear_call_spread_scanner import register_routes as register_bear_call_spread_scanner_routes
 from iron_condor_scanner import register_routes as register_iron_condor_scanner_routes
+from put_condor_scanner import register_routes as register_put_condor_scanner_routes
 from unbalanced_put_condor_scanner import register_routes as register_unbalanced_put_condor_scanner_routes
 from unbalanced_butterfly_scanner import register_routes as register_unbalanced_butterfly_scanner_routes
 from four_eight_eight_scanner import register_routes as register_four_eight_eight_scanner_routes
@@ -1138,6 +1140,7 @@ _NAV_BENCHMARK_OVERRIDE_CACHE = {"ts": 0, "data": {}}
 _PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
 _UPCOMING_DIVIDENDS_CACHE = {}
 _DIVIDEND_CALENDAR_CACHE = {}
+_DIVIDEND_CALENDAR_BUILD_LOCK = threading.Lock()
 _EARNINGS_CALENDAR_CACHE = {}
 _DIVIDEND_GROWTH_CACHE = {}
 _DIVIDEND_EVENT_TTL_SEC = 60 * 60
@@ -1219,6 +1222,10 @@ def _cache_value(value):
         pass
     if hasattr(value, "isoformat"):
         return value.isoformat()
+    if isinstance(value, (list, tuple)):
+        return tuple(_cache_value(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(sorted((key, _cache_value(item)) for key, item in value.items()))
     return value
 
 
@@ -5273,6 +5280,7 @@ def restore_import_backup():
     except Exception as e:
         return jsonify({"error": f"Restore failed: {e}"}), 500
 
+    _clear_dividend_event_caches()
     return jsonify({"message": f"Database restored from {fname}. Refresh your browser to see the changes."})
 
 
@@ -5729,6 +5737,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             f"export doesn't go back far enough to cover the full position: {ticker_list}."
         )
 
+    _clear_dividend_event_caches()
     return jsonify({
         "message": " ".join(parts),
         "details": holding_messages,
@@ -6536,6 +6545,9 @@ def api_import_transactions():
                 f"export doesn't go back far enough to cover the full position: {ticker_list}."
             )
 
+    # Imported actual payments can immediately change the recurring pay-date
+    # pattern, so no caller should continue serving the pre-import schedule.
+    _clear_dividend_event_caches()
     return jsonify({
         "inserted_buys": inserted_buys,
         "inserted_sells": inserted_sells,
@@ -8199,6 +8211,8 @@ def _parse_timestamp_value(value):
         return None
     try:
         ts = pd.Timestamp(value)
+        if pd.isna(ts):
+            return None
         if ts.tzinfo is not None:
             ts = ts.tz_localize(None)
         return ts
@@ -9741,6 +9755,8 @@ def _merge_official_distribution_snapshot(snapshot, official):
         return merged
     if official.get("has_dividend"):
         merged.update(official)
+        if official.get("div_pay_date"):
+            merged["pay_date_confirmed"] = True
         return merged
 
     # A newly launched fund can publish its cadence and future schedule before
@@ -9753,6 +9769,8 @@ def _merge_official_distribution_snapshot(snapshot, official):
         value = official.get(key)
         if value not in (None, "", []):
             merged[key] = value
+    if official.get("div_pay_date"):
+        merged["pay_date_confirmed"] = True
     return merged
 
 
@@ -11127,6 +11145,7 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
         "div": 0.0,
         "ex_div_date": None,
         "div_pay_date": None,
+        "pay_date_confirmed": False,
         "freq": None,
         "history": pd.Series(dtype=float),
     }
@@ -11200,6 +11219,7 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
             if isinstance(pay_date, (int, float)):
                 pay_date = pd.Timestamp(pay_date, unit="s", tz=_timezone.utc)
             snapshot["div_pay_date"] = _format_mdy_date(pay_date)
+            snapshot["pay_date_confirmed"] = bool(snapshot["div_pay_date"])
         except Exception:
             pass
 
@@ -11475,7 +11495,7 @@ def _portfolio_daily_price_change(
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
     import yfinance as yf
-    from datetime import datetime as _dt, timedelta as _td
+    from datetime import datetime as _dt
 
     conn = get_connection()
     _ensure_basis_columns(conn)  # div_frequency_locked is read below
@@ -11701,6 +11721,28 @@ def refresh_market_data():
 
     lag_pattern_map = _build_dividend_lag_patterns(conn)
 
+    actual_payment_history = {}
+    try:
+        history_rows = conn.execute(
+            "SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date "
+            "FROM dividend_payments "
+            "WHERE profile_id IN ({}) "
+            "AND LOWER(COALESCE(source, '')) != 'refresh_estimate' "
+            "AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%' "
+            "ORDER BY profile_id, ticker, payment_date".format(
+                ",".join("?" * len(source_pids))
+            ),
+            source_pids,
+        ).fetchall()
+        for history_row in history_rows:
+            parsed = _parse_timestamp_value(history_row["payment_date"])
+            if parsed is not None:
+                actual_payment_history.setdefault(
+                    (history_row["profile_id"], history_row["ticker"]), []
+                ).append(parsed.date().isoformat())
+    except Exception:
+        actual_payment_history = {}
+
     # Load known weekly tickers across all profiles
     weekly_set = set()
     try:
@@ -11742,6 +11784,7 @@ def refresh_market_data():
                         description=description_map.get(t),
                     )
                 ),
+                "pay_date_confirmed": False,
                 "freq": freq_map.get(t),
                 "history": div_history.get(t, pd.Series(dtype=float)),
             }
@@ -11862,15 +11905,52 @@ def refresh_market_data():
             return False
         return not _refresh_num_changed(income, expected, tolerance=max(1.0, expected * 0.03))
 
-    def _refresh_expected_pay_date(ex_div_date, pay_date, freq):
+    def _refresh_expected_pay_date(
+        ex_div_date,
+        pay_date,
+        freq,
+        ticker=None,
+        description=None,
+        payment_history=None,
+        pay_date_confirmed=False,
+    ):
         parsed_pay = _refresh_parse_date(pay_date)
-        if parsed_pay:
+        if parsed_pay and pay_date_confirmed:
             return parsed_pay
-        parsed_ex = _refresh_parse_date(ex_div_date)
-        if not parsed_ex:
-            return None
-        lag_days = {"W": 3, "M": 7, "Q": 10, "SA": 14, "A": 14}
-        return parsed_ex + _td(days=lag_days.get((freq or "Q").upper(), 10))
+        if parsed_pay is None:
+            estimated = _estimate_dividend_pay_from_pattern(
+                ex_div_date,
+                freq,
+                pattern=lag_pattern_map.get(ticker),
+                ticker=ticker,
+                description=description,
+            )
+            parsed_pay = estimated.date() if estimated is not None else None
+        if parsed_pay is None or not payment_history:
+            return parsed_pay
+
+        ex_date = _refresh_parse_date(ex_div_date)
+        holding = {
+            "ticker": ticker,
+            "description": description or ticker or "",
+            "date": ex_date.isoformat() if ex_date else None,
+            "pay_date": parsed_pay.isoformat(),
+            "freq": freq,
+            "quantity": 1,
+            "amount": 1,
+            "payment_income": 1,
+            "payment_history": payment_history,
+        }
+        event = {
+            **holding,
+            "pay_estimated": True,
+        }
+        resolved = _apply_payment_history_to_calendar_events([holding], [event])
+        if resolved:
+            resolved_date = _refresh_parse_date(resolved[0].get("pay_date"))
+            if resolved_date is not None:
+                return resolved_date
+        return parsed_pay
 
     # Load last-refresh timestamps per profile so we can estimate accrued dividends
     last_refresh_times = {}
@@ -12297,6 +12377,10 @@ def refresh_market_data():
                 effective_exdiv,
                 new_pay_date if snapshot_known else old_pay_date,
                 new_freq if snapshot_known else old_freq,
+                ticker=t,
+                description=h.get("description"),
+                payment_history=actual_payment_history.get((pid, t), []),
+                pay_date_confirmed=bool(snapshot.get("pay_date_confirmed")),
             )
             # dividend_paid is cash actually received for the current
             # distribution, so it stays $0 until the pay date arrives — a fund
@@ -12511,10 +12595,7 @@ def get_accrual_summary():
     ).fetchall()
     profile_names = {r["id"]: r["name"] for r in profile_name_rows}
 
-    from datetime import timedelta as _td
     freq_days_map = {"W": 7.0, "M": 30.44, "Q": 91.25, "SA": 182.5, "A": 365.0}
-    # Typical ex-div → payment lags by frequency
-    pay_lag_days = {"W": 3, "M": 7, "Q": 10, "SA": 14, "A": 14}
     today = _date.today()
 
     def _parse_date(s):
@@ -12529,6 +12610,13 @@ def get_accrual_summary():
 
     accounts = []
     for pid in source_pids:
+        try:
+            calendar_holdings = _dividend_calendar_holdings_for_view(conn, False, [pid])
+            calendar_by_ticker = {
+                holding["ticker"]: holding for holding in calendar_holdings
+            }
+        except Exception:
+            calendar_by_ticker = {}
         row = conn.execute(
             "SELECT value FROM settings WHERE key = ?", (f"last_refresh_{pid}",)
         ).fetchone()
@@ -12558,14 +12646,38 @@ def get_accrual_summary():
                     continue
                 freq = (h["div_frequency"] or "Q").upper()
                 fd = freq_days_map.get(freq, 91.25)
-                # Estimate payment date from ex_div_date + typical lag for this frequency.
-                # div_pay_date stored in DB uses a fixed 10-day lag that's wrong for weekly
-                # payers — deriving from ex_div_date is more accurate.
+                # Use the canonical issuer/history-aware schedule for exact
+                # distributions and retain cadence accrual only as a fallback.
                 ex_date = _parse_date(h["ex_div_date"] or "")
                 confirmed = False
+                calendar_holding = calendar_by_ticker.get(h["ticker"])
+                resolved_event = None
                 if ex_date:
-                    lag = pay_lag_days.get(freq, 10)
-                    expected_pay = ex_date + _td(days=lag)
+                    fallback_pay = _estimate_dividend_pay_from_pattern(
+                        ex_date,
+                        freq=freq,
+                        ticker=h["ticker"],
+                        description=(calendar_holding or {}).get("description"),
+                    )
+                    if fallback_pay is not None:
+                        event = {
+                            "ticker": h["ticker"],
+                            "date": ex_date.isoformat(),
+                            "pay_date": fallback_pay.date().isoformat(),
+                            "pay_estimated": True,
+                        }
+                        resolved_event = _apply_payment_history_to_calendar_events(
+                            [calendar_holding] if calendar_holding else [],
+                            [event],
+                        )[0]
+                resolved_pay = _parse_date(
+                    resolved_event.get("pay_date") if resolved_event else None
+                )
+                resolved_ex = _parse_date(
+                    resolved_event.get("date") if resolved_event else None
+                ) or ex_date
+                if resolved_pay:
+                    expected_pay = resolved_pay
                     if last_refresh_date <= expected_pay <= today:
                         amount = div * qty
                         accrued += amount
@@ -12573,7 +12685,7 @@ def get_accrual_summary():
                         payment_details.append({
                             "ticker": h["ticker"],
                             "expected_pay_date": expected_pay.isoformat(),
-                            "ex_div_date": ex_date.isoformat(),
+                            "ex_div_date": resolved_ex.isoformat() if resolved_ex else None,
                             "amount": round(amount, 2),
                             "div_per_share": round(div, 6),
                             "shares": round(qty, 6),
@@ -12708,6 +12820,12 @@ def action_center():
             pids,
         ).fetchall()
         holdings = rows_to_dicts(holding_rows)
+        try:
+            calendar_holdings = _dividend_calendar_holdings_for_view(conn, is_agg, pids)
+            calendar_events = _build_cal_events(calendar_holdings, is_agg, pids)
+            _apply_resolved_pay_dates(holdings, calendar_events, "%Y-%m-%d")
+        except Exception:
+            pass
         total_value = sum(float(h.get("current_value") or 0) for h in holdings)
         total_monthly_income = sum(float(h.get("approx_monthly_income") or 0) for h in holdings)
 
@@ -13410,6 +13528,18 @@ def list_holdings():
                     else:
                         r["monthly_income_reinvested"] = 0
                         r["monthly_income_not_reinvested"] = mi
+
+    # Every pay-date display consumes the same issuer/history-aware calendar
+    # event. Keep the stored value available for editing and audit, but expose
+    # the resolved date as the normal holdings field used by the UI.
+    try:
+        calendar_holdings = _dividend_calendar_holdings_for_view(conn, is_agg, pids)
+        calendar_events = _build_cal_events(calendar_holdings, is_agg, pids)
+        _apply_resolved_pay_dates(results, calendar_events)
+    except Exception:
+        # Holdings must remain available even when an external calendar source
+        # is temporarily unavailable; the stored date is the safe fallback.
+        pass
 
     conn.close()
     return jsonify(results)
@@ -17056,160 +17186,8 @@ def dividend_compare_lookup():
 
 @app.route("/api/upcoming-dividends", methods=["GET"])
 def upcoming_dividends():
-    """Return holdings with ex-div dates projected into the upcoming week."""
-    from datetime import datetime, timedelta
-
-    is_agg, pids = get_profile_filter()
-    conn = get_connection()
-    placeholders = ",".join("?" * len(pids))
-    if is_agg and len(pids) > 1:
-        rows = conn.execute(
-            f"""SELECT ticker, MAX(description) as description, MAX(ex_div_date) as ex_div_date,
-                   MAX(div_pay_date) as div_pay_date,
-                   MAX(div) as div, MAX(div_frequency) as div_frequency,
-                   SUM(quantity) as quantity, SUM(approx_monthly_income) as approx_monthly_income
-               FROM all_account_info
-               WHERE profile_id IN ({placeholders}) AND ex_div_date IS NOT NULL AND ex_div_date != ''
-                 AND ex_div_date != '--' AND quantity > 0
-               GROUP BY ticker""",
-            pids,
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"""SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency, quantity, approx_monthly_income
-               FROM all_account_info
-               WHERE profile_id IN ({placeholders}) AND ex_div_date IS NOT NULL AND ex_div_date != ''
-                 AND ex_div_date != '--' AND quantity > 0""",
-            pids,
-        ).fetchall()
-    conn.close()
-
-    if not rows:
-        return jsonify([])
-
-    today = datetime.today().date()
-    cache_columns = (
-        "ticker", "description", "ex_div_date", "div_pay_date",
-        "div", "div_frequency", "quantity", "approx_monthly_income",
-    )
-    cache_key = (
-        tuple(pids),
-        today.isoformat(),
-        _rows_signature(rows, cache_columns),
-    )
-    cached = _cache_get(_UPCOMING_DIVIDENDS_CACHE, cache_key)
-    if cached is not None:
-        return jsonify(cached)
-
-    week_end = today + timedelta(days=7)
-
-    freq_days = {"W": 7, "52": 7, "M": 30, "Q": 91, "SA": 182, "A": 365}
-    freq_labels = {"W": "Weekly", "52": "Weekly", "M": "Monthly", "Q": "Quarterly", "SA": "Semi-Annual", "A": "Annual"}
-    freq_colors = {"M": "#00c9a7", "52": "#FFD700", "W": "#FFD700", "Q": "#7ecfff", "SA": "#f0a0ff", "A": "#f0a0ff"}
-    official_cache = {}
-
-    def next_biz(d):
-        if d.weekday() == 5:
-            d += timedelta(days=2)
-        elif d.weekday() == 6:
-            d += timedelta(days=1)
-        return d
-
-    def official_snapshot_for(ticker, description):
-        key = ((ticker or "").strip().upper(), description or "")
-        if key not in official_cache:
-            try:
-                official_cache[key] = _fetch_official_distribution_snapshot(key[0], key[1])
-            except Exception:
-                official_cache[key] = None
-        return official_cache[key]
-
-    events = []
-    for r in rows:
-        ticker = (r["ticker"] or "").strip().upper()
-        description = r["description"] or ticker
-        freq = (r["div_frequency"] or "Q").upper()
-        amount = r["div"] or 0
-        stored_pay = _date_from_value(r["div_pay_date"])
-        official_pay = None
-        official_lag = None
-        official = official_snapshot_for(ticker, description)
-        if official and official.get("has_dividend"):
-            official_freq = (official.get("freq") or "").strip().upper()
-            if official_freq:
-                freq = official_freq
-            try:
-                official_div = official.get("div")
-                if official_div is not None and float(official_div) > 0:
-                    amount = float(official_div)
-            except Exception:
-                pass
-            ex = _date_from_value(official.get("ex_div_date"))
-            official_pay = _date_from_value(official.get("div_pay_date"))
-            if official_pay is not None:
-                stored_pay = official_pay
-            lag_val = official.get("pay_lag_days")
-            if lag_val is not None:
-                try:
-                    official_lag = int(lag_val)
-                except (TypeError, ValueError):
-                    official_lag = None
-        else:
-            ex = None
-
-        try:
-            if ex is None:
-                ex = datetime.strptime(r["ex_div_date"], "%m/%d/%y").date()
-        except (ValueError, TypeError):
-            try:
-                if ex is None:
-                    ex = datetime.strptime(r["ex_div_date"], "%Y-%m-%d").date()
-            except (ValueError, TypeError):
-                continue
-
-        step = freq_days.get(freq, 91)
-
-        # Project forward — keep advancing until the estimated pay date >= today
-        nxt = ex
-        cycle_steps = 0
-        while True:
-            if stored_pay and cycle_steps == 0:
-                pay = stored_pay
-            elif official_lag is not None:
-                pay = next_biz(nxt + timedelta(days=official_lag))
-            elif freq in ("W", "52"):
-                pay = next_biz(nxt + timedelta(days=1))
-            elif freq == "M":
-                pay = next_biz(nxt + timedelta(days=2))
-            else:
-                pay = next_biz(nxt + timedelta(days=14))
-            # Show if pay date is today or later
-            if pay >= today:
-                break
-            nxt += timedelta(days=step)
-            cycle_steps += 1
-
-        if nxt <= week_end:
-            events.append({
-                "ticker": ticker,
-                "description": description,
-                "ex_date": nxt.strftime("%Y-%m-%d"),
-                "ex_weekday": nxt.strftime("%a"),
-                "pay_date": pay.strftime("%Y-%m-%d"),
-                "pay_weekday": pay.strftime("%a"),
-                "pay_estimated": not (official_pay is not None and cycle_steps == 0),
-                "amount": amount,
-                "est_payment": round(amount * (r["quantity"] or 0), 2),
-                "frequency": freq,
-                "freq_label": freq_labels.get(freq, "Quarterly"),
-                "color": freq_colors.get(freq, "#7ecfff"),
-            })
-
-    events.sort(key=lambda e: (e["ex_date"], e["ticker"]))
-    _cache_set(_UPCOMING_DIVIDENDS_CACHE, cache_key, events)
-    return jsonify(events)
-
-
+    """Return near-term events from the canonical dividend calendar pipeline."""
+    return jsonify(_canonical_upcoming_dividends())
 # ── Portfolio Summary Data (grades) ────────────────────────────────────────────
 
 def _ticker_info_from_holding_rows(rows):
@@ -22106,6 +22084,22 @@ def dividend_analysis_data():
         conn.close()
         return jsonify({"rows": [], "totals": {}, "charts": {}, "grade": {}, "categories": categories})
 
+    try:
+        calendar_holdings = _dividend_calendar_holdings_for_view(conn, False, [profile_id])
+        calendar_events = _build_cal_events(calendar_holdings, False, [profile_id])
+        calendar_by_ticker = {event["ticker"]: event for event in calendar_events}
+        df["div_pay_date_estimated"] = False
+        df["div_pay_date_source"] = None
+        for index, row in df.iterrows():
+            event = calendar_by_ticker.get(str(row["ticker"]).upper())
+            if not event:
+                continue
+            df.at[index, "div_pay_date"] = event.get("pay_date")
+            df.at[index, "div_pay_date_estimated"] = bool(event.get("pay_estimated", True))
+            df.at[index, "div_pay_date_source"] = event.get("pay_source")
+    except Exception:
+        pass
+
     # Coerce numerics
     num_cols = ["ytd_divs", "total_divs_received", "estim_payment_per_year",
                 "approx_monthly_income", "purchase_value", "dividend_paid",
@@ -22163,6 +22157,8 @@ def dividend_analysis_data():
             "div_frequency": row.get("div_frequency") or None,
             "ex_div_date": row.get("ex_div_date"),
             "div_pay_date": row.get("div_pay_date"),
+            "div_pay_date_estimated": bool(row.get("div_pay_date_estimated", False)),
+            "div_pay_date_source": row.get("div_pay_date_source") or None,
             "quantity": _clean(row.get("quantity")),
             "div_per_share": _clean(row.get("div")),
             "ytd_divs": _clean(row.get("ytd_divs")),
@@ -27645,7 +27641,534 @@ def _yf_div_pay_date(ticker):
         return None
 
 
-def _build_cal_events():
+def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
+    """Return current holdings and actual payment history for the active view.
+
+    The holding universe and the transaction history intentionally share the
+    same read scope.  A single account therefore never inherits another
+    account's tickers or dates, while an aggregate combines only its configured
+    members.  Owner reads its linked source accounts once, matching the other
+    portfolio roll-up screens and avoiding duplicated Owner snapshot rows.
+    """
+    from datetime import date, timedelta
+
+    read_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+    ids = list(dict.fromkeys(int(pid) for pid in (read_ids or []) if pid is not None))
+    if not ids:
+        return []
+
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT profile_id, ticker, description, ex_div_date, div_pay_date,
+                   div, div_frequency, div_frequency_locked, div_manual_until,
+                   div_dates_manual_until, quantity, current_price, current_value,
+                   estim_payment_per_year, approx_monthly_income, import_date
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 0
+            ORDER BY ticker,
+                     CASE WHEN import_date IS NULL OR import_date = '' THEN 1 ELSE 0 END,
+                     import_date DESC""",
+        ids,
+    ).fetchall()
+
+    def num(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def payments_per_year(freq):
+        return {
+            "52": 52, "W": 52, "M": 12, "Q": 4,
+            "SA": 2, "S": 2, "A": 1,
+        }.get(str(freq or "").strip().upper(), 12)
+
+    freq_colors = {
+        "M": "#00c9a7", "52": "#FFD700", "W": "#FFD700",
+        "Q": "#7ecfff", "SA": "#f0a0ff", "S": "#f0a0ff", "A": "#f0a0ff",
+    }
+    by_ticker = {}
+    for row in rows:
+        ticker = str(row["ticker"] or "").strip().upper()
+        if not ticker:
+            continue
+        quantity = max(0.0, num(row["quantity"]))
+        price = max(0.0, num(row["current_price"]))
+        value = max(0.0, num(row["current_value"])) or quantity * price
+        annual_income = max(0.0, num(row["estim_payment_per_year"]))
+        if annual_income <= 0:
+            annual_income = max(0.0, num(row["approx_monthly_income"])) * 12
+        freq = str(row["div_frequency"] or "").strip().upper()
+        distribution = max(0.0, num(row["div"]))
+        payment_income = distribution * quantity
+        if payment_income <= 0 and annual_income > 0:
+            payment_income = annual_income / payments_per_year(freq)
+
+        holding = by_ticker.setdefault(ticker, {
+            "ticker": ticker,
+            "description": "",
+            "date": None,
+            "pay_date": None,
+            "amount": None,
+            "freq": "",
+            "div_frequency_locked": False,
+            "div_manual_until": None,
+            "div_dates_manual_until": None,
+            "quantity": 0.0,
+            "current_value": 0.0,
+            "annual_income": 0.0,
+            "payment_income": 0.0,
+            "profile_count": 0,
+            "_profile_ids": set(),
+            "_distribution_value": 0.0,
+            "_distribution_quantity": 0.0,
+        })
+        holding["quantity"] += quantity
+        holding["current_value"] += value
+        holding["annual_income"] += annual_income
+        holding["payment_income"] += payment_income
+        holding["_profile_ids"].add(int(row["profile_id"]))
+        if distribution > 0 and quantity > 0:
+            holding["_distribution_value"] += distribution * quantity
+            holding["_distribution_quantity"] += quantity
+
+        description = str(row["description"] or "").strip()
+        if len(description) > len(holding["description"]):
+            holding["description"] = description
+        if not holding["date"] and _parse_timestamp_value(row["ex_div_date"]) is not None:
+            holding["date"] = _parse_timestamp_value(row["ex_div_date"]).date().isoformat()
+            holding["div_frequency_locked"] = row["div_frequency_locked"]
+            holding["div_manual_until"] = row["div_manual_until"]
+            holding["div_dates_manual_until"] = row["div_dates_manual_until"]
+        if not holding["pay_date"] and _parse_timestamp_value(row["div_pay_date"]) is not None:
+            holding["pay_date"] = _parse_timestamp_value(row["div_pay_date"]).date().isoformat()
+        if not holding["freq"] and freq:
+            holding["freq"] = freq
+
+    holdings = []
+    for holding in by_ticker.values():
+        distribution_qty = holding.pop("_distribution_quantity")
+        distribution_value = holding.pop("_distribution_value")
+        holding["amount"] = round(distribution_value / distribution_qty, 6) if distribution_qty > 0 else None
+        holding["profile_count"] = len(holding.pop("_profile_ids"))
+        holding["quantity"] = round(holding["quantity"], 6)
+        holding["current_value"] = round(holding["current_value"], 2)
+        holding["annual_income"] = round(holding["annual_income"], 2)
+        holding["payment_income"] = round(holding["payment_income"], 2)
+        holding["current_price"] = (
+            round(holding["current_value"] / holding["quantity"], 4)
+            if holding["quantity"] > 0 and holding["current_value"] > 0
+            else None
+        )
+        holding["color"] = freq_colors.get(holding["freq"], "#8899aa")
+        holding["payment_history"] = []
+        holdings.append(holding)
+
+    # Transaction files contain historical pay dates, not future dates.  Keep
+    # only actual imported ledger rows and use them solely as schedule anchors.
+    tickers = [holding["ticker"] for holding in holdings]
+    if tickers:
+        ticker_placeholders = ",".join("?" * len(tickers))
+        history_start = (date.today() - timedelta(days=730)).isoformat()
+        history_rows = conn.execute(
+            f"""SELECT UPPER(TRIM(ticker)) AS ticker, payment_date
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                  AND UPPER(TRIM(ticker)) IN ({ticker_placeholders})
+                  AND payment_date >= ?
+                  AND payment_date <= ?
+                  AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
+                  AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'
+                GROUP BY UPPER(TRIM(ticker)), payment_date
+                ORDER BY ticker, payment_date""",
+            [*ids, *tickers, history_start, date.today().isoformat()],
+        ).fetchall()
+        history_by_ticker = {}
+        for row in history_rows:
+            parsed = _parse_timestamp_value(row["payment_date"])
+            if parsed is not None:
+                history_by_ticker.setdefault(row["ticker"], []).append(parsed.date().isoformat())
+        for holding in holdings:
+            holding["payment_history"] = history_by_ticker.get(holding["ticker"], [])
+
+    holdings.sort(key=lambda row: row["ticker"])
+    return holdings
+
+
+def _dividend_payment_value(row):
+    """Return the cash value of one distribution for a calendar holding."""
+    for field in ("payment_income", "dividend_paid"):
+        try:
+            value = float(row.get(field) or 0)
+        except (TypeError, ValueError, AttributeError):
+            value = 0.0
+        if value > 0:
+            return value
+
+    try:
+        amount = float(row.get("amount") or row.get("div") or 0)
+        quantity = float(row.get("quantity") or 0)
+    except (TypeError, ValueError, AttributeError):
+        amount = quantity = 0.0
+    if amount > 0 and quantity > 0:
+        return amount * quantity
+
+    try:
+        annual = float(row.get("annual_income") or row.get("estim_payment_per_year") or 0)
+    except (TypeError, ValueError, AttributeError):
+        annual = 0.0
+    frequency = str(row.get("freq") or row.get("div_frequency") or "").strip().upper()
+    payments = {
+        "W": 52, "52": 52, "M": 12, "Q": 4,
+        "SA": 2, "S": 2, "A": 1,
+    }.get(frequency, 12)
+    return annual / payments if annual > 0 else 0.0
+
+
+def _payment_history_dates(values):
+    """Normalize and deduplicate imported transaction payment dates."""
+    dates = set()
+    for value in values or []:
+        parsed = _parse_timestamp_value(value)
+        if parsed is not None:
+            dates.add(parsed.date())
+    return sorted(dates)
+
+
+def _payment_history_frequency(history, fallback=None):
+    """Infer cadence from actual payment spacing, matching the Month calendar."""
+    fallback = str(fallback or "").strip().upper()
+    if len(history) < 2:
+        return fallback or "M"
+    gaps = [
+        (current - previous).days
+        for previous, current in zip(history, history[1:])
+        if current > previous
+    ]
+    if not gaps:
+        return fallback or "M"
+    typical_gap = statistics.median(gaps[-12:])
+    if typical_gap <= 11:
+        return "W"
+    if typical_gap <= 50:
+        return "M"
+    if typical_gap <= 125:
+        return "Q"
+    if typical_gap <= 220:
+        return "SA"
+    return "A"
+
+
+def _payment_mode(values):
+    """Return a deterministic mode (lowest value wins ties)."""
+    counts = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def _previous_business_date(value):
+    value = value.date() if isinstance(value, datetime.datetime) else value
+    while value.weekday() >= 5:
+        value -= datetime.timedelta(days=1)
+    return value
+
+
+def _next_business_date(value):
+    value = value.date() if isinstance(value, datetime.datetime) else value
+    while value.weekday() >= 5:
+        value += datetime.timedelta(days=1)
+    return value
+
+
+def _shift_business_dates(value, amount):
+    shifted = value
+    direction = -1 if amount < 0 else 1
+    remaining = abs(int(amount))
+    while remaining:
+        shifted += datetime.timedelta(days=direction)
+        if shifted.weekday() < 5:
+            remaining -= 1
+    return shifted
+
+
+def _last_business_date(year, month):
+    return _previous_business_date(
+        datetime.date(year, month, calendar.monthrange(year, month)[1])
+    )
+
+
+def _business_days_after(value):
+    end = datetime.date(value.year, value.month, calendar.monthrange(value.year, value.month)[1])
+    cursor = value
+    count = 0
+    while cursor < end:
+        cursor += datetime.timedelta(days=1)
+        if cursor.weekday() < 5:
+            count += 1
+    return count
+
+
+def _monthly_payment_pattern_date(history, year, month):
+    """Project the recurring day within a month from actual cash history."""
+    target_start = datetime.date(year, month, 1)
+    usable = [value for value in history if value < target_start][-12:]
+    if not usable:
+        return None
+
+    near_month_end = [value for value in usable if _business_days_after(value) <= 1]
+    if len(near_month_end) >= max(2, math.ceil(len(usable) * 0.6)):
+        offsets = [
+            _business_days_after(value)
+            for value in usable
+            if _business_days_after(value) <= 3
+        ]
+        typical_offset = max(0, round(statistics.median(offsets) if offsets else 0))
+        return _shift_business_dates(_last_business_date(year, month), -typical_offset)
+
+    weekday_ordinals = [(value.weekday(), math.ceil(value.day / 7)) for value in usable]
+    common_pattern = _payment_mode(weekday_ordinals)
+    matching_count = weekday_ordinals.count(common_pattern) if common_pattern else 0
+    if common_pattern and matching_count >= max(2, math.ceil(len(usable) * 0.5)):
+        weekday, ordinal = common_pattern
+        first = datetime.date(year, month, 1)
+        offset = (weekday - first.weekday() + 7) % 7
+        day = 1 + offset + ((ordinal - 1) * 7)
+        if day <= calendar.monthrange(year, month)[1]:
+            return datetime.date(year, month, day)
+
+    typical_day = max(1, round(statistics.median(value.day for value in usable)))
+    last_day = calendar.monthrange(year, month)[1]
+    return _next_business_date(datetime.date(year, month, min(typical_day, last_day)))
+
+
+def _closest_payment_date(actual_dates, target, tolerance_days):
+    if not actual_dates or target is None:
+        return None
+    closest = min(actual_dates, key=lambda value: abs((value - target).days))
+    return closest if abs((closest - target).days) <= tolerance_days else None
+
+
+def _project_weekly_payment_dates(history, anchor_date, start, end):
+    if anchor_date is None:
+        return []
+    common_weekday = (
+        _payment_mode([value.weekday() for value in history[-16:]])
+        if history else anchor_date.weekday()
+    )
+    anchor = next(
+        (value for value in reversed(history) if value.weekday() == common_weekday),
+        anchor_date,
+    )
+    while anchor > start:
+        anchor -= datetime.timedelta(days=7)
+    while anchor < start:
+        anchor += datetime.timedelta(days=7)
+
+    selected_actuals = [value for value in history if start <= value <= end]
+    projected = []
+    cursor = anchor
+    while cursor <= end:
+        actual = _closest_payment_date(selected_actuals, cursor, 2)
+        projected.append((actual or _next_business_date(cursor), actual is not None))
+        cursor += datetime.timedelta(days=7)
+    return projected
+
+
+def _project_cyclical_payment_date(history, anchor_date, frequency, year, month):
+    months_per_cycle = {"Q": 3, "SA": 6, "S": 6, "A": 12}.get(frequency, 1)
+    base = history[-1] if history else anchor_date
+    if base is None:
+        return None
+    month_distance = ((year - base.year) * 12) + month - base.month
+    if month_distance % months_per_cycle != 0:
+        return None
+    patterned = _monthly_payment_pattern_date(history, year, month)
+    if patterned is not None:
+        return patterned
+    day = min(base.day, calendar.monthrange(year, month)[1])
+    return _next_business_date(datetime.date(year, month, day))
+
+
+def _project_dividend_payments_for_month(holdings, events, selected_month):
+    """Project one month's cash dates using the Month calendar's precedence.
+
+    Actual imported transactions establish recurring patterns. Confirmed issuer
+    or market-calendar dates remain authoritative, and the current stored
+    schedule is the fallback when no usable transaction history exists.
+    """
+    match = re.fullmatch(r"(\d{4})-(\d{2})", str(selected_month or ""))
+    if not match:
+        return []
+    year, month = (int(part) for part in match.groups())
+    if not 1 <= month <= 12:
+        return []
+    start = datetime.date(year, month, 1)
+    end = datetime.date(year, month, calendar.monthrange(year, month)[1])
+    event_by_ticker = {
+        str(event.get("ticker") or "").strip().upper(): event
+        for event in events or []
+    }
+    universe = holdings or events or []
+    projected = []
+
+    for holding in universe:
+        ticker = str(holding.get("ticker") or "").strip().upper()
+        if not ticker:
+            continue
+        event = event_by_ticker.get(ticker)
+        item = dict(holding)
+        if event:
+            item.update(event)
+            for field in (
+                "quantity", "annual_income", "current_value", "current_price",
+                "payment_income", "payment_history", "description",
+            ):
+                holding_value = holding.get(field)
+                if holding_value is not None and (field != "description" or holding_value):
+                    item[field] = holding_value
+        if _dividend_payment_value(item) <= 0:
+            continue
+
+        history = _payment_history_dates(item.get("payment_history"))
+        selected_actuals = [value for value in history if start <= value <= end]
+        event_pay_ts = _parse_timestamp_value(
+            (event or {}).get("pay_date") or item.get("pay_date") or item.get("div_pay_date")
+        )
+        event_pay_date = event_pay_ts.date() if event_pay_ts is not None else None
+        confirmed_event_date = (
+            event_pay_date
+            if event_pay_date is not None
+            and (event or {}).get("pay_estimated") is False
+            and start <= event_pay_date <= end
+            else None
+        )
+        frequency = _payment_history_frequency(
+            history,
+            (event or {}).get("freq") or item.get("freq") or item.get("div_frequency"),
+        )
+
+        def add_payment(value, source):
+            if value is None or value < start or value > end:
+                return
+            payment = dict(item)
+            payment.update({
+                "ticker": ticker,
+                "freq": frequency,
+                "calendar_pay_date": value.isoformat(),
+                "calendar_source": source,
+                "calendar_projected": source == "projected",
+                "calendar_estimated": source == "projected",
+            })
+            projected.append(payment)
+
+        if frequency in ("W", "52"):
+            ex_ts = _parse_timestamp_value(item.get("date") or item.get("ex_div_date"))
+            anchor = history[-1] if history else event_pay_date or (ex_ts.date() if ex_ts is not None else None)
+            for value, is_actual in _project_weekly_payment_dates(history, anchor, start, end):
+                source = (
+                    "confirmed"
+                    if confirmed_event_date == value
+                    else "history" if is_actual else "projected"
+                )
+                add_payment(value, source)
+            continue
+
+        if confirmed_event_date is not None:
+            add_payment(confirmed_event_date, "confirmed")
+            continue
+
+        predicted = None
+        if frequency == "M":
+            predicted = _monthly_payment_pattern_date(history, year, month)
+            if predicted is None and event_pay_date is not None:
+                cursor = pd.Timestamp(event_pay_date)
+                guard = 0
+                while cursor.date() < start and guard < 120:
+                    cursor = _advance_dividend_cycle(cursor, "M", 1)
+                    guard += 1
+                while cursor.date() > end and guard < 240:
+                    cursor = _add_months_preserving_day(cursor, -1)
+                    guard += 1
+                if start <= cursor.date() <= end:
+                    predicted = _next_business_date(cursor.date())
+            predicted = predicted or _last_business_date(year, month)
+        else:
+            ex_ts = _parse_timestamp_value(item.get("date") or item.get("ex_div_date"))
+            anchor = event_pay_date or (ex_ts.date() if ex_ts is not None else None)
+            predicted = _project_cyclical_payment_date(
+                history, anchor, frequency, year, month
+            )
+
+        matching_actual = _closest_payment_date(selected_actuals, predicted, 4)
+        add_payment(matching_actual or predicted, "history" if matching_actual else "projected")
+
+    return sorted(
+        projected,
+        key=lambda item: (item["calendar_pay_date"], item.get("ticker") or ""),
+    )
+
+
+def _apply_payment_history_to_calendar_events(holdings, events):
+    """Resolve each current calendar event through the shared Month pipeline."""
+    if not events:
+        return []
+    payments_by_month = {}
+    for event in events:
+        pay_ts = _parse_timestamp_value(event.get("pay_date"))
+        if pay_ts is None:
+            continue
+        month_key = pay_ts.strftime("%Y-%m")
+        if month_key not in payments_by_month:
+            payments_by_month[month_key] = _project_dividend_payments_for_month(
+                holdings, events, month_key
+            )
+
+    resolved = []
+    for original in events:
+        event = dict(original)
+        raw_pay_ts = _parse_timestamp_value(event.get("pay_date"))
+        if raw_pay_ts is None or event.get("pay_estimated") is False:
+            resolved.append(event)
+            continue
+        raw_pay_date = raw_pay_ts.date()
+        ex_ts = _parse_timestamp_value(event.get("date"))
+        ex_date = ex_ts.date() if ex_ts is not None else None
+        month_key = raw_pay_ts.strftime("%Y-%m")
+        candidates = [
+            payment for payment in payments_by_month.get(month_key, [])
+            if payment.get("ticker") == event.get("ticker")
+        ]
+        if ex_date is not None:
+            candidates = [
+                payment for payment in candidates
+                if datetime.date.fromisoformat(payment["calendar_pay_date"]) >= ex_date
+            ]
+        if not candidates:
+            resolved.append(event)
+            continue
+        payment = min(
+            candidates,
+            key=lambda item: abs(
+                (datetime.date.fromisoformat(item["calendar_pay_date"]) - raw_pay_date).days
+            ),
+        )
+        pay_date = datetime.date.fromisoformat(payment["calendar_pay_date"])
+        event.update({
+            "pay_date": pay_date.isoformat(),
+            "pay_month": pay_date.strftime("%b"),
+            "pay_day": str(pay_date.day),
+            "pay_estimated": bool(payment.get("calendar_estimated", True)),
+            "pay_source": payment.get("calendar_source", "projected"),
+        })
+        resolved.append(event)
+    return resolved
+
+
+def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None):
     """Build dividend calendar events from all_account_info."""
     from datetime import datetime, timedelta
 
@@ -27657,37 +28180,48 @@ def _build_cal_events():
         "M": "#00c9a7", "52": "#FFD700", "W": "#FFD700",
         "Q": "#7ecfff", "SA": "#f0a0ff", "A": "#f0a0ff",
     }
-    profile_id = get_profile_id()
-    conn = get_connection()
-    try:
-        df = pd.read_sql("""
-            SELECT ticker, description, ex_div_date, div_pay_date, div, div_frequency,
-                   div_frequency_locked, div_manual_until, div_dates_manual_until,
-                   quantity, current_price, estim_payment_per_year
-            FROM all_account_info
-            WHERE ex_div_date IS NOT NULL
-              AND ex_div_date NOT IN ('', '--')
-              AND current_price IS NOT NULL
-              AND COALESCE(quantity, 0) > 0
-              AND profile_id = ?
-            ORDER BY ticker
-        """, conn, params=[profile_id])
-    except Exception:
-        conn.close()
+    if is_aggregate is None or profile_ids is None:
+        try:
+            is_aggregate, profile_ids = get_profile_filter()
+        except RuntimeError:
+            # The calendar builder is also used by maintenance code and tests
+            # outside a Flask request. Preserve its long-standing single-profile
+            # fallback while the request path retains aggregate support.
+            is_aggregate, profile_ids = False, [get_profile_id()]
+    if holdings is None:
+        conn = get_connection()
+        try:
+            holdings = _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids)
+        finally:
+            conn.close()
+    df = pd.DataFrame(holdings or [])
+    if df.empty:
         return []
-    conn.close()
+    # Callers that supply a prebuilt holding list (including older integrations)
+    # do not carry the optional manual-override fields. Normalize them before
+    # building the cache signature so those callers keep working.
+    for column in ("div_frequency_locked", "div_manual_until", "div_dates_manual_until"):
+        if column not in df.columns:
+            df[column] = None
+
+    is_owner_view = (not is_aggregate) and list(profile_ids or []) == [1]
+    scope_key = (
+        "aggregate" if is_aggregate else "profile",
+        tuple(int(pid) for pid in (profile_ids or [1])),
+    )
 
     today_d = datetime.today().date()
     cache_columns = (
-        "ticker", "description", "ex_div_date", "div_pay_date", "div", "div_frequency",
+        "ticker", "description", "date", "pay_date", "amount", "freq",
         # The pin columns belong in the signature too, or releasing an override
         # would leave the calendar serving the pinned dates from cache.
         "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
-        "quantity", "current_price", "estim_payment_per_year",
+        "quantity", "current_price", "annual_income", "payment_income",
+        "payment_history",
     )
     cache_rows = df.to_dict("records")
     cache_key = (
-        profile_id,
+        scope_key,
         today_d.isoformat(),
         _rows_signature(cache_rows, cache_columns),
     )
@@ -27708,7 +28242,7 @@ def _build_cal_events():
 
     # Pre-fetch yfinance pay dates for non-weekly tickers
     yf_pay_dates = {}
-    for tkr in df.loc[~df["div_frequency"].isin(["52", "W"]), "ticker"].tolist():
+    for tkr in df.loc[~df["freq"].isin(["52", "W"]), "ticker"].tolist():
         pd_date = _yf_div_pay_date(tkr)
         if pd_date:
             yf_pay_dates[tkr] = pd_date
@@ -27722,17 +28256,27 @@ def _build_cal_events():
     for _, row in df.iterrows():
         ticker = str(row["ticker"] or "").strip().upper()
         description = str(row["description"]) if pd.notna(row["description"]) else ""
-        freq = str(row["div_frequency"]).strip() if pd.notna(row["div_frequency"]) else ""
-        amount = float(row["div"]) if pd.notna(row["div"]) and row["div"] else None
+        freq = str(row["freq"]).strip() if pd.notna(row["freq"]) else ""
+        amount = float(row["amount"]) if pd.notna(row["amount"]) and row["amount"] else None
         quantity = float(row["quantity"]) if pd.notna(row["quantity"]) and row["quantity"] else 0.0
         current_price = float(row["current_price"]) if pd.notna(row["current_price"]) and row["current_price"] else 0.0
         annual_income = (
-            float(row["estim_payment_per_year"])
-            if pd.notna(row["estim_payment_per_year"]) and row["estim_payment_per_year"]
+            float(row["annual_income"])
+            if pd.notna(row["annual_income"]) and row["annual_income"]
             else 0.0
         )
-        ex_value = row["ex_div_date"]
-        pay_value = row.get("div_pay_date")
+        payment_income = (
+            float(row["payment_income"])
+            if pd.notna(row.get("payment_income")) and row.get("payment_income")
+            else 0.0
+        )
+        current_value = (
+            float(row["current_value"])
+            if pd.notna(row.get("current_value")) and row.get("current_value")
+            else 0.0
+        )
+        ex_value = row["date"]
+        pay_value = row.get("pay_date")
         official_pay_ts = None
         official_lag = None
 
@@ -27789,7 +28333,21 @@ def _build_cal_events():
         # rather than rolling it to the next cycle. Between ex-date and pay date
         # the ex-date is already behind us and would otherwise advance, leaving
         # the card showing next month's ex-date against this month's pay date.
-        if (is_weekly or profile_id != 1) and dt < threshold and freq and not dates_pinned:
+        current_pay_hint = official_pay_ts or _parse_timestamp_value(
+            yf_pay_dates.get(ticker) or stored_pay_ts
+        )
+        has_unpaid_current_cycle = (
+            not is_weekly
+            and current_pay_hint is not None
+            and current_pay_hint.date() >= today_d
+        )
+        if (
+            (is_weekly or not is_owner_view)
+            and not has_unpaid_current_cycle
+            and dt < threshold
+            and freq
+            and not dates_pinned
+        ):
             while dt < threshold:
                 next_dt = _advance_dividend_cycle(pd.Timestamp(dt), freq, 1)
                 if next_dt is None:
@@ -27832,6 +28390,11 @@ def _build_cal_events():
             if pay_dt is None:
                 continue
 
+        normalized_pay_ts = _parse_timestamp_value(pay_dt)
+        if normalized_pay_ts is None:
+            continue
+        normalized_pay_date = normalized_pay_ts.date()
+
         events.append({
             "ticker":        ticker,
             "description":   description,
@@ -27843,14 +28406,20 @@ def _build_cal_events():
             "quantity":      round(quantity, 6),
             "current_price": round(current_price, 4) if current_price > 0 else None,
             "annual_income": round(annual_income, 2) if annual_income > 0 else None,
+            "payment_income": round(payment_income, 2) if payment_income > 0 else None,
+            "current_value": round(current_value, 2) if current_value > 0 else None,
             "freq":          freq,
             "freq_label":    FREQ_LABEL.get(freq, freq.lower() if freq else ""),
             "color":         FREQ_COLOR.get(freq, "#8899aa"),
-            "pay_date":      pay_dt.date().isoformat() if hasattr(pay_dt, "date") else pay_dt.isoformat(),
-            "pay_month":     pay_dt.strftime("%b"),
-            "pay_day":       str(pay_dt.day),
+            "pay_date":      normalized_pay_date.isoformat(),
+            "pay_month":     normalized_pay_date.strftime("%b"),
+            "pay_day":       str(normalized_pay_date.day),
             "pay_estimated": pay_estimated,
         })
+
+    # Run every current event through the same transaction-history-aware date
+    # resolver used by the Month view before any other screen consumes it.
+    events = _apply_payment_history_to_calendar_events(holdings, events)
 
     # Calendar cards lead with the ex-dividend date, so keep the grid in that
     # chronological order rather than ordering by the (secondary) pay date.
@@ -27859,13 +28428,132 @@ def _build_cal_events():
     return events
 
 
+def _build_cal_events(holdings=None, is_aggregate=None, profile_ids=None):
+    """Serialize cache misses so concurrent screens share one provider lookup."""
+    with _DIVIDEND_CALENDAR_BUILD_LOCK:
+        return _build_cal_events_locked(holdings, is_aggregate, profile_ids)
+
+
+def _canonical_upcoming_dividends(today=None):
+    """Build Dashboard events from the same resolved schedule as the calendar."""
+    is_aggregate, profile_ids = get_profile_filter()
+    conn = get_connection()
+    try:
+        holdings = _dividend_calendar_holdings_for_view(
+            conn, is_aggregate, profile_ids
+        )
+    finally:
+        conn.close()
+    calendar_events = _build_cal_events(holdings, is_aggregate, profile_ids)
+    if not calendar_events:
+        return []
+
+    today = today or datetime.date.today()
+    week_end = today + datetime.timedelta(days=7)
+    cache_key = (
+        "aggregate" if is_aggregate else "profile",
+        tuple(profile_ids),
+        today.isoformat(),
+        _rows_signature(
+            calendar_events,
+            ("ticker", "date", "pay_date", "amount", "quantity", "pay_estimated"),
+        ),
+    )
+    cached = _cache_get(_UPCOMING_DIVIDENDS_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
+    frequency_labels = {
+        "W": "Weekly", "52": "Weekly", "M": "Monthly", "Q": "Quarterly",
+        "SA": "Semi-Annual", "S": "Semi-Annual", "A": "Annual",
+    }
+    events = []
+    for event in calendar_events:
+        ex_ts = _parse_timestamp_value(event.get("date"))
+        pay_ts = _parse_timestamp_value(event.get("pay_date"))
+        if ex_ts is None or pay_ts is None:
+            continue
+        ex_date = ex_ts.date()
+        pay_date = pay_ts.date()
+        # Show approaching ex-dates and already-earned distributions that are
+        # still waiting for their resolved pay date.
+        if ex_date > week_end or pay_date < today:
+            continue
+        frequency = str(event.get("freq") or "").strip().upper()
+        events.append({
+            "ticker": event.get("ticker"),
+            "description": event.get("description"),
+            "ex_date": ex_date.isoformat(),
+            "ex_weekday": ex_date.strftime("%a"),
+            "pay_date": pay_date.isoformat(),
+            "pay_weekday": pay_date.strftime("%a"),
+            "pay_estimated": bool(event.get("pay_estimated", True)),
+            "pay_source": event.get("pay_source"),
+            "amount": event.get("amount") or 0,
+            "est_payment": round(_dividend_payment_value(event), 2),
+            "frequency": frequency,
+            "freq_label": frequency_labels.get(frequency, frequency.title()),
+            "color": event.get("color") or "#7ecfff",
+        })
+
+    events.sort(key=lambda event: (event["ex_date"], event["ticker"]))
+    _cache_set(_UPCOMING_DIVIDENDS_CACHE, cache_key, events)
+    return events
+
+
+def _apply_resolved_pay_dates(rows, events, output_format="%m/%d/%y"):
+    """Overlay canonical current pay dates on API rows without mutating storage."""
+    event_by_ticker = {
+        str(event.get("ticker") or "").strip().upper(): event
+        for event in events or []
+    }
+    for row in rows or []:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        event = event_by_ticker.get(ticker)
+        if not event:
+            continue
+        pay_ts = _parse_timestamp_value(event.get("pay_date"))
+        if pay_ts is None:
+            continue
+        row["stored_div_pay_date"] = row.get("div_pay_date")
+        row["div_pay_date"] = pay_ts.strftime(output_format)
+        row["div_pay_date_estimated"] = bool(event.get("pay_estimated", True))
+        row["div_pay_date_source"] = event.get("pay_source") or (
+            "confirmed" if event.get("pay_estimated") is False else "schedule"
+        )
+    return rows
+
+
 @app.route("/api/div-calendar")
 def div_calendar():
     """Return dividend calendar events as JSON."""
     from datetime import date
     try:
-        events = _build_cal_events()
-        return jsonify(events=events, today=date.today().isoformat())
+        requested_month = request.args.get("month", "").strip()
+        if requested_month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", requested_month):
+            return jsonify(error="month must use YYYY-MM format"), 400
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            holdings = _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids)
+        finally:
+            conn.close()
+        events = _build_cal_events(holdings, is_aggregate, profile_ids)
+        payments = (
+            _project_dividend_payments_for_month(holdings, events, requested_month)
+            if requested_month else []
+        )
+        return jsonify(
+            events=events,
+            holdings=holdings,
+            payments=payments,
+            payment_month=requested_month or None,
+            today=date.today().isoformat(),
+            scope={
+                "type": "aggregate" if is_aggregate else "profile",
+                "profile_ids": profile_ids,
+            },
+        )
     except Exception as e:
         return jsonify(error=str(e)), 500
 
@@ -43696,6 +44384,7 @@ register_bear_put_spread_scanner_routes(app)
 register_bull_put_spread_scanner_routes(app)
 register_bear_call_spread_scanner_routes(app)
 register_iron_condor_scanner_routes(app)
+register_put_condor_scanner_routes(app)
 register_unbalanced_put_condor_scanner_routes(app)
 register_unbalanced_butterfly_scanner_routes(app)
 register_four_eight_eight_scanner_routes(app)

@@ -190,6 +190,42 @@ const GUIDES = {
       ],
     },
   ],
+  'put-condor': [
+    {
+      title: 'Side, underlying, and debit-spread placement',
+      items: [
+        ['Condor side', 'Runs the Put Condor, the mirrored Call Condor, or both. Both mode keeps the four-leg results separate and also calculates an eight-leg combined expiration payoff for shared expirations.'],
+        ['Underlying', 'Chooses Mini-SPX (^XSP on Yahoo) or SPY. The selected symbol is the only chain scanned.'],
+        ['Debit-spread placement', 'Places the debit long near spot: below spot for a Put Condor and above spot for a Call Condor.'],
+        ['Debit spread OTM', 'When Slightly out of the money is selected, sets the target distance away from spot on the selected side.'],
+        ['Fixed 1-point width', 'The debit long and short must be exactly one point apart. The scanner does not relax this construction rule.'],
+        ['Target / Minimum / Maximum DTE', 'Selects nearby listed expirations around the preferred calendar days while enforcing the hard date bounds.'],
+        ['Results', 'Maximum number of qualifying expirations returned. At most one best construction is shown per expiration.'],
+      ],
+    },
+    {
+      title: 'Credit and maximum-risk construction',
+      items: [
+        ['Maximum risk', 'Hard maximum expiration loss in dollars for each four-leg condor. Candidate credit wings that exceed it are rejected. In Both mode, this budget applies independently to each side.'],
+        ['Credit short delta', 'Places the short option in the farther credit spread at the selected 10–20 delta target. The closest valid listed strike is used.'],
+        ['Target line credit', 'Preferred positive expiration payoff on the untested side: above all puts or below all calls. Ranking aims for this small credit after first using the risk budget closely.'],
+        ['Maximum line credit', 'Largest net credit that still qualifies as a slight untested-side line credit. Zero-credit and net-debit structures are always rejected.'],
+        ['Automatic protective long', 'After placing the credit short at the selected delta, the scanner chooses the farther protective long and credit-spread width. Its width, the 1-point debit benefit, and the opening credit determine maximum loss.'],
+        ['Risk utilization', 'Calculated maximum loss divided by the selected risk ceiling. It can be below 100% when listed strikes or current premiums do not permit a closer fit.'],
+        ['Minimum leg OI', 'Minimum open interest required at each of the four strikes for an actionable result.'],
+      ],
+    },
+    {
+      title: 'Reading each trade',
+      items: [
+        ['Expiration outcomes', 'A Put Condor has downside risk and a positive upper line; a Call Condor mirrors it with upside risk and a positive lower line. The 1-point debit spread creates each side’s maximum-profit shelf.'],
+        ['Combined payoff', 'For matching expirations, Both mode calculates profit and loss from all eight legs at the downside tail, middle, upside tail, and each side’s peak. It does not add two peaks that cannot occur at the same underlying price.'],
+        ['Natural market', 'Uses sell bids and buy asks across all four legs. A mid-price credit with a non-credit natural market is labeled review-only.'],
+        ['Probability cards', 'Show modeled touches and terminal probabilities from current IV, plus profitable-close estimates at halfway and two-thirds of original DTE.'],
+        ['Risk graph / Save trade', 'Sends the exact four strikes and current mid prices to Strategy Lab or saves them for tracking.'],
+      ],
+    },
+  ],
   'unbalanced-put-condor': [
     {
       title: 'Universe and expiration',

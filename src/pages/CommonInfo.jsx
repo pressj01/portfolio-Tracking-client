@@ -336,6 +336,7 @@ function activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth) {
     profitBasis,
     shareOfPortfolio,
     nextPayment: holding.div_pay_date || '',
+    nextPaymentEstimated: !!holding.div_pay_date_estimated,
     exDividend: holding.ex_div_date || '',
     frequency: FREQ_LABELS[String(holding.div_frequency || '').toUpperCase()] || holding.div_frequency || '--',
   }
@@ -546,7 +547,7 @@ const COLUMN_DEFS = {
   nextPayment: {
     label: 'Next payment',
     sortValue: row => row.nextPayment,
-    render: row => text(row.nextPayment),
+    render: row => text(`${row.nextPaymentEstimated ? '~' : ''}${row.nextPayment || ''}`),
   },
   exDividend: {
     label: 'Ex-dividend date',

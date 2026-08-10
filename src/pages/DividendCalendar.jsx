@@ -10,10 +10,12 @@ const FILTERS = [
 
 const TABS = [
   { key: 'calendar', label: 'Calendar' },
+  { key: 'month', label: 'Month' },
   { key: 'optimization', label: 'Optimization' },
 ]
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const CANDIDATE_PROVIDERS = [
   { name: 'NEOs', note: 'primary candidate source' },
@@ -177,11 +179,79 @@ function estimatePaymentIncome(ev) {
   return amount > 0 && qty > 0 ? amount * qty : 0
 }
 
+function calendarPaymentIncome(ev) {
+  const scopedPayment = Number(ev.payment_income || 0)
+  if (scopedPayment > 0) return scopedPayment
+  const amount = Number(ev.amount || ev.dividend_paid || 0)
+  const qty = Number(ev.quantity || 0)
+  if (amount > 0 && qty > 0) return amount * qty
+  return estimatePaymentIncome(ev)
+}
+
 function estimateAnnualYieldPct(amount, freq, price) {
   const amt = Number(amount || 0)
   const px = Number(price || 0)
   if (amt <= 0 || px <= 0) return null
   return (amt * paymentsPerYear(freq) / px) * 100
+}
+
+function currentYieldPct(ev) {
+  const annualIncome = Number(ev.annual_income || 0)
+  const holdingValue = Number(ev.current_value || 0)
+    || Number(ev.quantity || 0) * Number(ev.current_price || 0)
+  if (annualIncome > 0 && holdingValue > 0) return (annualIncome / holdingValue) * 100
+  return estimateAnnualYieldPct(ev.amount, ev.freq, ev.current_price)
+}
+
+function isoDate(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function dateFromIso(value) {
+  const [year, month, day] = String(value || '').split('-').map(Number)
+  if (!year || !month || !day) return null
+  const date = new Date(year, month - 1, day)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
+function shiftMonthKey(key, amount) {
+  const [year, month] = String(key || '').split('-').map(Number)
+  const date = new Date(year, (month || 1) - 1 + amount, 1)
+  return monthKey(date)
+}
+
+function buildMonthCells(selectedMonth, payments) {
+  const [year, month] = String(selectedMonth || '').split('-').map(Number)
+  if (!year || !month) return []
+  const first = new Date(year, month - 1, 1)
+  const leadingDays = (first.getDay() + 6) % 7
+  const daysInMonth = new Date(year, month, 0).getDate()
+  const cellCount = Math.ceil((leadingDays + daysInMonth) / 7) * 7
+  const byDate = new Map()
+
+  payments.forEach(payment => {
+    const key = payment.calendar_pay_date
+    if (!byDate.has(key)) byDate.set(key, [])
+    byDate.get(key).push(payment)
+  })
+
+  return Array.from({ length: cellCount }, (_, index) => {
+    const date = new Date(year, month - 1, index - leadingDays + 1)
+    const key = isoDate(date)
+    return {
+      key,
+      date,
+      currentMonth: date.getMonth() === month - 1,
+      payments: byDate.get(key) || [],
+    }
+  })
 }
 
 function providerForCandidate(ticker, description = '') {
@@ -445,24 +515,32 @@ export default function DividendCalendar() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const [events, setEvents] = useState([])
+  const [holdings, setHoldings] = useState([])
   const [watchlistRows, setWatchlistRows] = useState([])
   const [candidateRows, setCandidateRows] = useState([])
   const [today, setToday] = useState('')
   const [filter, setFilter] = useState('all')
   const [tab, setTab] = useState('calendar')
+  const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()))
+  const [monthPayments, setMonthPayments] = useState([])
+  const [monthLoading, setMonthLoading] = useState(false)
   const [loading, setLoading] = useState(true)
-  const cacheKey = useMemo(() => `portfolio_div_calendar_v3_${selection}`, [selection])
+  const cacheKey = useMemo(() => `portfolio_div_calendar_v5_${selection}`, [selection])
 
   useEffect(() => {
     let stale = false
     const cached = readCalendarCache(cacheKey)
     if (cached) {
       setEvents(cached.events || [])
+      setHoldings(cached.holdings || cached.events || [])
       setToday(cached.today || new Date().toISOString().slice(0, 10))
+      setSelectedMonth((cached.today || isoDate(new Date())).slice(0, 7))
       setLoading(false)
     } else {
       setEvents([])
+      setHoldings([])
       setToday('')
+      setSelectedMonth(monthKey(new Date()))
       setLoading(true)
     }
     pf('/api/div-calendar')
@@ -473,9 +551,12 @@ export default function DividendCalendar() {
       .then(data => {
         if (stale) return
         setEvents(data.events || [])
+        setHoldings(data.holdings || data.events || [])
         setToday(data.today || new Date().toISOString().slice(0, 10))
+        setSelectedMonth((data.today || isoDate(new Date())).slice(0, 7))
         writeCalendarCache(cacheKey, {
           events: data.events || [],
+          holdings: data.holdings || data.events || [],
           today: data.today || new Date().toISOString().slice(0, 10),
         })
         setLoading(false)
@@ -483,6 +564,27 @@ export default function DividendCalendar() {
       .catch(() => { if (!stale) setLoading(false) })
     return () => { stale = true }
   }, [pf, selection, cacheKey])
+
+  useEffect(() => {
+    if (tab !== 'month' || !selectedMonth) return undefined
+    let stale = false
+    pf(`/api/div-calendar?month=${encodeURIComponent(selectedMonth)}`)
+      .then(r => {
+        if (!r.ok) throw new Error(`Request failed (${r.status})`)
+        return r.json()
+      })
+      .then(data => {
+        if (stale) return
+        setMonthPayments(data.payments || [])
+        setMonthLoading(false)
+      })
+      .catch(() => {
+        if (stale) return
+        setMonthPayments([])
+        setMonthLoading(false)
+      })
+    return () => { stale = true }
+  }, [pf, selection, tab, selectedMonth])
 
   useEffect(() => {
     let stale = false
@@ -543,7 +645,7 @@ export default function DividendCalendar() {
   if (loading) return <div style={{ padding: '2rem', color: 'var(--text-dim)' }}>Loading dividend calendar...</div>
 
   return (
-    <div className="dc-page">
+    <div className={`dc-page${tab === 'month' ? ' dc-calendar-page-wide' : ''}`}>
       <h1 className="dc-title">Dividend Calendar</h1>
       <p className="dc-subtitle">Ex-dividend &amp; estimated pay dates for portfolio holdings</p>
 
@@ -555,7 +657,10 @@ export default function DividendCalendar() {
             role="tab"
             aria-selected={tab === t.key}
             className={`dc-tab${tab === t.key ? ' active' : ''}`}
-            onClick={() => setTab(t.key)}
+            onClick={() => {
+              setTab(t.key)
+              if (t.key === 'month') setMonthLoading(true)
+            }}
           >
             {t.label}
           </button>
@@ -657,9 +762,158 @@ export default function DividendCalendar() {
         </>
       )}
 
+      {tab === 'month' && (
+        <DividendMonthView
+          events={events}
+          holdings={holdings}
+          payments={monthPayments}
+          loading={monthLoading}
+          today={today}
+          selectedMonth={selectedMonth}
+          onMonthChange={month => {
+            setMonthLoading(true)
+            setSelectedMonth(month)
+          }}
+        />
+      )}
+
       {tab === 'optimization' && (
         <DividendOptimization data={optimization} events={events} watchlistRows={watchlistRows} candidateRows={candidateRows} />
       )}
+    </div>
+  )
+}
+
+function DividendMonthView({ events, holdings, payments, loading, today, selectedMonth, onMonthChange }) {
+  const fallbackMonth = (today || isoDate(new Date())).slice(0, 7)
+  const activeMonth = selectedMonth || fallbackMonth
+  const cells = useMemo(
+    () => buildMonthCells(activeMonth, payments),
+    [activeMonth, payments],
+  )
+  const monthDate = dateFromIso(`${activeMonth}-01`) || new Date()
+  const monthTitle = monthDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  const monthIncome = payments.reduce((sum, ev) => sum + calendarPaymentIncome(ev), 0)
+  const paymentDays = new Set(payments.map(ev => ev.calendar_pay_date)).size
+
+  return (
+    <div className="dc-month-view">
+      <div className="dc-month-toolbar">
+        <div className="dc-month-nav" aria-label="Choose calendar month">
+          <button
+            type="button"
+            className="dc-month-nav-btn"
+            onClick={() => onMonthChange(shiftMonthKey(activeMonth, -1))}
+            aria-label="Previous month"
+          >
+            {'\u2039'}
+          </button>
+          <button
+            type="button"
+            className="dc-month-today-btn"
+            onClick={() => onMonthChange(fallbackMonth)}
+          >
+            Today
+          </button>
+          <button
+            type="button"
+            className="dc-month-nav-btn"
+            onClick={() => onMonthChange(shiftMonthKey(activeMonth, 1))}
+            aria-label="Next month"
+          >
+            {'\u203a'}
+          </button>
+        </div>
+        <h2>{monthTitle}</h2>
+        <div className="dc-month-summary">
+          <strong>{formatMoney(monthIncome)}</strong>
+          <span>{payments.length} payment{payments.length !== 1 ? 's' : ''} across {paymentDays} day{paymentDays !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="dc-month-empty">Loading payment schedule...</p>
+      ) : holdings.length === 0 && events.length === 0 ? (
+        <p className="dc-month-empty">No dividend payment data found. Import data first.</p>
+      ) : (
+        <div className="dc-month-scroll">
+          <div className="dc-month-grid" role="grid" aria-label={`${monthTitle} dividend payments`}>
+            {WEEKDAYS.map(day => (
+              <div key={day} className="dc-month-weekday" role="columnheader">{day}</div>
+            ))}
+            {cells.map(cell => {
+              const dailyIncome = cell.payments.reduce((sum, ev) => sum + calendarPaymentIncome(ev), 0)
+              const isToday = cell.key === today
+              return (
+                <div
+                  key={cell.key}
+                  className={`dc-month-cell${cell.currentMonth ? '' : ' outside'}${isToday ? ' today' : ''}`}
+                  role="gridcell"
+                  aria-label={`${cell.date.toLocaleDateString()}: ${cell.payments.length} dividend payments`}
+                >
+                  <div className="dc-month-cell-head">
+                    <span className="dc-month-day-number">{cell.date.getDate()}</span>
+                    {cell.currentMonth && dailyIncome > 0 && (
+                      <span className="dc-month-day-total">+{formatMoney(dailyIncome)}</span>
+                    )}
+                  </div>
+                  {cell.currentMonth && (
+                    <div className="dc-month-cell-events">
+                      {cell.payments.map((ev, index) => {
+                        const payment = calendarPaymentIncome(ev)
+                        const yieldPct = currentYieldPct(ev)
+                        const estimated = ev.calendar_estimated ?? (ev.pay_estimated || ev.calendar_projected)
+                        const description = ev.description || 'Dividend payment'
+                        return (
+                          <div
+                            key={`${cell.key}-${ev.ticker}-${index}`}
+                            className="dc-month-event"
+                            style={{ borderLeftColor: ev.color || 'var(--teal)' }}
+                            title={`${ev.ticker} - ${description}\nPayment: ${formatMoney(payment)}\nYield: ${yieldPct == null ? 'Unavailable' : `${yieldPct.toFixed(2)}%`}\nEx-dividend: ${ev.date || 'Unavailable'}\n${estimated ? 'Estimated pay date' : 'Confirmed pay date'}`}
+                          >
+                            <div
+                              className="dc-month-event-icon"
+                              style={{ background: `${ev.color || '#8899aa'}22`, color: ev.color || 'var(--text-soft)' }}
+                              aria-hidden="true"
+                            >
+                              {String(ev.ticker || '?').slice(0, 2)}
+                            </div>
+                            <div className="dc-month-event-body">
+                              <div className="dc-month-event-title">
+                                <strong>{ev.ticker}</strong>
+                                <span>{description}</span>
+                              </div>
+                              <div className="dc-month-event-meta">
+                                <strong>{formatMoney(payment)}</strong>
+                                <span
+                                  className={`dc-month-date-status${estimated ? ' estimated' : ' confirmed'}`}
+                                  title={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
+                                  aria-label={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
+                                >
+                                  {estimated ? '~' : '\u2713'}
+                                </span>
+                                <span className="dc-month-meta-dot" aria-hidden="true">&bull;</span>
+                                <span>{yieldPct == null ? 'Yield unavailable' : `${yieldPct.toFixed(2)}% yield`}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="dc-month-legend">
+        <span><i className="confirmed">{'\u2713'}</i> confirmed pay date</span>
+        <span><i className="confirmed">{'\u2713'}</i> matched to imported transaction history</span>
+        <span><i className="estimated">~</i> estimated from the current dividend schedule</span>
+        <span>Tickers and amounts follow the selected account; aggregate views combine only their configured members.</span>
+      </div>
     </div>
   )
 }

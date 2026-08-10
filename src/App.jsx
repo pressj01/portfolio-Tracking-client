@@ -71,6 +71,7 @@ import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
 import StockBuyingChecklist from './pages/StockBuyingChecklist'
 import OptionTradingTools from './pages/OptionTradingTools'
 import OptionDashboard from './pages/OptionDashboard'
+import OptionProbabilityCalculator from './pages/OptionProbabilityCalculator'
 import OptionTrades from './pages/OptionTrades'
 import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
@@ -80,6 +81,7 @@ import BearPutSpreadScanner from './pages/BearPutSpreadScanner'
 import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
 import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
 import IronCondorScanner from './pages/IronCondorScanner'
+import PutCondorScanner from './pages/PutCondorScanner'
 import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
 import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
 import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
@@ -249,6 +251,7 @@ function App() {
         <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
         <Route path="/options" element={<OptionTradingTools />} />
         <Route path="/option-dashboard" element={<OptionDashboard />} />
+        <Route path="/option-probability-calculator" element={<OptionProbabilityCalculator />} />
         <Route path="/option-trades" element={<OptionTrades />} />
         <Route path="/option-trades/import" element={<OptionTradeImport />} />
         <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
@@ -257,6 +260,8 @@ function App() {
         <Route path="/bear-put-spread-scanner" element={<BearPutSpreadScanner />} />
         <Route path="/bear-call-spread-scanner" element={<BearCallSpreadScanner />} />
         <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
+        <Route path="/put-condor-scanner" element={<PutCondorScanner />} />
+        <Route path="/put-call-condor-scanner" element={<PutCondorScanner />} />
         <Route path="/unbalanced-put-condor-scanner" element={<UnbalancedPutCondorScanner />} />
         <Route path="/unbalanced-butterfly-scanner" element={<UnbalancedButterflyScanner />} />
         <Route path="/double-hedge-put-butterfly-scanner" element={<DoubleHedgePutButterflyScanner />} />
@@ -328,6 +333,7 @@ function Nav() {
       <NavLink to="/action-center">Action Center</NavLink>
       <NavDropdown label="Options">
         <NavLink to="/option-dashboard">Options Dashboard</NavLink>
+        <NavLink to="/option-probability-calculator">Probability Calculator</NavLink>
         <NavLink to="/option-trades">Option Trades</NavLink>
         <NavLink to="/option-trades/import">Import Option Trades</NavLink>
         <NavLink to="/options">Strategy Lab</NavLink>
@@ -337,6 +343,7 @@ function Nav() {
         <NavLink to="/bear-put-spread-scanner">Bear Put Spread Scanner</NavLink>
         <NavLink to="/bear-call-spread-scanner">Bear Call Spread Scanner</NavLink>
         <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
+        <NavLink to="/put-call-condor-scanner">Put / Call Condor Scanner</NavLink>
         <NavLink to="/unbalanced-put-condor-scanner">Unbalanced Put Condor Scanner</NavLink>
         <NavLink to="/unbalanced-butterfly-scanner">Unbalanced Butterfly Scanner</NavLink>
         <NavLink to="/double-hedge-put-butterfly-scanner">Double-Hedge Put Butterfly Scanner</NavLink>
