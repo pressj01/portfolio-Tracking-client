@@ -155,6 +155,37 @@ const RR_DEFAULTS = {
   investmentTaxPct: 15,
 }
 
+// Keep each profile (and aggregate) independent so changing a retirement plan
+// for one selection never changes the assumptions for another.
+const RR_STORAGE_KEY_PREFIX = 'retirement-readiness-inputs:v1:'
+const RR_SAVED_INPUT_KEYS = [
+  'monthlyExpenses', 'bufferRatio', 'surplusWithdrawPct', 'surplusReinvestPct',
+  'startingCash', 'targetCashMonths', 'years', 'inflationPct',
+  'employmentIncome', 'companyPension', 'govPension', 'annuities',
+  'otherRecurringIncome', 'incomeIndexPct', 'nonInvestmentTaxPct',
+  'portfolioBookNav', 'targetYieldPct', 'navErosionPct', 'bearDeclinePct',
+  'bearYieldPct', 'investmentTaxPct', 'directContribution', 'incomeHaircutPct',
+]
+
+function readSavedInputs(selection) {
+  try {
+    const raw = window.localStorage.getItem(`${RR_STORAGE_KEY_PREFIX}${selection}`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+
+    const saved = {}
+    RR_SAVED_INPUT_KEYS.forEach(key => {
+      const value = Number(parsed[key])
+      if (Number.isFinite(value)) saved[key] = value
+    })
+    return Object.keys(saved).length ? saved : null
+  } catch {
+    // Local storage can be unavailable in private browsing or by policy.
+    return null
+  }
+}
+
 const INPUT_HELP = {
   monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. Pulled from your Cash Flow & Sustainability plan, averaged over 12 months in today’s dollars so annual and quarterly bills are normalized. Expense inflation is applied forward from here, not baked in, so a budget of plain monthly bills matches the Cash Flow screen exactly.',
   nonInvestmentIncome: 'Monthly income that does not come from the portfolio, before taxes. Examples: employment income, pensions, Social Security, annuities, and other recurring inflows. Pulled from the income entries in your Cash Flow & Sustainability plan.',
@@ -282,6 +313,7 @@ export default function RetirementReadiness() {
   const [investmentTaxPct, setInvestmentTaxPct] = useState(15)
   const [directContribution, setDirectContribution] = useState(0)
   const [incomeHaircutPct, setIncomeHaircutPct] = useState(10)
+  const [settingsLoadedFor, setSettingsLoadedFor] = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -319,6 +351,32 @@ export default function RetirementReadiness() {
     setSurplusWithdrawPct(s ? s.surplusWithdrawPct : d.surplusWithdrawPct)
   }, [])
 
+  const applySavedInputs = useCallback(saved => {
+    if ('monthlyExpenses' in saved) setMonthlyExpenses(saved.monthlyExpenses)
+    if ('bufferRatio' in saved) setBufferRatio(saved.bufferRatio)
+    if ('surplusWithdrawPct' in saved) setSurplusWithdrawPct(saved.surplusWithdrawPct)
+    if ('surplusReinvestPct' in saved) setSurplusReinvestPct(saved.surplusReinvestPct)
+    if ('startingCash' in saved) setStartingCash(saved.startingCash)
+    if ('targetCashMonths' in saved) setTargetCashMonths(saved.targetCashMonths)
+    if ('years' in saved) setYears(saved.years)
+    if ('inflationPct' in saved) setInflationPct(saved.inflationPct)
+    if ('employmentIncome' in saved) setEmploymentIncome(saved.employmentIncome)
+    if ('companyPension' in saved) setCompanyPension(saved.companyPension)
+    if ('govPension' in saved) setGovPension(saved.govPension)
+    if ('annuities' in saved) setAnnuities(saved.annuities)
+    if ('otherRecurringIncome' in saved) setOtherRecurringIncome(saved.otherRecurringIncome)
+    if ('incomeIndexPct' in saved) setIncomeIndexPct(saved.incomeIndexPct)
+    if ('nonInvestmentTaxPct' in saved) setNonInvestmentTaxPct(saved.nonInvestmentTaxPct)
+    if ('portfolioBookNav' in saved) setPortfolioBookNav(saved.portfolioBookNav)
+    if ('targetYieldPct' in saved) setTargetYieldPct(saved.targetYieldPct)
+    if ('navErosionPct' in saved) setNavErosionPct(saved.navErosionPct)
+    if ('bearDeclinePct' in saved) setBearDeclinePct(saved.bearDeclinePct)
+    if ('bearYieldPct' in saved) setBearYieldPct(saved.bearYieldPct)
+    if ('investmentTaxPct' in saved) setInvestmentTaxPct(saved.investmentTaxPct)
+    if ('directContribution' in saved) setDirectContribution(saved.directContribution)
+    if ('incomeHaircutPct' in saved) setIncomeHaircutPct(saved.incomeHaircutPct)
+  }, [])
+
   // The selection resolves to profile 1 for a tick before the aggregate list
   // loads, so an early response can land after a later one. Only the newest
   // request is allowed to write.
@@ -351,14 +409,45 @@ export default function RetirementReadiness() {
       })
   }, [pf])
 
-  // Seed expenses, non-investment inflows, and the saved assumptions from the
-  // cash-flow plan so this screen models the same budget the Cash Flow screen
-  // does. Typing over a field still wins; "Re-sync" puts the plan's numbers back.
+  // Use the Cash Flow plan only until this selection has saved Retirement
+  // Readiness inputs. Once saved, the user's adjustments win on future visits;
+  // "Re-sync" remains the explicit way to replace them with plan values.
   useEffect(() => {
+    setSettingsLoadedFor(null)
     loadCashFlowPlan().then(result => {
-      if (result) applyCashFlowPlan(result.plan, result.settings)
+      if (!result) return
+      const saved = readSavedInputs(selection)
+      if (saved) applySavedInputs(saved)
+      else applyCashFlowPlan(result.plan, result.settings)
+      setSettingsLoadedFor(selection)
     })
-  }, [loadCashFlowPlan, applyCashFlowPlan, selection])
+  }, [loadCashFlowPlan, applyCashFlowPlan, applySavedInputs, selection])
+
+  // Wait for the selected plan or its saved inputs to load before writing. This
+  // prevents the initial defaults from overwriting a saved profile on mount.
+  useEffect(() => {
+    if (settingsLoadedFor !== selection) return
+    const saved = {
+      monthlyExpenses, bufferRatio, surplusWithdrawPct, surplusReinvestPct,
+      startingCash, targetCashMonths, years, inflationPct,
+      employmentIncome, companyPension, govPension, annuities,
+      otherRecurringIncome, incomeIndexPct, nonInvestmentTaxPct,
+      portfolioBookNav, targetYieldPct, navErosionPct, bearDeclinePct,
+      bearYieldPct, investmentTaxPct, directContribution, incomeHaircutPct,
+    }
+    try {
+      window.localStorage.setItem(`${RR_STORAGE_KEY_PREFIX}${selection}`, JSON.stringify(saved))
+    } catch {
+      // Best effort: the model still works if browser storage is unavailable.
+    }
+  }, [
+    settingsLoadedFor, selection, monthlyExpenses, bufferRatio,
+    surplusWithdrawPct, surplusReinvestPct, startingCash, targetCashMonths,
+    years, inflationPct, employmentIncome, companyPension, govPension,
+    annuities, otherRecurringIncome, incomeIndexPct, nonInvestmentTaxPct,
+    portfolioBookNav, targetYieldPct, navErosionPct, bearDeclinePct,
+    bearYieldPct, investmentTaxPct, directContribution, incomeHaircutPct,
+  ])
 
   const holdings = useMemo(() => rows.map(buildHolding).filter(h => h.currentValue > 0 || h.annualIncome > 0), [rows])
 
