@@ -419,6 +419,209 @@ export default function Growth() {
         )}
       </div>
 
+      <details className="growth-help">
+        <summary>How to read the charts, metric bubbles, and filters</summary>
+        <div className="growth-help-intro">
+          <strong>What this page measures:</strong> Growth &amp; Performance compares the selected
+          holdings with one benchmark over one effective market-data window. The two index charts
+          start at 100, so their ending value is a percentage return rather than a dollar balance.
+          The cards, ticker bars, and heatmap are recalculated from the same selected scope and date
+          range whenever a filter changes.
+        </div>
+
+        <div className="growth-help-grid">
+          <section className="growth-help-section">
+            <h3>Filters and controls</h3>
+
+            <h4>Categories</h4>
+            <p>
+              This is a holdings-scope filter. <strong>All Holdings</strong> includes every positive
+              holding in the active account or account group. Choosing one or more top-level
+              categories includes all tickers assigned to those categories. Choosing only a
+              sub-category includes the tickers assigned to that sub-category.
+            </p>
+            <p>
+              Category and sub-category choices are combined with <strong>OR</strong>: a ticker is
+              included when it belongs to any selected choice. Selecting a whole category takes
+              precedence over its sub-categories; those sub-category checkboxes become dimmed and
+              do not create a second or narrower filter. The category button changes from
+              <strong> All Holdings</strong> to the number selected. This filter affects the
+              portfolio lines, both return cards, the risk cards, every ticker bar, and every heatmap
+              row. It is shown only when categories exist for the selected account.
+            </p>
+
+            <h4>Benchmark</h4>
+            <p>
+              The benchmark defaults to <strong>SPY</strong>. Type a market ticker, then press
+              <strong> Enter</strong> or click <strong>Go</strong> to fetch it. The benchmark is
+              plotted as the dotted orange line on both index charts, and its return is shown beside
+              the portfolio return cards. Its own Sharpe and Sortino values appear in the last two
+              metric bubbles. Changing the benchmark does not change the portfolio return; it
+              changes the comparison series, comparison difference, and benchmark risk statistics.
+            </p>
+            <p>
+              If the entered ticker has no usable history in the selected window, the portfolio can
+              still load, but the orange line and benchmark comparison values may be absent. The
+              ticker is not a portfolio holding filter and does not appear in the per-ticker bars.
+            </p>
+
+            <h4>Shared Performance Date Range</h4>
+            <p>
+              The preset buttons are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All</strong>, and
+              <strong> Custom</strong>. Presets end at the most recent available market close.
+              <strong> 1D</strong> uses the last two trading sessions, so weekends and holidays do
+              not become fake data points. The month and year presets use calendar dates, then use
+              the close on or before the requested start when that date is not a trading day.
+              <strong> YTD</strong> starts from the close on or before January 1.
+            </p>
+            <p>
+              <strong>All</strong> starts with the portfolio&apos;s own first recorded trade, purchase,
+              or import. It never uses a benchmark&apos;s older history to imply that the portfolio was
+              invested before it existed. The selected range is remembered across the other tracking
+              screens that use the shared performance range. The page prints the requested range and,
+              when necessary, the actual market-observation range so you can see any adjustment.
+            </p>
+
+            <h4>Custom dates</h4>
+            <p>
+              Custom <strong>Start date</strong> and <strong>End date</strong> are inclusive calendar
+              dates. Start must be on or before End, both dates must be complete, and End cannot be
+              in the future. Returns still use the last market close on or before the start, so a
+              weekend start can include the prior Friday close as its baseline. An invalid custom
+              range stops the request and shows an error instead of silently changing the dates.
+            </p>
+          </section>
+
+          <section className="growth-help-section">
+            <h3>Metric bubbles / summary cards</h3>
+            <p>
+              These cards summarize the selected holdings and date window. They are not independent
+              filters. A card can show an em dash when the window is too short, a ticker lacks enough
+              history, or the required market data is unavailable.
+            </p>
+            <ul>
+              <li>
+                <strong>Portfolio Grade:</strong> an overall A+ through F grade with its numeric
+                score. It is a composite view of risk-adjusted behavior, drawdown, downside capture,
+                and diversification—not a simple ranking of the largest percentage return. It is
+                calculated from adjusted prices and the current-value weighting of the selected
+                holdings, so a concentrated position can affect the result more than a small one.
+              </li>
+              <li>
+                <strong>Tracker Total Return %:</strong> the portfolio&apos;s transaction-aware,
+                dividend-reinvested return. The final portfolio index value minus 100 is this card&apos;s
+                percentage. Buys and sells change the portfolio weights after the transaction; they
+                are cash-flow events, not gains or losses. The smaller comparison text shows the
+                benchmark return and the portfolio&apos;s difference versus it.
+              </li>
+              <li>
+                <strong>Price Return %:</strong> the same transaction-aware portfolio measurement
+                using market-price movement only. Dividends and other distributions are excluded.
+                Comparing this card with Tracker Total Return % indicates how much reinvested
+                distributions contributed during the window.
+              </li>
+              <li>
+                <strong>Portfolio Sharpe:</strong> excess return per unit of total volatility,
+                using a risk-free-rate assumption. Higher generally means more return for the risk
+                taken, but it can be unstable in short windows and is not a prediction of future
+                performance.
+              </li>
+              <li>
+                <strong>Portfolio Sortino:</strong> excess return per unit of downside volatility.
+                Unlike Sharpe, it does not penalize upside movement as risk, so it focuses on how
+                efficiently the portfolio avoided harmful variation.
+              </li>
+              <li>
+                <strong>Benchmark Sharpe / Sortino:</strong> the same two risk measures for the
+                ticker entered in the Benchmark filter, calculated over the same effective window.
+                They make the risk-adjusted comparison apples-to-apples with the portfolio cards.
+              </li>
+            </ul>
+            <p className="growth-help-note">
+              Every card shows the effective date range used. A later first purchase, missing quote
+              history, or a non-trading start can make that effective range narrower than the
+              requested preset without changing the meaning of the result.
+            </p>
+          </section>
+        </div>
+
+        <div className="growth-help-grid growth-help-grid-charts">
+          <section className="growth-help-section">
+            <h3>Transaction-Aware Price Return Index</h3>
+            <p>
+              This line chart answers: <em>How did the market prices of the holdings I actually
+              owned change?</em> The portfolio is the solid cyan line and the benchmark is the
+              dotted orange line. Both are normalized to 100 at the start of their plotted window.
+              A portfolio ending at 115 represents approximately a 15% price return; it does not
+              mean the account is worth $115 or that $15 was deposited.
+            </p>
+            <p>
+              The calculation replays dated buys and sells. A transaction changes which shares and
+              weights contribute after that date, but the transaction itself is not counted as
+              performance. Dividends and other distributions are deliberately left out, which is
+              why this line can finish below the total-return line for an income-producing portfolio.
+            </p>
+          </section>
+
+          <section className="growth-help-section">
+            <h3>Transaction-Aware Total Return Index</h3>
+            <p>
+              This chart uses the same 100 starting point and line comparison, but includes
+              distributions reinvested into the return calculation. The portfolio is the solid
+              green line and the benchmark remains dotted orange. The ending index minus 100 is the
+              Tracker Total Return % bubble above it.
+            </p>
+            <p>
+              The gap between the total-return and price-return charts is a practical view of the
+              contribution from dividends and other distributions. For a fair comparison, read the
+              portfolio and benchmark at the same date and remember that each series is normalized
+              independently.
+            </p>
+          </section>
+
+          <section className="growth-help-section">
+            <h3>Performance by Ticker</h3>
+            <p>
+              This horizontal bar chart ranks each included holding by its transaction-aware total
+              return over the selected period. It uses the same return concept as Tracker Total
+              Return %, not price return alone. Green bars are positive and red bars are negative;
+              the longer the bar extends from the zero line, the larger the percentage move.
+            </p>
+            <p>
+              The bars show contribution by ticker, not dollar profit. A small position can have a
+              high percentage bar without driving much account-level change, while a large position
+              with a modest bar may matter more to the portfolio. The Category filter changes which
+              tickers appear; the Benchmark filter does not add a benchmark bar.
+            </p>
+          </section>
+
+          <section className="growth-help-section">
+            <h3>Performance Heatmap</h3>
+            <p>
+              The heatmap is a compact version of the ticker breakdown: each row is an included
+              ticker and the column is the selected period. The cell is that ticker&apos;s total return
+              percentage. Red means negative, the dark midpoint is near zero, and green means
+              positive. The number printed in the cell is rounded for display; hover it for the
+              precise plotted value.
+            </p>
+            <p>
+              Because there is one period column, the heatmap is best for spotting the strongest and
+              weakest holdings at a glance. It is not a multi-period history grid. To compare a
+              different window, change the shared date range and the bars, heatmap, cards, and line
+              charts will all refresh together.
+            </p>
+          </section>
+        </div>
+
+        <p className="growth-help-footer">
+          <strong>Reading tip:</strong> first check the effective dates printed on the cards and
+          chart titles, then use the total-return index for the headline comparison, the price-only
+          index to isolate market movement, and the ticker bar/heatmap to find which holdings are
+          driving the result. Hovering a line opens a shared date readout so the portfolio and
+          benchmark can be compared at the same point in time.
+        </p>
+      </details>
+
       {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
       {error && <div className="alert alert-error">{error}</div>}
 

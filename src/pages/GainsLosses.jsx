@@ -4,6 +4,7 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
+import { AccountValueCard } from '../components/AccountReconciliation'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -12,6 +13,7 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
+  formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
@@ -25,12 +27,13 @@ const fmtInt = v => formatMoneyWhole(v)
 // renders its em-dash in gain-green, which reads as a positive result.
 const glColor = v => (v == null ? 'var(--text-dim)' : (v >= 0 ? '#4dff91' : '#ff6b6b'))
 
-function MetricCard({ label, value, range, className }) {
+function MetricCard({ label, value, range, className, children }) {
   return (
     <div className={`summary-card ${className || ''}`}>
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '\u2014'}</div>
       {range && <div className="summary-sub">{range}</div>}
+      {children}
     </div>
   )
 }
@@ -336,6 +339,12 @@ export default function GainsLosses() {
     chartData?.actual_start_date || chartData?.requested_start_date,
     chartData?.actual_end_date || chartData?.requested_end_date,
   )
+  // Start and End Value are single closes; the range belongs on the cards that
+  // measure across one.
+  const periodAsOf = (value) => {
+    const label = formatPerformanceDate(value)
+    return label ? `As of ${label} close` : performanceRange
+  }
   const performanceByTicker = useMemo(() => new Map(
     (chartData?.performance_rows || []).map(row => [
       String(row.ticker || '').trim().toUpperCase(),
@@ -765,6 +774,81 @@ export default function GainsLosses() {
         )}
       </div>
 
+      <details className="tracker-help">
+        <summary>What do these cards mean?</summary>
+        <p className="tracker-help-footer">
+          <strong>Two different questions, both called "gains and losses":</strong> the top strip is a
+          period return — it resets to whatever the Shared Performance Date Range is set to, and it is
+          the same transaction-aware calculation used on Total Return. The bottom strip is lifetime
+          cost-basis accounting — invested vs. current value since the day each holding was bought,
+          unaffected by the date range above.
+        </p>
+        <div className="tracker-help-grid">
+          <section>
+            <h3>Selected-period cards</h3>
+            <p>Everything in this row moves when you change the Shared Performance Date Range.</p>
+            <ul>
+              <li><strong>Start Value / End Value:</strong> the portfolio's holdings, priced at the close on the first and last day of the range. Neither includes cash.</li>
+              <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
+              <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
+              <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
+              <li><strong>Total Return:</strong> Price Return plus Distributions — the dollar version of Tracker Total Return %.</li>
+              <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2 when the account, holdings filter, and date range match.</li>
+            </ul>
+            <p className="tracker-help-note">
+              Buys and sells during the range change what is being measured, not the return itself — a
+              purchase or sale is never counted as a gain or loss here.
+            </p>
+          </section>
+          <section>
+            <h3>Lifetime cost-basis cards</h3>
+            <p>This row ignores the date range. Each figure runs from the day a holding was first bought.</p>
+            <p className="tracker-help-note" style={{ margin: '0 0 0.55rem', paddingTop: 0, borderTop: 'none' }}>
+              <strong>Cost basis</strong> is what you originally paid for shares you still own — price
+              paid × shares, not today's value. It is the baseline every gain/loss figure on this row is
+              measured against, and it follows the <strong>Basis</strong> selector in the top nav: Original
+              cost uses your recorded purchase price, Broker adjusted cost uses your broker's adjusted
+              figure (wash sales, corporate actions) when one is on file. Switching that selector changes
+              every number below without changing what you actually hold.
+            </p>
+            <ul>
+              <li><strong>Total Invested:</strong> your total cost basis — the sum of price paid × shares across every holding you currently own.</li>
+              <li><strong>Current Value:</strong> those same holdings at today's market price. Does not include cash.</li>
+              <li><strong>Account Value:</strong> Current Value plus cash and any open option contracts — compare this one against your broker, not Current Value.</li>
+              <li><strong>Unrealized G/L:</strong> gain or loss on shares you still hold. <em>Price Only</em> ignores dividends; <em>Price + Divs</em> adds every dividend received while holding those shares.</li>
+              <li><strong>Realized G/L:</strong> the same split, but for shares you have already sold — the gain or loss is locked in at the sale.</li>
+              <li><strong>Combined G/L:</strong> Unrealized plus Realized — your total cost-basis result across everything you have ever owned, sold or not.</li>
+            </ul>
+            <p className="tracker-help-note">
+              This is cost-basis accounting, not a time-weighted return: a holding bought ten years ago
+              and one bought last week both count their full gain, so this row cannot be compared
+              directly against Tracker Total Return %.
+            </p>
+          </section>
+          {/* Full width: this is about all three tables, not one card strip. */}
+          <section className="tracker-help-wide">
+            <h3>Unrealized / Realized / Combined tables</h3>
+            <p>
+              The tabs below break the same lifetime accounting down by ticker. <strong>Unrealized</strong>
+              lists what you currently hold; <strong>Realized</strong> lists closed sales, grouped one row
+              per ticker with the individual sells available behind the expand arrow when there is more
+              than one; <strong>Combined</strong> shows both sides side by side for every ticker you have
+              ever owned. <strong>RvY</strong> (Return vs. Yield, Unrealized tab only) compares each
+              holding's Tracker Total Return % for the selected range against its yield scaled to that
+              same window — Good means the total return beat the income, Poor means the income alone beat
+              the total return.
+            </p>
+          </section>
+        </div>
+        <p className="tracker-help-footer">
+          The Categories filter narrows every card, table, and chart on this screen to the selected
+          holdings. The Shared Performance Date Range only moves the selected-period cards, the charts
+          below, and the period-scoped columns in the tables (Tracker TR %, Effective Range, RvY) — it
+          does not change the Lifetime Cost-Basis cards or the rest of the table columns, which always
+          run from each holding's original purchase date.
+        </p>
+      </details>
+
       {rangeError && <div className="alert alert-error">{rangeError}</div>}
 
       {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading shared-period performance...</div>}
@@ -787,12 +871,33 @@ export default function GainsLosses() {
             a different cost-basis accounting question.
           </div>
           <div className="summary-strip" style={{ marginBottom: '1.25rem' }}>
-            <MetricCard label="Start Value" value={fmtInt(periodMetrics.start_value)} range={performanceRange} />
-            <MetricCard label="End Value" value={fmtInt(periodMetrics.end_value)} range={performanceRange} />
-            <MetricCard label="Price Return" value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>} range={performanceRange} />
-            <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange} />
-            <MetricCard label="Total Return" value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>} range={performanceRange} />
-            <MetricCard label="Tracker Total Return %" value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>} range={performanceRange} />
+            <MetricCard label="Start Value" value={fmtInt(periodMetrics.start_value)}
+              range={periodAsOf(chartData?.actual_start_date)}>
+              {periodMetrics.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
+            </MetricCard>
+            <MetricCard label="End Value" value={fmtInt(periodMetrics.end_value)}
+              range={periodAsOf(chartData?.actual_end_date)}>
+              {periodMetrics.account_reconciliation && (
+                <div className="summary-sub">Holdings only — no cash; see Account Value</div>
+              )}
+            </MetricCard>
+            <AccountValueCard data={periodMetrics.account_reconciliation}
+              basisLabel={periodAsOf(chartData?.actual_end_date)} />
+            <MetricCard label="Price Return" range={performanceRange}
+              value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>}>
+              <div className="summary-sub">Market price only, dividends excluded</div>
+            </MetricCard>
+            <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange}>
+              <div className="summary-sub">Dividends paid during the range</div>
+            </MetricCard>
+            <MetricCard label="Total Return" range={performanceRange}
+              value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>}>
+              <div className="summary-sub">Price Return + Distributions</div>
+            </MetricCard>
+            <MetricCard label="Tracker Total Return %" range={performanceRange}
+              value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>}>
+              <div className="summary-sub">Matches Total Return &amp; Dashboard</div>
+            </MetricCard>
           </div>
         </>
       )}
@@ -807,18 +912,51 @@ export default function GainsLosses() {
             These invested, current-value, realized, and combined figures are lifetime accounting totals.
             They are intentionally not changed by the performance date range; use Tracker TR % above and
             in the Unrealized table for a period-to-period return comparison.
+            {t.account_reconciliation && (
+              <>
+                {' '}Current Value counts holdings only. <strong>Account Value</strong> beside it adds
+                your cash balance and any open option contracts, which are tracked in their own
+                ledger — that is the figure to compare with a broker's net liquidating value, which
+                already includes your cash.
+              </>
+            )}
           </p>
           <div className="summary-strip" style={{ marginBottom: '0.5rem' }}>
-            <MetricCard label="Total Invested" value={fmtInt(t.unrealized_invested)} />
-            <MetricCard label="Current Value" value={fmtInt(t.unrealized_value)} />
-            <MetricCard label="Unrealized G/L (Price Only)" value={<span style={{ color: glColor(t.unrealized_price_gl) }}>{fmtInt(t.unrealized_price_gl)}</span>} />
-            <MetricCard label="Unrealized G/L (Price + Divs)" value={<span style={{ color: glColor(t.unrealized_total_gl) }}>{fmtInt(t.unrealized_total_gl)}</span>} />
+            <MetricCard label="Total Invested" value={fmtInt(t.unrealized_invested)}>
+              <div className="summary-sub">What you paid for shares you still hold</div>
+              <div className="summary-sub">
+                Cost basis · {basisMode === 'broker_adjusted' ? 'broker adjusted' : 'original'}
+              </div>
+            </MetricCard>
+            <MetricCard label="Current Value" value={fmtInt(t.unrealized_value)}>
+              {t.account_reconciliation ? (
+                <div className="summary-sub">Holdings only — no cash; see Account Value</div>
+              ) : (
+                <div className="summary-sub">Those same shares at today's price</div>
+              )}
+            </MetricCard>
+            {/* Current Value counts holdings only; this is the whole account. */}
+            <AccountValueCard data={t.account_reconciliation} />
+            <MetricCard label="Unrealized G/L (Price Only)" value={<span style={{ color: glColor(t.unrealized_price_gl) }}>{fmtInt(t.unrealized_price_gl)}</span>}>
+              <div className="summary-sub">Current Value − Total Invested</div>
+            </MetricCard>
+            <MetricCard label="Unrealized G/L (Price + Divs)" value={<span style={{ color: glColor(t.unrealized_total_gl) }}>{fmtInt(t.unrealized_total_gl)}</span>}>
+              <div className="summary-sub">Same, plus dividends received while held</div>
+            </MetricCard>
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
-            <MetricCard label="Realized G/L (Price Only)" value={<span style={{ color: glColor(t.realized_price_gl) }}>{fmtInt(t.realized_price_gl)}</span>} />
-            <MetricCard label="Realized G/L (Price + Divs)" value={<span style={{ color: glColor(t.realized_total_gl) }}>{fmtInt(t.realized_total_gl)}</span>} />
-            <MetricCard label="Combined G/L (Price Only)" value={<span style={{ color: glColor(t.combined_price_gl) }}>{fmtInt(t.combined_price_gl)}</span>} />
-            <MetricCard label="Combined G/L (Price + Divs)" value={<span style={{ color: glColor(t.combined_total_gl) }}>{fmtInt(t.combined_total_gl)}</span>} />
+            <MetricCard label="Realized G/L (Price Only)" value={<span style={{ color: glColor(t.realized_price_gl) }}>{fmtInt(t.realized_price_gl)}</span>}>
+              <div className="summary-sub">Proceeds − cost basis, shares already sold</div>
+            </MetricCard>
+            <MetricCard label="Realized G/L (Price + Divs)" value={<span style={{ color: glColor(t.realized_total_gl) }}>{fmtInt(t.realized_total_gl)}</span>}>
+              <div className="summary-sub">Same, plus dividends received before the sale</div>
+            </MetricCard>
+            <MetricCard label="Combined G/L (Price Only)" value={<span style={{ color: glColor(t.combined_price_gl) }}>{fmtInt(t.combined_price_gl)}</span>}>
+              <div className="summary-sub">Unrealized + Realized, price only</div>
+            </MetricCard>
+            <MetricCard label="Combined G/L (Price + Divs)" value={<span style={{ color: glColor(t.combined_total_gl) }}>{fmtInt(t.combined_total_gl)}</span>}>
+              <div className="summary-sub">Lifetime result: everything you've ever owned</div>
+            </MetricCard>
           </div>
 
           {/* Tabs */}

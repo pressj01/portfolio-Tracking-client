@@ -2279,9 +2279,18 @@ function PortfolioGrowth2Help() {
         performance down by source: capital gains, dividends, realized P&amp;L, and fees.
       </p>
       <p style={{ marginBottom: '1rem' }}>
-        Both charts and the headline cards share the same period selector and ticker filter. Every summary
-        card shows its effective date range, and each chart title prints its From and To dates, so every view
-        stays in sync as you explore a range.
+        Both charts and the headline cards share the same period selector and ticker filter. Each chart title
+        prints its From and To dates, the return cards show their effective date range, and Start and End
+        Value show the single close each one is taken from, so every view stays in sync as you explore a range.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Comparing against your broker:</strong> End Value is your shares at the latest close plus your
+        recorded cash. A broker's net liquidating value already includes that cash, so adding the two together
+        double counts it. If the account is carrying open option contracts, they appear beneath End Value marked
+        at the current bid/ask mid, along with a combined <strong>with options</strong> figure — that is the one
+        to compare against net liquidating value. Short spreads mark negative because closing them costs money.
+        Options live in the separate option trade ledger, have no history in this replay, and never affect the
+        charts or either return card. The line is hidden entirely for an account with nothing open.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         <strong>How this ties to the other tracking pages:</strong> <strong>Tracker Total Return %</strong>

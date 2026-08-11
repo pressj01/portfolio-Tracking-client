@@ -4,6 +4,7 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
+import { AccountValueCard } from '../components/AccountReconciliation'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -60,7 +61,7 @@ const COMPARISON_TRACE_STYLES = {
 const formatComparisonDate = formatPerformanceDate
 const formatComparisonRange = formatPerformanceRange
 
-function MetricCard({ label, value, range, className }) {
+function MetricCard({ label, value, range, className, children }) {
   return (
     <div className={`summary-card ${className || ''}`}>
       <div className="summary-label">{label}</div>
@@ -70,6 +71,7 @@ function MetricCard({ label, value, range, className }) {
           {range}
         </div>
       )}
+      {children}
     </div>
   )
 }
@@ -782,6 +784,12 @@ export default function TotalReturn() {
   const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
   const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
   const dashboardCardRange = dashboardActualRange || dashboardRequestedRange
+  const asOf = (value) => {
+    const label = formatPerformanceDate(value)
+    return label ? `As of ${label} close` : dashboardCardRange
+  }
+  const startValueAsOf = asOf(chartData?.actual_start_date)
+  const endValueAsOf = asOf(chartData?.actual_end_date)
   const spyRange = formatComparisonRange(chartData?.spy_actual_start_date, chartData?.spy_actual_end_date)
   const cmpRequestedRange = formatComparisonRange(cmpData?.requested_start_date, cmpData?.requested_end_date)
   const cmpActualRange = formatComparisonRange(cmpData?.actual_start_date, cmpData?.actual_end_date)
@@ -894,6 +902,64 @@ export default function TotalReturn() {
         )}
       </div>
 
+      <details className="tracker-help">
+        <summary>What do these cards mean?</summary>
+        <p className="tracker-help-footer">
+          Every card in the summary strip moves together with the Shared Performance Date Range above —
+          unlike Gains &amp; Losses, nothing here is a lifetime figure. All of it comes from one replay of
+          your dated buy and sell history, priced at each day's close.
+        </p>
+        <div className="tracker-help-grid">
+          <section>
+            <h3>Value and return cards</h3>
+            <ul>
+              <li><strong>Start Value / End Value:</strong> the portfolio's holdings, priced at the close on the first and last day of the range. Neither includes cash.</li>
+              <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
+              <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
+              <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
+              <li><strong>SPY:</strong> the S&amp;P 500's own return over this portfolio's actual market-observation dates, for comparison.</li>
+            </ul>
+          </section>
+          {/* Full width: this is the one distinction worth getting right, and
+              splitting it across two half-width boxes would just re-fragment it. */}
+          <section className="tracker-help-wide">
+            <h3>Total Return vs. Tracker Total Return %</h3>
+            <p>
+              These are not the same number expressed two ways — they answer different questions, and
+              Total Return ÷ Start Value will not equal Tracker Total Return % whenever you bought or
+              sold during the range.
+            </p>
+            <ul>
+              <li>
+                <strong>Total Return ($):</strong> Price Return plus Distributions — the actual dollars
+                your position gained, given the shares you actually held on each day. Buying more
+                shares partway through the range means more dollars are exposed to whatever the price
+                does afterward, so this figure is <em>money-weighted</em>: it reflects how much capital
+                was invested and when, not just how the price moved.
+              </li>
+              <li>
+                <strong>Tracker Total Return %:</strong> a daily-compounded, dividend-reinvested index —
+                the same one drawn on the Growth &amp; Performance chart. Each trade re-bases the index
+                to the value just before the trade, so a purchase or sale never creates a jump in the
+                return itself. This is <em>time-weighted</em>: it measures how the investment performed,
+                independent of when money moved in or out.
+              </li>
+            </ul>
+            <p className="tracker-help-note">
+              Use Tracker Total Return % to judge performance or compare against a benchmark like SPY —
+              it is the figure that should match Dashboard, Growth &amp; Performance, Portfolio Growth 2,
+              and Gains &amp; Losses when the account, date range, and holdings scope match. Use Total
+              Return ($) to see the actual dollar result of your specific buy and sell timing, which a
+              pure percentage cannot show.
+            </p>
+          </section>
+        </div>
+        <p className="tracker-help-footer">
+          The Categories filter and the Shared Performance Date Range both apply to every card, chart,
+          and table on this page.
+        </p>
+      </details>
+
       {/* Reported once for the whole page: every data source below stands down
           on the same condition, so per-source alerts would just repeat it. */}
       {rangeError && <div className="alert alert-error">{rangeError}</div>}
@@ -924,21 +990,57 @@ export default function TotalReturn() {
             account, date range, and holdings scope match. Lifetime cost-basis G/L and dollar P/L
             answer a different question: where the accounting profit or loss came from.
             {' '}The selected range is remembered across all five tracking screens.
+            {t.account_reconciliation && (
+              <>
+                {' '}<strong>Against your broker:</strong> End Value is the charted positions alone,
+                so Start Value plus Price Return and Distributions reconciles to it — a cash balance
+                is not a return, and open option contracts live in their own ledger with no history
+                to replay. <strong>Account Value</strong> adds both back; that is the card to compare
+                with net liquidating value, which already includes your cash.
+              </>
+            )}
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
-            <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={dashboardCardRange} />
-            <MetricCard label="End Value" value={fmtInt(t.end_value)} range={dashboardCardRange} />
+            {/* Both are single closes, so each names its own date; the range
+                belongs on the cards that actually measure across one. */}
+            {/* Say what these measure. Only when something is actually left out,
+                so an account with no cash and no options is not told twice that
+                it has neither. */}
+            <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={startValueAsOf}>
+              {t.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
+            </MetricCard>
+            <MetricCard label="End Value" value={fmtInt(t.end_value)} range={endValueAsOf}>
+              {t.account_reconciliation && (
+                <div className="summary-sub">Holdings only — no cash; see Account Value</div>
+              )}
+            </MetricCard>
+            {/* Its own card rather than a bigger End Value: Start Value plus the
+                two return cards has to keep reconciling to End Value, and
+                neither cash nor an option mark is a return. */}
+            <AccountValueCard data={t.account_reconciliation} basisLabel={endValueAsOf} />
             <MetricCard label="Price Return" range={dashboardCardRange}
-              value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>} />
-            <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange} />
+              value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>}>
+              <div className="summary-sub">Market price only, dividends excluded</div>
+            </MetricCard>
+            <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange}>
+              <div className="summary-sub">Dividends paid during the range</div>
+            </MetricCard>
             <MetricCard label="Total Return" range={dashboardCardRange}
-              value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>} />
+              value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>}>
+              <div className="summary-sub">Price Return + Distributions, in dollars</div>
+              <div className="summary-sub">Money-weighted — reflects your buy/sell timing</div>
+            </MetricCard>
             <MetricCard label="Tracker Total Return %" range={dashboardCardRange}
-              value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>} />
+              value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>}>
+              <div className="summary-sub">Time-weighted — timing-neutral performance</div>
+              <div className="summary-sub">Matches Dashboard, Growth &amp; Gains/Losses</div>
+            </MetricCard>
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
                 range={spyRange}
-                value={<span style={{ color: chartData.spy_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(chartData.spy_ret)}</span>} />
+                value={<span style={{ color: chartData.spy_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(chartData.spy_ret)}</span>}>
+                <div className="summary-sub">Benchmark, compare against Tracker TR %</div>
+              </MetricCard>
             )}
           </div>
         </>

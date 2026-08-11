@@ -565,6 +565,92 @@ def realized_option_income(conn, profile_ids, start_date, end_date):
     ), 2)
 
 
+def open_option_liquidating_value(conn, profile_ids):
+    """Mark still-open option legs to market for account-value reconciliation.
+
+    A broker's net liquidating value carries open option positions; the holdings
+    tables never do, because this ledger is deliberately separate from portfolio
+    positions. An account running short spreads therefore reads high by the cost
+    to close them. Returns ``None`` when nothing is open, so callers can drop the
+    line rather than print a zero.
+    """
+    if not profile_ids:
+        return None
+    placeholders = ",".join("?" * len(profile_ids))
+    try:
+        legs = conn.execute(
+            f"""SELECT l.id, l.option_type, l.position_side, l.expiration, l.strike,
+                       l.multiplier, t.underlying, t.id AS trade_id
+                FROM option_trade_legs l
+                JOIN option_trades t ON t.id = l.trade_id
+                WHERE t.profile_id IN ({placeholders})
+                  AND t.status = 'OPEN' AND l.status = 'OPEN'""",
+            list(profile_ids),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        # Endpoint tests build only the tables their own route needs.
+        if "no such table" in str(exc).lower():
+            return None
+        raise
+    if not legs:
+        return None
+
+    from options_api import _fetch_chain
+
+    chains = {}
+
+    def chain_for(underlying, expiration):
+        key = (underlying, expiration)
+        if key not in chains:
+            try:
+                chains[key] = _fetch_chain(underlying, expiration)
+            except Exception:
+                chains[key] = None
+        return chains[key]
+
+    liquidating_value = 0.0
+    open_contracts = 0
+    open_trade_ids = set()
+    priced_legs = 0
+    unpriced = set()
+    for leg in legs:
+        contracts = _open_contracts_for_leg(conn, int(leg["id"]))
+        if contracts <= 0:
+            continue
+        underlying = str(leg["underlying"] or "").strip().upper()
+        expiration = str(leg["expiration"] or "")[:10]
+        open_contracts += contracts
+        open_trade_ids.add(int(leg["trade_id"]))
+        chain = chain_for(underlying, expiration)
+        rows = (chain or {}).get("puts" if str(leg["option_type"]).upper() == "PUT" else "calls") or []
+        strike = _number(leg["strike"], 0.0) or 0.0
+        mid = 0.0
+        for row in rows:
+            if math.isclose(float(row.get("strike") or 0.0), strike, rel_tol=0, abs_tol=1e-6):
+                mid = float(row.get("mid") or 0.0)
+                break
+        if mid <= 0:
+            # After hours yfinance zeroes bid/ask, and _fetch_chain's fallback to
+            # lastPrice can still come back empty. Report the gap instead of
+            # marking the leg at zero, which would read as a free short.
+            unpriced.add(f"{underlying} {expiration} {strike:g}{str(leg['option_type'])[:1].upper()}")
+            continue
+        sign = -1.0 if str(leg["position_side"]).upper() == "SHORT" else 1.0
+        multiplier = _number(leg["multiplier"], 100) or 100
+        liquidating_value += sign * mid * float(multiplier) * contracts
+        priced_legs += 1
+
+    if not open_contracts:
+        return None
+    return {
+        "open_trades": len(open_trade_ids),
+        "open_contracts": open_contracts,
+        "priced_legs": priced_legs,
+        "unpriced_legs": sorted(unpriced),
+        "liquidating_value": round(liquidating_value, 2) if priced_legs else None,
+    }
+
+
 def _validate_trade_payload(payload):
     underlying = str(payload.get("underlying") or "").strip().upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9.\-/]{0,10}", underlying):

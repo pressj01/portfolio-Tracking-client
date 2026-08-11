@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import AccountReconciliation from '../components/AccountReconciliation'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -10,6 +11,7 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
+  formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
@@ -135,9 +137,10 @@ export default function PortfolioGrowth2() {
   const [profitMode, setProfitMode] = useState('dollar')
   const [groupProfitSource, setGroupProfitSource] = useState(true)
   const rangeError = customRangeError(period, customStart, customEnd)
-  const cardRange = data
-    ? formatPerformanceRange(data.actual_start_date, data.actual_end_date)
-    : ''
+  // Start and End Value are single closes, so they carry their own as-of date.
+  // Printing the whole range on them read as if each number spanned the period.
+  const startValueDate = data ? formatPerformanceDate(data.actual_start_date) : ''
+  const endValueDate = data ? formatPerformanceDate(data.actual_end_date) : ''
   const trackerCardRange = data
     ? formatPerformanceRange(
         data.tracker_actual_start_date || data.actual_start_date,
@@ -381,15 +384,15 @@ export default function PortfolioGrowth2() {
         )}
       </div>
 
-      <details className="g2-help">
+      <details className="tracker-help">
         <summary>What are these charts showing?</summary>
-        <p className="g2-help-footer">
+        <p className="tracker-help-footer">
           <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
           transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
           the account, date range, and holdings scope match. The dollar card and return chart use
           the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
         </p>
-        <div className="g2-help-grid">
+        <div className="tracker-help-grid">
           <section>
             <h3>Portfolio value</h3>
             <p>
@@ -403,10 +406,11 @@ export default function PortfolioGrowth2() {
               <li><strong>Invested:</strong> recorded cost basis, added when each holding first enters the timeline.</li>
               <li><strong>Trade markers:</strong> recorded buys and sells when Show trades is enabled.</li>
             </ul>
-            <p className="g2-help-note">
+            <p className="tracker-help-note">
               Start Value is the portfolio's real opening balance for the range, not today's share
               counts priced backward. It differs from Total Return only by any recorded cash balance,
-              which this chart includes and that page does not.
+              which this chart includes and that page does not. Each figure is a single close, so
+              each carries its own as-of date rather than the whole range.
             </p>
           </section>
           <section>
@@ -420,13 +424,44 @@ export default function PortfolioGrowth2() {
               <li><strong>Distributions:</strong> actual broker payments, with Yahoo history only where broker history is unavailable.</li>
               <li><strong>Tracker total return:</strong> price return plus distributions in amount mode; the shared dividend-reinvested return in percent mode.</li>
             </ul>
-            <p className="g2-help-note">
+            <p className="tracker-help-note">
               Switch between amount and percent to change the Y-axis units. The amount reconciles to
               Total Return dollars; the percent reconciles to Tracker Total Return %.
             </p>
           </section>
+          {/* Full width: this one is about both cards, not about either chart. */}
+          <section className="tracker-help-wide">
+            <h3>Reconciling to your broker</h3>
+            <p>
+              End Value is the shares you hold priced at the latest close, plus your recorded cash. A
+              broker's net liquidating value already includes that cash, so adding the two together
+              double counts it.
+            </p>
+            <ul>
+              <li>
+                <strong>Open options:</strong> shown beside End Value only when the account is
+                carrying open contracts, marked at the current bid/ask mid. Short spreads mark
+                negative, because closing them costs money — that is why a broker can read lower than
+                this page.
+              </li>
+              <li>
+                <strong>Account:</strong> End Value plus that mark. This is the figure to compare
+                against net liquidating value. Total Return and Gains &amp; Losses show it as its own
+                Account Value card, because their headline figures leave cash out and this one
+                does not.
+              </li>
+            </ul>
+            <p className="tracker-help-note">
+              Option positions live in the separate option trade ledger and have no history in this
+              replay, so they never touch the value chart, the invested line, or either return card —
+              they are a present-day reconciliation only. Legs the option chain cannot quote are
+              listed rather than marked at zero, which would read as a free short. A small residual
+              against your broker is normal: this page uses the last traded price at load time, and a
+              broker marks its own realtime feed at the moment you look.
+            </p>
+          </section>
         </div>
-        <p className="g2-help-footer">
+        <p className="tracker-help-footer">
           Period and ticker filters apply to both charts. Custom start and end dates are inclusive.
         </p>
       </details>
@@ -464,7 +499,7 @@ export default function PortfolioGrowth2() {
               {data.summary?.cash_value > 0 && (
                 <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
               )}
-              {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
+              {startValueDate && <div className="summary-sub">As of {startValueDate} close</div>}
             </div>
             <div className="summary-card">
               <div className="summary-label">End Value</div>
@@ -472,7 +507,8 @@ export default function PortfolioGrowth2() {
               {data.summary?.cash_value > 0 && (
                 <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
               )}
-              {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
+              {endValueDate && <div className="summary-sub">As of {endValueDate} close</div>}
+              <AccountReconciliation data={data.summary?.account_reconciliation} />
             </div>
             <div className="summary-card">
               <div className="summary-label">Tracker Total Return $</div>

@@ -819,6 +819,41 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(metrics["start_value"], 120.0)
         self.assertEqual(metrics["end_value"], 132.0)
 
+    def test_same_day_sell_then_rebuy_does_not_leave_phantom_shares(self):
+        """Dates carry no time, so a same-day round trip can replay sell-first."""
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"AAA": [10.0, 11.0, 12.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": "SELL",
+                "transaction_date": "2026-01-05",
+                "shares": 300,
+            },
+            {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-05",
+                "shares": 300,
+            },
+        ]
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            transactions,
+            [],
+        )
+
+        self.assertEqual(result["market_value"], [None, None, None])
+
 
 if __name__ == "__main__":
     unittest.main()

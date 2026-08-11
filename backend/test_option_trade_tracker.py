@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from flask import Flask, request
 
@@ -634,6 +635,68 @@ class OptionTradeApiTest(unittest.TestCase):
         # It is listed under both years, but it realized in 2026 alone.
         self.assertEqual(opened_in["metrics"]["realized_ytd"], 0.0)
         self.assertEqual(closed_in["metrics"]["realized_ytd"], 200.0)
+
+
+class OpenOptionLiquidatingValueTest(unittest.TestCase):
+    """Net liq carries open contracts; the holdings tables never do."""
+
+    def setUp(self):
+        self.conn = memory_database()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _short_spread(self):
+        return tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY",
+            "strategy_type": "Bull Put Spread",
+            "purpose": "Income",
+            "opened_at": "2026-08-01",
+            "legs": [
+                {"position_side": "SHORT", "option_type": "PUT", "expiration": "2026-09-18", "strike": 545, "contracts": 1, "price": 1.00},
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-09-18", "strike": 540, "contracts": 1, "price": 0.30},
+            ],
+        })
+
+    def _chain(self, mids):
+        def fake_chain(underlying, expiration):
+            return {"puts": [{"strike": k, "mid": v} for k, v in mids.items()], "calls": []}
+        return fake_chain
+
+    def test_absent_when_the_account_holds_no_options(self):
+        self.assertIsNone(tracker.open_option_liquidating_value(self.conn, [1]))
+
+    def test_short_spread_marks_negative_against_account_value(self):
+        self._short_spread()
+        with patch("options_api._fetch_chain", self._chain({545.0: 2.00, 540.0: 0.80})):
+            snapshot = tracker.open_option_liquidating_value(self.conn, [1])
+
+        # Costs 1.20 x 100 to buy back, so it reduces net liq.
+        self.assertEqual(snapshot["liquidating_value"], -120.0)
+        self.assertEqual(snapshot["open_trades"], 1)
+        self.assertEqual(snapshot["open_contracts"], 2)
+        self.assertEqual(snapshot["unpriced_legs"], [])
+
+    def test_absent_once_every_contract_is_closed(self):
+        trade_id = self._short_spread()
+        trade = tracker.load_trades(self.conn, [1])[0]
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2026-08-05",
+            "executions": [
+                {"leg_id": leg["id"], "contracts": 1, "price": 0.10}
+                for leg in trade["legs"]
+            ],
+        })
+
+        self.assertIsNone(tracker.open_option_liquidating_value(self.conn, [1]))
+
+    def test_unquoted_leg_is_reported_rather_than_marked_at_zero(self):
+        self._short_spread()
+        with patch("options_api._fetch_chain", self._chain({545.0: 2.00, 540.0: 0.0})):
+            snapshot = tracker.open_option_liquidating_value(self.conn, [1])
+
+        self.assertEqual(snapshot["priced_legs"], 1)
+        self.assertEqual(snapshot["unpriced_legs"], ["SPY 2026-09-18 540P"])
 
 
 if __name__ == "__main__":

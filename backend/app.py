@@ -93,6 +93,7 @@ from diversification import (
     register_routes as register_diversification_routes,
 )
 from option_trade_tracker import (
+    open_option_liquidating_value,
     realized_option_income,
     register_routes as register_option_trade_routes,
 )
@@ -890,10 +891,15 @@ def _build_transaction_aware_portfolio_series(
             _, symbol, delta = events[event_index]
             symbol_index = symbol_indexes.get(symbol)
             if symbol_index is not None:
-                quantities[symbol_index] = max(
-                    0.0,
-                    quantities[symbol_index] + delta,
-                )
+                # A running total that dips below zero must stay negative until
+                # the offsetting buy arrives. Clamping it at zero here absorbed
+                # the sale and left every later buy standing as shares the
+                # account no longer owns: a same-day SELL/BUY pair ordered
+                # sell-first (dates carry no time) ended the replay holding the
+                # buy outright. Valuation already ignores non-positive
+                # quantities, so a transient negative simply drops the symbol
+                # from those days instead of inflating the balance forever.
+                quantities[symbol_index] += delta
             event_index += 1
 
     def portfolio_value_at(row_index):
@@ -4084,6 +4090,62 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
 
     _strip_shear_group_account_fields(parsed.get("transactions"))
     return parsed
+
+
+def _account_value_reconciliation(
+    is_aggregate,
+    profile_ids,
+    position_profile_ids,
+    *,
+    end_value,
+    cash_included,
+    filtered,
+    ends_today,
+):
+    """What stands between a tracking screen's End Value and a broker's net liq.
+
+    Each screen measures the positions it charts, which is the right basis for a
+    return but is never the whole account: cash sits outside it on some screens,
+    and open option contracts sit outside it on all of them because that ledger
+    is deliberately separate from portfolio holdings. Both are present-day
+    balances with no history in any replay, so they are reported beside End
+    Value and never folded into a series or a return.
+
+    Returns ``None`` when there is nothing to reconcile — a filtered view, a
+    window that closed before today, or an account whose End Value is already
+    the whole story — so callers can drop the line instead of printing a zero.
+    """
+    if filtered or not ends_today or end_value is None:
+        return None
+
+    conn = get_connection()
+    try:
+        cash_value = 0.0
+        profile_cols = {
+            row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+        }
+        if "cash_value" in profile_cols:
+            cash_profile_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+            cash_placeholders = ",".join("?" * len(cash_profile_ids))
+            cash_row = conn.execute(
+                f"SELECT COALESCE(SUM(cash_value), 0) FROM profiles WHERE id IN ({cash_placeholders})",
+                cash_profile_ids,
+            ).fetchone()
+            cash_value = float(cash_row[0] if cash_row else 0)
+        options = open_option_liquidating_value(conn, position_profile_ids)
+    finally:
+        conn.close()
+
+    missing_cash = 0.0 if cash_included else cash_value
+    option_value = (options or {}).get("liquidating_value") or 0.0
+    if not options and not missing_cash:
+        return None
+    return {
+        "cash_value": round(cash_value, 2),
+        "cash_included": bool(cash_included),
+        "open_options": options,
+        "account_value": round(end_value + missing_cash + option_value, 2),
+    }
 
 
 def _tracker_position_profile_ids(conn, profile_ids):
@@ -25193,6 +25255,20 @@ def total_return_charts():
                 else "Yahoo market history"
             )
             portfolio_metrics["payment_sources"] = sorted(payment_sources)
+            # End Value here is the charted positions alone — this page leaves
+            # cash out on purpose, because a cash balance is not a return.
+            portfolio_metrics["account_reconciliation"] = _account_value_reconciliation(
+                _request_aggregate_id() is not None,
+                profile_ids,
+                position_profile_ids,
+                end_value=portfolio_metrics.get("end_value"),
+                cash_included=False,
+                filtered=filter_is_active,
+                ends_today=(
+                    not period_range["end_date"]
+                    or period_range["end_date"] >= datetime.date.today().isoformat()
+                ),
+            )
 
         spy_ret = None
         spy_actual_start = None
@@ -26240,6 +26316,17 @@ def gains_losses_summary():
         "combined_divs": _safe(u_totals["divs"] + r_totals["divs"]),
         "combined_total_gl": _safe(u_totals["total_gl"] + r_totals["total_gl"]),
     }
+    # Current Value is a lifetime accounting figure, not a period one, so it is
+    # already an as-of-today number and needs no date gate here.
+    totals["account_reconciliation"] = _account_value_reconciliation(
+        _request_aggregate_id() is not None,
+        holding_profile_ids,
+        transaction_profile_ids,
+        end_value=totals["unrealized_value"],
+        cash_included=False,
+        filtered=bool(cat_ids or sub_ids),
+        ends_today=True,
+    )
 
     return jsonify(
         unrealized=unrealized, realized=realized, combined=combined,
@@ -45463,6 +45550,7 @@ def growth_2_data():
     if include_cash and cash_value:
         chart_value = chart_value + cash_value
 
+
     chart_invested = pd.Series(0.0, index=chart_index)
     for t in avail:
         owned_from = ownership_starts.get(t)
@@ -45612,6 +45700,18 @@ def growth_2_data():
         ),
         "cash_value": round(cash_value, 2) if include_cash else 0,
     }
+
+    # This page's End Value already carries cash, so the only thing left between
+    # it and a broker's net liquidating value is any open option contract.
+    result["summary"]["account_reconciliation"] = _account_value_reconciliation(
+        is_aggregate,
+        profile_ids,
+        position_profile_ids,
+        end_value=result["summary"]["end_value"],
+        cash_included=include_cash,
+        filtered=bool(filter_tickers),
+        ends_today=use_current_value_scale,
+    )
 
     # A per-ticker/per-category breakdown used to be computed here and shipped
     # as per_ticker/per_category. Nothing ever read it: the "Group by" control
