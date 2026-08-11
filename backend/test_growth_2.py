@@ -83,7 +83,9 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
         self.assertEqual(data["dates"], ["2024-01-02", "2024-12-31"])
         self.assertEqual(data["portfolio_value"], [10.0, 12.0])
         self.assertEqual(data["invested"], [8.0, 8.0])
-        self.assertEqual(data["pl_basis"], "first_trade")
+        # pl_basis drove the old today's-shares P&L projection, which the value
+        # chart no longer uses; the field is gone rather than echoed unread.
+        self.assertNotIn("pl_basis", data)
         self.assertEqual(data["summary"]["total_return_pct"], 20.0)
         self.assertEqual(data["summary"]["price_return_amount"], 2.0)
         self.assertEqual(data["summary"]["distribution_amount"], 0.5)
@@ -179,7 +181,13 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200, data)
         self.assertIn("SOLD", self.download_tickers)
-        self.assertEqual(data["dates"], ["2024-01-02", "2024-12-31"])
+        # The value chart reads the replayed market-value series, so it shares
+        # the tracker's axis. A position sold before the end of the window was
+        # genuinely part of the portfolio's value while it was held, and
+        # trimming the axis back to today's holdings is what made the opening
+        # balance read far below the truth.
+        self.assertEqual(data["dates"], data["performance_dates"])
+        self.assertEqual(data["dates"][0], "2023-01-02")
         self.assertEqual(data["tracker_actual_start_date"], "2023-01-02")
         self.assertEqual(data["tracker_actual_end_date"], "2024-12-31")
         self.assertEqual(data["summary"]["total_return_pct"], -40.0)

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import { returnVsYield } from '../utils/returnVsYield'
+import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
@@ -21,7 +21,9 @@ import {
 const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
 const fmtInt = v => formatMoneyWhole(v)
-const glColor = v => (v || 0) >= 0 ? '#4dff91' : '#ff6b6b'
+// A missing value is not a gain. Without the null check an absent Tracker TR %
+// renders its em-dash in gain-green, which reads as a positive result.
+const glColor = v => (v == null ? 'var(--text-dim)' : (v >= 0 ? '#4dff91' : '#ff6b6b'))
 
 function MetricCard({ label, value, range, className }) {
   return (
@@ -376,7 +378,7 @@ export default function GainsLosses() {
     { key: 'total_gl_pct', label: 'Lifetime G/L %', tip: 'Lifetime total gain/loss as a percentage of amount invested; this accounting figure is not controlled by the performance date range', fmt: fmtPct, gl: true },
     { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; this is the figure that matches Total Return', fmt: fmtPct, gl: true },
     { key: 'period_range', label: 'Effective Range', tip: 'Actual market-observation dates used for this holding' },
-    { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield on cost — Good means total return exceeds yield, Poor means yield exceeds total return', rvy: true },
+    { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield, both measured over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return.', rvy: true },
   ]
 
   const realizedCols = [
@@ -413,11 +415,21 @@ export default function GainsLosses() {
     if (!data?.unrealized) return []
     return data.unrealized.map(r => {
       const performance = performanceByTicker.get(String(r.ticker || '').trim().toUpperCase())
-      const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
+      const annualYld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
       const comparableReturn = performance?.total_return_pct
-      const rvy = comparableReturn != null ? returnVsYield(comparableReturn, yld) : null
+      // Tracker TR % covers the shared performance range, so the yield it is
+      // compared against is scaled to that same window — otherwise a 7D return
+      // is measured against a full year of income and always reads Poor.
+      const windowYld = (
+        prorateAnnualYield(annualYld, performance?.actual_start_date, performance?.actual_end_date)
+        ?? prorateAnnualYield(annualYld, chartData?.actual_start_date, chartData?.actual_end_date)
+      )
+      const rvy = comparableReturn != null && windowYld != null
+        ? returnVsYield(comparableReturn, windowYld)
+        : null
       return {
         ...r,
+        rvy_annual_yield_pct: annualYld,
         period_total_return_pct: comparableReturn,
         period_total_return_dollar: performance?.total_return_dollar,
         period_range: formatPerformanceRange(
@@ -428,7 +440,21 @@ export default function GainsLosses() {
         ret_vs_yld_sort: rvy ? rvy.spread : -999,
       }
     })
-  }, [data, performanceByTicker, rvyMode])
+  }, [data, performanceByTicker, rvyMode, chartData])
+
+  // Spells out both sides of the comparison, so the window-scaled yield is not
+  // mistaken for the annual one.
+  const rvyTitle = (row) => {
+    const rvy = row.ret_vs_yld
+    if (!rvy) return 'No comparable return for this range'
+    const annual = row.rvy_annual_yield_pct
+    const annualNote = annual != null ? ` (${Number(annual).toFixed(2)}% annual)` : ''
+    return (
+      `Total return ${rvy.totalReturnPct.toFixed(2)}%`
+      + ` vs ${rvy.yieldOnCost.toFixed(2)}% yield over this range${annualNote}`
+      + ` · spread ${rvy.spread >= 0 ? '+' : ''}${rvy.spread.toFixed(2)}%`
+    )
+  }
 
   // One realized row per ticker. A ticker sold in many fills (weekly assignments,
   // DRIP lots) otherwise floods the tab with hundreds of near-identical rows, so
@@ -533,7 +559,7 @@ export default function GainsLosses() {
       <td
         key={col.key}
         style={style}
-        title={col.rvy && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}
+        title={col.rvy ? rvyTitle(row) : undefined}
       >
         {display}
       </td>

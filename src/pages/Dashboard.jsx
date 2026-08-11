@@ -5,7 +5,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
-import { returnVsYield } from '../utils/returnVsYield'
+import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import {
@@ -1619,8 +1619,17 @@ export default function Dashboard() {
         const periodPriceReturn = trackerRow?.price_return_pct
         const periodTotalReturn = trackerRow?.total_return_pct
         const rvyYield = rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield
-        const rvy = periodTotalReturn != null
-          ? returnVsYield(periodTotalReturn, (rvyYield || 0) * 100)
+        const rvyAnnualYieldPct = (rvyYield || 0) * 100
+        // The tracker return covers the selected range, so the yield compared
+        // against it is scaled to that same window — an annual yield would mark
+        // every payer "Poor" on a 1D or 7D range by construction.
+        const rvyWindowYieldPct = prorateAnnualYield(
+          rvyAnnualYieldPct,
+          trackerRow?.actual_start_date,
+          trackerRow?.actual_end_date,
+        )
+        const rvy = periodTotalReturn != null && rvyWindowYieldPct != null
+          ? returnVsYield(periodTotalReturn, rvyWindowYieldPct)
           : null
         return {
           ...h,
@@ -1635,6 +1644,7 @@ export default function Dashboard() {
           drip_shares_monthly: sharesFromDrip(h.approx_monthly_income, h),
           drip_shares_yearly: sharesFromDrip(h.estim_payment_per_year, h),
           current_month_income_delta: (h.current_month_income || 0) - (h.approx_monthly_income || 0),
+          rvy_annual_yield_pct: rvyAnnualYieldPct,
           ret_vs_yld: rvy,
           ret_vs_yld_sort: rvy ? rvy.spread : -999,
           _coverage: tickerCoverage[h.ticker] ?? null,
@@ -2067,8 +2077,8 @@ export default function Dashboard() {
     } },
     { id: 'delta_up', label: 'Delta Up', name: 'Benchmark Up Delta', sortKey: '_delta_up_sort', group: 'Current', defaultVisible: true, align: 'right', tip: 'Approximate effective delta on benchmark up-days from return regression; lower than down delta can indicate capped upside', render: h => <td style={{ textAlign: 'right', color: 'var(--p-2f9d55)' }} title={h._risk?.beta_benchmark ? `Approximate effective delta on ${h._risk.beta_benchmark} up-days. This is a price-regression proxy, not true option delta.` : 'Approximate up-delta unavailable'}>{riskNum(h._risk?.delta_up, tickerRiskLoading)}</td> },
     { id: 'delta_down', label: 'Delta Down', name: 'Benchmark Down Delta', sortKey: '_delta_down_sort', group: 'Current', defaultVisible: true, align: 'right', tip: 'Approximate effective delta on benchmark down-days from return regression; higher than up delta can indicate fuller downside participation', render: h => <td style={{ textAlign: 'right', color: 'var(--p-d94b4b)' }} title={h._risk?.beta_benchmark ? `Approximate effective delta on ${h._risk.beta_benchmark} down-days. This is a price-regression proxy, not true option delta.` : 'Approximate down-delta unavailable'}>{riskNum(h._risk?.delta_down, tickerRiskLoading)}</td> },
-    { id: 'ret_vs_yld', label: 'RvY', name: 'Return vs Yield', sortKey: 'ret_vs_yld_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Total return vs yield — Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)', renderHeader: () => (
-      <th key="ret_vs_yld" style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield — Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)">
+    { id: 'ret_vs_yld', label: 'RvY', name: 'Return vs Yield', sortKey: 'ret_vs_yld_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Total return vs yield, both over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)', renderHeader: () => (
+      <th key="ret_vs_yld" style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield, both over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)">
         <span style={{ cursor: 'pointer' }} onClick={() => handleSort('ret_vs_yld_sort')}>RvY</span>{' '}
         <span
           onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
@@ -2078,7 +2088,7 @@ export default function Dashboard() {
           {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
         </span>
       </th>
-    ), render: h => <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || 'var(--p-6f7890)', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% (spread ${h.ret_vs_yld.spread?.toFixed(2)}%)` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td> },
+    ), render: h => <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || 'var(--p-6f7890)', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% over this range${h.rvy_annual_yield_pct != null ? ` (${Number(h.rvy_annual_yield_pct).toFixed(2)}% annual)` : ''} · spread ${h.ret_vs_yld.spread?.toFixed(2)}%` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td> },
     { id: 'div', label: 'Div$', name: 'Dividend per Share', sortKey: 'div', group: 'Current', defaultVisible: true, align: 'right', tip: 'Last dividend paid per share', render: h => <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? formatMoney(h.div, { digits: 4 }) : '—'}</td> },
     { id: 'current_annual_yield', label: 'CurYld', name: 'Current Annual Yield', sortKey: 'current_annual_yield', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current annual dividend yield based on market price', render: h => <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>, footer: () => pct(totals.currentYield) },
     { id: 'annual_yield_on_cost', label: 'YOC', name: 'Yield on Cost', sortKey: 'annual_yield_on_cost', group: 'Current', defaultVisible: true, align: 'right', tip: 'Annual dividend yield based on your cost basis', render: h => <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>, footer: () => pct(totals.avgYoc) },

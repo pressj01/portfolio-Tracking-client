@@ -813,10 +813,14 @@ def _build_transaction_aware_portfolio_series(
             first_activity = first_transaction_dates.get(position_key)
             if first_activity is None:
                 continue
-            seed_date = max(
-                first_market_date,
-                first_activity - datetime.timedelta(days=1),
-            )
+            # Keep the inferred opening lot immediately before its first
+            # recorded activity even when that activity predates the requested
+            # market window.  The first rendered row replays all earlier
+            # events, so clamping this seed to first_market_date would apply
+            # historical sales first and then add the opening lot a second
+            # time.  That turns a modest current position into a fictitious
+            # six-figure balance on short/YTD periods.
+            seed_date = first_activity - datetime.timedelta(days=1)
             if seed_date > last_market_date:
                 continue
             events.append((seed_date, symbol, opening_quantity))
@@ -4080,6 +4084,31 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
 
     _strip_shear_group_account_fields(parsed.get("transactions"))
     return parsed
+
+
+def _tracker_position_profile_ids(conn, profile_ids):
+    """Profiles whose holdings *and* transactions feed the tracker engine.
+
+    Owner (profile 1) stores a rollup copy of its source accounts' holdings but
+    owns no transactions of its own. Reading profile 1 alone therefore leaves
+    _build_transaction_aware_portfolio_series with nothing to replay: every
+    position takes the purchase-date fallback, the period's opening balance
+    cannot be reconstructed, and Start Value comes out far below the truth.
+
+    Resolving Owner to its source accounts fixes that while keeping holdings and
+    transactions on the same ``(profile_id, ticker)`` position keys — which is
+    what the opening/closing reconciliation matches on. Reading Owner's rollup
+    rows *and* the sources' transactions would double count instead, because
+    ``(1, 'ARCC')`` never matches ``(6, 'ARCC')``.
+
+    Callers keep their original scope for the category tables: the ticker set is
+    identical either way, and category ids are per-profile, so id -> name
+    resolution has to stay on the scope whose ids the UI is sending.
+    """
+    if len(profile_ids) != 1 or int(profile_ids[0]) != 1:
+        return list(profile_ids)
+    source_ids = _get_owner_source_profile_ids(conn)
+    return list(source_ids) if source_ids else list(profile_ids)
 
 
 def _get_gains_losses_profile_scope(conn):
@@ -24804,15 +24833,19 @@ def total_return_charts():
     sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
     conn = get_connection()
     sub_tickers = _subcategory_ticker_set(conn, profile_ids, sub_ids)
+    # Holdings and transactions must share one scope so their position keys
+    # match; the category tables below stay on the caller's own scope.
+    position_profile_ids = _tracker_position_profile_ids(conn, profile_ids)
+    position_placeholders = ",".join("?" * len(position_profile_ids))
 
     rows = conn.execute(
         f"""SELECT ticker, profile_id, description, classification_type,
                    purchase_value, quantity, purchase_date, import_date
             FROM all_account_info
             WHERE COALESCE(quantity, 0) > 0
-              AND profile_id IN ({placeholders})
+              AND profile_id IN ({position_placeholders})
             ORDER BY ticker""",
-        profile_ids,
+        position_profile_ids,
     ).fetchall()
     holding_records = [dict(row) for row in rows]
     df = pd.DataFrame(holding_records)
@@ -24884,10 +24917,10 @@ def total_return_charts():
         f"""SELECT ticker, profile_id, transaction_type, transaction_date,
                    shares, price_per_share, fees, notes
             FROM transactions
-            WHERE profile_id IN ({placeholders})
+            WHERE profile_id IN ({position_placeholders})
               AND transaction_date IS NOT NULL
             ORDER BY transaction_date, id""",
-        profile_ids,
+        position_profile_ids,
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
     payment_placeholders = ",".join("?" * len(payment_profile_ids))
@@ -25851,6 +25884,45 @@ def gains_losses_summary():
     cat_ids = [c.strip() for c in cat_param.split(",") if c.strip()] if cat_param else []
     sub_ids = _parse_subcategory_ids(request.args.get("subcategory"))
     sub_tickers = _subcategory_ticker_set(conn, holding_profile_ids, sub_ids)
+    # The unrealized frame matches sub-category tickers against the raw stored
+    # values on both sides, so that set is left untouched. Realized sales are
+    # matched on an upper-cased symbol, so they need their own normalized copy.
+    sub_tickers_upper = {str(ticker or "").strip().upper() for ticker in sub_tickers}
+    selected_cat_names = {c["name"] for c in categories if str(c["id"]) in cat_ids}
+
+    # A sold ticker is gone from all_account_info, so the realized filter below
+    # cannot reuse the holdings join — its category has to come straight from
+    # the assignment table. Realized rows span the transaction read scope, which
+    # is wider than the holdings scope on Owner, so the lookup has to cover that
+    # same scope or a sale whose category was assigned in the source account
+    # falls through to "Other" and is filtered out of every category.
+    category_lookup_profile_ids = list(
+        dict.fromkeys([*holding_profile_ids, *transaction_profile_ids])
+    )
+    category_lookup_placeholders = ",".join("?" * len(category_lookup_profile_ids))
+    cat_by_ticker = {}
+    try:
+        for row in conn.execute(
+            "SELECT tc.ticker, c.name AS category_name "
+            "FROM ticker_categories tc JOIN categories c ON c.id = tc.category_id "
+            f"WHERE tc.profile_id IN ({category_lookup_placeholders})",
+            category_lookup_profile_ids,
+        ).fetchall():
+            ticker = str(row["ticker"] or "").strip().upper()
+            if ticker and ticker not in cat_by_ticker:
+                cat_by_ticker[ticker] = row["category_name"]
+    except Exception:
+        cat_by_ticker = {}
+
+    def _passes_category_filter(ticker):
+        """Same rule the unrealized frame uses: category OR sub-category."""
+        if not (cat_ids or sub_ids):
+            return True
+        symbol = str(ticker or "").strip().upper()
+        return (
+            cat_by_ticker.get(symbol, "Other") in selected_cat_names
+            or symbol in sub_tickers_upper
+        )
 
     # ── Unrealized (current holdings) ──
     rows = conn.execute(
@@ -25934,8 +26006,10 @@ def gains_losses_summary():
         udf["category_name"] = udf["category_name"].fillna("Other")
 
         if cat_ids or sub_ids:
-            cat_names = [c["name"] for c in categories if str(c["id"]) in cat_ids]
-            udf = udf[udf["category_name"].isin(cat_names) | udf["ticker"].isin(sub_tickers)]
+            udf = udf[
+                udf["category_name"].isin(selected_cat_names)
+                | udf["ticker"].isin(sub_tickers)
+            ]
 
     # ── Realized (sold positions) ──
     # 1) Legacy watchlist_sold table
@@ -25982,6 +26056,13 @@ def gains_losses_summary():
             txn_df = pd.DataFrame(txn_rows)
             rdf = pd.concat([rdf, txn_df], ignore_index=True) if not rdf.empty else txn_df
 
+    # The unrealized frame is filtered above; realized sales have to honour the
+    # same selection. Without this the Realized and Combined tabs list every
+    # sale ever made, and the lifetime cards add a filtered open side to an
+    # unfiltered closed side.
+    if (cat_ids or sub_ids) and not rdf.empty:
+        rdf = rdf[rdf["ticker"].map(_passes_category_filter)]
+
     conn.close()
 
     def _safe(v):
@@ -25990,6 +26071,17 @@ def gains_losses_summary():
         try:
             f = float(v)
             return None if (math.isnan(f) or math.isinf(f)) else round(f, 2)
+        except (TypeError, ValueError):
+            return None
+
+    def _safe_shares(v):
+        """Share counts keep four decimals — the money rounding in _safe drops
+        fractional DRIP shares that the table then formats back out to three."""
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, 4)
         except (TypeError, ValueError):
             return None
 
@@ -26035,7 +26127,7 @@ def gains_losses_summary():
                 "ticker": row["ticker"],
                 "description": row.get("description", ""),
                 "category_name": row.get("category_name", ""),
-                "quantity": _safe(row.get("quantity")),
+                "quantity": _safe_shares(row.get("quantity")),
                 "price_paid": _safe(row.get("price_paid")),
                 "current_price": _safe(row.get("current_price")),
                 "purchase_value": _safe(pv),
@@ -26079,7 +26171,7 @@ def gains_losses_summary():
                 "ticker": row["ticker"],
                 "buy_price": _safe(bp),
                 "sell_price": _safe(sp),
-                "shares_sold": _safe(sh),
+                "shares_sold": _safe_shares(sh),
                 "sell_date": _safe_str(row.get("sell_date")) or "",
                 "cost_basis": _safe(cost),
                 "proceeds": _safe(proceeds),
@@ -26805,31 +26897,41 @@ def growth_data():
     # includes only its holdings. The two selections are OR-combined.
     cat_ids = [int(c) for c in category_id.split(",") if c.strip().isdigit()] if category_id else []
     sub_ids = [int(s) for s in subcategory_id.split(",") if s.strip().isdigit()] if subcategory_id else []
+    # Holdings and transactions share one scope so their position keys match.
+    position_profile_ids = _tracker_position_profile_ids(conn, profile_ids)
+    position_placeholders = ",".join("?" * len(position_profile_ids))
+    # The selection is resolved to a ticker set on the caller's own scope first.
+    # Category ids are per-profile, so a scope change cannot be pushed into the
+    # holdings join — the ids the UI sent only exist under the selected profile.
+    selected_category_tickers = None
     if cat_ids or sub_ids:
         conds, qparams = [], list(profile_ids)
         if cat_ids:
-            conds.append(f"tc.category_id IN ({','.join('?' * len(cat_ids))})")
+            conds.append(f"category_id IN ({','.join('?' * len(cat_ids))})")
             qparams += cat_ids
         if sub_ids:
-            conds.append(f"tc.subcategory_id IN ({','.join('?' * len(sub_ids))})")
+            conds.append(f"subcategory_id IN ({','.join('?' * len(sub_ids))})")
             qparams += sub_ids
-        rows = conn.execute(
-            f"""SELECT DISTINCT a.ticker, a.profile_id, a.quantity, a.current_value,
-                       a.purchase_date, a.import_date
-               FROM all_account_info a
-               JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
-               WHERE a.profile_id IN ({placeholders}) AND ({' OR '.join(conds)})
-                 AND a.quantity > 0""",
-            qparams,
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            f"""SELECT ticker, profile_id, quantity, current_value,
-                      purchase_date, import_date
-               FROM all_account_info
-               WHERE profile_id IN ({placeholders}) AND quantity > 0""",
-            profile_ids,
-        ).fetchall()
+        selected_category_tickers = {
+            str(row["ticker"] or "").strip().upper()
+            for row in conn.execute(
+                f"""SELECT DISTINCT ticker FROM ticker_categories
+                    WHERE profile_id IN ({placeholders}) AND ({' OR '.join(conds)})""",
+                qparams,
+            ).fetchall()
+        }
+    rows = conn.execute(
+        f"""SELECT ticker, profile_id, quantity, current_value,
+                  purchase_date, import_date
+           FROM all_account_info
+           WHERE profile_id IN ({position_placeholders}) AND quantity > 0""",
+        position_profile_ids,
+    ).fetchall()
+    if selected_category_tickers is not None:
+        rows = [
+            row for row in rows
+            if str(row["ticker"] or "").strip().upper() in selected_category_tickers
+        ]
 
     holding_records = []
     for raw_row in rows:
@@ -26844,9 +26946,10 @@ def growth_data():
         f"""SELECT ticker, profile_id, transaction_type, transaction_date,
                   shares, price_per_share, fees
            FROM transactions
-           WHERE profile_id IN ({placeholders}) AND transaction_date IS NOT NULL
+           WHERE profile_id IN ({position_placeholders})
+             AND transaction_date IS NOT NULL
            ORDER BY transaction_date, id""",
-        profile_ids,
+        position_profile_ids,
     ).fetchall()
     filtered_transactions = []
     for raw_row in transaction_rows:
@@ -27082,8 +27185,11 @@ def growth_data():
         )
         b0 = bc.iloc[0]
         ba0 = ba.iloc[0]
-        bench_price_norm = (bc / b0 * 100) if b0 > 0 else bc
-        bench_total_norm = (ba / ba0 * 100) if ba0 > 0 else ba
+        # An unusable baseline leaves the series empty rather than falling back
+        # to raw prices — those would plot as dollars against an axis labelled
+        # "Indexed (100)" and read as a benchmark that outran everything.
+        bench_price_norm = (bc / b0 * 100) if pd.notna(b0) and b0 > 0 else pd.Series(dtype=float)
+        bench_total_norm = (ba / ba0 * 100) if pd.notna(ba0) and ba0 > 0 else pd.Series(dtype=float)
 
     dates_str = [d.strftime("%Y-%m-%d") for d in port_price_norm.index]
 
@@ -27133,12 +27239,17 @@ def growth_data():
     if len(grade_tickers) >= 2:
         # Match the Dashboard: adjusted prices, current-value weights, and zero
         # return on dates before a newer holding has its first available quote.
-        returns_for_grade = adjusted[grade_tickers].pct_change().fillna(0)
+        # Restricted to the charted window so these ratios cover the range the
+        # cards print beside them — the raw download reaches further back (a
+        # YTD/custom request over-fetches to anchor on the prior close), which
+        # had the cards measuring one period and labelled with another.
+        grade_adjusted = adjusted.reindex(chart_index)
+        returns_for_grade = grade_adjusted[grade_tickers].pct_change().fillna(0)
         if len(returns_for_grade) >= 30:
             weights_arr = np.array([values.get(t, 0.0) for t in grade_tickers])
             bench_ret = (
-                adjusted[benchmark].pct_change().dropna()
-                if benchmark in adjusted.columns
+                grade_adjusted[benchmark].pct_change().dropna()
+                if benchmark in grade_adjusted.columns
                 else None
             )
             pm = grade_portfolio(returns_for_grade, weights_arr, bench_ret)
@@ -27153,10 +27264,12 @@ def growth_data():
     # ── Benchmark metrics ──
     benchmark_metrics = {}
     if benchmark in adjusted.columns:
-        bc_full = adjusted[benchmark].dropna()
+        # Same window as the portfolio ratios above, so the two are comparable
+        # and both match the range shown on their cards.
+        bench_window = adjusted[benchmark].reindex(chart_index).dropna()
         benchmark_metrics = {
-            "sharpe": _clean(_sharpe(bc_full)),
-            "sortino": _clean(_sortino(bc_full)),
+            "sharpe": _clean(_sharpe(bench_window)),
+            "sortino": _clean(_sortino(bench_window)),
         }
 
     def _clean_series(s):
@@ -44836,7 +44949,6 @@ def growth_2_data():
     """Portfolio value + invested timeline and P&L breakdown by source."""
     import math
     import warnings
-    import numpy as np
     import yfinance as yf
     from datetime import datetime, timedelta
     warnings.filterwarnings("ignore")
@@ -44857,23 +44969,33 @@ def growth_2_data():
     custom_start = request.args.get("start_date", "").strip()
     custom_end = request.args.get("end_date", "").strip()
     tickers_param = request.args.get("tickers", "")
-    group_by = request.args.get("group_by", "none")
     show_cost_basis = request.args.get("show_cost_basis", "true") == "true"
     show_trades = request.args.get("show_trades", "false") == "true"
     profit_mode = request.args.get("profit_mode", "dollar")
-    pl_basis = request.args.get("pl_basis", "selected_period")
-    if period_param == "all":
-        pl_basis = "first_trade"
     group_profit_source = request.args.get("group_profit_source", "true") == "true"
 
     conn = get_connection()
+    # _basis_total_expr below reads the original_/broker_ basis columns, which
+    # are added by migration. A dev database already has them, so skipping this
+    # only breaks fresh installs and test fixtures.
+    _ensure_basis_columns(conn)
 
+    # Holdings and transactions share one scope so their position keys match;
+    # the category tables below stay on the caller's own scope.
+    position_profile_ids = _tracker_position_profile_ids(conn, profile_ids)
+    position_placeholders = ",".join("?" * len(position_profile_ids))
+    # Cost basis honours the basis-mode toggle, same as every other screen.
+    # Reading raw purchase_value here made the Invested line disagree with the
+    # Invested figure on Gains & Losses and Total Return for any holding whose
+    # original and broker-adjusted basis differ.
+    basis_total = _basis_total_expr("")
     rows = conn.execute(
-        f"""SELECT ticker, profile_id, quantity, price_paid, purchase_value, current_value,
+        f"""SELECT ticker, profile_id, quantity, price_paid,
+                  {basis_total} AS purchase_value, current_value,
                   purchase_date, import_date
            FROM all_account_info
-           WHERE profile_id IN ({placeholders}) AND quantity > 0""",
-        profile_ids,
+           WHERE profile_id IN ({position_placeholders}) AND quantity > 0""",
+        position_profile_ids,
     ).fetchall()
 
     cash_value = 0.0
@@ -44904,14 +45026,16 @@ def growth_2_data():
     ).fetchall()
     cat_map = {r["ticker"]: r["category_name"] for r in cat_map_rows}
 
-    # Owner (profile_id=1) is the combined view — fetch transactions across all profiles
+    # Owner (profile_id=1) is the combined view: _tracker_position_profile_ids
+    # resolves it to its source accounts so these transactions line up with the
+    # holdings read above.
     txn_rows = conn.execute(
         f"""SELECT ticker, profile_id, transaction_type, transaction_date, shares,
                    price_per_share, fees, realized_gain
             FROM transactions
-            WHERE profile_id IN ({placeholders})
+            WHERE profile_id IN ({position_placeholders})
             ORDER BY transaction_date""",
-        profile_ids,
+        position_profile_ids,
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
     payment_placeholders = ",".join("?" * len(payment_profile_ids))
@@ -44966,10 +45090,6 @@ def growth_2_data():
     }
     cost_basis = {
         t: sum(float(r["purchase_value"] or 0) for r in active_rows if r["ticker"] == t)
-        for t in active_tickers
-    }
-    current_values = {
-        t: sum(float(r["current_value"] or 0) for r in active_rows if r["ticker"] == t)
         for t in active_tickers
     }
 
@@ -45158,34 +45278,10 @@ def growth_2_data():
     ).fillna(0)
     return_splits = splits_raw.reindex(columns=return_avail).fillna(0)
 
-    first_valid = close[avail].dropna(how="all").index[0]
-    close_a = close[avail].loc[first_valid:].ffill()
-    adj_a = adjusted_raw.reindex(index=close_a.index, columns=avail).ffill()
-    divs_a = divs_raw.reindex(index=close_a.index, columns=avail).fillna(0)
-    cap_gains_a = cap_gains_raw.reindex(index=close_a.index, columns=avail).fillna(0)
-
-    lower_bounds = []
-    if start_date is not None:
-        lower_bounds.append(pd.Timestamp(start_date))
-    owned_dates = [ownership_starts[t] for t in avail if t in ownership_starts]
-    if owned_dates:
-        lower_bounds.append(min(owned_dates))
-    if lower_bounds:
-        effective_start = max(lower_bounds)
-        close_a = close_a.loc[close_a.index >= effective_start]
-        adj_a = adj_a.loc[adj_a.index >= effective_start]
-        divs_a = divs_a.loc[divs_a.index >= effective_start]
-        cap_gains_a = cap_gains_a.loc[cap_gains_a.index >= effective_start]
-    if end_date is not None:
-        end_ts = pd.Timestamp(end_date)
-        close_a = close_a.loc[close_a.index <= end_ts]
-        adj_a = adj_a.loc[adj_a.index <= end_ts]
-        divs_a = divs_a.loc[divs_a.index <= end_ts]
-        cap_gains_a = cap_gains_a.loc[cap_gains_a.index <= end_ts]
-
-    if close_a.empty:
-        return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
-
+    # The separate today's-shares price window that used to be assembled here
+    # (close_a/adj_a/divs_a/cap_gains_a) is gone with the projection that read
+    # it. Everything charted now comes off the replayed series, which is built
+    # on return_close below. The empty-window guard moved to that series.
     return_transactions = []
     for transaction in return_scope_transactions:
         row = dict(transaction)
@@ -45338,46 +45434,47 @@ def growth_2_data():
         else None
     )
 
-    # ── Portfolio value timeline (current shares * historical prices) ──
-    port_value = pd.Series(0.0, index=close_a.index)
-    value_scale = {}
-    position_values = {}
-    use_current_value_scale = end_date is None or end_date.date() >= datetime.now().date()
-    for t in avail:
-        q = quantities.get(t, 0)
-        series = close_a[t] * q
-        latest_market_value = float(series.dropna().iloc[-1]) if not series.dropna().empty else 0
-        stored_current_value = current_values.get(t, 0)
-        scale = (
-            stored_current_value / latest_market_value
-            if use_current_value_scale and latest_market_value > 0 and stored_current_value > 0
-            else 1.0
-        )
-        value_scale[t] = scale
-        owned_from = ownership_starts.get(t)
-        owned_mask = close_a.index >= owned_from if owned_from is not None else series.notna()
-        ticker_value = (series * scale).where(owned_mask, 0).fillna(0)
-        position_values[t] = ticker_value
-        port_value += ticker_value
+    # ── Charted portfolio value (replayed share counts * historical prices) ──
+    # Taken from the same replay that produces the tracker return, so the value
+    # chart, its Start/End Value cards, Total Return and Gains & Losses all read
+    # one series. The former estimate projected *today's* share counts back over
+    # history and masked each position off before its ownership start, which
+    # understated the opening balance by everything bought during the period
+    # (Owner YTD: $425,821 charted against a $563,684 actual opening balance).
+    chart_index = (
+        return_close.index[tracker_indexes]
+        if tracker_indexes
+        else return_close.index[:0]
+    )
+    chart_value = pd.Series(
+        [portfolio_return_result["market_value"][index] for index in tracker_indexes],
+        index=chart_index,
+        dtype=float,
+    ).ffill().fillna(0.0)
 
-    holdings_value = port_value.copy()
+    if not len(chart_index):
+        return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
+
+    # Cash is only meaningful against the whole account and only as a
+    # present-day balance, so it is left out of a ticker-filtered view and of
+    # any window that ends before today.
+    use_current_value_scale = end_date is None or end_date.date() >= datetime.now().date()
     include_cash = not filter_tickers and use_current_value_scale
     if include_cash and cash_value:
-        port_value += cash_value
+        chart_value = chart_value + cash_value
 
-    total_invested = sum(cost_basis.get(t, 0) for t in avail)
-    invested_series = pd.Series(0.0, index=close_a.index)
+    chart_invested = pd.Series(0.0, index=chart_index)
     for t in avail:
         owned_from = ownership_starts.get(t)
         if owned_from is None:
-            invested_series += cost_basis.get(t, 0)
+            chart_invested += cost_basis.get(t, 0)
         else:
-            invested_series.loc[invested_series.index >= owned_from] += cost_basis.get(t, 0)
+            chart_invested.loc[chart_invested.index >= owned_from] += cost_basis.get(t, 0)
 
     # ── Build transaction timeline for trades overlay ──
     # Tickers that have explicit transaction records
     trade_points = []
-    if show_trades:
+    if show_trades and len(chart_index):
         for tx in all_txns:
             if tx["ticker"] not in avail:
                 continue
@@ -45385,10 +45482,10 @@ def growth_2_data():
                 td = pd.Timestamp(tx["transaction_date"])
             except Exception:
                 continue
-            if td >= close_a.index[0] and td <= close_a.index[-1]:
-                idx_pos = close_a.index.searchsorted(td, side="right") - 1
+            if td >= chart_index[0] and td <= chart_index[-1]:
+                idx_pos = chart_index.searchsorted(td, side="right") - 1
                 if idx_pos >= 0:
-                    val_at = float(port_value.iloc[idx_pos])
+                    val_at = float(chart_value.iloc[idx_pos])
                     trade_points.append({
                         "date": tx["transaction_date"],
                         "value": round(val_at, 2),
@@ -45398,66 +45495,15 @@ def growth_2_data():
                         "price": float(tx["price_per_share"] or 0),
                     })
 
-    # ── P&L breakdown ──
-    dates_idx = close_a.index
-
-    # Capital gain = portfolio_value - invested at each point
-    # For "from first trade": use absolute values from start
-    # For "selected period": compute relative to period start
-    start_port_val = float(holdings_value.iloc[0])
-
-    # Cumulative dividends within the period (from yfinance per-share data)
-    cum_divs_dollar = pd.Series(0.0, index=dates_idx)
-    ticker_dividends = {}
-    for t in avail:
-        owned_from = ownership_starts.get(t)
-        owned_mask = dates_idx >= owned_from if owned_from is not None else pd.Series(True, index=dates_idx)
-        ticker_div = divs_a[t].where(owned_mask, 0).cumsum() * quantities.get(t, 0)
-        ticker_dividends[t] = ticker_div
-        cum_divs_dollar += ticker_div
-
-    # Realized P&L from transactions
-    realized_cum = pd.Series(0.0, index=dates_idx)
-    fees_cum = pd.Series(0.0, index=dates_idx)
-    for tx in all_txns:
-        tx = dict(tx)
-        if tx["ticker"] not in avail:
-            continue
-        try:
-            td = pd.Timestamp(tx["transaction_date"])
-        except Exception:
-            continue
-        if td < dates_idx[0] or td > dates_idx[-1]:
-            continue
-        mask = dates_idx >= td
-        if tx["transaction_type"] == "SELL" and tx["realized_gain"] is not None:
-            realized_cum.loc[mask] += float(tx["realized_gain"])
-        if tx["fees"] is not None and float(tx["fees"]) > 0:
-            fees_cum.loc[mask] -= float(tx["fees"])
-
-    # Capital gain (unrealized price change)
-    if pl_basis == "first_trade":
-        capital_gain = holdings_value - total_invested
-    else:
-        capital_gain = holdings_value - start_port_val
-
-    total_pl = capital_gain + cum_divs_dollar + realized_cum + fees_cum
-
-    # Convert to percentage if needed
-    def to_pct(series, base):
-        if base > 0:
-            return series / base * 100
-        return series * 0
-
-    dates_str = [d.strftime("%Y-%m-%d") for d in dates_idx]
+    dates_str = [d.strftime("%Y-%m-%d") for d in chart_index]
 
     def _cs(s):
         return [_clean(round(float(v), 2)) for v in s]
 
     result = {
         "dates": dates_str,
-        "portfolio_value": _cs(port_value),
-        "invested": _cs(invested_series),
+        "portfolio_value": _cs(chart_value),
+        "invested": _cs(chart_invested),
         "tickers": all_tickers,
         "categories": categories,
         "ticker_info": {t: {"category": cat_map.get(t, "Other"), "quantity": quantities.get(t, 0), "cost_basis": cost_basis.get(t, 0)} for t in avail},
@@ -45481,11 +45527,8 @@ def growth_2_data():
         "requested_start_date": period_range["start_date"],
         "requested_end_date": period_range["end_date"],
         "cash_value": round(cash_value, 2) if include_cash else 0,
-        "pl_basis": pl_basis,
         "accounting_basis": "transaction_aware",
     }
-
-    base_for_pct = total_invested if pl_basis == "first_trade" else start_port_val
 
     performance_dates = [
         return_close.index[index].strftime("%Y-%m-%d") for index in tracker_indexes
@@ -45501,8 +45544,11 @@ def growth_2_data():
     tracker_price_dollar = tracker_price_dollar.iloc[tracker_indexes]
     tracker_distribution_dollar = tracker_distribution_dollar.iloc[tracker_indexes]
     tracker_total_dollar = tracker_price_dollar + tracker_distribution_dollar
-    zero_performance = pd.Series(0.0, index=tracker_price_dollar.index)
 
+    # Realized P&L and fees are not separate components of a transaction-aware
+    # return — a sale changes portfolio weights, it does not book a gain into
+    # the index — so they are not reported. They used to ship as all-zero
+    # series, which the client dutifully tested for significance and never drew.
     if profit_mode == "pct":
         tracker_price_pct = pd.Series([
             float(portfolio_return_result["price"][index]) - 100
@@ -45515,8 +45561,6 @@ def growth_2_data():
         result["performance"] = {
             "capital_gain": _cs(tracker_price_pct),
             "dividends": _cs(tracker_total_pct - tracker_price_pct),
-            "realized_pl": _cs(zero_performance),
-            "fees": _cs(zero_performance),
             "total": _cs(tracker_total_pct),
         }
         result["profit_unit"] = "%"
@@ -45524,16 +45568,18 @@ def growth_2_data():
         result["performance"] = {
             "capital_gain": _cs(tracker_price_dollar),
             "dividends": _cs(tracker_distribution_dollar),
-            "realized_pl": _cs(zero_performance),
-            "fees": _cs(zero_performance),
             "total": _cs(tracker_total_dollar),
         }
         result["profit_unit"] = "$"
     result["performance_dates"] = performance_dates
 
     result["summary"] = {
-        "start_value": _clean(round(float(port_value.iloc[0]), 2)),
-        "end_value": _clean(round(float(port_value.iloc[-1]), 2)),
+        "start_value": (
+            _clean(round(float(chart_value.iloc[0]), 2)) if len(chart_value) else None
+        ),
+        "end_value": (
+            _clean(round(float(chart_value.iloc[-1]), 2)) if len(chart_value) else None
+        ),
         "total_profit_amount": (
             _clean(round(float(portfolio_return_metrics["total_return_dollar"]), 2))
             if portfolio_return_metrics
@@ -45567,70 +45613,13 @@ def growth_2_data():
         "cash_value": round(cash_value, 2) if include_cash else 0,
     }
 
-    # Per-ticker breakdown when grouping requested
-    if group_by == "ticker":
-        per_ticker = {}
-        for t in avail:
-            tv = position_values[t]
-            td_div = ticker_dividends[t]
-            if pl_basis == "first_trade":
-                t_cg = tv - cost_basis.get(t, 0)
-            else:
-                t_cg = tv - float(tv.iloc[0])
-            t_total = t_cg + td_div
-            tb = cost_basis.get(t, 0) if pl_basis == "first_trade" else float(tv.iloc[0])
-            if profit_mode == "pct":
-                per_ticker[t] = {
-                    "value": _cs(tv),
-                    "capital_gain": _cs(to_pct(t_cg, tb)),
-                    "dividends": _cs(to_pct(td_div, tb)),
-                    "total": _cs(to_pct(t_total, tb)),
-                }
-            else:
-                per_ticker[t] = {
-                    "value": _cs(tv),
-                    "capital_gain": _cs(t_cg),
-                    "dividends": _cs(td_div),
-                    "total": _cs(t_total),
-                }
-        result["per_ticker"] = per_ticker
-    elif group_by == "category":
-        per_cat = {}
-        for t in avail:
-            cat_name = cat_map.get(t, "Other")
-            if cat_name not in per_cat:
-                per_cat[cat_name] = {"value": np.zeros(len(dates_idx)), "cg": np.zeros(len(dates_idx)), "div": np.zeros(len(dates_idx)), "cost": 0.0, "start_val": 0.0}
-            tv = position_values[t].values
-            td_div = ticker_dividends[t].values
-            per_cat[cat_name]["value"] += tv
-            per_cat[cat_name]["div"] += td_div
-            per_cat[cat_name]["cost"] += cost_basis.get(t, 0)
-            per_cat[cat_name]["start_val"] += float(position_values[t].iloc[0])
-
-        grouped = {}
-        for cat_name, d in per_cat.items():
-            if pl_basis == "first_trade":
-                cg = d["value"] - d["cost"]
-                base = d["cost"]
-            else:
-                cg = d["value"] - d["start_val"]
-                base = d["start_val"]
-            total = cg + d["div"]
-            if profit_mode == "pct":
-                grouped[cat_name] = {
-                    "value": _cs(d["value"]),
-                    "capital_gain": _cs(to_pct(pd.Series(cg), base)),
-                    "dividends": _cs(to_pct(pd.Series(d["div"]), base)),
-                    "total": _cs(to_pct(pd.Series(total), base)),
-                }
-            else:
-                grouped[cat_name] = {
-                    "value": _cs(d["value"]),
-                    "capital_gain": _cs(cg),
-                    "dividends": _cs(d["div"]),
-                    "total": _cs(total),
-                }
-        result["per_category"] = grouped
+    # A per-ticker/per-category breakdown used to be computed here and shipped
+    # as per_ticker/per_category. Nothing ever read it: the "Group by" control
+    # on the page was wired to the request but not to any rendering, so the
+    # only effect of changing it was a second round trip. It was also built on
+    # the old today's-shares projection, so its lines would not have summed to
+    # the tracker total now charted above. Rebuilding grouping on the replay is
+    # a feature, not a repair, so the dead computation is simply gone.
 
     return jsonify(result)
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import { returnVsYield } from '../utils/returnVsYield'
+import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
@@ -182,7 +182,11 @@ export default function TotalReturn() {
     // A superseded range must not paint over the current one. Requests for a
     // wide window outlive the narrow one typed after it and would land last.
     return () => { active = false }
-  }, [categories, subcategories, selection, basisMode, dashboardPeriod, customStart, customEnd, rangeError])
+    // `pf` carries the profile/basis query string. It can change without
+    // `selection` changing — a legacy 'aggregate' value resolving once the
+    // aggregate list loads, or a deleted aggregate falling back to profile 1 —
+    // and without it here the page keeps rendering the previous account's data.
+  }, [categories, subcategories, selection, basisMode, dashboardPeriod, customStart, customEnd, rangeError, pf])
 
   // Fetch yfinance charts
   useEffect(() => {
@@ -210,7 +214,7 @@ export default function TotalReturn() {
       .catch(e => { if (active) setChartError(e.message) })
       .finally(() => { if (active) setChartLoading(false) })
     return () => { active = false }
-  }, [categories, subcategories, dashboardPeriod, customStart, customEnd, selection, rangeError])
+  }, [categories, subcategories, dashboardPeriod, customStart, customEnd, selection, rangeError, pf])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -472,6 +476,7 @@ export default function TotalReturn() {
     subcategories,
     chartData,
     chartLoading,
+    pf,
   ])
 
   // Render comparison chart
@@ -563,12 +568,30 @@ export default function TotalReturn() {
   const enrichedRows = useMemo(() => {
     if (!dashboardRows.length) return []
     return dashboardRows.map(r => {
-      const primaryYld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) : (r.current_annual_yield || 0)
-      const yld = (primaryYld || (r.annual_yield_on_cost || 0)) * 100
-      const rvy = r.total_return_pct != null ? returnVsYield(r.total_return_pct, yld) : null
-      return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
+      // No silent fallback to yield-on-cost when current yield is zero: the
+      // badge says which basis is in use, and Gains & Losses reads the selected
+      // one straight, so falling back here made the same holding show two
+      // different verdicts across the two pages.
+      const annualYld = (rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) : (r.current_annual_yield || 0)) * 100
+      // Total Ret % covers the selected window, so the yield it is measured
+      // against has to cover that same window. Each row carries its own
+      // effective held-period range; fall back to the portfolio's range when a
+      // row has none, and withhold the verdict when neither is known.
+      const windowYld = (
+        prorateAnnualYield(annualYld, r.actual_start_date, r.actual_end_date)
+        ?? prorateAnnualYield(annualYld, chartData?.actual_start_date, chartData?.actual_end_date)
+      )
+      const rvy = r.total_return_pct != null && windowYld != null
+        ? returnVsYield(r.total_return_pct, windowYld)
+        : null
+      return {
+        ...r,
+        rvy_annual_yield_pct: annualYld,
+        ret_vs_yld: rvy,
+        ret_vs_yld_sort: rvy ? rvy.spread : -999,
+      }
     })
-  }, [dashboardRows, rvyMode])
+  }, [dashboardRows, rvyMode, chartData])
 
   const realizedRows = useMemo(() => summary?.realized || [], [summary])
   const realizedTotals = summary?.realized_totals || {}
@@ -707,6 +730,20 @@ export default function TotalReturn() {
   const sortIcon = (col) => {
     if (sortCol !== col) return ' \u21C5'
     return sortAsc ? ' \u25B2' : ' \u25BC'
+  }
+
+  // Spells out both sides of the comparison, so the window-scaled yield is not
+  // mistaken for the annual one shown elsewhere on the row.
+  const rvyTitle = (row) => {
+    const rvy = row.ret_vs_yld
+    if (!rvy) return 'No comparable return for this range'
+    const annual = row.rvy_annual_yield_pct
+    const annualNote = annual != null ? ` (${Number(annual).toFixed(2)}% annual)` : ''
+    return (
+      `Total return ${rvy.totalReturnPct.toFixed(2)}%`
+      + ` vs ${rvy.yieldOnCost.toFixed(2)}% yield over this range${annualNote}`
+      + ` · spread ${rvy.spread >= 0 ? '+' : ''}${rvy.spread.toFixed(2)}%`
+    )
   }
 
   const missingBasis = (row) => (
@@ -1120,7 +1157,7 @@ export default function TotalReturn() {
                     const sk = col.sortKey || col.key
                     if (col.key === 'ret_vs_yld') {
                       return (
-                        <th key={col.key} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield — Good means total return exceeds yield, Poor means yield exceeds total return">
+                        <th key={col.key} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield, both measured over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return.">
                           <span style={{ cursor: 'pointer' }} onClick={() => handleSort(sk)}>RvY{sortIcon(sk)}</span>
                           {' '}
                           <span
@@ -1155,7 +1192,12 @@ export default function TotalReturn() {
                       if (col.key === 'ticker') display = <strong>{val}</strong>
                       if (col.key === 'sell_date') display = formatComparisonDate(val) || (val ?? '')
                       if (col.gl) {
-                        style = { textAlign: 'right', color: (val || 0) >= 0 ? '#4dff91' : '#ff6b6b' }
+                        // A missing value is not a gain — don't paint its
+                        // em-dash gain-green.
+                        style = {
+                          textAlign: 'right',
+                          color: val == null ? 'var(--text-dim)' : (val >= 0 ? '#4dff91' : '#ff6b6b'),
+                        }
                       }
                       if (missingBasis(row) && (col.key === 'start_value' || col.key === 'net_basis')) {
                         display = <span title="No cost basis on record for these shares, so the return percentage cannot be computed. Usually an unmatched transfer that drained the lot history." style={{ color: 'var(--warn, #ffb86c)' }}>{display} ⚠</span>
@@ -1165,7 +1207,7 @@ export default function TotalReturn() {
                         display = rvy ? rvy.label : '—'
                         style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
                       }
-                      return <td key={col.key} style={style} title={col.key === 'ret_vs_yld' && row.ret_vs_yld ? `Spread: ${row.ret_vs_yld.spread.toFixed(2)}%` : undefined}>{display}</td>
+                      return <td key={col.key} style={style} title={col.key === 'ret_vs_yld' ? rvyTitle(row) : undefined}>{display}</td>
                     })}
                   </tr>
                 ))}

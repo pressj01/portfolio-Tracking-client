@@ -775,6 +775,50 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(result["market_value"], [None, 1210.0, 1331.0])
         self.assertEqual(result["inferred_opening_positions"], 1)
 
+    def test_short_window_applies_inferred_lot_before_historical_sales(self):
+        """A short period must not add an inferred lot after replaying history."""
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05"])
+        close = pd.DataFrame({"AAA": [10.0, 11.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": "SELL",
+                "transaction_date": "2025-01-02",
+                "shares": 90,
+            },
+            {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": "BUY",
+                "transaction_date": "2025-12-31",
+                "shares": 2,
+            },
+        ]
+        holdings = [{
+            "ticker": "AAA",
+            "market_symbol": "AAA",
+            "position_key": (1, "AAA"),
+            "quantity": 12,
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            transactions,
+            holdings,
+        )
+
+        self.assertEqual(result["market_value"], [120.0, 132.0])
+        metrics = _portfolio_period_metrics(result)
+        self.assertEqual(metrics["start_value"], 120.0)
+        self.assertEqual(metrics["end_value"], 132.0)
+
 
 if __name__ == "__main__":
     unittest.main()

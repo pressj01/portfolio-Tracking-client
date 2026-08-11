@@ -134,7 +134,6 @@ export default function PortfolioGrowth2() {
   // Chart 2 controls
   const [profitMode, setProfitMode] = useState('dollar')
   const [groupProfitSource, setGroupProfitSource] = useState(true)
-  const [groupBy, setGroupBy] = useState('none')
   const rangeError = customRangeError(period, customStart, customEnd)
   const cardRange = data
     ? formatPerformanceRange(data.actual_start_date, data.actual_end_date)
@@ -162,7 +161,6 @@ export default function PortfolioGrowth2() {
       show_trades: showTrades ? 'true' : 'false',
       show_cost_basis: showCostBasis ? 'true' : 'false',
       group_profit_source: groupProfitSource ? 'true' : 'false',
-      group_by: groupBy,
     })
     if (selectedTickers.length > 0) {
       params.set('tickers', selectedTickers.join(','))
@@ -183,7 +181,10 @@ export default function PortfolioGrowth2() {
     // A superseded range must not paint over the current one: a request for a
     // wide window outlives the narrow one typed after it and would land last.
     return () => { active = false }
-  }, [period, customStart, customEnd, rangeError, selectedTickers, profitMode, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
+    // `pf` carries the profile/basis query string and can change without
+    // `selection` doing so, which otherwise leaves this page on the previous
+    // account's data — and stops the cost-basis toggle from taking effect.
+  }, [period, customStart, customEnd, rangeError, selectedTickers, profitMode, showTrades, showCostBasis, groupProfitSource, selection, pf])
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
@@ -289,22 +290,16 @@ export default function PortfolioGrowth2() {
     const suffix = isPct ? '%' : ''
     const prefix = isPct ? '' : '$'
 
-    // Determine if optional series have meaningful values (> 1% of total P&L range)
-    const totalRange = Math.max(...perf.total.map(Math.abs).filter(v => v != null), 1)
-    const isNonTrivial = (arr) => arr && Math.max(...arr.map(v => Math.abs(v || 0))) > totalRange * 0.01
-
+    // A transaction-aware return has exactly two components: price movement and
+    // distributions. Realized P&L and fees are not separate lines here — a sale
+    // reweights the portfolio rather than booking a gain into the index — and
+    // the endpoint no longer sends them.
     const traces = []
     if (groupProfitSource) {
       traces.push(
         { x: performanceDates, y: perf.capital_gain, name: 'Price return', line: { color: '#7ecfff', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Price return</extra>` },
         { x: performanceDates, y: perf.dividends, name: 'Distributions', line: { color: '#ff9800', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Distributions</extra>` },
       )
-      if (isNonTrivial(perf.realized_pl)) {
-        traces.push({ x: performanceDates, y: perf.realized_pl, name: 'Realized P&L', line: { color: '#4dff91', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Realized P&L</extra>` })
-      }
-      if (isNonTrivial(perf.fees)) {
-        traces.push({ x: performanceDates, y: perf.fees, name: 'Fee', line: { color: '#e040fb', width: 1.5 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Fee</extra>` })
-      }
     }
     traces.push(
       { x: performanceDates, y: perf.total, name: 'Tracker total return', line: { color: groupProfitSource ? '#b0bec5' : '#7ecfff', width: groupProfitSource ? 1.5 : 2.5, dash: groupProfitSource ? 'dot' : undefined }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Tracker total return</extra>` },
@@ -398,19 +393,20 @@ export default function PortfolioGrowth2() {
           <section>
             <h3>Portfolio value</h3>
             <p>
-              The blue line estimates what the selected holdings were worth on each date using current
-              share quantities and Yahoo Finance adjusted closing prices. A holding begins at its first
-              known purchase or transaction date, so it is not projected backward into years before you
-              owned it.
+              The blue line is the share count actually held on each date, replayed from your dated
+              buy and sell history, priced at that day's close. It comes from the same calculation as
+              the return card below it, so Start Value and End Value reconcile with Total Return and
+              Gains &amp; Losses.
             </p>
             <ul>
-              <li><strong>Portfolio:</strong> combined estimated market value of the selected holdings.</li>
+              <li><strong>Portfolio:</strong> market value of the shares held on each date, plus recorded cash.</li>
               <li><strong>Invested:</strong> recorded cost basis, added when each holding first enters the timeline.</li>
               <li><strong>Trade markers:</strong> recorded buys and sells when Show trades is enabled.</li>
             </ul>
             <p className="g2-help-note">
-              This is a historical estimate based on today's open share quantities, not a reconstructed
-              account balance with historical cash and share-count changes.
+              Start Value is the portfolio's real opening balance for the range, not today's share
+              counts priced backward. It differs from Total Return only by any recorded cash balance,
+              which this chart includes and that page does not.
             </p>
           </section>
           <section>
@@ -446,7 +442,7 @@ export default function PortfolioGrowth2() {
             {data.requested_start_date && data.actual_start_date !== data.requested_start_date
               ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
               : ''}.
-            {' The value chart begins when current-position history is available; the return card and chart use the tracker range shown on them.'}
+            {' The value chart and the return card share one replayed series, so both use the tracker range shown on them.'}
             {formatAccountingCoverage(data.tracker_coverage)
               ? ` ${formatAccountingCoverage(data.tracker_coverage)}`
               : ''}
@@ -460,15 +456,21 @@ export default function PortfolioGrowth2() {
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card">
-              <div className="summary-label">Estimated Start Value</div>
+              <div className="summary-label">Start Value</div>
               <div className="summary-value">{formatMoney(data.summary?.start_value)}</div>
+              {/* Cash is a present-day balance carried across the whole line, so
+                  it is in this figure too — say so here rather than only on End
+                  Value, where it used to look like an end-of-period addition. */}
+              {data.summary?.cash_value > 0 && (
+                <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
+              )}
               {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
             <div className="summary-card">
-              <div className="summary-label">Estimated End Value</div>
+              <div className="summary-label">End Value</div>
               <div className="summary-value">{formatMoney(data.summary?.end_value)}</div>
               {data.summary?.cash_value > 0 && (
-                <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash</div>
+                <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
               )}
               {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
@@ -511,15 +513,6 @@ export default function PortfolioGrowth2() {
                 value={profitMode}
                 onChange={setProfitMode}
               />
-
-              <div className="g2-control-row">
-                <span className="g2-control-label">Group by</span>
-                <select value={groupBy} onChange={e => setGroupBy(e.target.value)} className="g2-select">
-                  <option value="none">No grouping</option>
-                  <option value="ticker">Ticker</option>
-                  <option value="category">Category</option>
-                </select>
-              </div>
 
               <Toggle label="Group by the profit source" value={groupProfitSource} onChange={setGroupProfitSource} />
 
