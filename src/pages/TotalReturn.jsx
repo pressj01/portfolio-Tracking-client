@@ -5,11 +5,17 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 import {
+  MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
   addCustomRangeParams,
+  customRangeError,
+  formatAccountingCoverage,
+  formatPerformanceChartRange,
   formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
+  todayInputValue,
   writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
@@ -111,6 +117,8 @@ export default function TotalReturn() {
     writeSharedPerformanceRange(dashboardPeriod, customStart, customEnd)
   }, [dashboardPeriod, customStart, customEnd])
 
+  const rangeError = customRangeError(dashboardPeriod, customStart, customEnd)
+
   const dashboardRows = useMemo(() => {
     if (!summary?.rows || !chartData?.performance_rows) return []
     const performanceByTicker = new Map(
@@ -145,6 +153,15 @@ export default function TotalReturn() {
 
   // Fetch DB summary
   useEffect(() => {
+    if (rangeError) {
+      setSummary(null)
+      setSummaryLoading(false)
+      // The range is a page-level condition, reported once above the cards
+      // rather than repeated by every data source that just stood down.
+      setSummaryError(null)
+      return undefined
+    }
+    let active = true
     setSummaryLoading(true)
     setSummaryError(null)
     // Realized sales are filtered by sell date, so the summary needs the same
@@ -156,23 +173,26 @@ export default function TotalReturn() {
     pf(`/api/total-return/summary?${params}`)
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setSummary(d)
       })
-      .catch(e => setSummaryError(e.message))
-      .finally(() => setSummaryLoading(false))
-  }, [categories, subcategories, selection, basisMode, dashboardPeriod, customStart, customEnd])
+      .catch(e => { if (active) setSummaryError(e.message) })
+      .finally(() => { if (active) setSummaryLoading(false) })
+    // A superseded range must not paint over the current one. Requests for a
+    // wide window outlive the narrow one typed after it and would land last.
+    return () => { active = false }
+  }, [categories, subcategories, selection, basisMode, dashboardPeriod, customStart, customEnd, rangeError])
 
   // Fetch yfinance charts
   useEffect(() => {
-    if (dashboardPeriod === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+    if (rangeError) {
       setChartData(null)
       setChartLoading(false)
-      setChartError(!customStart || !customEnd
-        ? 'Choose both a custom start date and end date.'
-        : 'Custom start date must be on or before the end date.')
-      return
+      setChartError(null)
+      return undefined
     }
+    let active = true
     setChartLoading(true)
     setChartError(null)
     setChartData(null)
@@ -183,12 +203,14 @@ export default function TotalReturn() {
     pf(`/api/total-return/charts?${params}`)
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setChartData(d)
       })
-      .catch(e => setChartError(e.message))
-      .finally(() => setChartLoading(false))
-  }, [categories, subcategories, dashboardPeriod, customStart, customEnd, selection])
+      .catch(e => { if (active) setChartError(e.message) })
+      .finally(() => { if (active) setChartLoading(false) })
+    return () => { active = false }
+  }, [categories, subcategories, dashboardPeriod, customStart, customEnd, selection, rangeError])
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
@@ -196,6 +218,12 @@ export default function TotalReturn() {
     const Plotly = window.Plotly
     const cfg = { responsive: true }
     const ids = []
+    const chartRange = formatPerformanceChartRange(
+      chartData.requested_start_date,
+      chartData.requested_end_date,
+      chartData.actual_start_date,
+      chartData.actual_end_date,
+    )
 
     // Build a ticker -> color map from the bar chart tickers (sorted by return)
     const colorMap = {}
@@ -236,6 +264,17 @@ export default function TotalReturn() {
         // Add left margin for the colored labels
         bar.layout.margin = { ...bar.layout.margin, l: 75 }
       }
+      const existingTitle = typeof bar.layout?.title === 'string'
+        ? bar.layout.title
+        : bar.layout?.title?.text
+      bar.layout.title = {
+        ...(typeof bar.layout?.title === 'object' ? bar.layout.title : {}),
+        text: `${existingTitle || 'Holding Total Return %'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`,
+      }
+      bar.layout.margin = {
+        ...bar.layout.margin,
+        t: Math.max(Number(bar.layout.margin?.t) || 0, 80),
+      }
       Plotly.newPlot(barEl, bar.data, themedPlotlyLayout(bar.layout, isDark), cfg)
     }
 
@@ -264,6 +303,12 @@ export default function TotalReturn() {
         total_return_dollar_num: Number(r.total_return_dollar || 0),
       }))
       .filter(r => r.ticker)
+    const chartRange = formatPerformanceChartRange(
+      chartData?.requested_start_date,
+      chartData?.requested_end_date,
+      chartData?.actual_start_date,
+      chartData?.actual_end_date,
+    )
 
     const maxPurchaseValue = Math.max(...rows.map(r => r.purchase_value_num), 0)
     const yKey = scatterReturnMode === 'dollar' ? 'total_return_dollar_num' : 'total_return_pct_num'
@@ -294,7 +339,7 @@ export default function TotalReturn() {
       data: traces,
       layout: {
         title: {
-          text: `${scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return %'} vs Annual Yield on Cost — ${chartData?.period_label || 'Selected Period'}`,
+          text: `${scatterReturnMode === 'dollar' ? `Total Return (${getCurrencyLabel()})` : 'Total Return %'} vs Annual Yield on Cost — ${chartData?.period_label || 'Selected Period'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`,
           font: { color: '#e0e8f0' },
         },
         template: 'plotly_dark',
@@ -333,16 +378,16 @@ export default function TotalReturn() {
 
     Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), { responsive: true })
     return () => { if (el) Plotly.purge(el) }
-  }, [dashboardRows, chartData?.period_label, scatterReturnMode, isDark])
+  }, [dashboardRows, chartData, scatterReturnMode, isDark])
 
   // Fetch comparison chart data
   useEffect(() => {
-    if (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) { setCmpData(null); return }
-    if (dashboardPeriod === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+    if (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) { setCmpData(null); return undefined }
+    if (rangeError) {
       setCmpData(null)
       setCmpLoading(false)
-      setCmpError('Choose a valid custom start and end date.')
-      return
+      setCmpError(null)
+      return undefined
     }
 
     const canReuseDashboardPortfolio = (
@@ -369,6 +414,10 @@ export default function TotalReturn() {
             transaction_count: metrics.transaction_count || 0,
             fallback_positions: metrics.fallback_positions || 0,
             inferred_opening_positions: metrics.inferred_opening_positions || 0,
+            inferred_closing_positions: metrics.inferred_closing_positions || 0,
+            split_adjusted_transactions: metrics.split_adjusted_transactions || 0,
+            split_adjusted_positions: metrics.split_adjusted_positions || 0,
+            missing_market_symbols: metrics.missing_market_symbols || [],
             fallback_date_sources: metrics.fallback_date_sources || {},
           },
           portfolio_method: (
@@ -392,6 +441,7 @@ export default function TotalReturn() {
       }
     }
 
+    let active = true
     setCmpLoading(true)
     setCmpError(null)
     const params = new URLSearchParams({ period: dashboardPeriod })
@@ -402,11 +452,13 @@ export default function TotalReturn() {
     pf(`/api/total-return/compare?${params}`)
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setCmpData(d)
       })
-      .catch(e => setCmpError(e.message))
-      .finally(() => setCmpLoading(false))
+      .catch(e => { if (active) setCmpError(e.message) })
+      .finally(() => { if (active) setCmpLoading(false) })
+    return () => { active = false }
   }, [
     cmpPortfolio,
     cmpTickers,
@@ -414,6 +466,7 @@ export default function TotalReturn() {
     dashboardPeriod,
     customStart,
     customEnd,
+    rangeError,
     selection,
     categories,
     subcategories,
@@ -466,16 +519,18 @@ export default function TotalReturn() {
       hoverinfo: 'skip',
     })
 
-    const comparisonRange = formatComparisonRange(
-      cmpData.requested_start_date || cmpData.actual_start_date,
-      cmpData.requested_end_date || cmpData.actual_end_date,
+    const comparisonRange = formatPerformanceChartRange(
+      cmpData.requested_start_date,
+      cmpData.requested_end_date,
+      cmpData.actual_start_date,
+      cmpData.actual_end_date,
     )
     const modeLabel = cmpMode === 'both'
       ? 'Total Return & Price Only'
       : (COMPARISON_RETURN_MODES.find(mode => mode.key === cmpMode)?.label || 'Return')
     const layout = {
       title: {
-        text: `${modeLabel} Comparison — ${cmpData.period_label}${comparisonRange ? ` · ${comparisonRange}` : ''} (normalized to 100)`,
+        text: `${modeLabel} Comparison — ${cmpData.period_label} (normalized to 100)${comparisonRange ? `<br><sup>${comparisonRange}</sup>` : ''}`,
         font: { color: '#e0e8f0' },
       },
       template: 'plotly_dark',
@@ -486,7 +541,7 @@ export default function TotalReturn() {
       height: 550,
       legend: { orientation: 'h', y: -0.15, font: { color: '#d0dde8', size: 12 } },
       hovermode: 'x unified',
-      margin: { t: 50, b: 80, l: 60, r: 20 },
+      margin: { t: 75, b: 80, l: 60, r: 20 },
     }
 
     Plotly.newPlot(el, traces, themedPlotlyLayout(layout, isDark), { responsive: true })
@@ -766,12 +821,14 @@ export default function TotalReturn() {
                 key={periodOption.key}
                 className={`tr-pbtn${dashboardPeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                title={periodOption.hint}
                 onClick={() => setDashboardPeriod(periodOption.key)}
               >
                 {periodOption.label}
               </button>
             ))}
           </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
         </div>
 
         {dashboardPeriod === 'custom' && (
@@ -781,7 +838,8 @@ export default function TotalReturn() {
               <input
                 type="date"
                 value={customStart}
-                max={customEnd || initialCustomDates.end}
+                min={MIN_PERFORMANCE_DATE}
+                max={customEnd || todayInputValue()}
                 onChange={e => setCustomStart(e.target.value)}
               />
             </label>
@@ -790,14 +848,18 @@ export default function TotalReturn() {
               <input
                 type="date"
                 value={customEnd}
-                min={customStart || undefined}
-                max={initialCustomDates.end}
+                min={customStart || MIN_PERFORMANCE_DATE}
+                max={todayInputValue()}
                 onChange={e => setCustomEnd(e.target.value)}
               />
             </label>
           </div>
         )}
       </div>
+
+      {/* Reported once for the whole page: every data source below stands down
+          on the same condition, so per-source alerts would just repeat it. */}
+      {rangeError && <div className="alert alert-error">{rangeError}</div>}
 
       {/* Summary cards */}
       {summaryLoading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
@@ -814,16 +876,17 @@ export default function TotalReturn() {
             {t.inferred_opening_positions > 0
               ? ` ${t.inferred_opening_positions} pre-existing position${t.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled backward from current shares because the transaction export began after the opening lot.`
               : ''}
+            {formatAccountingCoverage(t) ? ` ${formatAccountingCoverage(t)}` : ''}
             {t.distribution_source ? ` Distribution dollars use ${t.distribution_source.toLowerCase()}.` : ''}
             {' '}Because capital changes during the period, dollar return divided by start value may not equal the time-weighted return percentage.
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> this page is the reference calculation for
-            transaction-aware Total Return. Growth &amp; Performance uses the same return index, and
-            Portfolio Growth 2 shows the same figure as <strong>Tracker Total Return %</strong> when the
-            account, date range, and holdings scope match. Its dollar P/L chart answers a different
-            question: where the dollar profit or loss came from.
-            {' '}The selected range is remembered across all four tracking screens.
+            transaction-aware Total Return. Dashboard, Growth &amp; Performance, Portfolio Growth 2,
+            and Gains &amp; Losses show this same figure as <strong>Tracker Total Return %</strong> when the
+            account, date range, and holdings scope match. Lifetime cost-basis G/L and dollar P/L
+            answer a different question: where the accounting profit or loss came from.
+            {' '}The selected range is remembered across all five tracking screens.
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={dashboardCardRange} />
@@ -970,6 +1033,9 @@ export default function TotalReturn() {
                   : ''}
                 {cmpData.portfolio_coverage?.inferred_opening_positions > 0
                   ? ` ${cmpData.portfolio_coverage.inferred_opening_positions} pre-existing position${cmpData.portfolio_coverage.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled from current shares because the transaction export began after the opening lot.`
+                  : ''}
+                {formatAccountingCoverage(cmpData.portfolio_coverage)
+                  ? ` ${formatAccountingCoverage(cmpData.portfolio_coverage)}`
                   : ''}
               </p>
             )}

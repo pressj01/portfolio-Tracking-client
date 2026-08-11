@@ -4,9 +4,15 @@ import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 import {
+  MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
+  customRangeError,
+  formatAccountingCoverage,
+  formatPerformanceChartRange,
   formatPerformanceRange,
   readSharedPerformanceRange,
+  todayInputValue,
   writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
@@ -128,25 +134,31 @@ export default function PortfolioGrowth2() {
   // Chart 2 controls
   const [profitMode, setProfitMode] = useState('dollar')
   const [groupProfitSource, setGroupProfitSource] = useState(true)
-  const [plBasis, setPlBasis] = useState('selected_period')
   const [groupBy, setGroupBy] = useState('none')
-  const effectivePlBasis = period === 'all' ? 'first_trade' : plBasis
+  const rangeError = customRangeError(period, customStart, customEnd)
+  const cardRange = data
+    ? formatPerformanceRange(data.actual_start_date, data.actual_end_date)
+    : ''
+  const trackerCardRange = data
+    ? formatPerformanceRange(
+        data.tracker_actual_start_date || data.actual_start_date,
+        data.tracker_actual_end_date || data.actual_end_date,
+      )
+    : ''
 
   useEffect(() => {
-    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+    if (rangeError) {
       setData(null)
       setLoading(false)
-      setError(!customStart || !customEnd
-        ? 'Choose both a custom start date and end date.'
-        : 'Custom start date must be on or before the end date.')
-      return
+      setError(rangeError)
+      return undefined
     }
+    let active = true
     setLoading(true)
     setError(null)
     const params = new URLSearchParams({
       period: period.toLowerCase(),
       profit_mode: profitMode,
-      pl_basis: effectivePlBasis,
       show_trades: showTrades ? 'true' : 'false',
       show_cost_basis: showCostBasis ? 'true' : 'false',
       group_profit_source: groupProfitSource ? 'true' : 'false',
@@ -162,18 +174,28 @@ export default function PortfolioGrowth2() {
     pf(`/api/growth-2/data?${params}`)
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setData(d)
       })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [period, customStart, customEnd, selectedTickers, profitMode, effectivePlBasis, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
+      .catch(e => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    // A superseded range must not paint over the current one: a request for a
+    // wide window outlives the narrow one typed after it and would land last.
+    return () => { active = false }
+  }, [period, customStart, customEnd, rangeError, selectedTickers, profitMode, showTrades, showCostBasis, groupProfitSource, groupBy, selection])
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
+    const chartRange = formatPerformanceChartRange(
+      data.requested_start_date,
+      data.requested_end_date,
+      data.actual_start_date,
+      data.actual_end_date,
+    )
     const el = document.getElementById('g2-value-chart')
     if (!el) return
     // Open the unified hover box on the last date so the current value reads
@@ -225,8 +247,8 @@ export default function PortfolioGrowth2() {
       plot_bgcolor: ct.plot,
       font: { color: ct.font },
       height: 420,
-      title: { text: 'Portfolio value', font: { size: 16, color: ct.title } },
-      margin: { l: 80, r: 20, t: 50, b: 50 },
+      title: { text: `Portfolio value${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`, font: { size: 16, color: ct.title } },
+      margin: { l: 80, r: 20, t: 70, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
       xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
@@ -244,11 +266,18 @@ export default function PortfolioGrowth2() {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
+    const chartRange = formatPerformanceChartRange(
+      data.requested_start_date,
+      data.requested_end_date,
+      data.tracker_actual_start_date,
+      data.tracker_actual_end_date,
+    )
     const el = document.getElementById('g2-perf-chart')
     if (!el) return
     let cancelled = false
 
     const perf = data.performance
+    const performanceDates = data.performance_dates || data.dates
     const unit = data.profit_unit
     const isPct = unit === '%'
     // Keep the currency/percent sign out of the d3 number format and supply it
@@ -267,18 +296,18 @@ export default function PortfolioGrowth2() {
     const traces = []
     if (groupProfitSource) {
       traces.push(
-        { x: data.dates, y: perf.capital_gain, name: 'Capital gain', line: { color: '#7ecfff', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Capital gain</extra>` },
-        { x: data.dates, y: perf.dividends, name: 'Dividends', line: { color: '#ff9800', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Dividends</extra>` },
+        { x: performanceDates, y: perf.capital_gain, name: 'Price return', line: { color: '#7ecfff', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Price return</extra>` },
+        { x: performanceDates, y: perf.dividends, name: 'Distributions', line: { color: '#ff9800', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Distributions</extra>` },
       )
       if (isNonTrivial(perf.realized_pl)) {
-        traces.push({ x: data.dates, y: perf.realized_pl, name: 'Realized P&L', line: { color: '#4dff91', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Realized P&L</extra>` })
+        traces.push({ x: performanceDates, y: perf.realized_pl, name: 'Realized P&L', line: { color: '#4dff91', width: 2 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Realized P&L</extra>` })
       }
       if (isNonTrivial(perf.fees)) {
-        traces.push({ x: data.dates, y: perf.fees, name: 'Fee', line: { color: '#e040fb', width: 1.5 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Fee</extra>` })
+        traces.push({ x: performanceDates, y: perf.fees, name: 'Fee', line: { color: '#e040fb', width: 1.5 }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Fee</extra>` })
       }
     }
     traces.push(
-      { x: data.dates, y: perf.total, name: 'Total', line: { color: groupProfitSource ? '#b0bec5' : '#7ecfff', width: groupProfitSource ? 1.5 : 2.5, dash: groupProfitSource ? 'dot' : undefined }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Total</extra>` },
+      { x: performanceDates, y: perf.total, name: 'Tracker total return', line: { color: groupProfitSource ? '#b0bec5' : '#7ecfff', width: groupProfitSource ? 1.5 : 2.5, dash: groupProfitSource ? 'dot' : undefined }, hovertemplate: `${prefix}%{y:${hoverFmt}}${suffix}<extra>Tracker total return</extra>` },
     )
 
     Plotly.newPlot(el, traces, {
@@ -287,8 +316,8 @@ export default function PortfolioGrowth2() {
       plot_bgcolor: ct.plot,
       font: { color: ct.font },
       height: 420,
-      title: { text: 'Portfolio performance', font: { size: 16, color: ct.title } },
-      margin: { l: 80, r: 20, t: 50, b: 50 },
+      title: { text: `Transaction-aware return${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`, font: { size: 16, color: ct.title } },
+      margin: { l: 80, r: 20, t: 70, b: 50 },
       hovermode: 'x unified',
       legend: { orientation: 'h', y: -0.12, xanchor: 'center', x: 0.5, font: { size: 11 } },
       xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
@@ -316,11 +345,13 @@ export default function PortfolioGrowth2() {
                 className={`tab${period === option.key ? ' active' : ''}`}
                 onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
+                title={option.hint}
               >
                 {option.label}
               </button>
             ))}
           </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom date range">
@@ -329,7 +360,8 @@ export default function PortfolioGrowth2() {
               <input
                 type="date"
                 value={customStart}
-                max={customEnd || initialCustomDates.end}
+                min={MIN_PERFORMANCE_DATE}
+                max={customEnd || todayInputValue()}
                 onChange={e => setCustomStart(e.target.value)}
               />
             </label>
@@ -338,8 +370,8 @@ export default function PortfolioGrowth2() {
               <input
                 type="date"
                 value={customEnd}
-                min={customStart || undefined}
-                max={initialCustomDates.end}
+                min={customStart || MIN_PERFORMANCE_DATE}
+                max={todayInputValue()}
                 onChange={e => setCustomEnd(e.target.value)}
               />
             </label>
@@ -359,8 +391,8 @@ export default function PortfolioGrowth2() {
         <p className="g2-help-footer">
           <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
           transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
-          the account, date range, and holdings scope match. The Total Profit chart is a separate
-          dollar P/L explanation, so it is not expected to equal that percentage.
+          the account, date range, and holdings scope match. The dollar card and return chart use
+          the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
         </p>
         <div className="g2-help-grid">
           <section>
@@ -382,20 +414,19 @@ export default function PortfolioGrowth2() {
             </p>
           </section>
           <section>
-            <h3>Portfolio performance</h3>
+            <h3>Transaction-aware return</h3>
             <p>
-              This chart explains the estimated profit or loss over the same dates. The total combines
-              price movement, distributions, recorded realized gains or losses, and transaction fees.
+              This chart explains the same return used by the Total Return Dashboard. Buys and sells
+              change the shares being measured after the trade date; they do not create profit or loss.
             </p>
             <ul>
-              <li><strong>Capital gain:</strong> change in estimated holding value.</li>
-              <li><strong>Dividends:</strong> cumulative Yahoo distributions multiplied by the selected shares.</li>
-              <li><strong>Realized P&amp;L and fees:</strong> included when present in recorded transactions.</li>
-              <li><strong>Total:</strong> the sum of the displayed profit sources.</li>
+              <li><strong>Price return:</strong> cumulative market-price gain or loss while each position was held.</li>
+              <li><strong>Distributions:</strong> actual broker payments, with Yahoo history only where broker history is unavailable.</li>
+              <li><strong>Tracker total return:</strong> price return plus distributions in amount mode; the shared dividend-reinvested return in percent mode.</li>
             </ul>
             <p className="g2-help-note">
-              Selected period starts P/L at the first displayed value. From the first trade compares value
-              with recorded cost basis. Switch between amount and percent to change the Y-axis units.
+              Switch between amount and percent to change the Y-axis units. The amount reconciles to
+              Total Return dollars; the percent reconciles to Tracker Total Return %.
             </p>
           </section>
         </div>
@@ -415,35 +446,39 @@ export default function PortfolioGrowth2() {
             {data.requested_start_date && data.actual_start_date !== data.requested_start_date
               ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
               : ''}.
-            {period === 'all'
-              ? ' All begins with the first recorded trade and uses the same basis as “From the first trade.”'
-              : ' Both charts and the summary below use this exact range.'}
+            {' The value chart begins when current-position history is available; the return card and chart use the tracker range shown on them.'}
+            {formatAccountingCoverage(data.tracker_coverage)
+              ? ` ${formatAccountingCoverage(data.tracker_coverage)}`
+              : ''}
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
             this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure.
-            <strong> Total Profit</strong> and the performance chart remain flexible dollar/P&amp;L views that
-            explain the result, so they are intentionally not alternative return percentages.
-            {' '}The selected range is remembered across all four tracking screens.
+            <strong> Tracker Total Return $</strong> is the matching cash-flow-adjusted dollar result:
+            price return plus distributions, without treating deposits, purchases, or sales as performance.
+            {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card">
-              <div className="summary-label">Start Value</div>
+              <div className="summary-label">Estimated Start Value</div>
               <div className="summary-value">{formatMoney(data.summary?.start_value)}</div>
-              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+              {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
             <div className="summary-card">
-              <div className="summary-label">End Value</div>
+              <div className="summary-label">Estimated End Value</div>
               <div className="summary-value">{formatMoney(data.summary?.end_value)}</div>
-              <div className="summary-sub">
-                {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
-                {data.summary?.cash_value > 0 ? ` | Includes ${formatMoney(data.summary.cash_value)} cash` : ''}
-              </div>
+              {data.summary?.cash_value > 0 && (
+                <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash</div>
+              )}
+              {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
             <div className="summary-card">
-              <div className="summary-label">Total Profit</div>
+              <div className="summary-label">Tracker Total Return $</div>
               <div className="summary-value">{formatMoney(data.summary?.total_profit_amount)}</div>
-              <div className="summary-sub">{formatPerformanceRange(data.actual_start_date, data.actual_end_date)}</div>
+              <div className="summary-sub">
+                Price {formatMoney(data.summary?.price_return_amount)} + distributions {formatMoney(data.summary?.distribution_amount)}
+              </div>
+              {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
             <div className="summary-card">
               <div className="summary-label">Tracker Total Return %</div>
@@ -451,6 +486,7 @@ export default function PortfolioGrowth2() {
                 {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
               </div>
               <div className="summary-sub">Same return standard as Growth &amp; Total Return</div>
+              {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
           </div>
           {/* ── Chart 1: Portfolio Value ── */}
@@ -471,7 +507,7 @@ export default function PortfolioGrowth2() {
             </div>
             <div className="g2-chart-controls">
               <TabButtons
-                options={[{ value: 'pct', label: 'Total profit, %' }, { value: 'dollar', label: 'Total profit, amount' }]}
+                options={[{ value: 'pct', label: 'Tracker return, %' }, { value: 'dollar', label: 'Tracker return, amount' }]}
                 value={profitMode}
                 onChange={setProfitMode}
               />
@@ -487,21 +523,6 @@ export default function PortfolioGrowth2() {
 
               <Toggle label="Group by the profit source" value={groupProfitSource} onChange={setGroupProfitSource} />
 
-              <div className="g2-pl-control">
-                <div className="g2-control-label g2-pl-label">Calculate P/L for:</div>
-                <TabButtons
-                  options={[{ value: 'selected_period', label: 'Selected period' }, { value: 'first_trade', label: 'From the first trade' }]}
-                  value={effectivePlBasis}
-                  onChange={value => { if (period !== 'all') setPlBasis(value) }}
-                />
-                <div className="g2-hint">
-                  {effectivePlBasis === 'selected_period'
-                    ? 'P/L is calculated relative to the portfolio value at the beginning of the period.'
-                    : period === 'all'
-                      ? 'All and From the first trade are the same inception-based calculation.'
-                      : 'P/L is calculated relative to total invested cost basis (purchase price).'}
-                </div>
-              </div>
             </div>
           </div>
         </>

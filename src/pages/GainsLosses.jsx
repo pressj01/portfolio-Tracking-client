@@ -4,22 +4,31 @@ import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
-
-const PALETTE = [
-  '#7B8CFF','#FF6F61','#2EFDB5','#C98FFF','#FFB86C','#4DE8FF','#FF80A8','#D4FF9A',
-  '#FFB3FF','#FFE066','#5AAFEE','#FF9933','#55DD55','#FF5555','#BB99DD','#CC8877',
-]
+import {
+  MIN_PERFORMANCE_DATE,
+  PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
+  addCustomRangeParams,
+  customRangeError,
+  formatAccountingCoverage,
+  formatPerformanceChartRange,
+  formatPerformanceRange,
+  readSharedPerformanceRange,
+  todayInputValue,
+  writeSharedPerformanceRange,
+} from '../utils/performancePeriods'
 
 const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
 const fmtInt = v => formatMoneyWhole(v)
 const glColor = v => (v || 0) >= 0 ? '#4dff91' : '#ff6b6b'
 
-function MetricCard({ label, value, className }) {
+function MetricCard({ label, value, range, className }) {
   return (
     <div className={`summary-card ${className || ''}`}>
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '\u2014'}</div>
+      {range && <div className="summary-sub">{range}</div>}
     </div>
   )
 }
@@ -40,13 +49,22 @@ export default function GainsLosses() {
   const [chartData, setChartData] = useState(null)
   const [chartLoading, setChartLoading] = useState(false)
   const [chartError, setChartError] = useState(null)
-  const [chartPeriod, setChartPeriod] = useState('1y')
+  const [initialPerformanceRange] = useState(() => readSharedPerformanceRange())
+  const [period, setPeriod] = useState(initialPerformanceRange.period)
+  const [customStart, setCustomStart] = useState(initialPerformanceRange.start)
+  const [customEnd, setCustomEnd] = useState(initialPerformanceRange.end)
 
   const [tab, setTab] = useState('unrealized')
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
   const [expandedRealized, setExpandedRealized] = useState({})
+
+  useEffect(() => {
+    writeSharedPerformanceRange(period, customStart, customEnd)
+  }, [period, customStart, customEnd])
+
+  const rangeError = customRangeError(period, customStart, customEnd)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -59,6 +77,7 @@ export default function GainsLosses() {
 
   // Fetch summary data
   useEffect(() => {
+    let active = true
     setLoading(true)
     setError(null)
     const params = new URLSearchParams()
@@ -67,29 +86,51 @@ export default function GainsLosses() {
     pf(`/api/gains-losses/summary?${params}`)
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         if (d.error) throw new Error(d.error)
         setData(d)
       })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [categories, subcategories, selection, basisMode])
+      .catch(e => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [categories, subcategories, selection, basisMode, pf])
 
-  // Fetch chart data
+  // Selected-period performance is read from the same two endpoints as the
+  // Total Return page. That makes "Tracker Total Return" a single calculation,
+  // while the separate lifetime accounting summary above remains cost-basis
+  // gain/loss rather than being silently redefined by a date button.
   useEffect(() => {
+    if (rangeError) {
+      setChartData(null)
+      setChartLoading(false)
+      setChartError(null)
+      return undefined
+    }
+    let active = true
     setChartLoading(true)
     setChartError(null)
-    const params = new URLSearchParams({ period: chartPeriod })
+    setChartData(null)
+    const params = new URLSearchParams({ period })
+    addCustomRangeParams(params, period, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
-    pf(`/api/gains-losses/chart?${params}`)
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) throw new Error(d.error)
-        setChartData(d)
+    Promise.all([
+      pf(`/api/total-return/charts?${params}`).then(r => r.json()),
+      pf(`/api/total-return/summary?${params}`).then(r => r.json()),
+    ])
+      .then(([performance, periodSummary]) => {
+        if (!active) return
+        if (performance.error) throw new Error(performance.error)
+        if (periodSummary.error) throw new Error(periodSummary.error)
+        setChartData({
+          ...performance,
+          realized_rows: periodSummary.realized || [],
+        })
       })
-      .catch(e => setChartError(e.message))
-      .finally(() => setChartLoading(false))
-  }, [chartPeriod, categories, subcategories, selection, basisMode])
+      .catch(e => { if (active) setChartError(e.message) })
+      .finally(() => { if (active) setChartLoading(false) })
+    return () => { active = false }
+  }, [period, customStart, customEnd, rangeError, categories, subcategories, selection, basisMode, pf])
 
   // Render Plotly charts
   useEffect(() => {
@@ -97,129 +138,151 @@ export default function GainsLosses() {
     const Plotly = window.Plotly
     const cfg = { responsive: true }
     const ids = []
+    const chartRange = formatPerformanceChartRange(
+      chartData.requested_start_date,
+      chartData.requested_end_date,
+      chartData.actual_start_date,
+      chartData.actual_end_date,
+    )
+    const withChartRange = title => chartRange ? `${title}<br><sup>${chartRange}</sup>` : title
 
-    // Chart 1: Cumulative G/L over time
+    // Chart 1: the exact transaction-aware index used on Total Return, shifted
+    // from a 100 baseline to percentage return for a familiar G/L view.
     const timeEl = document.getElementById('gl-chart-time')
-    if (timeEl && chartData.dates?.length) {
+    const portfolioSeries = chartData.portfolio_series
+    if (timeEl && portfolioSeries?.dates?.length) {
       ids.push('gl-chart-time')
+      const priceReturns = (portfolioSeries.price || []).map(value => (
+        value == null ? null : Number((Number(value) - 100).toFixed(2))
+      ))
+      const totalReturns = (portfolioSeries.total || []).map(value => (
+        value == null ? null : Number((Number(value) - 100).toFixed(2))
+      ))
       const traces = [
         {
-          x: chartData.dates, y: chartData.price_gl,
-          name: 'Price G/L', mode: 'lines',
+          x: portfolioSeries.dates, y: priceReturns,
+          name: 'Price Return', mode: 'lines',
           line: { width: 2.5, color: '#7B8CFF' },
           fill: 'tozeroy', fillcolor: 'rgba(123,140,255,0.1)',
-          hovertemplate: '<b>Price G/L</b><br>%{x}<br>$%{y:,.0f}<extra></extra>',
+          hovertemplate: '<b>Price Return</b><br>%{x}<br>%{y:+.2f}%<extra></extra>',
         },
         {
-          x: chartData.dates, y: chartData.total_gl,
-          name: 'Total G/L (+ Divs)', mode: 'lines',
+          x: portfolioSeries.dates, y: totalReturns,
+          name: 'Tracker Total Return', mode: 'lines',
           line: { width: 2.5, color: '#2EFDB5' },
           fill: 'tozeroy', fillcolor: 'rgba(46,253,181,0.08)',
-          hovertemplate: '<b>Total G/L</b><br>%{x}<br>$%{y:,.0f}<extra></extra>',
+          hovertemplate: '<b>Tracker Total Return</b><br>%{x}<br>%{y:+.2f}%<extra></extra>',
         },
       ]
       // Zero line
       traces.push({
-        x: [chartData.dates[0], chartData.dates[chartData.dates.length - 1]],
+        x: [portfolioSeries.dates[0], portfolioSeries.dates[portfolioSeries.dates.length - 1]],
         y: [0, 0], mode: 'lines',
         line: { width: 1, color: '#555', dash: 'dash' },
         showlegend: false, hoverinfo: 'skip',
       })
       const layout = {
-        title: { text: `Portfolio Cumulative G/L \u2014 ${chartData.period_label}`, font: { color: '#e0e8f0' } },
+        title: { text: withChartRange(`Portfolio Return \u2014 ${chartData.period_label}`), font: { color: '#e0e8f0' } },
         template: 'plotly_dark',
         paper_bgcolor: '#1a1f2e', plot_bgcolor: 'rgba(255,255,255,0.03)',
         xaxis: { tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)' },
-        yaxis: { title: { text: 'Gain / Loss ($)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', tickprefix: '$', separatethousands: true },
+        yaxis: { title: { text: 'Return (%)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', ticksuffix: '%', tickformat: ',.2f' },
         height: 450, hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.12, font: { color: '#d0dde8' } },
-        margin: { t: 50, b: 60, l: 80, r: 20 },
+        margin: { t: 70, b: 60, l: 80, r: 20 },
       }
       Plotly.newPlot(timeEl, traces, themedPlotlyLayout(layout, isDark), cfg)
     }
 
-    // Chart 2: Grouped bar - Price G/L vs Total G/L by ticker
+    // Chart 2: selected-period return by ticker, from the same performance rows
+    // rendered on Total Return.
     const barEl = document.getElementById('gl-chart-bar')
-    if (barEl && chartData.ticker_gl?.length) {
+    if (barEl && chartData.performance_rows?.length) {
       ids.push('gl-chart-bar')
-      const sorted = [...chartData.ticker_gl].sort((a, b) => (a.total_gl || 0) - (b.total_gl || 0))
+      const sorted = [...chartData.performance_rows].sort((a, b) => (a.total_return_pct || 0) - (b.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
-      const priceVals = sorted.map(r => r.price_gl || 0)
-      const totalVals = sorted.map(r => r.total_gl || 0)
+      const priceVals = sorted.map(r => Number(Number(r.price_return_pct || 0).toFixed(2)))
+      const totalVals = sorted.map(r => Number(Number(r.total_return_pct || 0).toFixed(2)))
       const barTraces = [
         {
           y: tickers, x: priceVals, type: 'bar', orientation: 'h',
-          name: 'Price G/L', marker: { color: '#7B8CFF' },
-          hovertemplate: '<b>%{y}</b><br>Price G/L: $%{x:,.2f}<extra></extra>',
+          name: 'Price Return', marker: { color: '#7B8CFF' },
+          text: priceVals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+          textposition: 'outside', cliponaxis: false,
+          hovertemplate: '<b>%{y}</b><br>Price Return: %{x:+.2f}%<extra></extra>',
         },
         {
           y: tickers, x: totalVals, type: 'bar', orientation: 'h',
-          name: 'Total G/L (+ Divs)', marker: { color: '#2EFDB5' },
-          hovertemplate: '<b>%{y}</b><br>Total G/L: $%{x:,.2f}<extra></extra>',
+          name: 'Tracker Total Return', marker: { color: '#2EFDB5' },
+          text: totalVals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+          textposition: 'outside', cliponaxis: false,
+          hovertemplate: '<b>%{y}</b><br>Tracker Total Return: %{x:+.2f}%<extra></extra>',
         },
       ]
       const barHeight = Math.max(400, tickers.length * 32 + 80)
       const barLayout = {
-        title: { text: 'Price G/L vs Total G/L by Ticker', font: { color: '#e0e8f0' } },
+        title: { text: withChartRange(`Price Return vs Tracker Total Return by Ticker \u2014 ${chartData.period_label}`), font: { color: '#e0e8f0' } },
         template: 'plotly_dark', barmode: 'group',
         paper_bgcolor: '#1a1f2e', plot_bgcolor: 'rgba(255,255,255,0.03)',
-        xaxis: { title: { text: 'Gain / Loss ($)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', tickprefix: '$', separatethousands: true },
+        xaxis: { title: { text: 'Return (%)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', ticksuffix: '%', tickformat: ',.2f', automargin: true },
         yaxis: { tickfont: { color: '#c0cdd8', size: 11 }, automargin: true },
         height: barHeight,
         legend: { orientation: 'h', y: -0.08, font: { color: '#d0dde8' } },
-        margin: { t: 50, b: 50, l: 80, r: 20 },
+        margin: { t: 70, b: 50, l: 80, r: 20 },
       }
       Plotly.newPlot(barEl, barTraces, themedPlotlyLayout(barLayout, isDark), cfg)
     }
 
-    // Chart 3: Winners vs Losers waterfall
+    // Chart 3: selected-period winners vs losers.
     const watEl = document.getElementById('gl-chart-waterfall')
-    if (watEl && chartData.ticker_gl?.length) {
+    if (watEl && chartData.performance_rows?.length) {
       ids.push('gl-chart-waterfall')
-      const sorted = [...chartData.ticker_gl].sort((a, b) => (b.total_gl || 0) - (a.total_gl || 0))
+      const sorted = [...chartData.performance_rows].sort((a, b) => (b.total_return_pct || 0) - (a.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
-      const vals = sorted.map(r => r.total_gl || 0)
+      const vals = sorted.map(r => Number(Number(r.total_return_pct || 0).toFixed(2)))
       const colors = vals.map(v => v >= 0 ? '#4dff91' : '#ff6b6b')
       const watTraces = [{
         x: tickers, y: vals, type: 'bar',
         marker: { color: colors },
-        hovertemplate: '<b>%{x}</b><br>Total G/L: $%{y:,.2f}<extra></extra>',
+        text: vals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+        textposition: 'outside', cliponaxis: false,
+        hovertemplate: '<b>%{x}</b><br>Tracker Total Return: %{y:+.2f}%<extra></extra>',
         showlegend: false,
       }]
       const watLayout = {
-        title: { text: 'Winners vs Losers \u2014 Total G/L by Ticker', font: { color: '#e0e8f0' } },
+        title: { text: withChartRange(`Winners vs Losers \u2014 Tracker Total Return (${chartData.period_label})`), font: { color: '#e0e8f0' } },
         template: 'plotly_dark',
         paper_bgcolor: '#1a1f2e', plot_bgcolor: 'rgba(255,255,255,0.03)',
         xaxis: { tickfont: { color: '#c0cdd8', size: 10 }, tickangle: -45 },
-        yaxis: { title: { text: 'Total G/L ($)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', tickprefix: '$', separatethousands: true },
+        yaxis: { title: { text: 'Total Return (%)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', ticksuffix: '%', tickformat: ',.2f', automargin: true },
         height: 400,
-        margin: { t: 50, b: 100, l: 80, r: 20 },
+        margin: { t: 70, b: 100, l: 80, r: 20 },
       }
       Plotly.newPlot(watEl, watTraces, themedPlotlyLayout(watLayout, isDark), cfg)
     }
 
     // Chart 4: Realized gains timeline
     const realEl = document.getElementById('gl-chart-realized')
-    if (realEl && chartData.realized_events?.length) {
+    if (realEl && chartData.realized_rows?.length) {
       ids.push('gl-chart-realized')
-      const events = chartData.realized_events
+      const events = chartData.realized_rows
       const realTraces = [{
-        x: events.map(e => e.date),
-        y: events.map(e => e.total_gl),
+        x: events.map(e => e.sell_date),
+        y: events.map(e => e.total_return_dollar),
         text: events.map(e => e.ticker),
         type: 'bar',
-        marker: { color: events.map(e => e.total_gl >= 0 ? '#4dff91' : '#ff6b6b') },
+        marker: { color: events.map(e => e.total_return_dollar >= 0 ? '#4dff91' : '#ff6b6b') },
         hovertemplate: '<b>%{text}</b><br>%{x}<br>Total G/L: $%{y:,.2f}<extra></extra>',
         showlegend: false,
       }]
       const realLayout = {
-        title: { text: 'Realized Gains Timeline', font: { color: '#e0e8f0' } },
+        title: { text: withChartRange(`Realized Gains Timeline \u2014 sales inside ${chartData.period_label}`), font: { color: '#e0e8f0' } },
         template: 'plotly_dark',
         paper_bgcolor: '#1a1f2e', plot_bgcolor: 'rgba(255,255,255,0.03)',
         xaxis: { title: { text: 'Sell Date', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)' },
         yaxis: { title: { text: 'Total G/L ($)', font: { color: '#d0dde8' } }, tickfont: { color: '#c0cdd8' }, gridcolor: 'rgba(255,255,255,0.08)', tickprefix: '$', separatethousands: true },
         height: 380,
-        margin: { t: 50, b: 60, l: 80, r: 20 },
+        margin: { t: 70, b: 60, l: 80, r: 20 },
       }
       Plotly.newPlot(realEl, realTraces, themedPlotlyLayout(realLayout, isDark), cfg)
     }
@@ -266,6 +329,37 @@ export default function GainsLosses() {
   })
 
   const t = data?.totals || {}
+  const periodMetrics = chartData?.portfolio_metrics || {}
+  const performanceRange = formatPerformanceRange(
+    chartData?.actual_start_date || chartData?.requested_start_date,
+    chartData?.actual_end_date || chartData?.requested_end_date,
+  )
+  const performanceByTicker = useMemo(() => new Map(
+    (chartData?.performance_rows || []).map(row => [
+      String(row.ticker || '').trim().toUpperCase(),
+      row,
+    ]),
+  ), [chartData])
+  const extremePerformanceRows = useMemo(() => {
+    const lifetimeByTicker = new Map(
+      (data?.unrealized || []).map(row => [
+        String(row.ticker || '').trim().toUpperCase(),
+        row,
+      ]),
+    )
+    return (chartData?.performance_rows || [])
+      .filter(row => Math.abs(Number(row.total_return_pct || 0)) >= 500)
+      .map(row => ({
+        ...row,
+        lifetime_gl_pct: lifetimeByTicker.get(
+          String(row.ticker || '').trim().toUpperCase(),
+        )?.total_gl_pct,
+      }))
+      .sort((left, right) => (
+        Math.abs(Number(right.total_return_pct || 0))
+        - Math.abs(Number(left.total_return_pct || 0))
+      ))
+  }, [chartData, data])
 
   const unrealizedCols = [
     { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
@@ -278,8 +372,10 @@ export default function GainsLosses() {
     { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (current value \u2212 invested)', fmt, gl: true },
     { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
     { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
-    { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
-    { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
+    { key: 'total_gl', label: 'Lifetime Total G/L', tip: 'Lifetime cost-basis gain or loss including all recorded dividends (price G/L + dividends received)', fmt, gl: true },
+    { key: 'total_gl_pct', label: 'Lifetime G/L %', tip: 'Lifetime total gain/loss as a percentage of amount invested; this accounting figure is not controlled by the performance date range', fmt: fmtPct, gl: true },
+    { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; this is the figure that matches Total Return', fmt: fmtPct, gl: true },
+    { key: 'period_range', label: 'Effective Range', tip: 'Actual market-observation dates used for this holding' },
     { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield on cost — Good means total return exceeds yield, Poor means yield exceeds total return', rvy: true },
   ]
 
@@ -316,11 +412,23 @@ export default function GainsLosses() {
   const enrichedUnrealized = useMemo(() => {
     if (!data?.unrealized) return []
     return data.unrealized.map(r => {
+      const performance = performanceByTicker.get(String(r.ticker || '').trim().toUpperCase())
       const yld = rvyMode === 'yoc' ? (r.annual_yield_on_cost || 0) * 100 : (r.current_annual_yield || 0) * 100
-      const rvy = r.total_gl_pct != null ? returnVsYield(r.total_gl_pct, yld) : null
-      return { ...r, ret_vs_yld: rvy, ret_vs_yld_sort: rvy ? rvy.spread : -999 }
+      const comparableReturn = performance?.total_return_pct
+      const rvy = comparableReturn != null ? returnVsYield(comparableReturn, yld) : null
+      return {
+        ...r,
+        period_total_return_pct: comparableReturn,
+        period_total_return_dollar: performance?.total_return_dollar,
+        period_range: formatPerformanceRange(
+          performance?.actual_start_date,
+          performance?.actual_end_date,
+        ),
+        ret_vs_yld: rvy,
+        ret_vs_yld_sort: rvy ? rvy.spread : -999,
+      }
     })
-  }, [data, rvyMode])
+  }, [data, performanceByTicker, rvyMode])
 
   // One realized row per ticker. A ticker sold in many fills (weekly assignments,
   // DRIP lots) otherwise floods the tab with hundreds of near-identical rows, so
@@ -496,6 +604,10 @@ export default function GainsLosses() {
                 <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_divs)}</strong></td>
                 <td style={{ textAlign: 'right', color: glColor(t.unrealized_total_gl) }}><strong>{fmt(t.unrealized_total_gl)}</strong></td>
                 <td></td>
+                <td style={{ textAlign: 'right', color: glColor(periodMetrics.total_return_pct) }}>
+                  <strong>{fmtPct(periodMetrics.total_return_pct)}</strong>
+                </td>
+                <td>{performanceRange}</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -523,9 +635,9 @@ export default function GainsLosses() {
     <div className="page dashboard">
       <h1 style={{ marginBottom: '0.5rem' }}>Gains & Losses</h1>
 
-      {/* Category filter */}
-      {(data?.categories?.length > 0) && (
-        <div className="growth-filters" style={{ marginBottom: '1rem' }}>
+      {/* Page-wide holdings and performance filters */}
+      <div className="growth-filters" style={{ marginBottom: '1rem' }}>
+        {(data?.categories?.length > 0) && (
           <div className="growth-filter-group" style={{ position: 'relative' }} ref={catRef}>
             <label>Categories</label>
             <button className="btn btn-secondary" style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
@@ -580,14 +692,96 @@ export default function GainsLosses() {
               </div>
             )}
           </div>
+        )}
+
+        <div className="growth-filter-group">
+          <label>Shared Performance Date Range</label>
+          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+            {PERFORMANCE_PERIODS.map(option => (
+              <button
+                type="button"
+                key={option.key}
+                className={`tr-pbtn${period === option.key ? ' tr-pbtn-active' : ''}`}
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                title={option.hint}
+                onClick={() => setPeriod(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
         </div>
+
+        {period === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom gains and losses performance date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={customStart}
+                min={MIN_PERFORMANCE_DATE}
+                max={customEnd || todayInputValue()}
+                onChange={event => setCustomStart(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={customEnd}
+                min={customStart || MIN_PERFORMANCE_DATE}
+                max={todayInputValue()}
+                onChange={event => setCustomEnd(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+
+      {rangeError && <div className="alert alert-error">{rangeError}</div>}
+
+      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading shared-period performance...</div>}
+      {chartError && <div className="alert alert-error">{chartError}</div>}
+      {chartData && !chartLoading && (
+        <>
+          <p className="tr-note">
+            <strong>{chartData.period_label} performance:</strong>{' '}
+            {performanceRange || 'effective dates unavailable'}. The figures below come from the same
+            transaction-aware calculation as Total Return; purchases and sales change portfolio weights
+            without being counted as returns.
+            {formatAccountingCoverage(periodMetrics)
+              ? ` ${formatAccountingCoverage(periodMetrics)}`
+              : ''}
+          </p>
+          <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+            <strong>Reconciliation figure:</strong> <strong>Tracker Total Return %</strong> is the value
+            that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2
+            when the account, holdings filter, and shared date range match. Lifetime G/L below answers
+            a different cost-basis accounting question.
+          </div>
+          <div className="summary-strip" style={{ marginBottom: '1.25rem' }}>
+            <MetricCard label="Start Value" value={fmtInt(periodMetrics.start_value)} range={performanceRange} />
+            <MetricCard label="End Value" value={fmtInt(periodMetrics.end_value)} range={performanceRange} />
+            <MetricCard label="Price Return" value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>} range={performanceRange} />
+            <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange} />
+            <MetricCard label="Total Return" value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>} range={performanceRange} />
+            <MetricCard label="Tracker Total Return %" value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>} range={performanceRange} />
+          </div>
+        </>
       )}
 
-      {/* Summary cards */}
+      {/* Lifetime cost-basis accounting */}
       {loading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
       {error && <div className="alert alert-error">{error}</div>}
       {data && !loading && (
         <>
+          <h2 style={{ marginBottom: '0.25rem' }}>Lifetime Cost-Basis G/L</h2>
+          <p className="tr-note">
+            These invested, current-value, realized, and combined figures are lifetime accounting totals.
+            They are intentionally not changed by the performance date range; use Tracker TR % above and
+            in the Unrealized table for a period-to-period return comparison.
+          </p>
           <div className="summary-strip" style={{ marginBottom: '0.5rem' }}>
             <MetricCard label="Total Invested" value={fmtInt(t.unrealized_invested)} />
             <MetricCard label="Current Value" value={fmtInt(t.unrealized_value)} />
@@ -637,35 +831,36 @@ export default function GainsLosses() {
       )}
 
       {/* Charts section */}
-      <h2 style={{ marginTop: '2rem', marginBottom: '0.5rem' }}>Charts</h2>
+      <h2 style={{ marginTop: '2rem', marginBottom: '0.25rem' }}>Selected-Period Performance Charts</h2>
+      <p className="tr-note">
+        These charts use the Shared Performance Date Range above and the same transaction-aware
+        return series as Total Return. The realized timeline includes only sales inside that range.
+      </p>
+      {extremePerformanceRows.length > 0 && (
+        <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+          <strong>Percentage outlier:</strong>{' '}
+          {extremePerformanceRows.map((row, index) => (
+            <React.Fragment key={row.ticker}>
+              {index > 0 ? '; ' : ''}
+              <strong>{row.ticker}</strong> {fmtPct(row.total_return_pct)} for {chartData?.period_label}
+              {' '}({fmt(row.total_return_dollar)} in period return
+              {row.lifetime_gl_pct != null ? `; ${fmtPct(row.lifetime_gl_pct)} lifetime cost-basis G/L` : ''})
+            </React.Fragment>
+          ))}.
+          {' '}A sub-cent security can move hundreds or thousands of percent from a tiny starting quote
+          while remaining an almost-total lifetime loss. This period percentage does not mean the investment
+          recovered; verify the effective dates and market quotes if the move looks stale or erroneous.
+        </div>
+      )}
 
-      {/* Period selector */}
-      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        {[
-          { key: '3mo', label: '3M' }, { key: '6mo', label: '6M' },
-          { key: '1y', label: '1Y' }, { key: '2y', label: '2Y' },
-          { key: '3y', label: '3Y' }, { key: '5y', label: '5Y' },
-        ].map(p => (
-          <button key={p.key}
-            className={`tr-pbtn${chartPeriod === p.key ? ' tr-pbtn-active' : ''}`}
-            style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-            onClick={() => setChartPeriod(p.key)}>
-            {p.label}
-          </button>
-        ))}
-      </div>
-
-      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Fetching data from Yahoo Finance...</div>}
-      {chartError && <div className="alert alert-error">{chartError}</div>}
-
-      <div id="gl-chart-time" style={{ minHeight: chartData?.dates ? '450px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-bar" style={{ minHeight: chartData?.ticker_gl?.length ? '400px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-waterfall" style={{ minHeight: chartData?.ticker_gl?.length ? '400px' : '0', marginBottom: '2rem' }} />
-      {chartData?.realized_events?.length > 0 && (
+      <div id="gl-chart-time" style={{ minHeight: chartData?.portfolio_series?.dates?.length ? '450px' : '0', marginBottom: '2rem' }} />
+      <div id="gl-chart-bar" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      <div id="gl-chart-waterfall" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      {chartData?.realized_rows?.length > 0 && (
         <div id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
       )}
-      {chartData && !chartLoading && !chartData.realized_events?.length && (
-        <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales to chart. Record sales in the Watchlist page.</p>
+      {chartData && !chartLoading && !chartData.realized_rows?.length && (
+        <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales occurred inside the selected performance range.</p>
       )}
     </div>
   )

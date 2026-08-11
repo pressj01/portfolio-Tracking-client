@@ -3,10 +3,16 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import {
+  MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
   addCustomRangeParams,
+  customRangeError,
+  formatAccountingCoverage,
+  formatPerformanceChartRange,
   formatPerformanceRange,
   readSharedPerformanceRange,
+  todayInputValue,
   writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
@@ -17,12 +23,13 @@ function GradeBadge({ grade, large }) {
   return <span className={`grade-badge ${cls} ${large ? 'grade-lg' : ''}`}>{grade}</span>
 }
 
-function MetricCard({ label, value, sub }) {
+function MetricCard({ label, value, sub, range }) {
   return (
     <div className="summary-card">
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '—'}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+      {range && <div className="summary-sub">Range: {range}</div>}
     </div>
   )
 }
@@ -45,7 +52,7 @@ function lastIndexReturn(series) {
 
 // Portfolio return large, benchmark comparison on the sub-line, so neither
 // number needs a trip to the chart.
-function ReturnCard({ label, value, benchLabel, benchValue }) {
+function ReturnCard({ label, value, benchLabel, benchValue, range }) {
   const diff = value != null && benchValue != null ? value - benchValue : null
   return (
     <div className="summary-card">
@@ -58,6 +65,7 @@ function ReturnCard({ label, value, benchLabel, benchValue }) {
           ? <>{benchLabel} {fmtPct(benchValue)} &middot; <span style={{ color: (diff ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtSignedPct(diff)} vs {benchLabel}</span></>
           : `No ${benchLabel} data for this range`}
       </div>
+      {range && <div className="summary-sub">Range: {range}</div>}
     </div>
   )
 }
@@ -90,13 +98,16 @@ export default function Growth() {
     writeSharedPerformanceRange(period, customStart, customEnd)
   }, [period, customStart, customEnd])
 
+  const rangeError = customRangeError(period, customStart, customEnd)
+  const cardRange = data
+    ? formatPerformanceRange(data.actual_start_date, data.actual_end_date)
+    : ''
+
   useEffect(() => {
-    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+    if (rangeError) {
       setData(null)
       setLoading(false)
-      setError(!customStart || !customEnd
-        ? 'Choose both a custom start date and end date.'
-        : 'Custom start date must be on or before the end date.')
+      setError(rangeError)
       return undefined
     }
     const controller = new AbortController()
@@ -134,12 +145,19 @@ export default function Growth() {
       active = false
       controller.abort()
     }
-  }, [period, customStart, customEnd, benchmark, categories, subcategories, selection, pf])
+  }, [period, customStart, customEnd, rangeError, benchmark, categories, subcategories, selection, pf])
 
   useEffect(() => {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
+    const chartRange = formatPerformanceChartRange(
+      data.requested_start_date,
+      data.requested_end_date,
+      data.actual_start_date,
+      data.actual_end_date,
+    )
+    const withChartRange = title => chartRange ? `${title}<br><sup>${chartRange}</sup>` : title
     const layoutBase = {
       template: ct.template,
       paper_bgcolor: ct.paper,
@@ -170,8 +188,8 @@ export default function Growth() {
       }
       Plotly.newPlot(priceEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Transaction-Aware Price Return Index', font: { size: 14, color: ct.title } },
-        margin: { l: 50, r: 20, t: 50, b: 40 },
+        title: { text: withChartRange('Transaction-Aware Price Return Index'), font: { size: 14, color: ct.title } },
+        margin: { l: 50, r: 20, t: 70, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
@@ -191,8 +209,8 @@ export default function Growth() {
       }
       Plotly.newPlot(totalEl, traces, {
         ...layoutBase, height: 380,
-        title: { text: 'Transaction-Aware Total Return Index (Dividends Reinvested)', font: { size: 14, color: ct.title } },
-        margin: { l: 50, r: 20, t: 50, b: 40 },
+        title: { text: withChartRange('Transaction-Aware Total Return Index (Dividends Reinvested)'), font: { size: 14, color: ct.title } },
+        margin: { l: 50, r: 20, t: 70, b: 40 },
         hovermode: 'x unified',
         legend: { orientation: 'h', y: -0.15, xanchor: 'center', x: 0.5, font: { size: 11 } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
@@ -218,11 +236,11 @@ export default function Growth() {
       }]
       Plotly.newPlot(barEl, traces, {
         ...layoutBase,
-        title: { text: `Performance by Ticker — ${data.period_label}`, font: { size: 14, color: ct.title } },
+        title: { text: withChartRange(`Performance by Ticker — ${data.period_label}`), font: { size: 14, color: ct.title } },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, title: 'Return %', ticksuffix: '%' },
         yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
         legend: { orientation: 'h', y: -0.08, xanchor: 'center', x: 0.5, font: { size: 11 } },
-        margin: { l: 80, r: 20, t: 50, b: 60 },
+        margin: { l: 80, r: 20, t: 70, b: 60 },
         height: Math.max(400, tickers.length * 30 + 120),
       }, { responsive: true })
     }
@@ -243,10 +261,10 @@ export default function Growth() {
         colorbar: { title: '%', ticksuffix: '%' },
       }], {
         ...layoutBase, showlegend: false,
-        title: { text: 'Performance Heatmap', font: { size: 14, color: ct.title } },
+        title: { text: withChartRange('Performance Heatmap'), font: { size: 14, color: ct.title } },
         yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
         xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
-        margin: { l: 80, r: 20, t: 50, b: 40 },
+        margin: { l: 80, r: 20, t: 70, b: 40 },
         height: Math.max(400, data.heatmap.tickers.length * 28 + 100),
       }, { responsive: true })
     }
@@ -367,11 +385,13 @@ export default function Growth() {
                 className={`tab${period === option.key ? ' active' : ''}`}
                 onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
+                title={option.hint}
               >
                 {option.label}
               </button>
             ))}
           </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom date range">
@@ -380,7 +400,8 @@ export default function Growth() {
               <input
                 type="date"
                 value={customStart}
-                max={customEnd || initialCustomDates.end}
+                min={MIN_PERFORMANCE_DATE}
+                max={customEnd || todayInputValue()}
                 onChange={e => setCustomStart(e.target.value)}
               />
             </label>
@@ -389,8 +410,8 @@ export default function Growth() {
               <input
                 type="date"
                 value={customEnd}
-                min={customStart || undefined}
-                max={initialCustomDates.end}
+                min={customStart || MIN_PERFORMANCE_DATE}
+                max={todayInputValue()}
                 onChange={e => setCustomEnd(e.target.value)}
               />
             </label>
@@ -410,6 +431,9 @@ export default function Growth() {
               ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
               : ''}
             . The period and category filters apply to every metric and chart below.
+            {formatAccountingCoverage(data.portfolio_metrics)
+              ? ` ${formatAccountingCoverage(data.portfolio_metrics)}`
+              : ''}
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
@@ -418,7 +442,7 @@ export default function Growth() {
             Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong>. Buys and sells
             change portfolio weights; they are not counted as gains or losses. The index starts at 100,
             so its final value minus 100 is the displayed return percentage.
-            {' '}The selected range is remembered across all four tracking screens.
+            {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
           </div>
           {/* Metrics strip */}
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
@@ -428,27 +452,28 @@ export default function Growth() {
                 {data.grade?.overall ? <GradeBadge grade={data.grade.overall} large /> : '—'}
               </div>
               {data.grade?.score != null && (
-                <div className="summary-sub">
-                  Score: {data.grade.score} | {formatPerformanceRange(data.actual_start_date, data.actual_end_date)}
-                </div>
+                <div className="summary-sub">Score: {data.grade.score}</div>
               )}
+              {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
             <ReturnCard
               label="Tracker Total Return %"
               value={data.portfolio_metrics?.total_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}
+              range={cardRange}
             />
             <ReturnCard
               label="Price Return %"
               value={data.portfolio_metrics?.price_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_price)}
+              range={cardRange}
             />
-            <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} />
-            <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} />
-            <MetricCard label={`${data.benchmark_ticker} Sharpe`} value={data.benchmark_metrics?.sharpe} />
-            <MetricCard label={`${data.benchmark_ticker} Sortino`} value={data.benchmark_metrics?.sortino} />
+            <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} range={cardRange} />
+            <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} range={cardRange} />
+            <MetricCard label={`${data.benchmark_ticker} Sharpe`} value={data.benchmark_metrics?.sharpe} range={cardRange} />
+            <MetricCard label={`${data.benchmark_ticker} Sortino`} value={data.benchmark_metrics?.sortino} range={cardRange} />
           </div>
 
           {/* Each chart in its own block-level container */}

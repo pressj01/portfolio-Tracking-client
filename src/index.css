@@ -1810,6 +1810,9 @@ label {
 
 /* Total Return */
 .tr-note { color: var(--text-dim); font-size: 0.88rem; margin: 0.25rem 0 1rem; }
+/* Sits inside a flex filter row, so it needs a ceiling or one long sentence
+   stretches the whole row and pushes the later filters off-screen. */
+.perf-range-note { max-width: 46rem; margin: 0.4rem 0 0; line-height: 1.45; }
 .tr-period-bar {
   display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;

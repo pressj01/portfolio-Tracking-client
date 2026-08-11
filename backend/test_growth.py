@@ -62,6 +62,7 @@ class GrowthApiTest(unittest.TestCase):
             "Adj Close": adjusted,
             "Dividends": zeros,
         }, axis=1)
+        self.download_tickers = None
         self.download_kwargs = None
 
         self.orig_connection = app_module.get_connection
@@ -87,6 +88,7 @@ class GrowthApiTest(unittest.TestCase):
         return conn
 
     def _download(self, tickers, **kwargs):
+        self.download_tickers = tickers
         self.download_kwargs = kwargs
         return self.market_data.copy()
 
@@ -115,6 +117,53 @@ class GrowthApiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("both", response.get_json()["error"].lower())
+
+    def test_tracker_return_includes_fully_sold_historical_ticker(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany(
+            """INSERT INTO transactions
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                (2, "SOLD", 6, "BUY", "2023-01-02", 1, 100, 0),
+                (3, "SOLD", 6, "SELL", "2023-01-03", 1, 50, 0),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        dates = pd.to_datetime([
+            "2023-01-02", "2023-01-03", "2024-01-02", "2024-12-31",
+        ])
+        close = pd.DataFrame(
+            {
+                "AAA": [None, None, 10.0, 12.0],
+                "SOLD": [100.0, 50.0, 50.0, 50.0],
+                "SPY": [90.0, 91.0, 100.0, 110.0],
+            },
+            index=dates,
+        )
+        adjusted = close.copy()
+        adjusted.loc[pd.Timestamp("2024-12-31"), "AAA"] = 14.0
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        self.market_data = pd.concat({
+            "Close": close,
+            "Adj Close": adjusted,
+            "Dividends": zeros,
+        }, axis=1)
+
+        response = self.client.get(
+            "/api/growth/data?profile_id=6&period=all&benchmark=SPY"
+        )
+        data = response.get_json()
+
+        self.assertEqual(response.status_code, 200, data)
+        self.assertIn("SOLD", self.download_tickers)
+        self.assertEqual(data["actual_start_date"], "2023-01-02")
+        self.assertEqual(data["portfolio_metrics"]["total_return_pct"], -30.0)
+        self.assertEqual(
+            [row["ticker"] for row in data["ticker_returns"]],
+            ["AAA"],
+        )
 
 
 if __name__ == "__main__":

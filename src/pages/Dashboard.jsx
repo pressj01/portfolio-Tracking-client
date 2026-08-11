@@ -9,10 +9,16 @@ import { returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import {
+  MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
   addCustomRangeParams,
+  customRangeError,
+  formatAccountingCoverage,
+  formatPerformanceChartRange,
   formatPerformanceRange,
   readSharedPerformanceRange,
+  todayInputValue,
   writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
 
@@ -807,16 +813,17 @@ function TickerModal({
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const rangeError = customRangeError(period, customStart, customEnd)
+
   useEffect(() => {
-    if (!ticker) return
-    if (period === 'custom' && (!customStart || !customEnd || customStart > customEnd)) {
+    if (!ticker) return undefined
+    if (rangeError) {
       setData(null)
       setLoading(false)
-      setError(!customStart || !customEnd
-        ? 'Choose both a custom start date and end date.'
-        : 'Custom start date must be on or before the end date.')
-      return
+      setError(rangeError)
+      return undefined
     }
+    let active = true
     setLoading(true)
     setError(null)
     setData(null)
@@ -829,13 +836,15 @@ function TickerModal({
         return payload
       })
       .then(d => {
+        if (!active) return
         if (!d) throw new Error(`Could not load return data for ${ticker}`)
         if (d.error) throw new Error(d.error)
         setData(d)
       })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [ticker, pf, selection, period, customStart, customEnd])
+      .catch(e => { if (active) setError(e.message) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [ticker, pf, selection, period, customStart, customEnd, rangeError])
 
   useEffect(() => {
     const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
@@ -874,16 +883,22 @@ function TickerModal({
           },
         ]
     const ct = chartTheme(isDark)
+    const chartRange = formatPerformanceChartRange(
+      data.requested_start_date,
+      data.requested_end_date,
+      data.effective_start_date || data.dates?.[0],
+      data.effective_end_date || data.dates?.[data.dates.length - 1],
+    )
     const layout = {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
-      title: { text: `${data.ticker} — ${hasTotalReturn ? `${data.period_label || 'Selected Period'} Return` : 'Recent Price History'}`, font: { size: 16, color: ct.title } },
+      title: { text: `${data.ticker} — ${hasTotalReturn ? `${data.period_label || 'Selected Period'} Return` : 'Recent Price History'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`, font: { size: 16, color: ct.title } },
       xaxis: { title: '', gridcolor: ct.grid },
       yaxis: hasTotalReturn
         ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
         : { title: 'Price', gridcolor: ct.grid, tickprefix: '$' },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
-      margin: { l: 50, r: 20, t: 60, b: 40 },
+      margin: { l: 50, r: 20, t: 80, b: 40 },
       hovermode: 'x unified',
       shapes: hasTotalReturn
         ? [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }]
@@ -934,12 +949,14 @@ function TickerModal({
                 key={option.key}
                 className={`tr-pbtn${period === option.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                title={option.hint}
                 onClick={() => onPeriodChange(option.key)}
               >
                 {option.label}
               </button>
             ))}
           </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom holding return date range" style={{ marginBottom: '0.75rem' }}>
@@ -948,6 +965,7 @@ function TickerModal({
               <input
                 type="date"
                 value={customStart}
+                min={MIN_PERFORMANCE_DATE}
                 max={customEnd || maxDate}
                 onChange={event => onCustomStartChange(event.target.value)}
               />
@@ -957,7 +975,7 @@ function TickerModal({
               <input
                 type="date"
                 value={customEnd}
-                min={customStart || undefined}
+                min={customStart || MIN_PERFORMANCE_DATE}
                 max={maxDate}
                 onChange={event => onCustomEndChange(event.target.value)}
               />
@@ -1021,6 +1039,9 @@ export default function Dashboard() {
   const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
   const [gradeCustomEnd, setGradeCustomEnd] = useState(initialGradeCustomDates.end)
   const [gradeRefreshToken, setGradeRefreshToken] = useState(0)
+  const [trackerPerformance, setTrackerPerformance] = useState(null)
+  const [trackerPerformanceLoading, setTrackerPerformanceLoading] = useState(false)
+  const [trackerPerformanceError, setTrackerPerformanceError] = useState(null)
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [upcomingDivs, setUpcomingDivs] = useState([])
   const [incomeSummary, setIncomeSummary] = useState(null)
@@ -1075,6 +1096,45 @@ export default function Dashboard() {
   useEffect(() => {
     writeSharedPerformanceRange(gradePeriod, gradeCustomStart, gradeCustomEnd)
   }, [gradePeriod, gradeCustomStart, gradeCustomEnd])
+
+  const gradeRangeError = customRangeError(gradePeriod, gradeCustomStart, gradeCustomEnd)
+
+  useEffect(() => {
+    if (!holdings.length) return undefined
+    if (gradeRangeError) {
+      setTrackerPerformance(null)
+      setTrackerPerformanceLoading(false)
+      setTrackerPerformanceError(null)
+      return undefined
+    }
+    const controller = new AbortController()
+    let active = true
+    const params = new URLSearchParams({ period: gradePeriod })
+    addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
+    setTrackerPerformance(null)
+    setTrackerPerformanceLoading(true)
+    setTrackerPerformanceError(null)
+    pf(`/api/total-return/charts?${params}`, { signal: controller.signal })
+      .then(safeJson)
+      .then(result => { if (active) setTrackerPerformance(result) })
+      .catch(error => {
+        if (active && error.name !== 'AbortError') setTrackerPerformanceError(error.message)
+      })
+      .finally(() => { if (active) setTrackerPerformanceLoading(false) })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [
+    gradePeriod,
+    gradeCustomStart,
+    gradeCustomEnd,
+    gradeRangeError,
+    gradeRefreshToken,
+    holdings.length,
+    selection,
+    pf,
+  ])
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -1332,14 +1392,8 @@ export default function Dashboard() {
     // periods, so a slow response can never land on top of a newer selection.
     // It re-fetches without reloading any unrelated Dashboard data source.
     if (!hasHoldings) return undefined
-    if (gradePeriod === 'custom' && (
-      !gradeCustomStart
-      || !gradeCustomEnd
-      || gradeCustomStart > gradeCustomEnd
-    )) {
-      setGradeStatus(!gradeCustomStart || !gradeCustomEnd
-        ? 'Choose both grade dates.'
-        : 'Grade start date must be on or before the end date.')
+    if (gradeRangeError) {
+      setGradeStatus(gradeRangeError)
       return undefined
     }
 
@@ -1389,6 +1443,7 @@ export default function Dashboard() {
     gradePeriod,
     gradeCustomStart,
     gradeCustomEnd,
+    gradeRangeError,
     gradeRefreshToken,
     hasHoldings,
     selection,
@@ -1524,11 +1579,25 @@ export default function Dashboard() {
     return { beta: betaNumber, betaAdjustedExposure }
   }, [portfolioGrade, betaBenchmark, totals.currentValue])
 
+  const trackerPortfolioMetrics = trackerPerformance?.portfolio_metrics || {}
+  const trackerPerformanceRange = formatPerformanceRange(
+    trackerPerformance?.actual_start_date || trackerPerformance?.requested_start_date,
+    trackerPerformance?.actual_end_date || trackerPerformance?.requested_end_date,
+  )
+  const trackerAccountingCoverage = formatAccountingCoverage(trackerPortfolioMetrics)
+  const trackerPerformanceByTicker = useMemo(() => new Map(
+    (trackerPerformance?.performance_rows || []).map(row => [
+      String(row.ticker || '').trim().toUpperCase(),
+      row,
+    ]),
+  ), [trackerPerformance])
+
   // Enrich holdings with computed fields
   const enrichedHoldings = useMemo(() => {
     return holdings
       .filter(h => h.quantity > 0)
       .map(h => {
+        const trackerRow = trackerPerformanceByTicker.get(String(h.ticker || '').trim().toUpperCase())
         const pv = h.purchase_value || 0
         const gl = h.gain_or_loss || 0
         const td = h.total_divs_received || 0
@@ -1547,12 +1616,21 @@ export default function Dashboard() {
         // match its price return even though nothing else changed.
         const totalReturnRealized = h.total_return_realized_component || 0
         const totalReturn = totalReturnBasis ? ((gl + totalReturnDivs + totalReturnRealized) / totalReturnBasis) : 0
+        const periodPriceReturn = trackerRow?.price_return_pct
+        const periodTotalReturn = trackerRow?.total_return_pct
         const rvyYield = rvyMode === 'yoc' ? h.annual_yield_on_cost : h.current_annual_yield
-        const rvy = returnVsYield(totalReturn * 100, (rvyYield || 0) * 100)
+        const rvy = periodTotalReturn != null
+          ? returnVsYield(periodTotalReturn, (rvyYield || 0) * 100)
+          : null
         return {
           ...h,
-          price_return_pct: priceReturn,
-          total_return_pct: totalReturn,
+          lifetime_price_return_pct: priceReturn,
+          lifetime_total_return_pct: totalReturn,
+          price_return_pct: periodPriceReturn != null ? periodPriceReturn / 100 : null,
+          total_return_pct: periodTotalReturn != null ? periodTotalReturn / 100 : null,
+          tracker_start_value: trackerRow?.start_value,
+          tracker_actual_start_date: trackerRow?.actual_start_date,
+          tracker_actual_end_date: trackerRow?.actual_end_date,
           pct_of_account: totalCv ? (cv / totalCv) : 0,
           drip_shares_monthly: sharesFromDrip(h.approx_monthly_income, h),
           drip_shares_yearly: sharesFromDrip(h.estim_payment_per_year, h),
@@ -1572,7 +1650,7 @@ export default function Dashboard() {
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, tickerClosureRisk, rvyMode])
+  }, [holdings, totals, trackerPerformanceByTicker, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, tickerClosureRisk, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
   const dailyChangeAmount = Number(dailyChange?.amount)
@@ -1688,11 +1766,22 @@ export default function Dashboard() {
     const gainLoss = sum('gain_or_loss')
     const lifetimeIncome = sum('total_divs_received')
     const annualIncome = sum('estim_payment_per_year')
-    const totalReturnBasis = rows.reduce((total, holding) => total + (Number(holding.total_return_basis || holding.purchase_value) || 0), 0)
-    const totalReturnValue = rows.reduce((total, holding) => total
-      + (Number(holding.gain_or_loss) || 0)
-      + (Number(holding.total_return_divs_component ?? holding.total_divs_received) || 0)
-      + (Number(holding.total_return_realized_component) || 0), 0)
+    const trackerRows = rows.filter(holding => (
+      Number.isFinite(Number(holding.tracker_start_value))
+      && Number(holding.tracker_start_value) > 0
+    ))
+    const trackerBasis = trackerRows.reduce(
+      (total, holding) => total + Number(holding.tracker_start_value || 0),
+      0,
+    )
+    const trackerPriceReturn = trackerBasis
+      ? trackerRows.reduce((total, holding) => total
+        + Number(holding.price_return_pct || 0) * Number(holding.tracker_start_value || 0), 0) / trackerBasis
+      : null
+    const trackerTotalReturn = trackerBasis
+      ? trackerRows.reduce((total, holding) => total
+        + Number(holding.total_return_pct || 0) * Number(holding.tracker_start_value || 0), 0) / trackerBasis
+      : null
     const yieldRows = rows.filter(holding => Number(holding.purchase_value) > 0 && holding.annual_yield_on_cost != null)
     const yieldBasis = yieldRows.reduce((total, holding) => total + Number(holding.purchase_value || 0), 0)
     const avgYoc = yieldBasis
@@ -1700,8 +1789,8 @@ export default function Dashboard() {
       : 0
 
     return {
-      priceReturn: purchaseValue ? gainLoss / purchaseValue : 0,
-      totalReturn: totalReturnBasis ? totalReturnValue / totalReturnBasis : 0,
+      priceReturn: trackerPriceReturn,
+      totalReturn: trackerTotalReturn,
       currentYield: currentValue ? annualIncome / currentValue : 0,
       avgYoc,
       ytdDivs: sum('ytd_divs'),
@@ -1728,7 +1817,19 @@ export default function Dashboard() {
     }
   }, [filteredEnrichedHoldings])
   const isHoldingsFiltered = overviewCategoryId != null
-  const tableTotals = isHoldingsFiltered ? calculatedTableTotals : totals
+  const fullTrackerPriceReturn = trackerPortfolioMetrics.price_return_pct == null
+    ? null
+    : Number(trackerPortfolioMetrics.price_return_pct) / 100
+  const fullTrackerTotalReturn = trackerPortfolioMetrics.total_return_pct == null
+    ? null
+    : Number(trackerPortfolioMetrics.total_return_pct) / 100
+  const tableTotals = isHoldingsFiltered
+    ? calculatedTableTotals
+    : {
+        ...totals,
+        priceReturn: fullTrackerPriceReturn,
+        totalReturn: fullTrackerTotalReturn,
+      }
   const tablePctOfAccount = useMemo(
     () => filteredEnrichedHoldings.reduce((total, holding) => total + (Number(holding.pct_of_account) || 0), 0),
     [filteredEnrichedHoldings],
@@ -1953,8 +2054,8 @@ export default function Dashboard() {
     { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
     { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },
     { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>, footer: () => pct(tablePctOfAccount) },
-    { id: 'price_return_pct', label: 'PrRtn', name: 'Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price-only return (excludes dividends)', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</span> },
-    { id: 'total_return_pct', label: 'TotRtn', name: 'Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Total return including dividends', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
+    { id: 'price_return_pct', label: 'PrRtn', name: 'Tracker Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Transaction-aware price-only return for the Shared Performance Date Range', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</span> },
+    { id: 'total_return_pct', label: 'TrkTR', name: 'Tracker Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Transaction-aware Total Return for the Shared Performance Date Range; matches the Total Return page', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
     { id: 'beta', label: 'Beta', name: 'Benchmark Beta', sortKey: '_beta_sort', group: 'Current', defaultVisible: true, align: 'right', tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ", render: h => {
       const risk = h._risk || {}
       return (
@@ -2211,13 +2312,23 @@ export default function Dashboard() {
       xaxis.dtick = tickStepDays * oneDayMs
     }
     if (xRange) xaxis.range = xRange
+    const chartRange = formatPerformanceChartRange(
+      dates[0],
+      dates[dates.length - 1],
+      dates[0],
+      dates[dates.length - 1],
+    )
     const layout = {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
+      title: {
+        text: `${isTotalReturn ? 'Portfolio Total Return Value History' : 'Portfolio Value History'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`,
+        font: { size: 15, color: ct.title },
+      },
       xaxis,
       yaxis: { title: { text: isTotalReturn ? 'Value + Dividends ($)' : 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
-      margin: { l: 90, r: 20, t: 10, b: 52 },
-      height: 300,
+      margin: { l: 90, r: 20, t: 70, b: 52 },
+      height: 340,
       hovermode: 'x unified',
     }
     try {
@@ -2435,6 +2546,61 @@ export default function Dashboard() {
         </div>
       )}
 
+      <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
+        <div className="growth-filter-group">
+          <label>Shared Performance Date Range</label>
+          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
+            {PERFORMANCE_PERIODS.map(option => (
+              <button
+                key={option.key}
+                className={`tab${gradePeriod === option.key ? ' active' : ''}`}
+                onClick={() => setGradePeriod(option.key)}
+                style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
+                title={option.hint}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+        </div>
+        {gradePeriod === 'custom' && (
+          <div className="g2-custom-range" role="group" aria-label="Custom grade date range">
+            <label>
+              <span>Start date</span>
+              <input
+                type="date"
+                value={gradeCustomStart}
+                min={MIN_PERFORMANCE_DATE}
+                max={gradeCustomEnd || todayInputValue()}
+                onChange={event => setGradeCustomStart(event.target.value)}
+              />
+            </label>
+            <label>
+              <span>End date</span>
+              <input
+                type="date"
+                value={gradeCustomEnd}
+                min={gradeCustomStart || MIN_PERFORMANCE_DATE}
+                max={todayInputValue()}
+                onChange={event => setGradeCustomEnd(event.target.value)}
+              />
+            </label>
+          </div>
+        )}
+      </div>
+      {gradeRangeError && <div className="alert alert-error">{gradeRangeError}</div>}
+      {trackerPerformanceError && (
+        <div className="alert alert-error">
+          Shared-period Total Return could not be loaded: {trackerPerformanceError}
+        </div>
+      )}
+      {trackerAccountingCoverage && !trackerPerformanceLoading && (
+        <p className="tr-note" style={{ marginTop: 0 }}>
+          <strong>Tracker accounting:</strong> {trackerAccountingCoverage}
+        </p>
+      )}
+
       {portfolioCoverage != null && (
         <div className="nav-erosion-summary-row">
           <div
@@ -2470,14 +2636,18 @@ export default function Dashboard() {
             title={dailyChangeTitle}
           />
           <SummaryCard
-            label="Price Return"
-            value={pct(totals.priceReturn)}
-            color={gradeColor(totals.priceReturn)}
+            label={`Price Return \u2014 ${trackerPerformance?.period_label || 'Selected Period'}`}
+            value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
+            color={gradeColor(fullTrackerPriceReturn)}
+            sub={trackerPerformanceRange}
+            title="Transaction-aware price return for the Shared Performance Date Range"
           />
           <SummaryCard
-            label="Total Return"
-            value={pct(totals.totalReturn)}
-            color={gradeColor(totals.totalReturn)}
+            label={`Tracker Total Return \u2014 ${trackerPerformance?.period_label || 'Selected Period'}`}
+            value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
+            color={gradeColor(fullTrackerTotalReturn)}
+            sub={trackerPerformanceRange}
+            title="The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages"
           />
         </div>
       )}
@@ -2529,46 +2699,6 @@ export default function Dashboard() {
         </div>
       </details>
 
-      <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
-        <div className="growth-filter-group">
-          <label>Shared Performance Date Range</label>
-          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
-            {PERFORMANCE_PERIODS.map(option => (
-              <button
-                key={option.key}
-                className={`tab${gradePeriod === option.key ? ' active' : ''}`}
-                onClick={() => setGradePeriod(option.key)}
-                style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {gradePeriod === 'custom' && (
-          <div className="g2-custom-range" role="group" aria-label="Custom grade date range">
-            <label>
-              <span>Start date</span>
-              <input
-                type="date"
-                value={gradeCustomStart}
-                max={gradeCustomEnd || initialGradeCustomDates.end}
-                onChange={event => setGradeCustomStart(event.target.value)}
-              />
-            </label>
-            <label>
-              <span>End date</span>
-              <input
-                type="date"
-                value={gradeCustomEnd}
-                min={gradeCustomStart || undefined}
-                max={initialGradeCustomDates.end}
-                onChange={event => setGradeCustomEnd(event.target.value)}
-              />
-            </label>
-          </div>
-        )}
-      </div>
       <p className="tr-note" style={{ marginTop: 0 }}>
         <strong>{portfolioGrade.period_label || 'Grade period'}:</strong>{' '}
         {formatPerformanceRange(

@@ -9,11 +9,29 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import (
     app,
+    _anchor_from_prior_close,
     _build_transaction_aware_portfolio_series,
     _normalize_prices_to_100,
     _portfolio_period_metrics,
     _resolve_total_return_period,
+    _stock_split_history_for_period,
+    _trim_to_last_bars,
 )
+from market_symbols import accounting_symbol_for_ticker, yahoo_symbol_for_ticker
+
+
+class AccountingSymbolTest(unittest.TestCase):
+    def test_corporate_action_symbols_share_current_market_identity(self):
+        expected = {
+            "AITXD": "AITX",
+            "NYCB": "FLG",
+            "WPAY": "TOPW",
+        }
+
+        for historical, current in expected.items():
+            with self.subTest(historical=historical):
+                self.assertEqual(accounting_symbol_for_ticker(historical), current)
+                self.assertEqual(yahoo_symbol_for_ticker(historical), current)
 
 
 class TotalReturnNormalizationTest(unittest.TestCase):
@@ -61,7 +79,14 @@ class TotalReturnPeriodTest(unittest.TestCase):
                 result = _resolve_total_return_period(period, today=self.today)
                 self.assertEqual(result["start_date"], expected_start)
                 self.assertEqual(result["end_date"], "2026-07-23")
-                self.assertEqual(result["yf_kwargs"]["start"], expected_start)
+                if period == "ytd":
+                    self.assertLess(result["yf_kwargs"]["start"], expected_start)
+                    self.assertEqual(
+                        result["yf_kwargs"]["anchor_on_or_before"],
+                        expected_start,
+                    )
+                else:
+                    self.assertEqual(result["yf_kwargs"]["start"], expected_start)
                 self.assertEqual(result["yf_kwargs"]["end"], "2026-07-24")
 
     def test_resolves_all_from_portfolio_inception(self):
@@ -77,6 +102,37 @@ class TotalReturnPeriodTest(unittest.TestCase):
         self.assertEqual(result["end_date"], "2026-07-23")
         self.assertEqual(result["yf_kwargs"]["start"], "2022-04-15")
         self.assertEqual(result["yf_kwargs"]["end"], "2026-07-24")
+
+    def test_short_period_retains_split_history_from_portfolio_inception(self):
+        history_dates = pd.to_datetime(["2024-01-23", "2026-08-07"])
+        raw = pd.concat(
+            {
+                "Close": pd.DataFrame(
+                    {"SPLITTEST": [50.0, 60.0]}, index=history_dates,
+                ),
+                "Stock Splits": pd.DataFrame(
+                    {"SPLITTEST": [0.01, 0.0]}, index=history_dates,
+                ),
+            },
+            axis=1,
+        )
+        current = pd.DataFrame(
+            {"SPLITTEST": [0.0]}, index=pd.to_datetime(["2026-08-07"]),
+        )
+        period_range = {
+            "start_date": "2026-08-07",
+            "end_date": "2026-08-10",
+        }
+
+        with patch("app._chunked_yf_download", return_value=raw):
+            result = _stock_split_history_for_period(
+                ["SPLITTEST"], current, period_range, "2022-04-18",
+            )
+
+        self.assertEqual(
+            float(result.loc[pd.Timestamp("2024-01-23"), "SPLITTEST"]),
+            0.01,
+        )
 
     def test_resolves_inclusive_custom_range(self):
         result = _resolve_total_return_period(
@@ -97,6 +153,127 @@ class TotalReturnPeriodTest(unittest.TestCase):
         )
 
         self.assertEqual(result["start_date"], "2023-02-28")
+
+    def test_one_day_measures_back_to_the_previous_session(self):
+        # A calendar offset would put the baseline on a closed market: Sunday
+        # from a Monday, Saturday from a Sunday. Each case must land on a
+        # weekday with an actual close.
+        expected = {
+            datetime.date(2026, 8, 10): ("2026-08-07", "2026-08-10"),  # Mon -> Fri
+            datetime.date(2026, 8, 11): ("2026-08-10", "2026-08-11"),  # Tue -> Mon
+            datetime.date(2026, 8, 8): ("2026-08-06", "2026-08-07"),   # Sat -> Thu/Fri
+            datetime.date(2026, 8, 9): ("2026-08-06", "2026-08-07"),   # Sun -> Thu/Fri
+        }
+
+        for today, (expected_start, expected_end) in expected.items():
+            with self.subTest(today=today, weekday=today.strftime("%a")):
+                result = _resolve_total_return_period("1d", today=today)
+                self.assertEqual(result["start_date"], expected_start)
+                self.assertEqual(result["end_date"], expected_end)
+                self.assertLess(
+                    datetime.date.fromisoformat(result["start_date"]).weekday(),
+                    5,
+                )
+
+    def test_one_day_over_requests_then_trims_to_two_sessions(self):
+        result = _resolve_total_return_period("1d", today=datetime.date(2026, 8, 10))
+
+        # The download must reach back past any holiday run, while the reported
+        # window stays on the real single session.
+        self.assertEqual(result["yf_kwargs"]["trim_to_last_bars"], 2)
+        self.assertLess(result["yf_kwargs"]["start"], result["start_date"])
+        self.assertEqual(result["yf_kwargs"]["end"], "2026-08-11")
+
+    def test_custom_anchors_on_the_close_before_a_non_trading_start(self):
+        # Sunday-to-Monday is the case that reported 0%: there is no Sunday bar,
+        # so the baseline has to be the Friday close, not Monday's own.
+        result = _resolve_total_return_period(
+            "custom",
+            today=self.today,
+            start_date="2026-07-19",
+            end_date="2026-07-20",
+        )
+
+        self.assertEqual(result["start_date"], "2026-07-19")
+        self.assertEqual(result["yf_kwargs"]["anchor_on_or_before"], "2026-07-19")
+        self.assertLess(result["yf_kwargs"]["start"], "2026-07-19")
+
+    def test_ytd_anchors_on_the_prior_year_close(self):
+        result = _resolve_total_return_period(
+            "ytd",
+            today=datetime.date(2026, 8, 10),
+        )
+
+        self.assertEqual(result["start_date"], "2026-01-01")
+        self.assertEqual(result["end_date"], "2026-08-10")
+        self.assertEqual(result["yf_kwargs"]["anchor_on_or_before"], "2026-01-01")
+        self.assertLess(result["yf_kwargs"]["start"], "2026-01-01")
+        self.assertEqual(result["yf_kwargs"]["end"], "2026-08-11")
+
+    def test_anchor_falls_back_to_the_prior_session(self):
+        dates = pd.to_datetime([
+            "2026-08-06", "2026-08-07", "2026-08-10", "2026-08-11",
+        ])
+        frame = pd.DataFrame({"AAA": [1.0, 2.0, 3.0, 4.0]}, index=dates)
+
+        # Sunday 8/9 has no bar, so Friday 8/7 becomes the baseline.
+        anchored = _anchor_from_prior_close(frame, "2026-08-09")
+        self.assertEqual(anchored["AAA"].tolist(), [2.0, 3.0, 4.0])
+
+        # A start that is already a trading day keeps exactly that bar.
+        exact = _anchor_from_prior_close(frame, "2026-08-07")
+        self.assertEqual(exact["AAA"].tolist(), [2.0, 3.0, 4.0])
+
+        # Nothing that early exists, so the ticker's own history stands.
+        early = _anchor_from_prior_close(frame, "2020-01-01")
+        self.assertEqual(len(early), 4)
+
+    def test_trim_keeps_the_final_sessions_of_a_padded_download(self):
+        dates = pd.to_datetime([
+            "2026-07-31", "2026-08-03", "2026-08-04",
+            "2026-08-05", "2026-08-06", "2026-08-07",
+        ])
+        frame = pd.DataFrame({"AAA": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]}, index=dates)
+
+        trimmed = _trim_to_last_bars(frame, 2)
+
+        self.assertEqual(trimmed["AAA"].tolist(), [5.0, 6.0])
+        self.assertEqual(
+            list(trimmed.index.strftime("%Y-%m-%d")),
+            ["2026-08-06", "2026-08-07"],
+        )
+
+    def test_trim_is_a_no_op_without_a_bar_count(self):
+        dates = pd.to_datetime(["2026-08-06", "2026-08-07"])
+        frame = pd.DataFrame({"AAA": [5.0, 6.0]}, index=dates)
+
+        self.assertEqual(len(_trim_to_last_bars(frame, None)), 2)
+        self.assertTrue(_trim_to_last_bars(pd.DataFrame(), 2).empty)
+
+    def test_rejects_partial_year_typed_into_a_date_input(self):
+        # A date input emits a value per keystroke, so typing "2026" sends
+        # 0002, 0020 and 0202 first. Each parses and is correctly ordered
+        # against the end date, so only a floor stops the download.
+        for partial in ("0002-08-10", "0020-08-10", "0202-08-10"):
+            with self.subTest(start_date=partial):
+                with self.assertRaises(ValueError) as caught:
+                    _resolve_total_return_period(
+                        "custom",
+                        today=self.today,
+                        start_date=partial,
+                        end_date="2026-07-23",
+                    )
+                self.assertIn("1970-01-01", str(caught.exception))
+
+    def test_still_accepts_a_genuinely_old_custom_start(self):
+        result = _resolve_total_return_period(
+            "custom",
+            today=self.today,
+            start_date="1993-01-29",
+            end_date="2026-07-23",
+        )
+
+        self.assertEqual(result["start_date"], "1993-01-29")
 
 
 class TotalReturnComparisonTest(unittest.TestCase):
@@ -328,6 +505,120 @@ class TotalReturnDashboardPeriodTest(unittest.TestCase):
 
 
 class PortfolioReturnSeriesTest(unittest.TestCase):
+    def test_reverse_split_normalizes_historical_transaction_shares(self):
+        dates = pd.to_datetime(["2022-01-03", "2022-01-04", "2024-01-23"])
+        close = pd.DataFrame({"SIRC": [100.0, 50.0, 50.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        splits = pd.DataFrame({"SIRC": [0.0, 0.0, 0.01]}, index=dates)
+        transactions = [
+            {
+                "ticker": "SIRC",
+                "market_symbol": "SIRC",
+                "position_key": (1, "SIRC"),
+                "transaction_type": "BUY",
+                "transaction_date": "2022-01-03",
+                "shares": 100,
+            },
+            {
+                "ticker": "SIRC",
+                "market_symbol": "SIRC",
+                "position_key": (1, "SIRC"),
+                "transaction_type": "SELL",
+                "transaction_date": "2022-01-04",
+                "shares": 100,
+            },
+        ]
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            transactions,
+            [],
+            stock_splits=splits,
+        )
+
+        self.assertEqual(result["market_value"][:2], [100.0, 0.0])
+        self.assertEqual(result["price_gain_dollar"], -50.0)
+        self.assertEqual(result["split_adjusted_transactions"], 2)
+        self.assertEqual(result["split_adjusted_positions"], 1)
+
+    def test_current_snapshot_closes_phantom_transaction_only_position(self):
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"CLOSED": [10.0, 11.0, 12.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "CLOSED",
+                "market_symbol": "CLOSED",
+                "position_key": (1, "CLOSED"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-02",
+                "shares": 10,
+            },
+            {
+                "ticker": "CLOSED",
+                "market_symbol": "CLOSED",
+                "position_key": (1, "CLOSED"),
+                "transaction_type": "SELL",
+                "transaction_date": "2026-01-05",
+                "shares": 5,
+            },
+        ]
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            transactions,
+            [],
+        )
+
+        self.assertEqual(result["market_value"], [100.0, 0.0, 0.0])
+        self.assertEqual(result["price_gain_dollar"], 10.0)
+        self.assertEqual(result["inferred_closing_positions"], 1)
+
+    def test_missing_market_history_is_excluded_and_reported(self):
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05"])
+        close = pd.DataFrame(
+            {"AAA": [10.0, 11.0], "DELISTED": [None, None]},
+            index=dates,
+        )
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-02",
+                "shares": 1,
+            },
+            {
+                "ticker": "DELISTED",
+                "market_symbol": "DELISTED",
+                "position_key": (1, "DELISTED"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-02",
+                "shares": 5,
+            },
+        ]
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            transactions,
+            [{"position_key": (1, "AAA"), "ticker": "AAA", "quantity": 1}],
+        )
+
+        self.assertEqual(result["price"], [100.0, 110.0])
+        self.assertEqual(result["transaction_count"], 1)
+        self.assertEqual(result["missing_market_symbols"], ["DELISTED"])
+
     def test_buys_and_sells_change_weights_without_creating_return_jumps(self):
         dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
         close = pd.DataFrame(
@@ -371,7 +662,10 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
             zeros,
             zeros,
             transactions,
-            [],
+            [
+                {"position_key": (1, "AAA"), "ticker": "AAA", "quantity": 1},
+                {"position_key": (1, "BBB"), "ticker": "BBB", "quantity": 2},
+            ],
         )
 
         self.assertEqual(result["price"], [100.0, 110.0, 121.0])
@@ -402,7 +696,7 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
             dividends,
             zeros,
             transactions,
-            [],
+            [{"position_key": (1, "AAA"), "ticker": "AAA", "quantity": 1}],
         )
 
         self.assertEqual(result["price"], [100.0, 90.0])

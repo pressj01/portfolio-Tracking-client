@@ -695,7 +695,7 @@ function DashboardHelp() {
         <li><strong>Portfolio Value</strong> — total current market value.</li>
         <li><strong>Portfolio IRR / Filtered IRR</strong> — annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value; idle account cash is excluded. The card shows <strong>Unavailable</strong> instead of estimating when transaction shares, transfers, or dividend payment history do not fully reconcile. <strong>Manage exclusions</strong> lists the blocking tickers and lets you omit selected ones. Any resulting number is labeled <strong>Filtered IRR</strong> and discloses the percentage of current portfolio value excluded, because it measures only the documented subset—not the whole account.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
-        <li><strong>Price Return / Total Return</strong> — portfolio returns excluding and including dividends.</li>
+        <li><strong>Price Return / Tracker Total Return</strong> — transaction-aware selected-period returns excluding and including dividends. The Shared Performance Date Range above the cards controls both; 1D measures from the previous trading close.</li>
         <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
         <li><strong>S&amp;P 500</strong> — the current S&amp;P 500 index level with its day's change, as a market reference alongside your portfolio's returns.</li>
       </ul>
@@ -767,18 +767,18 @@ function DashboardHelp() {
         Key columns include:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Ticker</strong> — click to open a detailed ticker modal. Its Shared Performance Date Range is the same saved range used by Growth &amp; Performance, Portfolio Growth 2, and Total Return. The modal prints the effective dates and ending Price Return and Total Return so the holding can be reconciled directly.</li>
+        <li><strong>Ticker</strong> — click to open a detailed ticker modal. Its Shared Performance Date Range is the same saved range used by Growth &amp; Performance, Portfolio Growth 2, Total Return, and Gains &amp; Losses. The chart title prints its From and To dates, and the modal also shows the effective dates and ending Price Return and Total Return so the holding can be reconciled directly.</li>
         <li><strong>Freq</strong> — dividend payment frequency (W=Weekly, M=Monthly, Q=Quarterly, SA=Semi-Annual, A=Annual).</li>
         <li><strong>%Acct</strong> — percentage of total portfolio value.</li>
         <li><strong>G/L%</strong> — unrealized gain/loss percentage.</li>
-        <li><strong>PrRtn / TotRtn</strong> — price-only return and total return (including dividends).</li>
+        <li><strong>PrRtn / TrkTR</strong> — transaction-aware price-only and total return for the Shared Performance Date Range. Hover a cell for that holding's effective market dates.</li>
         <li><strong>YTD</strong> — year-to-date dividends received.</li>
         <li><strong>Mo$ / Yr$</strong> — estimated monthly and annual dividend income.</li>
         <li><strong>MoShr</strong> — estimated fractional shares acquired per month if the monthly dividend is fully reinvested at the current price (DRIP simulation).</li>
         <li><strong>DRIP$</strong> — monthly income being reinvested (blue). Only present for shares in DRIP-enabled accounts.</li>
         <li><strong>YrShr</strong> — estimated fractional shares acquired per year if the annual dividend is fully reinvested at the current price.</li>
         <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
-        <li><strong>RvY</strong> — Return vs. Yield. Compares each holding's all-time total return to its dividend yield. <strong>Good</strong> (green) means total return exceeds yield; <strong>Poor</strong> (red) means yield exceeds total return, suggesting price decline is eroding dividend income. A toggle in the column header switches between <strong>CYld</strong> (current yield, the default) and <strong>YOC</strong> (yield on cost).</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares each holding's selected-period Tracker Total Return to its dividend yield. <strong>Good</strong> (green) means total return exceeds yield; <strong>Poor</strong> (red) means yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, the default) and <strong>YOC</strong> (yield on cost).</li>
         <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
         <li><strong>Grd</strong> — composite grade for the holding.</li>
       </ul>
@@ -2133,8 +2133,9 @@ function GrowthHelp() {
         card on Portfolio Growth 2. With the same portfolio, holdings filter, and effective date range, the
         percentage should match. Purchases and sales change the amount invested; they are not counted as gain
         or loss. The Dashboard holding chart uses this same calculation for that individual holding. The
-        Shared Performance Date Range is remembered across all four screens; only a later purchase date or
-        unavailable market day can make a holding&apos;s effective start later than the requested start.
+        Shared Performance Date Range is remembered across all five screens; only a later purchase date or
+        unavailable market day can make a holding&apos;s effective start later than the requested start. Every
+        summary card shows the effective date range used for its metric.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -2183,7 +2184,7 @@ function GrowthHelp() {
         <li>
           <strong>Tracker Total Return %</strong> — The portfolio&apos;s transaction-aware, dividend-reinvested
           return over the selected period. The exact effective start and end dates appear on the card and
-          above the charts. This is the percentage to compare with Total Return and Portfolio Growth 2.
+          directly in every chart title. This is the percentage to compare with Total Return and Portfolio Growth 2.
         </li>
         <li>
           <strong>Portfolio Sharpe</strong> — The Sharpe ratio measures excess return per unit of total risk
@@ -2278,8 +2279,9 @@ function PortfolioGrowth2Help() {
         performance down by source: capital gains, dividends, realized P&amp;L, and fees.
       </p>
       <p style={{ marginBottom: '1rem' }}>
-        Both charts and the headline cards share the same period selector and ticker filter. The exact
-        effective dates are printed above them, so every view stays in sync as you explore a range.
+        Both charts and the headline cards share the same period selector and ticker filter. Every summary
+        card shows its effective date range, and each chart title prints its From and To dates, so every view
+        stays in sync as you explore a range.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         <strong>How this ties to the other tracking pages:</strong> <strong>Tracker Total Return %</strong>
@@ -2287,7 +2289,7 @@ function PortfolioGrowth2Help() {
         Total Return. It should match when the portfolio, ticker scope, and effective date range match.
         The dollar charts below intentionally answer a different question: how portfolio value and dollar
         profit/loss changed, including the effect of cash invested or withdrawn. The Shared Performance Date
-        Range is remembered across Dashboard, Growth &amp; Performance, this page, and Total Return.
+        Range is remembered across Dashboard, Growth &amp; Performance, this page, Total Return, and Gains &amp; Losses.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3064,11 +3066,12 @@ function TotalReturnHelp() {
       </p>
       <p style={{ marginBottom: '1rem' }}>
         <strong>This is the tracker-return reference:</strong> its transaction-aware Total Return % is the
-        same percentage used by Growth &amp; Performance and the Tracker Total Return % card on Portfolio Growth
-        2. Match the portfolio, holdings filter, and effective dates to reconcile the figure. The Dashboard
-        holding modal uses the same method for a single holding; dollar P&amp;L views elsewhere can differ because
+        same percentage used by Dashboard, Growth &amp; Performance, Portfolio Growth 2, and Gains &amp; Losses.
+        Match the portfolio, holdings filter, and effective dates to reconcile the figure. Every performance
+        chart title prints its From and To dates. Dollar P&amp;L views
+        elsewhere can differ because
         deposits, withdrawals, and position size are meaningful in dollars but are excluded from return. The
-        Shared Performance Date Range is remembered across all four tracking screens.
+        Shared Performance Date Range is remembered across all five tracking screens, including Gains &amp; Losses.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3124,11 +3127,12 @@ function TotalReturnHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Controls</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Dashboard Date Range</strong> — The page-wide 7D, 1M, 3M, 6M, YTD, 1Y,
+          <strong>Dashboard Date Range</strong> — The page-wide 1D, 7D, 1M, 3M, 6M, YTD, 1Y,
           5Y, All, and Custom choices update the summary cards, holding-return chart,
           comparison chart, scatter chart, and holdings summary together. All starts with
           the portfolio&apos;s first recorded trade; Custom accepts inclusive start and end dates.
-          Every card displays its effective dates, and each holding also lists its held-period range.
+          Every card displays its effective dates, every chart title shows From and To dates, and each holding also lists its held-period range.
+          See <strong>What the range buttons measure</strong> below for the exact start each one resolves to.
         </li>
         <li>
           <strong>Portfolio &amp; Tickers dropdown</strong> — Select <strong>Entire Portfolio</strong>,
@@ -3157,6 +3161,58 @@ function TotalReturnHelp() {
         All lines are normalized to 100 so that securities with different share prices can be
         directly compared. A dashed gray baseline at 100 marks the starting value. Hover over the
         chart for a unified tooltip showing all values at a given date.
+      </p>
+
+      {/* ── What the range buttons measure ──────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Range Buttons Measure</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each button sets only the <strong>start</strong> of the window. Every range ends at the
+        <strong> most recent close</strong>, so the end date never changes between buttons — only the
+        start moves. Return is measured from the close on the start date, which makes that day the
+        baseline rather than the first day of gain. Hovering any button shows the same detail in a tooltip.
+      </p>
+      <p style={{ marginBottom: '0.5rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        Worked example for a run on <strong>Monday, August 10, 2026</strong>:
+      </p>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ fontSize: '0.85rem', minWidth: '620px' }}>
+          <thead>
+            <tr>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Button</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>Start</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>End</th>
+              <th style={{ padding: '0.4rem 0.75rem' }}>How the start is derived</th>
+            </tr>
+          </thead>
+          <tbody>
+            {[
+              ['1D', '8/7/2026', '8/10/2026', 'The previous trading session, not the previous calendar day. Resolved as the last two sessions, so a Monday correctly measures back to Friday instead of to a closed Sunday market.'],
+              ['7D', '8/3/2026', '8/10/2026', 'Exactly 7 calendar days back, so always the same weekday as today. Calendar days, not trading days — the window spans 5–6 closes.'],
+              ['1M', '7/10/2026', '8/10/2026', 'One calendar month back on the same day of the month, clamped to the last day in shorter months (3/31 → 2/28).'],
+              ['3M', '5/10/2026', '8/10/2026', 'Three calendar months back on the same day of the month, clamped the same way.'],
+              ['6M', '2/10/2026', '8/10/2026', 'Six calendar months back on the same day of the month, clamped the same way.'],
+              ['YTD', '1/1/2026', '8/10/2026', 'January 1 of the current year. Markets are closed that day, so the first bar available is the first trading session of the year (1/2/2026) and its close becomes the baseline — that session’s own move is not counted in YTD.'],
+              ['1Y', '8/10/2025', '8/10/2026', 'One calendar year back on the same month and day. February 29 falls back to February 28.'],
+              ['5Y', '8/10/2021', '8/10/2026', 'Five calendar years back on the same month and day, with the same leap-day fallback.'],
+              ['All', 'First recorded trade', '8/10/2026', "The portfolio's own earliest trade, purchase, or import date — never a benchmark's older quote history."],
+              ['Custom', 'Whatever you enter', 'Whatever you enter', 'Both dates are inclusive. Dates before 1/1/1970 are treated as still being typed and are not sent.'],
+            ].map(([button, start, end, derivation]) => (
+              <tr key={button}>
+                <td style={{ padding: '0.4rem 0.75rem', fontWeight: 600 }}>{button}</td>
+                <td style={{ padding: '0.4rem 0.75rem', whiteSpace: 'nowrap' }}>{start}</td>
+                <td style={{ padding: '0.4rem 0.75rem', whiteSpace: 'nowrap' }}>{end}</td>
+                <td style={{ padding: '0.4rem 0.75rem' }}>{derivation}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p style={{ marginTop: '0.75rem', marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        Every preset is recalculated from the current date on each request, so the windows roll forward
+        on their own — a year later, 1Y on 8/10/2027 resolves to 8/10/2026. Apart from 1D, the presets
+        are not market-holiday aware: when a computed start lands on a weekend or holiday there is no
+        bar that day, and the baseline slides forward to the next available close. The longer windows
+        absorb that harmlessly; 1D cannot, which is why it is resolved by session instead.
       </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Where the Measurement Starts and What the Scale Means</h4>
@@ -3250,8 +3306,8 @@ function GainsLossesHelp() {
       <p style={{ marginBottom: '1rem' }}>
         The Gains & Losses page provides a complete picture of your investment profit and loss
         across both open (unrealized) and closed (realized) positions. It separates price-only
-        returns from total returns that include dividends, so you can see how much of your
-        performance comes from capital appreciation versus income collected.
+        gain/loss from figures that include dividends, and it now separates two measurements that
+        must not be confused: selected-period Tracker Total Return and lifetime cost-basis G/L.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3266,10 +3322,26 @@ function GainsLossesHelp() {
         "All Holdings" is the default.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Performance Date Range</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The 1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom buttons use the same saved range as
+        Dashboard, Growth &amp; Performance, Portfolio Growth 2, and Total Return. The selected-period
+        cards, the <strong>Tracker TR %</strong> holding column, and the performance charts all come from
+        the exact same transaction-aware endpoint as Total Return. With the same account, holdings
+        filter, and effective dates, <strong>Tracker Total Return %</strong> should match exactly.
+      </p>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        1D means the move since the previous trading close, so Monday measures from Friday and market
+        holidays are skipped. YTD uses the final close on or before January 1, so the first market session&apos;s
+        move is included. Custom dates are inclusive. Hover any range button for its precise rule.
+      </p>
+
       {/* ── Summary Cards ───────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Two rows of metric cards show the high-level numbers:
+        The first row is selected-period performance: Start Value, End Value, Price Return,
+        Distributions, Total Return dollars, and Tracker Total Return %. These match Total Return.
+        The next two rows are explicitly labeled <strong>Lifetime Cost-Basis G/L</strong>:
       </p>
       <h4 style={{ marginBottom: '0.4rem' }}>Top Row — Unrealized (Open Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -3283,7 +3355,7 @@ function GainsLossesHelp() {
         <li><strong>Realized Price G/L</strong> — Capital gain or loss from positions you have sold (sell proceeds minus cost basis). Sourced from SELL transactions recorded via the Holdings transaction system.</li>
         <li><strong>Realized Total G/L</strong> — Realized Price G/L plus all dividends collected on those tickers while you held them. Even a position sold at a price loss can show a positive Total G/L if enough dividends were collected.</li>
         <li><strong>Combined Price G/L</strong> — Unrealized Price G/L + Realized Price G/L. Your overall capital-only profit/loss across all positions, open and closed.</li>
-        <li><strong>Combined Total G/L</strong> — Unrealized Total G/L + Realized Total G/L. Your true overall profit/loss including all dividends ever collected. This is the most comprehensive performance number on the page.</li>
+        <li><strong>Combined Total G/L</strong> — Unrealized Total G/L + Realized Total G/L. This is a lifetime accounting total including all recorded dividends, not a selected-period time-weighted return.</li>
       </ul>
 
       {/* ── Tabs ─────────────────────────────────────────────────── */}
@@ -3308,9 +3380,9 @@ function GainsLossesHelp() {
         <li><strong>Price G/L</strong> — Unrealized capital gain/loss in dollars.</li>
         <li><strong>Price G/L %</strong> — Price G/L as a percentage of Invested.</li>
         <li><strong>Divs Rcvd</strong> — Total dividends received while holding this position.</li>
-        <li><strong>Total G/L</strong> — Price G/L + Dividends Received.</li>
-        <li><strong>Total G/L %</strong> — Total G/L as a percentage of Invested.</li>
-        <li><strong>RvY</strong> — Return vs. Yield. Compares the Total G/L % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation.</li>
+        <li><strong>Lifetime Total G/L / Lifetime G/L %</strong> — Cost-basis price G/L plus all recorded dividends, in dollars and as a percentage of Invested.</li>
+        <li><strong>Tracker TR % / Effective Range</strong> — Transaction-aware selected-period return and the actual market dates used. Tracker TR % is the directly comparable figure.</li>
+        <li><strong>RvY</strong> — Return vs. Yield. Compares Tracker TR % to the holding's dividend yield. <strong>Good</strong> (green) when total return exceeds yield; <strong>Poor</strong> (red) when yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, default) and <strong>YOC</strong> (yield on cost). See the Dashboard help section for a full explanation.</li>
       </ul>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         A Portfolio Total footer row sums key columns across all holdings.
@@ -3358,43 +3430,48 @@ function GainsLossesHelp() {
       {/* ── Charts ───────────────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Charts</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Below the table, a set of charts visualize your gains and losses over time. Use the period
-        buttons (3M, 6M, 1Y, 2Y, 3Y, 5Y) to change the time range. All chart data is fetched
-        live from Yahoo Finance.
+        Below the lifetime table, the charts use the Shared Performance Date Range at the top and print
+        the selected From and To dates directly in every chart title.
+        Market data is fetched live, while dated buys and sells keep external cash flows from being
+        counted as investment performance.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Cumulative G/L Over Time</strong> — Two area lines showing your portfolio's running
-          Price G/L (blue) and Total G/L including dividends (green) over the selected period. A dashed
-          zero line marks breakeven. Hover for exact dollar values at any date.</li>
+          Price Return (blue) and Tracker Total Return (green) over the selected period. The green line
+          is the same index used on Total Return, shifted from a 100 baseline to a 0% baseline.</li>
         <li><strong>Price G/L vs Total G/L by Ticker</strong> — Horizontal grouped bar chart comparing
-          each ticker's price-only and total gain/loss side by side. Makes it easy to spot which
-          holdings are being "saved" by their dividends (large gap between the two bars).</li>
+          each ticker's price-only and Tracker Total Return side by side over the shared period.</li>
         <li><strong>Winners vs Losers</strong> — Vertical bar chart ranking every ticker by Total G/L.
           Green bars are winners, red bars are losers. Sorted from highest to lowest so your best
           and worst performers are immediately visible.</li>
         <li><strong>Realized Gains Timeline</strong> — Appears only if you have sold positions. Shows
-          each sale as a bar on a timeline, colored green for gains and red for losses. Useful for
-          tracking when you locked in profits or took losses.</li>
+          only sales whose sell date is inside the selected performance range.</li>
       </ul>
+      <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        Chart returns and labels are rounded to two decimals. A 500% or larger move also produces a
+        percentage-outlier warning with the period dollars and lifetime G/L. This is especially important
+        for failed or sub-cent securities: a quote moving from $0.00001 to $0.00010 is +900% for that
+        short window even though the investment may still be down about 99% from its cost basis.
+      </p>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
           <strong>Check the summary cards first</strong> — Compare Price G/L to Total G/L in each
-          row. If Total G/L is significantly higher, dividends are a major contributor to your returns.
+          the selected-period Tracker Total Return cards with the separately labeled lifetime G/L cards.
         </li>
         <li>
           <strong>Use the Combined tab</strong> to see each ticker's full history across both open
-          and closed positions. The Net Total G/L column is the definitive profit/loss figure.
+          and closed positions. Net Total G/L is a lifetime accounting figure, not a period return.
         </li>
         <li>
           <strong>Sort the Unrealized table by Total G/L %</strong> to find your best and worst
-          performing open positions when dividends are included.
+          lifetime cost-basis positions, or by Tracker TR % for the selected-period comparison.
         </li>
         <li>
           <strong>Compare the two bar chart types</strong> — if a ticker has a red Price G/L bar
-          but a green Total G/L bar, the dividends earned more than offset the price decline.
+          and Tracker Total Return bars; their gap is the selected-period dividend contribution.
         </li>
         <li>
           <strong>Record sales via transactions</strong> in the Holdings page to populate the

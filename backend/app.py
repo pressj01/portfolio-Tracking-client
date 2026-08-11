@@ -109,7 +109,11 @@ from four_eight_eight_scanner import register_routes as register_four_eight_eigh
 from road_trip_butterfly_scanner import register_routes as register_road_trip_butterfly_scanner_routes
 from sixty_forty_twenty_fly_scanner import register_routes as register_sixty_forty_twenty_fly_scanner_routes
 from iron_butterfly_scanner import register_routes as register_iron_butterfly_scanner_routes
-from market_symbols import yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker
+from market_symbols import (
+    accounting_aliases_for_ticker as _accounting_aliases_for_ticker,
+    accounting_symbol_for_ticker as _accounting_symbol_for_ticker,
+    yahoo_symbol_for_ticker as _yahoo_symbol_for_ticker,
+)
 from market_calendar import (
     is_nyse_trading_day,
     nyse_closure_reason,
@@ -138,6 +142,47 @@ from accumulation_sim import run_accumulation_comparison
 _YF_DOWNLOAD_LOCK = threading.Lock()
 
 
+def _trim_to_last_bars(frame, bars):
+    """Keep only the final ``bars`` observations of a download.
+
+    1 Day cannot be written as a calendar offset. ``today - 1`` is a Sunday
+    every Monday and a closed market the day after every holiday, so the window
+    holds a single bar and there is no baseline to measure from. Periods with
+    that problem over-request instead and keep the last N sessions, which is the
+    only definition that survives both weekends and holidays.
+    """
+    if not bars or frame is None or getattr(frame, "empty", True):
+        return frame
+    trimmed = frame
+    if trimmed.index.has_duplicates:
+        trimmed = trimmed.loc[~trimmed.index.duplicated(keep="last")]
+    return trimmed.sort_index().iloc[-int(bars):]
+
+
+def _anchor_from_prior_close(frame, anchor_date):
+    """Drop bars before the last close on or before ``anchor_date``.
+
+    The baseline for a range is the close already held going into it, so a start
+    date landing on a weekend or holiday must measure from the session before
+    it, not the next session after it. Without this, asking for Sunday-to-Monday
+    finds no Sunday bar, anchors forward onto Monday, and reports 0% for a day
+    the market plainly moved. Callers over-request and let this trim back to the
+    correct opening bar.
+    """
+    if not anchor_date or frame is None or getattr(frame, "empty", True):
+        return frame
+    trimmed = frame
+    if trimmed.index.has_duplicates:
+        trimmed = trimmed.loc[~trimmed.index.duplicated(keep="last")]
+    trimmed = trimmed.sort_index()
+    eligible = trimmed.index[trimmed.index <= pd.Timestamp(anchor_date)]
+    if len(eligible) == 0:
+        # The window predates this ticker's history; its own first quote is the
+        # earliest defensible baseline.
+        return trimmed
+    return trimmed.loc[eligible[-1]:]
+
+
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     """Drop-in replacement for yf.download that batches large ticker lists.
 
@@ -156,12 +201,23 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     if not tickers:
         return pd.DataFrame()
 
+    # Carried inside yf_kwargs so every period-aware caller inherits it without
+    # touching its own download call. Must not reach yfinance.
+    trim_to_last_bars = kwargs.pop("trim_to_last_bars", None)
+    anchor_on_or_before = kwargs.pop("anchor_on_or_before", None)
     kwargs.setdefault("progress", False)
     # Do NOT default group_by — preserve caller's intent
 
+    def _shape(frame):
+        return _trim_to_last_bars(
+            _anchor_from_prior_close(frame, anchor_on_or_before),
+            trim_to_last_bars,
+        )
+
     if len(tickers) <= chunk_size:
         with _YF_DOWNLOAD_LOCK:
-            return yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
+            raw = yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
+        return _shape(raw)
 
     # Multi-chunk path: use caller's group_by (if any) in each chunk.
     # Single-ticker chunks return flat columns and must be normalized to match
@@ -201,7 +257,7 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
         combined = combined.loc[~combined.index.duplicated(keep="last")]
     if combined.columns.has_duplicates:
         combined = combined.loc[:, ~combined.columns.duplicated(keep="first")]
-    return combined
+    return _shape(combined)
 
 
 def _normalize_prices_to_100(close):
@@ -231,6 +287,11 @@ def _normalize_prices_to_100(close):
     return norm
 
 
+# Mirrors MIN_PERFORMANCE_DATE in src/utils/performancePeriods.js. Any real
+# range starts long after this; anything earlier is a half-typed year.
+_MIN_PERFORMANCE_DATE = datetime.date(1970, 1, 1)
+
+
 def _calendar_months_ago(value, months):
     """Subtract whole calendar months while keeping the day when possible."""
     month_index = (value.year * 12 + value.month - 1) - months
@@ -245,6 +306,18 @@ def _calendar_years_ago(value, years):
     year = value.year - years
     day = min(value.day, calendar.monthrange(year, value.month)[1])
     return datetime.date(year, value.month, day)
+
+
+def _last_business_day(value):
+    """Roll a date back to Friday when it lands on a weekend."""
+    while value.weekday() >= 5:
+        value -= datetime.timedelta(days=1)
+    return value
+
+
+def _previous_business_day(value):
+    """The weekday before ``value``, skipping the weekend."""
+    return _last_business_day(value - datetime.timedelta(days=1))
 
 
 def _resolve_total_return_period(
@@ -270,6 +343,7 @@ def _resolve_total_return_period(
     }
     key = aliases.get(raw_key, raw_key)
     labels = {
+        "1d": "1 Day",
         "7d": "7 Days",
         "1m": "1 Month",
         "3m": "3 Months",
@@ -296,6 +370,18 @@ def _resolve_total_return_period(
             raise ValueError("Choose both a custom start date and end date")
         resolved_start = parse_date(start_date, "Custom start date")
         resolved_end = parse_date(end_date, "Custom end date")
+        # A date input emits a value per keystroke, so typing a year sends 0002,
+        # 0020 and 0202 before it sends 2026. Those parse cleanly and ordered
+        # fine, so without a floor the API would download two millennia of
+        # quotes for a range nobody picked.
+        if resolved_start < _MIN_PERFORMANCE_DATE:
+            raise ValueError(
+                f"Custom start date must be on or after {_MIN_PERFORMANCE_DATE.isoformat()}"
+            )
+        if resolved_end < _MIN_PERFORMANCE_DATE:
+            raise ValueError(
+                f"Custom end date must be on or after {_MIN_PERFORMANCE_DATE.isoformat()}"
+            )
         if resolved_start > resolved_end:
             raise ValueError("Custom start date must be on or before the end date")
         if resolved_end > today:
@@ -306,8 +392,14 @@ def _resolve_total_return_period(
             "start_date": resolved_start.isoformat(),
             "end_date": resolved_end.isoformat(),
             "yf_kwargs": {
-                "start": resolved_start.isoformat(),
+                # Reach back past the longest market closure so the session
+                # before the chosen start is present, then anchor onto it. A
+                # start that is already a trading day keeps that exact bar, so
+                # ordinary ranges are unaffected; only starts on a weekend or
+                # holiday move, and those are the ones that reported 0%.
+                "start": (resolved_start - datetime.timedelta(days=10)).isoformat(),
                 "end": (resolved_end + datetime.timedelta(days=1)).isoformat(),
+                "anchor_on_or_before": resolved_start.isoformat(),
             },
         }
 
@@ -333,6 +425,28 @@ def _resolve_total_return_period(
             "yf_kwargs": {"period": "max"},
         }
 
+    if key == "1d":
+        # The only period short enough that a calendar offset can miss the
+        # market entirely, so it is resolved by session rather than by date:
+        # over-request, then keep the last two bars. The reported boundaries
+        # stay on the real one-session window because start_date also decides
+        # which distributions fall inside the period.
+        resolved_end = _last_business_day(today)
+        resolved_start = _previous_business_day(resolved_end)
+        return {
+            "key": key,
+            "label": labels[key],
+            "start_date": resolved_start.isoformat(),
+            "end_date": resolved_end.isoformat(),
+            "yf_kwargs": {
+                # Reaches past the longest holiday run so both sessions are
+                # always present before the trim.
+                "start": (resolved_start - datetime.timedelta(days=10)).isoformat(),
+                "end": (resolved_end + datetime.timedelta(days=1)).isoformat(),
+                "trim_to_last_bars": 2,
+            },
+        }
+
     if key == "7d":
         start_date = today - datetime.timedelta(days=7)
     elif key == "1m":
@@ -350,15 +464,25 @@ def _resolve_total_return_period(
     else:
         raise ValueError(f"Unsupported period: {period}")
 
+    yf_kwargs = {
+        "start": start_date.isoformat(),
+        "end": (today + datetime.timedelta(days=1)).isoformat(),
+    }
+    if key == "ytd":
+        # YTD begins before the first market session of the year. Include and
+        # anchor on the last close on or before Jan 1 so the first session's
+        # move is part of the return instead of becoming the zero baseline.
+        yf_kwargs.update({
+            "start": (start_date - datetime.timedelta(days=10)).isoformat(),
+            "anchor_on_or_before": start_date.isoformat(),
+        })
+
     return {
         "key": key,
         "label": labels[key],
         "start_date": start_date.isoformat(),
         "end_date": today.isoformat(),
-        "yf_kwargs": {
-            "start": start_date.isoformat(),
-            "end": (today + datetime.timedelta(days=1)).isoformat(),
-        },
+        "yf_kwargs": yf_kwargs,
     }
 
 
@@ -391,6 +515,80 @@ def _portfolio_inception_date(current_holdings, transactions):
     return min(dates).isoformat() if dates else None
 
 
+def _stock_split_history_for_period(
+    symbols,
+    current_splits,
+    period_range,
+    inception_date,
+):
+    """Return split actions covering every transaction used by a period.
+
+    A short price window can begin years after a split that changed the units
+    of an older transaction. In that case the period download cannot normalize
+    the transaction shares by itself, so fetch and cache action history from
+    portfolio inception while leaving the plotted price window untouched.
+    """
+    normalized_symbols = tuple(sorted({
+        str(symbol or "").strip().upper()
+        for symbol in symbols or []
+        if str(symbol or "").strip()
+    }))
+    if not normalized_symbols or not inception_date:
+        return current_splits
+
+    requested_start = period_range.get("start_date")
+    if not requested_start or requested_start <= inception_date:
+        return current_splits
+
+    end_date = period_range.get("end_date") or datetime.date.today().isoformat()
+    cache_key = (normalized_symbols, inception_date, end_date)
+    history = _cache_get(
+        _STOCK_SPLIT_HISTORY_CACHE,
+        cache_key,
+        _STOCK_SPLIT_HISTORY_TTL_SEC,
+    )
+    if history is None:
+        try:
+            raw = _chunked_yf_download(
+                " ".join(normalized_symbols),
+                start=inception_date,
+                end=(
+                    datetime.date.fromisoformat(end_date)
+                    + datetime.timedelta(days=1)
+                ).isoformat(),
+                auto_adjust=False,
+                actions=True,
+                progress=False,
+            )
+            if isinstance(raw.columns, pd.MultiIndex):
+                history = (
+                    raw["Stock Splits"].fillna(0)
+                    if "Stock Splits" in raw.columns.get_level_values(0)
+                    else pd.DataFrame(
+                        0, index=raw.index, columns=list(normalized_symbols),
+                    )
+                )
+            else:
+                symbol = normalized_symbols[0]
+                values = (
+                    raw["Stock Splits"].fillna(0)
+                    if "Stock Splits" in raw.columns
+                    else pd.Series(0, index=raw.index)
+                )
+                history = pd.DataFrame({symbol: values})
+            _cache_set(_STOCK_SPLIT_HISTORY_CACHE, cache_key, history)
+        except Exception:
+            # The period's own action data is still useful. Coverage metadata
+            # will expose zero adjustments instead of inventing split factors.
+            history = None
+
+    if history is None or history.empty:
+        return current_splits
+    if current_splits is None or getattr(current_splits, "empty", True):
+        return history
+    return history.combine_first(current_splits).sort_index()
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -398,6 +596,7 @@ def _build_transaction_aware_portfolio_series(
     capital_gains,
     transactions,
     current_holdings,
+    stock_splits=None,
 ):
     """Build cash-flow-adjusted portfolio return indexes.
 
@@ -416,11 +615,18 @@ def _build_transaction_aware_portfolio_series(
         "price_gain_dollar": 0.0,
         "distribution_dollar": 0.0,
         "total_gain_dollar": 0.0,
+        "price_gain_dollar_series": [],
+        "distribution_dollar_series": [],
+        "total_gain_dollar_series": [],
         "actual_start_date": None,
         "actual_end_date": None,
         "transaction_count": 0,
         "fallback_positions": 0,
         "inferred_opening_positions": 0,
+        "inferred_closing_positions": 0,
+        "split_adjusted_transactions": 0,
+        "split_adjusted_positions": 0,
+        "missing_market_symbols": [],
         "fallback_date_sources": {
             "purchase_date": 0,
             "import_date": 0,
@@ -430,15 +636,34 @@ def _build_transaction_aware_portfolio_series(
     if close is None or close.empty:
         return empty
 
+    requested_market_symbols = sorted({
+        str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
+        for row in list(transactions or []) + list(current_holdings or [])
+        if isinstance(row, dict)
+        and str(row.get("market_symbol") or row.get("ticker") or "").strip()
+    })
+
     prices = close.copy()
     if prices.index.has_duplicates:
         prices = prices.loc[~prices.index.duplicated(keep="last")]
     if prices.columns.has_duplicates:
         prices = prices.loc[:, ~prices.columns.duplicated(keep="first")]
     prices.index = pd.to_datetime(prices.index)
-    prices = prices.sort_index().apply(pd.to_numeric, errors="coerce").ffill()
+    prices = prices.sort_index().apply(pd.to_numeric, errors="coerce")
+    # A return requires two actual market observations. Do not treat a lone
+    # quote followed by forward-filled blanks as valid historical coverage.
+    valid_price_columns = [
+        column for column in prices.columns
+        if int(prices[column].notna().sum()) >= 2
+    ]
+    prices = prices[valid_price_columns].ffill()
     if prices.empty:
-        return empty
+        return {**empty, "missing_market_symbols": requested_market_symbols}
+    missing_market_symbols = sorted(
+        set(requested_market_symbols) - {
+            str(column).strip().upper() for column in prices.columns
+        }
+    )
 
     def aligned_frame(frame, fill_value=None):
         if frame is None or frame.empty:
@@ -460,6 +685,33 @@ def _build_transaction_aware_portfolio_series(
         fill_value=0,
     )
 
+    # Yahoo's historical Close is expressed in today's split-adjusted share
+    # units. Broker exports retain the share quantity that actually traded at
+    # the time. Without converting those historical quantities, a reverse
+    # split can turn a $1,000 position into a fictional $100,000+ position.
+    # Keep the action history independent of the plotted price window because
+    # a split after a transaction still changes the units of that transaction.
+    if stock_splits is None or getattr(stock_splits, "empty", True):
+        split_history = pd.DataFrame()
+    else:
+        split_history = stock_splits.copy()
+        if isinstance(split_history, pd.Series):
+            split_history = split_history.to_frame()
+        if split_history.index.has_duplicates:
+            split_history = split_history.loc[
+                ~split_history.index.duplicated(keep="last")
+            ]
+        if split_history.columns.has_duplicates:
+            split_history = split_history.loc[
+                :, ~split_history.columns.duplicated(keep="first")
+            ]
+        split_history.index = pd.to_datetime(split_history.index)
+        split_history = (
+            split_history.sort_index()
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+        )
+
     first_market_date = prices.index[0].date()
     last_market_date = prices.index[-1].date()
     events = []
@@ -467,7 +719,31 @@ def _build_transaction_aware_portfolio_series(
     transaction_deltas = {}
     transaction_symbols = {}
     first_transaction_dates = {}
+    last_transaction_dates = {}
     valid_transaction_events = 0
+    split_adjusted_transactions = 0
+    split_adjusted_positions = set()
+    last_market_timestamp = pd.Timestamp(last_market_date)
+
+    split_factor_cache = {}
+
+    def split_factor_after(symbol, event_date):
+        cache_key = (symbol, event_date)
+        if cache_key in split_factor_cache:
+            return split_factor_cache[cache_key]
+        factor = 1.0
+        if symbol in split_history.columns:
+            series = split_history[symbol]
+            applicable = series[
+                (series.index > pd.Timestamp(event_date))
+                & (series.index <= last_market_timestamp)
+                & (series > 0)
+                & (series != 1)
+            ]
+            for value in applicable:
+                factor *= float(value)
+        split_factor_cache[cache_key] = factor
+        return factor
 
     for txn in transactions or []:
         symbol = str(txn.get("market_symbol") or txn.get("ticker") or "").strip().upper()
@@ -484,6 +760,11 @@ def _build_transaction_aware_portfolio_series(
         transaction_positions.add(position_key)
         if event_date is None or shares <= 0 or txn_type not in {"BUY", "SELL"}:
             continue
+        split_factor = split_factor_after(symbol, event_date)
+        if not math.isclose(split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12):
+            shares *= split_factor
+            split_adjusted_transactions += 1
+            split_adjusted_positions.add(position_key)
         signed_shares = shares if txn_type == "BUY" else -shares
         transaction_deltas[position_key] = (
             transaction_deltas.get(position_key, 0.0) + signed_shares
@@ -492,6 +773,10 @@ def _build_transaction_aware_portfolio_series(
         first_transaction_dates[position_key] = min(
             event_date,
             first_transaction_dates.get(position_key, event_date),
+        )
+        last_transaction_dates[position_key] = max(
+            event_date,
+            last_transaction_dates.get(position_key, event_date),
         )
         if symbol not in prices.columns or event_date > last_market_date:
             continue
@@ -505,9 +790,12 @@ def _build_transaction_aware_portfolio_series(
             str(holding.get("ticker") or "").strip().upper(),
         )
         try:
-            current_quantities[position_key] = float(holding.get("quantity") or 0)
+            current_quantities[position_key] = (
+                current_quantities.get(position_key, 0.0)
+                + float(holding.get("quantity") or 0)
+            )
         except (TypeError, ValueError):
-            current_quantities[position_key] = 0.0
+            current_quantities.setdefault(position_key, 0.0)
 
     # Broker transaction exports frequently begin with a DRIP or SELL for a
     # position that was already open before the export's first row. Reconcile
@@ -515,24 +803,37 @@ def _build_transaction_aware_portfolio_series(
     # opening lot is present, while still using the first recorded activity as
     # the earliest defensible ownership boundary.
     inferred_opening_positions = 0
+    inferred_closing_positions = 0
     for position_key, net_delta in transaction_deltas.items():
         symbol = transaction_symbols.get(position_key)
         if symbol not in prices.columns:
             continue
         opening_quantity = current_quantities.get(position_key, 0.0) - net_delta
-        if opening_quantity <= 1e-8:
-            continue
-        first_activity = first_transaction_dates.get(position_key)
-        if first_activity is None:
-            continue
-        seed_date = max(
-            first_market_date,
-            first_activity - datetime.timedelta(days=1),
-        )
-        if seed_date > last_market_date:
-            continue
-        events.append((seed_date, symbol, opening_quantity))
-        inferred_opening_positions += 1
+        if opening_quantity > 1e-8:
+            first_activity = first_transaction_dates.get(position_key)
+            if first_activity is None:
+                continue
+            seed_date = max(
+                first_market_date,
+                first_activity - datetime.timedelta(days=1),
+            )
+            if seed_date > last_market_date:
+                continue
+            events.append((seed_date, symbol, opening_quantity))
+            inferred_opening_positions += 1
+        elif opening_quantity < -1e-8:
+            # The transaction export contains more net purchases than the
+            # authoritative current snapshot. The missing close/transfer must
+            # not leave a phantom holding earning returns through today. Close
+            # the excess at the last recorded activity inside this window and
+            # expose the reconciliation count to every consumer.
+            close_date = min(
+                last_market_date,
+                last_transaction_dates.get(position_key, last_market_date),
+            )
+            close_date = max(first_market_date, close_date)
+            events.append((close_date, symbol, opening_quantity))
+            inferred_closing_positions += 1
 
     fallback_positions = 0
     fallback_date_sources = {
@@ -609,6 +910,16 @@ def _build_transaction_aware_portfolio_series(
     distribution_cash = 0.0
     price_gain_dollar = 0.0
     distribution_dollar = 0.0
+    price_gain_dollar_series = [None] * len(prices.index)
+    distribution_dollar_series = [None] * len(prices.index)
+    total_gain_dollar_series = [None] * len(prices.index)
+
+    def record_dollar_returns(row_index):
+        price_gain_dollar_series[row_index] = round(price_gain_dollar, 4)
+        distribution_dollar_series[row_index] = round(distribution_dollar, 4)
+        total_gain_dollar_series[row_index] = round(
+            price_gain_dollar + distribution_dollar, 4,
+        )
 
     for row_index, timestamp in enumerate(prices.index):
         day = timestamp.date()
@@ -619,6 +930,7 @@ def _build_transaction_aware_portfolio_series(
                 price_index = total_index = 100.0
                 price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
                 market_values[row_index] = round(opening_value, 4)
+                record_dollar_returns(row_index)
             continue
 
         previous_prices = price_matrix[row_index - 1]
@@ -671,6 +983,7 @@ def _build_transaction_aware_portfolio_series(
             price_values[row_index] = round(price_index, 4)
             pricediv_values[row_index] = round(price_index + distribution_cash, 4)
             total_values[row_index] = round(total_index, 4)
+            record_dollar_returns(row_index)
 
         # End-of-day flow convention: today's trades affect tomorrow's weights,
         # but never create a jump in today's return index.
@@ -680,6 +993,7 @@ def _build_transaction_aware_portfolio_series(
             price_index = total_index = 100.0
             distribution_cash = 0.0
             price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
+            record_dollar_returns(row_index)
         if price_index is not None:
             market_values[row_index] = round(closing_value, 4)
 
@@ -697,11 +1011,18 @@ def _build_transaction_aware_portfolio_series(
         "price_gain_dollar": round(price_gain_dollar, 4),
         "distribution_dollar": round(distribution_dollar, 4),
         "total_gain_dollar": round(price_gain_dollar + distribution_dollar, 4),
+        "price_gain_dollar_series": price_gain_dollar_series,
+        "distribution_dollar_series": distribution_dollar_series,
+        "total_gain_dollar_series": total_gain_dollar_series,
         "actual_start_date": plotted_dates[0] if plotted_dates else None,
         "actual_end_date": plotted_dates[-1] if plotted_dates else None,
         "transaction_count": valid_transaction_events,
         "fallback_positions": fallback_positions,
         "inferred_opening_positions": inferred_opening_positions,
+        "inferred_closing_positions": inferred_closing_positions,
+        "split_adjusted_transactions": split_adjusted_transactions,
+        "split_adjusted_positions": len(split_adjusted_positions),
+        "missing_market_symbols": missing_market_symbols,
         "fallback_date_sources": fallback_date_sources,
     }
 
@@ -747,6 +1068,10 @@ def _portfolio_period_metrics(series_result):
         "transaction_count": int(series_result.get("transaction_count") or 0),
         "fallback_positions": int(series_result.get("fallback_positions") or 0),
         "inferred_opening_positions": int(series_result.get("inferred_opening_positions") or 0),
+        "inferred_closing_positions": int(series_result.get("inferred_closing_positions") or 0),
+        "split_adjusted_transactions": int(series_result.get("split_adjusted_transactions") or 0),
+        "split_adjusted_positions": int(series_result.get("split_adjusted_positions") or 0),
+        "missing_market_symbols": list(series_result.get("missing_market_symbols") or []),
         "fallback_date_sources": series_result.get("fallback_date_sources") or {},
     }
 
@@ -1181,6 +1506,8 @@ _TOTAL_RETURN_DASHBOARD_CACHE = {}
 _TOTAL_RETURN_DASHBOARD_TTL_SEC = 10 * 60
 _TOTAL_RETURN_COMPARISON_CACHE = {}
 _TOTAL_RETURN_COMPARISON_TTL_SEC = 10 * 60
+_STOCK_SPLIT_HISTORY_CACHE = {}
+_STOCK_SPLIT_HISTORY_TTL_SEC = 6 * 60 * 60
 
 
 def _cached_yf_info(yf_ticker_obj, symbol):
@@ -18024,6 +18351,8 @@ def _ticker_return_holding_context(conn, ticker):
     is_aggregate, profile_ids = get_profile_filter()
     profile_ids = list(dict.fromkeys(int(pid) for pid in profile_ids))
     placeholders = ",".join("?" * len(profile_ids))
+    ticker_aliases = _accounting_aliases_for_ticker(ticker)
+    ticker_placeholders = ",".join("?" * len(ticker_aliases))
 
     if is_aggregate:
         basis_total = _basis_total_expr("a")
@@ -18037,21 +18366,21 @@ def _ticker_return_holding_context(conn, ticker):
                     END AS price_paid,
                     MAX(NULLIF(a.description, '')) AS description
                 FROM all_account_info a
-                WHERE a.ticker = ?
+                WHERE a.ticker IN ({ticker_placeholders})
                   AND a.profile_id IN ({placeholders})
                   AND COALESCE(a.quantity, 0) > 1e-9
                 HAVING SUM(COALESCE({basis_total}, 0)) > 0""",
-            [ticker] + profile_ids,
+            list(ticker_aliases) + profile_ids,
         ).fetchone()
     else:
         row = conn.execute(
-            """SELECT purchase_date, price_paid, description, quantity,
+            f"""SELECT purchase_date, price_paid, description, quantity,
                       purchase_value, original_price_paid, original_purchase_value,
                       broker_price_paid, broker_purchase_value
                FROM all_account_info
-               WHERE ticker = ? AND profile_id = ?
+               WHERE ticker IN ({ticker_placeholders}) AND profile_id = ?
                  AND COALESCE(quantity, 0) > 1e-9""",
-            (ticker, profile_ids[0]),
+            list(ticker_aliases) + [profile_ids[0]],
         ).fetchone()
         if row:
             holding = dict(row)
@@ -18065,14 +18394,14 @@ def _ticker_return_holding_context(conn, ticker):
     txn_row = conn.execute(
         f"""SELECT transaction_date, price_per_share
             FROM transactions
-            WHERE ticker = ?
+            WHERE ticker IN ({ticker_placeholders})
               AND profile_id IN ({placeholders})
               AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
               AND shares > 0
               AND price_per_share > 0
             ORDER BY transaction_date ASC
             LIMIT 1""",
-        [ticker] + profile_ids,
+        list(ticker_aliases) + profile_ids,
     ).fetchone()
     return row, txn_row
 
@@ -18100,23 +18429,25 @@ def ticker_return_chart(ticker):
         row, txn_row = _ticker_return_holding_context(conn, ticker)
         _, profile_ids = get_profile_filter()
         placeholders = ",".join("?" * len(profile_ids))
+        ticker_aliases = _accounting_aliases_for_ticker(ticker)
+        ticker_placeholders = ",".join("?" * len(ticker_aliases))
         holding_rows = conn.execute(
             f"""SELECT ticker, profile_id, quantity, purchase_date, import_date
                 FROM all_account_info
-                WHERE ticker = ?
+                WHERE ticker IN ({ticker_placeholders})
                   AND profile_id IN ({placeholders})
                   AND COALESCE(quantity, 0) > 1e-9""",
-            [ticker] + profile_ids,
+            list(ticker_aliases) + profile_ids,
         ).fetchall()
         transaction_rows = conn.execute(
             f"""SELECT ticker, profile_id, transaction_type, transaction_date,
                        shares, price_per_share, fees, notes
                 FROM transactions
-                WHERE ticker = ?
+                WHERE ticker IN ({ticker_placeholders})
                   AND profile_id IN ({placeholders})
                   AND transaction_date IS NOT NULL
                 ORDER BY transaction_date, id""",
-            [ticker] + profile_ids,
+            list(ticker_aliases) + profile_ids,
         ).fetchall()
     finally:
         conn.close()
@@ -18164,7 +18495,8 @@ def ticker_return_chart(ticker):
         return jsonify({"error": str(exc)}), 400
 
     # Detect ticker rename (e.g. TOPW → WPAY)
-    dl_ticker = ticker
+    accounting_ticker = _accounting_symbol_for_ticker(ticker)
+    dl_ticker = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
     try:
         _info = yf.Ticker(ticker).info or {}
         _new_sym = (_info.get("symbol") or "").upper()
@@ -18212,27 +18544,38 @@ def ticker_return_chart(ticker):
         adjusted_col = _field_series("Adj Close", close_col)
         divs_col = _field_series("Dividends", pd.Series(0.0, index=close_col.index))
         cap_gains_col = _field_series("Capital Gains", pd.Series(0.0, index=close_col.index))
-        close_frame = pd.DataFrame({ticker: close_col})
-        adjusted_frame = pd.DataFrame({ticker: adjusted_col}).reindex(close_frame.index)
-        divs_frame = pd.DataFrame({ticker: divs_col}).reindex(close_frame.index).fillna(0)
-        cap_gains_frame = pd.DataFrame({ticker: cap_gains_col}).reindex(close_frame.index).fillna(0)
+        splits_col = _field_series("Stock Splits", pd.Series(0.0, index=close_col.index))
+        close_frame = pd.DataFrame({dl_ticker: close_col})
+        adjusted_frame = pd.DataFrame({dl_ticker: adjusted_col}).reindex(close_frame.index)
+        divs_frame = pd.DataFrame({dl_ticker: divs_col}).reindex(close_frame.index).fillna(0)
+        cap_gains_frame = pd.DataFrame({dl_ticker: cap_gains_col}).reindex(close_frame.index).fillna(0)
+        splits_frame = pd.DataFrame({dl_ticker: splits_col}).fillna(0)
+        splits_frame = _stock_split_history_for_period(
+            [dl_ticker],
+            splits_frame,
+            period_range,
+            history_start.strftime("%Y-%m-%d"),
+        )
 
         canonical_transactions = []
         for raw_row in transaction_rows:
             tx = dict(raw_row)
-            tx["market_symbol"] = ticker
-            tx["position_key"] = (tx.get("profile_id"), ticker)
+            tx["ticker"] = accounting_ticker
+            tx["market_symbol"] = dl_ticker
+            tx["position_key"] = (tx.get("profile_id"), accounting_ticker)
             canonical_transactions.append(tx)
         canonical_holdings = []
         for raw_row in holding_rows:
             holding = dict(raw_row)
-            holding["market_symbol"] = ticker
-            holding["position_key"] = (holding.get("profile_id"), ticker)
+            holding["ticker"] = accounting_ticker
+            holding["market_symbol"] = dl_ticker
+            holding["position_key"] = (holding.get("profile_id"), accounting_ticker)
             canonical_holdings.append(holding)
 
         series = _build_transaction_aware_portfolio_series(
             close_frame, adjusted_frame, divs_frame, cap_gains_frame,
             canonical_transactions, canonical_holdings,
+            stock_splits=splits_frame,
         )
         valid_indexes = [
             index for index, value in enumerate(series["total"])
@@ -24530,6 +24873,9 @@ def total_return_charts():
         return jsonify({"error": "No holdings in selected categories"}), 404
 
     allowed_tickers = set(df["ticker"].astype(str).str.upper())
+    allowed_accounting_tickers = {
+        _accounting_symbol_for_ticker(ticker) for ticker in allowed_tickers
+    }
     filtered_holding_records = [
         row for row in holding_records
         if str(row.get("ticker") or "").strip().upper() in allowed_tickers
@@ -24557,7 +24903,7 @@ def total_return_charts():
     filtered_transaction_records = [
         dict(row) for row in transaction_rows
         if not (cat_ids or sub_ids)
-        or str(row["ticker"] or "").strip().upper() in allowed_tickers
+        or _accounting_symbol_for_ticker(row["ticker"]) in allowed_accounting_tickers
     ]
     inception_date = _portfolio_inception_date(
         filtered_holding_records,
@@ -24610,12 +24956,16 @@ def total_return_charts():
     for raw_row in payment_rows:
         row = dict(raw_row)
         raw_ticker = str(row.get("ticker") or "").strip().upper()
-        if not raw_ticker or (filter_is_active and raw_ticker not in allowed_tickers):
+        if not raw_ticker or (
+            filter_is_active
+            and _accounting_symbol_for_ticker(raw_ticker) not in allowed_accounting_tickers
+        ):
             continue
+        accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
         source = str(row.get("source") or "").strip()
         if source.lower() in non_actual_payment_sources:
             continue
-        payment_covered_tickers.add(raw_ticker)
+        payment_covered_tickers.add(accounting_ticker)
         payment_date = str(row.get("payment_date") or "")[:10]
         if period_range["start_date"] and payment_date < period_range["start_date"]:
             continue
@@ -24625,19 +24975,25 @@ def total_return_charts():
             amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             amount = 0
-        period_payment_totals[raw_ticker] = period_payment_totals.get(raw_ticker, 0) + amount
+        period_payment_totals[accounting_ticker] = (
+            period_payment_totals.get(accounting_ticker, 0) + amount
+        )
         if source:
             payment_sources.add(source)
 
     for raw_row in transaction_rows:
         row = dict(raw_row)
         raw_ticker = str(row.get("ticker") or "").strip().upper()
-        if filter_is_active and raw_ticker not in allowed_tickers:
+        if (
+            filter_is_active
+            and _accounting_symbol_for_ticker(raw_ticker) not in allowed_accounting_tickers
+        ):
             continue
-        market_symbol = _yahoo_symbol_for_ticker(raw_ticker) or raw_ticker
-        row["ticker"] = raw_ticker
+        accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
+        market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+        row["ticker"] = accounting_ticker
         row["market_symbol"] = market_symbol
-        row["position_key"] = (row.get("profile_id"), raw_ticker)
+        row["position_key"] = (row.get("profile_id"), accounting_ticker)
         portfolio_transactions.append(row)
         if market_symbol:
             portfolio_symbols.append(market_symbol)
@@ -24645,10 +25001,11 @@ def total_return_charts():
     for raw_row in filtered_holding_records:
         row = dict(raw_row)
         raw_ticker = str(row.get("ticker") or "").strip().upper()
-        market_symbol = _yahoo_symbol_for_ticker(raw_ticker) or raw_ticker
-        row["ticker"] = raw_ticker
+        accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
+        market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+        row["ticker"] = accounting_ticker
         row["market_symbol"] = market_symbol
-        row["position_key"] = (row.get("profile_id"), raw_ticker)
+        row["position_key"] = (row.get("profile_id"), accounting_ticker)
         portfolio_holdings.append(row)
         if market_symbol:
             portfolio_symbols.append(market_symbol)
@@ -24674,6 +25031,7 @@ def total_return_charts():
             adjusted_close = raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else None
             dividends = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
             capital_gains = raw["Capital Gains"].fillna(0) if "Capital Gains" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+            stock_splits = raw["Stock Splits"].fillna(0) if "Stock Splits" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
         else:
             close = raw[["Close"]]
             close.columns = [all_dl[0]]
@@ -24684,6 +25042,15 @@ def total_return_charts():
             dividends.columns = [all_dl[0]]
             capital_gains = raw[["Capital Gains"]].fillna(0) if "Capital Gains" in raw.columns else pd.DataFrame(0, index=close.index, columns=[all_dl[0]])
             capital_gains.columns = [all_dl[0]]
+            stock_splits = raw[["Stock Splits"]].fillna(0) if "Stock Splits" in raw.columns else pd.DataFrame(0, index=close.index, columns=[all_dl[0]])
+            stock_splits.columns = [all_dl[0]]
+
+        stock_splits = _stock_split_history_for_period(
+            all_dl,
+            stock_splits,
+            period_range,
+            inception_date,
+        )
 
         transactions_by_ticker = {}
         holdings_by_ticker = {}
@@ -24697,7 +25064,8 @@ def total_return_charts():
         def ticker_result_for(ticker):
             if ticker in ticker_result_cache:
                 return ticker_result_cache[ticker]
-            market_symbol = _yahoo_symbol_for_ticker(ticker) or ticker
+            accounting_ticker = _accounting_symbol_for_ticker(ticker)
+            market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
             if market_symbol not in close.columns:
                 ticker_result_cache[ticker] = None
                 return None
@@ -24706,8 +25074,13 @@ def total_return_charts():
                 adjusted_close[[market_symbol]] if adjusted_close is not None and market_symbol in adjusted_close.columns else None,
                 dividends[[market_symbol]] if market_symbol in dividends.columns else None,
                 capital_gains[[market_symbol]] if market_symbol in capital_gains.columns else None,
-                transactions_by_ticker.get(ticker, []),
-                holdings_by_ticker.get(ticker, []),
+                transactions_by_ticker.get(accounting_ticker, []),
+                holdings_by_ticker.get(accounting_ticker, []),
+                stock_splits=(
+                    stock_splits[[market_symbol]]
+                    if market_symbol in stock_splits.columns
+                    else None
+                ),
             )
             ticker_result_cache[ticker] = result
             return result
@@ -24720,8 +25093,11 @@ def total_return_charts():
             metrics = _portfolio_period_metrics(ticker_result)
             if metrics is None:
                 continue
-            if ticker in payment_covered_tickers:
-                metrics["distribution_dollar"] = round(period_payment_totals.get(ticker, 0), 4)
+            accounting_ticker = _accounting_symbol_for_ticker(ticker)
+            if accounting_ticker in payment_covered_tickers:
+                metrics["distribution_dollar"] = round(
+                    period_payment_totals.get(accounting_ticker, 0), 4,
+                )
                 metrics["distribution_source"] = "Broker payment history"
             else:
                 metrics["distribution_source"] = "Yahoo market history"
@@ -24753,6 +25129,7 @@ def total_return_charts():
             capital_gains,
             portfolio_transactions,
             portfolio_holdings,
+            stock_splits=stock_splits,
         )
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         if portfolio_metrics is not None:
@@ -24927,6 +25304,9 @@ def total_return_compare():
     extras = [t.strip().upper() for t in extra_param.replace(",", " ").split() if t.strip()]
     all_tickers = list(dict.fromkeys(selected + extras))  # dedupe, preserve order
     selected_set = set(selected)
+    selected_accounting_set = {
+        _accounting_symbol_for_ticker(ticker) for ticker in selected_set
+    }
 
     if not all_tickers and not include_portfolio:
         return jsonify({"error": "No tickers selected"}), 400
@@ -24961,12 +25341,13 @@ def total_return_compare():
         for raw_row in transaction_rows:
             row = dict(raw_row)
             raw_ticker = str(row.get("ticker") or "").strip().upper()
-            if not include_portfolio and raw_ticker not in selected_set:
+            accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
+            if not include_portfolio and accounting_ticker not in selected_accounting_set:
                 continue
-            market_symbol = _yahoo_symbol_for_ticker(raw_ticker) or raw_ticker
-            row["ticker"] = raw_ticker
+            market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+            row["ticker"] = accounting_ticker
             row["market_symbol"] = market_symbol
-            row["position_key"] = (row.get("profile_id"), raw_ticker)
+            row["position_key"] = (row.get("profile_id"), accounting_ticker)
             portfolio_transactions.append(row)
             if market_symbol:
                 portfolio_symbols.append(market_symbol)
@@ -24974,12 +25355,13 @@ def total_return_compare():
         for raw_row in holding_rows:
             row = dict(raw_row)
             raw_ticker = str(row.get("ticker") or "").strip().upper()
-            if not include_portfolio and raw_ticker not in selected_set:
+            accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
+            if not include_portfolio and accounting_ticker not in selected_accounting_set:
                 continue
-            market_symbol = _yahoo_symbol_for_ticker(raw_ticker) or raw_ticker
-            row["ticker"] = raw_ticker
+            market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+            row["ticker"] = accounting_ticker
             row["market_symbol"] = market_symbol
-            row["position_key"] = (row.get("profile_id"), raw_ticker)
+            row["position_key"] = (row.get("profile_id"), accounting_ticker)
             portfolio_holdings.append(row)
             if market_symbol:
                 portfolio_symbols.append(market_symbol)
@@ -25044,6 +25426,7 @@ def total_return_compare():
             adj_close = raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else None
             divs = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
             cap_gains = raw["Capital Gains"].fillna(0) if "Capital Gains" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+            stock_splits = raw["Stock Splits"].fillna(0) if "Stock Splits" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
         else:
             close = raw[["Close"]]
             close.columns = [download_tickers[0]]
@@ -25054,6 +25437,15 @@ def total_return_compare():
             divs.columns = [download_tickers[0]]
             cap_gains = raw[["Capital Gains"]].fillna(0) if "Capital Gains" in raw.columns else pd.DataFrame(0, index=close.index, columns=[download_tickers[0]])
             cap_gains.columns = [download_tickers[0]]
+            stock_splits = raw[["Stock Splits"]].fillna(0) if "Stock Splits" in raw.columns else pd.DataFrame(0, index=close.index, columns=[download_tickers[0]])
+            stock_splits.columns = [download_tickers[0]]
+
+        stock_splits = _stock_split_history_for_period(
+            download_tickers,
+            stock_splits,
+            period_range,
+            inception_date,
+        )
 
         dates = [d.strftime("%Y-%m-%d") for d in close.index]
 
@@ -25079,18 +25471,25 @@ def total_return_compare():
 
         for t in all_tickers:
             market_symbol = market_symbol_by_ticker.get(t, t)
+            accounting_ticker = _accounting_symbol_for_ticker(t)
             if market_symbol not in close.columns:
                 continue
             if t in selected_set and (
-                transactions_by_ticker.get(t) or holdings_by_ticker.get(t)
+                transactions_by_ticker.get(accounting_ticker)
+                or holdings_by_ticker.get(accounting_ticker)
             ):
                 owned_result = _build_transaction_aware_portfolio_series(
                     close[[market_symbol]],
                     adj_close[[market_symbol]] if adj_close is not None and market_symbol in adj_close.columns else None,
                     divs[[market_symbol]] if market_symbol in divs.columns else None,
                     cap_gains[[market_symbol]] if market_symbol in cap_gains.columns else None,
-                    transactions_by_ticker.get(t, []),
-                    holdings_by_ticker.get(t, []),
+                    transactions_by_ticker.get(accounting_ticker, []),
+                    holdings_by_ticker.get(accounting_ticker, []),
+                    stock_splits=(
+                        stock_splits[[market_symbol]]
+                        if market_symbol in stock_splits.columns
+                        else None
+                    ),
                 )
                 if any(value is not None for value in owned_result["price"]):
                     price_series[t] = owned_result["price"]
@@ -25137,6 +25536,7 @@ def total_return_compare():
                 cap_gains,
                 portfolio_transactions,
                 portfolio_holdings,
+                stock_splits=stock_splits,
             )
             if any(value is not None for value in portfolio_result["price"]):
                 price_series["PORTFOLIO"] = portfolio_result["price"]
@@ -25146,6 +25546,10 @@ def total_return_compare():
                     "transaction_count": portfolio_result["transaction_count"],
                     "fallback_positions": portfolio_result["fallback_positions"],
                     "inferred_opening_positions": portfolio_result["inferred_opening_positions"],
+                    "inferred_closing_positions": portfolio_result["inferred_closing_positions"],
+                    "split_adjusted_transactions": portfolio_result["split_adjusted_transactions"],
+                    "split_adjusted_positions": portfolio_result["split_adjusted_positions"],
+                    "missing_market_symbols": portfolio_result["missing_market_symbols"],
                     "fallback_date_sources": portfolio_result["fallback_date_sources"],
                 }
 
@@ -26415,7 +26819,7 @@ def growth_data():
                FROM all_account_info a
                JOIN ticker_categories tc ON a.ticker = tc.ticker AND a.profile_id = tc.profile_id
                WHERE a.profile_id IN ({placeholders}) AND ({' OR '.join(conds)})
-                 AND a.quantity > 0 AND a.current_value > 0""",
+                 AND a.quantity > 0""",
             qparams,
         ).fetchall()
     else:
@@ -26423,13 +26827,18 @@ def growth_data():
             f"""SELECT ticker, profile_id, quantity, current_value,
                       purchase_date, import_date
                FROM all_account_info
-               WHERE profile_id IN ({placeholders}) AND quantity > 0 AND current_value > 0""",
+               WHERE profile_id IN ({placeholders}) AND quantity > 0""",
             profile_ids,
         ).fetchall()
 
+    holding_records = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        row["ticker"] = _accounting_symbol_for_ticker(row.get("ticker"))
+        holding_records.append(row)
     selected_tickers = {
         str(row["ticker"] or "").strip().upper()
-        for row in rows
+        for row in holding_records
     }
     transaction_rows = conn.execute(
         f"""SELECT ticker, profile_id, transaction_type, transaction_date,
@@ -26439,15 +26848,14 @@ def growth_data():
            ORDER BY transaction_date, id""",
         profile_ids,
     ).fetchall()
-    filtered_transactions = [
-        dict(row) for row in transaction_rows
-        if str(row["ticker"] or "").strip().upper() in selected_tickers
-    ]
-    inception_transactions = (
-        filtered_transactions
-        if cat_ids or sub_ids
-        else [dict(row) for row in transaction_rows]
-    )
+    filtered_transactions = []
+    for raw_row in transaction_rows:
+        row = dict(raw_row)
+        row["ticker"] = _accounting_symbol_for_ticker(row.get("ticker"))
+        if (cat_ids or sub_ids) and row["ticker"] not in selected_tickers:
+            continue
+        filtered_transactions.append(row)
+    inception_transactions = filtered_transactions
 
     # Fetch categories (with sub-categories) for the filter dropdown
     cats = conn.execute(
@@ -26471,25 +26879,33 @@ def growth_data():
     if not rows:
         return jsonify({"error": "No holdings found", "categories": categories}), 400
 
-    holding_records = [dict(row) for row in rows]
+    portfolio_inception_date = _portfolio_inception_date(
+        holding_records,
+        inception_transactions,
+    )
     try:
         period_range = _resolve_total_return_period(
             period,
             start_date=custom_start,
             end_date=custom_end,
-            inception_date=_portfolio_inception_date(
-                holding_records,
-                inception_transactions,
-            ),
+            inception_date=portfolio_inception_date,
         )
     except ValueError as exc:
         return jsonify({"error": str(exc), "categories": categories}), 400
 
     tickers = sorted(selected_tickers)
+    portfolio_tickers = sorted(
+        selected_tickers
+        | {
+            str(row.get("ticker") or "").strip().upper()
+            for row in filtered_transactions
+            if str(row.get("ticker") or "").strip()
+        }
+    )
     quantities = {
         ticker: sum(
             float(row["quantity"] or 0)
-            for row in rows
+            for row in holding_records
             if str(row["ticker"] or "").strip().upper() == ticker
         )
         for ticker in tickers
@@ -26497,12 +26913,15 @@ def growth_data():
     values = {
         ticker: sum(
             float(row["current_value"] or 0)
-            for row in rows
+            for row in holding_records
             if str(row["ticker"] or "").strip().upper() == ticker
         )
         for ticker in tickers
     }
-    yahoo_by_symbol = {sym: _yahoo_symbol_for_ticker(sym) for sym in tickers + [benchmark]}
+    yahoo_by_symbol = {
+        sym: _yahoo_symbol_for_ticker(sym)
+        for sym in portfolio_tickers + [benchmark]
+    }
     yahoo_symbols = list(dict.fromkeys(yahoo_by_symbol.values()))
 
     try:
@@ -26528,6 +26947,7 @@ def growth_data():
         )
         divs = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
         cap_gains = raw["Capital Gains"].fillna(0) if "Capital Gains" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+        stock_splits = raw["Stock Splits"].fillna(0) if "Stock Splits" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [yahoo_symbols[0]]
@@ -26537,6 +26957,15 @@ def growth_data():
         divs.columns = [yahoo_symbols[0]]
         cap_gains = raw[["Capital Gains"]].fillna(0) if "Capital Gains" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_symbols[0]])
         cap_gains.columns = [yahoo_symbols[0]]
+        stock_splits = raw[["Stock Splits"]].fillna(0) if "Stock Splits" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_symbols[0]])
+        stock_splits.columns = [yahoo_symbols[0]]
+
+    stock_splits = _stock_split_history_for_period(
+        yahoo_symbols,
+        stock_splits,
+        period_range,
+        portfolio_inception_date,
+    )
 
     # Convert Yahoo-specific symbols (e.g. BRK-B, CODI-PB) back to the app's
     # tickers, and ignore empty download columns so one failed ticker cannot
@@ -26545,6 +26974,10 @@ def growth_data():
     adjusted_by_ticker = pd.DataFrame(index=close.index)
     divs_by_ticker = pd.DataFrame(index=close.index)
     cap_gains_by_ticker = pd.DataFrame(index=close.index)
+    # Split actions must retain the full inception-to-period history returned
+    # above. Reindexing them to the short price window would discard an older
+    # split and reintroduce the historical-share/current-price unit mismatch.
+    splits_by_ticker = pd.DataFrame(index=stock_splits.index)
     for symbol, yahoo_symbol in yahoo_by_symbol.items():
         if yahoo_symbol not in close.columns:
             continue
@@ -26565,34 +26998,36 @@ def growth_data():
             cap_gains_by_ticker[symbol] = cap_gains[yahoo_symbol]
         else:
             cap_gains_by_ticker[symbol] = 0
+        if yahoo_symbol in stock_splits.columns:
+            splits_by_ticker[symbol] = stock_splits[yahoo_symbol]
+        else:
+            splits_by_ticker[symbol] = 0
     close = close_by_ticker.dropna(how="all")
     adjusted = adjusted_by_ticker.reindex(close.index).dropna(how="all")
     divs = divs_by_ticker.reindex(close.index).fillna(0)
     cap_gains = cap_gains_by_ticker.reindex(close.index).fillna(0)
-    if period_range["start_date"]:
-        start_boundary = pd.Timestamp(period_range["start_date"])
-        close = close.loc[close.index >= start_boundary]
-        adjusted = adjusted.loc[adjusted.index >= start_boundary]
-        divs = divs.loc[divs.index >= start_boundary]
-        cap_gains = cap_gains.loc[cap_gains.index >= start_boundary]
-    if period_range["end_date"]:
-        end_boundary = pd.Timestamp(period_range["end_date"])
-        close = close.loc[close.index <= end_boundary]
-        adjusted = adjusted.loc[adjusted.index <= end_boundary]
-        divs = divs.loc[divs.index <= end_boundary]
-        cap_gains = cap_gains.loc[cap_gains.index <= end_boundary]
-
+    stock_splits = splits_by_ticker.fillna(0)
     # Filter to tickers actually present in data
     available_tickers = [t for t in tickers if t in close.columns and len(close[t].dropna()) >= 2]
     if not available_tickers:
         return jsonify({"error": "No price data for holdings"}), 500
+    portfolio_available_tickers = [
+        t for t in portfolio_tickers
+        if t in close.columns and len(close[t].dropna()) >= 2
+    ]
 
     # ── Portfolio value series (price-only and total return) ──
-    first_valid = close[available_tickers].dropna(how="all").index[0]
-    close_aligned = close[available_tickers].loc[first_valid:].ffill().bfill()
-    adjusted_aligned = adjusted[available_tickers].loc[first_valid:].ffill().bfill()
-    divs_aligned = divs[available_tickers].loc[first_valid:].fillna(0) if set(available_tickers).issubset(divs.columns) else pd.DataFrame(0, index=close_aligned.index, columns=available_tickers)
-    cap_gains_aligned = cap_gains[available_tickers].loc[first_valid:].fillna(0) if set(available_tickers).issubset(cap_gains.columns) else pd.DataFrame(0, index=close_aligned.index, columns=available_tickers)
+    first_valid = close[portfolio_available_tickers].dropna(how="all").index[0]
+    close_aligned = close[portfolio_available_tickers].loc[first_valid:]
+    adjusted_aligned = adjusted.reindex(
+        index=close_aligned.index, columns=portfolio_available_tickers,
+    )
+    divs_aligned = divs.reindex(
+        index=close_aligned.index, columns=portfolio_available_tickers,
+    ).fillna(0)
+    cap_gains_aligned = cap_gains.reindex(
+        index=close_aligned.index, columns=portfolio_available_tickers,
+    ).fillna(0)
 
     # Growth & Performance and Total Return now use the same transaction-aware
     # engine. A trade changes the portfolio's weight after the day's return; it
@@ -26601,8 +27036,6 @@ def growth_data():
     canonical_transactions = []
     for transaction in filtered_transactions:
         ticker = str(transaction.get("ticker") or "").strip().upper()
-        if ticker not in available_tickers:
-            continue
         transaction = dict(transaction)
         transaction["market_symbol"] = ticker
         transaction["position_key"] = (transaction.get("profile_id"), ticker)
@@ -26610,8 +27043,6 @@ def growth_data():
     canonical_holdings = []
     for holding in holding_records:
         ticker = str(holding.get("ticker") or "").strip().upper()
-        if ticker not in available_tickers:
-            continue
         holding = dict(holding)
         holding["market_symbol"] = ticker
         holding["position_key"] = (holding.get("profile_id"), ticker)
@@ -26619,6 +27050,9 @@ def growth_data():
     canonical_result = _build_transaction_aware_portfolio_series(
         close_aligned, adjusted_aligned, divs_aligned, cap_gains_aligned,
         canonical_transactions, canonical_holdings,
+        stock_splits=stock_splits.reindex(
+            columns=portfolio_available_tickers,
+        ).fillna(0),
     )
     canonical_metrics = _portfolio_period_metrics(canonical_result)
     canonical_indexes = [
@@ -26657,10 +27091,12 @@ def growth_data():
     ticker_returns = []
     for t in available_tickers:
         ticker_result = _build_transaction_aware_portfolio_series(
-            close_aligned[[t]], adjusted_aligned[[t]], divs_aligned[[t]],
-            cap_gains_aligned[[t]],
+            close[[t]], adjusted.reindex(index=close.index, columns=[t]),
+            divs.reindex(index=close.index, columns=[t]).fillna(0),
+            cap_gains.reindex(index=close.index, columns=[t]).fillna(0),
             [tx for tx in canonical_transactions if tx.get("market_symbol") == t],
             [holding for holding in canonical_holdings if holding.get("market_symbol") == t],
+            stock_splits=stock_splits.reindex(columns=[t]).fillna(0),
         )
         ticker_metrics = _portfolio_period_metrics(ticker_result)
         ticker_returns.append({
@@ -26683,7 +27119,7 @@ def growth_data():
     ]
 
     # ── Correlation matrix ──
-    daily_returns = close_aligned[available_tickers].pct_change().dropna(how="all")
+    daily_returns = close[available_tickers].ffill().pct_change().dropna(how="all")
     corr = daily_returns.corr()
     corr_tickers = list(corr.columns)
     corr_matrix = [[_clean(round(float(corr.iloc[i, j]), 3)) for j in range(len(corr_tickers))] for i in range(len(corr_tickers))]
@@ -44479,8 +44915,12 @@ def growth_2_data():
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
     payment_placeholders = ",".join("?" * len(payment_profile_ids))
+    dividend_payment_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(dividend_payments)").fetchall()
+    }
+    payment_source_sql = "source" if "source" in dividend_payment_columns else "NULL AS source"
     div_rows = conn.execute(
-        f"""SELECT ticker, payment_date, amount
+        f"""SELECT ticker, payment_date, amount, {payment_source_sql}
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
             ORDER BY payment_date""",
@@ -44492,11 +44932,28 @@ def growth_2_data():
     if not rows:
         return jsonify({"error": "No holdings found", "categories": categories, "tickers": []}), 400
 
+    normalized_rows = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        row["ticker"] = _accounting_symbol_for_ticker(row.get("ticker"))
+        normalized_rows.append(row)
+    rows = normalized_rows
+
+    normalized_txn_rows = []
+    for raw_row in txn_rows:
+        row = dict(raw_row)
+        row["ticker"] = _accounting_symbol_for_ticker(row.get("ticker"))
+        normalized_txn_rows.append(row)
+    txn_rows = normalized_txn_rows
+
     all_tickers = sorted(set(r["ticker"] for r in rows))
 
     filter_tickers = None
     if tickers_param:
-        filter_tickers = set(t.strip().upper() for t in tickers_param.split(",") if t.strip())
+        filter_tickers = {
+            _accounting_symbol_for_ticker(t)
+            for t in tickers_param.split(",") if t.strip()
+        }
 
     active_rows = [r for r in rows if not filter_tickers or r["ticker"] in filter_tickers]
     if not active_rows:
@@ -44535,6 +44992,19 @@ def growth_2_data():
                 "realized_gain": None,
             })
     all_txns = [dict(tx) for tx in txn_rows] + synthetic_txns
+    return_scope_transactions = [
+        dict(tx) for tx in all_txns
+        if not filter_tickers
+        or str(tx.get("ticker") or "").strip().upper() in active_tickers
+    ]
+    return_scope_tickers = sorted(
+        set(active_tickers)
+        | {
+            str(tx.get("ticker") or "").strip().upper()
+            for tx in return_scope_transactions
+            if str(tx.get("ticker") or "").strip()
+        }
+    )
 
     ownership_starts = {}
 
@@ -44568,16 +45038,16 @@ def growth_2_data():
         for t in active_tickers:
             ownership_starts.setdefault(t, known_portfolio_start)
 
+    tracker_inception_date = _portfolio_inception_date(
+        [dict(row) for row in active_rows],
+        return_scope_transactions,
+    )
     try:
         period_range = _resolve_total_return_period(
             period_param,
             start_date=custom_start,
             end_date=custom_end,
-            inception_date=(
-                known_portfolio_start.strftime("%Y-%m-%d")
-                if known_portfolio_start is not None
-                else None
-            ),
+            inception_date=tracker_inception_date,
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -44592,7 +45062,7 @@ def growth_2_data():
         else None
     )
 
-    yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in active_tickers}
+    yahoo_by_ticker = {t: _yahoo_symbol_for_ticker(t) for t in return_scope_tickers}
     ticker_by_yahoo = {yf_t: t for t, yf_t in yahoo_by_ticker.items()}
     yahoo_tickers = list(dict.fromkeys(yahoo_by_ticker.values()))
 
@@ -44618,6 +45088,7 @@ def growth_2_data():
         )
         divs_raw = raw["Dividends"].fillna(0) if "Dividends" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
         cap_gains_raw = raw["Capital Gains"].fillna(0) if "Capital Gains" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
+        splits_raw = raw["Stock Splits"].fillna(0) if "Stock Splits" in raw.columns.get_level_values(0) else pd.DataFrame(0, index=close.index, columns=close.columns)
     else:
         close = raw[["Close"]].dropna(how="all")
         close.columns = [yahoo_tickers[0]]
@@ -44627,11 +45098,21 @@ def growth_2_data():
         divs_raw.columns = [yahoo_tickers[0]]
         cap_gains_raw = raw[["Capital Gains"]].fillna(0) if "Capital Gains" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_tickers[0]])
         cap_gains_raw.columns = [yahoo_tickers[0]]
+        splits_raw = raw[["Stock Splits"]].fillna(0) if "Stock Splits" in raw.columns else pd.DataFrame(0, index=close.index, columns=[yahoo_tickers[0]])
+        splits_raw.columns = [yahoo_tickers[0]]
+
+    splits_raw = _stock_split_history_for_period(
+        yahoo_tickers,
+        splits_raw,
+        period_range,
+        tracker_inception_date,
+    )
 
     close = close.rename(columns=ticker_by_yahoo)
     adjusted_raw = adjusted_raw.rename(columns=ticker_by_yahoo)
     divs_raw = divs_raw.rename(columns=ticker_by_yahoo)
     cap_gains_raw = cap_gains_raw.rename(columns=ticker_by_yahoo)
+    splits_raw = splits_raw.rename(columns=ticker_by_yahoo)
     # yfinance (esp. when rate-limited across chunked downloads) can return the
     # same symbol as duplicate columns. That makes close[t] a DataFrame instead
     # of a Series, which later blows up float(series.iloc[-1]) with
@@ -44644,6 +45125,8 @@ def growth_2_data():
         divs_raw = divs_raw.loc[:, ~divs_raw.columns.duplicated()]
     if cap_gains_raw.columns.duplicated().any():
         cap_gains_raw = cap_gains_raw.loc[:, ~cap_gains_raw.columns.duplicated()]
+    if splits_raw.columns.duplicated().any():
+        splits_raw = splits_raw.loc[:, ~splits_raw.columns.duplicated()]
     if close.index.has_duplicates:
         close = close.loc[~close.index.duplicated(keep="last")]
     if adjusted_raw.index.has_duplicates:
@@ -44652,9 +45135,28 @@ def growth_2_data():
         divs_raw = divs_raw.loc[~divs_raw.index.duplicated(keep="last")]
     if cap_gains_raw.index.has_duplicates:
         cap_gains_raw = cap_gains_raw.loc[~cap_gains_raw.index.duplicated(keep="last")]
+    if splits_raw.index.has_duplicates:
+        splits_raw = splits_raw.loc[~splits_raw.index.duplicated(keep="last")]
     avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
     if not avail:
         return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
+    return_avail = [
+        t for t in return_scope_tickers
+        if t in close.columns and len(close[t].dropna()) >= 2
+    ]
+
+    return_first_valid = close[return_avail].dropna(how="all").index[0]
+    return_close = close[return_avail].loc[return_first_valid:]
+    return_adj = adjusted_raw.reindex(
+        index=return_close.index, columns=return_avail,
+    )
+    return_divs = divs_raw.reindex(
+        index=return_close.index, columns=return_avail,
+    ).fillna(0)
+    return_cap_gains = cap_gains_raw.reindex(
+        index=return_close.index, columns=return_avail,
+    ).fillna(0)
+    return_splits = splits_raw.reindex(columns=return_avail).fillna(0)
 
     first_valid = close[avail].dropna(how="all").index[0]
     close_a = close[avail].loc[first_valid:].ffill()
@@ -44685,11 +45187,9 @@ def growth_2_data():
         return jsonify({"error": "No data for selected period", "tickers": all_tickers}), 500
 
     return_transactions = []
-    for transaction in all_txns:
+    for transaction in return_scope_transactions:
         row = dict(transaction)
         ticker = str(row.get("ticker") or "").strip().upper()
-        if ticker not in avail:
-            continue
         row["market_symbol"] = ticker
         row["position_key"] = (row.get("profile_id", profile_ids[0]), ticker)
         return_transactions.append(row)
@@ -44698,21 +45198,145 @@ def growth_2_data():
     for holding in active_rows:
         row = dict(holding)
         ticker = str(row.get("ticker") or "").strip().upper()
-        if ticker not in avail:
-            continue
         row["market_symbol"] = ticker
         row["position_key"] = (row.get("profile_id", profile_ids[0]), ticker)
         return_holdings.append(row)
 
     portfolio_return_result = _build_transaction_aware_portfolio_series(
-        close_a,
-        adj_a,
-        divs_a,
-        cap_gains_a,
+        return_close,
+        return_adj,
+        return_divs,
+        return_cap_gains,
         return_transactions,
         return_holdings,
+        stock_splits=return_splits,
     )
     portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
+
+    # Use the same distribution-dollar policy as Total Return: actual broker
+    # payment history wins for a covered ticker, with Yahoo market history only
+    # filling tickers that have no broker payment history. This keeps the
+    # dollar result on this page reconcilable with the reference dashboard.
+    non_actual_payment_sources = {
+        "refresh_estimate", "projection", "estimate", "estimated",
+    }
+    payment_covered_tickers = set()
+    payment_events_by_ticker = {}
+    payment_sources = set()
+    for raw_row in div_rows:
+        row = dict(raw_row)
+        ticker = _accounting_symbol_for_ticker(row.get("ticker"))
+        if ticker not in return_scope_tickers:
+            continue
+        source = str(row.get("source") or "").strip()
+        if source.lower() in non_actual_payment_sources:
+            continue
+        payment_covered_tickers.add(ticker)
+        payment_date = str(row.get("payment_date") or "")[:10]
+        if period_range["start_date"] and payment_date < period_range["start_date"]:
+            continue
+        if period_range["end_date"] and payment_date > period_range["end_date"]:
+            continue
+        try:
+            payment_timestamp = pd.Timestamp(payment_date).normalize()
+            payment_amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        payment_events_by_ticker.setdefault(ticker, []).append(
+            (payment_timestamp, payment_amount),
+        )
+        if source:
+            payment_sources.add(source)
+
+    transactions_by_ticker = {}
+    holdings_by_ticker = {}
+    for row in return_transactions:
+        transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
+    for row in return_holdings:
+        holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
+
+    ticker_return_cache = {}
+
+    def ticker_return_result(ticker):
+        if ticker in ticker_return_cache:
+            return ticker_return_cache[ticker]
+        if ticker not in return_close.columns:
+            ticker_return_cache[ticker] = None
+            return None
+        ticker_result = _build_transaction_aware_portfolio_series(
+            return_close[[ticker]],
+            return_adj[[ticker]] if ticker in return_adj.columns else None,
+            return_divs[[ticker]] if ticker in return_divs.columns else None,
+            return_cap_gains[[ticker]] if ticker in return_cap_gains.columns else None,
+            transactions_by_ticker.get(ticker, []),
+            holdings_by_ticker.get(ticker, []),
+            stock_splits=(
+                return_splits[[ticker]] if ticker in return_splits.columns else None
+            ),
+        )
+        ticker_return_cache[ticker] = ticker_result
+        return ticker_result
+
+    distribution_series = pd.Series(0.0, index=return_close.index)
+    yahoo_fallback_tickers = 0
+    for ticker in return_scope_tickers:
+        if ticker in payment_covered_tickers:
+            ticker_payments = pd.Series(0.0, index=return_close.index)
+            for payment_timestamp, payment_amount in payment_events_by_ticker.get(ticker, []):
+                market_index = return_close.index.searchsorted(
+                    payment_timestamp, side="left",
+                )
+                if market_index < len(return_close.index):
+                    ticker_payments.iloc[market_index] += payment_amount
+            distribution_series += ticker_payments.cumsum()
+            continue
+        ticker_result = ticker_return_result(ticker)
+        if ticker_result is None:
+            continue
+        ticker_distribution = pd.to_numeric(
+            pd.Series(
+                ticker_result.get("distribution_dollar_series") or [],
+                index=return_close.index,
+            ),
+            errors="coerce",
+        ).ffill().fillna(0)
+        distribution_series += ticker_distribution
+        yahoo_fallback_tickers += 1
+
+    if portfolio_return_metrics is not None:
+        portfolio_distribution = float(distribution_series.iloc[-1])
+        portfolio_return_metrics["distribution_dollar"] = round(
+            portfolio_distribution, 4,
+        )
+        portfolio_return_metrics["total_return_dollar"] = round(
+            float(portfolio_return_metrics.get("price_return_dollar") or 0)
+            + portfolio_distribution,
+            4,
+        )
+        portfolio_return_metrics["distribution_source"] = (
+            "Broker payment history"
+            + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
+               f"{'' if yahoo_fallback_tickers == 1 else 's'}"
+               if yahoo_fallback_tickers else "")
+            if payment_covered_tickers
+            else "Yahoo market history"
+        )
+        portfolio_return_metrics["payment_sources"] = sorted(payment_sources)
+
+    tracker_indexes = [
+        index for index, value in enumerate(portfolio_return_result["total"])
+        if value is not None
+    ]
+    tracker_actual_start_date = (
+        return_close.index[tracker_indexes[0]].strftime("%Y-%m-%d")
+        if tracker_indexes
+        else None
+    )
+    tracker_actual_end_date = (
+        return_close.index[tracker_indexes[-1]].strftime("%Y-%m-%d")
+        if tracker_indexes
+        else None
+    )
 
     # ── Portfolio value timeline (current shares * historical prices) ──
     port_value = pd.Series(0.0, index=close_a.index)
@@ -44842,40 +45466,101 @@ def growth_2_data():
         "period_label": period_range["label"],
         "actual_start_date": dates_str[0] if dates_str else None,
         "actual_end_date": dates_str[-1] if dates_str else None,
+        "tracker_actual_start_date": tracker_actual_start_date,
+        "tracker_actual_end_date": tracker_actual_end_date,
+        "tracker_coverage": {
+            "transaction_count": portfolio_return_result["transaction_count"],
+            "fallback_positions": portfolio_return_result["fallback_positions"],
+            "inferred_opening_positions": portfolio_return_result["inferred_opening_positions"],
+            "inferred_closing_positions": portfolio_return_result["inferred_closing_positions"],
+            "split_adjusted_transactions": portfolio_return_result["split_adjusted_transactions"],
+            "split_adjusted_positions": portfolio_return_result["split_adjusted_positions"],
+            "missing_market_symbols": portfolio_return_result["missing_market_symbols"],
+            "fallback_date_sources": portfolio_return_result["fallback_date_sources"],
+        },
         "requested_start_date": period_range["start_date"],
         "requested_end_date": period_range["end_date"],
         "cash_value": round(cash_value, 2) if include_cash else 0,
         "pl_basis": pl_basis,
+        "accounting_basis": "transaction_aware",
     }
 
     base_for_pct = total_invested if pl_basis == "first_trade" else start_port_val
 
+    performance_dates = [
+        return_close.index[index].strftime("%Y-%m-%d") for index in tracker_indexes
+    ]
+    tracker_price_dollar = pd.to_numeric(
+        pd.Series(
+            portfolio_return_result.get("price_gain_dollar_series") or [],
+            index=return_close.index,
+        ),
+        errors="coerce",
+    ).ffill().fillna(0)
+    tracker_distribution_dollar = distribution_series.ffill().fillna(0)
+    tracker_price_dollar = tracker_price_dollar.iloc[tracker_indexes]
+    tracker_distribution_dollar = tracker_distribution_dollar.iloc[tracker_indexes]
+    tracker_total_dollar = tracker_price_dollar + tracker_distribution_dollar
+    zero_performance = pd.Series(0.0, index=tracker_price_dollar.index)
+
     if profit_mode == "pct":
+        tracker_price_pct = pd.Series([
+            float(portfolio_return_result["price"][index]) - 100
+            for index in tracker_indexes
+        ], index=tracker_price_dollar.index)
+        tracker_total_pct = pd.Series([
+            float(portfolio_return_result["total"][index]) - 100
+            for index in tracker_indexes
+        ], index=tracker_price_dollar.index)
         result["performance"] = {
-            "capital_gain": _cs(to_pct(capital_gain, base_for_pct)),
-            "dividends": _cs(to_pct(cum_divs_dollar, base_for_pct)),
-            "realized_pl": _cs(to_pct(realized_cum, base_for_pct)),
-            "fees": _cs(to_pct(fees_cum, base_for_pct)),
-            "total": _cs(to_pct(total_pl, base_for_pct)),
+            "capital_gain": _cs(tracker_price_pct),
+            "dividends": _cs(tracker_total_pct - tracker_price_pct),
+            "realized_pl": _cs(zero_performance),
+            "fees": _cs(zero_performance),
+            "total": _cs(tracker_total_pct),
         }
         result["profit_unit"] = "%"
     else:
         result["performance"] = {
-            "capital_gain": _cs(capital_gain),
-            "dividends": _cs(cum_divs_dollar),
-            "realized_pl": _cs(realized_cum),
-            "fees": _cs(fees_cum),
-            "total": _cs(total_pl),
+            "capital_gain": _cs(tracker_price_dollar),
+            "dividends": _cs(tracker_distribution_dollar),
+            "realized_pl": _cs(zero_performance),
+            "fees": _cs(zero_performance),
+            "total": _cs(tracker_total_dollar),
         }
         result["profit_unit"] = "$"
+    result["performance_dates"] = performance_dates
 
     result["summary"] = {
         "start_value": _clean(round(float(port_value.iloc[0]), 2)),
         "end_value": _clean(round(float(port_value.iloc[-1]), 2)),
-        "total_profit_amount": _clean(round(float(total_pl.iloc[-1]), 2)),
-        "total_profit_pct": _clean(round(float(to_pct(total_pl, base_for_pct).iloc[-1]), 2)),
+        "total_profit_amount": (
+            _clean(round(float(portfolio_return_metrics["total_return_dollar"]), 2))
+            if portfolio_return_metrics
+            else None
+        ),
+        "total_profit_pct": (
+            portfolio_return_metrics.get("total_return_pct")
+            if portfolio_return_metrics
+            else None
+        ),
         "total_return_pct": (
             portfolio_return_metrics.get("total_return_pct")
+            if portfolio_return_metrics
+            else None
+        ),
+        "price_return_amount": (
+            _clean(round(float(portfolio_return_metrics["price_return_dollar"]), 2))
+            if portfolio_return_metrics
+            else None
+        ),
+        "distribution_amount": (
+            _clean(round(float(portfolio_return_metrics["distribution_dollar"]), 2))
+            if portfolio_return_metrics
+            else None
+        ),
+        "distribution_source": (
+            portfolio_return_metrics.get("distribution_source")
             if portfolio_return_metrics
             else None
         ),
