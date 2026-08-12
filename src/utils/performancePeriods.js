@@ -165,6 +165,25 @@ export const writeSharedPerformanceRange = (period, start, end, originId = null)
   }
 }
 
+// Two screens price the same positions from different clocks: Gains & Losses
+// reads the prices saved by the last market refresh, Total Return re-reads
+// Yahoo on every request. Stamping each value with its clock is what makes the
+// intraday gap between them explainable instead of alarming.
+export const formatClockTime = (value) => {
+  if (!value) return ''
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return parsed.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+export const formatClockStamp = (value) => {
+  const time = formatClockTime(value)
+  if (!time) return ''
+  const parsed = new Date(value)
+  const isToday = dateInputValue(parsed) === todayInputValue()
+  return isToday ? time : `${formatPerformanceDate(dateInputValue(parsed))} ${time}`
+}
+
 export const formatPerformanceDate = (value) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!match) return ''

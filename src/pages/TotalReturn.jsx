@@ -16,6 +16,8 @@ import {
   formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
+  formatClockStamp,
+  formatClockTime,
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
@@ -791,7 +793,17 @@ export default function TotalReturn() {
     return label ? `As of ${label} close` : dashboardCardRange
   }
   const startValueAsOf = asOf(chartData?.actual_start_date)
-  const endValueAsOf = asOf(chartData?.actual_end_date)
+  // "As of <today> close" is a lie while the session is still running: the last
+  // point of the Yahoo series is the live price, re-read on every request. That
+  // is the whole reason End Value here and Current Value on Gains & Losses
+  // disagree intraday, so name the clock — but keep the date, which is the range
+  // the card is reporting and is not what changed.
+  const endsToday = chartData?.actual_end_date === todayInputValue()
+  const pricedAtLabel = t.priced_at ? formatClockTime(t.priced_at) : ''
+  const endDateLabel = formatPerformanceDate(chartData?.actual_end_date)
+  const endValueAsOf = endsToday && endDateLabel
+    ? `As of ${endDateLabel} ${pricedAtLabel ? `· live price, read ${pricedAtLabel}` : '· live price'}`
+    : asOf(chartData?.actual_end_date)
   const spyRange = formatComparisonRange(chartData?.spy_actual_start_date, chartData?.spy_actual_end_date)
   const cmpRequestedRange = formatComparisonRange(cmpData?.requested_start_date, cmpData?.requested_end_date)
   const cmpActualRange = formatComparisonRange(cmpData?.actual_start_date, cmpData?.actual_end_date)
@@ -1015,14 +1027,36 @@ export default function TotalReturn() {
               {t.account_reconciliation && (
                 <div className="summary-sub">Holdings only — no cash; see Account Value</div>
               )}
+              {/* Without this, the same positions showing two totals on two
+                  screens reads as a bug rather than as two reading times. */}
+              {endsToday && t.prices_saved_at && (
+                <div className="summary-sub">
+                  Moves with the market. Gains &amp; Losses shows saved prices from
+                  {' '}{formatClockStamp(t.prices_saved_at)}, so it reads lower or higher until the close.
+                </div>
+              )}
             </MetricCard>
             {/* Its own card rather than a bigger End Value: Start Value plus the
                 two return cards has to keep reconciling to End Value, and
                 neither cash nor an option mark is a return. */}
-            <AccountValueCard data={t.account_reconciliation} basisLabel={endValueAsOf} />
+            <AccountValueCard
+              data={t.account_reconciliation}
+              basisLabel={endValueAsOf}
+              holdingsNote={endsToday
+                ? 'Built on the live End Value above, and the option mark is quoted fresh, so it will not tie to Gains & Losses to the cent until the close.'
+                : undefined}
+            />
+            {/* Price Return, Price Return % and Tracker Total Return % appear in
+                this order on Growth & Performance too, so the two screens can be
+                read side by side without hunting for the matching card. */}
             <MetricCard label="Price Return" range={dashboardCardRange}
               value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>}>
               <div className="summary-sub">Market price only, dividends excluded</div>
+            </MetricCard>
+            <MetricCard label="Price Return %" range={dashboardCardRange}
+              value={<span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>}>
+              <div className="summary-sub">Time-weighted — dividends excluded</div>
+              <div className="summary-sub">Compare with Growth &amp; Performance</div>
             </MetricCard>
             <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange}>
               <div className="summary-sub">Dividends paid during the range</div>

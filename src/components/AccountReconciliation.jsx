@@ -42,7 +42,7 @@ export default function AccountReconciliation({ data }) {
 
 // The standalone card, for a screen whose headline deliberately excludes cash.
 // This is the figure to compare against a broker's net liquidating value.
-export function AccountValueCard({ data, label = 'Account Value', basisLabel }) {
+export function AccountValueCard({ data, label = 'Account Value', basisLabel, holdingsNote }) {
   if (!data) return null
   const detail = parts(data)
   return (
@@ -53,6 +53,11 @@ export function AccountValueCard({ data, label = 'Account Value', basisLabel }) 
       {/* Led by "Holdings" so the line reads as the whole sum, not as a set of
           adjustments to some figure the reader has to go find. */}
       {detail.length > 0 && <div className="summary-sub">Holdings {detail.join(' ')}</div>}
+      {/* This card inherits its screen's holdings clock, and the option mark is
+          quoted fresh on every request. Two screens can therefore print two
+          account values for the same account, which needs saying on the card
+          rather than only in whichever screen the reader happens to open. */}
+      {holdingsNote && <div className="summary-sub">{holdingsNote}</div>}
       <div className="summary-sub">Compare with broker net liquidating value</div>
     </div>
   )

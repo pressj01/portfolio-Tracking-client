@@ -4092,6 +4092,41 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
     return parsed
 
 
+def _saved_price_timestamp(profile_ids):
+    """When the stored holdings prices these screens read were last refreshed.
+
+    Two clocks price the same positions. Gains & Losses reads
+    ``holdings.current_price``, frozen at the last market refresh; Total Return
+    and Growth re-fetch Yahoo on every request, and while the market is open
+    "today's close" is the live price. Intraday the two therefore disagree, and
+    the gap widens as the session runs — with nothing on screen to say why.
+
+    Reported so each screen can name the clock it is showing. Owner resolves to
+    its source accounts, whose refresh markers are the ones that actually moved
+    the rollup's prices; Owner's own marker can be months old.
+    """
+    if not profile_ids:
+        return None
+    conn = get_connection()
+    try:
+        latest = None
+        for pid in profile_ids:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key = ?", (f"last_refresh_{pid}",)
+            ).fetchone()
+            if not row or not row[0]:
+                continue
+            try:
+                stamp = datetime.datetime.fromisoformat(row[0])
+            except (TypeError, ValueError):
+                continue
+            if latest is None or stamp > latest:
+                latest = stamp
+    finally:
+        conn.close()
+    return latest.isoformat(timespec="seconds") if latest else None
+
+
 def _account_value_reconciliation(
     is_aggregate,
     profile_ids,
@@ -25288,6 +25323,15 @@ def total_return_charts():
             portfolio_metrics["payment_sources"] = sorted(payment_sources)
             # End Value here is the charted positions alone — this page leaves
             # cash out on purpose, because a cash balance is not a return.
+            # End Value is priced from a Yahoo series fetched for this request.
+            # When the range ends today that last point is the live price, not a
+            # settled close, so stamp when it was read: it is the other half of
+            # why this screen and Gains & Losses disagree intraday.
+            portfolio_metrics["priced_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+            # position_profile_ids, not profile_ids: Owner's own refresh marker
+            # can be months old while the source accounts that actually hold the
+            # shares refreshed minutes ago.
+            portfolio_metrics["prices_saved_at"] = _saved_price_timestamp(position_profile_ids)
             portfolio_metrics["account_reconciliation"] = _account_value_reconciliation(
                 _request_aggregate_id() is not None,
                 profile_ids,
@@ -26347,6 +26391,12 @@ def gains_losses_summary():
         "combined_divs": _safe(u_totals["divs"] + r_totals["divs"]),
         "combined_total_gl": _safe(u_totals["total_gl"] + r_totals["total_gl"]),
     }
+    # Names the clock behind Current Value. These are stored prices, so the
+    # figure holds still between refreshes while Total Return's End Value keeps
+    # moving with the market — see _saved_price_timestamp.
+    totals["prices_saved_at"] = _saved_price_timestamp(
+        list(dict.fromkeys([*holding_profile_ids, *transaction_profile_ids])),
+    )
     # Current Value is a lifetime accounting figure, not a period one, so it is
     # already an as-of-today number and needs no date gate here.
     totals["account_reconciliation"] = _account_value_reconciliation(

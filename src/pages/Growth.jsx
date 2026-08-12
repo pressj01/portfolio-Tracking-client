@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
+import { formatMoneyWhole } from '../utils/money'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -35,6 +36,7 @@ function MetricCard({ label, value, sub, range }) {
 }
 
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '—'
+const fmtInt = v => formatMoneyWhole(v)
 const fmtSignedPct = v => v != null ? `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%` : '—'
 
 // Both index charts are normalized to 100 at the start of the period, so the
@@ -661,11 +663,16 @@ export default function Growth() {
               )}
               {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
-            <ReturnCard
-              label="Tracker Total Return %"
-              value={data.portfolio_metrics?.total_return_pct}
-              benchLabel={data.benchmark_ticker}
-              benchValue={lastIndexReturn(data.benchmark_total)}
+            {/* Price Return, Price Return % and Tracker Total Return % appear in
+                this order on the Total Return Dashboard too, so the two screens
+                can be read side by side without hunting for the matching card.
+                The dollar figure comes from the same builder over the same
+                series as that screen's, so it can be checked directly rather
+                than by converting a percentage back into money. */}
+            <MetricCard
+              label="Price Return"
+              value={<span style={{ color: (data.portfolio_metrics?.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(data.portfolio_metrics?.price_return_dollar)}</span>}
+              sub="Market price only, dividends excluded"
               range={cardRange}
             />
             <ReturnCard
@@ -673,6 +680,13 @@ export default function Growth() {
               value={data.portfolio_metrics?.price_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_price)}
+              range={cardRange}
+            />
+            <ReturnCard
+              label="Tracker Total Return %"
+              value={data.portfolio_metrics?.total_return_pct}
+              benchLabel={data.benchmark_ticker}
+              benchValue={lastIndexReturn(data.benchmark_total)}
               range={cardRange}
             />
             <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} range={cardRange} />

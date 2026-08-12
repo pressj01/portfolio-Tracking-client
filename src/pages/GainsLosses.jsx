@@ -15,6 +15,7 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
+  formatClockStamp,
   formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
@@ -1005,15 +1006,33 @@ export default function GainsLosses() {
                 Cost basis · {basisMode === 'broker_adjusted' ? 'broker adjusted' : 'original'}
               </div>
             </MetricCard>
-            <MetricCard label="Current Value" value={fmtInt(t.unrealized_value)}>
+            <MetricCard
+              label="Current Value"
+              value={fmtInt(t.unrealized_value)}
+              /* "Today's price" is only true at the moment of the refresh. Naming
+                 that moment is what explains why Total Return's End Value, which
+                 re-reads the market on every request, sits above or below this. */
+              range={t.prices_saved_at ? `Saved prices from ${formatClockStamp(t.prices_saved_at)}` : undefined}
+            >
               {t.account_reconciliation ? (
                 <div className="summary-sub">Holdings only — no cash; see Account Value</div>
               ) : (
                 <div className="summary-sub">Those same shares at today's price</div>
               )}
+              {t.prices_saved_at && (
+                <div className="summary-sub">
+                  Holds still between refreshes. Total Return&apos;s End Value re-reads the
+                  market each time, so the two differ until the close.
+                </div>
+              )}
             </MetricCard>
             {/* Current Value counts holdings only; this is the whole account. */}
-            <AccountValueCard data={t.account_reconciliation} />
+            <AccountValueCard
+              data={t.account_reconciliation}
+              holdingsNote={t.prices_saved_at
+                ? 'Built on the saved Current Value above, and the option mark is quoted fresh, so it will not tie to Total Return to the cent until the close.'
+                : undefined}
+            />
             <MetricCard label="Unrealized G/L (Price Only)" value={<span style={{ color: glColor(t.unrealized_price_gl) }}>{fmtInt(t.unrealized_price_gl)}</span>}>
               <div className="summary-sub">Current Value − Total Invested</div>
             </MetricCard>
