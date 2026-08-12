@@ -2201,6 +2201,42 @@ label {
   color: var(--accent-bright);
   font-weight: 600;
 }
+/* Ticker filter: the list scrolls, the All Tickers row and the Apply footer
+   stay put — a footer inside the scroll area scrolls out of reach. */
+.growth-ticker-dropdown {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+.growth-ticker-head {
+  flex: 0 0 auto;
+  padding: 0.4rem 0.4rem 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+.growth-ticker-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 0.4rem;
+}
+.growth-ticker-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.growth-ticker-actions .btn {
+  padding: 0.25rem 0.7rem;
+  font-size: 0.8rem;
+}
+.growth-ticker-count {
+  margin-right: auto;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
 .growth-help {
   margin: -0.25rem 0 1rem;
   overflow: hidden;

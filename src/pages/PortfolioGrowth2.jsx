@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
@@ -22,19 +22,47 @@ function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
 
+  // The applied selection uses [] for "all", but the dropdown needs an explicit
+  // list so the All Tickers box has something to clear — otherwise unchecking it
+  // is a no-op and picking one ticker means unchecking every other one by hand.
+  const applied = useMemo(
+    () => (selected.length ? tickers.filter(t => selected.includes(t)) : tickers),
+    [selected, tickers],
+  )
+  // Checkbox clicks edit a draft; only Apply reloads the charts, so building a
+  // selection costs one fetch instead of one per box ticked.
+  const [draft, setDraft] = useState(applied)
+  // Resync during render rather than in an effect: an applied selection that
+  // changed underneath us (new range, new account) must not leave a stale draft.
+  const [syncedApplied, setSyncedApplied] = useState(applied)
+  if (syncedApplied !== applied) {
+    setSyncedApplied(applied)
+    setDraft(applied)
+  }
+
+  const closeAndReset = useCallback(() => {
+    setOpen(false)
+    setDraft(applied)
+  }, [applied])
+
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) closeAndReset() }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [])
+  }, [closeAndReset])
 
   const allSelected = selected.length === 0
+  const allDrafted = draft.length === tickers.length
+  const dirty = draft.length !== applied.length || draft.some(t => !applied.includes(t))
+
   const toggleTicker = (t) => {
-    if (selected.includes(t)) {
-      onChange(selected.filter(x => x !== t))
-    } else {
-      onChange([...selected, t])
-    }
+    setDraft(d => (d.includes(t) ? d.filter(x => x !== t) : tickers.filter(x => d.includes(x) || x === t)))
+  }
+
+  const apply = () => {
+    if (!draft.length) return
+    onChange(allDrafted ? [] : draft)
+    setOpen(false)
   }
 
   return (
@@ -43,33 +71,48 @@ function TickerFilter({ tickers, selected, onChange }) {
       <button
         className="btn btn-secondary"
         style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem', minWidth: '140px', textAlign: 'left' }}
-        onClick={() => setOpen(o => !o)}
+        onClick={() => (open ? closeAndReset() : setOpen(true))}
       >
         {allSelected ? `All (${tickers.length})` : `${selected.length} of ${tickers.length}`}
         <span style={{ float: 'right', marginLeft: '0.5rem' }}>{open ? '▴' : '▾'}</span>
       </button>
       {open && (
-        <div className="growth-cat-dropdown" style={{ maxHeight: '400px', minWidth: '200px' }}>
-          <label className="growth-cat-option" style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.4rem', marginBottom: '0.2rem' }}>
-            <input type="checkbox" checked={allSelected} onChange={() => onChange([])} />
-            <span>All Tickers</span>
-          </label>
-          {tickers.map(t => (
-            <label key={t} className="growth-cat-option">
+        <div className="growth-cat-dropdown growth-ticker-dropdown" style={{ maxHeight: '400px', minWidth: '220px' }}>
+          <div className="growth-ticker-head">
+            <label className="growth-cat-option">
               <input
                 type="checkbox"
-                checked={allSelected || selected.includes(t)}
-                onChange={() => {
-                  if (allSelected) {
-                    onChange(tickers.filter(x => x !== t))
-                  } else {
-                    toggleTicker(t)
-                  }
-                }}
+                checked={allDrafted}
+                ref={el => { if (el) el.indeterminate = !allDrafted && draft.length > 0 }}
+                onChange={() => setDraft(allDrafted ? [] : tickers)}
               />
-              <span>{t}</span>
+              <span>All Tickers</span>
             </label>
-          ))}
+          </div>
+          <div className="growth-ticker-list">
+            {tickers.map(t => (
+              <label key={t} className="growth-cat-option">
+                <input
+                  type="checkbox"
+                  checked={draft.includes(t)}
+                  onChange={() => toggleTicker(t)}
+                />
+                <span>{t}</span>
+              </label>
+            ))}
+          </div>
+          <div className="growth-ticker-actions">
+            <span className="growth-ticker-count">{draft.length} of {tickers.length}</span>
+            <button className="btn btn-secondary" onClick={closeAndReset}>Cancel</button>
+            <button
+              className="btn btn-primary"
+              onClick={apply}
+              disabled={!draft.length || !dirty}
+              title={!draft.length ? 'Select at least one ticker' : undefined}
+            >
+              Apply
+            </button>
+          </div>
         </div>
       )}
     </div>

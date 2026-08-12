@@ -2317,8 +2317,12 @@ function PortfolioGrowth2Help() {
         <li>
           <strong>Tickers</strong> - A multi-select dropdown listing every ticker in the active portfolio.
           By default all tickers are included. Uncheck tickers to exclude them from both charts, or check
-          specific ones to focus on a subset. The button shows "All (N)" when nothing is excluded, or
-          "X of N" when a subset is selected.
+          specific ones to focus on a subset. <strong>All Tickers</strong> at the top selects or clears the
+          whole list in one click, so isolating a single holding is clear-all then check that one. Nothing
+          reloads while you are ticking boxes — click <strong>Apply</strong> to run the charts on the new
+          selection, or <strong>Cancel</strong> (or click away) to discard the edit. Apply stays disabled
+          until at least one ticker is checked. The button shows "All (N)" when nothing is excluded, or
+          "X of N" when a subset is applied.
         </li>
       </ul>
 
