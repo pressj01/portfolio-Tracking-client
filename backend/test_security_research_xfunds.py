@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
 from backend.app import (
     _XFUNDS_CURRENT_TICKERS,
+    _fetch_goldman_distribution_snapshot,
     _fetch_xfunds_distribution_snapshot,
     _fetch_xfunds_etf_profile,
     _is_xfunds_fund,
@@ -98,6 +100,20 @@ class _DistributionSession(_FakeSession):
         return super().get(url, params=params, headers=headers, timeout=timeout)
 
 
+class _GoldmanSession:
+    def post(self, url, json=None, timeout=None, headers=None):
+        return _FakeResponse(payload={
+            "data": {
+                "fundsDetail": {
+                    "fundName": "Goldman Sachs S&P 500 Premium Income ETF",
+                    "distributionFrequency": "Monthly",
+                    "yield": [{"value": "8.11%"}],
+                    "distributions": [],
+                },
+            },
+        })
+
+
 class XFundsSecurityResearchTests(unittest.TestCase):
     def test_current_official_lineup_is_recognized(self):
         expected = {
@@ -107,6 +123,15 @@ class XFundsSecurityResearchTests(unittest.TestCase):
         self.assertEqual(_XFUNDS_CURRENT_TICKERS, expected)
         self.assertTrue(all(_is_xfunds_fund(ticker) for ticker in expected))
         self.assertFalse(_is_xfunds_fund("DRMP"))
+
+    def test_goldman_snapshot_includes_the_official_fund_name(self):
+        fund = {"pvNumber": "123", "shareClassId": "456", "fundName": "GPIX"}
+        with patch("backend.app._fetch_goldman_fund_map", return_value={"GPIX": fund}):
+            snapshot = _fetch_goldman_distribution_snapshot("GPIX", session=_GoldmanSession())
+
+        self.assertEqual(snapshot["fund_name"], "Goldman Sachs S&P 500 Premium Income ETF")
+        self.assertEqual(snapshot["freq"], "M")
+        self.assertEqual(snapshot["distribution_rate_pct"], 8.11)
 
     def test_official_profile_parses_fund_site_fields(self):
         profile = _fetch_xfunds_etf_profile(

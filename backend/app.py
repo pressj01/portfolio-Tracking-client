@@ -11342,7 +11342,7 @@ def _fetch_goldman_fund_map():
     return funds
 
 
-def _fetch_goldman_distribution_snapshot(ticker):
+def _fetch_goldman_distribution_snapshot(ticker, session=None):
     """Fetch official Goldman Sachs fund yield and distributions when available."""
     import requests
 
@@ -11380,7 +11380,8 @@ def _fetch_goldman_distribution_snapshot(ticker):
     }
 
     try:
-        resp = requests.post(
+        client = session or requests
+        resp = client.post(
             "https://am.gs.com/services/funds",
             json={"query": query, "variables": variables},
             timeout=12,
@@ -11450,6 +11451,7 @@ def _fetch_goldman_distribution_snapshot(ticker):
     return {
         "known": True,
         "has_dividend": bool(not history.empty or distribution_rate_pct is not None),
+        "fund_name": str(detail.get("fundName") or fund.get("fundName") or "").strip() or None,
         "div": float(history.iloc[-1]) if not history.empty else None,
         "ex_div_date": latest_ex.strftime("%m/%d/%y") if latest_ex is not None else None,
         "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
@@ -18900,6 +18902,50 @@ def _research_money(value):
     return round(float(value), 2)
 
 
+def _research_market_price(yf_ticker_obj, info, symbol):
+    """Resolve a current market price when Yahoo's quote summary is sparse.
+
+    Security Research and the ETF Comparer both need a current price to express
+    distributions as periodic and annualized yields.  The quote summary is the
+    fastest source, but newer ETFs can have a complete distribution record with
+    no quote fields, so fall back to fast_info and then the market-data download.
+    """
+    price = _research_money(
+        _research_info_value(info or {}, "regularMarketPrice", "currentPrice", "previousClose")
+    )
+    if price is not None and price > 0:
+        return price
+
+    try:
+        fast_info = yf_ticker_obj.fast_info
+        price = _research_money(
+            getattr(fast_info, "last_price", None)
+            or (fast_info.get("last_price") if hasattr(fast_info, "get") else None)
+            or getattr(fast_info, "previous_close", None)
+            or (fast_info.get("previous_close") if hasattr(fast_info, "get") else None)
+        )
+        if price is not None and price > 0:
+            return price
+    except Exception:
+        pass
+
+    try:
+        frame = _chunked_yf_download(
+            [symbol], period="5d", interval="1d", auto_adjust=False, progress=False,
+        )
+        closes = frame.get("Close") if frame is not None and not frame.empty else None
+        if isinstance(closes, pd.DataFrame):
+            closes = closes[symbol] if symbol in closes.columns else closes.iloc[:, 0]
+        closes = pd.to_numeric(closes, errors="coerce").dropna()
+        if not closes.empty:
+            price = _research_money(closes.iloc[-1])
+            if price is not None and price > 0:
+                return price
+    except Exception:
+        pass
+    return None
+
+
 def _research_expense_pct(*values):
     for value in values:
         value = _research_clean_value(value)
@@ -20446,6 +20492,8 @@ def security_research(kind, ticker):
             trailing = divs[divs.index >= (pd.Timestamp.now(tz=divs.index.tz) - pd.DateOffset(years=1))]
             ttm_dividend = round(float(trailing.sum()), 4) if not trailing.empty else None
 
+    market_price = _research_market_price(yf_ticker, info, lookup_symbol)
+
     if kind == "etf":
         fund_data = None
         fund_overview = {}
@@ -20499,7 +20547,6 @@ def security_research(kind, ticker):
             if total_assets is not None:
                 total_assets_label = "Market Cap"
 
-        market_price = _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice"))
         nav_price = _research_money(_research_info_value(info, "navPrice"))
         nav_label = "NAV"
         if nav_price is None:
@@ -20574,6 +20621,11 @@ def security_research(kind, ticker):
 
         dist_history_series = None
         if official_snapshot:
+            official_fund_name = official_snapshot.get("fund_name")
+            if official_fund_name and response.get("name") in {None, "", ticker, lookup_symbol}:
+                response["name"] = official_fund_name
+            if official_snapshot.get("source") == "Goldman Sachs" and not response.get("issuer"):
+                response["issuer"] = "Goldman Sachs"
             if official_snapshot.get("freq"):
                 response["dividend_frequency"] = {
                     "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
@@ -20649,7 +20701,7 @@ def security_research(kind, ticker):
         "country": _research_info_value(info, "country"),
         "website": _research_info_value(info, "website"),
         "exchange": _research_info_value(info, "exchange", "fullExchangeName"),
-        "price": _research_money(_research_info_value(info, "regularMarketPrice", "currentPrice")),
+        "price": market_price,
         "market_cap": _research_money(_research_info_value(info, "marketCap")),
         "enterprise_value": _research_money(_research_info_value(info, "enterpriseValue")),
         "beta": _research_clean_value(_research_info_value(info, "beta")),

@@ -270,6 +270,7 @@ function DistributionChart({ history, ticker, price, frequency, source }) {
         onTogglePctMode={() => { setPctMode(v => !v); setAnnual(false) }}
         onToggleAnnual={() => setAnnual(v => !v)}
         emptyLabel="this symbol"
+        showEstimatedYield
       />
     </section>
   )
