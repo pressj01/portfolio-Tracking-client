@@ -19,8 +19,8 @@ import {
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
-  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 
 const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
@@ -120,9 +120,11 @@ export default function GainsLosses() {
   const [rvyMode, setRvyMode] = useState('cur')
   const [expandedRealized, setExpandedRealized] = useState({})
 
-  useEffect(() => {
-    writeSharedPerformanceRange(period, customStart, customEnd)
-  }, [period, customStart, customEnd])
+  useSharedPerformanceRange(period, customStart, customEnd, (next) => {
+    setPeriod(next.period)
+    setCustomStart(next.start)
+    setCustomEnd(next.end)
+  })
 
   const rangeError = customRangeError(period, customStart, customEnd)
 

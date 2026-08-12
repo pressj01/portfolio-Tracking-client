@@ -13,8 +13,8 @@ import {
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
-  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -94,9 +94,11 @@ export default function Growth() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    writeSharedPerformanceRange(period, customStart, customEnd)
-  }, [period, customStart, customEnd])
+  useSharedPerformanceRange(period, customStart, customEnd, (next) => {
+    setPeriod(next.period)
+    setCustomStart(next.start)
+    setCustomEnd(next.end)
+  })
 
   const rangeError = customRangeError(period, customStart, customEnd)
   const cardRange = data

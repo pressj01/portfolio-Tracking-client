@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { HashRouter as Router, Routes, Route, NavLink, useLocation } from 'react-router-dom'
+import { HashRouter as Router, NavLink, useLocation } from 'react-router-dom'
 import './index.css'
 import DialogProvider from './components/DialogProvider'
 import ProfileProvider, { useProfile } from './context/ProfileContext'
@@ -7,88 +7,7 @@ import ThemeProvider, { useTheme } from './context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
-import Dashboard from './pages/Dashboard'
-import Import from './pages/Import'
-import ManageHoldings from './pages/ManageHoldings'
-import CommonInfo from './pages/CommonInfo'
-import Settings from './pages/Settings'
-import Categories from './pages/Categories'
-import Growth from './pages/Growth'
-import DividendAnalysis from './pages/DividendAnalysis'
-import TotalReturn from './pages/TotalReturn'
-import ETFScreen from './pages/ETFScreen'
-import DividendCalendar from './pages/DividendCalendar'
-import EarningsCalendar from './pages/EarningsCalendar'
-import Watchlist from './pages/Watchlist'
-import BuySellSignals from './pages/BuySellSignals'
-import NavErosion from './pages/NavErosion'
-import NavErosionPortfolio from './pages/NavErosionPortfolio'
-import DripScore from './pages/DripScore'
-import PortfolioIncomeSim from './pages/PortfolioIncomeSim'
-import Correlation from './pages/Correlation'
-import Analytics from './pages/Analytics'
-import PortfolioBuilder from './pages/PortfolioBuilder'
-import DistributionCompare from './pages/DistributionCompare'
-import ManagePortfolios from './pages/ManagePortfolios'
-import Export from './pages/Export'
-import DividendCompare from './pages/DividendCompare'
-import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
-import Diversification from './pages/Diversification'
-import FundDefinitions from './pages/FundDefinitions'
-import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
-import IncomeGrowthSim from './pages/IncomeGrowthSim'
-import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
-import RetirementReadiness from './pages/RetirementReadiness'
-import CashFlowSustainability from './pages/CashFlowSustainability'
-import DividendHistory from './pages/DividendHistory'
-import DividendLedger from './pages/DividendLedger'
-import ReinvestmentImpact from './pages/ReinvestmentImpact'
-import GainsLosses from './pages/GainsLosses'
-import TaxLossHarvest from './pages/TaxLossHarvest'
-import BlendedYield from './pages/BlendedYield'
-import SafeWithdrawal from './pages/SafeWithdrawal'
-import Help from './pages/Help'
-import TechnicalScanner from './pages/TechnicalScanner'
-import GeneralScanner from './pages/GeneralScanner'
-import PortfolioTester from './pages/PortfolioTester'
-import SecurityResearch from './pages/SecurityResearch'
-import DividendCalculator from './pages/DividendCalculator'
-import AnnualTaxReport from './pages/AnnualTaxReport'
-import PortfolioGrowth2 from './pages/PortfolioGrowth2'
-import ETFProviderUpdate from './pages/ETFProviderUpdate'
-import ETFComparer from './pages/ETFComparer'
-import StockComparer from './pages/StockComparer'
-import StockValuation from './pages/StockValuation'
-import RebalanceWizard from './pages/RebalanceWizard'
-import HoldingTargets from './pages/HoldingTargets'
-import ActionCenter from './pages/ActionCenter'
-import ClosedCEFInformation from './pages/ClosedCEFInformation'
-import CEFBuyingGuide from './pages/CEFBuyingGuide'
-import CEFBuyingChecklistEvaluator from './pages/CEFBuyingChecklistEvaluator'
-import CEFvsIncomeETF from './pages/CEFvsIncomeETF'
-import ETFBuyingChecklistEvaluator from './pages/ETFBuyingChecklistEvaluator'
-import OptionIncomeETFEvaluator from './pages/OptionIncomeETFEvaluator'
-import StockBuyingChecklist from './pages/StockBuyingChecklist'
-import OptionTradingTools from './pages/OptionTradingTools'
-import OptionDashboard from './pages/OptionDashboard'
-import OptionProbabilityCalculator from './pages/OptionProbabilityCalculator'
-import OptionTrades from './pages/OptionTrades'
-import OptionTradeImport from './pages/OptionTradeImport'
-import OptionEducation from './pages/OptionEducation'
-import PutSellingScanner from './pages/PutSellingScanner'
-import CoveredCallScanner from './pages/CoveredCallScanner'
-import BearPutSpreadScanner from './pages/BearPutSpreadScanner'
-import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
-import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
-import IronCondorScanner from './pages/IronCondorScanner'
-import PutCondorScanner from './pages/PutCondorScanner'
-import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
-import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
-import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
-import RoadTripButterflyScanner from './pages/RoadTripButterflyScanner'
-import SixtyFortyTwentyFlyScanner from './pages/SixtyFortyTwentyFlyScanner'
-import IronButterflyScanner from './pages/IronButterflyScanner'
-import GreeksGuide from './pages/GreeksGuide'
+import AppRoutes from './pageCatalog'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -177,6 +96,15 @@ function NavMenuGroup({ title, children }) {
   )
 }
 
+function AppFrame() {
+  return (
+    <>
+      <Nav />
+      <AppRoutes />
+    </>
+  )
+}
+
 function App() {
   return (
     <DialogProvider>
@@ -185,93 +113,7 @@ function App() {
     <MarketRefreshProvider>
     <PlotlyThemeBridge />
     <Router>
-      <Nav />
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/action-center" element={<ActionCenter />} />
-        <Route path="/import" element={<Import />} />
-        <Route path="/holdings" element={<ManageHoldings />} />
-        <Route path="/common-info" element={<CommonInfo />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/categories" element={<Categories />} />
-        <Route path="/growth" element={<Growth />} />
-        <Route path="/dividends" element={<DividendAnalysis />} />
-        <Route path="/total-return" element={<TotalReturn />} />
-        <Route path="/gains-losses" element={<GainsLosses />} />
-        <Route path="/safe-withdrawal" element={<SafeWithdrawal />} />
-        <Route path="/etf-screen" element={<ETFScreen />} />
-        <Route path="/div-calendar" element={<DividendCalendar />} />
-        <Route path="/earnings-calendar" element={<EarningsCalendar />} />
-        <Route path="/watchlist" element={<Watchlist />} />
-        <Route path="/buy-sell-signals" element={<BuySellSignals />} />
-        <Route path="/nav-erosion" element={<NavErosion />} />
-        <Route path="/nav-erosion-portfolio" element={<NavErosionPortfolio />} />
-        <Route path="/drip-score" element={<DripScore />} />
-        <Route path="/income-sim" element={<PortfolioIncomeSim />} />
-        <Route path="/income-growth" element={<IncomeGrowthSim />} />
-        <Route path="/growth-income-freedom" element={<GrowthIncomeFreedom />} />
-        <Route path="/retirement-readiness" element={<RetirementReadiness />} />
-        <Route path="/cash-flow" element={<CashFlowSustainability />} />
-        <Route path="/correlation" element={<Correlation />} />
-        <Route path="/analytics" element={<Analytics />} />
-        <Route path="/portfolio-builder" element={<PortfolioBuilder />} />
-        <Route path="/dist-compare" element={<DistributionCompare />} />
-        <Route path="/portfolios" element={<ManagePortfolios />} />
-        <Route path="/export" element={<Export />} />
-        <Route path="/div-compare" element={<DividendCompare />} />
-        <Route path="/consolidation" element={<ConsolidationAnalysis />} />
-        <Route path="/diversification" element={<Diversification />} />
-        <Route path="/fund-definitions" element={<FundDefinitions />} />
-        <Route path="/macro-dashboard" element={<MacroRegimeDashboard />} />
-        <Route path="/dividend-history" element={<DividendHistory />} />
-        <Route path="/dividend-ledger" element={<DividendLedger />} />
-        <Route path="/reinvestment-impact" element={<ReinvestmentImpact />} />
-        <Route path="/scanner" element={<TechnicalScanner />} />
-        <Route path="/general-scanner" element={<GeneralScanner />} />
-        <Route path="/portfolio-tester" element={<PortfolioTester />} />
-        <Route path="/security-research" element={<SecurityResearch />} />
-        <Route path="/dividend-calculator" element={<DividendCalculator />} />
-        <Route path="/growth-2" element={<PortfolioGrowth2 />} />
-        <Route path="/etf-provider-update" element={<ETFProviderUpdate />} />
-        <Route path="/etf-comparer" element={<ETFComparer />} />
-        <Route path="/stock-comparer" element={<StockComparer />} />
-        <Route path="/stock-valuation" element={<StockValuation />} />
-        <Route path="/rebalance-wizard" element={<RebalanceWizard />} />
-        <Route path="/holding-targets" element={<HoldingTargets />} />
-        <Route path="/tax-report" element={<AnnualTaxReport />} />
-        <Route path="/tax-loss" element={<TaxLossHarvest />} />
-        <Route path="/blended-yield" element={<BlendedYield />} />
-        <Route path="/closed-cef-info" element={<ClosedCEFInformation />} />
-        <Route path="/closed-cef-info/:ticker" element={<ClosedCEFInformation />} />
-        <Route path="/cef-buying-guide" element={<CEFBuyingGuide />} />
-        <Route path="/cef-buying-checklist-evaluator" element={<CEFBuyingChecklistEvaluator />} />
-        <Route path="/cef-vs-income-etf" element={<CEFvsIncomeETF />} />
-        <Route path="/etf-buying-checklist-evaluator" element={<ETFBuyingChecklistEvaluator />} />
-        <Route path="/option-income-etf-evaluator" element={<OptionIncomeETFEvaluator />} />
-        <Route path="/stock-buying-checklist" element={<StockBuyingChecklist />} />
-        <Route path="/options" element={<OptionTradingTools />} />
-        <Route path="/option-dashboard" element={<OptionDashboard />} />
-        <Route path="/option-probability-calculator" element={<OptionProbabilityCalculator />} />
-        <Route path="/option-trades" element={<OptionTrades />} />
-        <Route path="/option-trades/import" element={<OptionTradeImport />} />
-        <Route path="/put-selling-scanner" element={<PutSellingScanner />} />
-        <Route path="/bull-put-spread-scanner" element={<BullPutSpreadScanner />} />
-        <Route path="/covered-call-scanner" element={<CoveredCallScanner />} />
-        <Route path="/bear-put-spread-scanner" element={<BearPutSpreadScanner />} />
-        <Route path="/bear-call-spread-scanner" element={<BearCallSpreadScanner />} />
-        <Route path="/iron-condor-scanner" element={<IronCondorScanner />} />
-        <Route path="/put-condor-scanner" element={<PutCondorScanner />} />
-        <Route path="/put-call-condor-scanner" element={<PutCondorScanner />} />
-        <Route path="/unbalanced-put-condor-scanner" element={<UnbalancedPutCondorScanner />} />
-        <Route path="/unbalanced-butterfly-scanner" element={<UnbalancedButterflyScanner />} />
-        <Route path="/double-hedge-put-butterfly-scanner" element={<DoubleHedgePutButterflyScanner />} />
-        <Route path="/road-trip-butterfly-scanner" element={<RoadTripButterflyScanner />} />
-        <Route path="/sixty-forty-twenty-fly-scanner" element={<SixtyFortyTwentyFlyScanner />} />
-        <Route path="/iron-butterfly-scanner" element={<IronButterflyScanner />} />
-        <Route path="/option-education" element={<OptionEducation />} />
-        <Route path="/option-greeks" element={<GreeksGuide />} />
-        <Route path="/help" element={<Help />} />
-      </Routes>
+      <AppFrame />
     </Router>
     </MarketRefreshProvider>
     </ProfileProvider>
@@ -374,6 +216,7 @@ function Nav() {
         <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
         <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
+        <NavLink to="/split-screen" title="Show two pages side by side, sharing one date range">Split View</NavLink>
       </NavDropdown>
       <NavDropdown label="Checklists">
         <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>

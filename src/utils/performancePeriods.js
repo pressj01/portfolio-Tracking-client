@@ -117,7 +117,26 @@ export const readSharedPerformanceRange = () => {
   }
 }
 
-export const writeSharedPerformanceRange = (period, start, end) => {
+// Every mounted performance screen that wants to follow the shared range. One
+// screen at a time was enough while the range was only read at mount, but split
+// view mounts two at once: without a broadcast the second pane keeps whatever
+// range it read when it opened, which is the exact drift that made comparing in
+// two app windows useless.
+const rangeListeners = new Set()
+
+// The screen that made the change already has these values in its own state,
+// and echoing them back would fight the user mid-keystroke — a half-typed date
+// is not stored, so the echo would carry the *previous* date and overwrite what
+// is being typed. Each subscriber gets an id so it can be skipped.
+let nextListenerId = 1
+export const nextPerformanceRangeListenerId = () => `perf-range-${nextListenerId++}`
+
+export const subscribeSharedPerformanceRange = (listener) => {
+  rangeListeners.add(listener)
+  return () => rangeListeners.delete(listener)
+}
+
+export const writeSharedPerformanceRange = (period, start, end, originId = null) => {
   if (typeof window === 'undefined' || !VALID_PERFORMANCE_PERIODS.has(period)) return
   try {
     // A half-typed date must never reach storage: it would outlive the keystroke
@@ -132,14 +151,15 @@ export const writeSharedPerformanceRange = (period, start, end) => {
       // Custom in a permanent error on every screen and every restart.
       && end <= todayInputValue()
     )
-    window.localStorage.setItem(
-      SHARED_PERFORMANCE_RANGE_KEY,
-      JSON.stringify({
-        period,
-        start: usable ? start : previous.start,
-        end: usable ? end : previous.end,
-      }),
-    )
+    const stored = {
+      period,
+      start: usable ? start : previous.start,
+      end: usable ? end : previous.end,
+    }
+    window.localStorage.setItem(SHARED_PERFORMANCE_RANGE_KEY, JSON.stringify(stored))
+    rangeListeners.forEach(listener => {
+      if (listener.id !== originId) listener.onChange(stored)
+    })
   } catch {
     // Best effort: private browsing or storage policy can disable localStorage.
   }

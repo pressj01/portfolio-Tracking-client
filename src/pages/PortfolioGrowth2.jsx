@@ -15,8 +15,8 @@ import {
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
-  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 
 function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
@@ -168,9 +168,11 @@ export default function PortfolioGrowth2() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
-    writeSharedPerformanceRange(period, customStart, customEnd)
-  }, [period, customStart, customEnd])
+  useSharedPerformanceRange(period, customStart, customEnd, (next) => {
+    setPeriod(next.period)
+    setCustomStart(next.start)
+    setCustomEnd(next.end)
+  })
 
   // Chart 1 controls
   const [showCostBasis, setShowCostBasis] = useState(true)

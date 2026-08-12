@@ -10351,3 +10351,159 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   .dl-month-select { flex: 1; }
   .dl-pay-list { grid-template-columns: 1fr; }
 }
+
+/* ---------------------------------------------------------------------------
+   Split View
+   Two screens side by side in one window. The panes each scroll on their own,
+   so the pickers and the divider stay put while you read either side.
+--------------------------------------------------------------------------- */
+/* Pin the app to the viewport so the panes, not the window, do the scrolling —
+   otherwise the pickers and the divider scroll off the top of the screen while
+   you are using them.
+   `:has()` scopes this to the split page: every other screen keeps scrolling the
+   window as it always has. Doing it in CSS rather than by measuring the nav bar
+   means a nav that wraps on a narrow window is handled for free. */
+body:has(.split-page) {
+  height: 100vh;
+  overflow: hidden;
+}
+body:has(.split-page) #root {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+/* The nav bar's own wrapper, whatever it is; the split page is its flexible
+   sibling. Matches nothing when the page sits directly under #root. */
+body:has(.split-page) #root *:has(> .split-page) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.split-page {
+  flex: 1;
+  min-height: 0;
+  padding: 1.25rem 1.5rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  overflow: hidden;
+}
+.split-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.35rem 1rem;
+}
+.split-toolbar h1 {
+  grid-column: 1;
+  margin: 0;
+  color: var(--accent);
+}
+.split-toolbar p {
+  grid-column: 1;
+  margin: 0;
+  max-width: 62rem;
+  color: var(--text-dim-2);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.split-toolbar-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 0.5rem;
+  align-self: center;
+}
+
+/* The inline grid-template comes from the drag ratio; only the axis is set
+   here, so switching orientation swaps rows for columns. */
+.split-shell {
+  display: grid;
+  grid-template-columns: 1fr 8px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+.split-shell.is-horizontal {
+  grid-template-columns: none;
+  grid-template-rows: 1fr 8px 1fr;
+}
+/* A drag that crosses a pane would otherwise select the text under it, and an
+   iframe-less pane still swallows mousemove without this. */
+.split-shell.is-dragging {
+  user-select: none;
+  cursor: col-resize;
+}
+.split-shell.is-horizontal.is-dragging { cursor: row-resize; }
+
+.split-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.split-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.split-picker {
+  flex: 1;
+  min-width: 0;
+  background: var(--border);
+  color: var(--accent);
+  border: 1px solid var(--p-1a4a8a);
+  border-radius: 4px;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.split-picker:hover { border-color: var(--accent); }
+.split-picker:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(100, 181, 246, 0.25);
+}
+
+/* The pane, not the window, is the scroll container: that keeps the pickers and
+   the divider on screen, and it makes each page's own sticky table headers
+   stick to the top of its pane instead of scrolling away. */
+.split-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  position: relative;
+}
+/* Full-page padding is a lot of a half-width pane, and several screens opt out
+   of the width cap on the assumption they own the window. */
+.split-pane-body .page {
+  padding: 1rem;
+  max-width: none;
+}
+.split-pane-body .page h1 { font-size: 1.35rem; margin-bottom: 1rem; }
+.split-pane-body .page h2 { font-size: 1.1rem; }
+.split-pane-body .card { padding: 1rem; margin-bottom: 1rem; }
+
+.split-divider {
+  background: var(--border);
+  cursor: col-resize;
+  border-radius: 3px;
+  transition: background 0.15s;
+}
+.split-shell.is-horizontal .split-divider { cursor: row-resize; }
+.split-divider:hover,
+.split-shell.is-dragging .split-divider { background: var(--accent); }
+
+@media (max-width: 900px) {
+  .split-page { padding: 1rem 0.75rem 0; }
+  .split-toolbar { grid-template-columns: 1fr; }
+  .split-toolbar-actions { grid-column: 1; grid-row: auto; }
+}

@@ -17,8 +17,8 @@ import {
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
-  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -115,9 +115,11 @@ export default function TotalReturn() {
   const [cmpLoading, setCmpLoading] = useState(false)
   const [cmpError, setCmpError] = useState(null)
 
-  useEffect(() => {
-    writeSharedPerformanceRange(dashboardPeriod, customStart, customEnd)
-  }, [dashboardPeriod, customStart, customEnd])
+  useSharedPerformanceRange(dashboardPeriod, customStart, customEnd, (next) => {
+    setDashboardPeriod(next.period)
+    setCustomStart(next.start)
+    setCustomEnd(next.end)
+  })
 
   const rangeError = customRangeError(dashboardPeriod, customStart, customEnd)
 

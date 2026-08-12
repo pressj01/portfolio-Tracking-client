@@ -19,8 +19,8 @@ import {
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
-  writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { layoutFromVisibleKeys } from '../utils/columnLayout'
@@ -1085,9 +1085,11 @@ export default function Dashboard() {
     'other',
   ].includes(String(currentProfile?.broker_source || '').toLowerCase())
 
-  useEffect(() => {
-    writeSharedPerformanceRange(gradePeriod, gradeCustomStart, gradeCustomEnd)
-  }, [gradePeriod, gradeCustomStart, gradeCustomEnd])
+  useSharedPerformanceRange(gradePeriod, gradeCustomStart, gradeCustomEnd, (next) => {
+    setGradePeriod(next.period)
+    setGradeCustomStart(next.start)
+    setGradeCustomEnd(next.end)
+  })
 
   const gradeRangeError = customRangeError(gradePeriod, gradeCustomStart, gradeCustomEnd)
 
@@ -2587,6 +2589,12 @@ export default function Dashboard() {
             color={portfolioNavColor}
           />
           <SummaryCard
+            label="Portfolio Value"
+            value={fmt(totals.accountValue)}
+            color="var(--accent-bright)"
+            sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
+          />
+          <SummaryCard
             className="daily-change-card"
             label="Account Day Change"
             value={dailyChangeValue}
@@ -2718,12 +2726,14 @@ export default function Dashboard() {
         <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="var(--warning-money)" sub={currentMonthSub} />
         <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="var(--pos-muted)" sub={currentMonthSub} />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="var(--pos)" />
-        <SummaryCard
-          label="Portfolio Value"
-          value={fmt(totals.accountValue)}
-          color="var(--accent-bright)"
-          sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
-        />
+        {portfolioCoverage == null && (
+          <SummaryCard
+            label="Portfolio Value"
+            value={fmt(totals.accountValue)}
+            color="var(--accent-bright)"
+            sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
+          />
+        )}
         <SummaryCard
           label={appliedIrrExclusions.length ? 'Filtered IRR' : 'Portfolio IRR'}
           value={irrExclusionLoading ? 'Updating…' : hasPortfolioIrr ? pct(portfolioIrr) : 'Unavailable'}
