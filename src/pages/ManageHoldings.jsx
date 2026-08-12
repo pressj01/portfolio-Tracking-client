@@ -30,6 +30,23 @@ function paymentsPerYear(freq) {
   return FREQ_PAYMENTS_PER_YEAR[String(freq || '').toUpperCase()] || 0
 }
 
+// The table stores purchase_date as ISO (YYYY-MM-DD) and ex_div_date /
+// div_pay_date as MM/DD/YY — neither matches the MM/DD/YYYY the rest of the
+// app uses, so both get normalized to that for display.
+function formatMDY(value) {
+  const raw = String(value || '')
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`
+  const mdy = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/)
+  if (mdy) {
+    const month = mdy[1].padStart(2, '0')
+    const day = mdy[2].padStart(2, '0')
+    const year = mdy[3].length === 2 ? `20${mdy[3]}` : mdy[3]
+    return `${month}/${day}/${year}`
+  }
+  return value
+}
+
 // Override expiry arrives as a plain ISO date. Split it by hand rather than
 // letting Date parse it, which reads bare YYYY-MM-DD as UTC and shows the day
 // before for anyone west of Greenwich.
@@ -1995,7 +2012,7 @@ export default function ManageHoldings() {
       case 'quantity':
         return <td>{fmt(h.quantity)}</td>
       case 'purchase_date':
-        return <td>{h.purchase_date || '-'}</td>
+        return <td>{formatMDY(h.purchase_date) || '-'}</td>
       case 'base_quantity':
         return <td>{fmt(h.base_quantity, 4)}</td>
       case 'shares_bought_from_dividend':
@@ -2027,11 +2044,11 @@ export default function ManageHoldings() {
       case 'div_frequency':
         return <td>{h.div_frequency || '-'}</td>
       case 'ex_div_date':
-        return <td>{h.ex_div_date || '-'}</td>
+        return <td>{formatMDY(h.ex_div_date) || '-'}</td>
       case 'div_pay_date':
         return (
           <td title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}>
-            {h.div_pay_date_estimated ? '~' : ''}{h.div_pay_date || '-'}
+            {h.div_pay_date_estimated ? '~' : ''}{formatMDY(h.div_pay_date) || '-'}
           </td>
         )
       case 'reinvest':

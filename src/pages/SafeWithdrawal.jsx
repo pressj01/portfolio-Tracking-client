@@ -80,7 +80,7 @@ export default function SafeWithdrawal() {
       w8_weekly: hasDividend ? cost * rate / 52 : 0,
       w8_monthly: hasDividend ? cost * rate / 12 : 0,
       w8_annually: hasDividend ? cost * rate : 0,
-      status: !hasDividend ? 'No Distribution' : !sustainable ? 'Distribution rate too low' : '',
+      status: !hasDividend ? 'No Distribution' : sustainable ? 'Sustainable' : 'Distribution rate too low',
     }
   }), [rows, pct])
 
@@ -182,7 +182,7 @@ export default function SafeWithdrawal() {
     { key: 'w8_weekly',      label: `${pct}% Cost / Week`,  fmt, align: 'right' },
     { key: 'w8_monthly',     label: `${pct}% Cost / Month`, fmt, align: 'right' },
     { key: 'w8_annually',    label: `${pct}% Cost / Year`,  fmt, align: 'right' },
-    { key: 'status',         label: 'Status', fmt: v => v || '', color: v => v ? '#ff6b6b' : undefined },
+    { key: 'status',         label: 'Status', fmt: v => v || '', color: v => v === 'Sustainable' ? '#4ade80' : v ? '#ff6b6b' : undefined },
   ]
 
   const arrow = key => sortCol === key ? (sortAsc ? ' \u25B4' : ' \u25BE') : ''
