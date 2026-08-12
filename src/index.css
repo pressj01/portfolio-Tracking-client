@@ -10475,13 +10475,34 @@ body:has(.split-page) #root *:has(> .split-page) {
 
 /* The pane, not the window, is the scroll container: that keeps the pickers and
    the divider on screen, and it makes each page's own sticky table headers
-   stick to the top of its pane instead of scrolling away. */
+   stick to the top of its pane instead of scrolling away.
+
+   Both axes scroll. A page laid out for a full window does not fit in half of
+   one, and squeezing it does not shrink the layout so much as change it —
+   columns drop, cards restack, numbers you were comparing move. The floor below
+   keeps each pane rendering the page at its normal width and lets you scroll
+   sideways to the rest instead. */
 .split-pane-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
   position: relative;
 }
+.split-pane-body > * {
+  min-width: var(--split-pane-floor, 1000px);
+}
+/* Two panes plus the pages' own inner scrollers means several scrollbars on
+   screen at once, and a default one gives no clue which box it drives. Make the
+   pane's own bar wider and accent-coloured so it reads as the pane's. */
+.split-pane-body::-webkit-scrollbar { width: 12px; height: 12px; }
+.split-pane-body::-webkit-scrollbar-track { background: var(--bg); }
+.split-pane-body::-webkit-scrollbar-corner { background: var(--bg); }
+.split-pane-body::-webkit-scrollbar-thumb {
+  background: var(--p-285996);
+  border-radius: 6px;
+  border: 2px solid var(--bg);
+}
+.split-pane-body::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 /* Full-page padding is a lot of a half-width pane, and several screens opt out
    of the width cap on the assumption they own the window. */
 .split-pane-body .page {

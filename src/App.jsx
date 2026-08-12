@@ -196,6 +196,7 @@ function Nav() {
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>
       <NavDropdown label="Portfolio">
+        <NavLink to="/split-screen" title="Show two pages side by side, sharing one date range">Split View</NavLink>
         <NavLink to="/holdings">Holdings</NavLink>
         <NavLink to="/common-info">CommonInfo</NavLink>
         <NavLink to="/categories">Categories</NavLink>
@@ -216,7 +217,6 @@ function Nav() {
         <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
         <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
         <NavLink to="/watchlist">Watchlist</NavLink>
-        <NavLink to="/split-screen" title="Show two pages side by side, sharing one date range">Split View</NavLink>
       </NavDropdown>
       <NavDropdown label="Checklists">
         <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
