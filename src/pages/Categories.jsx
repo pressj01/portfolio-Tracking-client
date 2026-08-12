@@ -166,6 +166,8 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
 
 const norm = (s) => String(s || '').trim().toLowerCase()
 const subKey = (catName, subName) => `${norm(catName)}›${norm(subName)}`
+const ROW_BTN = { padding: '0.2rem 0.5rem', fontSize: '0.75rem' }
+const SUB_ROW_BTN = { padding: '0.1rem 0.4rem', fontSize: '0.7rem' }
 
 // Copying is additive by design, so an existing category always wins. Replacing
 // one with this account's version is a deliberate two-step: delete it there first.
@@ -789,12 +791,22 @@ export default function Categories() {
   const [constraintsSeeded, setConstraintsSeeded] = useState(false)
   const [incomeFloorTouched, setIncomeFloorTouched] = useState(false)
   const [showCopyModal, setShowCopyModal] = useState(false)
+  // A new category sorts to the bottom, well below the fold on this page, so
+  // creating one changed nothing on screen and read as "nothing happened yet".
+  const [pendingFocusName, setPendingFocusName] = useState(null)
+  const [flashId, setFlashId] = useState(null)
+  const catRefs = useRef({})
   const reloadSeq = useRef(0)
   const isOwnerProfile = !isAggregate && Number(profileId) === 1
   // "Copy to Accounts" only makes sense when there is somewhere else to copy into.
   const hasOtherAccounts = (profiles?.length || 0) > 1
 
-  const reload = useCallback(async () => {
+  // /api/holdings and /api/portfolio-coverage are per-ticker market data costing
+  // tens of seconds, and no category edit can change them. Cache them per
+  // selection so a create/delete/assign only waits on /api/categories/data.
+  const marketCache = useRef({ selection: null, holdings: [], navCoverage: null })
+
+  const reload = useCallback(async ({ refreshMarketData = true } = {}) => {
     const seq = reloadSeq.current + 1
     reloadSeq.current = seq
     if (isAggregate) {
@@ -803,20 +815,28 @@ export default function Categories() {
       setLoading(false)
       return
     }
+    const cached = marketCache.current
+    const useCache = !refreshMarketData && cached.selection === selection
     try {
       const [catRes, holdingsRes, navCoverageRes, ownerTargetRefRes] = await Promise.all([
         pf('/api/categories/data'),
-        pf('/api/holdings').catch(() => null),
-        pf('/api/portfolio-coverage').catch(() => null),
+        useCache ? null : pf('/api/holdings').catch(() => null),
+        useCache ? null : pf('/api/portfolio-coverage').catch(() => null),
         isOwnerProfile ? pf('/api/categories/owner-target-reference').catch(() => null) : Promise.resolve(null),
       ])
       const d = await catRes.json()
-      const holdings = holdingsRes ? await holdingsRes.json() : []
-      const navCoverage = navCoverageRes ? await navCoverageRes.json() : null
+      const holdings = useCache
+        ? cached.holdings
+        : (holdingsRes ? await holdingsRes.json() : [])
+      const navCoverage = useCache
+        ? cached.navCoverage
+        : (navCoverageRes ? await navCoverageRes.json() : null)
       const ownerTargetReference = ownerTargetRefRes ? await ownerTargetRefRes.json() : null
       if (seq !== reloadSeq.current) return
+      const safeHoldings = Array.isArray(holdings) ? holdings : []
+      if (!useCache) marketCache.current = { selection, holdings: safeHoldings, navCoverage }
       setData({
-        ...enrichCategoryData(d, Array.isArray(holdings) ? holdings : [], navCoverage),
+        ...enrichCategoryData(d, safeHoldings, navCoverage),
         owner_target_reference: ownerTargetReference,
         _selection: selection,
       })
@@ -829,6 +849,23 @@ export default function Categories() {
   }, [pf, selection, isOwnerProfile, isAggregate])
 
   useEffect(() => { reload() }, [reload, selection])
+
+  // Bring a freshly created category into view and flash it, so the create is
+  // visible even though it sorts to the bottom of a long page.
+  useEffect(() => {
+    if (!pendingFocusName) return
+    const created = data.categories.find(c => norm(c.name) === norm(pendingFocusName))
+    if (!created) return
+    setPendingFocusName(null)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    catRefs.current[created.id]?.scrollIntoView({
+      behavior: reduceMotion ? 'auto' : 'smooth',
+      block: 'center',
+    })
+    setFlashId(created.id)
+    const timer = setTimeout(() => setFlashId(null), 2000)
+    return () => clearTimeout(timer)
+  }, [data.categories, pendingFocusName])
 
   useEffect(() => {
     setConstraintsSeeded(false)
@@ -862,6 +899,17 @@ export default function Categories() {
   const handleCreate = () => { setEditCat(null); setShowModal(true) }
   const handleEdit = (cat) => { setEditCat(cat); setShowModal(true) }
 
+  // These writes used to ignore the response, so a rejected save or delete was
+  // indistinguishable from one that succeeded and changed nothing.
+  const mutate = async (path, options) => {
+    const res = await pf(path, options)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.error || `Request failed (${res.status})`)
+    }
+    return res
+  }
+
   const handleSave = async ({ name, target_pct }) => {
     if (isAggregate) {
       setError('Select an individual account before editing categories.')
@@ -879,19 +927,20 @@ export default function Categories() {
     }
     try {
       if (editCat) {
-        await pf(`/api/categories/${editCat.id}`, {
+        await mutate(`/api/categories/${editCat.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       } else {
-        await pf('/api/categories', {
+        await mutate('/api/categories', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       }
       setShowModal(false)
-      await reload()
-    } catch (e) { setError(e.message) }
+      if (!editCat) setPendingFocusName(name)
+      await reload({ refreshMarketData: false })
+    } catch (e) { setError(e.message || 'Could not save the category.') }
   }
 
   const handleDelete = async (cat) => {
@@ -899,10 +948,20 @@ export default function Categories() {
       setError('Select an individual account before editing categories.')
       return
     }
-    if (!await dialog.confirm(`Delete category "${cat.name}"? Tickers will become unallocated.`)) return
-    await pf(`/api/categories/${cat.id}`, { method: 'DELETE' })
+    const subCount = (cat.subcategories || []).length
+    const detail = subCount > 0
+      ? ` Its ${subCount} sub-${subCount === 1 ? 'category' : 'categories'} are removed too, and its ${cat.tickers.length} holdings become unallocated.`
+      : ` Its ${cat.tickers.length} holdings become unallocated.`
+    if (!await dialog.confirm(`Delete category "${cat.name}"?${detail}`)) return
+    setError(null)
+    try {
+      await mutate(`/api/categories/${cat.id}`, { method: 'DELETE' })
+    } catch (e) {
+      setError(e.message || 'Could not delete the category.')
+      return
+    }
     if (expandedId === cat.id) setExpandedId(null)
-    await reload()
+    await reload({ refreshMarketData: false })
   }
 
   const handleAssign = async (tickers, categoryId, subcategoryId = null) => {
@@ -915,7 +974,7 @@ export default function Categories() {
       body: JSON.stringify({ category_id: categoryId, subcategory_id: subcategoryId, tickers }),
     })
     setSelectedUnalloc(new Set())
-    await reload()
+    await reload({ refreshMarketData: false })
   }
 
   const handleSaveSub = async ({ name, target_pct }) => {
@@ -936,19 +995,19 @@ export default function Categories() {
     }
     try {
       if (subModal.sub) {
-        await pf(`/api/subcategories/${subModal.sub.id}`, {
+        await mutate(`/api/subcategories/${subModal.sub.id}`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       } else {
-        await pf(`/api/categories/${subModal.categoryId}/subcategories`, {
+        await mutate(`/api/categories/${subModal.categoryId}/subcategories`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, target_pct }),
         })
       }
       setSubModal(null)
-      await reload()
-    } catch (e) { setError(e.message) }
+      await reload({ refreshMarketData: false })
+    } catch (e) { setError(e.message || 'Could not save the sub-category.') }
   }
 
   const handleCopied = async (message) => {
@@ -963,9 +1022,15 @@ export default function Categories() {
       return
     }
     if (!await dialog.confirm(`Delete sub-category "${sub.name}"? Its tickers stay in the parent category but become unclassified.`)) return
-    await pf(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
+    setError(null)
+    try {
+      await mutate(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
+    } catch (e) {
+      setError(e.message || 'Could not delete the sub-category.')
+      return
+    }
     if (expandedSubId === sub.id) setExpandedSubId(null)
-    await reload()
+    await reload({ refreshMarketData: false })
   }
 
   const handleUnassign = async (tickers) => {
@@ -977,7 +1042,7 @@ export default function Categories() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers }),
     })
-    await reload()
+    await reload({ refreshMarketData: false })
   }
 
   const toggleUnalloc = (ticker) => {
@@ -1032,7 +1097,7 @@ export default function Categories() {
           body: JSON.stringify({ target_pct: Number(row.suggested_pct.toFixed(1)) }),
         })
       }
-      await reload()
+      await reload({ refreshMarketData: false })
       if (openWizard) {
         try {
           sessionStorage.setItem('categoryTargetAssistantHandoff', JSON.stringify({
@@ -1677,7 +1742,19 @@ export default function Categories() {
             const expanded = expandedId === cat.id
             const assistantRow = assistantRowsById[cat.id]
             return (
-              <div key={cat.id} className="card" style={{ marginBottom: '0.75rem', border: expanded ? '1px solid var(--primary)' : undefined }}>
+              <div
+                key={cat.id}
+                ref={el => { catRefs.current[cat.id] = el }}
+                className="card"
+                style={{
+                  marginBottom: '0.75rem',
+                  border: flashId === cat.id
+                    ? '1px solid var(--pos-bright)'
+                    : expanded ? '1px solid var(--primary)' : undefined,
+                  boxShadow: flashId === cat.id ? '0 0 0 3px rgba(0, 232, 154, 0.25)' : undefined,
+                  transition: 'box-shadow 0.4s, border-color 0.4s',
+                }}
+              >
                 {/* Header */}
                 <div
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
@@ -1721,6 +1798,10 @@ export default function Categories() {
                       {cat.actual_pct.toFixed(1)}%
                     </span>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-dim-2)' }}>{fmt(cat.actual_value)}</span>
+                    <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
+                      <button className="btn btn-primary" style={ROW_BTN} title={`Rename ${cat.name} or change its target`} onClick={() => handleEdit(cat)}>Edit</button>
+                      <button className="btn btn-danger" style={ROW_BTN} title={`Delete ${cat.name}`} onClick={() => handleDelete(cat)}>Delete</button>
+                    </div>
                   </div>
                 </div>
 
@@ -1736,11 +1817,9 @@ export default function Categories() {
                   return (
                     <div style={{ marginTop: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <button className="btn btn-primary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleEdit(cat)}>Edit</button>
-                        <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, siblings: cat.subcategories || [] })}>+ Sub-category</button>
-                        <button className="btn btn-danger" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }} onClick={() => handleDelete(cat)}>Delete</button>
+                        <button className="btn btn-secondary" style={ROW_BTN} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, siblings: cat.subcategories || [] })}>+ Sub-category</button>
                         {!hasSubs && cat.tickers.length > 0 && (
-                          <button className="btn btn-secondary" style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                          <button className="btn btn-secondary" style={ROW_BTN}
                             onClick={() => handleUnassign(cat.tickers.map(t => t.ticker))}>
                             Unassign All
                           </button>
@@ -1769,8 +1848,10 @@ export default function Categories() {
                                       <span style={{ fontSize: '0.78rem', color: 'var(--accent-2)' }}>Target {sub.target_pct.toFixed(1)}% of cat</span>
                                     )}
                                     <span style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)' }}>{fmt(sub.actual_value)}</span>
-                                    <button className="btn btn-secondary" style={{ padding: '0.1rem 0.4rem', fontSize: '0.7rem' }} onClick={(e) => { e.stopPropagation(); setSubModal({ categoryId: cat.id, categoryName: cat.name, sub, siblings: cat.subcategories || [] }) }}>Edit</button>
-                                    <button style={{ background: 'none', border: 'none', color: 'var(--p-ef9a9a)', cursor: 'pointer', fontSize: '1rem', padding: '0 0.25rem' }} title="Delete sub-category" onClick={(e) => { e.stopPropagation(); handleDeleteSub(sub) }}>&times;</button>
+                                    <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
+                                      <button className="btn btn-secondary" style={SUB_ROW_BTN} title={`Rename ${sub.name} or change its target`} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, sub, siblings: cat.subcategories || [] })}>Edit</button>
+                                      <button className="btn btn-danger" style={SUB_ROW_BTN} title={`Delete sub-category ${sub.name}`} onClick={() => handleDeleteSub(sub)}>Delete</button>
+                                    </div>
                                   </div>
                                 </div>
                                 {subExpanded && (

@@ -21598,12 +21598,19 @@ def categories_data():
     profile_id = get_profile_id()
     conn = get_connection()
 
-    # Auto-seed categories from classification_type if none exist
+    # Auto-seed categories from classification_type on a profile's first visit.
+    # The marker is what makes this one-time: gated on the row count alone,
+    # deleting every category silently rebuilt them on the very next load.
+    seed_key = f"categories_seeded_{profile_id}"
+    already_seeded = conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?", (seed_key,)
+    ).fetchone() is not None
+
     cat_count = conn.execute(
         "SELECT COUNT(*) as c FROM categories WHERE profile_id = ?", (profile_id,)
     ).fetchone()["c"]
 
-    if cat_count == 0:
+    if cat_count == 0 and not already_seeded:
         types = conn.execute(
             "SELECT DISTINCT classification_type FROM all_account_info WHERE profile_id = ? AND classification_type IS NOT NULL",
             (profile_id,),
@@ -21634,6 +21641,17 @@ def categories_data():
                     "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
                     (h["ticker"], cat_id, profile_id),
                 )
+        conn.commit()
+        cat_count = conn.execute(
+            "SELECT COUNT(*) as c FROM categories WHERE profile_id = ?", (profile_id,)
+        ).fetchone()["c"]
+
+    # Marking only once the profile actually has categories keeps a brand-new
+    # account (imported later) eligible for its one seed.
+    if cat_count > 0 and not already_seeded:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')", (seed_key,)
+        )
         conn.commit()
 
     # Fetch categories
@@ -21964,11 +21982,18 @@ def update_category(cat_id):
         conn.close()
         return jsonify({"error": "Nothing to update"}), 400
     vals.extend([cat_id, profile_id])
-    conn.execute(
-        f"UPDATE categories SET {', '.join(sets)} WHERE id = ? AND profile_id = ?", vals
-    )
-    conn.commit()
+    try:
+        cur = conn.execute(
+            f"UPDATE categories SET {', '.join(sets)} WHERE id = ? AND profile_id = ?", vals
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({"error": "Another category in this account already uses that name"}), 409
+    updated = cur.rowcount
     conn.close()
+    if not updated:
+        return jsonify({"error": "Category not found in this account"}), 404
     return jsonify({"message": "Category updated"})
 
 
@@ -21990,6 +22015,12 @@ def delete_category(cat_id):
     conn.execute(
         "DELETE FROM categories WHERE id = ? AND profile_id = ?",
         (cat_id, profile_id),
+    )
+    # Deleting is deliberate, so record the profile as seeded: otherwise removing
+    # the last category lets categories_data re-seed the whole set straight back.
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')",
+        (f"categories_seeded_{profile_id}",),
     )
     conn.commit()
     conn.close()
