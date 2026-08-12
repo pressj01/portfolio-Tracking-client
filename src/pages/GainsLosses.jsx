@@ -5,6 +5,8 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 import { AccountValueCard } from '../components/AccountReconciliation'
+import ColumnCustomizer from '../components/ColumnCustomizer'
+import { useColumnLayout } from '../utils/useColumnLayout'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -37,6 +39,59 @@ function MetricCard({ label, value, range, className, children }) {
     </div>
   )
 }
+
+// Column definitions sit at module scope so a saved layout resolves against a
+// stable list. Ticker is locked: it is the row identity, and on the Realized
+// tab it also carries the expander for the individual sells.
+const GL_LOCKED_COLS = ['ticker']
+
+const UNREALIZED_COLS = [
+  { key: 'ticker', label: 'Ticker', locked: true, tip: 'Stock or ETF ticker symbol' },
+  { key: 'description', label: 'Description', tip: 'Full name of the holding' },
+  { key: 'quantity', label: 'Shares', tip: 'Number of shares currently held', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
+  { key: 'price_paid', label: 'Price Paid', tip: 'Average cost per share at time of purchase', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
+  { key: 'current_price', label: 'Curr Price', tip: 'Latest market price per share', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
+  { key: 'purchase_value', label: 'Invested', tip: 'Total amount invested (price paid \u00d7 shares)', fmt, numeric: true },
+  { key: 'current_value', label: 'Curr Value', tip: 'Current market value (current price \u00d7 shares)', fmt, numeric: true },
+  { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (current value \u2212 invested)', fmt, gl: true },
+  { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
+  { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
+  { key: 'total_gl', label: 'Lifetime Total G/L', tip: 'Lifetime cost-basis gain or loss including all recorded dividends (price G/L + dividends received)', fmt, gl: true },
+  { key: 'total_gl_pct', label: 'Lifetime G/L %', tip: 'Lifetime total gain/loss as a percentage of amount invested; this accounting figure is not controlled by the performance date range', fmt: fmtPct, gl: true },
+  { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; this is the figure that matches Total Return', fmt: fmtPct, gl: true },
+  { key: 'period_range', label: 'Effective Range', tip: 'Actual market-observation dates used for this holding' },
+  { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield, both measured over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return.', rvy: true },
+]
+
+const REALIZED_COLS = [
+  { key: 'ticker', label: 'Ticker', locked: true, tip: 'Stock or ETF ticker symbol' },
+  { key: 'sell_date', label: 'Sell Date', sortKey: 'sell_date_sort', tip: 'Date the shares were sold — a grouped row shows the range from first to last sell' },
+  { key: 'buy_price', label: 'Buy Price', tip: 'Price per share when originally purchased', fmt, numeric: true },
+  { key: 'sell_price', label: 'Sell Price', tip: 'Price per share when sold', fmt, numeric: true },
+  { key: 'shares_sold', label: 'Shares', tip: 'Number of shares sold in this transaction', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
+  { key: 'cost_basis', label: 'Cost Basis', tip: 'Total cost of shares sold (buy price \u00d7 shares)', fmt, numeric: true },
+  { key: 'proceeds', label: 'Proceeds', tip: 'Total sale amount received (sell price \u00d7 shares)', fmt, numeric: true },
+  { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (proceeds \u2212 cost basis)', fmt, gl: true },
+  { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
+  { key: 'divs_received', label: 'Divs Rcvd', tip: 'Dividends received while holding the shares before selling', fmt, numeric: true },
+  { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
+  { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
+]
+
+const COMBINED_COLS = [
+  { key: 'ticker', label: 'Ticker', locked: true, tip: 'Stock or ETF ticker symbol' },
+  { key: 'description', label: 'Description', tip: 'Full name of the holding' },
+  { key: 'status', label: 'Status', tip: 'Open = currently held, Closed = fully sold, Open + Closed = partially sold' },
+  { key: 'unrealized_price_gl', label: 'Unreal. Price G/L', tip: 'Unrealized gain/loss on shares still held (price change only)', fmt, gl: true },
+  { key: 'unrealized_divs', label: 'Unreal. Divs', tip: 'Dividends received on shares still held', fmt, numeric: true },
+  { key: 'unrealized_total_gl', label: 'Unreal. Total G/L', tip: 'Unrealized gain/loss including dividends on shares still held', fmt, gl: true },
+  { key: 'realized_price_gl', label: 'Real. Price G/L', tip: 'Realized gain/loss from sold shares (price change only)', fmt, gl: true },
+  { key: 'realized_divs', label: 'Real. Divs', tip: 'Dividends received on shares that were sold', fmt, numeric: true },
+  { key: 'realized_total_gl', label: 'Real. Total G/L', tip: 'Realized gain/loss including dividends from sold shares', fmt, gl: true },
+  { key: 'net_price_gl', label: 'Net Price G/L', tip: 'Combined unrealized + realized price gain/loss', fmt, gl: true },
+  { key: 'net_divs', label: 'Net Divs', tip: 'Total dividends received (unrealized + realized)', fmt, numeric: true },
+  { key: 'net_total_gl', label: 'Net Total G/L', tip: 'Combined total gain/loss across all open and closed positions', fmt, gl: true },
+]
 
 export default function GainsLosses() {
   const pf = useProfileFetch()
@@ -372,54 +427,6 @@ export default function GainsLosses() {
       ))
   }, [chartData, data])
 
-  const unrealizedCols = [
-    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
-    { key: 'description', label: 'Description', tip: 'Full name of the holding' },
-    { key: 'quantity', label: 'Shares', tip: 'Number of shares currently held', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
-    { key: 'price_paid', label: 'Price Paid', tip: 'Average cost per share at time of purchase', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
-    { key: 'current_price', label: 'Curr Price', tip: 'Latest market price per share', fmt: v => formatMoney(v, { digits: 4 }), numeric: true },
-    { key: 'purchase_value', label: 'Invested', tip: 'Total amount invested (price paid \u00d7 shares)', fmt, numeric: true },
-    { key: 'current_value', label: 'Curr Value', tip: 'Current market value (current price \u00d7 shares)', fmt, numeric: true },
-    { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (current value \u2212 invested)', fmt, gl: true },
-    { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of amount invested', fmt: fmtPct, gl: true },
-    { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
-    { key: 'total_gl', label: 'Lifetime Total G/L', tip: 'Lifetime cost-basis gain or loss including all recorded dividends (price G/L + dividends received)', fmt, gl: true },
-    { key: 'total_gl_pct', label: 'Lifetime G/L %', tip: 'Lifetime total gain/loss as a percentage of amount invested; this accounting figure is not controlled by the performance date range', fmt: fmtPct, gl: true },
-    { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; this is the figure that matches Total Return', fmt: fmtPct, gl: true },
-    { key: 'period_range', label: 'Effective Range', tip: 'Actual market-observation dates used for this holding' },
-    { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield, both measured over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return.', rvy: true },
-  ]
-
-  const realizedCols = [
-    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
-    { key: 'sell_date', label: 'Sell Date', sortKey: 'sell_date_sort', tip: 'Date the shares were sold — a grouped row shows the range from first to last sell' },
-    { key: 'buy_price', label: 'Buy Price', tip: 'Price per share when originally purchased', fmt, numeric: true },
-    { key: 'sell_price', label: 'Sell Price', tip: 'Price per share when sold', fmt, numeric: true },
-    { key: 'shares_sold', label: 'Shares', tip: 'Number of shares sold in this transaction', fmt: v => v != null ? Number(v).toFixed(3) : '\u2014', numeric: true },
-    { key: 'cost_basis', label: 'Cost Basis', tip: 'Total cost of shares sold (buy price \u00d7 shares)', fmt, numeric: true },
-    { key: 'proceeds', label: 'Proceeds', tip: 'Total sale amount received (sell price \u00d7 shares)', fmt, numeric: true },
-    { key: 'price_gl', label: 'Price G/L', tip: 'Gain or loss based on price change only (proceeds \u2212 cost basis)', fmt, gl: true },
-    { key: 'price_gl_pct', label: 'Price G/L %', tip: 'Price gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
-    { key: 'divs_received', label: 'Divs Rcvd', tip: 'Dividends received while holding the shares before selling', fmt, numeric: true },
-    { key: 'total_gl', label: 'Total G/L', tip: 'Total gain or loss including dividends (price G/L + dividends received)', fmt, gl: true },
-    { key: 'total_gl_pct', label: 'Total G/L %', tip: 'Total gain/loss as a percentage of cost basis', fmt: fmtPct, gl: true },
-  ]
-
-  const combinedCols = [
-    { key: 'ticker', label: 'Ticker', tip: 'Stock or ETF ticker symbol' },
-    { key: 'description', label: 'Description', tip: 'Full name of the holding' },
-    { key: 'status', label: 'Status', tip: 'Open = currently held, Closed = fully sold, Open + Closed = partially sold' },
-    { key: 'unrealized_price_gl', label: 'Unreal. Price G/L', tip: 'Unrealized gain/loss on shares still held (price change only)', fmt, gl: true },
-    { key: 'unrealized_divs', label: 'Unreal. Divs', tip: 'Dividends received on shares still held', fmt, numeric: true },
-    { key: 'unrealized_total_gl', label: 'Unreal. Total G/L', tip: 'Unrealized gain/loss including dividends on shares still held', fmt, gl: true },
-    { key: 'realized_price_gl', label: 'Real. Price G/L', tip: 'Realized gain/loss from sold shares (price change only)', fmt, gl: true },
-    { key: 'realized_divs', label: 'Real. Divs', tip: 'Dividends received on shares that were sold', fmt, numeric: true },
-    { key: 'realized_total_gl', label: 'Real. Total G/L', tip: 'Realized gain/loss including dividends from sold shares', fmt, gl: true },
-    { key: 'net_price_gl', label: 'Net Price G/L', tip: 'Combined unrealized + realized price gain/loss', fmt, gl: true },
-    { key: 'net_divs', label: 'Net Divs', tip: 'Total dividends received (unrealized + realized)', fmt, numeric: true },
-    { key: 'net_total_gl', label: 'Net Total G/L', tip: 'Combined total gain/loss across all open and closed positions', fmt, gl: true },
-  ]
-
   const enrichedUnrealized = useMemo(() => {
     if (!data?.unrealized) return []
     return data.unrealized.map(r => {
@@ -516,12 +523,31 @@ export default function GainsLosses() {
   )
   const realizedLotCount = groupedRealized.reduce((acc, r) => acc + r.lot_count, 0)
 
+  // One saved layout per tab. The three tables answer different questions and
+  // share barely any columns, so a single shared layout would be meaningless.
+  const unrealizedLayout = useColumnLayout({
+    storageKey: 'gains-losses-columns-unrealized-v1',
+    columns: UNREALIZED_COLS,
+    lockedKeys: GL_LOCKED_COLS,
+  })
+  const realizedLayout = useColumnLayout({
+    storageKey: 'gains-losses-columns-realized-v1',
+    columns: REALIZED_COLS,
+    lockedKeys: GL_LOCKED_COLS,
+  })
+  const combinedLayout = useColumnLayout({
+    storageKey: 'gains-losses-columns-combined-v1',
+    columns: COMBINED_COLS,
+    lockedKeys: GL_LOCKED_COLS,
+  })
+
   const tabConfig = {
-    unrealized: { cols: unrealizedCols, rows: enrichedUnrealized },
-    realized: { cols: realizedCols, rows: groupedRealized },
-    combined: { cols: combinedCols, rows: data?.combined },
+    unrealized: { layout: unrealizedLayout, rows: enrichedUnrealized },
+    realized: { layout: realizedLayout, rows: groupedRealized },
+    combined: { layout: combinedLayout, rows: data?.combined },
   }
-  const activeCols = tabConfig[tab].cols
+  const columnLayout = tabConfig[tab].layout
+  const activeCols = columnLayout.activeColumns
   const activeRows = sortRows(tabConfig[tab].rows || [])
 
   // Shared by the roll-up row and its expanded lot rows so the two always use the
@@ -575,6 +601,66 @@ export default function GainsLosses() {
     )
   })
 
+  // Footer totals are keyed by column rather than by position. The old fixed
+  // colSpan plus positional cells misaligned silently the moment a column was
+  // hidden or moved. The Combined tab has never had a totals row.
+  const footerTotals = {
+    unrealized: {
+      purchase_value: { value: t.unrealized_invested },
+      current_value: { value: t.unrealized_value },
+      price_gl: { value: t.unrealized_price_gl, gl: true },
+      divs_received: { value: t.unrealized_divs },
+      total_gl: { value: t.unrealized_total_gl, gl: true },
+      period_total_return_pct: { value: periodMetrics.total_return_pct, gl: true, format: fmtPct },
+      period_range: { value: performanceRange, text: true },
+    },
+    realized: {
+      cost_basis: { value: t.realized_cost },
+      proceeds: { value: t.realized_proceeds },
+      price_gl: { value: t.realized_price_gl, gl: true },
+      divs_received: { value: t.realized_divs },
+      total_gl: { value: t.realized_total_gl, gl: true },
+    },
+  }[tab]
+
+  const renderFooter = () => {
+    if (!footerTotals) return null
+    const label = tab === 'realized' ? 'Total' : 'Portfolio Total'
+    // The label spans the leading run of columns with nothing to total, which is
+    // exactly what the default Ticker-through-Shares layout looks like.
+    let leading = 0
+    while (leading < activeCols.length && !footerTotals[activeCols[leading].key]) leading += 1
+    let labelPlaced = leading > 0
+    const cells = leading > 0
+      ? [<td key="__label" colSpan={leading}><strong>{label}</strong></td>]
+      : []
+    activeCols.slice(leading).forEach(col => {
+      const cell = footerTotals[col.key]
+      if (!cell) {
+        // Every label column was dragged behind a total, so the heading takes the
+        // first spare cell instead and the row still reads as one.
+        cells.push(<td key={col.key}>{labelPlaced ? null : <strong>{label}</strong>}</td>)
+        labelPlaced = true
+        return
+      }
+      if (cell.text) {
+        cells.push(<td key={col.key}>{cell.value}</td>)
+        return
+      }
+      const format = cell.format || fmt
+      cells.push(
+        <td key={col.key} style={{ textAlign: 'right', color: cell.gl ? glColor(cell.value) : undefined }}>
+          <strong>{format(cell.value)}</strong>
+        </td>
+      )
+    })
+    return (
+      <tfoot>
+        <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>{cells}</tr>
+      </tfoot>
+    )
+  }
+
   const renderTable = () => {
     if (!activeRows.length) {
       return <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>
@@ -589,14 +675,21 @@ export default function GainsLosses() {
             <tr>
               {activeCols.map(col => {
                 const sk = col.rvy ? 'ret_vs_yld_sort' : (col.sortKey || col.key)
+                const headerTip = `${col.tip || col.label}\u000a\u000aDrag this header to reorder the columns.`
                 if (col.rvy) {
                   return (
-                    <th key={col.key} title={col.tip} style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }}>
+                    <th
+                      key={col.key}
+                      title={headerTip}
+                      className={columnLayout.dragClass(col.key)}
+                      style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'grab', userSelect: 'none' }}
+                      {...columnLayout.dragHandlers(col.key)}
+                    >
                       <span style={{ cursor: 'pointer' }} onClick={() => handleSort(sk)}>RvY{sortIcon(sk)}</span>
                       {' '}
                       <span
                         onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
-                        title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
+                        title={rvyMode === 'yoc' ? 'Using Yield on Cost \u2014 click to switch to Current Yield' : 'Using Current Yield \u2014 click to switch to Yield on Cost'}
                         style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? 'var(--p-1a3a5c)' : 'var(--p-1a3a2a)', color: rvyMode === 'yoc' ? 'var(--accent-bright)' : 'var(--pos)', border: `1px solid ${rvyMode === 'yoc' ? 'var(--p-294b73)' : 'var(--p-2a5c3a)'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
                       >
                         {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
@@ -605,7 +698,14 @@ export default function GainsLosses() {
                   )
                 }
                 return (
-                  <th key={col.key} title={col.tip} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }} onClick={() => handleSort(sk)}>
+                  <th
+                    key={col.key}
+                    title={headerTip}
+                    className={columnLayout.dragClass(col.key)}
+                    style={{ cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap', textAlign: (col.numeric || col.gl) ? 'right' : undefined }}
+                    onClick={() => handleSort(sk)}
+                    {...columnLayout.dragHandlers(col.key)}
+                  >
                     {col.label}
                     <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                       {sortIcon(sk)}
@@ -628,39 +728,7 @@ export default function GainsLosses() {
               </React.Fragment>
             ))}
           </tbody>
-          {tab === 'unrealized' && (
-            <tfoot>
-              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
-                <td colSpan={5}><strong>Portfolio Total</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_invested)}</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_value)}</strong></td>
-                <td style={{ textAlign: 'right', color: glColor(t.unrealized_price_gl) }}><strong>{fmt(t.unrealized_price_gl)}</strong></td>
-                <td></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.unrealized_divs)}</strong></td>
-                <td style={{ textAlign: 'right', color: glColor(t.unrealized_total_gl) }}><strong>{fmt(t.unrealized_total_gl)}</strong></td>
-                <td></td>
-                <td style={{ textAlign: 'right', color: glColor(periodMetrics.total_return_pct) }}>
-                  <strong>{fmtPct(periodMetrics.total_return_pct)}</strong>
-                </td>
-                <td>{performanceRange}</td>
-                <td></td>
-              </tr>
-            </tfoot>
-          )}
-          {tab === 'realized' && (
-            <tfoot>
-              <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
-                <td colSpan={5}><strong>Total</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.realized_cost)}</strong></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.realized_proceeds)}</strong></td>
-                <td style={{ textAlign: 'right', color: glColor(t.realized_price_gl) }}><strong>{fmt(t.realized_price_gl)}</strong></td>
-                <td></td>
-                <td style={{ textAlign: 'right' }}><strong>{fmt(t.realized_divs)}</strong></td>
-                <td style={{ textAlign: 'right', color: glColor(t.realized_total_gl) }}><strong>{fmt(t.realized_total_gl)}</strong></td>
-                <td></td>
-              </tr>
-            </tfoot>
-          )}
+          {renderFooter()}
         </table>
       </div>
     )
@@ -841,6 +909,13 @@ export default function GainsLosses() {
           </section>
         </div>
         <p className="tracker-help-footer">
+          <strong>Choosing and ordering columns:</strong> each of the three tables keeps its own
+          layout. The <strong>Columns</strong> button beside the tabs switches columns on and off, and
+          you can drag a row in that panel &mdash; or a header on the table itself &mdash; to reorder
+          them. Ticker always stays on, and the layout is saved on this machine, so it survives a
+          restart.
+        </p>
+        <p className="tracker-help-footer">
           The Categories filter narrows every card, table, and chart on this screen to the selected
           holdings. The Shared Performance Date Range only moves the selected-period cards, the charts
           below, and the period-scoped columns in the tables (Tracker TR %, Effective Range, RvY) — it
@@ -988,6 +1063,17 @@ export default function GainsLosses() {
                 </span>
               </>
             )}
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <span className="column-bar-hint" style={{ marginRight: 0 }}>
+                Each tab&apos;s columns are customizable &mdash; use <strong>Columns</strong> to choose
+                which ones show, and drag a header to reorder them.
+              </span>
+              <ColumnCustomizer
+                layout={columnLayout}
+                detailOf={col => col.tip}
+                buttonLabel="Columns"
+              />
+            </div>
           </div>
 
           {renderTable()}

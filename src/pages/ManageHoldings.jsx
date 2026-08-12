@@ -5,6 +5,8 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
+import ColumnCustomizer from '../components/ColumnCustomizer'
+import { useColumnLayout } from '../utils/useColumnLayout'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1120,18 +1122,19 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
 }
 
 // Column definitions for sortable table
-const FROZEN_COLS = 5 // first 5 columns are frozen
-const FROZEN_WIDTHS = [80, 180, 96, 76, 76] // px widths for frozen cols
-const FROZEN_LEFT = FROZEN_WIDTHS.map((_, i) =>
-  FROZEN_WIDTHS.slice(0, i).reduce((s, w) => s + w, 0)
-)
+// The first FROZEN_COLS visible columns are frozen horizontally. Widths live on
+// the column definitions so hiding or reordering cannot shift them out of line.
+const FROZEN_COLS = 5
+const HOLDINGS_LOCKED_COLS = ['ticker']
+// Truncation the frozen cells used to hard-code; now it follows its column.
+const TRUNCATED_CELL = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
 const COLUMNS = [
-  { key: 'ticker', label: 'Ticker', type: 'string', tip: 'Security ticker symbol' },
-  { key: 'description', label: 'Description', type: 'string', tip: 'Security name / description' },
-  { key: 'category', label: 'Category', type: 'string', tip: 'Investment category assigned to this holding' },
-  { key: 'percent_of_account', label: '% Acct', type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
-  { key: 'quantity', label: 'Shares', type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
+  { key: 'ticker', label: 'Ticker', width: 80, type: 'string', tip: 'Security ticker symbol' },
+  { key: 'description', label: 'Description', width: 180, truncate: true, type: 'string', tip: 'Security name / description' },
+  { key: 'category', label: 'Category', width: 96, truncate: true, type: 'string', tip: 'Investment category assigned to this holding' },
+  { key: 'percent_of_account', label: '% Acct', width: 76, truncate: true, type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
+  { key: 'quantity', label: 'Shares', width: 76, truncate: true, type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
   { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120, tip: 'Date of original purchase (or earliest lot date)' },
   { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105, tip: 'Original shares purchased, excluding DRIP-acquired shares' },
   { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110, tip: 'Shares acquired through dividend reinvestment (DRIP)' },
@@ -1234,8 +1237,7 @@ const sortLotTransactions = (transactions, holding, sort) => {
 
 const DEFAULT_COLUMN_WIDTH = 96
 const ACTIONS_COLUMN_WIDTH = 150
-const columnWidth = (col, i) => i < FROZEN_COLS ? FROZEN_WIDTHS[i] : (col.width || DEFAULT_COLUMN_WIDTH)
-const HOLDINGS_TABLE_MIN_WIDTH = COLUMNS.reduce((sum, col, i) => sum + columnWidth(col, i), ACTIONS_COLUMN_WIDTH)
+const columnWidth = (col) => col.width || DEFAULT_COLUMN_WIDTH
 
 const DIV_SOURCE_OPTIONS = [
   { value: 'all', label: 'All Div Src' },
@@ -1576,6 +1578,12 @@ export default function ManageHoldings() {
   }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
+
+  const holdingsLayout = useColumnLayout({
+    storageKey: 'manage-holdings-columns-v1',
+    columns: COLUMNS,
+    lockedKeys: HOLDINGS_LOCKED_COLS,
+  })
 
   // `silent` re-fetches without flashing the table spinner — used to reconcile
   // a single optimistic edit (e.g. a DRIP toggle) against the backend's
@@ -1926,6 +1934,192 @@ export default function ManageHoldings() {
   const hasDividendRefreshResult = Array.isArray(dividendRefreshAccounts)
   const dividendRefreshDateLabel = fmtDateLabel(dividendRefreshDate)
 
+  const activeCols = holdingsLayout.activeColumns
+  const frozenCount = Math.min(FROZEN_COLS, activeCols.length)
+  // Left offsets come from the widths of the columns actually on screen, so
+  // freezing still lines up after a column is hidden or dragged elsewhere.
+  const frozenLefts = activeCols.slice(0, frozenCount).map((_, i) => (
+    activeCols.slice(0, i).reduce((sum, col) => sum + columnWidth(col), 0)
+  ))
+  const holdingsTableMinWidth = activeCols.reduce(
+    (sum, col) => sum + columnWidth(col), ACTIONS_COLUMN_WIDTH,
+  )
+  const frozenCellStyle = (i) => {
+    const width = columnWidth(activeCols[i])
+    return {
+      position: 'sticky',
+      left: frozenLefts[i],
+      width,
+      minWidth: width,
+      maxWidth: width,
+      boxSizing: 'border-box',
+      overflow: 'hidden',
+      zIndex: 1,
+    }
+  }
+
+  // One renderer per column, so a row is built from whatever layout is saved
+  // rather than from a fixed run of <td>s. Frozen positioning is applied by the
+  // row above, never in here.
+  const renderHoldingCell = (col, h) => {
+    switch (col.key) {
+      case 'ticker':
+        return (
+          <td style={{ fontWeight: 600 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+              <span
+                onClick={() => toggleExpand(h.ticker)}
+                style={{ cursor: 'pointer', fontSize: '0.7rem', opacity: 0.7, userSelect: 'none', width: '12px' }}
+                title="Show/hide transaction lots"
+              >
+                {expandedTickers[h.ticker] ? '\u25BC' : '\u25B6'}
+              </span>
+              <a
+                href="#"
+                onClick={(e) => { e.preventDefault(); handleEdit(h) }}
+                style={{ color: 'var(--accent)', textDecoration: 'none', cursor: 'pointer' }}
+                onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
+                onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
+              >
+                {h.ticker}
+              </a>
+            </div>
+          </td>
+        )
+      case 'description':
+        return <td>{h.description || '-'}</td>
+      case 'category':
+        return <td>{h.category || '-'}</td>
+      case 'percent_of_account':
+        return <td>{fmtPct(h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0))}</td>
+      case 'quantity':
+        return <td>{fmt(h.quantity)}</td>
+      case 'purchase_date':
+        return <td>{h.purchase_date || '-'}</td>
+      case 'base_quantity':
+        return <td>{fmt(h.base_quantity, 4)}</td>
+      case 'shares_bought_from_dividend':
+        return <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
+      case 'total_cash_reinvested':
+        return <td>{formatMoney(h.total_cash_reinvested, { fallback: '-' })}</td>
+      case 'price_paid':
+        return <td>{fmtM(h.price_paid, 4)}</td>
+      case 'current_price':
+        return <td>{fmtM(h.current_price)}</td>
+      case 'purchase_value':
+        return <td>{fmtM(h.purchase_value)}</td>
+      case 'current_value':
+        return <td>{fmtM(h.current_value)}</td>
+      case 'gain_or_loss':
+        return (
+          <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
+            {fmtM(h.gain_or_loss)}
+          </td>
+        )
+      case 'gain_or_loss_percentage':
+        return (
+          <td style={{ color: h.gain_or_loss_percentage >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
+            {fmtPct(h.gain_or_loss_percentage)}
+          </td>
+        )
+      case 'div':
+        return <td>{fmtM(h.div, 4)}</td>
+      case 'div_frequency':
+        return <td>{h.div_frequency || '-'}</td>
+      case 'ex_div_date':
+        return <td>{h.ex_div_date || '-'}</td>
+      case 'div_pay_date':
+        return (
+          <td title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}>
+            {h.div_pay_date_estimated ? '~' : ''}{h.div_pay_date || '-'}
+          </td>
+        )
+      case 'reinvest':
+        return (
+          <td style={{ textAlign: 'center' }}>
+            <input
+              type="checkbox"
+              checked={h.reinvest === 'Y'}
+              onChange={async () => {
+                const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
+                const mi = Number(h.approx_monthly_income) || 0
+                const ri = Number(h.monthly_income_reinvested) || 0
+                // Only fake an all-or-nothing split when the holding is
+                // already wholly reinvested or wholly not (single account).
+                // A partial DRIP ratio (Owner/aggregate, where some
+                // sub-accounts reinvest and others don't) must NOT snap to
+                // 100%/0% — flip just the flag and let the silent refetch
+                // below pull the backend's true split.
+                const isAllOrNothing = ri < 0.005 || Math.abs(ri - mi) < 0.005
+                setHoldings(prev => prev.map(row => {
+                  if (row.ticker !== h.ticker) return row
+                  if (!isAllOrNothing) return { ...row, reinvest: newVal }
+                  return {
+                    ...row,
+                    reinvest: newVal,
+                    monthly_income_reinvested: newVal === 'Y' ? mi : 0,
+                    monthly_income_not_reinvested: newVal === 'Y' ? 0 : mi,
+                  }
+                }))
+                try {
+                  await pf(`/api/holdings/${h.ticker}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reinvest: newVal }),
+                  })
+                  invalidateDashboardCache()
+                  // Reconcile with the backend's authoritative split so
+                  // partial reinvestment ratios stay accurate.
+                  await fetchHoldings({ silent: true })
+                } catch (e) {
+                  setHoldings(prev => prev.map(row =>
+                    row.ticker === h.ticker ? { ...row, reinvest: h.reinvest, monthly_income_reinvested: h.monthly_income_reinvested, monthly_income_not_reinvested: h.monthly_income_not_reinvested } : row
+                  ))
+                  setError(e.message)
+                }
+              }}
+              style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+            />
+          </td>
+        )
+      case 'estim_payment_per_year':
+        return <td>{fmtM(h.estim_payment_per_year, 3)}</td>
+      case 'approx_monthly_income':
+        return <td>{fmtM(h.approx_monthly_income, 3)}</td>
+      case 'annual_yield_on_cost':
+        return <td>{fmtPct(h.annual_yield_on_cost)}</td>
+      case 'current_annual_yield':
+        return <td>{fmtPct(h.current_annual_yield)}</td>
+      case 'dividend_paid':
+        return <td>{fmtM(h.dividend_paid)}</td>
+      case 'ytd_divs':
+        return <td>{fmtM(h.ytd_divs)}</td>
+      case 'total_divs_received':
+        return <td>{formatMoney(h.total_divs_received, { zeroIfInvalid: true })}</td>
+      case 'paid_for_itself':
+        return <td>{fmtPct(h.paid_for_itself)}</td>
+      case 'dividend_actuals_source':
+        return <td>{sourceBadge(h.dividend_actuals_source)}</td>
+      case '_shares_if_reinvested':
+        return (
+          <td>
+            {h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price
+              ? fmt(h.estim_payment_per_year / h.current_price, 3)
+              : '-'}
+          </td>
+        )
+      case 'realized_gains':
+        return (
+          <td style={{ color: h.realized_gains > 0 ? 'var(--p-81c784)' : h.realized_gains < 0 ? 'var(--p-ef9a9a)' : undefined }}>
+            {h.realized_gains ? formatMoney(h.realized_gains) : '-'}
+          </td>
+        )
+      default:
+        return <td>{h[col.key] ?? '-'}</td>
+    }
+  }
+
+
   return (
     <div className="page">
       {isAggregate && (
@@ -2199,6 +2393,18 @@ export default function ManageHoldings() {
         </details>
       )}
 
+      <div className="holdings-column-bar">
+        <span className="column-bar-hint">
+          This table is customizable &mdash; use <strong>Columns</strong> to choose which ones show,
+          and drag a header to reorder them.
+        </span>
+        <ColumnCustomizer
+          layout={holdingsLayout}
+          detailOf={col => col.tip}
+          buttonLabel="Columns"
+        />
+      </div>
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
       ) : holdings.length === 0 ? (
@@ -2207,44 +2413,43 @@ export default function ManageHoldings() {
         </div>
       ) : (
         <div className="sticky-table-wrap">
-          <table style={{ minWidth: HOLDINGS_TABLE_MIN_WIDTH, tableLayout: 'fixed' }}>
+          <table style={{ minWidth: holdingsTableMinWidth, tableLayout: 'fixed' }}>
             <colgroup>
-              {COLUMNS.map((col, i) => (
-                <col key={col.key} style={{ width: columnWidth(col, i) }} />
+              {activeCols.map(col => (
+                <col key={col.key} style={{ width: columnWidth(col) }} />
               ))}
               <col style={{ width: ACTIONS_COLUMN_WIDTH }} />
             </colgroup>
             <thead>
               <tr>
-                {COLUMNS.map((col, i) => (
-                  <th
-                    key={col.key}
-                    onClick={() => handleSort(col.key)}
-                    className={i < FROZEN_COLS ? 'frozen-col' : undefined}
-                    title={col.tip || ''}
-                    style={{
-                      cursor: 'pointer', whiteSpace: 'nowrap', userSelect: 'none',
-                      textAlign: col.align || 'left',
-                      ...(i < FROZEN_COLS ? {
-                        position: 'sticky',
-                        left: FROZEN_LEFT[i],
-                        width: FROZEN_WIDTHS[i],
-                        minWidth: FROZEN_WIDTHS[i],
-                        maxWidth: FROZEN_WIDTHS[i],
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        zIndex: 4,
-                      } : {
-                        width: col.width || DEFAULT_COLUMN_WIDTH,
-                        minWidth: col.width || DEFAULT_COLUMN_WIDTH,
-                        boxSizing: 'border-box',
-                      }),
-                    }}
-                  >
-                    {col.label}{col.tip && !col.compact ? ' ⓘ' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
-                  </th>
-                ))}
+                {activeCols.map((col, i) => {
+                  const frozen = i < frozenCount
+                  const width = columnWidth(col)
+                  return (
+                    <th
+                      key={col.key}
+                      onClick={() => handleSort(col.key)}
+                      className={holdingsLayout.dragClass(col.key, frozen ? 'frozen-col' : undefined)}
+                      title={`${col.tip || col.label}\u000a\u000aDrag this header to reorder the columns.`}
+                      style={{
+                        cursor: 'grab', whiteSpace: 'nowrap', userSelect: 'none',
+                        textAlign: col.align || 'left',
+                        width, minWidth: width, boxSizing: 'border-box',
+                        ...(frozen ? {
+                          position: 'sticky',
+                          left: frozenLefts[i],
+                          maxWidth: width,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          zIndex: 4,
+                        } : null),
+                      }}
+                      {...holdingsLayout.dragHandlers(col.key)}
+                    >
+                      {col.label}{col.tip && !col.compact ? ' \u24d8' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
+                    </th>
+                  )
+                })}
                 <th>Actions</th>
               </tr>
             </thead>
@@ -2252,114 +2457,19 @@ export default function ManageHoldings() {
               {sortedHoldings.map(h => (
                 <React.Fragment key={h.ticker}>
                 <tr>
-                  <td className="frozen-col" style={{ fontWeight: 600, position: 'sticky', left: FROZEN_LEFT[0], width: FROZEN_WIDTHS[0], minWidth: FROZEN_WIDTHS[0], maxWidth: FROZEN_WIDTHS[0], boxSizing: 'border-box', overflow: 'hidden', zIndex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                      <span
-                        onClick={() => toggleExpand(h.ticker)}
-                        style={{ cursor: 'pointer', fontSize: '0.7rem', opacity: 0.7, userSelect: 'none', width: '12px' }}
-                        title="Show/hide transaction lots"
-                      >
-                        {expandedTickers[h.ticker] ? '\u25BC' : '\u25B6'}
-                      </span>
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); handleEdit(h) }}
-                        style={{ color: 'var(--accent)', textDecoration: 'none', cursor: 'pointer' }}
-                        onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
-                        onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
-                      >
-                        {h.ticker}
-                      </a>
-                    </div>
-                  </td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[1], width: FROZEN_WIDTHS[1], minWidth: FROZEN_WIDTHS[1], maxWidth: FROZEN_WIDTHS[1], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>
-                    {h.description || '-'}
-                  </td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[2], width: FROZEN_WIDTHS[2], minWidth: FROZEN_WIDTHS[2], maxWidth: FROZEN_WIDTHS[2], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{h.category || '-'}</td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[3], width: FROZEN_WIDTHS[3], minWidth: FROZEN_WIDTHS[3], maxWidth: FROZEN_WIDTHS[3], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmtPct(h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0))}</td>
-                  <td className="frozen-col" style={{ position: 'sticky', left: FROZEN_LEFT[4], width: FROZEN_WIDTHS[4], minWidth: FROZEN_WIDTHS[4], maxWidth: FROZEN_WIDTHS[4], boxSizing: 'border-box', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', zIndex: 1 }}>{fmt(h.quantity)}</td>
-                  <td>{h.purchase_date || '-'}</td>
-                  <td>{fmt(h.base_quantity, 4)}</td>
-                  <td>{fmt(h.shares_bought_from_dividend, 4)}</td>
-                  <td>{formatMoney(h.total_cash_reinvested, { fallback: '-' })}</td>
-                  <td>{fmtM(h.price_paid, 4)}</td>
-                  <td>{fmtM(h.current_price)}</td>
-                  <td>{fmtM(h.purchase_value)}</td>
-                  <td>{fmtM(h.current_value)}</td>
-                  <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
-                    {fmtM(h.gain_or_loss)}
-                  </td>
-                  <td style={{ color: h.gain_or_loss_percentage >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
-                    {fmtPct(h.gain_or_loss_percentage)}
-                  </td>
-                  <td>{fmtM(h.div, 4)}</td>
-                  <td>{h.div_frequency || '-'}</td>
-                  <td>{h.ex_div_date || '-'}</td>
-                  <td title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}>
-                    {h.div_pay_date_estimated ? '~' : ''}{h.div_pay_date || '-'}
-                  </td>
-                  <td style={{ textAlign: 'center' }}>
-                    <input
-                      type="checkbox"
-                      checked={h.reinvest === 'Y'}
-                      onChange={async () => {
-                        const newVal = h.reinvest === 'Y' ? 'N' : 'Y'
-                        const mi = Number(h.approx_monthly_income) || 0
-                        const ri = Number(h.monthly_income_reinvested) || 0
-                        // Only fake an all-or-nothing split when the holding is
-                        // already wholly reinvested or wholly not (single account).
-                        // A partial DRIP ratio (Owner/aggregate, where some
-                        // sub-accounts reinvest and others don't) must NOT snap to
-                        // 100%/0% — flip just the flag and let the silent refetch
-                        // below pull the backend's true split.
-                        const isAllOrNothing = ri < 0.005 || Math.abs(ri - mi) < 0.005
-                        setHoldings(prev => prev.map(row => {
-                          if (row.ticker !== h.ticker) return row
-                          if (!isAllOrNothing) return { ...row, reinvest: newVal }
-                          return {
-                            ...row,
-                            reinvest: newVal,
-                            monthly_income_reinvested: newVal === 'Y' ? mi : 0,
-                            monthly_income_not_reinvested: newVal === 'Y' ? 0 : mi,
-                          }
-                        }))
-                        try {
-                          await pf(`/api/holdings/${h.ticker}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ reinvest: newVal }),
-                          })
-                          invalidateDashboardCache()
-                          // Reconcile with the backend's authoritative split so
-                          // partial reinvestment ratios stay accurate.
-                          await fetchHoldings({ silent: true })
-                        } catch (e) {
-                          setHoldings(prev => prev.map(row =>
-                            row.ticker === h.ticker ? { ...row, reinvest: h.reinvest, monthly_income_reinvested: h.monthly_income_reinvested, monthly_income_not_reinvested: h.monthly_income_not_reinvested } : row
-                          ))
-                          setError(e.message)
-                        }
-                      }}
-                      style={{ cursor: 'pointer', width: '16px', height: '16px' }}
-                    />
-                  </td>
-                  <td>{fmtM(h.estim_payment_per_year, 3)}</td>
-                  <td>{fmtM(h.approx_monthly_income, 3)}</td>
-                  <td>{fmtPct(h.annual_yield_on_cost)}</td>
-                  <td>{fmtPct(h.current_annual_yield)}</td>
-                  <td>{fmtM(h.dividend_paid)}</td>
-                  <td>{fmtM(h.ytd_divs)}</td>
-                  <td>{formatMoney(h.total_divs_received, { zeroIfInvalid: true })}</td>
-                  <td>{fmtPct(h.paid_for_itself)}</td>
-                  <td>{sourceBadge(h.dividend_actuals_source)}</td>
-                  <td>
-                    {h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price
-                      ? fmt(h.estim_payment_per_year / h.current_price, 3)
-                      : '-'}
-                  </td>
-                  <td style={{ color: h.realized_gains > 0 ? 'var(--p-81c784)' : h.realized_gains < 0 ? 'var(--p-ef9a9a)' : undefined }}>
-                    {h.realized_gains ? formatMoney(h.realized_gains) : '-'}
-                  </td>
+                  {activeCols.map((col, i) => {
+                    const cell = renderHoldingCell(col, h)
+                    const frozen = i < frozenCount
+                    return React.cloneElement(cell, {
+                      key: col.key,
+                      className: [cell.props.className, frozen ? 'frozen-col' : null].filter(Boolean).join(' ') || undefined,
+                      style: {
+                        ...(col.truncate ? TRUNCATED_CELL : null),
+                        ...cell.props.style,
+                        ...(frozen ? frozenCellStyle(i) : null),
+                      },
+                    })
+                  })}
                   <td>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="btn btn-primary" style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem' }} onClick={() => handleEdit(h)}>Edit</button>
@@ -2370,7 +2480,7 @@ export default function ManageHoldings() {
                 </tr>
                 {expandedTickers[h.ticker] && (
                   <tr>
-                    <td colSpan={COLUMNS.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
+                    <td colSpan={activeCols.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
                       {expandedTickers[h.ticker] === 'loading' ? (
                         <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
                       ) : expandedTickers[h.ticker].length === 0 ? (

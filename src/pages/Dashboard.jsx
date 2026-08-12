@@ -21,9 +21,15 @@ import {
   todayInputValue,
   writeSharedPerformanceRange,
 } from '../utils/performancePeriods'
+import ColumnCustomizer from '../components/ColumnCustomizer'
+import { useColumnLayout } from '../utils/useColumnLayout'
+import { layoutFromVisibleKeys } from '../utils/columnLayout'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
+// Holds an {order, hidden} layout so a switched-off column keeps its place
+// for when it comes back. The key is unchanged: the old bare list of visible
+// ids is migrated in place on first read (migrateLegacyHoldingColumns).
 const HOLDINGS_COLUMN_PREF_KEY = 'dashboard_holdings_visible_columns_v1'
 // Freeze the first N visible holdings columns horizontally (Excel-style freeze
 // panes). By default the 5th column is "Purchased", so freezing 5 keeps
@@ -125,41 +131,31 @@ const SPREADSHEET_DELTA_COLUMN_IDS = [
   'current_month_income_delta',
 ]
 
-const parseHoldingColumnPreference = (raw) => {
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed) || !parsed.length) return null
-    const ids = [...parsed]
-    // One-time migration: surface the new Closure Risk column for users whose
-    // saved column set predates it (insert next to NAV/Grade, not at the end).
-    if (!ids.includes('closure_risk')) {
-      const anchor = ids.indexOf('grade')
-      const at = anchor >= 0 ? anchor : (ids.indexOf('nav') >= 0 ? ids.indexOf('nav') + 1 : ids.length)
-      ids.splice(at, 0, 'closure_risk')
-    }
-    return ids
-  } catch {
-    return null
+// v1 saved a bare list of the visible ids. That list is already an order, so it
+// converts to the {order, hidden} layout without the user losing a thing.
+const migrateLegacyHoldingColumns = (parsed) => {
+  if (!Array.isArray(parsed) || !parsed.length) return null
+  const ids = [...parsed]
+  // One-time migration: surface the Closure Risk column for users whose saved
+  // column set predates it (insert next to NAV/Grade, not at the end).
+  if (!ids.includes('closure_risk')) {
+    const anchor = ids.indexOf('grade')
+    const at = anchor >= 0 ? anchor : (ids.indexOf('nav') >= 0 ? ids.indexOf('nav') + 1 : ids.length)
+    ids.splice(at, 0, 'closure_risk')
   }
+  return layoutFromVisibleKeys(ids, [...new Set([...ids, ...ALL_HOLDING_COLUMN_IDS])])
 }
 
-const readHoldingColumnPreference = () => {
-  if (typeof window === 'undefined') return DEFAULT_HOLDINGS_COLUMN_IDS
-  try {
-    return parseHoldingColumnPreference(window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY))
-      || DEFAULT_HOLDINGS_COLUMN_IDS
-  } catch {
-    return DEFAULT_HOLDINGS_COLUMN_IDS
-  }
-}
-
-const persistHoldingColumnPreference = (ids) => {
-  if (typeof window === 'undefined') return
-  try {
-    window.localStorage.setItem(HOLDINGS_COLUMN_PREF_KEY, JSON.stringify(ids))
-  } catch {}
-}
+const HOLDINGS_LOCKED_COLS = ['ticker']
+const HOLDINGS_COLUMN_PRESETS = [
+  { label: 'Current View', keys: DEFAULT_HOLDINGS_COLUMN_IDS, tip: 'The columns the dashboard ships with' },
+  {
+    label: 'All Calculated',
+    keys: [...DEFAULT_HOLDINGS_COLUMN_IDS, ...SPREADSHEET_DELTA_COLUMN_IDS],
+    tip: 'Everything, including the calculated spreadsheet additions',
+  },
+]
+const ALL_HOLDING_COLUMN_IDS = [...DEFAULT_HOLDINGS_COLUMN_IDS, ...SPREADSHEET_DELTA_COLUMN_IDS]
 
 const readOverviewReturnMode = () => {
   if (typeof window === 'undefined') return 'price'
@@ -193,9 +189,6 @@ const persistNavReturnMode = (mode) => {
   } catch {}
 }
 
-const sameColumnPreference = (left, right) => (
-  left.length === right.length && left.every((id, index) => id === right[index])
-)
 
 const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
 const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
@@ -1072,7 +1065,6 @@ export default function Dashboard() {
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
-  const [visibleHoldingColumnIds, setVisibleHoldingColumnIds] = useState(readHoldingColumnPreference)
   // Left offsets (px) for each frozen holdings column, measured from the
   // rendered header widths so freezing works with the auto-sized table.
   const [frozenColLefts, setFrozenColLefts] = useState([])
@@ -2121,10 +2113,18 @@ export default function Dashboard() {
     { id: 'current_month_income_delta', label: `${currentMonth} Δ`, name: `${currentMonth} Income Difference`, sortKey: 'current_month_income_delta', group: 'Calculated Additions', align: 'right', tip: `${currentMonth} income minus estimated monthly income`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.current_month_income_delta || 0) }}>{moneyOrDash(h.current_month_income_delta)}</td>, footer: () => <span style={{ color: gradeColor(totals.currentMonthIncomeDelta || 0) }}>{moneyOrDash(totals.currentMonthIncomeDelta)}</span> },
     ]
   })()
-  const validHoldingColumnIds = new Set(holdingsColumns.map(column => column.id))
-  const selectedHoldingColumnSet = new Set(visibleHoldingColumnIds.filter(id => validHoldingColumnIds.has(id)))
-  const visibleHoldingColumns = holdingsColumns.filter(column => selectedHoldingColumnSet.has(column.id))
-  const effectiveVisibleHoldingColumns = visibleHoldingColumns.length ? visibleHoldingColumns : holdingsColumns.filter(column => column.id === 'ticker')
+  // Column visibility AND order, shared with Manage Holdings and Gains & Losses.
+  // Declared here rather than with the other hooks because it needs the built
+  // column list, and it still sits above every early return.
+  const holdingsLayout = useColumnLayout({
+    storageKey: HOLDINGS_COLUMN_PREF_KEY,
+    columns: holdingsColumns,
+    keyField: 'id',
+    lockedKeys: HOLDINGS_LOCKED_COLS,
+    defaultLayout: allKeys => layoutFromVisibleKeys(DEFAULT_HOLDINGS_COLUMN_IDS, allKeys),
+    migrate: migrateLegacyHoldingColumns,
+  })
+  const effectiveVisibleHoldingColumns = holdingsLayout.activeColumns
   const visibleColumnCount = effectiveVisibleHoldingColumns.length
   const frozenColCount = Math.min(FROZEN_HOLDING_COLS, visibleColumnCount)
   const visibleHoldingColumnSignature = effectiveVisibleHoldingColumns.map(column => column.id).join('|')
@@ -2141,58 +2141,7 @@ export default function Dashboard() {
     if (index === frozenColCount - 1) parts.push('frozen-col-edge')
     return parts.filter(Boolean).join(' ')
   }
-  const holdingColumnGroups = ['Current', 'Calculated Additions'].map(group => ({
-    group,
-    columns: holdingsColumns.filter(column => column.group === group),
-  }))
-  const setHoldingColumns = (ids) => {
-    const unique = Array.from(new Set(ids)).filter(id => validHoldingColumnIds.has(id))
-    const next = unique.length ? unique : ['ticker']
-    persistHoldingColumnPreference(next)
-    setVisibleHoldingColumnIds(next)
-  }
-  const toggleHoldingColumn = (id) => {
-    const next = new Set(visibleHoldingColumnIds.filter(value => validHoldingColumnIds.has(value)))
-    if (next.has(id)) next.delete(id)
-    else next.add(id)
-    const ids = next.size ? Array.from(next) : ['ticker']
-    persistHoldingColumnPreference(ids)
-    setVisibleHoldingColumnIds(ids)
-  }
 
-  // Keep dashboard windows/clients on the same machine in sync. The storage
-  // event updates clients that are already open; re-reading on focus covers a
-  // client that was suspended while another client changed the selection.
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-
-    const applyPreference = (raw, useDefaults = false) => {
-      const next = parseHoldingColumnPreference(raw)
-        || (useDefaults ? DEFAULT_HOLDINGS_COLUMN_IDS : null)
-      if (!next) return
-      setVisibleHoldingColumnIds(prev => sameColumnPreference(prev, next) ? prev : next)
-    }
-    const handleStorage = (event) => {
-      if (event.storageArea !== window.localStorage || event.key !== HOLDINGS_COLUMN_PREF_KEY) return
-      applyPreference(event.newValue, event.newValue == null)
-    }
-    const handleFocus = () => {
-      try {
-        applyPreference(window.localStorage.getItem(HOLDINGS_COLUMN_PREF_KEY), true)
-      } catch {}
-    }
-
-    window.addEventListener('storage', handleStorage)
-    window.addEventListener('focus', handleFocus)
-    return () => {
-      window.removeEventListener('storage', handleStorage)
-      window.removeEventListener('focus', handleFocus)
-    }
-  }, [])
-
-  useEffect(() => {
-    persistHoldingColumnPreference(visibleHoldingColumnIds)
-  }, [visibleHoldingColumnIds])
 
   // Measure the rendered widths of the frozen header cells and turn them into
   // cumulative left offsets so the pinned columns line up with an auto-sized
@@ -3099,39 +3048,18 @@ export default function Dashboard() {
           <div className="holdings-toolbar-sub">
             {visibleColumnCount} of {holdingsColumns.length} columns · {sorted.length} of {enrichedHoldings.length} holdings
           </div>
-        </div>
-        <details className="column-picker">
-          <summary>
-            Columns
-            <span>{visibleColumnCount}</span>
-          </summary>
-          <div className="column-picker-panel">
-            <div className="column-picker-actions">
-              <button type="button" onClick={() => setHoldingColumns(DEFAULT_HOLDINGS_COLUMN_IDS)}>Current View</button>
-              <button type="button" onClick={() => setHoldingColumns([...DEFAULT_HOLDINGS_COLUMN_IDS, ...SPREADSHEET_DELTA_COLUMN_IDS])}>All Calculated</button>
-            </div>
-            {holdingColumnGroups.map(({ group, columns }) => (
-              <div key={group} className="column-picker-group">
-                <div className="column-picker-group-title">{group}</div>
-                <div className="column-picker-options">
-                  {columns.map(column => (
-                    <label key={column.id} className="column-picker-option" title={column.tip || column.name}>
-                      <input
-                        type="checkbox"
-                        checked={selectedHoldingColumnSet.has(column.id)}
-                        onChange={() => toggleHoldingColumn(column.id)}
-                      />
-                      <span>
-                        <strong>{column.name}</strong>
-                        <small>{column.label}</small>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            ))}
+          <div className="holdings-toolbar-sub">
+            Customizable &mdash; use <strong>Columns</strong> to choose which ones show, and drag a
+            header to reorder them.
           </div>
-        </details>
+        </div>
+        <ColumnCustomizer
+          layout={holdingsLayout}
+          labelOf={column => column.name}
+          detailOf={column => column.label}
+          groupOf={column => column.group}
+          presets={HOLDINGS_COLUMN_PRESETS}
+        />
       </div>
 
       <div className="holdings-table-wrap">
@@ -3141,14 +3069,19 @@ export default function Dashboard() {
               {effectiveVisibleHoldingColumns.map((column, index) => {
                 const frozen = index < frozenColCount
                 const frozenStyle = frozenColStyle(index)
+                const dragProps = holdingsLayout.dragHandlers(column.id)
+                const dragTitle = `${column.tip || column.name}\u000a\u000aDrag this header to reorder the columns.`
                 if (column.renderHeader) {
                   const header = column.renderHeader()
                   return React.cloneElement(header, {
                     key: column.id,
-                    ...(frozen ? {
-                      className: frozenColClass(index, header.props.className),
-                      style: { ...header.props.style, ...frozenStyle },
-                    } : {}),
+                    ...dragProps,
+                    title: dragTitle,
+                    className: holdingsLayout.dragClass(
+                      column.id,
+                      frozen ? frozenColClass(index, header.props.className) : header.props.className,
+                    ),
+                    style: { ...header.props.style, cursor: 'grab', ...(frozen ? frozenStyle : null) },
                   })
                 }
                 return (
@@ -3157,8 +3090,9 @@ export default function Dashboard() {
                     col={column.sortKey || column.id}
                     align={column.align}
                     tip={column.tip || column.name}
-                    className={frozen ? frozenColClass(index) : undefined}
-                    style={frozenStyle || undefined}
+                    className={holdingsLayout.dragClass(column.id, frozen ? frozenColClass(index) : undefined)}
+                    style={{ cursor: 'grab', ...(frozenStyle || {}) }}
+                    {...dragProps}
                   >
                     {column.label}
                   </SortHeader>

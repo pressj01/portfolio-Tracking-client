@@ -1685,6 +1685,149 @@ label {
   font-size: 0.66rem;
   margin-top: 0.12rem;
 }
+/* Ordered, draggable column list (ColumnCustomizer). One flat list rather than
+   the grouped grid above, because the order is the setting being edited. */
+.column-picker-hint {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  margin: 0 0 0.5rem;
+}
+.column-picker-search {
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-strong);
+  font-size: 0.75rem;
+  margin-bottom: 0.55rem;
+  padding: 0.35rem 0.5rem;
+  width: 100%;
+}
+.column-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.column-picker-row {
+  align-items: center;
+  background: var(--surface-inset);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 6px;
+  cursor: grab;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+}
+.column-picker-row:hover {
+  border-color: color-mix(in srgb, var(--accent-bright) 45%, var(--border));
+}
+.column-picker-row.col-drag-source {
+  opacity: 0.4;
+}
+.column-picker-row.col-drag-target {
+  border-color: var(--accent-bright);
+  box-shadow: inset 3px 0 0 var(--accent-bright);
+}
+.column-picker-handle {
+  color: var(--text-dim);
+  cursor: grab;
+  flex: 0 0 auto;
+  font-size: 0.85rem;
+  line-height: 1;
+  user-select: none;
+}
+.column-picker-check {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 0.45rem;
+  min-width: 0;
+}
+.column-picker-check input {
+  margin-top: 0.15rem;
+}
+.column-picker-check strong {
+  align-items: center;
+  color: var(--text-strong);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+  gap: 0.35rem;
+  line-height: 1.2;
+}
+.column-picker-check small {
+  color: var(--text-dim);
+  display: block;
+  font-size: 0.66rem;
+  margin-top: 0.12rem;
+}
+.column-picker-tag {
+  background: color-mix(in srgb, var(--accent-bright) 14%, transparent);
+  border-radius: 999px;
+  color: var(--accent-soft);
+  font-size: 0.6rem;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 0.08rem 0.34rem;
+  text-transform: uppercase;
+}
+.column-picker-move {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.2rem;
+}
+.column-picker-move button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.6rem;
+  line-height: 1;
+  padding: 0.22rem 0.3rem;
+}
+.column-picker-move button:hover:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+}
+.column-picker-move button:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+.column-picker-empty {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-style: italic;
+  margin: 0.4rem 0 0;
+}
+/* Strip that carries the Columns button above a table, with the hint that says
+   the table is customizable at all — the button alone did not read as one. */
+.holdings-column-bar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+.column-bar-hint {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  margin-right: auto;
+}
+.column-bar-hint strong {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+/* Drag feedback on the table's own headers. The bar marks the edge the dragged
+   column lands against, so the drop reads before the mouse is released. */
+th.col-drag-source {
+  opacity: 0.45;
+}
+th.col-drag-target {
+  box-shadow: inset 3px 0 0 var(--accent-bright);
+}
 .holdings-table-wrap {
   max-height: 78vh;
   overflow: auto;
