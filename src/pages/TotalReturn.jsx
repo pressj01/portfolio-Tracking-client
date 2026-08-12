@@ -13,11 +13,11 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
+  formatPerformanceAsOf,
   formatPerformanceDate,
   formatPerformanceRange,
   readSharedPerformanceRange,
   formatClockStamp,
-  formatClockTime,
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
@@ -788,22 +788,17 @@ export default function TotalReturn() {
   const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
   const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
   const dashboardCardRange = dashboardActualRange || dashboardRequestedRange
-  const asOf = (value) => {
-    const label = formatPerformanceDate(value)
-    return label ? `As of ${label} close` : dashboardCardRange
-  }
-  const startValueAsOf = asOf(chartData?.actual_start_date)
+  const startValueAsOf = formatPerformanceAsOf(chartData?.actual_start_date) || dashboardCardRange
   // "As of <today> close" is a lie while the session is still running: the last
   // point of the Yahoo series is the live price, re-read on every request. That
   // is the whole reason End Value here and Current Value on Gains & Losses
   // disagree intraday, so name the clock — but keep the date, which is the range
   // the card is reporting and is not what changed.
   const endsToday = chartData?.actual_end_date === todayInputValue()
-  const pricedAtLabel = t.priced_at ? formatClockTime(t.priced_at) : ''
-  const endDateLabel = formatPerformanceDate(chartData?.actual_end_date)
-  const endValueAsOf = endsToday && endDateLabel
-    ? `As of ${endDateLabel} ${pricedAtLabel ? `· live price, read ${pricedAtLabel}` : '· live price'}`
-    : asOf(chartData?.actual_end_date)
+  const endValueAsOf = formatPerformanceAsOf(
+    chartData?.actual_end_date,
+    t.priced_at,
+  ) || dashboardCardRange
   const spyRange = formatComparisonRange(chartData?.spy_actual_start_date, chartData?.spy_actual_end_date)
   const cmpRequestedRange = formatComparisonRange(cmpData?.requested_start_date, cmpData?.requested_end_date)
   const cmpActualRange = formatComparisonRange(cmpData?.actual_start_date, cmpData?.actual_end_date)
@@ -921,13 +916,14 @@ export default function TotalReturn() {
         <p className="tracker-help-footer">
           Every card in the summary strip moves together with the Shared Performance Date Range above —
           unlike Gains &amp; Losses, nothing here is a lifetime figure. All of it comes from one replay of
-          your dated buy and sell history, priced at each day's close.
+          your dated buy and sell history, priced at each day&apos;s market observation: a live quote
+          when available today, otherwise that day&apos;s close.
         </p>
         <div className="tracker-help-grid">
           <section>
             <h3>Value and return cards</h3>
             <ul>
-              <li><strong>Start Value / End Value:</strong> the portfolio's holdings, priced at the close on the first and last day of the range. Neither includes cash.</li>
+              <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
               <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
@@ -948,8 +944,8 @@ export default function TotalReturn() {
                 <strong>Total Return ($):</strong> Price Return plus Distributions — the actual dollars
                 your position gained, given the shares you actually held on each day. Buying more
                 shares partway through the range means more dollars are exposed to whatever the price
-                does afterward, so this figure is <em>money-weighted</em>: it reflects how much capital
-                was invested and when, not just how the price moved.
+                does afterward, so this is a <em>cash-flow-sensitive dollar result</em>: it reflects how
+                much capital was invested and when, not just how the price moved.
               </li>
               <li>
                 <strong>Tracker Total Return %:</strong> a daily-compounded, dividend-reinvested index —
@@ -962,7 +958,8 @@ export default function TotalReturn() {
             <p className="tracker-help-note">
               Use Tracker Total Return % to judge performance or compare against a benchmark like SPY —
               it is the figure that should match Dashboard, Growth &amp; Performance, Portfolio Growth 2,
-              and Gains &amp; Losses when the account, date range, and holdings scope match. Use Total
+              and Gains &amp; Losses after the close when the account, date range, and holdings scope match.
+              Each screen reads live quotes separately, so values can differ intraday. Use Total
               Return ($) to see the actual dollar result of your specific buy and sell timing, which a
               pure percentage cannot show.
             </p>
@@ -1000,8 +997,9 @@ export default function TotalReturn() {
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> this page is the reference calculation for
             transaction-aware Total Return. Dashboard, Growth &amp; Performance, Portfolio Growth 2,
-            and Gains &amp; Losses show this same figure as <strong>Tracker Total Return %</strong> when the
-            account, date range, and holdings scope match. Lifetime cost-basis G/L and dollar P/L
+            and Gains &amp; Losses use this same calculation for <strong>Tracker Total Return %</strong> when the
+            account, date range, and holdings scope match. They should agree after the close; separately
+            read live quotes can differ intraday. Lifetime cost-basis G/L and dollar P/L
             answer a different question: where the accounting profit or loss came from.
             {' '}The selected range is remembered across all five tracking screens.
             {t.account_reconciliation && (
@@ -1015,7 +1013,7 @@ export default function TotalReturn() {
             )}
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
-            {/* Both are single closes, so each names its own date; the range
+            {/* Both are single market observations, so each names its own date; the range
                 belongs on the cards that actually measure across one. */}
             {/* Say what these measure. Only when something is actually left out,
                 so an account with no cash and no options is not told twice that
@@ -1064,12 +1062,12 @@ export default function TotalReturn() {
             <MetricCard label="Total Return" range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>}>
               <div className="summary-sub">Price Return + Distributions, in dollars</div>
-              <div className="summary-sub">Money-weighted — reflects your buy/sell timing</div>
+              <div className="summary-sub">Dollar result — reflects your buy/sell timing</div>
             </MetricCard>
             <MetricCard label="Tracker Total Return %" range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>}>
               <div className="summary-sub">Time-weighted — timing-neutral performance</div>
-              <div className="summary-sub">Matches Dashboard, Growth &amp; Gains/Losses</div>
+              <div className="summary-sub">Same calculation as Dashboard, Growth &amp; Gains/Losses; separately read live quotes can differ until close</div>
             </MetricCard>
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}

@@ -2131,7 +2131,8 @@ function GrowthHelp() {
         <strong>How this ties to the other tracking pages:</strong> the <strong>Tracker Total Return %</strong>
         here uses the same transaction-aware return calculation as Total Return and the Tracker Total Return %
         card on Portfolio Growth 2. With the same portfolio, holdings filter, and effective date range, the
-        percentage should match. Purchases and sales change the amount invested; they are not counted as gain
+        percentage should match after the close; separately read live quotes can differ intraday. Purchases
+        and sales change the amount invested; they are not counted as gain
         or loss. The Dashboard holding chart uses this same calculation for that individual holding. The
         Shared Performance Date Range is remembered across all five screens; only a later purchase date or
         unavailable market day can make a holding&apos;s effective start later than the requested start. Every
@@ -2280,11 +2281,13 @@ function PortfolioGrowth2Help() {
       <p style={{ marginBottom: '1rem' }}>
         Both charts and the headline cards share the same period selector and ticker filter. Each chart title
         prints its From and To dates, the return cards show their effective date range, and Start and End
-        Value show the single close each one is taken from, so every view stays in sync as you explore a range.
+        Value show the single market observation each one is taken from: a live quote when available today,
+        otherwise a close. This makes intraday timing visible as you explore a range.
       </p>
       <p style={{ marginBottom: '1rem' }}>
-        <strong>Comparing against your broker:</strong> End Value is your shares at the latest close plus your
-        recorded cash. A broker's net liquidating value already includes that cash, so adding the two together
+        <strong>Comparing against your broker:</strong> End Value is your shares at the latest market observation
+        (a live quote when available today, otherwise the latest close), plus your recorded cash. A broker's
+        net liquidating value already includes that cash, so adding the two together
         double counts it. If the account is carrying open option contracts, they appear beneath End Value marked
         at the current bid/ask mid, along with a combined <strong>with options</strong> figure — that is the one
         to compare against net liquidating value. Short spreads mark negative because closing them costs money.
@@ -2294,7 +2297,8 @@ function PortfolioGrowth2Help() {
       <p style={{ marginBottom: '1rem' }}>
         <strong>How this ties to the other tracking pages:</strong> <strong>Tracker Total Return %</strong>
         is the common transaction-aware, dividend-reinvested percentage used by Growth &amp; Performance and
-        Total Return. It should match when the portfolio, ticker scope, and effective date range match.
+        Total Return. It should match after the close when the portfolio, ticker scope, and effective date
+        range match; separately read live quotes can differ intraday.
         The dollar charts below intentionally answer a different question: how portfolio value and dollar
         profit/loss changed, including the effect of cash invested or withdrawn. The Shared Performance Date
         Range is remembered across Dashboard, Growth &amp; Performance, this page, Total Return, and Gains &amp; Losses.
@@ -3165,9 +3169,10 @@ function TotalReturnHelp() {
       {/* ── What the range buttons measure ──────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>What the Range Buttons Measure</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each button sets only the <strong>start</strong> of the window. Every range ends at the
-        <strong> most recent close</strong>, so the end date never changes between buttons — only the
-        start moves. Return is measured from the close on the start date, which makes that day the
+        Each button sets only the <strong>start</strong> of the window. Every range ends at the latest
+        <strong> market observation</strong> — a live quote when available today, otherwise the most recent
+        close — so the end date never changes between buttons; only the start moves. Return is measured
+        from the close on the start date, which makes that day the
         baseline rather than the first day of gain. Hovering any button shows the same detail in a tooltip.
       </p>
       <p style={{ marginBottom: '0.5rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
@@ -3341,7 +3346,8 @@ function GainsLossesHelp() {
         Dashboard, Growth &amp; Performance, Portfolio Growth 2, and Total Return. The selected-period
         cards, the <strong>Tracker TR %</strong> holding column, and the performance charts all come from
         the exact same transaction-aware endpoint as Total Return. With the same account, holdings
-        filter, and effective dates, <strong>Tracker Total Return %</strong> should match exactly.
+        filter, and effective dates, <strong>Tracker Total Return %</strong> should match after the close.
+        Separately read live quotes can differ intraday.
       </p>
       <p style={{ marginBottom: '1rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         1D means the move since the previous trading close, so Monday measures from Friday and market
@@ -3355,7 +3361,8 @@ function GainsLossesHelp() {
         The first row is selected-period performance: Start Value, End Value, Account Value when
         reconciliation data is available, Price Return, Distributions, Total Return dollars, and Tracker
         Total Return %. Start Value and End Value are holdings-only figures; Account Value adds cash and
-        open option marks for comparison with broker net liquidating value. These match Total Return.
+        open option marks for comparison with broker net liquidating value. They use the same calculation
+        as Total Return; separately read live quotes can differ intraday.
         The next two rows are explicitly labeled <strong>Lifetime Cost-Basis G/L</strong>:
       </p>
       <h4 style={{ marginBottom: '0.4rem' }}>Top Row — Unrealized (Open Positions)</h4>

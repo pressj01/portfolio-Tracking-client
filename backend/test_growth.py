@@ -110,6 +110,25 @@ class GrowthApiTest(unittest.TestCase):
         self.assertEqual(data["heatmap"]["windows"], ["From First Trade"])
         self.assertEqual(data["heatmap"]["values"], [[40.0]])
 
+    def test_ticker_bars_use_the_portfolio_cards_trimmed_index(self):
+        calls = []
+        build = app_module._build_transaction_aware_portfolio_series
+
+        def record_index(close, *args, **kwargs):
+            calls.append([timestamp.strftime("%Y-%m-%d") for timestamp in close.index])
+            return build(close, *args, **kwargs)
+
+        app_module._build_transaction_aware_portfolio_series = record_index
+        try:
+            response = self.client.get(
+                "/api/growth/data?profile_id=6&period=all&benchmark=SPY"
+            )
+        finally:
+            app_module._build_transaction_aware_portfolio_series = build
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual(calls[-1], ["2024-01-02", "2024-12-31"])
+
     def test_custom_range_requires_both_dates(self):
         response = self.client.get(
             "/api/growth/data?profile_id=6&period=custom&start_date=2024-01-02"

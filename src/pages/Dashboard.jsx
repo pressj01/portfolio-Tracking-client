@@ -981,8 +981,8 @@ function TickerModal({
           <>
             {data.calculation_method && (
               <p style={{ color: 'var(--text-dim)', margin: '-0.5rem 0 1rem', fontSize: '0.82rem', lineHeight: 1.45 }}>
-                <strong>Matches Total Return for {data.period_label || 'the selected period'}:</strong>{' '}
-                {data.calculation_method}
+                <strong>Uses the Total Return method for {data.period_label || 'the selected period'}:</strong>{' '}
+                {data.calculation_method} Separately read live quotes can differ intraday.
               </p>
             )}
             <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>

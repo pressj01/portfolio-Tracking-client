@@ -1,7 +1,9 @@
-// Every period ends at the most recent close. `hint` is the hover help on each
-// button and must keep describing what the backend actually resolves in
-// _resolve_total_return_period; returns use the final close on or before the
-// selected start, which is the baseline rather than the first day of gain.
+// Every period ends at the latest market observation: a live quote when Yahoo
+// provides one for today, otherwise the most recent close. `hint` is the hover
+// help on each button and must keep describing what the backend actually
+// resolves in _resolve_total_return_period; returns use the final close on or
+// before the selected start, which is the baseline rather than the first day
+// of gain.
 export const PERFORMANCE_PERIODS = [
   {
     key: '1d',
@@ -58,7 +60,7 @@ export const PERFORMANCE_PERIODS = [
 // One line under the button row on every performance screen. The per-button
 // detail lives in `hint`.
 export const PERFORMANCE_RANGE_NOTE = (
-  'Each preset sets the start and ends at the most recent close; Custom uses both inclusive dates you enter. '
+  'All ranges end at the latest market observation: a live quote when available today, otherwise the most recent close. Presets choose the start; Custom uses both inclusive dates you enter. '
   + 'Return is measured from the market close on or before the start date, so weekends and holidays use the prior close. '
   + 'Hover a button for the exact start it resolves to.'
 )
@@ -184,6 +186,19 @@ export const formatClockStamp = (value) => {
   return isToday ? time : `${formatPerformanceDate(dateInputValue(parsed))} ${time}`
 }
 
+// Start and end values are point-in-time figures, not ranges. When a response
+// reaches today, Yahoo's final row is a live quote rather than a settled close;
+// use the same label everywhere so split-view comparisons name that distinction.
+export const formatPerformanceAsOf = (value, pricedAt = null) => {
+  const label = formatPerformanceDate(value)
+  if (!label) return ''
+  if (value === todayInputValue()) {
+    const stamp = formatClockStamp(pricedAt)
+    return `As of ${label} · live price${stamp ? `, read ${stamp}` : ''}`
+  }
+  return `As of ${label} close`
+}
+
 export const formatPerformanceDate = (value) => {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
   if (!match) return ''
@@ -264,7 +279,7 @@ export const customRangeError = (period, start, end) => {
   // same as the API's own rejection.
   const today = todayInputValue()
   if (end > today) {
-    return `Custom end date cannot be in the future — the latest close is ${formatPerformanceDate(today)}.`
+    return `Custom end date cannot be in the future — the latest selectable date is ${formatPerformanceDate(today)}.`
   }
   return null
 }

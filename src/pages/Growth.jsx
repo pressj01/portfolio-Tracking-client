@@ -646,7 +646,8 @@ export default function Growth() {
             <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
             ticker bars use the same transaction-aware calculation as the Total Return Dashboard. With
             the same account, date range, and holdings scope, <strong>Total Return %</strong> here matches
-            Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong>. Buys and sells
+            Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong> after the close.
+            Separately read live quotes can differ intraday. Buys and sells
             change portfolio weights; they are not counted as gains or losses. The index starts at 100,
             so its final value minus 100 is the displayed return percentage.
             {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.

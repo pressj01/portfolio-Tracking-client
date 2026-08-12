@@ -11,7 +11,7 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
-  formatPerformanceDate,
+  formatPerformanceAsOf,
   formatPerformanceRange,
   readSharedPerformanceRange,
   todayInputValue,
@@ -182,10 +182,10 @@ export default function PortfolioGrowth2() {
   const [profitMode, setProfitMode] = useState('dollar')
   const [groupProfitSource, setGroupProfitSource] = useState(true)
   const rangeError = customRangeError(period, customStart, customEnd)
-  // Start and End Value are single closes, so they carry their own as-of date.
+  // Start and End Value are single market observations, so they carry their own as-of date.
   // Printing the whole range on them read as if each number spanned the period.
-  const startValueDate = data ? formatPerformanceDate(data.actual_start_date) : ''
-  const endValueDate = data ? formatPerformanceDate(data.actual_end_date) : ''
+  const startValueAsOf = data ? formatPerformanceAsOf(data.actual_start_date) : ''
+  const endValueAsOf = data ? formatPerformanceAsOf(data.actual_end_date) : ''
   const trackerCardRange = data
     ? formatPerformanceRange(
         data.tracker_actual_start_date || data.actual_start_date,
@@ -434,7 +434,8 @@ export default function PortfolioGrowth2() {
         <p className="tracker-help-footer">
           <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
           transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
-          the account, date range, and holdings scope match. The dollar card and return chart use
+          the account, date range, and holdings scope match. Separately read live quotes can differ
+          intraday. The dollar card and return chart use
           the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
         </p>
         <div className="tracker-help-grid">
@@ -442,9 +443,10 @@ export default function PortfolioGrowth2() {
             <h3>Portfolio value</h3>
             <p>
               The blue line is the share count actually held on each date, replayed from your dated
-              buy and sell history, priced at that day's close. It comes from the same calculation as
+              buy and sell history, priced at that day&apos;s market observation: a live quote when
+              available today, otherwise that day&apos;s close. It comes from the same calculation as
               the return card below it, so Start Value and End Value reconcile with Total Return and
-              Gains &amp; Losses.
+              Gains &amp; Losses after the close.
             </p>
             <ul>
               <li><strong>Portfolio:</strong> market value of the shares held on each date, plus recorded cash.</li>
@@ -454,7 +456,7 @@ export default function PortfolioGrowth2() {
             <p className="tracker-help-note">
               Start Value is the portfolio's real opening balance for the range, not today's share
               counts priced backward. It differs from Total Return only by any recorded cash balance,
-              which this chart includes and that page does not. Each figure is a single close, so
+              which this chart includes and that page does not. Each figure is a single market observation, so
               each carries its own as-of date rather than the whole range.
             </p>
           </section>
@@ -478,7 +480,8 @@ export default function PortfolioGrowth2() {
           <section className="tracker-help-wide">
             <h3>Reconciling to your broker</h3>
             <p>
-              End Value is the shares you hold priced at the latest close, plus your recorded cash. A
+              End Value is the shares you hold priced at the latest market observation (a live quote
+              when available today, otherwise the latest close), plus your recorded cash. A
               broker's net liquidating value already includes that cash, so adding the two together
               double counts it.
             </p>
@@ -529,7 +532,8 @@ export default function PortfolioGrowth2() {
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
-            this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure.
+            this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure;
+            separately read live quotes can differ intraday.
             <strong> Tracker Total Return $</strong> is the matching cash-flow-adjusted dollar result:
             price return plus distributions, without treating deposits, purchases, or sales as performance.
             {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
@@ -544,7 +548,7 @@ export default function PortfolioGrowth2() {
               {data.summary?.cash_value > 0 && (
                 <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
               )}
-              {startValueDate && <div className="summary-sub">As of {startValueDate} close</div>}
+              {startValueAsOf && <div className="summary-sub">{startValueAsOf}</div>}
             </div>
             <div className="summary-card">
               <div className="summary-label">End Value</div>
@@ -552,7 +556,7 @@ export default function PortfolioGrowth2() {
               {data.summary?.cash_value > 0 && (
                 <div className="summary-sub">Includes {formatMoney(data.summary.cash_value)} cash (current balance)</div>
               )}
-              {endValueDate && <div className="summary-sub">As of {endValueDate} close</div>}
+              {endValueAsOf && <div className="summary-sub">{endValueAsOf}</div>}
               <AccountReconciliation data={data.summary?.account_reconciliation} />
             </div>
             <div className="summary-card">
@@ -568,7 +572,7 @@ export default function PortfolioGrowth2() {
               <div className="summary-value">
                 {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
               </div>
-              <div className="summary-sub">Same return standard as Growth &amp; Total Return</div>
+              <div className="summary-sub">Same calculation as Growth &amp; Total Return; live quotes can differ intraday</div>
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
           </div>

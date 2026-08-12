@@ -15,6 +15,7 @@ import {
   customRangeError,
   formatAccountingCoverage,
   formatPerformanceChartRange,
+  formatPerformanceAsOf,
   formatClockStamp,
   formatPerformanceDate,
   formatPerformanceRange,
@@ -59,7 +60,7 @@ const UNREALIZED_COLS = [
   { key: 'divs_received', label: 'Divs Rcvd', tip: 'Total lifetime dividends received from this holding', fmt, numeric: true },
   { key: 'total_gl', label: 'Lifetime Total G/L', tip: 'Lifetime cost-basis gain or loss including all recorded dividends (price G/L + dividends received)', fmt, gl: true },
   { key: 'total_gl_pct', label: 'Lifetime G/L %', tip: 'Lifetime total gain/loss as a percentage of amount invested; this accounting figure is not controlled by the performance date range', fmt: fmtPct, gl: true },
-  { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; this is the figure that matches Total Return', fmt: fmtPct, gl: true },
+  { key: 'period_total_return_pct', label: 'Tracker TR %', tip: 'Transaction-aware Total Return for the shared performance date range; it uses the same calculation as Total Return. Separately read live quotes can differ intraday.', fmt: fmtPct, gl: true },
   { key: 'period_range', label: 'Effective Range', tip: 'Actual market-observation dates used for this holding' },
   { key: 'ret_vs_yld', label: 'RvY', tip: 'Total return vs yield, both measured over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return.', rvy: true },
 ]
@@ -397,12 +398,11 @@ export default function GainsLosses() {
     chartData?.actual_start_date || chartData?.requested_start_date,
     chartData?.actual_end_date || chartData?.requested_end_date,
   )
-  // Start and End Value are single closes; the range belongs on the cards that
-  // measure across one.
-  const periodAsOf = (value) => {
-    const label = formatPerformanceDate(value)
-    return label ? `As of ${label} close` : performanceRange
-  }
+  // Start and End Value are single market observations; the range belongs on
+  // cards that measure across one.
+  const periodAsOf = (value, pricedAt = null) => (
+    formatPerformanceAsOf(value, pricedAt) || performanceRange
+  )
   const performanceByTicker = useMemo(() => new Map(
     (chartData?.performance_rows || []).map(row => [
       String(row.ticker || '').trim().toUpperCase(),
@@ -850,7 +850,8 @@ export default function GainsLosses() {
         <p className="tracker-help-footer">
           <strong>Two different questions, both called "gains and losses":</strong> the top strip is a
           period return — it resets to whatever the Shared Performance Date Range is set to, and it is
-          the same transaction-aware calculation used on Total Return. The bottom strip is lifetime
+          the same transaction-aware calculation used on Total Return. Each screen reads live quotes
+          separately, so current-day values can differ until the close. The bottom strip is lifetime
           cost-basis accounting — invested vs. current value since the day each holding was bought,
           unaffected by the date range above.
         </p>
@@ -859,12 +860,12 @@ export default function GainsLosses() {
             <h3>Selected-period cards</h3>
             <p>Everything in this row moves when you change the Shared Performance Date Range.</p>
             <ul>
-              <li><strong>Start Value / End Value:</strong> the portfolio's holdings, priced at the close on the first and last day of the range. Neither includes cash.</li>
+              <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
               <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
               <li><strong>Total Return:</strong> Price Return plus Distributions — the dollar version of Tracker Total Return %.</li>
-              <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2 when the account, holdings filter, and date range match.</li>
+              <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2 after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
             </ul>
             <p className="tracker-help-note">
               Buys and sells during the range change what is being measured, not the return itself — a
@@ -945,7 +946,8 @@ export default function GainsLosses() {
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Reconciliation figure:</strong> <strong>Tracker Total Return %</strong> is the value
             that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2
-            when the account, holdings filter, and shared date range match. Lifetime G/L below answers
+            after the close when the account, holdings filter, and shared date range match. Separately
+            read live quotes can differ intraday. Lifetime G/L below answers
             a different cost-basis accounting question.
           </div>
           <div className="summary-strip" style={{ marginBottom: '1.25rem' }}>
@@ -954,13 +956,13 @@ export default function GainsLosses() {
               {periodMetrics.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
             </MetricCard>
             <MetricCard label="End Value" value={fmtInt(periodMetrics.end_value)}
-              range={periodAsOf(chartData?.actual_end_date)}>
+              range={periodAsOf(chartData?.actual_end_date, periodMetrics.priced_at)}>
               {periodMetrics.account_reconciliation && (
                 <div className="summary-sub">Holdings only — no cash; see Account Value</div>
               )}
             </MetricCard>
             <AccountValueCard data={periodMetrics.account_reconciliation}
-              basisLabel={periodAsOf(chartData?.actual_end_date)} />
+              basisLabel={periodAsOf(chartData?.actual_end_date, periodMetrics.priced_at)} />
             <MetricCard label="Price Return" range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>}>
               <div className="summary-sub">Market price only, dividends excluded</div>
@@ -974,7 +976,7 @@ export default function GainsLosses() {
             </MetricCard>
             <MetricCard label="Tracker Total Return %" range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>}>
-              <div className="summary-sub">Matches Total Return &amp; Dashboard</div>
+              <div className="summary-sub">Same calculation as Total Return &amp; Dashboard; live quotes can differ intraday</div>
             </MetricCard>
           </div>
         </>

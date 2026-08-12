@@ -27416,10 +27416,15 @@ def growth_data():
     # ── Per-ticker returns for bar chart ──
     ticker_returns = []
     for t in available_tickers:
+        # Keep each bar on the exact market-observation window that produced the
+        # portfolio cards and indexes. `close` can retain earlier rows from a
+        # provider response, which would otherwise give the ticker bars a
+        # longer return period than the trimmed portfolio series.
+        ticker_close = close.reindex(index=chart_index, columns=[t])
         ticker_result = _build_transaction_aware_portfolio_series(
-            close[[t]], adjusted.reindex(index=close.index, columns=[t]),
-            divs.reindex(index=close.index, columns=[t]).fillna(0),
-            cap_gains.reindex(index=close.index, columns=[t]).fillna(0),
+            ticker_close, adjusted.reindex(index=chart_index, columns=[t]),
+            divs.reindex(index=chart_index, columns=[t]).fillna(0),
+            cap_gains.reindex(index=chart_index, columns=[t]).fillna(0),
             [tx for tx in canonical_transactions if tx.get("market_symbol") == t],
             [holding for holding in canonical_holdings if holding.get("market_symbol") == t],
             stock_splits=stock_splits.reindex(columns=[t]).fillna(0),
