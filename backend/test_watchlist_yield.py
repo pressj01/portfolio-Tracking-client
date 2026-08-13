@@ -67,9 +67,15 @@ class WatchlistExpectedYieldTest(unittest.TestCase):
         self.assertEqual(source, "annualized_since_launch")
 
     def test_established_monthly_fund_uses_full_trailing_year(self):
+        # Anchored to today: fixed dates age out of the trailing year and the
+        # test then measures 11 payments while claiming to measure 12.
         distributions = pd.Series(
             [1.00] * 12,
-            index=pd.date_range("2025-08-01", periods=12, freq="MS"),
+            index=pd.date_range(
+                pd.Timestamp.today().normalize() - pd.DateOffset(months=11),
+                periods=12,
+                freq="MS",
+            ),
         )
 
         result, source = app_module._expected_annual_distribution_yield_pct(

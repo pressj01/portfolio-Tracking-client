@@ -83,6 +83,66 @@ class DividendFrequencyTest(unittest.TestCase):
         self.assertAlmostEqual(annual, 1.5236, places=4)
         self.assertEqual(source, "trailing_12_month")
 
+    def test_decayed_weekly_payout_is_not_annualized_from_the_trailing_year(self):
+        # ULTI paid $0.35/week at launch and $0.095 a year later. Its trailing
+        # total ($7.76/share) still carries the launch payments, which turned
+        # 237.9954 shares into $153.90/month of estimated income against a real
+        # weekly deposit of $22.61.
+        amounts = [
+            0.350, 0.270, 0.270, 0.270, 0.270, 0.225, 0.235, 0.220, 0.240,
+            0.245, 0.240, 0.250, 0.210, 0.200, 0.195, 0.190, 0.190, 0.190,
+            0.190, 0.190, 0.190, 0.185, 0.185, 0.190, 0.175, 0.190, 0.195,
+            0.185, 0.215, 0.205, 0.170, 0.175, 0.155, 0.160, 0.130, 0.120,
+            0.105, 0.090, 0.100,
+        ]
+        divs = pd.Series(
+            amounts,
+            index=pd.date_range(
+                pd.Timestamp.today().normalize() - pd.Timedelta(weeks=len(amounts) - 1),
+                periods=len(amounts),
+                freq="W",
+            ),
+        )
+
+        annual, ttm, source = app_module._div_calc_annual_dividend(divs, "W", 0.095)
+
+        self.assertAlmostEqual(ttm, 7.76, places=2)
+        self.assertAlmostEqual(annual, 5.07, places=2)
+        self.assertEqual(source, "annualized_recent_distributions")
+        self.assertAlmostEqual(annual * 237.9954 / 12, 100.55, places=2)
+
+    def test_level_weekly_payout_still_uses_the_trailing_year(self):
+        divs = pd.Series(
+            [0.25] * 52,
+            index=pd.date_range(
+                pd.Timestamp.today().normalize() - pd.Timedelta(weeks=51),
+                periods=52,
+                freq="W",
+            ),
+        )
+
+        annual, _ttm, source = app_module._div_calc_annual_dividend(divs, "W", 0.25)
+
+        self.assertAlmostEqual(annual, 13.0, places=4)
+        self.assertEqual(source, "trailing_12_month")
+
+    def test_single_light_week_does_not_reprice_a_level_weekly_payer(self):
+        # One low distribution is noise, not a cut: the current-rate window
+        # averages four payments so it cannot chase a single week.
+        divs = pd.Series(
+            [0.25] * 51 + [0.10],
+            index=pd.date_range(
+                pd.Timestamp.today().normalize() - pd.Timedelta(weeks=51),
+                periods=52,
+                freq="W",
+            ),
+        )
+
+        annual, _ttm, source = app_module._div_calc_annual_dividend(divs, "W", 0.25)
+
+        self.assertAlmostEqual(annual, 12.85, places=2)
+        self.assertEqual(source, "trailing_12_month")
+
     def test_refresh_metadata_uses_quarterly_cycle_instead_of_latest_payment(self):
         quantity = 130.6035
         price = 12.36

@@ -8281,14 +8281,49 @@ def _div_calc_positive_dividends(divs):
     return divs[divs > 0].dropna()
 
 
-def _div_calc_annual_dividend(divs, freq_code):
+# How many recent payments describe what a weekly/monthly fund pays *now*.
+# Roughly a month either way: long enough that one unusually high or low
+# distribution cannot swing the estimate, short enough to follow a fund that
+# has repriced its payout.
+_CURRENT_DISTRIBUTION_WINDOW = {"W": 4, "M": 3}
+
+# How far the current rate has to sit from the trailing year before that year
+# is treated as history rather than a forward estimate.
+_CURRENT_DISTRIBUTION_LEVEL_SHIFT = 0.15
+
+
+def _current_distribution_run_rate(pos, freq_code, per_year, current_div=None):
+    """Annualize what a variable fund is paying now, not over the past year.
+
+    Averages the most recent payments so a single outlier cannot move the
+    estimate, and folds in a freshly declared amount that has not reached the
+    payment history yet — that declaration postdates every payment in the
+    series and is the fund's own statement of its current rate.
+    """
+    window = _CURRENT_DISTRIBUTION_WINDOW.get(freq_code)
+    if not window:
+        return 0.0
+    recent = [float(v) for v in pos.tail(window).tolist()]
+    try:
+        declared = float(current_div or 0)
+    except (TypeError, ValueError):
+        declared = 0.0
+    if declared > 0 and (not recent or abs(declared - recent[-1]) > 1e-9):
+        recent = (recent + [declared])[-window:]
+    if len(recent) < window:
+        return 0.0
+    return (sum(recent) / len(recent)) * per_year
+
+
+def _div_calc_annual_dividend(divs, freq_code, current_div=None):
     """Return an annual dividend estimate for the calculator.
 
     Prefer a completed distribution cycle when enough payments exist. This is
     especially important for variable quarterly funds: annualizing only the
     latest payout can materially understate or overstate their sustainable
     yield. For variable weekly/monthly option-income funds, prefer a completed
-    trailing-12-month total.
+    trailing-12-month total — but only while the payout has held its level,
+    since those funds ratchet the distribution with NAV.
     """
     pos = _div_calc_positive_dividends(divs)
     if pos.empty:
@@ -8313,6 +8348,19 @@ def _div_calc_annual_dividend(divs, freq_code):
     if freq_code in ("W", "M"):
         min_full_year_payments = max(1, int(per_year * 0.75))
         if len(trailing) >= min_full_year_payments and ttm_div > 0:
+            # A completed year only forecasts the year ahead while the payout
+            # has held its level. ULTI's weekly distribution decayed from
+            # $0.35 to $0.095 over its first year, so its trailing total still
+            # carried the old, much larger payments and overstated the income
+            # it now produces by 57%. Let a real level shift win.
+            current_rate = _current_distribution_run_rate(
+                pos, freq_code, per_year, current_div,
+            )
+            if (
+                current_rate > 0
+                and abs(current_rate - ttm_div) > ttm_div * _CURRENT_DISTRIBUTION_LEVEL_SHIFT
+            ):
+                return current_rate, ttm_div, "annualized_recent_distributions"
             return ttm_div, ttm_div, "trailing_12_month"
 
         if len(pos) >= 2:
@@ -9086,7 +9134,9 @@ def _annual_dividend_per_share_from_snapshot(snapshot, fallback_frequency=None):
     annual_per_share = div * freq_mult.get(freq, 4)
     history = snapshot.get("history")
     if history is not None and not getattr(history, "empty", True):
-        estimated, _ttm, _source = _div_calc_annual_dividend(history, freq)
+        # The snapshot's own amount is the distribution being paid next, which
+        # the history has not recorded yet — the newest evidence of the rate.
+        estimated, _ttm, _source = _div_calc_annual_dividend(history, freq, div)
         if estimated > 0:
             annual_per_share = estimated
     return annual_per_share
@@ -12426,6 +12476,24 @@ def refresh_market_data():
             return False
         return not _refresh_num_changed(income, expected, tolerance=max(1.0, expected * 0.03))
 
+    def _refresh_income_contradicts_rate(income, div, quantity, freq, tolerance=0.25):
+        """True when a stored income cannot describe the current distribution.
+
+        The band is deliberately wide: our own estimate smooths a variable
+        payout and legitimately lands a little off div x qty x frequency. Only
+        a figure that misses by a quarter has stopped describing this fund.
+        """
+        expected = _refresh_annual_income_from_rate(div, quantity, freq)
+        if expected <= 0:
+            return False
+        try:
+            income = float(income or 0)
+        except (TypeError, ValueError):
+            return False
+        if income <= 0:
+            return False
+        return abs(income - expected) > expected * tolerance
+
     def _refresh_expected_pay_date(
         ex_div_date,
         pay_date,
@@ -12625,10 +12693,26 @@ def refresh_market_data():
                 qty,
                 old_freq,
             )
+            # A figure that cannot be reconciled with the distribution the fund
+            # is paying now is stale, whoever produced it. ULTI's $1,846/yr
+            # outlived a weekly payout that fell from $0.35 to $0.095 because a
+            # weekly broker import kept re-arming the preservation branch, and
+            # the run-rate escape above only fires when the stored value is
+            # already correct.
+            existing_income_contradicts_rate = _refresh_income_contradicts_rate(
+                existing_estim_annual,
+                h.get("div"),
+                qty,
+                old_freq,
+            )
             preserve_income_estimate = existing_estim_annual > 0 and (
                 (pid in positions_managed_ids and broker_data_fresh)
                 or not (fresh_div and float(fresh_div) > 0)
-            ) and not (fresh_div and float(fresh_div) > 0 and existing_income_is_run_rate)
+            ) and not (
+                fresh_div
+                and float(fresh_div) > 0
+                and (existing_income_is_run_rate or existing_income_contradicts_rate)
+            )
             if div_override_active:
                 # Income has to track the corrected rate, not a broker estimate
                 # that was built from the amount being corrected.
@@ -13265,6 +13349,26 @@ def _action_money(value):
     return f"${float(value or 0):,.2f}"
 
 
+def _action_center_payment_estimate(holding):
+    """Cash a single upcoming distribution should deposit for this holding."""
+    def num(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    per_payment = num(holding.get("div")) * num(holding.get("quantity"))
+    if per_payment > 0:
+        return per_payment
+    annual = num(holding.get("estim_payment_per_year")) or num(holding.get("approx_monthly_income")) * 12
+    if annual <= 0:
+        return 0.0
+    per_year = {"52": 52, "W": 52, "M": 12, "Q": 4, "SA": 2, "S": 2, "A": 1}.get(
+        str(holding.get("div_frequency") or "").strip().upper(), 12
+    )
+    return annual / per_year
+
+
 def _action_pct(value, digits=1):
     return f"{float(value or 0):.{digits}f}%"
 
@@ -13432,7 +13536,7 @@ def action_center():
                     "ticker": h["ticker"],
                     "date": iso,
                     "days": days,
-                    "income": float(h.get("approx_monthly_income") or 0),
+                    "payment": _action_center_payment_estimate(h),
                 })
         upcoming.sort(key=lambda r: (r["date"], r["ticker"]))
         for ev in upcoming[:5]:
@@ -13442,7 +13546,10 @@ def action_center():
                 "dividend",
                 "info",
                 f"{ev['ticker']} payment {when}",
-                f"Estimated pay date {ev['date']}. Monthly estimate: {_action_money(ev['income'])}.",
+                # The card announces one payment, so it has to quote that
+                # payment. A monthly figure against a weekly payer reads as the
+                # deposit about to land and is 4.3x too big.
+                f"Estimated pay date {ev['date']}. Estimated payment: {_action_money(ev['payment'])}.",
                 "/div-calendar",
                 ticker=ev["ticker"],
                 date=ev["date"],
