@@ -671,8 +671,16 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         elif credit_mode == "credit" and entry_credit <= 0:
             reasons.append("Opening cash flow must be a credit")
     scores = meta.get("stock_scores") or {}
+    ticker = str(meta.get("ticker") or "").upper()
+    is_fund = bool(
+        meta.get("is_etf")
+        or ticker in (INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET)
+    )
     for key, label in (("fundamental", "Fundamental score"), ("growth", "Growth score"), ("technical", "Technical score")):
-        if meta.get("is_etf") and key in {"fundamental", "growth"}:
+        # Fundamental and Growth scores describe a company.  They never gate an
+        # ETF or index fund such as SPY, QQQ, or IWM; Technical remains useful
+        # for both stocks and funds.
+        if is_fund and key in {"fundamental", "growth"}:
             continue
         value = _num(scores.get(key))
         low = _num(payload.get(f"stock_score_{key}_min"))
