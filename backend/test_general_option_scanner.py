@@ -271,7 +271,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")
-    def test_fundamental_score_filter_skips_index_etfs(self, score_rows, iv_history):
+    def test_fundamental_score_filter_skips_index_and_sector_etfs(self, score_rows, iv_history):
         def populate(rows):
             for row in rows:
                 row["_general"]["stock_scores"] = {
@@ -290,10 +290,11 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 {"ticker": "SPY", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
                 {"ticker": "QQQ", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
                 {"ticker": "IWM", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
+                {"ticker": "XLK", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
                 {"ticker": "AAPL", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
             ]},
         )
-        self.assertEqual([row["ticker"] for row in result["rows"]], ["IWM", "QQQ", "SPY"])
+        self.assertEqual([row["ticker"] for row in result["rows"]], ["IWM", "QQQ", "SPY", "XLK"])
         self.assertEqual(result["stats"]["filter_rejections"], {"Fundamental score": 1})
 
     @patch("general_option_scanner._iv_history")
