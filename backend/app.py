@@ -4723,6 +4723,65 @@ def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_
     )
 
 
+def _import_snowball_categories(parsed, profile_id):
+    """Import only new Snowball categories and their sub-categories."""
+    conn = get_connection()
+    categories = parsed.get("categories") or []
+    stats = {
+        "categories_created": 0,
+        "categories_skipped": 0,
+    }
+
+    try:
+        for definition in categories:
+            category_name = str(definition.get("name") or "").strip()
+            if not category_name:
+                continue
+
+            category = conn.execute(
+                """SELECT id FROM categories
+                   WHERE profile_id = ? AND LOWER(TRIM(name)) = LOWER(?)
+                   ORDER BY id LIMIT 1""",
+                (profile_id, category_name),
+            ).fetchone()
+            if category:
+                stats["categories_skipped"] += 1
+                continue
+
+            next_sort = conn.execute(
+                """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
+                   FROM categories WHERE profile_id = ?""",
+                (profile_id,),
+            ).fetchone()["n"]
+            category_id = conn.execute(
+                """INSERT INTO categories (name, target_pct, sort_order, profile_id)
+                   VALUES (?, 0, ?, ?)""",
+                (category_name, next_sort, profile_id),
+            ).lastrowid
+            stats["categories_created"] += 1
+
+        conn.commit()
+        summary = parsed.get("summary") or {}
+        msg = (
+            f"Imported {stats['categories_created']} new Snowball categor"
+            f"{'y' if stats['categories_created'] == 1 else 'ies'}"
+            f"; skipped {stats['categories_skipped']} categor"
+            f"{'y' if stats['categories_skipped'] == 1 else 'ies'} that already exist."
+        )
+        if not stats["categories_created"]:
+            msg = (
+                f"No new Snowball categories were imported; all "
+                f"{summary.get('categories', 0)} categor"
+                f"{'y' if summary.get('categories', 0) == 1 else 'ies'} already exist."
+            )
+        return jsonify({"message": msg, **stats})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": f"Category import failed: {e}"}), 500
+    finally:
+        conn.close()
+
+
 def _calc_dividend_growth_batch(tickers):
     """Calculate 3-year and 5-year dividend growth rates for a list of tickers.
     Returns dict of ticker -> {"div_growth_3y": float|None, "div_growth_5y": float|None}.
@@ -6236,7 +6295,9 @@ def api_import_transactions_preview():
     try:
         result = TXN_PARSERS[fmt](path, f.filename)
         result = _filter_shear_group_result_for_profile(result, profile_id)
-        if result.get("format_type") == "combined_export":
+        if result.get("format_type") == "categories":
+            result["target_profile_name"] = _get_profile_name(profile_id)
+        elif result.get("format_type") == "combined_export":
             result["target_profile_name"] = _get_profile_name(profile_id)
             result["preserve_positions"] = True
             result["preserve_positions_message"] = (
@@ -6730,6 +6791,9 @@ def api_import_transactions():
         )
         if not account_match["matched"]:
             return jsonify({"error": account_match["message"]}), 400
+
+    if parsed.get("format_type") == "categories":
+        return _import_snowball_categories(parsed, profile_id)
 
     # ── Positions-based import (e.g. Schwab) ─────────────────────────────────
     if parsed.get("format_type") == "positions":

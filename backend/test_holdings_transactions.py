@@ -755,7 +755,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             CREATE TABLE subcategories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category_id INTEGER,
-                name TEXT
+                name TEXT,
+                target_pct REAL,
+                profile_id INTEGER,
+                sort_order INTEGER
             );
             CREATE TABLE dividends (
                 ticker TEXT,
@@ -1173,6 +1176,63 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             [(row["ticker"], row["name"]) for row in assignments],
             [("ADX", "CORE EQUITY"), ("ARCC", "Legacy Income")],
         )
+
+    def test_snowball_categories_import_only_creates_new_categories(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (52, 'Snowball Categories', 'other', 0, 0)"
+        )
+        content = "\n".join([
+            "Holding,Category",
+            "ARCC,GROWTH / Growth-Stocks",
+            "ADX,GROWTH / Growth-Funds",
+            "ICSH,CASH",
+        ])
+
+        responses = []
+        for _ in range(2):
+            response = self.client.post(
+                "/api/import/transactions?profile_id=52",
+                data={
+                    "format": "snowball_categories",
+                    "file": (io.BytesIO(content.encode()), "Snowball_Export_Holdings.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            responses.append(response.get_json())
+
+        self.assertEqual(responses[0]["categories_created"], 3)
+        self.assertEqual(responses[0]["categories_skipped"], 0)
+        self.assertEqual(responses[1]["categories_created"], 0)
+        self.assertEqual(responses[1]["categories_skipped"], 3)
+
+        conn = self._get_connection()
+        try:
+            categories = conn.execute(
+                "SELECT name FROM categories WHERE profile_id = 52 ORDER BY sort_order, id"
+            ).fetchall()
+            subcategories = conn.execute(
+                """SELECT c.name AS category, s.name AS subcategory
+                   FROM subcategories s
+                   JOIN categories c ON c.id = s.category_id
+                   WHERE c.profile_id = 52
+                   ORDER BY c.sort_order, s.id"""
+            ).fetchall()
+            assignments = conn.execute(
+                "SELECT COUNT(*) FROM ticker_categories WHERE profile_id = 52"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            [row["name"] for row in categories],
+            ["Growth-Stocks", "Growth-Funds", "CASH"],
+        )
+        self.assertEqual(subcategories, [])
+        self.assertEqual(assignments, 0)
 
     def test_generic_transactions_import_builds_positions_and_deduplicates_reimports(self):
         import io

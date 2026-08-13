@@ -193,6 +193,8 @@ export default function Import() {
   const txnHasRows = txnPreview
     ? (txnPreview.format_type === 'combined_export'
         ? ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0)
+        : txnPreview.format_type === 'categories'
+        ? (txnPreview.summary?.categories || 0) > 0
         : txnPreview.format_type === 'positions'
         ? txnPreview.positions.length > 0
         : txnPreview.transactions.length > 0)
@@ -689,6 +691,8 @@ export default function Import() {
               ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
             : txnFormat === 'generic_transactions'
               ? <>Import broker-neutral transaction history from the app's <strong>Generic Transactions XLSX or CSV</strong> format. BUY, SELL, DIVIDEND, and DRIP rows use the same preview, duplicate protection, position rollup, dividend tracking, and realized-gain workflow as broker transaction imports.</>
+            : txnFormat === 'snowball_categories'
+              ? <>Import unique category names from a Snowball <strong>Holdings CSV or XLSX</strong>. Existing categories are skipped; this does not import holdings, ticker assignments, or sub-categories.</>
             : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
               : txnFormat === 'snowball_holdings'
@@ -781,6 +785,12 @@ export default function Import() {
             </div>
           )}
 
+          {txnFormat === 'snowball_categories' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Snowball categories import:</strong> the file must include a <strong>Category</strong> column. Labels such as <em>GROWTH / Growth-Stocks</em> import as <em>Growth-Stocks</em>. Duplicate entries in the file and categories already in this account are skipped.
+            </div>
+          )}
+
           {txnFormat === 'schwab_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
               <strong>Schwab transactions template available:</strong> the downloadable template contains the exact transaction columns this importer reads for buys, sells, cash dividends, DRIP share purchases, and reinvestment adjustments. CSV and XLSX files with those fields are supported.
@@ -857,6 +867,7 @@ export default function Import() {
               <option value="portfolio_export">Portfolio Export (Holdings + Transactions)</option>
               <option value="generic_transactions">Generic Transactions</option>
               <option value="snowball_holdings">Snowball Holdings (Migration)</option>
+              <option value="snowball_categories">Snowball Categories</option>
               <option value="snowball">Snowball Transactions</option>
               <option value="schwab">Charles Schwab (Positions)</option>
               <option value="schwab_transactions">Charles Schwab (Transactions)</option>
@@ -1028,6 +1039,37 @@ export default function Import() {
             </div>
           )}
 
+          {txnPreview && txnPreview.format_type === 'categories' && (
+            <div style={{ marginTop: '1rem' }}>
+              <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+                <strong>{txnPreview.summary.categories}</strong> categor{txnPreview.summary.categories === 1 ? 'y' : 'ies'} found.{' '}
+                {txnPreview.summary.filtered > 0 && (
+                  <>{txnPreview.summary.filtered} rows filtered out. </>
+                )}
+                {txnPreview.summary.duplicates_skipped > 0 && (
+                  <>{txnPreview.summary.duplicates_skipped} duplicate categor{txnPreview.summary.duplicates_skipped === 1 ? 'y' : 'ies'} in the file skipped. </>
+                )}
+                Existing categories will be skipped. No holdings or ticker assignments will be changed.
+              </div>
+              <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px' }}>
+                <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Category</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(txnPreview.categories || []).map((category, i) => (
+                      <tr key={i}>
+                        <td style={{ fontWeight: 600 }}>{category.name}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {txnPreview && txnPreview.format_type === 'positions' && (
             <div style={{ marginTop: '1rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
@@ -1105,7 +1147,7 @@ export default function Import() {
           )}
 
           {/* ── Transactions preview (Snowball) ── */}
-          {txnPreview && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'combined_export' && (
+          {txnPreview && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'combined_export' && txnPreview.format_type !== 'categories' && (
             <div style={{ marginTop: '1rem' }}>
               {txnPreview.preserve_positions && txnPreview.preserve_positions_message && (
                 <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>

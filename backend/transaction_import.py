@@ -451,6 +451,70 @@ def parse_snowball_holdings_csv(file_path, filename):
     }
 
 
+def _snowball_category_name(value):
+    """Return the actual category name from a Snowball category label."""
+    label = str(value or "").strip()
+    if not label:
+        return ""
+    parent, separator, child = label.partition("/")
+    # Snowball's leading label (for example ``GROWTH`` in
+    # ``GROWTH / Growth-Stocks``) is a visual grouping. The category itself is
+    # the value after the slash. A label without a slash, such as ``CASH``, is
+    # already the category name.
+    return (child if separator else parent).strip()
+
+
+def parse_snowball_categories_csv(file_path, filename):
+    """Parse the category assignments from a Snowball Holdings export.
+
+    Snowball exports categories as labels such as ``GROWTH / Growth-Stocks``.
+    The leading value is a Snowball grouping; this import creates the actual
+    category name after the slash (``Growth-Stocks``). It deliberately does
+    not parse or import holdings, prices, dividends, or transactions.
+    """
+    headers, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
+
+    required = {"Category"}
+    missing = sorted(required - set(headers))
+    if missing:
+        raise ValueError(
+            "This does not look like a Snowball category export. "
+            f"Missing required columns: {', '.join(missing)}"
+        )
+    if not rows:
+        raise ValueError("The file is empty or has no data rows.")
+
+    categories = []
+    category_keys = set()
+    filtered_count = 0
+    duplicates_skipped = 0
+    for row in rows:
+        category = _snowball_category_name(row.get("Category"))
+        if not category:
+            filtered_count += 1
+            continue
+        category_key = category.casefold()
+        if category_key in category_keys:
+            duplicates_skipped += 1
+            continue
+        category_keys.add(category_key)
+        categories.append({"name": category})
+
+    if not categories:
+        raise ValueError("No valid categories were found in the Snowball file.")
+
+    return {
+        "categories": categories,
+        "summary": {
+            "categories": len(categories),
+            "filtered": filtered_count,
+            "duplicates_skipped": duplicates_skipped,
+        },
+        "format_type": "categories",
+        "source_format": "snowball_categories",
+    }
+
+
 # â”€â”€ DRIP detection â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _detect_drip(transactions):
@@ -2374,6 +2438,7 @@ PARSERS = {
     "generic_transactions": parse_generic_transactions,
     "snowball": parse_snowball_csv,
     "snowball_holdings": parse_snowball_holdings_csv,
+    "snowball_categories": parse_snowball_categories_csv,
     "schwab": parse_schwab_csv,
     "schwab_transactions": parse_schwab_transactions_csv,
     "etrade": parse_etrade_csv,
@@ -2391,6 +2456,7 @@ PARSER_LABELS = {
     "generic_transactions": "Generic Transactions",
     "snowball": "Snowball Analytics",
     "snowball_holdings": "Snowball Holdings (Migration)",
+    "snowball_categories": "Snowball Categories",
     "schwab": "Charles Schwab (Positions)",
     "schwab_transactions": "Charles Schwab (Transactions)",
     "etrade": "E*Trade (Positions)",

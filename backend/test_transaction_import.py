@@ -15,6 +15,7 @@ from transaction_import import (
     parse_shear_group_activity,
     parse_shear_group_positions,
     parse_snowball_holdings_csv,
+    parse_snowball_categories_csv,
 )
 
 
@@ -34,6 +35,34 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(
             {position["ticker"]: position["category"] for position in result["positions"]},
             {"ARCC": "BDC", "ADX": "CORE EQUITY"},
+        )
+
+    def test_snowball_categories_deduplicates_flat_categories(self):
+        content = "\n".join([
+            "Holding,Category",
+            "ARCC,GROWTH / Growth-Stocks",
+            "ADX,GROWTH / Growth-Stocks",
+            "WMT,GROWTH / Growth-Funds",
+            "ICSH,CASH",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Snowball_Export_Holdings.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_snowball_categories_csv(str(path), path.name)
+
+        self.assertEqual(result["format_type"], "categories")
+        self.assertEqual(
+            result["summary"],
+            {"categories": 3, "filtered": 0, "duplicates_skipped": 1},
+        )
+        self.assertEqual(
+            result["categories"],
+            [
+                {"name": "Growth-Stocks"},
+                {"name": "Growth-Funds"},
+                {"name": "CASH"},
+            ],
         )
 
     def _write_etrade_all_transactions_csv(self, path):
