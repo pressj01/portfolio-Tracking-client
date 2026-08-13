@@ -92,6 +92,7 @@ from diversification import (
     bootstrap as bootstrap_diversification,
     register_routes as register_diversification_routes,
 )
+from sector_exposure import register_routes as register_sector_exposure_routes
 from option_trade_tracker import (
     open_option_liquidating_value,
     realized_option_income,
@@ -27083,7 +27084,7 @@ def tax_report_export():
 
 @app.route("/api/growth/data", methods=["GET"])
 def growth_data():
-    """Portfolio growth charts, heatmap, correlation, and grading."""
+    """Portfolio growth charts, treemap, legacy heatmap, correlation, and grading."""
     import math
     import warnings
     import numpy as np
@@ -27442,7 +27443,30 @@ def growth_data():
         reverse=True,
     )
 
-    # ── Heatmap ──
+    # ── Growth map and legacy heatmap ──
+    # The treemap uses the same per-ticker return as the bars, but sizes each
+    # tile by the latest tracked position value. Keeping this separate preserves
+    # the compact ticker_returns contract used by the existing bar clients.
+    treemap_values = {
+        ticker: max(float(values.get(ticker) or 0), 0.0)
+        for ticker in available_tickers
+    }
+    treemap_total = sum(treemap_values.values())
+    treemap = []
+    for row in ticker_returns:
+        ticker = row["ticker"]
+        market_value = treemap_values.get(ticker, 0.0)
+        if market_value <= 0:
+            continue
+        treemap.append({
+            "ticker": ticker,
+            "return_pct": row.get("return_pct"),
+            "market_value": _clean(round(market_value, 2)),
+            "allocation_pct": _clean(round(market_value / treemap_total * 100, 2))
+            if treemap_total > 0 else None,
+            "quantity": _clean(round(float(quantities.get(ticker) or 0), 6)),
+        })
+
     heatmap_tickers = [r["ticker"] for r in ticker_returns]
     heatmap_labels = [period_range["label"]]
     heatmap_values = [
@@ -27508,6 +27532,7 @@ def growth_data():
         benchmark_total={"dates": [d.strftime("%Y-%m-%d") for d in bench_total_norm.index] if len(bench_total_norm) else [], "values": _clean_series(bench_total_norm)},
         benchmark_ticker=benchmark,
         ticker_returns=ticker_returns,
+        treemap=treemap,
         heatmap={"tickers": heatmap_tickers, "windows": heatmap_labels, "values": heatmap_values},
         correlation={"tickers": corr_tickers, "matrix": corr_matrix},
         grade=grade_info,
@@ -45152,6 +45177,7 @@ def cef_scan():
 register_options_routes(app)
 register_option_dashboard_routes(app, download_history=_chunked_yf_download)
 register_diversification_routes(app)
+register_sector_exposure_routes(app)
 register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)

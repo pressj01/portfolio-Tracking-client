@@ -77,6 +77,132 @@ class LookThroughAggregationTest(unittest.TestCase):
         self.assertEqual(undisclosed["kind"], "undisclosed")
         self.assertAlmostEqual(result["coverage"]["undisclosed_pct"], 60.0, places=2)
 
+    def test_undisclosed_remainder_is_named_by_asset_class_when_known(self):
+        """CEF Connect publishes ten holdings; the rest should still say what it is.
+
+        NAD's look-through stops at 6.7% of the fund, and the missing 93% is
+        municipal bonds. Naming the remainder does not estimate any weight --
+        it stays Undisclosed and the coverage accounting is unchanged.
+        """
+        conn = _memory_db()
+        _add_position(conn, "NAD", 1000)
+        _add_fund(conn, "NAD", [("", "Some Muni Bond 5% 2041", 10.0)])
+        conn.executemany(
+            "INSERT INTO security_sector_weights (ticker, sector, weight_pct) VALUES (?,?,?)",
+            [("NAD", "Fixed Income", 99.62), ("NAD", "Cash & equivalents", 0.37)],
+        )
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        fixed = _by_key(result, "UNDISCLOSED::NAD::Fixed Income")
+        self.assertIsNotNone(fixed)
+        self.assertEqual(fixed["kind"], "undisclosed")
+        self.assertIn("undisclosed (Fixed Income)", fixed["name"])
+        # 90% of the fund is undisclosed, split 99.62/0.37 by what it holds.
+        self.assertAlmostEqual(fixed["value"], 900.0 * (99.62 / 99.99), places=1)
+        self.assertAlmostEqual(result["coverage"]["undisclosed_pct"], 90.0, places=2)
+
+    def test_equity_sectors_collapse_to_one_equities_label(self):
+        # The remainder's sector mix is not known -- only that it is equity.
+        # Splitting it across sectors would invent precision.
+        conn = _memory_db()
+        _add_position(conn, "ADX", 1000)
+        _add_fund(conn, "ADX", [("NVDA", "NVIDIA Corp", 40.0)])
+        conn.executemany(
+            "INSERT INTO security_sector_weights (ticker, sector, weight_pct) VALUES (?,?,?)",
+            [("ADX", "Information Technology", 38.56), ("ADX", "Financials", 11.95),
+             ("ADX", "Health Care", 9.17)],
+        )
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        equities = _by_key(result, "UNDISCLOSED::ADX::Equities")
+        self.assertIsNotNone(equities)
+        self.assertAlmostEqual(equities["value"], 600.0, places=2)
+        self.assertIsNone(_by_key(result, "UNDISCLOSED::ADX::Information Technology"))
+
+    def test_negative_sleeves_do_not_describe_the_remainder(self):
+        # A leveraged fund reports borrowed cash as a negative sleeve. That is
+        # how it is financed, not what the undisclosed part holds.
+        conn = _memory_db()
+        _add_position(conn, "PTY", 1000)
+        _add_fund(conn, "PTY", [("", "Some Corporate Bond", 20.0)])
+        conn.executemany(
+            "INSERT INTO security_sector_weights (ticker, sector, weight_pct) VALUES (?,?,?)",
+            [("PTY", "Fixed Income", 177.44), ("PTY", "Cash & equivalents", -87.57)],
+        )
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        fixed = _by_key(result, "UNDISCLOSED::PTY::Fixed Income")
+        self.assertIsNotNone(fixed)
+        self.assertAlmostEqual(fixed["value"], 800.0, places=2)
+        self.assertIsNone(_by_key(result, "UNDISCLOSED::PTY::Cash & equivalents"))
+
+    def test_remainder_stays_one_slice_when_nothing_is_cached(self):
+        conn = _memory_db()
+        _add_position(conn, "MYSTERY", 1000)
+        _add_fund(conn, "MYSTERY", [("NVDA", "NVIDIA Corp", 40.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        gap = _by_key(result, "UNDISCLOSED::MYSTERY")
+        self.assertIsNotNone(gap)
+        self.assertAlmostEqual(gap["value"], 600.0, places=2)
+
+    def test_top_does_not_shrink_reported_coverage(self):
+        """Truncating the response must not change what it says is undisclosed.
+
+        Coverage used to be summed from the already-truncated list, so asking
+        for `top` quietly reported less Undisclosed than the portfolio has --
+        the one number here that must never read low.
+        """
+        conn = _memory_db()
+        _add_position(conn, "PARTIAL", 1000)
+        _add_fund(conn, "PARTIAL", [("NVDA", "NVIDIA Corp", 40.0)])
+        for i in range(30):
+            _add_position(conn, f"BIG{i}", 5000)
+
+        full = dv.build_diversification(conn, None, xray=True, mode="literal")
+        cut = dv.build_diversification(conn, None, xray=True, mode="literal", top=5)
+
+        self.assertEqual(full["coverage"], cut["coverage"])
+        self.assertEqual(cut["constituent_count"], len(full["constituents"]))
+
+    def test_top_keeps_every_non_holding_bucket(self):
+        """Collateral and Undisclosed drive the page's warnings, whatever their rank.
+
+        Dropping one by rank would not shorten the list, it would silently
+        remove a warning about weight the user cannot see.
+        """
+        conn = _memory_db()
+        _add_position(conn, "TINY", 1)
+        _add_fund(conn, "TINY", [("NVDA", "NVIDIA Corp", 40.0)])
+        for i in range(30):
+            _add_position(conn, f"BIG{i}", 5000)
+
+        cut = dv.build_diversification(conn, None, xray=True, mode="literal", top=3)
+
+        kinds = {c["kind"] for c in cut["constituents"]}
+        self.assertIn("undisclosed", kinds)
+        self.assertLessEqual(
+            len([c for c in cut["constituents"] if c["kind"] == "holding"]), 3)
+
+    def test_truncated_value_accounts_for_the_rows_left_out(self):
+        conn = _memory_db()
+        for i in range(20):
+            _add_position(conn, f"S{i}", 100)
+
+        full = dv.build_diversification(conn, None, xray=False)
+        cut = dv.build_diversification(conn, None, xray=False, top=5)
+
+        charted = sum(c["value"] for c in cut["constituents"]) + cut["truncated_value"]
+        self.assertAlmostEqual(charted, sum(c["value"] for c in full["constituents"]),
+                               places=2)
+
     def test_economic_mode_overrides_treasury_collateral_with_real_exposure(self):
         """KGLD files T-bills but is economically gold -- literal must not win."""
         conn = _memory_db()
@@ -727,6 +853,150 @@ class SymbolNormalisationTest(unittest.TestCase):
     def test_issuer_name_variants_normalise_together(self):
         self.assertEqual(dv._norm_name("NVIDIA CORP"), dv._norm_name("NVIDIA Corp."))
         self.assertEqual(dv._norm_name("Alphabet Inc Class A"), dv._norm_name("ALPHABET INC CL A"))
+
+
+def _nport_xml(rows):
+    """A minimal but schema-shaped N-PORT primary_doc.xml for `rows`.
+
+    Each row is (name, ticker, pct, assetCat). Namespaced exactly as EDGAR
+    emits so the real parser's ElementTree lookups exercise real paths.
+    """
+    ns = "http://www.sec.gov/edgar/nport"
+    body = []
+    for name, ticker, pct, cat in rows:
+        ident = f'<identifiers><ticker value="{ticker}"/></identifiers>' if ticker else "<identifiers/>"
+        body.append(
+            f"<invstOrSec><name>{name}</name><title>{name}</title>{ident}"
+            f"<pctVal>{pct}</pctVal><assetCat>{cat}</assetCat></invstOrSec>"
+        )
+    return (f'<?xml version="1.0"?><edgarSubmission xmlns="{ns}">'
+            f'<formData><invstOrSecs>{"".join(body)}</invstOrSecs></formData>'
+            f'</edgarSubmission>')
+
+
+class NportAssetCategoryTest(unittest.TestCase):
+    """assetCat routing. Codes confirmed against real filings for 29 CEFs."""
+
+    def test_equity_codes(self):
+        self.assertEqual(dv._nport_bucket("EC"), "equity")
+        self.assertEqual(dv._nport_bucket("EP"), "equity")
+
+    def test_debt_codes_are_fixed_income(self):
+        for cat in ("DBT", "ABS-MBS", "ABS-CBDO", "ABS-O", "LON", "SN"):
+            self.assertEqual(dv._nport_bucket(cat), "fixed_income", cat)
+
+    def test_repo_and_short_term_are_cash(self):
+        self.assertEqual(dv._nport_bucket("RA"), "cash")
+        self.assertEqual(dv._nport_bucket("STIV"), "cash")
+
+    def test_derivative_codes(self):
+        for cat in ("DE", "DFE", "DIR", "DCR"):
+            self.assertEqual(dv._nport_bucket(cat), "derivatives", cat)
+
+    def test_blank_asset_cat_defaults_to_equity_not_debt(self):
+        # Private-placement equity (LLC/LP stakes) files a blank assetCat.
+        # Measured on ASGI: 20 such rows totalling 21.4%, matching CEF
+        # Connect's "Other" figure of 22.5%. Defaulting them to Fixed Income
+        # was confidently wrong; equity keeps them visible as named holdings.
+        self.assertEqual(dv._nport_bucket(""), "equity")
+        self.assertEqual(dv._nport_bucket(None), "equity")
+        self.assertEqual(dv._nport_bucket("UNKNOWN_FUTURE_CODE"), "equity")
+
+
+class NportParseTest(unittest.TestCase):
+    def test_equities_stay_separate_and_non_equities_aggregate(self):
+        xml = _nport_xml([
+            ("NVIDIA Corp", "NVDA", "10.0", "EC"),
+            ("Apple Inc", "AAPL", "8.0", "EC"),
+            ("Some Muni Bond", "", "50.0", "DBT"),
+            ("Another Muni", "", "25.0", "DBT"),
+            ("Cash Sweep", "", "5.0", "RA"),
+            ("An Option", "", "2.0", "DE"),
+        ])
+        rows = dv._parse_nport_holdings(xml)
+        self.assertEqual(len(rows), 6)
+        # The fetcher, not the parser, aggregates -- parse keeps every row.
+        cats = {r["asset_cat"] for r in rows}
+        self.assertEqual(cats, {"EC", "DBT", "RA", "DE"})
+
+    def test_zero_and_missing_pct_rows_are_dropped(self):
+        xml = _nport_xml([
+            ("Real", "AAA", "10.0", "EC"),
+            ("ZeroPct", "BBB", "0", "EC"),
+        ])
+        rows = dv._parse_nport_holdings(xml)
+        self.assertEqual([r["name"] for r in rows], ["Real"])
+
+    def test_malformed_xml_returns_empty_not_raises(self):
+        self.assertEqual(dv._parse_nport_holdings("<not-xml"), [])
+
+
+class NportFetchTest(unittest.TestCase):
+    """The fetcher, with the network stubbed at _sec_get."""
+
+    def _stub(self, xml):
+        cik_json = {"0": {"cik_str": 1234, "ticker": "TESTCEF", "title": "Test CEF"}}
+        sub_json = {"filings": {"recent": {
+            "form": ["NPORT-P"], "accessionNumber": ["0001-24-000001"],
+            "reportDate": ["2026-03-31"]}}}
+
+        def fake_get(url, as_json=False, **kw):
+            if "company_tickers" in url:
+                return cik_json
+            if "submissions" in url:
+                return sub_json
+            if "primary_doc.xml" in url:
+                return xml
+            return None
+
+        original = dv._sec_get
+        prior_map = dv._SEC_CIK_MAP
+        dv._sec_get = fake_get
+        dv._SEC_CIK_MAP = None  # force rebuild from the stub
+        self.addCleanup(lambda: setattr(dv, "_sec_get", original))
+        self.addCleanup(lambda: setattr(dv, "_SEC_CIK_MAP", prior_map))
+
+    def test_equity_fund_maps_tickers_and_carries_report_date(self):
+        self._stub(_nport_xml([
+            ("NVIDIA Corp", "NVDA", "60.0", "EC"),
+            ("Apple Inc", "AAPL", "40.0", "EC"),
+        ]))
+        rows = dv._fetch_sec_nport_holdings("TESTCEF")
+        by_sym = {r["symbol"]: r["weight_pct"] for r in rows}
+        self.assertEqual(by_sym, {"NVDA": 60.0, "AAPL": 40.0})
+        self.assertTrue(any(r.get("as_of") == "2026-03-31" for r in rows))
+
+    def test_bond_sleeve_folds_into_one_fixed_income_row(self):
+        self._stub(_nport_xml([
+            ("Muni A", "", "60.0", "DBT"),
+            ("Muni B", "", "39.0", "DBT"),
+            ("Cash", "", "1.0", "RA"),
+        ]))
+        rows = dv._fetch_sec_nport_holdings("TESTCEF")
+        labels = dv._nport_aggregate_labels()
+        fixed = [r for r in rows if r["name"] == labels["fixed_income"]]
+        self.assertEqual(len(fixed), 1)
+        self.assertAlmostEqual(fixed[0]["weight_pct"], 99.0, places=2)
+
+    def test_leveraged_fund_over_100_is_scaled_down(self):
+        # 160% gross (borrowed to hold bonds) -> normalised to 100%.
+        self._stub(_nport_xml([
+            ("Bond", "", "120.0", "DBT"),
+            ("Stock", "SPY", "40.0", "EC"),
+        ]))
+        rows = dv._fetch_sec_nport_holdings("TESTCEF")
+        self.assertAlmostEqual(sum(r["weight_pct"] for r in rows), 100.0, places=2)
+
+    def test_under_100_is_left_as_filed(self):
+        # A fund that files at 96% is not inflated -- the missing 4% is a real
+        # Undisclosed remainder, not something to invent weight for.
+        self._stub(_nport_xml([("Stock", "SPY", "96.0", "EC")]))
+        rows = dv._fetch_sec_nport_holdings("TESTCEF")
+        self.assertAlmostEqual(sum(r["weight_pct"] for r in rows), 96.0, places=2)
+
+    def test_unknown_ticker_returns_empty(self):
+        self._stub(_nport_xml([("X", "X", "100.0", "EC")]))
+        self.assertEqual(dv._fetch_sec_nport_holdings("NOTAFILER"), [])
 
 
 if __name__ == "__main__":

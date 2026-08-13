@@ -249,28 +249,92 @@ export default function Growth() {
       }, { responsive: true })
     }
 
-    // ── Performance heatmap ──
-    const heatEl = document.getElementById('growth-heatmap')
-    if (heatEl && data.heatmap.tickers.length) {
-      ids.push('growth-heatmap')
-      const z = data.heatmap.values
-      const textVals = z.map(row => row.map(v => v != null ? Number(v).toFixed(1) + '%' : ''))
-      Plotly.newPlot(heatEl, [{
-        z, x: data.heatmap.windows, y: data.heatmap.tickers,
-        type: 'heatmap',
-        colorscale: [[0, '#c62828'], [0.5, ct.plot], [1, '#2e7d32']],
-        zmid: 0,
-        text: textVals, texttemplate: '%{text}',
-        hovertemplate: '%{y} %{x}: %{z:.1f}%<extra></extra>',
-        colorbar: { title: '%', ticksuffix: '%' },
+    // ── Value-weighted performance treemap ──
+    const treeEl = document.getElementById('growth-treemap')
+    const treemapRows = data.treemap || []
+    if (treeEl && treemapRows.length) {
+      ids.push('growth-treemap')
+      const returnValues = treemapRows
+        .map(row => Number(row.return_pct))
+        .filter(value => Number.isFinite(value))
+      const colorLimit = Math.max(5, ...returnValues.map(value => Math.abs(value)))
+      const labels = ['Portfolio', ...treemapRows.map(row => row.ticker)]
+      const parents = ['', ...treemapRows.map(() => 'Portfolio')]
+      const values = [
+        treemapRows.reduce((sum, row) => sum + (Number(row.market_value) || 0), 0),
+        ...treemapRows.map(row => row.market_value),
+      ]
+      const colors = [
+        0,
+        ...treemapRows.map(row => {
+          const value = Number(row.return_pct)
+          return Number.isFinite(value) ? value : 0
+        }),
+      ]
+      const customdata = [
+        [null, null, null, null],
+        ...treemapRows.map(row => [row.market_value, row.allocation_pct, row.quantity, row.return_pct]),
+      ]
+      const hovertemplate = [
+        '<b>Portfolio</b><br>Total tracked value: $%{value:,.2f}<extra></extra>',
+        ...treemapRows.map(() => (
+          '<b>%{label}</b><br>' +
+          'Total return: %{customdata[3]:+.2f}%<br>' +
+          'Allocation: %{customdata[1]:.2f}%<br>' +
+          'Market value: $%{customdata[0]:,.2f}<br>' +
+          'Shares: %{customdata[2]:,.4f}<extra></extra>'
+        )),
+      ]
+      const displayText = [
+        '',
+        ...treemapRows.map(row => {
+          const value = Number(row.return_pct)
+          return Number.isFinite(value) ? `${value >= 0 ? '+' : ''}${value.toFixed(1)}%` : 'No return'
+        }),
+      ]
+
+      Plotly.newPlot(treeEl, [{
+        type: 'treemap',
+        labels,
+        parents,
+        values,
+        branchvalues: 'total',
+        sort: true,
+        text: displayText,
+        textinfo: 'label+text',
+        textfont: { color: isDark ? '#ffffff' : ct.title, size: 14 },
+        customdata,
+        hovertemplate,
+        marker: {
+          colors,
+          cmin: -colorLimit,
+          cmax: colorLimit,
+          cmid: 0,
+          colorscale: [
+            [0, '#c85c50'],
+            [0.35, '#87514f'],
+            [0.5, ct.plot],
+            [0.65, '#467467'],
+            [1, '#4fae78'],
+          ],
+          line: { color: ct.paper, width: 2 },
+          colorbar: {
+            title: 'Return',
+            ticksuffix: '%',
+            len: 0.72,
+            thickness: 12,
+            outlinewidth: 0,
+          },
+        },
+        pathbar: { visible: false },
       }], {
-        ...layoutBase, showlegend: false,
-        title: { text: withChartRange('Performance Heatmap'), font: { size: 14, color: ct.title } },
-        yaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline, automargin: true },
-        xaxis: { gridcolor: ct.grid, zerolinecolor: ct.zeroline },
-        margin: { l: 80, r: 20, t: 70, b: 40 },
-        height: Math.max(400, data.heatmap.tickers.length * 28 + 100),
-      }, { responsive: true })
+        ...layoutBase,
+        showlegend: false,
+        title: { text: withChartRange('Portfolio Growth Map'), font: { size: 14, color: ct.title } },
+        margin: { l: 0, r: 70, t: 52, b: 0 },
+        height: Math.min(720, Math.max(460, 360 + treemapRows.length * 8)),
+        uniformtext: { minsize: 11, mode: 'hide' },
+      }, { responsive: true, displayModeBar: false })
     }
 
     return () => {
@@ -429,7 +493,7 @@ export default function Growth() {
           <strong>What this page measures:</strong> Growth &amp; Performance compares the selected
           holdings with one benchmark over one effective market-data window. The two index charts
           start at 100, so their ending value is a percentage return rather than a dollar balance.
-          The cards, ticker bars, and heatmap are recalculated from the same selected scope and date
+          The cards, ticker bars, and growth map are recalculated from the same selected scope and date
           range whenever a filter changes.
         </div>
 
@@ -450,7 +514,7 @@ export default function Growth() {
               precedence over its sub-categories; those sub-category checkboxes become dimmed and
               do not create a second or narrower filter. The category button changes from
               <strong> All Holdings</strong> to the number selected. This filter affects the
-              portfolio lines, both return cards, the risk cards, every ticker bar, and every heatmap
+              portfolio lines, both return cards, the risk cards, every ticker bar, and every growth-map
               row. It is shown only when categories exist for the selected account.
             </p>
 
@@ -600,18 +664,19 @@ export default function Growth() {
           </section>
 
           <section className="growth-help-section">
-            <h3>Performance Heatmap</h3>
+            <h3>Portfolio Growth Map</h3>
             <p>
-              The heatmap is a compact version of the ticker breakdown: each row is an included
-              ticker and the column is the selected period. The cell is that ticker&apos;s total return
-              percentage. Red means negative, the dark midpoint is near zero, and green means
-              positive. The number printed in the cell is rounded for display; hover it for the
-              precise plotted value.
+              This treemap shows every included holding at once. Tile area is the holding&apos;s current
+              tracked market value, so larger positions receive more visual weight. Tile color is
+              that ticker&apos;s transaction-aware total return for the selected period: red is negative,
+              the midpoint is near zero, and green is positive. The label includes a rounded return
+              percentage; hover a tile for allocation, value, and share count.
             </p>
             <p>
-              Because there is one period column, the heatmap is best for spotting the strongest and
-              weakest holdings at a glance. It is not a multi-period history grid. To compare a
-              different window, change the shared date range and the bars, heatmap, cards, and line
+              The map makes concentration and performance visible together: a small holding can be
+              bright green without driving much of the account, while a large red tile deserves
+              attention. To compare a different window, change the shared date range and the bars,
+              map, cards, and line
               charts will all refresh together.
             </p>
           </section>
@@ -620,7 +685,7 @@ export default function Growth() {
         <p className="growth-help-footer">
           <strong>Reading tip:</strong> first check the effective dates printed on the cards and
           chart titles, then use the total-return index for the headline comparison, the price-only
-          index to isolate market movement, and the ticker bar/heatmap to find which holdings are
+          index to isolate market movement, and the ticker bar/growth map to find which holdings are
           driving the result. Hovering a line opens a shared date readout so the portfolio and
           benchmark can be compared at the same point in time.
         </p>
@@ -703,7 +768,21 @@ export default function Growth() {
           </div>
 
           <div id="growth-bar-chart" style={{ marginBottom: '1rem' }} />
-          <div id="growth-heatmap" style={{ marginBottom: '1rem' }} />
+
+          <section className="growth-treemap-panel" aria-labelledby="growth-treemap-title">
+            <div className="growth-treemap-heading">
+              <div>
+                <h2 id="growth-treemap-title">Portfolio growth map</h2>
+                <p>Tile size shows current portfolio value. Color shows total return for the selected period.</p>
+              </div>
+              <div className="growth-treemap-legend" aria-label="Treemap return colors">
+                <span><i className="growth-treemap-swatch growth-treemap-swatch-loss" /> Loss</span>
+                <span><i className="growth-treemap-swatch growth-treemap-swatch-flat" /> Flat</span>
+                <span><i className="growth-treemap-swatch growth-treemap-swatch-gain" /> Gain</span>
+              </div>
+            </div>
+            <div id="growth-treemap" className="growth-treemap-chart" />
+          </section>
         </>
       )}
     </div>

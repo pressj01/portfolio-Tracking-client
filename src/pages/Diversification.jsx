@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import ThemedPlot from '../components/ThemedPlot'
+import SectorExposurePanel from '../components/SectorExposurePanel'
 import { formatMoney } from '../utils/money'
 
 // Distinct hues that stay legible on both themes. Cycled, so the ranked list
@@ -20,6 +21,11 @@ const UNDEFINED_COLOR = '#a16207'
 const CASH_COLOR = '#94a3b8'
 const COLLATERAL_COLOR = '#64748b'
 const DERIV_COLOR = '#b45309'
+// Same blue the Sectors tab uses for its Fixed Income bucket, so a bond CEF's
+// sleeve reads as the same thing on both screens.
+const FIXED_INCOME_COLOR = '#0ea5e9'
+const EMPTY_ROWS = []
+const TOP_CONSTITUENTS = 120
 
 function sliceColor(row, i) {
   if (row.kind === 'undisclosed') return UNDISCLOSED_COLOR
@@ -27,6 +33,7 @@ function sliceColor(row, i) {
   if (row.kind === 'cash') return CASH_COLOR
   if (row.kind === 'collateral') return COLLATERAL_COLOR
   if (row.kind === 'derivative') return DERIV_COLOR
+  if (row.kind === 'fixed_income') return FIXED_INCOME_COLOR
   return PALETTE[i % PALETTE.length]
 }
 
@@ -42,13 +49,18 @@ const MODE_HELP = {
 const COLLATERAL_HELP =
   'Fund-level cash, money-market funds, and Treasury bills reported inside derivative or financed funds. It backs those funds’ strategies and is not spendable brokerage cash. Cash-like holdings not identified as collateral appear separately under Cash & equivalents.'
 
-export default function Diversification() {
+// `initialTab` lets the catalog route straight to a tab, so Sector Exposure is
+// its own destination in the menu and in a Split View pane. The tab stays local
+// state rather than driving the URL: a pane renders this component directly, so
+// navigating on a tab click would move the whole app instead of the pane.
+export default function Diversification({ initialTab = 'holdings' }) {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
 
   // Opens on the portfolio as actually held. Looking through funds to the
   // companies underneath is what the X-Ray toggle is for -- showing constituent
   // stocks by default buries the positions the user actually owns.
+  const [tab, setTab] = useState(initialTab)
   const [xray, setXray] = useState(false)
   const [mode, setMode] = useState('economic')
   const [data, setData] = useState(null)
@@ -57,10 +69,15 @@ export default function Diversification() {
   const [job, setJob] = useState(null)
   const [showFunds, setShowFunds] = useState(false)
 
+  // The screen charts a top-40 donut over a top-60 list, so the whole
+  // constituent set is never displayed. Asking for all of it cost ~2.9 MB on a
+  // combined portfolio, most of the wait between ticking X-Ray and seeing
+  // anything change. Buckets that are not plain holdings come back regardless
+  // of rank, so the collateral and undisclosed warnings still fire.
   const load = useCallback(() => {
     setLoading(true)
     setError(null)
-    pf(`/api/diversification?xray=${xray ? 1 : 0}&mode=${mode}`)
+    pf(`/api/diversification?xray=${xray ? 1 : 0}&mode=${mode}&top=${TOP_CONSTITUENTS}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) { setError(d.error); return }
@@ -116,7 +133,10 @@ export default function Diversification() {
     runRefresh(false)
   }, [xray, data, job?.running, runRefresh])
 
-  const rows = data?.constituents || []
+  const rows = data?.constituents || EMPTY_ROWS
+  // The response is capped, so its length is no longer the portfolio's
+  // constituent count -- the server reports that separately.
+  const totalConstituents = data?.constituent_count ?? rows.length
   const shown = useMemo(() => rows.slice(0, 60), [rows])
   const maxPct = shown.length ? Math.max(...shown.map(r => r.weight_pct)) : 1
 
@@ -124,12 +144,15 @@ export default function Diversification() {
     if (!rows.length) return null
     // Everything past the top 40 becomes one slice so the ring stays readable.
     const top = rows.slice(0, 40)
+    // Rows the server left out are already summarised, so the Other slice stays
+    // correct even though the tail was never sent.
     const restVal = rows.slice(40).reduce((a, r) => a + r.value, 0)
+      + (data?.truncated_value || 0)
     const labels = top.map(r => r.symbol || r.name)
     const values = top.map(r => r.value)
     const colors = top.map((r, i) => sliceColor(r, i))
     if (restVal > 0) {
-      labels.push(`Other (${rows.length - 40})`)
+      labels.push(`Other (${totalConstituents - 40})`)
       values.push(restVal)
       colors.push('#475569')
     }
@@ -143,7 +166,7 @@ export default function Diversification() {
       hovertemplate: '<b>%{label}</b><br>%{percent}<br>%{value:$,.0f}<extra></extra>',
       sort: false,
     }]
-  }, [rows, isDark])
+  }, [rows, isDark, data?.truncated_value, totalConstituents])
 
   const cov = data?.coverage
   const undisclosedPct = cov?.undisclosed_pct ?? 0
@@ -168,11 +191,38 @@ export default function Diversification() {
     <div className="page">
       <h1>Diversification</h1>
       <p style={{ color: 'var(--text-muted)', marginTop: '-0.5rem', maxWidth: '74ch' }}>
-        Your positions as held. Turn on <strong>X-Ray Funds</strong> to look through them
-        to the companies underneath — three S&amp;P funds then become one NVDA slice
-        rather than three fund slices.
+        {tab === 'holdings' ? (
+          <>
+            Your positions as held. Turn on <strong>X-Ray Funds</strong> to look through them
+            to the companies underneath — three S&amp;P funds then become one NVDA slice
+            rather than three fund slices.
+          </>
+        ) : (
+          <>
+            The same look-through, folded up to the eleven sectors. Every weight names the
+            holdings that put you there, so a sector you never bought directly still shows
+            which funds brought it in.
+          </>
+        )}
       </p>
 
+      <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '1rem' }}>
+        {[['holdings', 'Holdings'], ['sectors', 'Sectors']].map(([key, label]) => (
+          <button
+            key={key}
+            className={`btn btn-sm ${tab === key ? 'btn-active' : ''}`}
+            onClick={() => setTab(key)}
+            aria-pressed={tab === key}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'sectors' && <SectorExposurePanel />}
+
+      {tab === 'holdings' && (
+        <>
       <div className="card" style={{ display: 'flex', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center' }}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={xray} onChange={e => setXray(e.target.checked)} />
@@ -326,15 +376,34 @@ export default function Diversification() {
         </div>
       )}
 
-      {loading && !data && <div className="card">Loading…</div>}
+      {/* Fires on every fetch, not only the first. Ticking X-Ray re-requests
+          the whole chart, and while `data` still held the previous answer this
+          card was suppressed -- the old chart simply sat there for a second or
+          two and the click looked like it had done nothing. */}
+      {loading && (
+        <div className="card" style={{
+          borderLeft: '3px solid var(--accent)',
+          display: 'flex', alignItems: 'center', gap: '0.6rem',
+        }}>
+          <span className="spinner" style={{ width: 16, height: 16 }} aria-hidden="true" />
+          <span>
+            {xray ? 'Looking through funds to their constituents…' : 'Loading holdings…'}
+          </span>
+        </div>
+      )}
 
       {data && (
-        <div className="card">
+        <div className="card" style={{
+          // The chart on screen during a reload is the *previous* answer, so it
+          // is dimmed rather than left looking current.
+          opacity: loading ? 0.45 : 1,
+          transition: 'opacity .15s',
+        }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
             <h2 style={{ margin: 0 }}>
               {xray ? 'Look-through holdings' : 'All holdings'}{' '}
               <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.9rem' }}>
-                {rows.length} {xray ? 'constituents' : 'positions'} · {formatMoney(data.total_value, { decimals: 0 })}
+                {totalConstituents} {xray ? 'constituents' : 'positions'} · {formatMoney(data.total_value, { decimals: 0 })}
               </span>
             </h2>
           </div>
@@ -407,9 +476,9 @@ export default function Diversification() {
                   </div>
                 </div>
               ))}
-              {rows.length > shown.length && (
+              {totalConstituents > shown.length && (
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Showing top {shown.length} of {rows.length}.
+                  Showing top {shown.length} of {totalConstituents}.
                 </p>
               )}
             </div>
@@ -468,6 +537,8 @@ export default function Diversification() {
             </div>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   )

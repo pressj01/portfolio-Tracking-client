@@ -31,6 +31,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -1496,6 +1497,219 @@ def _security_type(ticker):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SEC N-PORT -- quarterly full holdings for closed-end funds
+#
+# CEF Connect and every issuer page publish only a fund's ten largest
+# positions. Measured across the 29 closed-end funds held here that is a
+# median 42.4% of the fund (NAD 6.7%, BCAT 6.4%, VCV 13.5%). Every registered
+# fund, closed-end included, must file its complete portfolio with the SEC
+# quarterly on Form N-PORT -- the same regulatory filing behind CEF Connect's
+# own numbers, just not truncated. Measured coverage from it: a median 100.2%
+# across the same 29 funds (BCAT alone: 1,397 holdings, 108.7%).
+# ─────────────────────────────────────────────────────────────────────────────
+
+# SEC's fair-access policy requires a descriptive User-Agent with contact
+# information on automated requests and can rate-limit or block a generic
+# browser string. Kept separate from HTTP_HEADERS, which every other fetcher
+# in this module uses and which SEC does not accept.
+_SEC_HEADERS = {"User-Agent": "Portfolio Tracker (personal desktop app; contact pressj01@gmail.com)"}
+_SEC_TIMEOUT = 30
+
+
+def _sec_get(url, as_json=False, tries=3, backoff=1.5):
+    last = None
+    for attempt in range(tries):
+        try:
+            resp = requests.get(url, timeout=_SEC_TIMEOUT, headers=_SEC_HEADERS)
+            if resp.status_code == 200:
+                return resp.json() if as_json else resp.text
+            if resp.status_code == 404:
+                return None
+            last = resp
+        except Exception:
+            last = None
+        if attempt < tries - 1:
+            time.sleep(backoff * (attempt + 1))
+    return None
+
+
+# ticker -> (cik, title). Built once per process from a single ~1 MB file
+# covering every filer, rather than once per fund -- a full sweep resolves up
+# to a few dozen CEFs and there is no reason to re-download the same index for
+# each of them.
+_SEC_CIK_MAP = None
+_SEC_CIK_LOCK = threading.Lock()
+
+
+def _sec_cik_for(ticker):
+    global _SEC_CIK_MAP
+    if _SEC_CIK_MAP is None:
+        with _SEC_CIK_LOCK:
+            if _SEC_CIK_MAP is None:
+                data = _sec_get("https://www.sec.gov/files/company_tickers.json", as_json=True) or {}
+                built = {}
+                for row in data.values():
+                    sym = (row.get("ticker") or "").strip().upper()
+                    if sym:
+                        built[sym] = (str(row["cik_str"]).zfill(10), row.get("title"))
+                _SEC_CIK_MAP = built
+    return _SEC_CIK_MAP.get(ticker.strip().upper(), (None, None))
+
+
+def _sec_latest_nport_accession(cik):
+    """The most recent Form N-PORT-P filing's accession number and report date."""
+    data = _sec_get(f"https://data.sec.gov/submissions/CIK{cik}.json", as_json=True)
+    if not data:
+        return None, None
+    recent = (data.get("filings") or {}).get("recent") or {}
+    for form, acc, date in zip(recent.get("form", []), recent.get("accessionNumber", []),
+                               recent.get("reportDate", [])):
+        if form.startswith("NPORT-P"):
+            return acc.replace("-", ""), date
+    return None, None
+
+
+# assetCat / issuerCat -> bucket. Vocabulary confirmed against N-PORT filings
+# for 29 funds spanning equity, municipal-bond, corporate-bond, and leveraged
+# CEFs: EC/EP are equity, repo and short-term paper are Cash, and the
+# D-prefixed derivative categories are Options & derivatives. issuerCat=RF
+# (the CEF holds shares of another registered fund) still reports assetCat=EC
+# and is treated as equity -- if that fund is itself a known ticker, nested
+# expansion picks it up the same way it already does for TSPY/TDAQ wrappers.
+_NPORT_EQUITY_CATS = {"EC", "EP"}
+_NPORT_CASH_CATS = {"RA", "STIV"}
+_NPORT_DERIV_CATS = {"DE", "DFE", "DIR", "DCR", "DCO", "DO"}
+# Debt-shaped: plain debt, asset/mortgage-backed, bank loans, structured
+# notes. Everything else recognised as debt routes here; nothing does so by
+# default (see below).
+_NPORT_DEBT_CATS = {"DBT", "ABS-MBS", "ABS-APCP", "ABS-CBDO", "ABS-O", "LON", "SN"}
+
+
+def _nport_bucket(asset_cat):
+    """assetCat -> 'equity' | 'cash' | 'derivatives' | 'fixed_income'.
+
+    Unrecognised and blank codes default to equity, not fixed income. Blank
+    assetCat is real, not a parsing gap -- confirmed on ASGI, where 20 rows
+    with no assetCat are private-placement LLC/LP equity stakes summing to
+    21.4% of the fund, matching CEF Connect's own "Other" figure for the same
+    fund (22.5%) almost exactly. Defaulting those to Fixed Income would have
+    been confidently wrong; defaulting to equity means an unrecognised
+    position surfaces as its own named, unmatched holding -- visibly
+    uncertain rather than silently miscategorised.
+    """
+    cat = (asset_cat or "").strip().upper()
+    if cat in _NPORT_CASH_CATS:
+        return "cash"
+    if cat in _NPORT_DERIV_CATS:
+        return "derivatives"
+    if cat in _NPORT_DEBT_CATS:
+        return "fixed_income"
+    return "equity"
+
+
+_NPORT_NS = {"n": "http://www.sec.gov/edgar/nport"}
+
+
+def _parse_nport_holdings(xml_text):
+    """Raw {name, ticker, pct, asset_cat} rows from a primary_doc.xml filing."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+
+    out = []
+    for inv in root.iter():
+        if not inv.tag.endswith("}invstOrSec"):
+            continue
+
+        def val(tag):
+            el = inv.find(f"n:{tag}", _NPORT_NS)
+            return el.text.strip() if el is not None and el.text else ""
+
+        ticker = ""
+        ident = inv.find("n:identifiers", _NPORT_NS)
+        if ident is not None:
+            for child in ident:
+                if child.tag.endswith("}ticker"):
+                    ticker = (child.get("value") or "").strip()
+
+        pct = _clean_weight(val("pctVal"))
+        if not pct or pct <= 0:
+            continue
+        out.append({
+            "name": val("name") or val("title"),
+            "ticker": ticker,
+            "asset_cat": val("assetCat"),
+            "pct": pct,
+        })
+    return out
+
+
+# Labels for the three non-equity aggregates. Deliberately the same strings
+# sector_exposure.py's FIXED_INCOME / CASH / DERIVATIVES constants use --
+# imported lazily below rather than duplicated, so the two screens can never
+# drift to different names for the same bucket. Lazy because sector_exposure
+# imports from this module; a top-level import here would be circular.
+def _nport_aggregate_labels():
+    from sector_exposure import CASH, DERIVATIVES, FIXED_INCOME
+    return {"cash": CASH, "derivatives": DERIVATIVES, "fixed_income": FIXED_INCOME}
+
+
+def _fetch_sec_nport_holdings(ticker, limit=None):
+    """A closed-end fund's complete quarterly holdings, from its own SEC filing.
+
+    Unlike every other fetcher in this module, `limit` is intentionally not
+    applied to equity rows: N-PORT's entire value is completeness (BCAT alone
+    reports 1,397 positions), and truncating here would throw that away before
+    it ever reaches the page. The existing top-N truncation in
+    build_diversification already caps what a chart displays -- capping the
+    cache too would just reintroduce the coverage gap this exists to close.
+    """
+    sym = ticker.strip().upper()
+    cik, _title = _sec_cik_for(sym)
+    if not cik:
+        return []
+    acc, report_date = _sec_latest_nport_accession(cik)
+    if not acc:
+        return []
+    xml_text = _sec_get(
+        f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/primary_doc.xml"
+    )
+    if not xml_text:
+        return []
+    raw = _parse_nport_holdings(xml_text)
+    if not raw:
+        return []
+
+    # Leveraged funds report position sizes as a percent of net assets, so a
+    # fund that borrows to hold $1.60 of bonds per $1 of investor capital
+    # files rows summing to ~160%. Scaled down (never up -- a filing that
+    # sums under 100% is left as reported rather than having weight invented
+    # for it) so the total matches what a share of the fund actually is.
+    total = sum(r["pct"] for r in raw)
+    scale = 100.0 / total if total > 100.5 else 1.0
+
+    labels = _nport_aggregate_labels()
+    aggregates = {"cash": 0.0, "derivatives": 0.0, "fixed_income": 0.0}
+    rows = []
+    for r in raw:
+        pct = r["pct"] * scale
+        bucket = _nport_bucket(r["asset_cat"])
+        if bucket == "equity":
+            rows.append(_row(r["ticker"], r["name"], pct))
+        else:
+            aggregates[bucket] += pct
+
+    for bucket, pct in aggregates.items():
+        if pct > 0:
+            rows.append(_row("", labels[bucket], pct))
+
+    if rows:
+        rows[0] = {**rows[0], "as_of": report_date}
+    return rows
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Economic exposure seeds
 #
 # Only funds whose *filed* holdings misrepresent them belong here. QQQI/SPYI/
@@ -1731,9 +1945,21 @@ def resolve_fund(ticker, conn, force=False):
         conn.commit()
         return {"ticker": sym, "status": "cash", "source": "classified", "coverage_pct": 100.0}
 
-    # Resolution order: the fund's own issuer publishes the most complete data,
-    # then the public scrapers, then Yahoo as a shallow last resort.
-    rows, source = _fetch_from_issuer(conn, sym)
+    # Closed-end funds are checked against their own SEC filing before
+    # anything else. Every registered CEF must file its complete portfolio on
+    # Form N-PORT quarterly, which is both more authoritative and far deeper
+    # than any issuer page or CEF Connect's published top ten -- measured
+    # across the 29 CEFs held here, a median 100.2% vs 42.4%.
+    rows, source = ([], None)
+    if sec_type == "CEF":
+        rows = _fetch_sec_nport_holdings(sym)
+        source = "sec_nport" if rows else None
+
+    # Resolution order for everything else: the fund's own issuer publishes
+    # the most complete data, then the public scrapers, then Yahoo as a
+    # shallow last resort.
+    if not rows:
+        rows, source = _fetch_from_issuer(conn, sym)
 
     if not rows:
         rows, source = _fetch_via_app(sym)
@@ -2017,12 +2243,59 @@ def _expand_nested(rows, holdings, meta, depth=2, _seen=None):
     return out
 
 
+def _undisclosed_composition(conn, ticker):
+    """What kind of thing a fund's undisclosed remainder is, as {label: share}.
+
+    CEF Connect publishes only a fund's ten largest positions, so a closed-end
+    fund's look-through stops at a median 42% of the fund here and several stop
+    far earlier (NAD 6.7%, BCAT 6.4%). The rest used to chart as one anonymous
+    grey slice, which is honest but says nothing -- NAD's missing 93% is
+    municipal bonds, and that is worth knowing.
+
+    Reuses the sector profile the Sectors tab already caches, so this costs a
+    table read rather than another fetch. Equity sectors collapse to a single
+    "Equities" label because the remainder's *sector* mix is not known -- only
+    that it is equity. Returns {} when nothing is cached, which keeps the
+    original single-slice behaviour.
+    """
+    # Imported here rather than at module scope: sector_exposure imports this
+    # module, so a top-level import would be circular.
+    from sector_exposure import SECTOR_SET
+
+    try:
+        rows = conn.execute(
+            "SELECT sector, weight_pct FROM security_sector_weights WHERE ticker=?",
+            (ticker,),
+        ).fetchall()
+    except Exception:
+        return {}
+
+    groups = {}
+    for label, weight in rows:
+        # Leveraged funds report negative sleeves (borrowed cash). They say
+        # how the fund is financed, not what the undisclosed part holds.
+        if not weight or weight <= 0:
+            continue
+        key = "Equities" if label in SECTOR_SET else label
+        groups[key] = groups.get(key, 0.0) + weight
+
+    total = sum(groups.values())
+    if not total:
+        return {}
+    return {label: weight / total for label, weight in groups.items()}
+
+
 def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
                           top=None, nest_depth=2):
     positions = _portfolio_positions(conn, profile_ids)
     total = sum(v for _, v in positions)
     holdings, meta, exposure = _load_cache(conn)
     name_idx = _name_index(holdings) if xray else {}
+    # Lazy import (sector_exposure imports from this module, so a top-level
+    # import here would be circular): the exact label SEC N-PORT rows use for
+    # a fund's aggregated bond sleeve, so it can be recognised below and given
+    # its own bucket instead of falling through as an unlabelled "holding".
+    fixed_income_label = _nport_aggregate_labels()["fixed_income"]
 
     buckets = {}   # key -> dict
     fund_detail = []
@@ -2118,13 +2391,33 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
                 add("DERIVATIVES", "Options & derivatives", share,
                     "derivative", contributor=tkr)
                 continue
+            # SEC N-PORT rows fold a fund's entire bond sleeve into one row
+            # named exactly this (see _fetch_sec_nport_holdings). Without this
+            # check a bond CEF's 90%+ debt position would land as an
+            # unlabelled "holding" bucket, indistinguishable on the chart from
+            # a single company that happened to be named "Fixed Income".
+            if not sym and nm == fixed_income_label:
+                add("FIXED_INCOME", fixed_income_label, share,
+                    "fixed_income", contributor=tkr)
+                continue
             key = sym or f"NAME::{_norm_name(nm)}"
             add(key, nm if not sym else (nm or sym), share, "holding", sym, tkr)
 
         covered = min(covered, 100.0)
         if covered < 99.5:
-            add(f"UNDISCLOSED::{tkr}", f"{tkr} — rest not disclosed by issuer",
-                value * (1 - covered / 100.0), "undisclosed", tkr, tkr)
+            remainder = value * (1 - covered / 100.0)
+            # Name the remainder by asset class where the fund publishes one.
+            # Still charted as Undisclosed -- this says what kind of thing is
+            # missing, not which companies, so no weight is ever estimated.
+            composition = _undisclosed_composition(conn, tkr)
+            if composition:
+                for label, share in composition.items():
+                    add(f"UNDISCLOSED::{tkr}::{label}",
+                        f"{tkr} — undisclosed ({label})",
+                        remainder * share, "undisclosed", tkr, tkr)
+            else:
+                add(f"UNDISCLOSED::{tkr}", f"{tkr} — rest not disclosed by issuer",
+                    remainder, "undisclosed", tkr, tkr)
         fund_detail.append({"ticker": tkr, "value": value, "status": status,
                             "coverage_pct": round(covered, 2), "source": used,
                             "mode": "economic" if used == "exposure" else "literal",
@@ -2145,12 +2438,31 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
             ],
         })
     out.sort(key=lambda r: -r["value"])
-    if top:
-        out = out[:top]
 
+    # Coverage is measured over every bucket, before any truncation. It used to
+    # be summed from the truncated list, so asking for `top` silently reported
+    # less Undisclosed than the portfolio actually has -- the one number on this
+    # screen that must never read low.
     resolved_val = sum(f["value"] for f in fund_detail if f["status"] != "unresolved")
     undisclosed_val = sum(b["value"] for b in out if b["kind"] == "undisclosed")
     undefined_val = sum(b["value"] for b in out if b["kind"] == "undefined")
+
+    constituent_count = len(out)
+    truncated_value = 0.0
+    if top and constituent_count > top:
+        # A broad portfolio looks through to ~14,000 constituents and the screen
+        # charts 60 of them, so sending all of them is ~2.9 MB spent to render a
+        # top-40 donut. Everything that is not a plain holding stays regardless
+        # of rank: the page looks those up by kind to decide whether to warn
+        # about collateral or undisclosed weight, and a missing bucket would
+        # silently drop the warning rather than shrink the list.
+        head = out[:top]
+        kept = {id(r) for r in head}
+        specials = [r for r in out[top:] if r["kind"] != "holding"]
+        tail = [r for r in out[top:]
+                if r["kind"] == "holding" and id(r) not in kept]
+        truncated_value = round(sum(r["value"] for r in tail), 2)
+        out = head + specials
 
     return {
         "total_value": round(total, 2),
@@ -2165,6 +2477,10 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
         # definitions are seeded at startup and do not count as a filled cache.
         "cache_empty": not any(not m.get("is_manual") for m in meta.values()),
         "constituents": out,
+        # How many buckets exist in total, and what the rows left out are worth,
+        # so a truncated response can still label "Other (N)" honestly.
+        "constituent_count": constituent_count,
+        "truncated_value": truncated_value,
         "funds": sorted(fund_detail, key=lambda r: -r["value"]),
         "coverage": {
             "resolved_value": round(resolved_val, 2),
@@ -2189,8 +2505,10 @@ def register_routes(app):
     @app.route("/api/diversification", methods=["GET"])
     def api_diversification():
         xray = request.args.get("xray", "1") not in {"0", "false", "no"}
-        mode = request.args.get("mode", "economic")
+        mode = "literal" if request.args.get("mode", "economic") == "literal" else "economic"
         top = request.args.get("top", type=int)
+        if top is not None:
+            top = max(1, min(top, 1000))
         scope = _scope_profile_ids()
         conn = get_connection()
         try:

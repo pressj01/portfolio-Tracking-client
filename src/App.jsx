@@ -252,7 +252,11 @@ function Nav() {
         </NavMenuGroup>
         <NavMenuGroup title="Portfolio Diagnostics">
           <NavLink to="/analytics">Portfolio Analytics</NavLink>
-          <NavLink to="/diversification">Diversification</NavLink>
+          {/* `end` so the parent does not stay lit on /diversification/sectors —
+              without it react-router matches by prefix and both entries
+              highlight at once. */}
+          <NavLink to="/diversification" end>Diversification</NavLink>
+          <NavLink to="/diversification/sectors">Sector Exposure</NavLink>
           <NavLink to="/fund-definitions">Fund Definitions</NavLink>
           <NavLink to="/correlation">Correlation Matrix</NavLink>
           <NavLink to="/consolidation">Consolidation Analysis</NavLink>

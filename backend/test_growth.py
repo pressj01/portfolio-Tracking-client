@@ -109,6 +109,13 @@ class GrowthApiTest(unittest.TestCase):
         }])
         self.assertEqual(data["heatmap"]["windows"], ["From First Trade"])
         self.assertEqual(data["heatmap"]["values"], [[40.0]])
+        self.assertEqual(data["treemap"], [{
+            "ticker": "AAA",
+            "return_pct": 40.0,
+            "market_value": 28.0,
+            "allocation_pct": 100.0,
+            "quantity": 2.0,
+        }])
 
     def test_ticker_bars_use_the_portfolio_cards_trimmed_index(self):
         calls = []

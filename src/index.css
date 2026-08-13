@@ -2732,6 +2732,64 @@ th.col-drag-target {
   min-height: 380px;
   overflow: hidden;
 }
+.growth-treemap-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  overflow: hidden;
+  padding: 0.9rem 1rem 1rem;
+}
+.growth-treemap-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+}
+.growth-treemap-heading h2 {
+  color: var(--text-strong);
+  font-size: 1rem;
+  margin: 0;
+}
+.growth-treemap-heading p {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin: 0.2rem 0 0;
+}
+.growth-treemap-legend {
+  align-items: center;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  gap: 0.7rem;
+  justify-content: flex-end;
+  padding-top: 0.1rem;
+  white-space: nowrap;
+}
+.growth-treemap-legend span {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.28rem;
+}
+.growth-treemap-swatch {
+  border-radius: 3px;
+  display: inline-block;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+.growth-treemap-swatch-loss { background: #c85c50; }
+.growth-treemap-swatch-flat { background: var(--secondary-solid); }
+.growth-treemap-swatch-gain { background: #4fae78; }
+.growth-treemap-chart {
+  min-height: 460px;
+  width: 100%;
+}
+.growth-treemap-chart .js-plotly-plot,
+.growth-treemap-chart .plot-container {
+  width: 100% !important;
+}
 .growth-cat-dropdown {
   position: absolute;
   top: 100%;
@@ -2909,6 +2967,13 @@ th.col-drag-target {
   }
   .growth-help-grid {
     grid-template-columns: 1fr;
+  }
+  .growth-treemap-heading {
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .growth-treemap-legend {
+    justify-content: flex-start;
   }
 }
 

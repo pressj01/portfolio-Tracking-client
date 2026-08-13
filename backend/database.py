@@ -1463,6 +1463,45 @@ def ensure_tables_exist(conn=None):
         ON fund_exposure_map(fund_ticker)
     """)
 
+    # ── security_sector_profile / security_sector_weights ─────────────────────
+    # How one security splits across the 11 GICS sectors, cached because
+    # resolving it means a Yahoo call per ticker and the sector screen needs
+    # every position plus the constituents of any fund that publishes no sector
+    # breakdown of its own.
+    #
+    # kind is what the security *is*, and it decides which bucket the value
+    # lands in: 'sectors' has a split in security_sector_weights, 'asset' is
+    # wholly non-equity (a bond fund, gold, cash) and carries asset_class
+    # instead, 'none' means nothing could be determined. The distinction
+    # matters because GICS sectors describe equities only — folding a bond ETF
+    # into a sector denominator quietly overstates every sector weight.
+    #
+    # A 'sectors' split is not purely equity: a closed-end fund's CEF Connect
+    # grid mixes sectors with fixed-income and cash sleeves (NAD is 99.6%
+    # municipal), so rows here may name either. sector_exposure.py routes each
+    # row by name, which is what keeps a muni CEF out of the equity denominator.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS security_sector_profile (
+            ticker      TEXT PRIMARY KEY,
+            kind        TEXT NOT NULL DEFAULT 'none',
+            asset_class TEXT,
+            covered_pct REAL,
+            source      TEXT,
+            quote_type  TEXT,
+            category    TEXT,
+            note        TEXT,
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS security_sector_weights (
+            ticker     TEXT NOT NULL,
+            sector     TEXT NOT NULL,
+            weight_pct REAL,
+            PRIMARY KEY (ticker, sector)
+        )
+    """)
+
     # ── fund_issuers ──────────────────────────────────────────────────────────
     # Where a fund family publishes its holdings. The URL pattern lives here,
     # not in code, so a new issuer is a row rather than a deploy. `parser` picks
