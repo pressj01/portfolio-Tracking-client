@@ -27,7 +27,7 @@ async function jsonOrError(response) {
 
 export default function OptionTradeImport() {
   const pf = useProfileFetch()
-  const { currentProfileName, isAggregate } = useProfile()
+  const { currentProfileName, isAggregate, profileId, profiles } = useProfile()
   const inputRef = useRef(null)
   const [format, setFormat] = useState('generic')
   const [file, setFile] = useState(null)
@@ -95,6 +95,12 @@ export default function OptionTradeImport() {
 
   const summary = preview?.summary || {}
   const importable = Math.max(0, Number(summary.recognized || 0) - Number(summary.duplicates || 0))
+  // Owner rolls up the accounts flagged for it and stores no trades of its own.
+  // Importing there files every execution where the account that placed the
+  // trades cannot see it, so block it the same way an aggregate is blocked.
+  const ownerSources = profiles.filter(profile => Number(profile.id) !== 1 && profile.include_in_owner)
+  const isOwnerRollup = !isAggregate && Number(profileId) === 1 && ownerSources.length > 0
+  const readOnlyScope = isAggregate || isOwnerRollup
 
   return (
     <main className="ot-page oti-page">
@@ -108,6 +114,7 @@ export default function OptionTradeImport() {
       </header>
 
       {isAggregate && <div className="ot-alert ot-alert-error">Select an individual portfolio before importing option transactions.</div>}
+      {isOwnerRollup && <div className="ot-alert ot-alert-error">Owner rolls up {ownerSources.map(account => account.name).join(', ')} and stores no option trades of its own. Select the account that executed these trades and import there — they will still appear in Owner.</div>}
       {error && <div className="ot-alert ot-alert-error">{error}</div>}
       {result && (
         <div className="ot-alert ot-alert-success">
@@ -127,13 +134,13 @@ export default function OptionTradeImport() {
           </div>
           <label className="oti-field"><span>File format</span><select value={format} disabled={busy} onChange={event => { setFormat(event.target.value); setPreview(null); setResult(null) }}>{FORMATS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="oti-dropzone">
-            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xlsm" disabled={busy || isAggregate} onChange={chooseFile} />
+            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xlsm" disabled={busy || readOnlyScope} onChange={chooseFile} />
             <strong>{file ? file.name : 'Choose a CSV or XLSX file'}</strong>
             <span>{file ? `${(file.size / 1024).toFixed(1)} KB selected` : 'Broker transaction exports and the generic options template are supported.'}</span>
           </label>
           <div className="ot-form-actions">
             {format === 'generic' && <button type="button" className="btn btn-secondary" onClick={downloadTemplate}>Download generic template</button>}
-            <button type="button" className="btn btn-primary" disabled={!file || busy || isAggregate} onClick={previewFile}>{busy ? 'Reading file…' : 'Preview executions'}</button>
+            <button type="button" className="btn btn-primary" disabled={!file || busy || readOnlyScope} onClick={previewFile}>{busy ? 'Reading file…' : 'Preview executions'}</button>
           </div>
         </div>
 

@@ -14,7 +14,7 @@ from datetime import date, datetime
 from flask import jsonify, request
 
 from config import get_connection
-from option_trade_import import SUPPORTED_FORMATS, parse_option_transactions
+from option_trade_import import SUPPORTED_FORMATS, parse_option_transactions, strategy_for_legs
 
 
 OPEN_ACTIONS = {"BTO", "STO"}
@@ -78,12 +78,35 @@ def _serialize_execution(row, multiplier=100):
     return result
 
 
+def _live_legs(legs):
+    """The legs a shape calculation should describe.
+
+    Rolling a leg, or re-filling one at a better price, retires the original and
+    records a replacement, so the ledger holds more legs than the position
+    carries -- a condor that was re-filled once reads as six legs and classifies
+    as Custom. While a trade is open, only the legs with contracts left can
+    still lose money; once every leg is closed the whole history is the trade.
+
+    A partly-closed leg is left out of this: its opening premium paid for
+    contracts that are no longer at risk, so neither its full size nor its
+    remaining size describes what is left, and the whole trade is reported
+    instead of guessing.
+    """
+    open_legs = [leg for leg in legs if int(leg["open_contracts"] or 0) > 0]
+    if not open_legs or len(open_legs) == len(legs):
+        return legs
+    if any(int(leg["open_contracts"] or 0) != int(leg["contracts"] or 0) for leg in open_legs):
+        return legs
+    return open_legs
+
+
 def _derived_max_risk(trade, legs):
     explicit = _number(trade.get("max_risk"))
     if explicit is not None and explicit >= 0:
         return round(explicit, 2), "entered"
     if not legs:
         return None, None
+    legs = _live_legs(legs)
 
     entry_net = sum(execution["cash_effect"] for leg in legs for execution in leg["executions"] if execution["action"] in OPEN_ACTIONS)
     option_types = {leg["option_type"] for leg in legs}
@@ -166,6 +189,14 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         realized = round(sum(leg["net_cash_flow"] for leg in legs if leg["open_contracts"] == 0), 2)
 
     max_risk, risk_source = _derived_max_risk(trade, legs)
+    live_legs = _live_legs(legs)
+    # The importer labels a trade from every opening fill it sees, so the same
+    # re-fill that inflates the leg count also degrades a plain condor to
+    # "Custom". Re-read the shape from the legs that are actually live, but only
+    # when the trade still carries that generic default -- a label the user
+    # chose is theirs to keep.
+    if len(live_legs) != len(legs) and str(trade.get("strategy_type") or "").strip() in {"", "Custom"}:
+        trade["strategy_type"] = strategy_for_legs(live_legs)
     opening_dte = None
     try:
         opened_date = date.fromisoformat(str(trade.get("opened_at") or "")[:10])
@@ -245,6 +276,8 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         "dte": dte,
         "outcome": outcome,
         "open_contracts": sum(leg["open_contracts"] for leg in legs),
+        "live_leg_count": len(live_legs),
+        "retired_leg_count": len(legs) - len(live_legs),
         "realized_events": realized_events,
     })
     return trade
@@ -405,15 +438,25 @@ def trade_years(conn, profile_ids, today=None):
     return sorted(years, reverse=True)
 
 
+def _owner_rollup_sources(conn):
+    """Accounts whose option trades roll up into Owner.
+
+    Owner aggregates the accounts flagged ``include_in_owner`` and holds no
+    positions of its own. An empty list means Owner is an ordinary account in
+    this database rather than a rollup.
+    """
+    rows = conn.execute(
+        "SELECT id, name FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
+    ).fetchall()
+    return [{"id": int(row["id"]), "name": row["name"]} for row in rows]
+
+
 def _option_trade_read_scope(conn, is_aggregate, profile_ids):
     """Expand Owner reads to the same source accounts used by income totals."""
     resolved_ids = list(dict.fromkeys(int(profile_id) for profile_id in (profile_ids or [1])))
     scope_type = "aggregate" if is_aggregate else "profile"
     if not is_aggregate and resolved_ids == [1]:
-        source_rows = conn.execute(
-            "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
-        ).fetchall()
-        source_ids = [int(row["id"]) for row in source_rows]
+        source_ids = [source["id"] for source in _owner_rollup_sources(conn)]
         if source_ids:
             resolved_ids = [1, *source_ids]
             scope_type = "owner"
@@ -985,6 +1028,28 @@ def _assert_import_source_allowed(conn, profile_id, source_format):
         )
 
 
+def _assert_import_target_allowed(conn, profile_id):
+    """Refuse to write broker executions into the Owner rollup.
+
+    Owner reads expand into its source accounts, so an import that lands on
+    Owner itself is stored where the account that actually executed the trades
+    can never see it, and where the Owner view then counts every trade twice --
+    once from the source account and once from the copy. Dedupe cannot catch it
+    either, because existing executions are counted per portfolio.
+    """
+    if int(profile_id) != 1:
+        return
+    sources = _owner_rollup_sources(conn)
+    if not sources:
+        return
+    names = ", ".join(source["name"] for source in sources)
+    raise ValueError(
+        f"Owner is a rollup of {names} and stores no option trades of its own. "
+        "Import the broker file into the account that executed the trades, then "
+        "they will appear in Owner as well."
+    )
+
+
 def _stored_import_hash(profile_id, parsed_hash, occurrence):
     """Scope the parser hash to a portfolio and preserve identical multi-fills."""
     value = f"option-execution-v2|{profile_id}|{parsed_hash}|{occurrence}"
@@ -1021,6 +1086,7 @@ def import_option_executions(conn, profile_id, parsed):
     # both decide that the same execution is new.
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
+    _assert_import_target_allowed(conn, profile_id)
     _assert_import_source_allowed(conn, profile_id, source_format)
     existing_counts = _existing_execution_counts(conn, profile_id)
     incoming_counts = Counter()
@@ -1128,6 +1194,7 @@ def import_option_executions(conn, profile_id, parsed):
 
 
 def annotate_import_preview(conn, profile_id, parsed):
+    _assert_import_target_allowed(conn, profile_id)
     _assert_import_source_allowed(conn, profile_id, parsed["source_format"])
     existing_counts = _existing_execution_counts(conn, profile_id)
     incoming_counts = Counter()

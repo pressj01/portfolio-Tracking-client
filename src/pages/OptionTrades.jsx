@@ -852,12 +852,17 @@ export default function OptionTrades() {
                 const expiration = openExpirations[0] || trade.legs.map(leg => leg.expiration).sort().at(-1)
                 const expiredOpenLegCount = trade.status === 'OPEN' ? openExpirations.filter(value => String(value).slice(0, 10) <= todayIso()).length : 0
                 const needsClassification = !trade.strategy_type || trade.strategy_type === 'Custom' || trade.purpose === 'Other'
-                const displayedLegs = trade.legs.length + (trade.stock_position?.shares > 0 ? 1 : 0)
+                // Legs retired by a roll or a re-fill stay in the ledger and are
+                // still listed in the expanded detail, but counting them here
+                // describes a position the trade no longer carries.
+                const liveLegs = trade.live_leg_count ?? trade.legs.length
+                const retiredLegs = trade.retired_leg_count || 0
+                const displayedLegs = liveLegs + (trade.stock_position?.shares > 0 ? 1 : 0)
                 const canEditTrade = !isAggregate && Number(trade.profile_id) === Number(profileId)
                 return [
                   <tr key={`trade-${trade.id}`} className="ot-trade-row">
                     <td><button className="ot-expand" aria-label={`${expanded.has(trade.id) ? 'Collapse' : 'Expand'} ${trade.underlying} trade`} onClick={() => toggleExpanded(trade.id)}>{expanded.has(trade.id) ? '−' : '+'}</button></td>
-                    <td><strong className="ot-symbol">{trade.underlying}</strong><small>{showsSourceAccounts && trade.profile_name ? `${trade.profile_name} · ` : ''}{displayedLegs} leg{displayedLegs === 1 ? '' : 's'}{trade.stock_position ? ' incl. stock' : ''}</small></td>
+                    <td><strong className="ot-symbol">{trade.underlying}</strong><small>{showsSourceAccounts && trade.profile_name ? `${trade.profile_name} · ` : ''}{displayedLegs} leg{displayedLegs === 1 ? '' : 's'}{trade.stock_position ? ' incl. stock' : ''}{retiredLegs > 0 ? ` · ${retiredLegs} retired` : ''}</small></td>
                     <td><strong>{trade.strategy_type}</strong><span className={`ot-purpose ot-purpose-${trade.purpose.toLowerCase()}`}>{trade.purpose}</span>{needsClassification && <span className="ot-needs-classification">Needs classification</span>}</td>
                     <td>{shortDate(trade.opened_at)}</td>
                     <td>{shortDate(expiration)}<small>{trade.status === 'OPEN' && trade.dte != null ? `${trade.dte} DTE` : trade.closed_at ? `Closed ${shortDate(trade.closed_at)}` : ''}</small></td>

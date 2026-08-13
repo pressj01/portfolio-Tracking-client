@@ -209,6 +209,128 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
         self.assertEqual(len(tracker.load_trades(self.conn, [2])), 1)
 
+    def _import_refilled_condor(self):
+        """A condor whose call spread was re-filled at the same price same day."""
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/10/2026", "Buy to Open", "IWM 09/11/2026 270.00 P", 1, "$0.63", "$0.66"],
+            ["08/10/2026", "Sell to Open", "IWM 09/11/2026 280.00 P", 1, "$1.30", "$0.66"],
+            ["08/10/2026", "Buy to Open", "IWM 09/11/2026 321.00 C", 1, "$0.67", "$0.66"],
+            ["08/10/2026", "Sell to Open", "IWM 09/11/2026 313.00 C", 1, "$1.89", "$0.66"],
+            ["08/10/2026", "Sell to Close", "IWM 09/11/2026 321.00 C", 1, "$0.68", "$0.66"],
+            ["08/10/2026", "Buy to Close", "IWM 09/11/2026 313.00 C", 1, "$1.92", "$0.66"],
+            ["08/10/2026", "Buy to Open", "IWM 09/11/2026 321.00 C", 1, "$0.67", "$0.66"],
+            ["08/10/2026", "Sell to Open", "IWM 09/11/2026 313.00 C", 1, "$1.89", "$0.66"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        tracker.import_option_executions(self.conn, 1, parsed)
+        return tracker.load_trades(self.conn, [1])[0]
+
+    def test_refilled_leg_is_retired_from_the_shape_and_the_risk(self):
+        trade = self._import_refilled_condor()
+
+        # Every fill is kept, so the audit trail and realized P/L stay complete.
+        self.assertEqual(len(trade["legs"]), 6)
+        self.assertEqual(trade["entry_net_amount"], 307.04)
+        self.assertEqual(trade["realized_pnl"], -4.64)
+
+        # The position itself is a four-leg condor: the wider wing is the 270/280
+        # put spread, so $1,000 of width less the $186.36 collected on the legs
+        # that are still live.
+        self.assertEqual(trade["live_leg_count"], 4)
+        self.assertEqual(trade["retired_leg_count"], 2)
+        self.assertEqual(trade["strategy_type"], "Iron Condor")
+        self.assertEqual(trade["max_risk"], 813.64)
+        self.assertEqual(trade["max_risk_source"], "derived condor width")
+
+    def test_user_classification_survives_a_retired_leg(self):
+        trade = self._import_refilled_condor()
+        self.conn.execute(
+            "UPDATE option_trades SET strategy_type = 'Broken Wing Condor' WHERE id = ?",
+            (trade["id"],),
+        )
+        self.conn.commit()
+
+        relabelled = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(relabelled["strategy_type"], "Broken Wing Condor")
+        self.assertEqual(relabelled["max_risk"], 813.64)
+
+    def test_partly_closed_leg_still_reports_whole_trade_risk(self):
+        trade_id = tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY",
+            "strategy_type": "Bull Put Spread",
+            "purpose": "Income",
+            "opened_at": "2026-08-01",
+            "legs": [
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-09-18", "strike": 540, "contracts": 2, "price": 0.30, "fees": 1},
+                {"position_side": "SHORT", "option_type": "PUT", "expiration": "2026-09-18", "strike": 545, "contracts": 2, "price": 1.00, "fees": 1},
+            ],
+        })
+        opened = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(opened["max_risk"], 862)
+
+        # Half the spread is bought back. The opening premium covers contracts
+        # that are no longer at risk, so the whole trade is reported rather than
+        # a number derived from a premium that no longer matches the size.
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2026-08-05",
+            "executions": [{"leg_id": leg["id"], "contracts": 1, "price": 0.50, "fees": 1} for leg in opened["legs"]],
+        })
+        partial = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(partial["status"], "OPEN")
+        self.assertEqual(partial["live_leg_count"], 2)
+        self.assertEqual(partial["retired_leg_count"], 0)
+        self.assertEqual(partial["max_risk"], 862)
+
+    def test_import_into_the_owner_rollup_is_rejected(self):
+        self.conn.execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (6, 'Pressj04', 1)"
+        )
+        self.conn.commit()
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/13/2026", "Sell to Open", "GLW 09/25/2026 130.00 P", 1, "$2.50", "$0.67"],
+            ["08/13/2026", "Buy to Open", "GLW 09/25/2026 120.00 P", 1, "$1.30", "$0.66"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        # Owner reads expand into its source accounts, so an import filed on
+        # Owner itself is invisible from the account that placed the trades and
+        # counted twice in the Owner view.
+        with self.assertRaisesRegex(ValueError, "Pressj04"):
+            tracker.annotate_import_preview(self.conn, 1, parsed)
+        with self.assertRaisesRegex(ValueError, "Pressj04"):
+            tracker.import_option_executions(self.conn, 1, parsed)
+        self.conn.rollback()
+
+        self.assertEqual(tracker.load_trades(self.conn, [1]), [])
+        source = tracker.import_option_executions(self.conn, 6, parsed)
+        self.assertEqual(source["inserted"], 2)
+        self.assertEqual(len(tracker.load_trades(self.conn, [6])), 1)
+
+    def test_import_is_allowed_when_owner_has_no_source_accounts(self):
+        rows = [
+            ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],
+            ["2026-01-02", "Buy to Open", "QQQ260220C00500000", 1, 2.00, 1.00],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broker.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        # A database where nothing rolls up into Owner has no rollup to protect,
+        # so profile 1 is an ordinary account that accepts its own imports.
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["inserted"], 1)
+
     def test_covered_call_links_only_the_required_stock_from_same_account(self):
         self.conn.execute(
             """INSERT INTO all_account_info

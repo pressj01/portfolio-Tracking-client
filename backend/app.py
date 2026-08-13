@@ -5038,7 +5038,9 @@ def _ensure_db():
 @app.route("/api/profiles", methods=["GET"])
 def list_profiles():
     conn = get_connection()
-    rows = conn.execute("SELECT id, name, created_at FROM profiles ORDER BY id").fetchall()
+    rows = conn.execute(
+        "SELECT id, name, created_at, include_in_owner FROM profiles ORDER BY id"
+    ).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
 

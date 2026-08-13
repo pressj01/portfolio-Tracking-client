@@ -237,7 +237,7 @@ def _normalize_action(value):
     return None, "Unrecognized option action."
 
 
-def _strategy_for_legs(legs):
+def strategy_for_legs(legs):
     positions = [(row["option_type"], row["position_side"], float(row["strike"])) for row in legs]
     if len(positions) == 1:
         option_type, side, _ = positions[0]
@@ -390,7 +390,7 @@ def parse_option_transactions(file_path, filename, source_format="generic"):
             opening_groups[execution["group_key"]].append(execution)
     for group in opening_groups.values():
         specified = next((row["strategy_type"] for row in group if row["strategy_type"]), None)
-        strategy = specified or _strategy_for_legs(group)
+        strategy = specified or strategy_for_legs(group)
         purpose = next((row["purpose"] for row in group if row["purpose"]), None) or _default_purpose(strategy)
         for row in group:
             row["strategy_type"] = strategy
