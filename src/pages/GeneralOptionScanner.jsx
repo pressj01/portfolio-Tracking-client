@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
 import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
 import { useProfileFetch } from '../context/ProfileContext'
@@ -62,10 +62,68 @@ function scoreText(filters, key) {
 function symbolScopeText(filters) {
   if (filters.symbols) return filters.symbols
   const groups = []
-  if (filters.include_stocks) groups.push(filters.universe === 'mid_cap' ? 'Mid caps' : filters.universe === 'large_mid' ? 'Large + mid caps' : 'Large caps')
-  if (filters.include_index_etfs) groups.push('SPY / QQQ / IWM + index ETFs')
+  if (filters.include_stocks) groups.push(filters.universe === 'mid_cap' ? 'Mid caps' : filters.universe === 'large_mid' ? 'Large + mid caps' : filters.universe === 'holdings' ? 'My holdings' : filters.universe === 'watchlist' ? 'My watchlist' : 'Large caps')
+  if (filters.include_index_etfs) groups.push(filters.index_tickers ? `Index ETFs: ${filters.index_tickers}` : 'All index ETFs')
   if (filters.include_sector_etfs) groups.push('Sector ETFs')
+  if (filters.include_commodity_etfs) groups.push('Commodity ETFs')
   return groups.join(' + ') || 'None selected'
+}
+
+const CORE_INDEX_TICKERS = 'SPY,QQQ,IWM'
+
+const SCAN_UNIVERSE_OPTIONS = [
+  ['stocks_large_cap', 'Stocks only — Large caps', { universe: 'large_cap', include_stocks: true }],
+  ['stocks_large_mid', 'Stocks only — Large + mid caps', { universe: 'large_mid', include_stocks: true }],
+  ['stocks_mid_cap', 'Stocks only — Mid caps', { universe: 'mid_cap', include_stocks: true }],
+  ['stocks_holdings', 'Stocks only — My holdings', { universe: 'holdings', include_stocks: true }],
+  ['stocks_watchlist', 'Stocks only — My watchlist', { universe: 'watchlist', include_stocks: true }],
+  ['core_index_etfs', 'Core index ETFs - SPY, QQQ, IWM', { include_stocks: false, include_index_etfs: true, index_tickers: CORE_INDEX_TICKERS }],
+  ['all_index_etfs', 'All index ETFs', { include_stocks: false, include_index_etfs: true, index_tickers: '' }],
+  ['sector_etfs', 'Sector ETFs only', { include_stocks: false, include_sector_etfs: true }],
+  ['commodity_etfs', 'Commodity ETFs only', { include_stocks: false, include_commodity_etfs: true }],
+  ['core_index_commodity_etfs', 'Core index + commodity ETFs', { include_stocks: false, include_index_etfs: true, include_commodity_etfs: true, index_tickers: CORE_INDEX_TICKERS }],
+  ['all_index_commodity_etfs', 'All index + commodity ETFs', { include_stocks: false, include_index_etfs: true, include_commodity_etfs: true, index_tickers: '' }],
+  ['index_sector_etfs', 'All index + sector ETFs', { include_stocks: false, include_index_etfs: true, include_sector_etfs: true, index_tickers: '' }],
+  ['sector_commodity_etfs', 'Sector + commodity ETFs', { include_stocks: false, include_sector_etfs: true, include_commodity_etfs: true }],
+  ['all_etfs', 'All ETFs — index + sector + commodity', { include_stocks: false, include_index_etfs: true, include_sector_etfs: true, include_commodity_etfs: true, index_tickers: '' }],
+  ['stocks_core_index_etfs', 'Stocks + core index ETFs', { include_stocks: true, include_index_etfs: true, index_tickers: CORE_INDEX_TICKERS }],
+  ['stocks_all_index_etfs', 'Stocks + all index ETFs', { include_stocks: true, include_index_etfs: true, index_tickers: '' }],
+  ['stocks_all_etfs', 'Stocks + all ETFs', { include_stocks: true, include_index_etfs: true, include_sector_etfs: true, include_commodity_etfs: true, index_tickers: '' }],
+  ['custom_combination', 'Custom combination — use the checkboxes below', null],
+]
+
+function selectedUniverseOption(filters) {
+  const flags = [
+    Boolean(filters.include_stocks),
+    Boolean(filters.include_index_etfs),
+    Boolean(filters.include_sector_etfs),
+    Boolean(filters.include_commodity_etfs),
+  ]
+  const normalizedIndexTickers = String(filters.index_tickers || '').replace(/\s+/g, '').toUpperCase()
+  const indexScope = !normalizedIndexTickers ? 'all' : normalizedIndexTickers === CORE_INDEX_TICKERS ? 'core' : 'custom'
+  if (flags[0] && !flags.slice(1).some(Boolean)) {
+    return `stocks_${filters.universe === 'large_mid' ? 'large_mid' : filters.universe === 'mid_cap' ? 'mid_cap' : filters.universe === 'holdings' ? 'holdings' : filters.universe === 'watchlist' ? 'watchlist' : 'large_cap'}`
+  }
+  if (!flags[0] && flags[1] && !flags[2] && !flags[3] && indexScope !== 'custom') return `${indexScope}_index_etfs`
+  if (!flags[0] && !flags[1] && flags[2] && !flags[3]) return 'sector_etfs'
+  if (!flags[0] && !flags[1] && !flags[2] && flags[3]) return 'commodity_etfs'
+  if (!flags[0] && flags[1] && !flags[2] && flags[3] && indexScope !== 'custom') return `${indexScope}_index_commodity_etfs`
+  if (!flags[0] && flags[1] && flags[2] && !flags[3] && indexScope === 'all') return 'index_sector_etfs'
+  if (!flags[0] && !flags[1] && flags[2] && flags[3]) return 'sector_commodity_etfs'
+  if (!flags[0] && flags.slice(1).every(Boolean) && indexScope === 'all') return 'all_etfs'
+  if (flags[0] && flags[1] && !flags[2] && !flags[3] && indexScope !== 'custom') return `stocks_${indexScope}_index_etfs`
+  if (flags[0] && flags.slice(1).every(Boolean) && indexScope === 'all') return 'stocks_all_etfs'
+  return 'custom_combination'
+}
+
+function applyUniverseOption(current, value) {
+  const option = SCAN_UNIVERSE_OPTIONS.find(([key]) => key === value)
+  if (!option?.[2]) return current
+  const next = { ...current, ...option[2] }
+  for (const key of ['include_stocks', 'include_index_etfs', 'include_sector_etfs', 'include_commodity_etfs']) {
+    if (!(key in option[2])) next[key] = false
+  }
+  return next
 }
 
 function openingCashflowText(mode) {
@@ -79,6 +137,7 @@ function fieldText(field, value) {
   if (field.type === 'select') {
     return field.options.find(([candidate]) => String(candidate) === String(value))?.[1] || String(value ?? 'Any')
   }
+  if (field.type === 'text') return value == null || value === '' ? 'Any' : String(value)
   if (value == null || value === '') return 'Any'
   return `${field.prefix || ''}${Number(value).toLocaleString()}${field.suffix ? ` ${field.suffix}` : ''}`
 }
@@ -105,13 +164,24 @@ function DynamicField({ field, value, onChange }) {
       onChange(next === 'true' ? true : next === 'false' ? false : next)
     }}>{field.options.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
   }
+  if (field.type === 'text') {
+    return <label className="gos-input"><span>{field.label}</span><input type="text" value={value ?? ''} placeholder={field.placeholder} onChange={event => onChange(event.target.value.toUpperCase())} /></label>
+  }
   return <label className="gos-input"><span>{field.label}</span><div>{field.prefix && <b>{field.prefix}</b>}<input type="number" value={value ?? ''} step={field.step ?? 1} min={field.min} max={field.max} onChange={event => onChange(event.target.value === '' ? null : Number(event.target.value))} />{field.suffix && <b>{field.suffix}</b>}</div></label>
 }
 
 function ScoreCells({ scores }) {
-  const values = ['fundamental', 'growth', 'technical'].map(key => scores?.[key])
+  const scoreTypes = [
+    ['fundamental', 'F', 'Fundamental'],
+    ['growth', 'G', 'Growth'],
+    ['technical', 'T', 'Technical'],
+  ]
+  const values = scoreTypes.map(([key]) => scores?.[key])
   if (values.every(value => value == null)) return <span className="gos-na">N/A</span>
-  return <span className="gos-scores">{values.map((value, index) => <b key={index} data-score={Math.round(Number(value) || 0)}>{value == null ? '—' : number(value, 0)}</b>)}</span>
+  return <span className="gos-scores" aria-label="Fundamental, growth, and technical scores">{scoreTypes.map(([key, shortLabel, label]) => {
+    const value = scores?.[key]
+    return <b key={key} data-score={value == null ? undefined : Math.round(Number(value) || 0)} data-missing={value == null ? 'true' : undefined} title={`${label}: ${value == null ? 'Not available' : number(value, 0)}`}><small>{shortLabel}</small><span>{value == null ? '—' : number(value, 0)}</span></b>
+  })}</span>
 }
 
 function TechnicalCells({ meta }) {
@@ -135,7 +205,7 @@ function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelec
       const active = selected === row
       const nearMatch = meta.match_status === 'near_match'
       return <tr key={key} className={`${active ? 'selected ' : ''}${nearMatch ? 'near-match' : ''}`.trim()} onClick={() => setSelected(row)} title={nearMatch ? `Near match; missed: ${(meta.filter_reasons || []).join(', ')}` : 'Matches every active filter'}>
-        <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small></button></td>
+        <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small>{nearMatch && <em>{(meta.filter_reasons || []).length} rule{(meta.filter_reasons || []).length === 1 ? '' : 's'} missed</em>}</button></td>
         <td>{money(meta.price)}</td>
         <td title={meta.iv_rank_source === 'history' ? `${meta.iv_rank_observations} locally collected Yahoo observations` : 'Yahoo IV history is still accumulating'}>{meta.iv_rank == null ? <small>Warming up<br />{meta.iv_rank_observations} days</small> : percent(meta.iv_rank)}</td>
         <td className="gos-strikes">{meta.strikes}</td><td>{formatExpiration(meta.expiration)}<small>{meta.dte == null ? '' : `${number(meta.dte, 0)} DTE`}</small></td>
@@ -158,7 +228,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     if (!initialStrategy) return {}
     const restoredFilters = { ...defaultsForGeneralStrategy(initialStrategy), ...(restored?.filters || {}) }
     return isIndexOnlyStrategy(initialStrategy)
-      ? { ...restoredFilters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false }
+      ? { ...restoredFilters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false }
       : restoredFilters
   })
   const [rows, setRows] = useState(restoredRows)
@@ -185,8 +255,9 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     setFilters(current => current.include_stocks === false
       && current.include_index_etfs === true
       && current.include_sector_etfs === false
+      && current.include_commodity_etfs === false
       ? current
-      : { ...current, include_stocks: false, include_index_etfs: true, include_sector_etfs: false })
+      : { ...current, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false })
   }, [strategy])
 
   useEffect(() => {
@@ -217,7 +288,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     replaceFilters(next ? defaultsForGeneralStrategy(next) : {})
   }
 
-  const strategyPicker = <select className="csf-strategy-select" aria-label="Option strategy" value={strategy} onChange={event => changeStrategy(event.target.value)}>
+  const strategyPicker = <select className="csf-strategy-select" aria-label="Option strategy" title="Choose the option structure to scan. It controls the strategy-specific construction, payoff, and probability rules shown below." value={strategy} onChange={event => changeStrategy(event.target.value)}>
     <option value="">Choose a scan…</option>
     {OPTION_SCANNER_GROUPS.map(group => <optgroup key={group.id} label={group.label}>{group.scanners.map(item => <option key={item.key} value={item.key}>{item.key === 'unbalanced-butterfly' ? 'Put / Unbalanced Butterfly' : item.label}</option>)}</optgroup>)}
   </select>
@@ -225,20 +296,25 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const summaryGroups = useMemo(() => {
     if (!strategy) return []
     const indexOnly = isIndexOnlyStrategy(strategy)
-    const symbolEditor = indexOnly
+    const restrictedCondor = strategy === 'put-call-condor'
+    const symbolEditor = restrictedCondor
+      ? <div className="gos-inline-stack"><label className="gos-input gos-wide"><span>Supported underlying</span><select value={filters.symbols || 'SPY'} onChange={event => setFilter('symbols', event.target.value)}><option value="SPY">SPY — SPDR S&amp;P 500 ETF</option><option value="^XSP">^XSP — Mini-SPX index</option></select></label><small className="csf-editor-note">This specialized risk-budgeted Condor engine supports SPY and Mini-SPX only and prices one underlying per run.</small></div>
+      : indexOnly
       ? <div className="gos-inline-stack"><label className="gos-input gos-wide"><span>Index ETFs (optional)</span><input value={filters.symbols} onChange={event => setFilter('symbols', event.target.value.toUpperCase())} placeholder="SPY, QQQ, IWM, VOO" /></label>{filters.symbols && <small className="csf-editor-note">Only index ETFs are supported for this long-dated structure. Stock symbols will be rejected.</small>}<small className="csf-editor-note">Leave blank to scan the default index ETF set.</small></div>
-      : <div className="gos-inline-stack"><label className="gos-input gos-wide"><span>Exact symbols (optional)</span><input value={filters.symbols} onChange={event => setFilter('symbols', event.target.value.toUpperCase())} placeholder="SPY, QQQ, IWM, AAPL, MSFT" /></label><label className="gos-input gos-wide"><span>Stock universe</span><select value={filters.universe} onChange={event => setFilter('universe', event.target.value)}><option value="large_cap">Large caps</option><option value="large_mid">Large + mid caps</option><option value="mid_cap">Mid caps</option></select></label><div className="gos-inline-checks"><label className="gos-check"><input type="checkbox" checked={filters.include_stocks} onChange={event => setFilter('include_stocks', event.target.checked)} /> Stocks</label><label className="gos-check"><input type="checkbox" checked={filters.include_index_etfs} onChange={event => setFilter('include_index_etfs', event.target.checked)} /> Index ETFs (SPY, QQQ, IWM…)</label><label className="gos-check"><input type="checkbox" checked={filters.include_sector_etfs} onChange={event => setFilter('include_sector_etfs', event.target.checked)} /> Sector ETFs</label></div>{filters.symbols && <small className="csf-editor-note">The exact list is active; universe switches are ignored until the list is cleared.</small>}</div>
-    const symbolHelp = indexOnly
+      : <div className="gos-inline-stack"><label className="gos-input gos-wide"><span>Exact symbols (optional)</span><input value={filters.symbols} onChange={event => setFilter('symbols', event.target.value.toUpperCase())} placeholder="SPY, QQQ, IWM, GLD, DBC, AAPL" /></label><label className="gos-input gos-wide"><span>Scan universe</span><select value={selectedUniverseOption(filters)} onChange={event => setFilters(current => ({ ...applyUniverseOption(current, event.target.value), risk_profile: 'custom' }))}>{SCAN_UNIVERSE_OPTIONS.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><div className="gos-inline-checks"><label className="gos-check"><input type="checkbox" checked={filters.include_stocks} onChange={event => setFilter('include_stocks', event.target.checked)} /> Stocks</label><label className="gos-check"><input type="checkbox" checked={filters.include_index_etfs} onChange={event => setFilter('include_index_etfs', event.target.checked)} /> Index ETFs (SPY, QQQ, IWM…)</label><label className="gos-check"><input type="checkbox" checked={filters.include_sector_etfs} onChange={event => setFilter('include_sector_etfs', event.target.checked)} /> Sector ETFs</label><label className="gos-check"><input type="checkbox" checked={filters.include_commodity_etfs} onChange={event => setFilter('include_commodity_etfs', event.target.checked)} /> Commodity ETFs (GLD, SLV, DBC…)</label></div>{filters.symbols && <small className="csf-editor-note">The exact list is active; universe choices are ignored until the list is cleared.</small>}<small className="csf-editor-note">Use the dropdown for a common combination, or use the checkboxes to fine-tune it.</small></div>
+    const symbolHelp = restrictedCondor
+      ? 'The specialized Put / Call Condor module supports SPY and Mini-SPX (^XSP) only. That engine prices one underlying per run, so this field intentionally replaces the broad universe selector.'
+      : indexOnly
       ? 'These long-dated unbalanced structures are defined for broad index ETFs only. Enter symbols such as SPY, QQQ, IWM, or VOO; individual stocks and sector ETFs are not supported.'
-      : 'Enter ticker symbols to scan only those names, including any mix such as SPY, QQQ, IWM, AAPL, and MSFT. Leave the list empty to combine the selected stock universe with index and/or sector ETFs.'
+      : 'Enter ticker symbols to scan only those names, including any mix such as SPY, QQQ, IWM, GLD, DBC, AAPL, and MSFT. Leave the list empty to choose stocks, index ETFs, sector ETFs, and commodity ETFs from the scan universe selector.'
     const groups = [
-    { title: 'Descriptive data', items: [{ label: 'Include symbols', value: indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: openingCashflowText(filters.entry_credit_mode), help: 'Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.', editor: null }] : [])] },
-    { title: 'Fundamental data', items: [
+    { title: 'Descriptive data', help: 'Select the stock and ETF symbols to scan. An exact symbol list takes precedence over the universe selections.', items: [{ label: 'Include symbols', value: restrictedCondor ? (filters.symbols || 'SPY') : indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: openingCashflowText(filters.entry_credit_mode), help: 'Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.', editor: null }] : [])] },
+    { title: 'Fundamental data', help: 'Filters individual stocks using the app\'s Fundamental and Growth scores. ETFs do not require these company-level scores.', items: [
       { label: 'Stock Score Fundamental', value: scoreText(filters, 'fundamental'), help: 'A transparent 1–10 app score for company quality and value. It averages valuation (forward or trailing P/E), profit margin, return on equity, current ratio, and lower debt-to-equity. Higher is better; missing inputs are excluded. ETFs show N/A.', editor: <ScoreRange label="Quality and value" name="fundamental" filters={filters} setFilter={setFilter} /> },
       { label: 'Stock Score Growth', value: scoreText(filters, 'growth'), help: 'A transparent 1–10 app score based on Yahoo revenue growth, earnings growth, and whether trailing EPS is positive. Higher is better; missing inputs are excluded. ETFs show N/A.', editor: <ScoreRange label="Revenue and earnings growth" name="growth" filters={filters} setFilter={setFilter} /> },
       { label: 'Stock Score Technical', value: scoreText(filters, 'technical'), help: 'A transparent 1–10 app score using price versus the 20-, 50-, and 200-day moving averages, 14-day RSI, and relative strength. Strong trends score well, while overbought RSI readings are penalized. This works for stocks and ETFs.', editor: <ScoreRange label="Trend and relative strength" name="technical" filters={filters} setFilter={setFilter} /> },
     ] },
-    { title: 'Technical market conditions', items: [
+    { title: 'Technical market conditions', help: 'Filters the broad market and each underlying by trend, recent price movement, lookback period, and RSI.', items: [
       { label: 'Market trend (SPY)', value: fieldText(TREND_FIELD, filters.market_trend), help: 'Classifies the broad market using SPY. Uptrend means price is above its 50-day average and the 50-day is above the 200-day. Downtrend is the reverse; Mixed covers all other arrangements.', editor: <DynamicField field={{ ...TREND_FIELD, label: 'Required SPY trend' }} value={filters.market_trend} onChange={value => setFilter('market_trend', value)} /> },
       { label: 'Stock / ETF trend', value: fieldText(TREND_FIELD, filters.underlying_trend), help: 'Applies the same price/50-day/200-day trend test to each stock or ETF being scanned.', editor: <DynamicField field={{ ...TREND_FIELD, label: 'Required underlying trend' }} value={filters.underlying_trend} onChange={value => setFilter('underlying_trend', value)} /> },
       { label: 'Recent stock / ETF move', value: fieldText(MOVE_FIELD, filters.recent_move_direction), help: 'Choose whether the underlying must have declined or rallied over the selected lookback. Combining Uptrend with Down / pullback finds an established uptrend experiencing a short-term decline.', editor: <DynamicField field={MOVE_FIELD} value={filters.recent_move_direction} onChange={value => setFilter('recent_move_direction', value)} /> },
@@ -246,16 +322,16 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       { label: 'Minimum move', value: `${filters.min_abs_recent_move_pct || 0}%`, help: 'Requires the recent rise or decline to be at least this large. Zero requires only the selected direction; increasing it finds more substantial pullbacks or rallies.', editor: <DynamicField field={{ key: 'min_abs_recent_move_pct', label: 'Minimum absolute move', suffix: '%', step: 0.25, min: 0 }} value={filters.min_abs_recent_move_pct} onChange={value => setFilter('min_abs_recent_move_pct', value)} /> },
       { label: 'RSI range', value: `${filters.technical_rsi_min}–${filters.technical_rsi_max}`, help: 'Limits the 14-day Relative Strength Index. RSI near 30 is commonly considered oversold and near 70 overbought, but the range is fully user-controlled.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'technical_rsi_min', label: 'Minimum RSI', step: 1, min: 0, max: 100 }} value={filters.technical_rsi_min} onChange={value => setFilter('technical_rsi_min', Math.min(value, filters.technical_rsi_max))} /><DynamicField field={{ key: 'technical_rsi_max', label: 'Maximum RSI', step: 1, min: 0, max: 100 }} value={filters.technical_rsi_max} onChange={value => setFilter('technical_rsi_max', Math.max(value, filters.technical_rsi_min))} /></div> },
     ] },
-    { title: 'Consolidated options data', items: [
+    { title: 'Consolidated options data', help: 'Filters the option chain by total trading volume and IV Rank, helping focus scans on liquid or volatility-specific opportunities.', items: [
       { label: 'Total Option Volume', value: filters.min_total_option_volume > 0 ? `Above ${Number(filters.min_total_option_volume).toLocaleString()}` : 'Any', help: 'Requires at least this much option-contract volume in the chain or expiration evaluated by the underlying strategy scanner. Higher thresholds favor liquid names but may remove otherwise valid trades.', editor: <DynamicField field={{ key: 'min_total_option_volume', label: 'Minimum volume', step: 500, min: 0 }} value={filters.min_total_option_volume} onChange={value => setFilter('min_total_option_volume', value)} /> },
       { label: 'IV Rank', value: filters.min_iv_rank <= 0 && filters.max_iv_rank >= 100 ? 'Any' : filters.min_iv_rank <= 0 ? `Up to ${filters.max_iv_rank}` : filters.max_iv_rank >= 100 ? `Above ${filters.min_iv_rank}` : `${filters.min_iv_rank}–${filters.max_iv_rank}`, help: 'IV Rank is the percentile of today’s at-the-money implied volatility among the daily Yahoo observations collected by this app. It begins populating after 20 observations; a value of 75 means current IV is above roughly 75% of the collected readings.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_iv_rank', label: 'Minimum IV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_iv_rank} onChange={value => setFilter('min_iv_rank', Math.min(value, filters.max_iv_rank))} /><DynamicField field={{ key: 'max_iv_rank', label: 'Maximum IV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_iv_rank} onChange={value => setFilter('max_iv_rank', Math.max(value, filters.min_iv_rank))} /></div> },
     ] },
-    { title: 'Option data', items: [
+    { title: 'Option data', help: 'Sets the expiration window, price-fill assumption, and primary option-leg delta used to construct each trade.', items: [
       { label: 'Expiration', value: `${filters.min_dte}–${filters.max_dte} DTE`, help: 'DTE means days to expiration. The scanner evaluates listed expirations inside this range and uses Target DTE to prefer the closest available expiration when the strategy supports it.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_dte', label: 'Minimum DTE', step: 1, min: 0 }} value={filters.min_dte} onChange={value => setFilter('min_dte', Math.min(value, filters.max_dte))} /><DynamicField field={{ key: 'target_dte', label: 'Target DTE', step: 1, min: 0 }} value={filters.target_dte} onChange={value => setFilter('target_dte', value)} /><DynamicField field={{ key: 'max_dte', label: 'Maximum DTE', step: 1, min: 1 }} value={filters.max_dte} onChange={value => setFilter('max_dte', Math.max(value, filters.min_dte))} /></div> },
       { label: 'Bid/Ask level', value: filters.bid_ask_level || config?.bidAsk || 'Mid', help: 'Controls the quote assumption used to estimate entry price. Conservative uses sell-at-bid and buy-at-ask values; Mid uses midpoint prices; 25% improvement assumes a fill one quarter of the way from the conservative price toward mid.', editor: <DynamicField field={{ key: 'bid_ask_level', label: 'Pricing assumption', type: 'select', options: [['Conservative (use bid/ask values)', 'Conservative (bid/ask)'], ['25% price improvement', '25% price improvement'], ['Mid', 'Mid']] }} value={filters.bid_ask_level} onChange={value => setFilter('bid_ask_level', value)} /> },
       { label: 'Reference option delta', value: filters.reference_delta_mode === 'none' ? 'Construction-specific' : `${filters.reference_delta_mode === 'short' ? 'Short' : 'Long'} ${filters.min_reference_delta}–${filters.max_reference_delta} Δ`, help: 'Controls the absolute delta of the primary risk-defining option. For income and credit trades this is normally the short leg; for directional debit trades it is the long leg. A displayed value of 10 means 0.10 delta. Neutral structures can leave this construction-specific.', editor: <div className="gos-inline-stack"><DynamicField field={{ key: 'reference_delta_mode', label: 'Reference leg', type: 'select', options: [['none', 'Use strategy construction'], ['short', 'Short option'], ['long', 'Long option']] }} value={filters.reference_delta_mode} onChange={value => setFilter('reference_delta_mode', value)} />{filters.reference_delta_mode !== 'none' && <div className="gos-quick-pair"><DynamicField field={{ key: 'min_reference_delta', label: 'Minimum absolute delta', step: 1, min: 1, max: 99 }} value={filters.min_reference_delta} onChange={value => setFilter('min_reference_delta', Math.min(value, filters.max_reference_delta))} /><DynamicField field={{ key: 'max_reference_delta', label: 'Maximum absolute delta', step: 1, min: 1, max: 99 }} value={filters.max_reference_delta} onChange={value => setFilter('max_reference_delta', Math.max(value, filters.min_reference_delta))} /></div>}</div> },
     ] },
-    { title: 'Strategy specific', items: strategyFields.map(item => ({ label: item.label, value: fieldText(item, filters[item.key]), help: helpForGeneralField(item), editor: <DynamicField field={item} value={filters[item.key]} onChange={value => setFilter(item.key, value)} /> })) },
+    { title: 'Strategy specific', help: 'Defines the selected strategy\'s trade construction, risk and reward requirements, and any strategy-only mechanics.', items: strategyFields.map(item => ({ label: item.label, value: fieldText(item, filters[item.key]), help: helpForGeneralField(item), editor: <DynamicField field={item} value={filters[item.key]} onChange={value => setFilter(item.key, value)} /> })) },
     ]
     return groups
   }, [config?.bidAsk, filters, strategy, strategyFields])
@@ -268,7 +344,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     scanRequestRef.current = { id: requestId, controller }
     setLoading(true); setError(''); setFocusedTicker(null); setSelected(null); setRows([]); setStats(null); setAsOf(null)
     const requestFilters = isIndexOnlyStrategy(strategy)
-      ? { ...filters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false }
+      ? { ...filters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false }
       : filters
     const strategyFilters = Object.fromEntries(strategyFields.map(field => [field.key, requestFilters[field.key]]))
     try {
@@ -321,7 +397,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   return <main className="page gos-page">
     <header className="gos-page-header">
       <div><span>Option Samurai-style workflow · powered by the app’s existing scanners</span><h1>General Option Scanner</h1><p>Filter the market once, compare the best structure for each ticker, then drill into every candidate and model its payoff.</p></div>
-      {scanner?.route && <Link className="btn btn-sm btn-outline" to={scanner.route}>Open original {scanner.label} screen</Link>}
+      <div className="gos-header-actions"><span className="gos-unified-note">One unified interface for every supported strategy</span></div>
     </header>
 
     <div className="scanner-filter-workspace">
@@ -339,7 +415,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
           ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
           : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
         {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
-        {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>Each row is a real constructible structure. Hover a row to see which active preset rules it missed, then edit those green values if desired.</span></div>}
+        {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}
         {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={selected} setSelected={setSelected} />}
         {stats && <div className="gos-stats"><span>{stats.showing_near_matches ? `${stats.near_matches_returned || rows.length} near-match structures shown` : `${stats.general_results ?? rows.length} matching structures`}</span><span>{stats.chains_fetched ?? stats.expirations_priced ?? '—'} chains / expirations priced</span></div>}
         <GeneralScannerAnalysis row={selected} strategyLabel={scanner?.label || strategy} />

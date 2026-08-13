@@ -56,6 +56,8 @@ from option_probability import profit_probability_schedule
 from option_strike_targets import strike_for_delta
 from options_pricing import black_scholes
 from put_scanner import (
+    COMMODITY_ETF_SET,
+    COMMODITY_ETF_UNIVERSE,
     BENCHMARK,
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
@@ -89,6 +91,7 @@ from put_scanner import (
     _wilder_rsi,
     dividend_yield_for_pricing,
     resolve_universe,
+    resolve_index_etfs,
     window_stretch,
 )
 
@@ -1069,9 +1072,11 @@ def resolve_scan_universe(p: dict) -> list[str]:
             profile_id=p.get("profile_id"), aggregate_id=p.get("aggregate_id"),
         )
     if p.get("include_index_etfs"):
-        tickers += INDEX_ETF_UNIVERSE
+        tickers += resolve_index_etfs(p.get("index_tickers"))
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
+    if p.get("include_commodity_etfs"):
+        tickers += COMMODITY_ETF_UNIVERSE
     return _clean_tickers(tickers)
 
 
@@ -1087,6 +1092,7 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": False,
     "include_sector_etfs": False,
+    "include_commodity_etfs": False,
     "lookback_days": 21,
     "min_market_cap": 2e9,
     # Small caps get their own floor for the same reason funds get theirs: the
@@ -1181,7 +1187,7 @@ def run_call_scan(payload: dict) -> dict:
                          "which is the minimum for one covered call contract.",
             }
 
-    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET
+    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
 
     hist = _load_history(tickers)
     if hist is None or hist.empty:
@@ -1445,6 +1451,7 @@ def run_call_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_commodity_etfs": bool(p["include_commodity_etfs"]),
             "fund_min_run_pct": fund_min_run,
             "fund_min_stretch_sigma": fund_min_stretch,
             "fund_min_aum": fund_min_aum,

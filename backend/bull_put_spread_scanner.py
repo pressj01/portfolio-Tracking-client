@@ -31,6 +31,7 @@ from flask import jsonify, request
 from option_probability import profit_probability_schedule
 from option_strike_targets import strike_for_delta
 from put_scanner import (
+    COMMODITY_ETF_SET,
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
     MAX_TARGET_DTE,
@@ -593,6 +594,7 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": True,
     "include_sector_etfs": False,
+    "include_commodity_etfs": False,
     "include_selected_funds": False,
     "selected_fund_tickers": [],
     "include_lower_confidence_selected_funds": True,
@@ -741,7 +743,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "error": "Price history unavailable. Yahoo may be rate-limiting.",
         }
 
-    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET
+    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
     bench_ret = _benchmark_returns(hist)
     priced = 0
     price_pass: list[dict] = []
@@ -1112,6 +1114,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_commodity_etfs": bool(p["include_commodity_etfs"]),
             "include_selected_funds": bool(p["include_selected_funds"]),
             "selected_fund_tickers": sorted(selected_fund_tickers),
             "include_lower_confidence_selected_funds": bool(

@@ -241,6 +241,12 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
       <RiskGraphButton kind={meta.trade_kind} row={row} source="General Option Scanner" label="Detailed Risk Graph" className="btn btn-xs btn-outline" />
     </header>
 
+    {meta.match_status === 'near_match' && <div className="gsa-near-match-explanation" role="note">
+      <strong>Near match — this trade did not pass every active filter.</strong>
+      <span>Rules missed:</span>
+      <div>{(meta.filter_reasons || []).map(reason => <b key={reason}>{reason}</b>)}</div>
+    </div>}
+
     <div className="gsa-probability-strip" aria-label="Probability and risk analysis">
       <article><span>Probability of success</span><strong>{percent(meta.prob_success)}</strong></article>
       <article><span>Probability of failure</span><strong>{percent(meta.prob_failure)}</strong></article>

@@ -18,7 +18,7 @@
  * so deriving it from here would lose more than it saved.
  */
 import React from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Navigate, Routes, Route } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
@@ -87,23 +87,11 @@ import OptionProbabilityCalculator from './pages/OptionProbabilityCalculator'
 import OptionTrades from './pages/OptionTrades'
 import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
-import PutSellingScanner from './pages/PutSellingScanner'
-import CoveredCallScanner from './pages/CoveredCallScanner'
-import BearPutSpreadScanner from './pages/BearPutSpreadScanner'
-import BullPutSpreadScanner from './pages/BullPutSpreadScanner'
-import BearCallSpreadScanner from './pages/BearCallSpreadScanner'
-import IronCondorScanner from './pages/IronCondorScanner'
-import PutCondorScanner from './pages/PutCondorScanner'
-import UnbalancedPutCondorScanner from './pages/UnbalancedPutCondorScanner'
-import UnbalancedButterflyScanner from './pages/UnbalancedButterflyScanner'
-import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
-import RoadTripButterflyScanner from './pages/RoadTripButterflyScanner'
-import SixtyFortyTwentyFlyScanner from './pages/SixtyFortyTwentyFlyScanner'
-import IronButterflyScanner from './pages/IronButterflyScanner'
-import OptionScannerHub from './pages/OptionScannerHub'
 import GeneralOptionScanner from './pages/GeneralOptionScanner'
+import GeneralOptionScannerHelp from './pages/GeneralOptionScannerHelp'
 import GreeksGuide from './pages/GreeksGuide'
 import SplitScreen from './pages/SplitScreen'
+import { generalScannerRoute } from './utils/optionScannerCatalog'
 
 export const PAGE_GROUPS = [
   {
@@ -121,21 +109,8 @@ export const PAGE_GROUPS = [
       { path: '/option-trades', label: 'Option Trades', element: <OptionTrades /> },
       { path: '/option-trades/import', label: 'Import Option Trades', element: <OptionTradeImport /> },
       { path: '/options', label: 'Strategy Lab', element: <OptionTradingTools /> },
-      { path: '/option-scanners', label: 'All Strategy Scanners', element: <OptionScannerHub /> },
       { path: '/general-option-scanner', label: 'General Option Scanner', element: <GeneralOptionScanner /> },
-      { path: '/put-selling-scanner', label: 'Put Selling Scanner', element: <PutSellingScanner /> },
-      { path: '/bull-put-spread-scanner', label: 'Bull Put Spread Scanner', element: <BullPutSpreadScanner /> },
-      { path: '/covered-call-scanner', label: 'Covered Call Scanner', element: <CoveredCallScanner /> },
-      { path: '/bear-put-spread-scanner', label: 'Bear Put Spread Scanner', element: <BearPutSpreadScanner /> },
-      { path: '/bear-call-spread-scanner', label: 'Bear Call Spread Scanner', element: <BearCallSpreadScanner /> },
-      { path: '/iron-condor-scanner', label: 'Iron Condor Scanner', element: <IronCondorScanner /> },
-      { path: '/put-call-condor-scanner', label: 'Put / Call Condor Scanner', element: <PutCondorScanner /> },
-      { path: '/unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner', element: <UnbalancedPutCondorScanner /> },
-      { path: '/unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner', element: <UnbalancedButterflyScanner /> },
-      { path: '/double-hedge-put-butterfly-scanner', label: 'Double-Hedge Put Butterfly Scanner', element: <DoubleHedgePutButterflyScanner /> },
-      { path: '/road-trip-butterfly-scanner', label: 'Road Trip Unbalanced Butterfly Scanner', element: <RoadTripButterflyScanner /> },
-      { path: '/sixty-forty-twenty-fly-scanner', label: '60/40/20 Fly Scanner', element: <SixtyFortyTwentyFlyScanner /> },
-      { path: '/iron-butterfly-scanner', label: 'Iron Butterfly Scanner', element: <IronButterflyScanner /> },
+      { path: '/general-option-scanner/help', label: 'General Option Scanner Help', element: <GeneralOptionScannerHelp /> },
       { path: '/option-education', label: 'Option Strategy Education', element: <OptionEducation /> },
       { path: '/option-greeks', label: 'Understanding the Greeks', element: <GreeksGuide /> },
     ],
@@ -238,7 +213,23 @@ export const PAGE_GROUPS = [
 // for links that were saved before the menu label changed.
 const EXTRA_ROUTES = [
   { path: '/closed-cef-info/:ticker', element: <ClosedCEFInformation /> },
-  { path: '/put-condor-scanner', element: <PutCondorScanner /> },
+  ...[
+    ['/option-scanners', ''],
+    ['/put-selling-scanner', 'cash-secured-put'],
+    ['/bull-put-spread-scanner', 'bull-put-spread'],
+    ['/covered-call-scanner', 'covered-call'],
+    ['/bear-put-spread-scanner', 'bear-put-spread'],
+    ['/bear-call-spread-scanner', 'bear-call-spread'],
+    ['/iron-condor-scanner', 'iron-condor'],
+    ['/put-call-condor-scanner', 'put-call-condor'],
+    ['/put-condor-scanner', 'put-call-condor'],
+    ['/unbalanced-put-condor-scanner', 'unbalanced-put-condor'],
+    ['/unbalanced-butterfly-scanner', 'unbalanced-butterfly'],
+    ['/double-hedge-put-butterfly-scanner', 'double-hedge-put-butterfly'],
+    ['/road-trip-butterfly-scanner', 'road-trip-butterfly'],
+    ['/sixty-forty-twenty-fly-scanner', 'sixty-forty-twenty-fly'],
+    ['/iron-butterfly-scanner', 'iron-butterfly'],
+  ].map(([path, strategy]) => ({ path, element: <Navigate to={strategy ? generalScannerRoute(strategy) : '/general-option-scanner'} replace /> })),
   // Split view is reachable from the menu but deliberately not offered inside a
   // pane: a pane showing the split page would nest panes inside panes.
   { path: '/split-screen', element: <SplitScreen /> },

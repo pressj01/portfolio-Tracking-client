@@ -31,6 +31,21 @@ test('strategy changes replace the strategy-specific input schema', () => {
   assert.ok(condor.includes('iron_condor_shape'))
 })
 
+test('shared scan defaults separate core indexes from commodities', () => {
+  const defaults = defaultsForGeneralStrategy('covered-call')
+  assert.equal(defaults.index_tickers, 'SPY,QQQ,IWM')
+  assert.equal(defaults.include_index_etfs, true)
+  assert.equal(defaults.include_commodity_etfs, false)
+})
+
+test('iron condor exposes every supported construction', () => {
+  const fields = fieldsForGeneralStrategy('iron-condor')
+  const construction = fields.find(field => field.key === 'construction')
+  const values = construction.options.map(([value]) => value)
+  assert.deepEqual(values, ['balanced', 'strike_tilt', 'ratio_tilt', 'risk_ratio', 'weirdor_ratio', 'weirdor_hedged', 'jeep', 'all'])
+  assert.equal(strategyDefaultsForGeneralStrategy('iron-condor').variant_tickers, 'SPY,QQQ,IWM')
+})
+
 test('bull call preset matches the supplied Samurai-style debit spread screen', () => {
   const preset = strategyDefaultsForGeneralStrategy('bull-call-spread')
   assert.equal(preset.max_iv_rank, 75)

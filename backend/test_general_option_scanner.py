@@ -21,6 +21,14 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertTrue(_runner_payload("iron-condor", {})["general_scanner_mode"])
         self.assertNotIn("general_scanner_mode", _runner_payload("cash-secured-put", {}))
 
+    def test_standard_strategy_passes_the_selected_index_subset(self):
+        payload = _runner_payload("iron-condor", {
+            "include_stocks": False,
+            "include_index_etfs": True,
+            "index_tickers": "SPY,QQQ,IWM",
+        })
+        self.assertEqual(payload["index_tickers"], "SPY,QQQ,IWM")
+
     def test_short_delta_profile_changes_standard_scanner_construction(self):
         payload = _runner_payload("bull-put-spread", {
             "reference_delta_mode": "short",
@@ -38,6 +46,22 @@ class GeneralOptionScannerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "index ETFs"):
             _runner_payload("unbalanced-put-condor", {"symbols": "SPY,AAPL"})
+
+    @patch("general_option_scanner.resolve_scan_universe", return_value=["GLD", "SLV", "DBC"])
+    def test_ticker_strategy_uses_the_selected_shared_universe(self, resolve):
+        payload = _runner_payload("iron-butterfly", {
+            "include_stocks": False,
+            "include_index_etfs": False,
+            "include_commodity_etfs": True,
+        })
+        self.assertEqual(payload["tickers"], "GLD,SLV,DBC")
+        resolve.assert_called_once()
+
+    def test_specialized_put_call_condor_keeps_its_supported_underlying(self):
+        self.assertEqual(
+            _runner_payload("put-call-condor", {"symbols": "^XSP"})["underlying"],
+            "^XSP",
+        )
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")

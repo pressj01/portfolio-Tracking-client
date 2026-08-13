@@ -1,10 +1,12 @@
 const COMMON = {
   risk_profile: 'open',
   symbols: '',
+  index_tickers: 'SPY,QQQ,IWM',
   universe: 'large_cap',
   include_stocks: true,
   include_index_etfs: true,
   include_sector_etfs: false,
+  include_commodity_etfs: false,
   min_total_option_volume: 5000,
   min_iv_rank: 0,
   max_iv_rank: 100,
@@ -173,6 +175,7 @@ const ADVANCED_FIELDS = [
 
 const choice = (key, label, options) => ({ key, label, type: 'select', options })
 const yesNo = (key, label) => choice(key, label, [['false', 'No'], ['true', 'Yes']])
+const text = (key, label, options = {}) => ({ key, label, type: 'text', ...options })
 
 const PUT_CALL_CONDOR_FIELDS = [
   choice('option_side', 'Condor side', [['both', 'Put and Call'], ['put', 'Put only'], ['call', 'Call only']]),
@@ -277,6 +280,12 @@ export const GENERAL_FILTER_HELP = {
   max_max_loss_dollars: 'Defines the most you are willing to lose on one complete trade at expiration, based on the selected pricing assumption.',
   max_abs_position_delta: 'Limits the absolute net delta of the complete position. A smaller value favors positions with less immediate directional exposure.',
   iron_condor_shape: 'Any allows all valid condors. Balanced requires equal put- and call-wing widths. Riskless Up or Down requires the collected credit to cover the loss on that side.',
+  construction: 'Chooses the iron-condor construction: classic balanced, a directional tilt, a ratio, a Weirdor, the Jeep, or every supported variation.',
+  variant_tickers: 'Underlyings used for non-standard iron-condor constructions. The default core set is SPY, QQQ, and IWM because the ratio and hedged forms need deep index-grade chains.',
+  variant_width_pct: 'Target width of a non-standard iron-condor wing as a percentage of the underlying price.',
+  tilt_strength: 'Controls how far a directional variant shifts its strikes toward the selected market view.',
+  ratio_contracts: 'Number of contracts used on the heavier side of a ratio construction.',
+  restrict_variants_to_core: 'When enabled, non-standard constructions use only the core index underlyings listed above.',
   butterfly_shape: 'Any allows all valid butterflies. Balanced requires matching wings; Riskless Up or Down requires the entry credit and wing geometry to remove expiration loss on that side.',
   option_side: 'Chooses whether the condor engine may build put condors, call condors, or compare both.',
   placement_mode: 'Controls where the upper spread is centered relative to the current stock price.',
@@ -427,8 +436,22 @@ export const GENERAL_STRATEGY_CONFIG = {
   },
   'iron-condor': {
     bidAsk: '25% price improvement',
-    defaults: { min_iv_rank: 25, min_moneyness_pct: -20, max_moneyness_pct: 20, max_abs_position_delta: 10, min_prob_max_profit: 60, max_prob_max_loss: 90, require_positive_expected_value: true, iron_condor_shape: 'balanced', min_profit_ratio_pct: 0, max_profit_ratio_pct: 500, min_max_profit_dollars: 100, min_max_loss_dollars: 300, max_max_loss_dollars: 1000 },
-    fields: [...RANGE_FIELDS, { key: 'iron_condor_shape', label: 'Iron Condor shape', type: 'select', options: [['any', 'Any'], ['balanced', 'Balanced'], ['riskless_up', 'Riskless up'], ['riskless_down', 'Riskless down']] }],
+    defaults: { min_iv_rank: 25, min_moneyness_pct: -20, max_moneyness_pct: 20, max_abs_position_delta: 10, min_prob_max_profit: 60, max_prob_max_loss: 90, require_positive_expected_value: true, iron_condor_shape: 'balanced', construction: 'balanced', market_bias: 'neutral', variant_width_pct: 5, tilt_strength: 0.25, ratio_contracts: 2, variant_tickers: 'SPY,QQQ,IWM', restrict_variants_to_core: true, min_profit_ratio_pct: 0, max_profit_ratio_pct: 500, min_max_profit_dollars: 100, min_max_loss_dollars: 300, max_max_loss_dollars: 1000 },
+    fields: [
+      ...RANGE_FIELDS,
+      { key: 'iron_condor_shape', label: 'Iron Condor shape', type: 'select', options: [['any', 'Any'], ['balanced', 'Balanced'], ['riskless_up', 'Riskless up'], ['riskless_down', 'Riskless down']] },
+      choice('construction', 'Structure', [
+        ['balanced', 'Balanced'], ['strike_tilt', 'Strike tilt'], ['ratio_tilt', 'Ratio tilt'],
+        ['risk_ratio', 'Centred ratio'], ['weirdor_ratio', 'Weirdor'],
+        ['weirdor_hedged', 'Weirdor (hedged)'], ['jeep', 'Jeep'], ['all', 'All variations'],
+      ]),
+      choice('market_bias', 'Market view', [['neutral', 'Neutral'], ['bullish', 'Bullish'], ['bearish', 'Bearish']]),
+      text('variant_tickers', 'Variant tickers', { placeholder: 'SPY, QQQ, IWM' }),
+      field('variant_width_pct', 'Variant width', { suffix: '% spot', step: 0.25, min: 0.5, max: 25 }),
+      field('tilt_strength', 'Tilt strength', { step: 0.05, min: 0, max: 0.75 }),
+      field('ratio_contracts', 'Ratio contracts', { step: 1, min: 2, max: 5 }),
+      yesNo('restrict_variants_to_core', 'Core index variants only'),
+    ],
   },
   'iron-butterfly': {
     bidAsk: '25% price improvement',

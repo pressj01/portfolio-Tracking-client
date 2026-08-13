@@ -603,7 +603,7 @@ class FundTests(unittest.TestCase):
         self.assertEqual(ps._fund_kind("SPY", self.etf()), "index")
         self.assertEqual(ps._fund_kind("QQQ", self.etf()), "index")
         self.assertEqual(ps._fund_kind("XLK", self.etf(category="Technology")), "sector")
-        self.assertEqual(ps._fund_kind("GLD", self.etf(category="Commodities Precious Metals")), "sector")
+        self.assertEqual(ps._fund_kind("GLD", self.etf(category="Commodities Precious Metals")), "commodity")
 
     def test_leveraged_and_inverse_funds_are_identified(self):
         self.assertEqual(ps._fund_kind("TQQQ", self.etf(name="ProShares UltraPro QQQ")), "leveraged")
@@ -671,10 +671,22 @@ class ScanUniverseTests(unittest.TestCase):
         })
         self.assertLess(len(etf_only), len(both) / 3)
 
-    def test_sector_group_carries_the_commodity_funds(self):
+    def test_sector_and_commodity_groups_are_independent(self):
         sect = ps.resolve_scan_universe({"include_stocks": False, "include_sector_etfs": True})
-        for t in ("XLK", "XLE", "GLD", "SLV", "GDX", "SMH"):
+        commodities = ps.resolve_scan_universe({"include_stocks": False, "include_commodity_etfs": True})
+        for t in ("XLK", "XLE", "GDX", "SMH"):
             self.assertIn(t, sect)
+        for t in ("GLD", "SLV", "DBC"):
+            self.assertNotIn(t, sect)
+            self.assertIn(t, commodities)
+
+    def test_index_group_can_be_limited_to_core_underlyings(self):
+        tickers = ps.resolve_scan_universe({
+            "include_stocks": False,
+            "include_index_etfs": True,
+            "index_tickers": "SPY, QQQ, IWM",
+        })
+        self.assertEqual(tickers, ["SPY", "QQQ", "IWM"])
 
     def test_combined_selection_dedupes(self):
         all_on = ps.resolve_scan_universe({

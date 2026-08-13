@@ -73,6 +73,8 @@ from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
 from call_scanner import SMALL_CAP_SET, SMALL_CAP_UNIVERSE, held_positions
 from put_scanner import (
+    COMMODITY_ETF_SET,
+    COMMODITY_ETF_UNIVERSE,
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
     INDEX_ETF_UNIVERSE,
@@ -101,6 +103,7 @@ from put_scanner import (
     _round,
     _ticker_frame,
     _wilder_rsi,
+    resolve_index_etfs,
     dividend_yield_for_pricing,
     resolve_universe,
     window_stretch,
@@ -1135,9 +1138,11 @@ def resolve_scan_universe(p: dict) -> list[str]:
             profile_id=p.get("profile_id"), aggregate_id=p.get("aggregate_id"),
         )
     if p.get("include_index_etfs"):
-        tickers += INDEX_ETF_UNIVERSE
+        tickers += resolve_index_etfs(p.get("index_tickers"))
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
+    if p.get("include_commodity_etfs"):
+        tickers += COMMODITY_ETF_UNIVERSE
     return _clean_tickers(tickers)
 
 
@@ -1150,6 +1155,7 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": False,
     "include_sector_etfs": False,
+    "include_commodity_etfs": False,
     "lookback_days": 21,
     "min_market_cap": 5e9,
     # Two legs to fill, so the small-cap floor is stricter than the covered call
@@ -1295,7 +1301,7 @@ def run_spread_scan(payload: dict) -> dict:
     except Exception:
         positions = {}
 
-    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET
+    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
 
     hist = _load_history(tickers)
     if hist is None or hist.empty:
@@ -1614,6 +1620,7 @@ def run_spread_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_commodity_etfs": bool(p["include_commodity_etfs"]),
             "min_stretch_sigma": min_stretch, "max_stretch_sigma": max_stretch,
             "require_below_sma50": bool(p["require_below_sma50"]),
             "require_downtrend": bool(p["require_downtrend"]),

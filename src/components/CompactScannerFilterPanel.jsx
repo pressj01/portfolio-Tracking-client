@@ -1,5 +1,13 @@
 import { useState } from 'react'
 
+function FieldLabel({ label, help }) {
+  if (!help) return label
+  const lastSpace = label.lastIndexOf(' ')
+  const leadingText = lastSpace === -1 ? '' : `${label.slice(0, lastSpace)} `
+  const finalWord = lastSpace === -1 ? label : label.slice(lastSpace + 1)
+  return <>{leadingText}<span className="csf-help-label-tail">{finalWord}<i className="csf-help-marker" tabIndex="0" title={help} aria-label={`${label}: ${help}`}>?</i></span></>
+}
+
 export default function CompactScannerFilterPanel({
   title,
   groups,
@@ -34,11 +42,11 @@ export default function CompactScannerFilterPanel({
               const active = editing === itemKey
               return <div className={`csf-summary-item${active ? ' is-editing' : ''}`} key={item.label}>
                 <div className="csf-summary-row">
-                  <span>{item.label}</span>
-                  {item.editor ? <button type="button" className={item.muted ? 'is-muted' : ''} aria-expanded={active} onClick={() => setEditing(active ? null : itemKey)}><span className="csf-summary-value">{item.value}</span><i aria-hidden="true">{active ? 'close' : 'edit'}</i></button>
-                    : <strong className={item.muted ? 'is-muted' : ''}>{item.value}</strong>}
+                  <span><FieldLabel label={item.label} help={item.help} /></span>
+                  {item.editor ? <button type="button" title={item.help || `Edit ${item.label}`} className={item.muted ? 'is-muted' : ''} aria-expanded={active} onClick={() => setEditing(active ? null : itemKey)}><span className="csf-summary-value">{item.value}</span><i aria-hidden="true">{active ? 'close' : 'edit'}</i></button>
+                    : <strong title={item.help} className={item.muted ? 'is-muted' : ''}>{item.value}</strong>}
                 </div>
-                {active && <div className="csf-inline-editor">
+                {active && <div className="csf-inline-editor" title={item.help}>
                   <button
                     type="button"
                     className="csf-editor-close"

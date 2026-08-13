@@ -120,7 +120,7 @@ INDEX_ETF_UNIVERSE = [
     "TLT", "IEF", "SHY", "AGG", "BND", "LQD", "HYG", "JNK", "TIP", "EMB", "MBB",
 ]
 
-# Sector, industry, commodity, and single-country funds. More concentrated than a
+# Sector, industry, and single-country funds. More concentrated than a
 # broad index, so a sector selloff is a real dislocation rather than market beta.
 SECTOR_ETF_UNIVERSE = [
     # SPDR select sectors
@@ -137,8 +137,6 @@ SECTOR_ETF_UNIVERSE = [
     "XOP", "OIH", "AMLP", "ICLN", "TAN", "URA", "URNM", "FCG",
     # Materials and mining
     "XME", "GDX", "GDXJ", "SIL", "COPX", "LIT", "REMX", "MOO",
-    # Commodities
-    "GLD", "IAU", "SLV", "PPLT", "PALL", "USO", "UNG", "DBC", "DBA", "CPER",
     # Real estate and housing
     "IYR", "XHB", "ITB", "REZ",
     # Consumer, retail, transport
@@ -150,9 +148,16 @@ SECTOR_ETF_UNIVERSE = [
     "EWC", "EWA", "EWW",
 ]
 
-ALL_ETF_UNIVERSE = INDEX_ETF_UNIVERSE + SECTOR_ETF_UNIVERSE
+# Keep commodity funds separate from sector funds so a scan can request broad
+# indexes plus gold/oil/agriculture without pulling in XLK or KRE as well.
+COMMODITY_ETF_UNIVERSE = [
+    "GLD", "IAU", "SLV", "PPLT", "PALL", "USO", "UNG", "DBC", "DBA", "CPER",
+    "GSG", "PDBC", "BCI", "DJP",
+]
+ALL_ETF_UNIVERSE = INDEX_ETF_UNIVERSE + SECTOR_ETF_UNIVERSE + COMMODITY_ETF_UNIVERSE
 INDEX_ETF_SET = frozenset(INDEX_ETF_UNIVERSE)
 SECTOR_ETF_SET = frozenset(SECTOR_ETF_UNIVERSE)
+COMMODITY_ETF_SET = frozenset(COMMODITY_ETF_UNIVERSE)
 
 # A selected-fund scan is intentionally allowed to show the best available
 # contract even when the technical screen has no fully qualifying result.  The
@@ -175,9 +180,10 @@ UNIVERSE_CHOICES = {
     "large_mid": {"label": "Large + mid caps", "tickers": LARGE_CAP_UNIVERSE + MID_CAP_UNIVERSE},
     "mid_cap": {"label": "Mid caps only", "tickers": MID_CAP_UNIVERSE},
     "index_etf": {"label": "Index ETFs (SPY, QQQ, IWM…)", "tickers": INDEX_ETF_UNIVERSE},
-    "sector_etf": {"label": "Sector & commodity ETFs (XLK, GLD…)", "tickers": SECTOR_ETF_UNIVERSE},
-    "etf_all": {"label": "All ETFs (index + sector)", "tickers": ALL_ETF_UNIVERSE},
+    "sector_etf": {"label": "Sector ETFs (XLK, XLE…)", "tickers": SECTOR_ETF_UNIVERSE},
+    "etf_all": {"label": "All ETFs (index + sector + commodity)", "tickers": ALL_ETF_UNIVERSE},
     "stocks_and_etfs": {"label": "Large caps + ETFs", "tickers": LARGE_CAP_UNIVERSE + ALL_ETF_UNIVERSE},
+    "commodity_etf": {"label": "Commodity ETFs", "tickers": COMMODITY_ETF_UNIVERSE},
     "holdings": {"label": "My holdings", "tickers": None},
     "watchlist": {"label": "My watchlist", "tickers": None},
     "custom": {"label": "Custom ticker list", "tickers": None},
@@ -337,7 +343,7 @@ def _is_fund(fund: dict, ticker: str = "") -> bool:
     quote_type = str(fund.get("quote_type") or "").upper()
     if quote_type in ("ETF", "MUTUALFUND"):
         return True
-    if ticker and (ticker in INDEX_ETF_SET or ticker in SECTOR_ETF_SET):
+    if ticker and (ticker in INDEX_ETF_SET or ticker in SECTOR_ETF_SET or ticker in COMMODITY_ETF_SET):
         return True
     # yfinance sometimes omits quoteType; AUM with no market cap still means fund.
     return fund.get("total_assets") is not None and fund.get("market_cap") is None
@@ -356,6 +362,8 @@ def _fund_kind(ticker: str, fund: dict) -> str:
         return "index"
     if ticker in SECTOR_ETF_SET:
         return "sector"
+    if ticker in COMMODITY_ETF_SET:
+        return "commodity"
     category = str(fund.get("category") or "").upper()
     if any(word in category for word in ("BLEND", "TOTAL", "LARGE", "500", "WORLD", "BOND")):
         return "index"
@@ -1503,6 +1511,12 @@ def resolve_universe(name: str, custom, profile_id=None, aggregate_id=None) -> l
     return _clean_tickers(choice["tickers"])
 
 
+def resolve_index_etfs(raw) -> list[str]:
+    """Resolve an optional index subset; blank means the complete index list."""
+    selected = _clean_tickers(raw)
+    return selected or list(INDEX_ETF_UNIVERSE)
+
+
 def resolve_scan_universe(p: dict) -> list[str]:
     """Union of the enabled groups.
 
@@ -1517,9 +1531,11 @@ def resolve_scan_universe(p: dict) -> list[str]:
             profile_id=p.get("profile_id"), aggregate_id=p.get("aggregate_id"),
         )
     if p.get("include_index_etfs"):
-        tickers += INDEX_ETF_UNIVERSE
+        tickers += resolve_index_etfs(p.get("index_tickers"))
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
+    if p.get("include_commodity_etfs"):
+        tickers += COMMODITY_ETF_UNIVERSE
     if p.get("include_selected_funds"):
         tickers += _clean_tickers(p.get("selected_fund_tickers"))
     return _clean_tickers(tickers)
@@ -1536,6 +1552,7 @@ DEFAULTS = {
     "include_stocks": True,
     "include_index_etfs": False,
     "include_sector_etfs": False,
+    "include_commodity_etfs": False,
     # A short, user-selected universe such as SPY, QQQ, IWM, GLD.  These are
     # independent of the broad ETF groups above, so a user can scan exactly
     # the funds they name.
@@ -1607,11 +1624,11 @@ def run_put_scan(payload: dict) -> dict:
         return {
             "rows": [], "stats": {"universe": 0, "priced": 0, "passed_price": 0, "final": 0},
             "params": p,
-            "error": "Nothing selected to scan. Enable stocks, index ETFs, or sector ETFs.",
+            "error": "Nothing selected to scan. Enable stocks, index ETFs, sector ETFs, or commodity ETFs.",
         }
     # A ticker from the curated ETF lists is known to be a fund before any
     # network call, so the price stage can apply the right thresholds up front.
-    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET
+    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
 
     hist = _load_history(tickers)
     if hist is None or hist.empty:
@@ -1904,6 +1921,7 @@ def run_put_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_commodity_etfs": bool(p["include_commodity_etfs"]),
             "include_selected_funds": bool(p["include_selected_funds"]),
             "selected_fund_tickers": sorted(selected_fund_tickers),
             "include_lower_confidence_selected_funds": bool(

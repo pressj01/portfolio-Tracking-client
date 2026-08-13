@@ -24,17 +24,6 @@ const GROUPS = [
       { id: 'option-dashboard', label: 'Options Dashboard' },
       { id: 'options', label: 'Options' },
       { id: 'option-trades', label: 'Option Trades' },
-      { id: 'put-selling-scanner', label: 'Put Selling Scanner' },
-      { id: 'bull-put-spread-scanner', label: 'Bull Put Spread Scanner' },
-      { id: 'covered-call-scanner', label: 'Covered Call Scanner' },
-      { id: 'bear-put-spread-scanner', label: 'Bear Put Spread Scanner' },
-      { id: 'bear-call-spread-scanner', label: 'Bear Call Spread Scanner' },
-      { id: 'iron-condor-scanner', label: 'Iron Condor Scanner' },
-      { id: 'unbalanced-put-condor-scanner', label: 'Unbalanced Put Condor Scanner' },
-      { id: 'unbalanced-butterfly-scanner', label: 'Unbalanced Butterfly Scanner' },
-      { id: 'double-hedge-put-butterfly-scanner', label: 'Double-Hedge Put Butterfly Scanner' },
-      { id: 'road-trip-butterfly-scanner', label: 'Road Trip Butterfly Scanner' },
-      { id: 'sixty-forty-twenty-fly-scanner', label: '60/40/20 Fly Scanner' },
     ],
   },
   {
@@ -47,6 +36,7 @@ const GROUPS = [
       { id: 'etf-provider-update', label: 'ETF Provider Update' },
       { id: 'portfolios', label: 'Portfolios' },
       { id: 'settings', label: 'Settings' },
+      { id: 'general-option-scanner', label: 'Option Scanner Help' },
     ],
   },
   {
@@ -6565,6 +6555,27 @@ function OptionsHelp() {
   )
 }
 
+function GeneralOptionScannerHelpEntry() {
+  return (
+    <div>
+      <h2>Option Scanner Help</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Every supported option strategy now uses the General Option Scanner. Choose a strategy, select the stock or ETF
+        universe, apply a starting preset, and edit the green values to control that strategy&apos;s construction and filters.
+      </p>
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>One scanner, strategy-specific rules:</strong> changing the strategy loads its own trade construction,
+        probability, payoff, and risk controls. The shared fields filter the market before a live option chain is priced.
+      </div>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Hover a white section heading or its <strong>?</strong> marker for a concise explanation. Each field also has a
+        matching marker, and its editor includes a longer <strong>What does this mean?</strong> explanation.
+      </p>
+      <a className="btn btn-sm btn-primary" href="#/general-option-scanner/help">Open the complete Option Scanner guide</a>
+    </div>
+  )
+}
+
 function OptionDashboardHelp() {
   return (
     <div>
@@ -11666,6 +11677,7 @@ const CONTENT_MAP = {
   options: OptionsHelp,
   'option-dashboard': OptionDashboardHelp,
   'option-trades': OptionTradesHelp,
+  'general-option-scanner': GeneralOptionScannerHelpEntry,
   'put-selling-scanner': PutSellingScannerHelp,
   'bull-put-spread-scanner': BullPutSpreadScannerHelp,
   'covered-call-scanner': CoveredCallScannerHelp,

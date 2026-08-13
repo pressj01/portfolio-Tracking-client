@@ -94,6 +94,8 @@ from call_scanner import (
     next_ex_dividend,
 )
 from put_scanner import (
+    COMMODITY_ETF_SET,
+    COMMODITY_ETF_UNIVERSE,
     CURATED_STOCK_SET,
     INDEX_ETF_SET,
     INDEX_ETF_UNIVERSE,
@@ -200,6 +202,8 @@ def resolve_scan_universe(p: dict) -> list[str]:
         tickers += _clean_tickers(selected_indexes or INDEX_ETF_UNIVERSE)
     if p.get("include_sector_etfs"):
         tickers += SECTOR_ETF_UNIVERSE
+    if p.get("include_commodity_etfs"):
+        tickers += COMMODITY_ETF_UNIVERSE
     return _clean_tickers(tickers)
 
 
@@ -2228,6 +2232,7 @@ DEFAULTS = {
     # and carry the deepest option chains in the market.
     "include_index_etfs": True,
     "include_sector_etfs": False,
+    "include_commodity_etfs": False,
     "lookback_days": 21,
     "min_market_cap": 0.0,
     "fund_min_aum": 0.0,
@@ -2526,7 +2531,7 @@ def run_iron_condor_scan(payload: dict) -> dict:
             "error": "Price history unavailable. Yahoo may be rate-limiting; try again shortly.",
         }
 
-    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET
+    etf_hint = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
     bench_ret = _benchmark_returns(hist)
 
     priced, price_pass = 0, []
@@ -2994,6 +2999,7 @@ def run_iron_condor_scan(payload: dict) -> dict:
             "include_stocks": bool(p["include_stocks"]),
             "include_index_etfs": bool(p["include_index_etfs"]),
             "include_sector_etfs": bool(p["include_sector_etfs"]),
+            "include_commodity_etfs": bool(p["include_commodity_etfs"]),
             "min_market_cap": min_cap, "fund_min_aum": fund_min_aum,
             "min_avg_dollar_volume": min_adv,
             "max_efficiency_ratio": max_er, "max_drift_sigma": max_drift,

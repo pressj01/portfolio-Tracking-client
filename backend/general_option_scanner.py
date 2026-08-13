@@ -27,6 +27,7 @@ from option_iv_history import record_iv_snapshot
 from put_condor_scanner import run_condor_scan
 from put_scanner import (
     BENCHMARK,
+    COMMODITY_ETF_SET,
     INDEX_ETF_SET,
     SECTOR_ETF_SET,
     _benchmark_returns,
@@ -192,6 +193,7 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
             "include_stocks": False,
             "include_index_etfs": True,
             "include_sector_etfs": False,
+            "include_commodity_etfs": False,
             "entry_credit_mode": payload.get("entry_credit_mode") or {
                 "risk_averse": "debit_or_flat",
                 "moderate": "flat_or_slight_credit",
@@ -218,13 +220,16 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
                 "include_stocks": True,
                 "include_index_etfs": False,
                 "include_sector_etfs": False,
+                "include_commodity_etfs": False,
             })
         else:
             result.update({
                 "universe": payload.get("universe") or "large_cap",
                 "include_stocks": bool(payload.get("include_stocks", True)),
                 "include_index_etfs": bool(payload.get("include_index_etfs", True)),
+                "index_tickers": payload.get("index_tickers"),
                 "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
+                "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
             })
         if strategy == "iron-condor":
             result["general_scanner_mode"] = True
@@ -258,7 +263,9 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
             "universe": payload.get("universe") or "large_cap",
             "include_stocks": bool(payload.get("include_stocks", True)),
             "include_index_etfs": bool(payload.get("include_index_etfs", True)),
+            "index_tickers": payload.get("index_tickers"),
             "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
+            "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
         })
         result.update({
             "generic_strategy": strategy,
@@ -268,9 +275,18 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
             "target_reference_delta": target_reference_delta,
         })
     else:
-        result["tickers"] = ",".join(
-            symbols or (INDEX_ONLY_DEFAULT_TICKERS if strategy in INDEX_ONLY_STRATEGIES else ("SPY", "QQQ", "IWM"))
-        )
+        if strategy in INDEX_ONLY_STRATEGIES:
+            selected = symbols or list(INDEX_ONLY_DEFAULT_TICKERS)
+        else:
+            selected = symbols or resolve_scan_universe({
+                "universe": payload.get("universe") or "large_cap",
+                "include_stocks": bool(payload.get("include_stocks", True)),
+                "include_index_etfs": bool(payload.get("include_index_etfs", True)),
+                "index_tickers": payload.get("index_tickers"),
+                "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
+                "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
+            })
+        result["tickers"] = ",".join(selected)
     return result
 
 
@@ -451,7 +467,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "ticker": str(row.get("ticker") or "").upper(),
         "is_etf": bool(
             row.get("is_etf")
-            or str(row.get("ticker") or "").upper() in (INDEX_ETF_SET | SECTOR_ETF_SET)
+            or str(row.get("ticker") or "").upper() in (INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET)
         ),
         "name": row.get("name") or row.get("company_name"),
         "price": price,
@@ -519,7 +535,7 @@ def _score_rows(rows: list[dict]) -> None:
     except Exception:
         pass
     market_context = _technical_context(benchmark_technicals, benchmark_frame)
-    fund_symbols = INDEX_ETF_SET | SECTOR_ETF_SET
+    fund_symbols = INDEX_ETF_SET | SECTOR_ETF_SET | COMMODITY_ETF_SET
     for row in rows:
         meta = row["_general"]
         scores = row.get("stock_scores")
