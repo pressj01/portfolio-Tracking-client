@@ -25,6 +25,7 @@ import {
 } from '../utils/optionsVolatility'
 import GreekSurfaceExplorer from '../components/GreekSurfaceExplorer'
 import OptionBacktest from '../components/OptionBacktest'
+import OptionProbabilityCards from '../components/OptionProbabilityCards'
 
 const TODAY = () => {
   const now = new Date()
@@ -44,19 +45,21 @@ const signedMoney = value => value == null || !Number.isFinite(Number(value))
 const percent = (value, digits = 1) => value == null || !Number.isFinite(Number(value))
   ? '—'
   : `${(Number(value) * 100).toFixed(digits)}%`
+const MONTH_LABELS = ['Jan', 'Feb', 'March', 'April', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec']
+const ordinal = value => {
+  const remainder = value % 100
+  if (remainder >= 11 && remainder <= 13) return `${value}th`
+  return `${value}${value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th'}`
+}
 const formatExpiration = expiration => {
   if (!expiration) return '—'
   const value = new Date(`${expiration}T00:00:00`)
   return Number.isNaN(value.getTime())
     ? expiration
-    : value.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: '2-digit' })
+    : `${MONTH_LABELS[value.getMonth()]} ${ordinal(value.getDate())} ${value.getFullYear()}`
 }
 const formatShortDate = value => {
-  if (!value) return '—'
-  const parsed = new Date(`${value}T00:00:00`)
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : `${parsed.getMonth() + 1}/${parsed.getDate()}/${String(parsed.getFullYear()).slice(-2)}`
+  return formatExpiration(value)
 }
 const daysBetween = (start, end) => {
   const a = new Date(`${start}T00:00:00`)
@@ -483,15 +486,18 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         setHover(null)
         return
       }
-      const underlying = xAxis.p2d(px - plotLeft)
+      const underlying = xAxis.p2d(Math.min(plotRight, Math.max(plotLeft, px)) - plotLeft)
+      if (!Number.isFinite(underlying)) return
       const todayPnl = interpolatePnl(evaluation, underlying)
       const expiryPnl = interpolatePnl(expiration, underlying)
+      const tagX = Math.min(plotRight - 42, Math.max(plotLeft + 42, px))
       setHover({
         x: px,
+        tagX,
         top: plotTop,
         bottom: plotBottom,
         left: plotLeft,
-        price: fmt(underlying, 2),
+        price: money(underlying, 2),
         markers: [
           { color: '#d46adf', y: Number.isFinite(todayPnl) ? yAxis._offset + yAxis.d2p(todayPnl) : null },
           { color: '#20c7c7', y: Number.isFinite(expiryPnl) ? yAxis._offset + yAxis.d2p(expiryPnl) : null },
@@ -528,6 +534,12 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         title: 'Underlying price', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline,
         autorange: false,
         range: [evaluation[0].s, evaluation[evaluation.length - 1].s],
+        showspikes: true,
+        spikemode: 'across+toaxis',
+        spikesnap: 'cursor',
+        spikecolor: ct.zeroline,
+        spikethickness: 1,
+        spikedash: 'dot',
         uirevision: strategyViewRevision,
       },
       yaxis: {
@@ -624,7 +636,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
                 ? <span key={index} className="opt-risk-crosshair-dot" style={{ left: `${hover.x}px`, top: `${marker.y}px`, borderColor: marker.color }} />
                 : null
             ))}
-            <span className="opt-risk-price-tag" style={{ left: `${hover.x}px`, top: `${hover.bottom}px` }}>{hover.price}</span>
+            <span className="opt-risk-price-tag" style={{ left: `${hover.tagX}px`, top: `${hover.bottom}px` }}>{hover.price}</span>
           </div>
         )}
       </div>
@@ -853,6 +865,58 @@ function SummaryMetric({ label, value, tone, helper }) {
       {helper && <small>{helper}</small>}
     </div>
   )
+}
+
+function ScannerProbabilityPanel({ probabilities, risk }) {
+  const firstFinite = (...values) => values.find(value => value != null && Number.isFinite(Number(value)))
+  const positionModel = risk?.position_probability || {}
+  const referenceModel = risk?.probability_range || {}
+  const combined = {
+    prob_success: firstFinite(probabilities?.prob_success, positionModel.probability_success_pct),
+    prob_failure: firstFinite(probabilities?.prob_failure, positionModel.probability_failure_pct),
+    prob_otm: firstFinite(probabilities?.prob_otm, referenceModel.probability_otm_pct),
+    prob_itm: firstFinite(probabilities?.prob_itm, referenceModel.probability_itm_pct),
+    prob_touch: firstFinite(probabilities?.prob_touch, referenceModel.probability_touch_pct),
+    prob_touch_put: firstFinite(probabilities?.prob_touch_put),
+    prob_touch_call: firstFinite(probabilities?.prob_touch_call),
+    prob_max_profit: firstFinite(probabilities?.prob_max_profit, positionModel.probability_max_profit_pct),
+    prob_max_loss: firstFinite(probabilities?.prob_max_loss, positionModel.probability_max_loss_pct),
+  }
+  const metrics = [
+    ['Probability of success', combined.prob_success, 'positive', 'Complete position finishes with positive modeled P/L'],
+    ['Probability of failure', combined.prob_failure, 'negative', 'Complete position finishes at or below $0 modeled P/L'],
+    ['Probability OTM', combined.prob_otm, '', 'Reference option expires out of the money'],
+    ['Probability ITM', combined.prob_itm, '', 'Reference option expires in the money'],
+    ['Probability of touch', combined.prob_touch, '', probabilities?.prob_touch_estimated ? 'Estimated as approximately 2 × probability ITM' : 'Modeled chance the reference strike is touched'],
+    ['Put-side touch', combined.prob_touch_put, '', 'Modeled chance the put-side boundary is touched'],
+    ['Call-side touch', combined.prob_touch_call, '', 'Modeled chance the call-side boundary is touched'],
+    ['Chance of max profit', combined.prob_max_profit, 'positive', 'Modeled chance of reaching the expiration maximum'],
+    ['Chance of max loss', combined.prob_max_loss, 'negative', 'Modeled chance of reaching the expiration maximum loss'],
+  ].filter(([, value]) => value != null && Number.isFinite(Number(value)))
+  const schedule = Array.isArray(probabilities?.probability_schedule)
+    ? probabilities.probability_schedule
+    : []
+  if (!metrics.length && !schedule.length) return null
+  return <section className="opt-scanner-probability-panel" aria-label="Scanner probability analysis">
+    <div className="opt-scanner-probability-heading">
+      <div><span>Position probability analysis</span><h3>Success, failure, moneyness and touch risk</h3></div>
+      <small>Scanner estimates, completed by the active risk model when needed</small>
+    </div>
+    {!!metrics.length && <div className="opt-scanner-probability-grid">
+      {metrics.map(([label, value, tone, helper]) => <article key={label}>
+        <span>{label}</span>
+        <strong className={tone ? `opt-${tone}` : ''}>{fmt(value, 1)}%</strong>
+        <small>{helper}</small>
+      </article>)}
+    </div>}
+    <OptionProbabilityCards
+      schedule={schedule}
+      successHeadline="The complete scanner trade has positive modeled P/L"
+      failureHeadline="The complete scanner trade has negative modeled P/L"
+      scheduleTitle="At every modeled management checkpoint"
+    />
+    <p>These are option-implied risk gauges based on the scanner’s entry assumptions and the active analysis date and volatility—not guarantees.</p>
+  </section>
 }
 
 function ChainButton({ value, side, onClick, title }) {
@@ -2270,6 +2334,7 @@ export default function OptionTradingTools() {
             <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
             <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
           </div>
+          {scannerTrade && <ScannerProbabilityPanel probabilities={scannerTrade.probabilities} risk={risk} />}
           {hasMixedExpirations && <div className="opt-horizon-note"><strong>Mixed expirations:</strong> analysis ends at the first expiration, {formatExpiration(analysisHorizon)}. Later-dated legs retain their remaining modeled time value.</div>}
           {riskLoading && <div className="opt-calculating">Updating the risk graph…</div>}
           {riskError && <div className="opt-error">{riskError}</div>}

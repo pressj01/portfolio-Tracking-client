@@ -157,6 +157,63 @@ class RiskArithmetic(unittest.TestCase):
         self.assertLess(condor["lower_breakeven"], 100.0)
         self.assertGreater(condor["upper_breakeven"], 100.0)
 
+    def test_samurai_probability_and_expected_value_metrics_are_available(self):
+        condor = standard_condor()
+        self.assertIsNotNone(condor["prob_max_loss"])
+        self.assertGreaterEqual(condor["prob_max_loss"], 0.0)
+        self.assertLessEqual(condor["prob_max_loss"], 100.0)
+        self.assertIsNotNone(condor["expected_value_dollars"])
+
+
+class CompactResultFilterTests(unittest.TestCase):
+    def setUp(self):
+        self.params = {
+            **ic.DEFAULTS,
+            "min_total_option_volume": 5000,
+            "min_iv_rank": 25,
+            "min_prob_max_profit": 60,
+            "max_prob_max_loss": 90,
+            "require_positive_expected_value": True,
+            "max_abs_position_delta": 10,
+            "require_balanced_shape": True,
+            "min_max_profit_dollars": 100,
+            "max_max_loss_dollars": 5000,
+            "min_profit_ratio_pct": 0,
+        }
+        self.row = {
+            "is_fund": False,
+            "iv_rank_effective": 55,
+            "stock_scores": {"fundamental": 7, "growth": 6, "technical": 8},
+            "spread": {
+                "variant": "balanced", "wing_skew_pct": 0,
+                "total_option_volume": 12000, "prob_max_profit": 68,
+                "prob_max_loss": 8, "expected_value_dollars": 35,
+                "structure_delta": 0.02, "max_profit_dollars": 225,
+                "max_loss_dollars": 775, "return_on_risk_pct": 29,
+            },
+        }
+
+    def test_matching_structure_has_no_filter_reasons(self):
+        self.assertEqual(ic._samurai_filter_reasons(self.row, self.params), [])
+
+    def test_each_result_gate_explains_why_a_structure_was_demoted(self):
+        row = {
+            **self.row,
+            "iv_rank_effective": 10,
+            "spread": {
+                **self.row["spread"],
+                "variant": "weirdor_ratio", "total_option_volume": 100,
+                "prob_max_profit": 40, "prob_max_loss": 95,
+                "expected_value_dollars": -10, "structure_delta": 0.25,
+                "max_profit_dollars": 50, "max_loss_dollars": 6000,
+            },
+        }
+        reasons = ic._samurai_filter_reasons(row, self.params)
+        self.assertGreaterEqual(len(reasons), 8)
+        self.assertTrue(any("Option volume" in reason for reason in reasons))
+        self.assertTrue(any("IV rank" in reason for reason in reasons))
+        self.assertTrue(any("standard balanced" in reason for reason in reasons))
+
     def test_execution_cost_counts_all_four_markets(self):
         condor = standard_condor()
         # Four legs at $0.10 wide each.

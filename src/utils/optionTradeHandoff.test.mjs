@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildScannerProbabilitySummary,
   buildScannerStrategyPayload,
   buildScannerTrade,
   buildTrackedTrade,
@@ -37,6 +38,28 @@ const jeepRow = {
     ],
   },
 }
+
+test('preserves scanner success, failure, moneyness, touch, and management-date probabilities', () => {
+  const schedule = [
+    { kind: 'management', label: '21 DTE', remaining_dte: 21, probability_success_pct: 71.2, probability_failure_pct: 28.8 },
+    { kind: 'expiration', label: 'Expiration', remaining_dte: 0, probability_success_pct: 68.4, probability_failure_pct: 31.6 },
+  ]
+  const probabilities = buildScannerProbabilitySummary({
+    ticker: 'SPY',
+    spread: { prob_otm: 82, probability_schedule: schedule },
+    _general: { prob_max_profit: 82, prob_max_loss: 4.5 },
+  })
+
+  assert.equal(probabilities.prob_success, 68.4)
+  assert.equal(probabilities.prob_failure, 31.6)
+  assert.equal(probabilities.prob_otm, 82)
+  assert.equal(probabilities.prob_itm, 18)
+  assert.equal(probabilities.prob_touch, 36)
+  assert.equal(probabilities.prob_touch_estimated, true)
+  assert.equal(probabilities.prob_max_profit, 82)
+  assert.equal(probabilities.prob_max_loss, 4.5)
+  assert.deepEqual(probabilities.probability_schedule, schedule)
+})
 
 test('builds every leg of a six-leg iron-condor variant for the risk graph', () => {
   const trade = buildScannerTrade('iron-condor', jeepRow)
@@ -120,6 +143,24 @@ test('builds the complete three-strike iron butterfly for Strategy Lab', () => {
   assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY'])
   assert.deepEqual(trade.legs.map(leg => leg.qty), [1, 1, 1, 1])
   assert.deepEqual(trade.legs.map(leg => leg.strike), [90, 100, 100, 110])
+})
+
+test('builds shared-engine legs with signed quantities and selected entry fills', () => {
+  const row = {
+    ticker: 'SPY', price: 700, expiration,
+    legs: [
+      { option_type: 'stock', qty: 100, entry_price: 700, delta: 1 },
+      { option_type: 'put', qty: 1, expiration, strike: 680, entry_price: 2.40, mid: 2.10, iv: 0.2, delta: -0.2 },
+      { option_type: 'call', qty: -1, expiration, strike: 720, entry_price: 2.25, mid: 2.50, iv: 0.2, delta: 0.2 },
+    ],
+  }
+
+  const built = buildScannerTrade('collar', row)
+
+  assert.ok(built)
+  assert.deepEqual(built.legs.map(leg => leg.side), ['BUY', 'BUY', 'SELL'])
+  assert.deepEqual(built.legs.map(leg => leg.qty), [100, 1, 1])
+  assert.deepEqual(built.legs.map(leg => leg.entry_price), [700, 2.40, 2.25])
 })
 
 test('builds the risk-budgeted put condor with its exact four strikes', () => {

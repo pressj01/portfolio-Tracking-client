@@ -77,9 +77,39 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
             evolved_data["portfolio_greeks"]["theta"],
         )
         self.assertGreaterEqual(len(initial_data["breakevens"]), 1)
+        _quote.assert_not_called()
 
     def test_same_day_contracts_keep_intraday_time_value(self):
         self.assertGreater(options_api._year_frac(self.today.isoformat(), self.today), 0)
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_long_call_reports_complete_position_probability_profile(self, _quote):
+        payload = self.payload(self.today)
+        payload["legs"] = [{
+            "side": "BUY", "qty": 1, "opt_type": "CALL", "strike": 100,
+            "expiration": self.expiration.isoformat(), "entry_price": 5, "iv": 0.25,
+        }]
+        payload["probability_range"] = {
+            "enabled": True, "low": 90, "high": 110, "iv": 0.25,
+            "anchor_strike": 100, "opt_type": "CALL",
+        }
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        profile = data["position_probability"]
+        self.assertAlmostEqual(
+            profile["probability_success_pct"] + profile["probability_failure_pct"],
+            100.0,
+            places=1,
+        )
+        self.assertLess(
+            profile["probability_success_pct"],
+            data["probability_range"]["probability_itm_pct"],
+        )
+        self.assertIsNone(profile["probability_max_profit_pct"])
+        self.assertGreater(profile["probability_max_loss_pct"], 0)
 
     def test_dividend_yield_normalization_uses_trailing_yield_to_resolve_units(self):
         self.assertAlmostEqual(options_api._normalize_dividend_yield(0.41, 0.00245), 0.0041)

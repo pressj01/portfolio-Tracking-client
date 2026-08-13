@@ -8,9 +8,39 @@ import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useScanCache } from '../utils/useScanCache'
 import { findActivePreset } from '../utils/activePreset'
 
-const STORAGE_KEY = 'iron-condor-scanner-filters'
+// v2 deliberately clears old saved Weirdor selections.  The standard balanced
+// four-leg condor is once again the default; exotic variants live in Advanced.
+const STORAGE_KEY = 'iron-condor-scanner-filters-v2'
 
 const PRESETS = {
+  samurai: {
+    label: 'Broad scan',
+    tip: 'Price a broad liquid universe first, then apply the compact probability, IV, EV, and risk filters to real structures',
+    filters: {
+      universe: 'large_mid', include_stocks: true, include_index_etfs: true, include_sector_etfs: true,
+      min_market_cap: 0, fund_min_aum: 0, min_avg_dollar_volume: 10e6,
+      max_efficiency_ratio: 1, max_drift_sigma: 99, max_variance_ratio: 99,
+      max_ma_slope_pct: 99, min_rsi: 0, max_rsi: 100, max_rel_strength_pct: 99,
+      min_range_position_pct: 0, max_range_position_pct: 100,
+      exclude_fresh_extremes: false, exclude_earnings_before_expiry: true,
+      exclude_leveraged_funds: true, earnings_buffer_days: 5, lookback_days: 21,
+      target_dte: 40, min_dte: 7, max_dte: 60,
+      short_delta: 0.16, long_delta: 0.07, delta_tolerance: 0.10,
+      min_width_pct: 0.5, max_width_pct: 20, min_credit_pct_of_width: 5,
+      min_cushion_sigma: 0, min_otm_pct: 0, max_wing_skew_pct: 25,
+      max_delta_gap: 0.15, min_open_interest: 0, max_exec_cost_pct: 100,
+      chain_limit: 60, max_results: 100, max_structures_per_ticker: 5,
+      min_total_option_volume: 5000, min_iv_rank: 25,
+      use_iv_proxy_until_ready: true, min_prob_max_profit: 60,
+      max_prob_max_loss: 90, require_positive_expected_value: true,
+      max_abs_position_delta: 10, require_balanced_shape: true,
+      min_max_profit_dollars: 100, max_max_loss_dollars: 5000,
+      min_profit_ratio_pct: 0,
+      stock_score_fundamental_min: 1, stock_score_fundamental_max: 10,
+      stock_score_growth_min: 1, stock_score_growth_max: 10,
+      stock_score_technical_min: 1, stock_score_technical_max: 10,
+    },
+  },
   conservative: {
     label: 'Conservative',
     tip: 'Index funds and mega caps only, tighter neutrality gates, further-out strikes, and more cushion',
@@ -68,7 +98,7 @@ const PRESETS = {
 // how selective the scan is, not which trade it builds, so switching from
 // Conservative to Aggressive must not silently turn a Jeep back into a condor.
 const DEFAULT_FILTERS = {
-  ...PRESETS.balanced.filters,
+  ...PRESETS.samurai.filters,
   custom_tickers: '',
   market_bias: 'neutral',
   construction: 'balanced',
@@ -118,6 +148,11 @@ const rowKey = row => [
   row.ticker,
   row.spread?.variant || 'balanced',
   row.spread?.direction || 'neutral',
+  row.spread?.expiration || 'none',
+  row.spread?.put_long_strike ?? 'na',
+  row.spread?.put_short_strike ?? 'na',
+  row.spread?.call_short_strike ?? 'na',
+  row.spread?.call_long_strike ?? 'na',
 ].join(':')
 
 const VARIANT_COLORS = {
@@ -188,6 +223,7 @@ const FLAG_SHORT = {
   'Thin open interest on one leg': 'Thin OI',
   'No credit after crossing all four markets': 'No natural credit',
   'No structure met every filter': 'Filters missed',
+  'Compact filters missed': 'Filters missed',
   'Small underlying — gap risk on both wings': 'Gap risk',
   'Thin share liquidity': 'Thin volume',
   'Leveraged or inverse fund': 'Leveraged',

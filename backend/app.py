@@ -110,6 +110,7 @@ from four_eight_eight_scanner import register_routes as register_four_eight_eigh
 from road_trip_butterfly_scanner import register_routes as register_road_trip_butterfly_scanner_routes
 from sixty_forty_twenty_fly_scanner import register_routes as register_sixty_forty_twenty_fly_scanner_routes
 from iron_butterfly_scanner import register_routes as register_iron_butterfly_scanner_routes
+from general_option_scanner import register_routes as register_general_option_scanner_routes
 from market_symbols import (
     accounting_aliases_for_ticker as _accounting_aliases_for_ticker,
     accounting_symbol_for_ticker as _accounting_symbol_for_ticker,
@@ -45165,6 +45166,7 @@ register_four_eight_eight_scanner_routes(app)
 register_road_trip_butterfly_scanner_routes(app)
 register_sixty_forty_twenty_fly_scanner_routes(app)
 register_iron_butterfly_scanner_routes(app)
+register_general_option_scanner_routes(app)
 
 
 # ── Portfolio Growth 2 ──────────────────────────────────────────────────────────

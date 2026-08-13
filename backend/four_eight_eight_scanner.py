@@ -34,6 +34,7 @@ from put_scanner import (
     MIN_TARGET_DTE,
     _clean_tickers,
     _fetch_fundamentals_bulk,
+    _index_only_tickers,
     _load_history,
     _load_put_chain,
     _num,
@@ -57,6 +58,7 @@ BODY_SHORT_TARGET = 0.15
 LOWER_LONG_TARGET = 0.025
 LOWER_LONG_QUANTITY_MULTIPLIER = 2
 BASE_UPPER_LONG_QUANTITY = 4
+DEFAULT_TICKERS = ["SPY", "QQQ", "IWM", "VOO"]
 
 BIAS_RANGES = {
     "bearish": (-3.0, -1.0),
@@ -73,7 +75,7 @@ DOCUMENT_LEARNING_CAPITAL_DOLLARS = 20000.0
 DOCUMENT_EXPECTED_HOLD_DAYS = 12 * 7
 
 DEFAULTS = {
-    "tickers": "SPY,QQQ,IWM",
+    "tickers": ",".join(DEFAULT_TICKERS),
     "market_bias": "neutral",
     "target_dte": 200,
     "min_dte": 160,
@@ -98,9 +100,7 @@ DEFAULTS = {
 
 
 def _ticker_list(raw) -> list[str]:
-    if isinstance(raw, str):
-        raw = re.split(r"[\s,;]+", raw)
-    return _clean_tickers(raw)[:20]
+    return _index_only_tickers(raw, DEFAULT_TICKERS, limit=20)
 
 
 def _bias_name(value) -> str:

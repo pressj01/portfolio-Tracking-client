@@ -1038,6 +1038,64 @@ def _probability_range(spot: float, low: float, high: float, sigma: float,
     }
 
 
+def _position_probability_profile(legs: list[dict], spot: float, sigma: float,
+                                  T: float, r: float, q: float, model: str,
+                                  breakevens: list[float],
+                                  theoretical_max_profit: float | None,
+                                  theoretical_max_loss: float | None) -> dict:
+    """Integrate the complete position payoff over its breakeven regions."""
+    structural_prices = {
+        max(0.0, float(leg.get('strike') or 0.0))
+        for leg in legs if leg.get('opt_type') != 'stock' and leg.get('strike') is not None
+    }
+    structural_prices.update(max(0.0, float(value)) for value in breakevens)
+    boundaries = [0.0, *sorted(value for value in structural_prices if value > 0)]
+    boundaries.append(float('inf'))
+
+    def position_pnl(price: float) -> float:
+        total = 0.0
+        for leg in legs:
+            leg_pnl, _ = _leg_pnl_at(price, leg, leg['T_horizon'], r, q, model)
+            total += leg['qty'] * leg_pnl
+        return total
+
+    success = 0.0
+    max_profit_probability = 0.0
+    max_loss_probability = 0.0
+    max_profit_available = theoretical_max_profit is not None
+    max_loss_available = theoretical_max_loss is not None
+    for index in range(1, len(boundaries)):
+        low = boundaries[index - 1]
+        high = boundaries[index]
+        low_cdf = _lognormal_cdf(spot, low, sigma, T, r, q)
+        high_cdf = 1.0 if math.isinf(high) else _lognormal_cdf(spot, high, sigma, T, r, q)
+        mass = max(0.0, high_cdf - low_cdf)
+        if mass <= 0:
+            continue
+        if math.isinf(high):
+            samples = [max(spot, low + max(1.0, spot * 0.25)), max(spot * 2.0, low + max(2.0, spot * 0.5))]
+        else:
+            width = high - low
+            samples = [low + width * 0.25, low + width * 0.75]
+        sample_pnls = [position_pnl(max(0.0001, sample)) for sample in samples]
+        if sum(sample_pnls) / len(sample_pnls) > 0:
+            success += mass
+        if max_profit_available and all(abs(value - theoretical_max_profit) <= 0.05 for value in sample_pnls):
+            max_profit_probability += mass
+        if max_loss_available and all(abs(value - theoretical_max_loss) <= 0.05 for value in sample_pnls):
+            max_loss_probability += mass
+
+    success = min(max(success, 0.0), 1.0)
+    return {
+        'date': None,
+        'iv': round(max(float(sigma), 1e-4), 6),
+        'probability_success_pct': round(success * 100.0, 2),
+        'probability_failure_pct': round((1.0 - success) * 100.0, 2),
+        'probability_max_profit_pct': round(max_profit_probability * 100.0, 2) if max_profit_available else None,
+        'probability_max_loss_pct': round(max_loss_probability * 100.0, 2) if max_loss_available else None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
@@ -1110,9 +1168,19 @@ def register_routes(app):
         model = payload.get('model') or 'black-scholes'
         r = float(payload.get('rate') if payload.get('rate') is not None else 0.0375)
 
-        quote = _fetch_quote(underlying)
-        spot = float(payload.get('spot_override') or quote.get('last') or 0.0)
-        q = float(payload.get('div_yield') if payload.get('div_yield') is not None else (quote.get('div_yield') or 0.0))
+        # Risk controls can reprice the exact same position many times while a
+        # user drags a slider or edits a numeric field.  The lab already sends
+        # the current spot and dividend yield from its loaded quote, so do not
+        # hit Yahoo again for every local model change.  Apart from being
+        # unnecessary, repeated quote-summary calls are what turns otherwise
+        # valid risk-graph requests into rate-limit errors.
+        spot_override = payload.get('spot_override')
+        dividend_override = payload.get('div_yield')
+        quote = None
+        if spot_override is None or dividend_override is None:
+            quote = _fetch_quote(underlying)
+        spot = float(spot_override if spot_override is not None else (quote or {}).get('last') or 0.0)
+        q = float(dividend_override if dividend_override is not None else (quote or {}).get('div_yield') or 0.0)
 
         eval_date_str = payload.get('eval_date')
         requested_eval_d = datetime.strptime(eval_date_str, '%Y-%m-%d').date() if eval_date_str else date.today()
@@ -1338,6 +1406,22 @@ def register_routes(app):
         exact_breakevens = payoff_bounds.pop('breakevens', None)
         if exact_breakevens is not None:
             breakevens = exact_breakevens
+        position_probability = None
+        option_ivs = [leg['iv'] for leg in legs if leg['opt_type'] != 'stock' and leg['iv'] > 0]
+        probability_T = max((horizon_d - date.today()).days, 0) / 365.0
+        if option_ivs and probability_T > 0:
+            probability_iv = (
+                float(probability_out['iv'])
+                if probability_out and probability_out.get('iv') is not None
+                else sum(option_ivs) / len(option_ivs)
+            )
+            position_probability = _position_probability_profile(
+                legs, spot, probability_iv, probability_T, r, q, model,
+                breakevens,
+                payoff_bounds.get('theoretical_max_profit'),
+                payoff_bounds.get('theoretical_max_loss'),
+            )
+            position_probability['date'] = horizon_d.isoformat()
 
         # Price slices: 3 scenarios (-10%, 0%, +10%) by default; user can override on client
         slice_requests = payload.get('price_slices') or [
@@ -1396,6 +1480,7 @@ def register_routes(app):
             **payoff_bounds,
             'price_slices': slices_out,
             'probability_range': probability_out,
+            'position_probability': position_probability,
             'volatility_surface': {
                 'dynamics': default_vol_dynamics,
                 'parallel_shock_pct': float(vol_surface_in.get('parallel_shock_pct') or 0.0),

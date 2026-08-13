@@ -22,7 +22,7 @@ const num = value => {
 // Every scanner quotes its credit, debit, breakeven and max loss off the mid, so
 // the risk graph has to enter at the mid too — entering at the natural bid/ask
 // would contradict the card the user just clicked.
-const entryPrice = leg => num(leg?.mid) ?? num(leg?.ask) ?? num(leg?.bid) ?? 0
+const entryPrice = leg => num(leg?.entry_price) ?? num(leg?.mid) ?? num(leg?.ask) ?? num(leg?.bid) ?? 0
 
 const optionLeg = (leg, side, optType, expiration, strike, qty = 1) => {
   const value = num(strike) ?? num(leg?.strike)
@@ -51,6 +51,18 @@ const stockLeg = (qty, basis) => ({
   delta: 1,
 })
 
+const signedStockLeg = (leg) => ({
+  side: Number(leg?.qty) < 0 ? 'SELL' : 'BUY',
+  qty: Math.max(1, Math.abs(Math.round(num(leg?.qty) ?? 1))),
+  opt_type: 'STOCK',
+  strike: 0,
+  expiration: '',
+  entry_price: entryPrice(leg),
+  iv: null,
+  delta: num(leg?.delta) ?? 1,
+  quote_source: leg?.quote_source || null,
+})
+
 const trade = (row, label, legs) => {
   const built = legs.filter(Boolean)
   if (!built.length) return null
@@ -61,6 +73,21 @@ const trade = (row, label, legs) => {
     spot: num(row?.price),
     legs: built,
   }
+}
+
+const genericLegTrade = (kind, row) => {
+  if (!Array.isArray(row?.legs) || !row.legs.length) return null
+  return trade(row, String(kind || 'option strategy').replaceAll('-', ' '), row.legs.map(leg => {
+    if (String(leg?.option_type).toLowerCase() === 'stock') return signedStockLeg(leg)
+    return optionLeg(
+      leg,
+      Number(leg?.qty) < 0 ? 'SELL' : 'BUY',
+      String(leg?.option_type || '').toUpperCase(),
+      leg?.expiration || row?.expiration,
+      leg?.strike,
+      Math.abs(Number(leg?.qty) || 1),
+    )
+  }))
 }
 
 // One builder per scanner. Each reads the scanner's own result shape and returns
@@ -250,8 +277,8 @@ const BUILDERS = {
 /** The suggested trade as risk-graph legs, or null when the row has no option trade. */
 export function buildScannerTrade(kind, row) {
   const build = BUILDERS[kind]
-  if (!build || !row?.ticker) return null
-  const built = build(row)
+  if (!row?.ticker) return null
+  const built = build ? build(row) : genericLegTrade(kind, row)
   // A partial structure would draw a payoff the scanner never suggested.
   if (!built) return null
   const fixedExpected = {
@@ -287,6 +314,61 @@ export function scannerTradeKey(kind, ticker) {
   const normalizedKind = String(kind || '').trim().toLowerCase()
   const normalizedTicker = String(ticker || '').trim().toUpperCase()
   return normalizedKind && normalizedTicker ? `${normalizedKind}:${normalizedTicker}` : ''
+}
+
+const firstNumber = (...values) => {
+  for (const value of values) {
+    const parsed = num(value)
+    if (parsed != null) return parsed
+  }
+  return null
+}
+
+/** Preserve the scanner's position-level probability model for Strategy Lab. */
+export function buildScannerProbabilitySummary(row) {
+  const meta = row?._general || {}
+  const spread = row?.spread || {}
+  const schedule = [meta.probability_schedule, spread.probability_schedule, row?.probability_schedule]
+    .find(value => Array.isArray(value)) || []
+  const expiration = schedule.find(point => (
+    point?.kind === 'expiration' || Number(point?.remaining_dte) === 0
+  )) || {}
+  const success = firstNumber(
+    meta.prob_success,
+    spread.prob_profit,
+    row?.prob_profit,
+    row?.probability_profit_pct,
+    expiration.probability_success_pct,
+  )
+  const failure = firstNumber(
+    meta.prob_failure,
+    spread.prob_loss,
+    row?.prob_loss,
+    row?.probability_loss_pct,
+    expiration.probability_failure_pct,
+    success == null ? null : 100 - success,
+  )
+  const otm = firstNumber(meta.prob_otm, spread.prob_otm, row?.prob_otm)
+  const itm = firstNumber(meta.prob_itm, otm == null ? null : 100 - otm)
+  const directTouch = firstNumber(meta.prob_touch, spread.prob_touch, row?.prob_touch)
+  const touch = firstNumber(directTouch, itm == null ? null : Math.min(100, 2 * itm))
+  const summary = {
+    prob_success: success,
+    prob_failure: failure,
+    prob_otm: otm,
+    prob_itm: itm,
+    prob_touch: touch,
+    prob_touch_estimated: Boolean(meta.prob_touch_estimated || (directTouch == null && touch != null)),
+    prob_touch_put: firstNumber(meta.prob_touch_put, spread.prob_touch_put, row?.prob_touch_put),
+    prob_touch_call: firstNumber(meta.prob_touch_call, spread.prob_touch_call, row?.prob_touch_call),
+    prob_max_profit: firstNumber(meta.prob_max_profit, spread.prob_max_profit, row?.prob_max_profit),
+    prob_max_loss: firstNumber(meta.prob_max_loss, spread.prob_max_loss, row?.prob_max_loss),
+    probability_schedule: schedule,
+  }
+  return schedule.length || [success, failure, otm, itm, touch, summary.prob_touch_put,
+    summary.prob_touch_call, summary.prob_max_profit, summary.prob_max_loss].some(value => value != null)
+    ? summary
+    : null
 }
 
 /** Convert a scanner result into the saved-strategy API shape. */
@@ -340,9 +422,10 @@ export function buildScannerStrategyPayload(kind, row, source) {
 export function stageScannerTrade(kind, row, source, returnTo) {
   const built = buildScannerTrade(kind, row)
   if (!built) return false
+  const probabilities = buildScannerProbabilitySummary(row)
   try {
     sessionStorage.setItem(HANDOFF_KEY, JSON.stringify({
-      ...built, kind, source, return_to: returnTo || null, staged_at: Date.now(),
+      ...built, kind, source, probabilities, return_to: returnTo || null, staged_at: Date.now(),
     }))
     return true
   } catch {

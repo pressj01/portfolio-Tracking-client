@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { generalScannerRoute } from '../utils/optionScannerCatalog'
 import OptionPayoffDiagram from '../components/OptionPayoffDiagram'
 
 const TABS = [
@@ -576,7 +577,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'cash-secured-put-scanner',
     name: 'Put Selling Scanner',
     family: 'Cash-secured put',
-    route: '/put-selling-scanner',
+    route: generalScannerRoute('cash-secured-put'),
     outlook: 'bullish',
     vega: 'short',
     diagram: {
@@ -594,7 +595,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'covered-call-scanner',
     name: 'Covered Call Scanner',
     family: 'Covered call',
-    route: '/covered-call-scanner',
+    route: generalScannerRoute('covered-call'),
     outlook: 'neutral',
     vega: 'short',
     diagram: {
@@ -612,7 +613,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'bull-put-spread-scanner',
     name: 'Bull Put Spread Scanner',
     family: 'Defined-risk credit spread',
-    route: '/bull-put-spread-scanner',
+    route: generalScannerRoute('bull-put-spread'),
     outlook: 'bullish',
     vega: 'short',
     diagram: {
@@ -630,7 +631,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'bear-put-spread-scanner',
     name: 'Bear Put Spread Scanner',
     family: 'Defined-risk debit spread',
-    route: '/bear-put-spread-scanner',
+    route: generalScannerRoute('bear-put-spread'),
     outlook: 'bearish',
     vega: 'long',
     diagram: {
@@ -648,7 +649,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'bear-call-spread-scanner',
     name: 'Bear Call Spread Scanner',
     family: 'Defined-risk credit spread',
-    route: '/bear-call-spread-scanner',
+    route: generalScannerRoute('bear-call-spread'),
     outlook: 'bearish',
     vega: 'short',
     diagram: {
@@ -666,7 +667,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'iron-condor-scanner',
     name: 'Iron Condor Scanner & Variants',
     family: 'Four-leg range trade',
-    route: '/iron-condor-scanner',
+    route: generalScannerRoute('iron-condor'),
     outlook: 'neutral',
     vega: 'short',
     diagram: {
@@ -690,7 +691,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'iron-butterfly-scanner',
     name: 'Iron Butterfly Scanner',
     family: 'Three-strike, four-leg range trade',
-    route: '/iron-butterfly-scanner',
+    route: generalScannerRoute('iron-butterfly'),
     outlook: 'neutral',
     vega: 'short',
     diagram: {
@@ -708,7 +709,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'put-call-condor-scanner',
     name: 'Put / Call Condor Scanner',
     family: 'Risk-budgeted directional or paired condors',
-    route: '/put-call-condor-scanner',
+    route: generalScannerRoute('put-call-condor'),
     outlook: 'neutral',
     vega: 'mixed',
     diagram: {
@@ -727,7 +728,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'unbalanced-put-condor-scanner',
     name: 'Unbalanced Put Condor Scanner',
     family: 'Long-dated asymmetric put condor',
-    route: '/unbalanced-put-condor-scanner',
+    route: generalScannerRoute('unbalanced-put-condor'),
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
@@ -747,7 +748,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'unbalanced-butterfly-scanner',
     name: 'Unbalanced Butterfly Scanner',
     family: '4 / -8 / 4 long-dated put fly',
-    route: '/unbalanced-butterfly-scanner',
+    route: generalScannerRoute('unbalanced-butterfly'),
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
@@ -767,7 +768,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'double-hedge-put-butterfly-scanner',
     name: 'Double-Hedge Put Butterfly Scanner',
     family: '4 / -8 / 8 put butterfly',
-    route: '/double-hedge-put-butterfly-scanner',
+    route: generalScannerRoute('double-hedge-put-butterfly'),
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
@@ -787,7 +788,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'road-trip-butterfly-scanner',
     name: 'Road Trip Unbalanced Butterfly Scanner',
     family: 'Staggered broken-wing put butterfly',
-    route: '/road-trip-butterfly-scanner',
+    route: generalScannerRoute('road-trip-butterfly'),
     outlook: 'bullish',
     vega: 'mixed',
     diagram: {
@@ -817,7 +818,7 @@ const SCANNER_TRADE_PLANS = [
     id: 'sixty-forty-twenty-fly-scanner',
     name: '60/40/20 Fly Scanner',
     family: 'Delta-selected put butterfly',
-    route: '/sixty-forty-twenty-fly-scanner',
+    route: generalScannerRoute('sixty-forty-twenty-fly'),
     outlook: 'neutral',
     vega: 'mixed',
     diagram: {

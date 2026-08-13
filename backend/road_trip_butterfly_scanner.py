@@ -51,6 +51,7 @@ from put_scanner import (
     MIN_TARGET_DTE,
     _clean_tickers,
     _fetch_fundamentals_bulk,
+    _index_only_tickers,
     _load_history,
     _load_put_chain,
     _num,
@@ -132,9 +133,7 @@ DEFAULTS = {
 
 
 def _ticker_list(raw) -> list[str]:
-    if isinstance(raw, str):
-        raw = re.split(r"[\s,;]+", raw)
-    return _clean_tickers(raw)[:20]
+    return _index_only_tickers(raw, DEFAULT_TICKERS, limit=20)
 
 
 def _bias_name(value) -> str:

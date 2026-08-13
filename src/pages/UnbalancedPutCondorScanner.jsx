@@ -7,7 +7,7 @@ import { useScanCache } from '../utils/useScanCache'
 
 const STORAGE_KEY = 'unbalanced-put-condor-scanner-filters'
 const FALLBACK_DEFAULTS = {
-  tickers: 'SPY,IWM,GLD,QQQ',
+  tickers: 'SPY,QQQ,IWM,VOO',
   delta_preset: 'all',
   target_dte: 160,
   min_dte: 120,
@@ -597,7 +597,7 @@ export default function UnbalancedPutCondorScanner() {
           <input
             value={filters.tickers}
             onChange={event => set('tickers', event.target.value.toUpperCase())}
-            placeholder="SPY,IWM,GLD,QQQ"
+            placeholder="SPY,QQQ,IWM,VOO"
             style={{
               display: 'block', width: '100%', marginTop: '0.2rem', padding: '0.32rem 0.4rem',
               color: 'var(--text-strong)', background: 'var(--surface-inset)',

@@ -8765,7 +8765,7 @@ function UnbalancedPutCondorScannerHelp() {
     <div>
       <h2>Unbalanced Put Condor Scanner</h2>
       <p style={{ marginBottom: '1rem' }}>
-        This scanner builds a long-dated, four-put position on SPY, IWM, GLD, QQQ, or a custom ticker list.
+        This scanner builds a long-dated, four-put position on broad index ETFs such as SPY, QQQ, IWM, and VOO.
         It buys an upper put debit spread and sells a farther-out-of-the-money put credit spread at the same
         expiration, then searches nearby strikes for the complete package whose net delta best matches the
         selected neutral, slightly bullish, or slightly bearish target.

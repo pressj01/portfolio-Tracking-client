@@ -3,16 +3,18 @@ import React from 'react'
 const pct = value => value == null || !Number.isFinite(Number(value))
   ? '—'
   : `${Number(value).toFixed(1)}%`
+const MONTH_LABELS = ['Jan', 'Feb', 'March', 'April', 'May', 'June', 'July', 'Aug', 'Sept', 'Oct', 'Nov', 'Dec']
+const ordinal = value => {
+  const remainder = value % 100
+  if (remainder >= 11 && remainder <= 13) return `${value}th`
+  return `${value}${value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th'}`
+}
 
 function formatDate(value) {
   if (!value) return '—'
   const date = new Date(`${value}T00:00:00`)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleDateString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
+  return `${MONTH_LABELS[date.getMonth()]} ${ordinal(date.getDate())} ${date.getFullYear()}`
 }
 
 function failureProbability(point) {

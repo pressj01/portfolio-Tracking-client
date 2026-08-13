@@ -66,7 +66,7 @@ def base_candidate(expiration, dte):
 
 class DocumentDefaults(unittest.TestCase):
     def test_defaults_match_the_presentation(self):
-        self.assertEqual(scanner.DEFAULTS["tickers"], "SPY,QQQ,IWM")
+        self.assertEqual(scanner.DEFAULTS["tickers"], "SPY,QQQ,IWM,VOO")
         self.assertEqual(scanner.DEFAULTS["target_dte"], 200)
         self.assertEqual(scanner.DEFAULTS["min_dte"], 160)
         self.assertEqual(scanner.DEFAULTS["max_dte"], 230)

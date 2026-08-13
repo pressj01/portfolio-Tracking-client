@@ -100,6 +100,8 @@ import DoubleHedgePutButterflyScanner from './pages/FourEightEightScanner'
 import RoadTripButterflyScanner from './pages/RoadTripButterflyScanner'
 import SixtyFortyTwentyFlyScanner from './pages/SixtyFortyTwentyFlyScanner'
 import IronButterflyScanner from './pages/IronButterflyScanner'
+import OptionScannerHub from './pages/OptionScannerHub'
+import GeneralOptionScanner from './pages/GeneralOptionScanner'
 import GreeksGuide from './pages/GreeksGuide'
 import SplitScreen from './pages/SplitScreen'
 
@@ -119,6 +121,8 @@ export const PAGE_GROUPS = [
       { path: '/option-trades', label: 'Option Trades', element: <OptionTrades /> },
       { path: '/option-trades/import', label: 'Import Option Trades', element: <OptionTradeImport /> },
       { path: '/options', label: 'Strategy Lab', element: <OptionTradingTools /> },
+      { path: '/option-scanners', label: 'All Strategy Scanners', element: <OptionScannerHub /> },
+      { path: '/general-option-scanner', label: 'General Option Scanner', element: <GeneralOptionScanner /> },
       { path: '/put-selling-scanner', label: 'Put Selling Scanner', element: <PutSellingScanner /> },
       { path: '/bull-put-spread-scanner', label: 'Bull Put Spread Scanner', element: <BullPutSpreadScanner /> },
       { path: '/covered-call-scanner', label: 'Covered Call Scanner', element: <CoveredCallScanner /> },

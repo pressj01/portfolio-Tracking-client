@@ -670,6 +670,8 @@ def _fetch_fundamentals(ticker: str) -> dict:
         "name": None, "sector": None, "industry": None, "market_cap": None,
         "trailing_eps": None, "profit_margin": None, "debt_to_equity": None,
         "current_ratio": None, "forward_pe": None, "trailing_pe": None,
+        "return_on_equity": None, "return_on_assets": None,
+        "revenue_growth": None, "earnings_growth": None,
         "dividend_yield": None, "target_mean_price": None, "quote_type": None,
         "next_earnings": None, "total_assets": None, "category": None,
         "fund_family": None, "expense_ratio": None,
@@ -692,6 +694,10 @@ def _fetch_fundamentals(ticker: str) -> dict:
             "profit_margin": _num(info.get("profitMargins")),
             "debt_to_equity": _num(info.get("debtToEquity")),
             "current_ratio": _num(info.get("currentRatio")),
+            "return_on_equity": _num(info.get("returnOnEquity")),
+            "return_on_assets": _num(info.get("returnOnAssets")),
+            "revenue_growth": _num(info.get("revenueGrowth")),
+            "earnings_growth": _num(info.get("earningsGrowth")),
             "forward_pe": _num(info.get("forwardPE")),
             "trailing_pe": _num(info.get("trailingPE")),
             "dividend_yield": _num(info.get("dividendYield")),
@@ -1436,6 +1442,18 @@ def _clean_tickers(raw) -> list[str]:
             seen.add(s)
             out.append(s)
     return out
+
+
+def _index_only_tickers(raw, defaults, limit: int = 50) -> list[str]:
+    """Normalize an index-only universe and reject stock symbols explicitly."""
+    tickers = _clean_tickers(raw)
+    invalid = [ticker for ticker in tickers if ticker not in INDEX_ETF_SET]
+    if invalid:
+        raise ValueError(
+            "This long-dated structure is limited to index ETFs; remove stock "
+            f"symbols: {', '.join(invalid)}"
+        )
+    return (tickers or list(defaults))[:limit]
 
 
 def _profile_scope(profile_id, aggregate_id):

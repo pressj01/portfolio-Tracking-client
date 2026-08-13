@@ -119,7 +119,8 @@ export default function RiskGraphButton({ kind, row, source, label = 'Risk graph
           : 'No option trade was suggested for this row'}
         onClick={event => {
           event.stopPropagation()
-          if (stageScannerTrade(kind, row, source, location.pathname)) navigate('/options')
+          const returnTo = `${location.pathname}${location.search || ''}`
+          if (stageScannerTrade(kind, row, source, returnTo)) navigate('/options')
         }}
       >
         &#128202; {label}

@@ -8,6 +8,8 @@ import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import AppRoutes from './pageCatalog'
+import OptionScannerNavigator from './components/OptionScannerNavigator'
+import { generalScannerRoute, isOptionScannerPath } from './utils/optionScannerCatalog'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -97,9 +99,11 @@ function NavMenuGroup({ title, children }) {
 }
 
 function AppFrame() {
+  const location = useLocation()
   return (
     <>
       <Nav />
+      {isOptionScannerPath(location.pathname) && <OptionScannerNavigator key={location.pathname} />}
       <AppRoutes />
     </>
   )
@@ -179,19 +183,21 @@ function Nav() {
         <NavLink to="/option-trades">Option Trades</NavLink>
         <NavLink to="/option-trades/import">Import Option Trades</NavLink>
         <NavLink to="/options">Strategy Lab</NavLink>
-        <NavLink to="/put-selling-scanner">Put Selling Scanner</NavLink>
-        <NavLink to="/bull-put-spread-scanner">Bull Put Spread Scanner</NavLink>
-        <NavLink to="/covered-call-scanner">Covered Call Scanner</NavLink>
-        <NavLink to="/bear-put-spread-scanner">Bear Put Spread Scanner</NavLink>
-        <NavLink to="/bear-call-spread-scanner">Bear Call Spread Scanner</NavLink>
-        <NavLink to="/iron-condor-scanner">Iron Condor Scanner</NavLink>
-        <NavLink to="/put-call-condor-scanner">Put / Call Condor Scanner</NavLink>
-        <NavLink to="/unbalanced-put-condor-scanner">Unbalanced Put Condor Scanner</NavLink>
-        <NavLink to="/unbalanced-butterfly-scanner">Unbalanced Butterfly Scanner</NavLink>
-        <NavLink to="/double-hedge-put-butterfly-scanner">Double-Hedge Put Butterfly Scanner</NavLink>
-        <NavLink to="/road-trip-butterfly-scanner">Road Trip Unbalanced Butterfly Scanner</NavLink>
-        <NavLink to="/sixty-forty-twenty-fly-scanner">60/40/20 Fly Scanner</NavLink>
-        <NavLink to="/iron-butterfly-scanner">Iron Butterfly Scanner</NavLink>
+        <NavLink to="/option-scanners">All Strategy Scanners</NavLink>
+        <NavLink to="/general-option-scanner">General Option Scanner</NavLink>
+        <NavLink to={generalScannerRoute('cash-secured-put')}>Put Selling Scanner</NavLink>
+        <NavLink to={generalScannerRoute('bull-put-spread')}>Bull Put Spread Scanner</NavLink>
+        <NavLink to={generalScannerRoute('covered-call')}>Covered Call Scanner</NavLink>
+        <NavLink to={generalScannerRoute('bear-put-spread')}>Bear Put Spread Scanner</NavLink>
+        <NavLink to={generalScannerRoute('bear-call-spread')}>Bear Call Spread Scanner</NavLink>
+        <NavLink to={generalScannerRoute('iron-condor')}>Iron Condor Scanner</NavLink>
+        <NavLink to={generalScannerRoute('put-call-condor')}>Put / Call Condor Scanner</NavLink>
+        <NavLink to={generalScannerRoute('unbalanced-put-condor')}>Unbalanced Put Condor Scanner</NavLink>
+        <NavLink to={generalScannerRoute('unbalanced-butterfly')}>Unbalanced Butterfly Scanner</NavLink>
+        <NavLink to={generalScannerRoute('double-hedge-put-butterfly')}>Double-Hedge Put Butterfly Scanner</NavLink>
+        <NavLink to={generalScannerRoute('road-trip-butterfly')}>Road Trip Unbalanced Butterfly Scanner</NavLink>
+        <NavLink to={generalScannerRoute('sixty-forty-twenty-fly')}>60/40/20 Fly Scanner</NavLink>
+        <NavLink to={generalScannerRoute('iron-butterfly')}>Iron Butterfly Scanner</NavLink>
         <NavLink to="/option-education">Option Strategy Education</NavLink>
         <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
       </NavDropdown>

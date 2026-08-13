@@ -39,6 +39,7 @@ from put_scanner import (
     RISK_FREE,
     _clean_tickers,
     _fetch_fundamentals_bulk,
+    _index_only_tickers,
     _load_history,
     _load_put_chain,
     _num,
@@ -70,7 +71,7 @@ MIN_QUOTED_LEGS_BELOW_SPOT = 8
 MAX_EXPIRATION_ATTEMPTS = 4
 # Slack for adjacent-strike IV noise when checking that delta falls with strike.
 DELTA_MONOTONICITY_SLACK = 0.005
-DEFAULT_TICKERS = ["SPY", "IWM", "GLD", "QQQ"]
+DEFAULT_TICKERS = ["SPY", "QQQ", "IWM", "VOO"]
 DEFAULTS = {
     "tickers": ",".join(DEFAULT_TICKERS),
     "delta_preset": "all",
@@ -1000,10 +1001,7 @@ def _round_candidate(candidate: dict) -> dict:
 
 
 def _ticker_list(raw) -> list[str]:
-    if isinstance(raw, str):
-        raw = re.split(r"[\s,;]+", raw)
-    tickers = _clean_tickers(raw)
-    return tickers[:50]
+    return _index_only_tickers(raw, DEFAULT_TICKERS, limit=50)
 
 
 def _ranked_expirations(
