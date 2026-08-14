@@ -118,7 +118,7 @@ class XFundsSecurityResearchTests(unittest.TestCase):
     def test_current_official_lineup_is_recognized(self):
         expected = {
             "DRMY", "GLDN", "SLVX", "NUKX", "WEPN", "BLOX",
-            "BHDG", "NGHT", "GIAX", "FITZ", "FIAX",
+            "BHDG", "NGHT", "GIAX", "FITZ", "FIZY", "FIAX",
         }
         self.assertEqual(_XFUNDS_CURRENT_TICKERS, expected)
         self.assertTrue(all(_is_xfunds_fund(ticker) for ticker in expected))
@@ -187,9 +187,41 @@ class XFundsSecurityResearchTests(unittest.TestCase):
         self.assertFalse(snapshot["has_dividend"])
         self.assertEqual(snapshot["freq"], "W")
         self.assertTrue(snapshot["history"].empty)
-        self.assertEqual(snapshot["ex_div_date"], "08/12/26")
-        self.assertEqual(snapshot["div_pay_date"], "08/13/26")
+        expected = next(
+            (
+                row for row in snapshot["future_schedule"]
+                if pd.Timestamp(row["ex_dividend_date"]) >= pd.Timestamp.now().normalize()
+            ),
+            snapshot["future_schedule"][-1],
+        )
+        self.assertEqual(
+            snapshot["ex_div_date"],
+            pd.Timestamp(expected["ex_dividend_date"]).strftime("%m/%d/%y"),
+        )
+        self.assertEqual(
+            snapshot["div_pay_date"],
+            pd.Timestamp(expected["payable_date"]).strftime("%m/%d/%y"),
+        )
         self.assertEqual(len(snapshot["future_schedule"]), 3)
+
+    def test_published_schedule_overrides_stale_page_frequency(self):
+        class StaleFrequencySession(_FakeSession):
+            pass
+
+        StaleFrequencySession.PAGE = _FakeSession.PAGE.replace(
+            "distribution-frequency-taxonomy-weekly",
+            "distribution-frequency-taxonomy-monthly",
+        )
+
+        profile = _fetch_xfunds_etf_profile(
+            "DRMY", session=StaleFrequencySession(), use_cache=False
+        )
+        snapshot = _fetch_xfunds_distribution_snapshot(
+            "DRMY", session=StaleFrequencySession()
+        )
+
+        self.assertEqual(profile["dividend_frequency"], "Weekly")
+        self.assertEqual(snapshot["freq"], "W")
 
     def test_official_schedule_metadata_does_not_erase_yahoo_distribution_fallback(self):
         yahoo_history = pd.Series(

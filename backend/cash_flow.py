@@ -43,7 +43,7 @@ OPTION_INCOME_TICKERS = frozenset({
     "DIVO", "PUTW",
     # Amplify / XFunds / Nicholas Wealth
     "BAGY", "BITY", "QDVO", "IDVO", "HCOW", "HAKY", "ETTY", "SLJY",
-    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
+    "GIAX", "BLOX", "FIAX", "FIZY", "WEPN", "NUKX", "GLDN", "SLVX",
     # NEOS option-income and hedged-income
     "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI",
     "MLPI", "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",

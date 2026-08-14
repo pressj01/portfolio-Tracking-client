@@ -8182,6 +8182,48 @@ def lookup_ticker(ticker):
 
     result["div_frequency"] = freq_code
 
+    # XFUNDS is issuer-first across the application. Its pages often have the
+    # complete fund facts and future distribution schedule before Yahoo has
+    # populated a newly launched ETF. Overlay official values here as well as
+    # on Security Research and refresh; Yahoo remains the fallback for every
+    # field the fund site has not published yet.
+    if _is_xfunds_fund(ticker, result.get("description")):
+        official_profile = None
+        try:
+            official_profile = _fetch_xfunds_etf_profile(ticker)
+        except Exception:
+            official_profile = None
+        if official_profile:
+            result["description"] = str(
+                official_profile.get("name")
+                or official_profile.get("description")
+                or result["description"]
+            )[:200]
+            result["classification_type"] = "ETF"
+            official_price = _positive_number(official_profile.get("price"))
+            if official_price:
+                result["current_price"] = official_price
+            result["data_source"] = official_profile.get("data_source") or "XFUNDS"
+            result["source_url"] = official_profile.get("source_url")
+
+        official_snapshot = None
+        try:
+            official_snapshot = _fetch_xfunds_distribution_snapshot(ticker)
+        except Exception:
+            official_snapshot = None
+        if official_snapshot:
+            if official_snapshot.get("has_dividend") and _positive_number(official_snapshot.get("div")):
+                result["div"] = round(_positive_number(official_snapshot["div"]), 6)
+            if official_snapshot.get("freq"):
+                result["div_frequency"] = official_snapshot["freq"]
+            if official_snapshot.get("ex_div_date"):
+                result["ex_div_date"] = official_snapshot["ex_div_date"]
+            if official_snapshot.get("div_pay_date"):
+                result["div_pay_date"] = official_snapshot["div_pay_date"]
+            if official_snapshot.get("future_schedule"):
+                result["future_distribution_schedule"] = official_snapshot["future_schedule"]
+            result["dividend_source"] = official_snapshot.get("source") or "X Funds"
+
     # If Yahoo is unavailable, an existing portfolio quote is still sufficient
     # to add the ticker to a DRIP comparison.
     if result["current_price"] <= 0:
@@ -10451,12 +10493,16 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None):
         except Exception:
             body = ""
 
-    page_freq = _xfunds_distribution_frequency_from_page(page_html)
     future_schedule = _xfunds_distribution_schedule_from_page(page_html)
     schedule_freq = _infer_dividend_frequency_from_dates(
         [row["ex_dividend_date"] for row in future_schedule]
     ) if future_schedule else None
-    official_freq = page_freq or schedule_freq
+    page_freq = _xfunds_distribution_frequency_from_page(page_html)
+    # The dated issuer schedule is the most concrete statement of cadence.
+    # Some newly launched XFUNDS pages retain a stale WordPress taxonomy value
+    # (FIZY was labeled monthly while publishing weekly ex/pay dates), so let
+    # the actual schedule win whenever the two disagree.
+    official_freq = schedule_freq or page_freq
 
     if not body:
         if not official_freq and not future_schedule:
@@ -11320,7 +11366,7 @@ def _is_tappalpha_fund(ticker, description=""):
 
 _XFUNDS_CURRENT_TICKERS = {
     "DRMY", "GLDN", "SLVX", "NUKX", "WEPN",
-    "BLOX", "BHDG", "NGHT", "GIAX", "FITZ", "FIAX",
+    "BLOX", "BHDG", "NGHT", "GIAX", "FITZ", "FIZY", "FIAX",
 }
 
 
@@ -20272,12 +20318,13 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
 
     summary = _xfunds_page_section(page_html, "Fund Summary", max_paragraphs=2)
     objective = _xfunds_page_section(page_html, "Fund Objective", max_paragraphs=2)
-    frequency_code = _xfunds_distribution_frequency_from_page(page_html)
     future_schedule = _xfunds_distribution_schedule_from_page(page_html)
-    if not frequency_code and future_schedule:
-        frequency_code = _infer_dividend_frequency_from_dates(
+    schedule_frequency = None
+    if future_schedule:
+        schedule_frequency = _infer_dividend_frequency_from_dates(
             [row["ex_dividend_date"] for row in future_schedule]
         )
+    frequency_code = schedule_frequency or _xfunds_distribution_frequency_from_page(page_html)
     distribution_rate = _research_pct(_xfunds_map_value(fund_info, "distribution rate"))
     sec_yield = _research_pct(_xfunds_map_value(fund_info, "30 day sec yield", "30-day sec yield"))
     net_assets = holdings_meta.get("net_assets") or _xfunds_money(_xfunds_map_value(daily_nav, "net assets"))
@@ -21430,7 +21477,7 @@ def _is_nav_erosion_candidate(ticker, name="", category=""):
         "BABO", "TSMY", "PLTY", "FIAT", "GMEY", "MARO", "CRSH", "ABNY", "SMCY",
         "METY", "TSLP", "NVDP", "QQQY", "JEPY", "IWMY", "PFFA",
         "FEPI", "AIPI", "CEPI", "GIF", "TLDR", "ATCL",
-        "GIAX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX", "SLJY",
+        "GIAX", "FIAX", "FIZY", "WEPN", "NUKX", "GLDN", "SLVX", "SLJY",
         "XLEI", "CHPY", "GPTY", "GOOP", "WNTR", "BEGS", "OVL", "SEPI",
     }
     risky_markers = (
@@ -34568,7 +34615,7 @@ INCOME_ETFS = [
     # Goldman Sachs / First Trust option-income ETFs
     "GPIQ", "GPIX", "FTQI",
     # XFunds / Nicholas Wealth income ETFs
-    "GIAX", "BLOX", "FIAX", "WEPN", "NUKX", "GLDN", "SLVX",
+    "GIAX", "BLOX", "FIAX", "FIZY", "WEPN", "NUKX", "GLDN", "SLVX",
     # NEOS ETF lineup
     "SPYI", "QQQI", "IWMI", "IYRI", "BTCI", "ETHI", "NEHI", "NIHI", "MLPI",
     "IAUI", "HYBI", "CSHI", "QQQH", "SPYH", "XQQI", "XSPI",

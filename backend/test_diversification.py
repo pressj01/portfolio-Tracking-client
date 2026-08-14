@@ -364,6 +364,40 @@ class IssuerLookupTest(unittest.TestCase):
         self.assertEqual(key, "demo")
         self.assertEqual(url, "https://x.com/abc/ABC.csv")
 
+    def test_xfunds_seed_includes_current_lineup(self):
+        expected = {
+            "DRMY", "GLDN", "SLVX", "NUKX", "WEPN", "BLOX",
+            "BHDG", "NGHT", "GIAX", "FITZ", "FIZY", "FIAX",
+        }
+        rows = self.conn.execute(
+            "SELECT fund_ticker, source FROM fund_issuer_map WHERE issuer_key='nicholas'"
+        ).fetchall()
+        self.assertEqual({row[0] for row in rows}, expected)
+        self.assertTrue(all(row[1] == "seed" for row in rows))
+
+    def test_xfunds_holdings_prefer_csv_tickers(self):
+        csv_text = (
+            "Date,Account,StockTicker,CUSIP,SecurityName,Shares,Price,MarketValue,Weightings,NetAssets\n"
+            "08/14/2026,FIZY,PLTR,69608A108,Palantir Technologies Inc,1,1,1,6.37%,100\n"
+        )
+        calls = []
+
+        def fake_get(url, tries=2):
+            calls.append(url)
+            if url.endswith("TidalFG_Holdings_FIZY.csv"):
+                return SimpleNamespace(text=csv_text)
+            return None
+
+        original = dv._http_get
+        dv._http_get = fake_get
+        try:
+            rows = dv._fetch_tidal_json("FIZY", url="https://nicholasx.com/fizy/")
+        finally:
+            dv._http_get = original
+
+        self.assertEqual(rows[0]["symbol"], "PLTR")
+        self.assertEqual(len(calls), 1)
+
     def test_url_driven_parsers_actually_receive_the_url(self):
         """Regression: html_table was called without a URL and always returned []."""
         seen = {}

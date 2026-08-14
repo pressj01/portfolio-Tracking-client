@@ -39,6 +39,20 @@ class _InfoFailureTicker:
         return pd.DataFrame()
 
 
+class _NewXFundsTicker:
+    info = {
+        "longName": "Yahoo FIZY Name",
+        "quoteType": "ETF",
+        "regularMarketPrice": 26.40,
+    }
+    fast_info = {}
+    dividends = pd.Series(dtype=float)
+    calendar = {}
+
+    def history(self, **_kwargs):
+        return pd.DataFrame()
+
+
 class _SimulationTicker:
     def history(self, **_kwargs):
         dates = pd.date_range("2025-01-31", periods=12, freq="ME")
@@ -118,6 +132,39 @@ class PortfolioIncomeSimulatorTests(unittest.TestCase):
         self.assertEqual(payload["div_frequency"], "M")
         self.assertEqual(payload["scenario_type"], "option_income")
         self.assertEqual(payload["scenario_label"], "Diversified option income")
+
+    def test_xfunds_lookup_prefers_official_data_and_keeps_yahoo_as_fallback(self):
+        official_profile = {
+            "name": "Fitz-Gerald Must Have Portfolio and Options Overlay ETF",
+            "price": 26.57,
+            "data_source": "XFUNDS",
+            "source_url": "https://nicholasx.com/fizy/",
+        }
+        official_snapshot = {
+            "known": True,
+            "has_dividend": False,
+            "div": None,
+            "freq": "W",
+            "ex_div_date": "08/19/26",
+            "div_pay_date": "08/20/26",
+            "future_schedule": [{"ex_dividend_date": "2026-08-19"}],
+            "source": "X Funds",
+        }
+        with (
+            patch("yfinance.Ticker", return_value=_NewXFundsTicker()),
+            patch.object(app_module, "_fetch_xfunds_etf_profile", return_value=official_profile),
+            patch.object(app_module, "_fetch_xfunds_distribution_snapshot", return_value=official_snapshot),
+        ):
+            response = app_module.app.test_client().get("/api/lookup/FIZY")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["description"], official_profile["name"])
+        self.assertEqual(payload["current_price"], 26.57)
+        self.assertEqual(payload["div_frequency"], "W")
+        self.assertEqual(payload["dividend_source"], "X Funds")
+        self.assertEqual(payload["data_source"], "XFUNDS")
+        self.assertEqual(payload["scenario_type"], "option_income")
 
     def test_custom_ticker_projects_without_imported_holdings(self):
         handle, db_path = tempfile.mkstemp(suffix=".db")

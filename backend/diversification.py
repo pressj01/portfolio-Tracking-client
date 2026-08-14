@@ -825,6 +825,22 @@ def _fetch_tidal_json(ticker, limit=None, url=None):
     """
     if not url:
         return []
+    parsed = urllib.parse.urlsplit(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+
+    # XFUNDS publishes the complete Tidal holdings CSV alongside the rendered
+    # table. Prefer it because it includes exchange tickers; the HTML widget
+    # exposes CUSIPs instead, which makes look-through resolution less precise.
+    csv_url = (
+        f"{origin}/wp-content/uploads/data/"
+        f"TidalFG_Holdings_{ticker.strip().upper()}.csv"
+    )
+    csv_response = _http_get(csv_url, tries=2)
+    if csv_response is not None:
+        csv_rows = _parse_generic_csv_text(csv_response.text or "", limit)
+        if csv_rows:
+            return csv_rows
+
     page = _http_get(url, tries=2)
     if page is None:
         return []
@@ -834,8 +850,6 @@ def _fetch_tidal_json(ticker, limit=None, url=None):
     # The page's own id dominates the stylesheet; element ids appear once each.
     post_id = max(set(ids), key=ids.count)
 
-    parsed = urllib.parse.urlsplit(url)
-    origin = f"{parsed.scheme}://{parsed.netloc}"
     api = (f"{origin}/wp-json/twm/v1/data"
            f"?type=holdings-table&post_id={urllib.parse.quote(post_id)}")
     resp = _http_get(api, tries=2)
@@ -1124,7 +1138,10 @@ ISSUER_MAP_SEED = {
     "vanguard": ["VOO", "VTWO", "VTI", "VYM", "VIG"],
     "amplify": ["DIVO", "DRVR", "ETTY", "SOLM", "SLJY"],
     "tappalpha": ["TDAQ", "TSPY", "TDAX", "TMGN", "TSYX"],
-    "nicholas": ["DRMY", "BLOX", "NUKX", "GLDN", "WEPN", "GIAX"],
+    "nicholas": [
+        "DRMY", "GLDN", "SLVX", "NUKX", "WEPN", "BLOX",
+        "BHDG", "NGHT", "GIAX", "FITZ", "FIZY", "FIAX",
+    ],
     "schwab": ["SCHG", "SCHD", "SCHB", "SCHX"],
     "shelton": ["TUGN", "SEPI"],
     "yieldmax": ["CHPY"],
