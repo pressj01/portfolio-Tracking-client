@@ -2508,7 +2508,9 @@ function DividendsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         Below the charts is a sortable data table with one row per holding and a totals row at the bottom.
         Click any column header to sort — click again to reverse the direction. Sort arrows indicate
-        the active column and direction.
+        the active column and direction. Drag a header to move that column anywhere in the table,
+        or use the Columns picker to hide columns and change their order. The layout is saved on
+        this computer. Ticker always stays visible. Footer totals stay under the columns they belong to.
       </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Columns</h4>

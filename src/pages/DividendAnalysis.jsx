@@ -3,6 +3,8 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import ColumnCustomizer from '../components/ColumnCustomizer'
+import { useColumnLayout } from '../utils/useColumnLayout'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -68,6 +70,77 @@ const DONUT_COLORS = [
   '#4dd0e1', '#aed581', '#fff176', '#f06292', '#7986cb',
   '#90a4ae', '#a1887f',
 ]
+
+const DIV_FREQ_LABELS = {
+  D: 'Daily', W: 'Weekly', M: 'Monthly', Q: 'Quarterly',
+  SA: 'Semi-Ann', S: 'Semi-Ann', A: 'Annual',
+  DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly',
+  QUARTERLY: 'Quarterly', ANNUAL: 'Annual',
+}
+
+const DIV_LOCKED_COLS = ['ticker']
+
+const DIV_TABLE_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', width: '5%' },
+  { key: 'description', label: 'Description', width: '17%' },
+  { key: 'category_name', label: 'Category', tip: 'Investment category', width: '7%' },
+  { key: 'div_frequency', label: 'Freq', fmt: v => DIV_FREQ_LABELS[v] || v || '\u2014', align: 'center', tip: 'Dividend payment frequency' },
+  { key: 'ex_div_date', label: 'Ex-Div Date', align: 'center', tip: 'Ex-dividend date' },
+  { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Resolved dividend payment date; ~ marks an estimate' },
+  { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '\u2014', align: 'right', tip: 'Number of shares held' },
+  { key: 'div_per_share', label: 'Dist./Share', fmt: v => formatMoney(v, { digits: 4 }), align: 'right', tip: 'Dividend amount per share' },
+  { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income (shares × distribution per share × frequency)' },
+  { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
+  { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
+  { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
+  { key: 'ytd_divs', label: 'YTD Divs', fmt: fmt, align: 'right', tip: 'Year-to-date dividends received' },
+  { key: 'total_divs_received', label: 'Total Divs', fmt: fmt, align: 'right', tip: 'Total dividends received since purchase' },
+  { key: 'paid_for_itself', label: 'Paid For Itself', fmt: v => fmtPctRaw(v != null ? v * 100 : null), align: 'right', tip: 'Percentage of original cost recovered through dividends' },
+  { key: 'safety_score', label: 'Safety', align: 'center', tip: 'Composite dividend safety score' },
+  { key: 'safety_risk_level', label: 'Risk', align: 'center', tip: 'Estimated dividend cut risk level' },
+  { key: 'payout_ratio_pct', label: 'Payout', fmt: v => v != null ? `${Number(v).toFixed(1)}%` : '\u2014', align: 'right', tip: 'Dividend payout ratio' },
+  { key: 'earnings_coverage', label: 'EPS Cov.', fmt: v => v != null ? `${Number(v).toFixed(2)}x` : '\u2014', align: 'right', tip: 'EPS coverage of annual dividend' },
+  { key: 'dividend_streak_years', label: 'Streak', fmt: v => v != null ? `${Number(v).toFixed(0)}y` : '\u2014', align: 'right', tip: 'Consecutive years with dividend payments' },
+  { key: 'debt_to_equity', label: 'D/E', fmt: fmtNum, align: 'right', tip: 'Debt to equity ratio' },
+  { key: 'gain_or_loss', label: 'Gain / Loss', fmt: fmt, align: 'right', tip: 'Unrealized gain or loss in dollar amount' },
+]
+
+const DIV_FOOTER_KEYS = new Set([
+  'approx_monthly_income',
+  'estim_payment_per_year',
+  'ytd_divs',
+  'total_divs_received',
+])
+
+// Footer cells follow the visible column order. The old colSpan layout assumed
+// Ticker–Shares always sat on the left; a moved Est. Monthly would land under
+// the wrong header.
+function renderDivTableFooter(activeCols, totals) {
+  if (!totals) return null
+  let leading = 0
+  while (leading < activeCols.length && !DIV_FOOTER_KEYS.has(activeCols[leading].key)) leading += 1
+  let labelPlaced = leading > 0
+  const cells = leading > 0
+    ? [<td key="__label" colSpan={leading}><strong>Totals</strong></td>]
+    : []
+  activeCols.slice(leading).forEach(col => {
+    if (!DIV_FOOTER_KEYS.has(col.key)) {
+      cells.push(<td key={col.key}>{labelPlaced ? null : <strong>Totals</strong>}</td>)
+      labelPlaced = true
+      return
+    }
+    cells.push(
+      <td key={col.key} style={{ textAlign: 'right' }}>
+        <strong>{fmt(totals[col.key])}</strong>
+      </td>
+    )
+  })
+  return (
+    <tfoot>
+      <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>{cells}</tr>
+    </tfoot>
+  )
+}
 
 // `metric`/`group` are owned by the page, not this component: changing the
 // basis or category filter puts the page back into its loading branch, which
@@ -692,6 +765,12 @@ export default function DividendAnalysis() {
   const [yieldGroup, setYieldGroup] = useState('holdings')
   const [recalcMsg, setRecalcMsg] = useState(null)
   const [recalcing, setRecalcing] = useState(false)
+  const columnLayout = useColumnLayout({
+    storageKey: 'dividend-analysis-columns-v1',
+    columns: DIV_TABLE_COLUMNS,
+    lockedKeys: DIV_LOCKED_COLS,
+  })
+  const activeCols = columnLayout.activeColumns
 
   useEffect(() => {
     const handler = (e) => { if (catRef.current && !catRef.current.contains(e.target)) setCatOpen(false) }
@@ -798,41 +877,6 @@ export default function DividendAnalysis() {
 
   const dividendSafety = data?.totals?.dividend_safety
   const atRiskCount = dividendSafety?.at_risk_holdings?.length ?? 0
-
-  const DIV_FREQ_LABELS = {
-    D: 'Daily', W: 'Weekly', M: 'Monthly', Q: 'Quarterly',
-    SA: 'Semi-Ann', S: 'Semi-Ann', A: 'Annual',
-    DAILY: 'Daily', WEEKLY: 'Weekly', MONTHLY: 'Monthly',
-    QUARTERLY: 'Quarterly', ANNUAL: 'Annual',
-  }
-  const columns = [
-    { key: 'ticker', label: 'Ticker', width: '5%' },
-    { key: 'description', label: 'Description', width: '17%' },
-    { key: 'category_name', label: 'Category', tip: 'Investment category', width: '7%' },
-    // \u2500\u2500 Dividend mechanics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    { key: 'div_frequency', label: 'Freq', fmt: v => DIV_FREQ_LABELS[v] || v || '\u2014', align: 'center', tip: 'Dividend payment frequency' },
-    { key: 'ex_div_date', label: 'Ex-Div Date', align: 'center', tip: 'Ex-dividend date' },
-    { key: 'div_pay_date', label: 'Pay Date', align: 'center', tip: 'Resolved dividend payment date; ~ marks an estimate' },
-    { key: 'quantity', label: 'Shares', fmt: v => v != null ? Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 }) : '\u2014', align: 'right', tip: 'Number of shares held' },
-    { key: 'div_per_share', label: 'Dist./Share', fmt: v => formatMoney(v, { digits: 4 }), align: 'right', tip: 'Dividend amount per share' },
-    // \u2500\u2500 Income estimates (derived from the above) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    { key: 'approx_monthly_income', label: 'Est. Monthly', fmt: fmt, align: 'right', tip: 'Estimated monthly dividend income (shares × distribution per share × frequency)' },
-    { key: 'estim_payment_per_year', label: 'Est. Annual', fmt: fmt, align: 'right', tip: 'Estimated annual dividend income' },
-    { key: 'annual_yield_on_cost', label: 'Yield on Cost', fmt: fmtPct, align: 'right', tip: 'Annual dividend yield based on your cost basis' },
-    { key: 'current_annual_yield', label: 'Current Yield', fmt: fmtPct, align: 'right', tip: 'Current annual dividend yield based on market price' },
-    // \u2500\u2500 History \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    { key: 'ytd_divs', label: 'YTD Divs', fmt: fmt, align: 'right', tip: 'Year-to-date dividends received' },
-    { key: 'total_divs_received', label: 'Total Divs', fmt: fmt, align: 'right', tip: 'Total dividends received since purchase' },
-    { key: 'paid_for_itself', label: 'Paid For Itself', fmt: v => fmtPctRaw(v != null ? v * 100 : null), align: 'right', tip: 'Percentage of original cost recovered through dividends' },
-    // \u2500\u2500 Safety \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-    { key: 'safety_score', label: 'Safety', align: 'center', tip: 'Composite dividend safety score' },
-    { key: 'safety_risk_level', label: 'Risk', align: 'center', tip: 'Estimated dividend cut risk level' },
-    { key: 'payout_ratio_pct', label: 'Payout', fmt: v => v != null ? `${Number(v).toFixed(1)}%` : '\u2014', align: 'right', tip: 'Dividend payout ratio' },
-    { key: 'earnings_coverage', label: 'EPS Cov.', fmt: v => v != null ? `${Number(v).toFixed(2)}x` : '\u2014', align: 'right', tip: 'EPS coverage of annual dividend' },
-    { key: 'dividend_streak_years', label: 'Streak', fmt: v => v != null ? `${Number(v).toFixed(0)}y` : '\u2014', align: 'right', tip: 'Consecutive years with dividend payments' },
-    { key: 'debt_to_equity', label: 'D/E', fmt: fmtNum, align: 'right', tip: 'Debt to equity ratio' },
-    { key: 'gain_or_loss', label: 'Gain / Loss', fmt: fmt, align: 'right', tip: 'Unrealized gain or loss in dollar amount' },
-  ]
 
   return (
     <div className="page dashboard">
@@ -1015,13 +1059,30 @@ export default function DividendAnalysis() {
           </div>
 
           {/* Data table */}
-          <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>Click any column header to sort. Click again to reverse.</p>
+          <div className="holdings-column-bar">
+            <span className="column-bar-hint">
+              This table is customizable &mdash; use <strong>Columns</strong> to choose which ones show,
+              and drag a header to reorder them. Click a header to sort.
+            </span>
+            <ColumnCustomizer
+              layout={columnLayout}
+              detailOf={col => col.tip}
+              buttonLabel="Columns"
+            />
+          </div>
           <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
             <table>
               <thead>
                 <tr>
-                  {columns.map(col => (
-                    <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: col.align || 'left', width: col.width || undefined }} onClick={() => handleSort(col.key)} title={col.tip || ''}>
+                  {activeCols.map(col => (
+                    <th
+                      key={col.key}
+                      className={columnLayout.dragClass(col.key)}
+                      style={{ cursor: 'grab', userSelect: 'none', whiteSpace: 'nowrap', textAlign: col.align || 'left', width: col.width || undefined }}
+                      onClick={() => handleSort(col.key)}
+                      title={`${col.tip || col.label}\u000a\u000aDrag this header to reorder the columns.`}
+                      {...columnLayout.dragHandlers(col.key)}
+                    >
                       {col.label}{col.tip ? ' \u24D8' : ''}
                       <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === col.key ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                         {sortIcon(col.key)}
@@ -1036,7 +1097,7 @@ export default function DividendAnalysis() {
                   const riskTitle = row.risk_reasons?.length ? row.risk_reasons.join('; ') : ''
                   return (
                     <tr key={row.ticker} className={row.cut_risk_flag ? 'div-risk-row' : ''} style={paidPct >= 100 ? { background: 'rgba(77,255,145,0.05)' } : {}} title={riskTitle}>
-                      {columns.map(col => {
+                      {activeCols.map(col => {
                         const val = row[col.key]
                         let display = col.fmt ? col.fmt(val) : (val ?? '')
                         let style = col.align ? { textAlign: col.align } : {}
@@ -1060,20 +1121,7 @@ export default function DividendAnalysis() {
                   )
                 })}
               </tbody>
-              {data.totals && (
-                <tfoot>
-                  <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
-                    <td colSpan={3}><strong>Totals</strong></td>
-                    <td colSpan={5}></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.approx_monthly_income)}</strong></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.estim_payment_per_year)}</strong></td>
-                    <td colSpan={2}></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.ytd_divs)}</strong></td>
-                    <td style={{ textAlign: 'right' }}><strong>{fmt(data.totals.total_divs_received)}</strong></td>
-                    <td colSpan={8}></td>
-                  </tr>
-                </tfoot>
-              )}
+              {renderDivTableFooter(activeCols, data.totals)}
             </table>
           </div>
         </>
