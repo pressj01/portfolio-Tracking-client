@@ -2540,6 +2540,57 @@ th.col-drag-target {
   text-transform: uppercase;
 }
 
+.dash-week-calendar {
+  padding: 0.75rem 1rem 1rem;
+  margin-bottom: 1rem;
+}
+.dash-week-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 0.65rem;
+}
+.dash-week-head h3 {
+  color: var(--accent-2);
+  margin: 0;
+  font-size: 1rem;
+}
+.dash-week-head p {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin: 0.2rem 0 0;
+}
+.dash-week-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-shrink: 0;
+}
+.dash-week-total {
+  color: var(--pos);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.dash-week-link {
+  color: var(--accent-bright);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+.dash-week-link:hover { text-decoration: underline; }
+.dash-week-empty {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  margin: 0.65rem 0 0;
+}
+.dash-week-calendar .dc-month-grid {
+  min-width: 980px;
+}
+.dash-week-calendar .dc-month-cell {
+  min-height: 148px;
+}
+
 /* Dashboard page overrides */
 .dashboard {
   max-width: none !important;
@@ -4874,6 +4925,7 @@ th.col-drag-target {
 .dc-month-grid {
   display: grid; grid-template-columns: repeat(7, minmax(160px, 1fr)); min-width: 1120px;
 }
+.dc-week-grid { min-width: 980px; }
 .dc-month-weekday {
   padding: 8px 10px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
   background: var(--surface); color: var(--text-dim); font-size: .67rem; font-weight: 700;

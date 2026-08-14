@@ -9,6 +9,13 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import {
+  isoDate,
+  monthKeysForWeek,
+  buildWeekCells,
+  weekPaymentTotal,
+} from '../utils/dividendCalendar'
+import { DividendWeekGrid } from '../components/DividendMonthGrid'
+import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
   PERFORMANCE_RANGE_NOTE,
@@ -402,48 +409,69 @@ function BenchmarkBetaCard({ benchmark, onBenchmarkChange, beta, exposure }) {
   )
 }
 
-function UpcomingDividends({ events }) {
-  if (!events || events.length === 0) {
-    return (
-      <div className="upcoming-dividends card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <h3 style={{ color: 'var(--accent-2)', marginBottom: '0.5rem', fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
-        <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>No ex-dividend dates in the next 7 days.</p>
-      </div>
-    )
-  }
+function loadDashboardWeek(pf) {
+  const localToday = isoDate(new Date())
+  const firstMonth = localToday.slice(0, 7)
+  return pf(`/api/div-calendar?month=${encodeURIComponent(firstMonth)}`)
+    .then(safeJson)
+    .then(first => {
+      const today = first.today || localToday
+      const extraMonths = monthKeysForWeek(today).filter(month => month !== firstMonth)
+      if (!extraMonths.length) {
+        return { today, payments: first.payments || [] }
+      }
+      return Promise.all(
+        extraMonths.map(month => (
+          pf(`/api/div-calendar?month=${encodeURIComponent(month)}`).then(safeJson)
+        )),
+      ).then(more => ({
+        today,
+        payments: (first.payments || []).concat(...more.map(data => data.payments || [])),
+      }))
+    })
+}
 
-  const sortedEvents = [...events].sort((a, b) => (
-    (a.ex_date || '').localeCompare(b.ex_date || '')
-    || (a.ticker || '').localeCompare(b.ticker || '')
-  ))
-  const totalEst = events.reduce((s, e) => s + e.est_payment, 0)
+function UpcomingDividends({ payments, today, loading }) {
+  const cells = useMemo(
+    () => buildWeekCells(today || isoDate(new Date()), payments),
+    [today, payments],
+  )
+  const totalEst = weekPaymentTotal(cells)
+  const weekStart = cells[0]?.date
+  const weekEnd = cells[6]?.date
+  const rangeLabel = weekStart && weekEnd
+    ? `${weekStart.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} – ${weekEnd.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}`
+    : ''
+  const paymentCount = cells.reduce((sum, cell) => sum + cell.payments.length, 0)
 
   return (
-    <div className="upcoming-dividends card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-        <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Upcoming Dividends This Week</h3>
-        <span style={{ color: 'var(--pos)', fontWeight: 700, fontSize: '0.95rem' }}>Est. Total: {fmt(totalEst)}</span>
+    <div className="upcoming-dividends card dash-week-calendar">
+      <div className="dash-week-head">
+        <div>
+          <h3>Upcoming Dividends This Week</h3>
+          {rangeLabel && <p>Expected pay dates for {rangeLabel}</p>}
+        </div>
+        <div className="dash-week-head-meta">
+          {paymentCount > 0 && (
+            <span className="dash-week-total">Est. Total: {fmt(totalEst)}</span>
+          )}
+          <NavLink to="/div-calendar" className="dash-week-link">Open Month calendar</NavLink>
+        </div>
       </div>
-      <div className="upcoming-grid">
-        {sortedEvents.map((e, i) => (
-          <div key={i} className="upcoming-event" style={{ borderLeft: `3px solid ${e.color}` }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ color: 'var(--accent-bright)', fontWeight: 700 }}>{e.ticker}</span>
-              <span className="upcoming-freq" style={{ color: e.color }}>{e.freq_label}</span>
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-              Ex: {e.ex_weekday} {new Date(e.ex_date + 'T00:00').toLocaleDateString()}
-            </div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-              Pay: {e.pay_estimated === false ? '' : '~'}{e.pay_weekday} {new Date(e.pay_date + 'T00:00').toLocaleDateString()}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.25rem' }}>
-              <span style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)' }}>{formatMoney(e.amount)}/share</span>
-              <span style={{ fontSize: '0.85rem', color: 'var(--pos)', fontWeight: 600 }}>{fmt(e.est_payment)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+      {loading && paymentCount === 0 ? (
+        <p className="dc-month-empty">Loading this week&apos;s payment schedule...</p>
+      ) : (
+        <>
+          <DividendWeekGrid
+            cells={cells}
+            today={today}
+            ariaLabel={`Dividend payments for the week of ${rangeLabel}`}
+          />
+          {!loading && paymentCount === 0 && (
+            <p className="dash-week-empty">No dividend payments scheduled this calendar week.</p>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -1036,7 +1064,9 @@ export default function Dashboard() {
   const [trackerPerformanceLoading, setTrackerPerformanceLoading] = useState(false)
   const [trackerPerformanceError, setTrackerPerformanceError] = useState(null)
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
-  const [upcomingDivs, setUpcomingDivs] = useState([])
+  const [weekPayments, setWeekPayments] = useState([])
+  const [weekToday, setWeekToday] = useState('')
+  const [weekLoading, setWeekLoading] = useState(false)
   const [incomeSummary, setIncomeSummary] = useState(null)
   const [portfolioValue, setPortfolioValue] = useState(null)
   const [irrExcludedTickers, setIrrExcludedTickers] = useState([])
@@ -1180,7 +1210,9 @@ export default function Dashboard() {
           ? (cached.portfolioValue || null)
           : null,
       )
-      setUpcomingDivs(cached.upcomingDivs || [])
+      setWeekPayments(cached.weekPayments || [])
+      setWeekToday(cached.weekToday || '')
+      setWeekLoading(false)
       setTickerGrades(cached.tickerGrades || {})
       setTickerRisk(cached.tickerRisk || {})
       setTickerClosureRisk(cached.tickerClosureRisk || {})
@@ -1198,7 +1230,9 @@ export default function Dashboard() {
       setHoldings([])
       setIncomeSummary(null)
       setPortfolioValue(null)
-      setUpcomingDivs([])
+      setWeekPayments([])
+      setWeekToday('')
+      setWeekLoading(false)
       setTickerGrades({})
       setTickerRisk({})
       setTickerClosureRisk({})
@@ -1223,11 +1257,20 @@ export default function Dashboard() {
         setHoldings(normalized)
         setLoading(false)
         if (normalized.length > 0) {
-          // Fetch upcoming dividends and portfolio coverage immediately (no refresh needed)
-          pf('/api/upcoming-dividends')
-            .then(safeJson)
-            .then(d => { if (!stale && Array.isArray(d)) setUpcomingDivs(d) })
-            .catch(() => {})
+          // Fetch this week's Month-calendar payments immediately (no refresh needed)
+          setWeekLoading(true)
+          loadDashboardWeek(pf)
+            .then(week => {
+              if (stale) return
+              setWeekToday(week.today)
+              setWeekPayments(week.payments)
+              setWeekLoading(false)
+            })
+            .catch(() => {
+              if (stale) return
+              setWeekPayments([])
+              setWeekLoading(false)
+            })
           pf('/api/income-summary')
             .then(safeJson)
             .then(d => { if (!stale) setIncomeSummary(d) })
@@ -1449,7 +1492,8 @@ export default function Dashboard() {
     writeDashboardCache(dashboardCacheKey, {
       incomeSummary,
       portfolioValue,
-      upcomingDivs,
+      weekPayments,
+      weekToday,
       tickerGrades: gradePeriod === '1y' ? tickerGrades : {},
       tickerRisk: gradePeriod === '1y' ? tickerRisk : {},
       tickerClosureRisk: gradePeriod === '1y' ? tickerClosureRisk : {},
@@ -1468,7 +1512,8 @@ export default function Dashboard() {
     holdings,
     incomeSummary,
     portfolioValue,
-    upcomingDivs,
+    weekPayments,
+    weekToday,
     tickerGrades,
     tickerRisk,
     tickerClosureRisk,
@@ -3029,7 +3074,7 @@ export default function Dashboard() {
       </details>
 
       {/* Upcoming Dividends This Week */}
-      <UpcomingDividends events={upcomingDivs} />
+      <UpcomingDividends payments={weekPayments} today={weekToday} loading={weekLoading} />
 
       {/* Portfolio Overview — Donut + Category Table */}
       {overviewGroups && (
