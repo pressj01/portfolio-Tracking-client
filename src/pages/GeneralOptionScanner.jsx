@@ -12,6 +12,7 @@ import {
   isIndexOnlyStrategy,
   riskProfileDefaultsForGeneralStrategy,
 } from '../utils/generalOptionScannerConfig'
+import { hasScannerTrade } from '../utils/optionTradeHandoff'
 
 const money = value => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -37,7 +38,7 @@ const formatExpiration = value => {
 }
 
 const SCANNER_BY_KEY = Object.fromEntries(OPTION_SCANNERS.map(scanner => [scanner.key, scanner]))
-const SCANNER_SESSION_KEY = 'generalOptionScannerSessionV2'
+const SCANNER_SESSION_KEY = 'generalOptionScannerSessionV3'
 const TREND_FIELD = { key: 'trend', label: 'Trend', type: 'select', options: [['any', 'Any'], ['uptrend', 'Uptrend'], ['downtrend', 'Downtrend'], ['mixed', 'Mixed / range']] }
 const MOVE_FIELD = { key: 'move', label: 'Recent move', type: 'select', options: [['any', 'Any'], ['down', 'Down / pullback'], ['up', 'Up / rally']] }
 const LOOKBACK_FIELD = { key: 'lookback', label: 'Move lookback', type: 'select', options: [['5', '5 sessions'], ['10', '10 sessions'], ['21', '21 sessions']] }
@@ -362,7 +363,9 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         throw new Error(`The scanner returned an unreadable response (${response.status}). Please run it again.`)
       }
       if (!response.ok || data.error) throw new Error(data.error || `Scan failed (${response.status})`)
-      const nextRows = data.rows || []
+      const nextRows = (data.rows || []).filter(row => (
+        hasScannerTrade(row._general?.trade_kind || strategy, row)
+      ))
       if (requestId !== scanRequestRef.current.id) return
       setRows(nextRows); setSelected(nextRows[0] || null); setStats(data.stats || null); setAsOf(data.as_of || null)
     } catch (scanError) {
@@ -411,8 +414,8 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
           <small>{asOf ? `As of ${new Date(asOf).toLocaleString()}` : 'Run the scan to load current Yahoo chains'}</small>
         </div>
         {error && <div className="error-message">{error}</div>}
-        {!loading && !error && !rows.length && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? 'No candidates met every active filter' : 'Run the scan to find candidates'}</strong><span>{scanCompleted
-          ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
+        {!loading && !error && !rows.length && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
+          ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated${Number(stats?.unpriced_dropped) ? `, and ${Number(stats.unpriced_dropped).toLocaleString()} names without a listed contract were omitted` : ''}. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
           : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
         {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
         {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}

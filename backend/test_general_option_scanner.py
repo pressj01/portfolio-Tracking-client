@@ -70,10 +70,10 @@ class GeneralOptionScannerTests(unittest.TestCase):
             row["_general"].update(stock_scores={}) for row in rows
         ]
         rows = [
-            {"ticker": "DEBIT", "price": 100, "entry_credit": -0.25},
-            {"ticker": "FLAT", "price": 100, "entry_credit": 0.0},
-            {"ticker": "SMALL", "price": 100, "entry_credit": 0.25},
-            {"ticker": "LARGE", "price": 100, "entry_credit": 0.75},
+            {"ticker": "DEBIT", "price": 100, "entry_credit": -0.25, "expiration": "2026-09-18", "body_strike": 100},
+            {"ticker": "FLAT", "price": 100, "entry_credit": 0.0, "expiration": "2026-09-18", "body_strike": 100},
+            {"ticker": "SMALL", "price": 100, "entry_credit": 0.25, "expiration": "2026-09-18", "body_strike": 100},
+            {"ticker": "LARGE", "price": 100, "entry_credit": 0.75, "expiration": "2026-09-18", "body_strike": 100},
         ]
         result = run_general_option_scan(
             {
@@ -339,6 +339,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
             runner=lambda _: {"rows": [{
                 "ticker": "XYZ", "price": 100,
                 "spread": {
+                    "expiration": "2026-09-18",
                     "put_long_strike": 80, "put_short_strike": 90,
                     "call_short_strike": 105, "call_long_strike": 110,
                     "put_width": 10, "call_width": 5, "entry_credit": 5.25,
@@ -362,19 +363,85 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 "max_reference_delta": 15,
             },
             runner=lambda _: {"rows": [
-                {"ticker": "KEEP", "price": 100, "legs": [
-                    {"option_type": "put", "qty": -1, "strike": 95, "delta": -0.10},
-                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04},
+                {"ticker": "KEEP", "price": 100, "expiration": "2026-09-18", "legs": [
+                    {"option_type": "put", "qty": -1, "strike": 95, "delta": -0.10, "expiration": "2026-09-18"},
+                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": "2026-09-18"},
                 ]},
-                {"ticker": "DROP", "price": 100, "legs": [
-                    {"option_type": "put", "qty": -1, "strike": 98, "delta": -0.25},
-                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04},
+                {"ticker": "DROP", "price": 100, "expiration": "2026-09-18", "legs": [
+                    {"option_type": "put", "qty": -1, "strike": 98, "delta": -0.25, "expiration": "2026-09-18"},
+                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": "2026-09-18"},
                 ]},
             ]},
         )
         self.assertEqual([row["ticker"] for row in result["rows"]], ["KEEP"])
         self.assertEqual(result["rows"][0]["_general"]["reference_delta"], 10.0)
         self.assertEqual(result["stats"]["filter_rejections"], {"Reference option delta": 1})
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_unpriced_cash_secured_puts_are_not_shown_as_trades(self, score_rows, iv_history):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        result = run_general_option_scan(
+            {
+                "strategy": "cash-secured-put",
+                "reference_delta_mode": "short",
+                "min_reference_delta": 5,
+                "max_reference_delta": 15,
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": [
+                {"ticker": "SHELL", "price": 100, "put": None, "score": 88},
+                {"ticker": "LIVE", "price": 100, "put": {
+                    "expiration": "2026-09-18", "strike": 95, "delta": -0.10,
+                }},
+            ]},
+        )
+        self.assertEqual([row["ticker"] for row in result["rows"]], ["LIVE"])
+        self.assertEqual(result["stats"]["unpriced_dropped"], 1)
+        self.assertEqual(result["rows"][0]["_general"]["strikes"], "95")
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_risk_averse_near_matches_still_require_a_listed_contract(
+        self, score_rows, iv_history
+    ):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        result = run_general_option_scan(
+            {
+                "strategy": "cash-secured-put",
+                "reference_delta_mode": "short",
+                "min_reference_delta": 5,
+                "max_reference_delta": 15,
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": [
+                {"ticker": "AAPL", "price": 190, "put": None},
+                {"ticker": "MSFT", "price": 420, "put": None},
+                {"ticker": "NVDA", "price": 120, "put": None},
+            ]},
+        )
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["stats"]["unpriced_dropped"], 3)
+        self.assertFalse(result["stats"]["showing_near_matches"])
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_unpriced_covered_calls_are_dropped(self, score_rows, iv_history):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        result = run_general_option_scan(
+            {"strategy": "covered-call", "include_near_matches": True},
+            runner=lambda _: {"rows": [
+                {"ticker": "XYZ", "price": 100, "call": None},
+            ]},
+        )
+        self.assertEqual(result["rows"], [])
+        self.assertEqual(result["stats"]["unpriced_dropped"], 1)
 
 
 if __name__ == "__main__":

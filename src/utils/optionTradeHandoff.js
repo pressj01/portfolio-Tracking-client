@@ -97,7 +97,13 @@ const BUILDERS = {
     const put = row?.put
     if (!put) return null
     return trade(row, 'cash-secured put', [
-      optionLeg(put, 'SELL', 'PUT', put.expiration, put.strike),
+      optionLeg(
+        put,
+        'SELL',
+        'PUT',
+        put.expiration || row.expiration || row._general?.expiration,
+        put.strike,
+      ),
     ])
   },
 

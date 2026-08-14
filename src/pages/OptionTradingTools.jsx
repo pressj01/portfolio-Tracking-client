@@ -370,7 +370,6 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
     }
     shapes.push(
       { type: 'line', x0: evaluation[0].s, x1: evaluation[evaluation.length - 1].s, y0: 0, y1: 0, editable: false, line: { color: ct.zeroline, width: 1 } },
-      { type: 'line', x0: result.spot, x1: result.spot, y0: 0, y1: 1, yref: 'paper', editable: false, line: { color: '#f0b429', width: 1.5, dash: 'dot' } },
       ...(result.breakevens || []).map(value => ({
         type: 'line', x0: value, x1: value, y0: 0, y1: 1, yref: 'paper',
         editable: false, line: { color: '#ff6b6b', width: 1, dash: 'dash' },
@@ -402,12 +401,32 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         ...annotationTag('#7ecfff'),
       })
     })
+    const spotColor = '#8eb6ff'
+    const spotValue = Number(result.spot)
+    if (Number.isFinite(spotValue) && spotValue > 0) {
+      shapes.push({
+        type: 'line', x0: spotValue, x1: spotValue, y0: 0, y1: 1, yref: 'paper',
+        editable: false, layer: 'above',
+        line: { color: spotColor, width: 2.25, dash: 'longdash' },
+      })
+    }
     const annotations = [
-      {
-        x: result.spot, y: 1.26, yref: 'paper',
-        text: `<b>${result.underlying || 'Underlying'} current</b> · $${fmt(result.spot)}`,
-        xanchor: 'center', yanchor: 'bottom', ...annotationTag('#f0b429'),
-      },
+      ...(Number.isFinite(spotValue) && spotValue > 0 ? [{
+        x: spotValue,
+        y: 0,
+        yref: 'paper',
+        yshift: -28,
+        text: `<b>Current price</b> · ${result.underlying || 'Underlying'} $${fmt(spotValue)}`,
+        xanchor: 'center',
+        yanchor: 'top',
+        showarrow: false,
+        captureevents: false,
+        bgcolor: 'rgba(16, 24, 40, 0.94)',
+        bordercolor: spotColor,
+        borderwidth: 1,
+        borderpad: 4,
+        font: { color: spotColor, size: 11, family: 'Inter, system-ui, sans-serif' },
+      }] : []),
       ...(result.breakevens || []).map((value, index, values) => ({
         x: value, y: 1.10, yref: 'paper', text: `<b>B/E</b> · $${fmt(value)}`,
         xanchor: index < values.length / 2 ? 'right' : 'left', yanchor: 'bottom',
@@ -516,7 +535,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       paper_bgcolor: ct.surface,
       plot_bgcolor: ct.plot,
       font: { color: ct.font, family: 'Inter, system-ui, sans-serif' },
-      margin: { l: 70, r: 25, t: 130, b: 55 },
+      margin: { l: 70, r: 25, t: 130, b: Number.isFinite(spotValue) && spotValue > 0 ? 74 : 55 },
       height: chartHeight,
       hovermode: 'x unified',
       hoverdistance: -1,
@@ -612,7 +631,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         <button type="button" className="opt-risk-chart-expand" onClick={() => setIsExpanded(value => !value)} aria-pressed={isExpanded} title={isExpanded ? 'Return the graph to the page' : 'Expand the graph to the window'}>{isExpanded ? 'Contract' : 'Expand'}</button>
       </div>
       <div className="opt-risk-readout" aria-hidden="true">
-        <span className="opt-risk-readout-price opt-risk-readout-current"><small>{result?.underlying || 'Underlying'} current</small><strong>{fmt(result?.spot)}</strong></span>
+        <span className="opt-risk-readout-price opt-risk-readout-current"><small>Current price · {result?.underlying || 'Underlying'}</small><strong>{fmt(result?.spot)}</strong></span>
         {hover && <span className="opt-risk-readout-price opt-risk-readout-hover"><small>Cursor</small><strong>{hover.price}</strong></span>}
         <span className="opt-risk-readout-chip" style={{ borderColor: '#d46adf' }}>
           <span className="opt-risk-readout-swatch" style={{ background: '#d46adf' }} />

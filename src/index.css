@@ -9521,6 +9521,14 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 .opt-risk-chart-shell.is-expanded .opt-risk-chart-frame { flex: 1 1 0; }
 .opt-risk-chart-shell.is-expanded .opt-risk-chart { height: 100%; min-height: 0; }
+.opt-risk-readout-current {
+  background: color-mix(in srgb, #8eb6ff 12%, var(--surface-sunken));
+  border: 1px solid color-mix(in srgb, #8eb6ff 50%, var(--border));
+  border-radius: 6px;
+  padding: 0.28rem 0.55rem;
+}
+.opt-risk-readout-current small { color: #8eb6ff; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+.opt-risk-readout-current strong { color: #8eb6ff; }
 
 /* =========================================================
    Options dashboard: market regime -> scanner fit

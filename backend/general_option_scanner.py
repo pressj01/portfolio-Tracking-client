@@ -300,7 +300,10 @@ def _trade_kind(strategy: str, row: dict) -> str:
 
 def _strike_summary(row: dict) -> str:
     spread = row.get("spread") if isinstance(row.get("spread"), dict) else {}
-    legs = spread.get("legs") or row.get("legs") or []
+    # Include nested call/put objects, not just a top-level legs list. Cash-
+    # secured puts and covered calls only carry the contract under `put`/`call`,
+    # so the table was showing "—" and the analysis panel treated them as empty.
+    legs = _option_legs(row)
     if legs:
         values = [_num(leg.get("strike")) for leg in legs if isinstance(leg, dict)]
         values = [value for value in values if value is not None]
@@ -747,25 +750,36 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
     return reasons
 
 
+def _is_constructible_trade(row: dict) -> bool:
+    """True when Detailed Risk Graph can open a real listed structure.
+
+    The dedicated cash-secured-put and covered-call scanners still emit
+    stock-only score rows when the chain lookup misses. Those names look like
+    trades on this screen, but they have no strike or expiration, so the risk
+    graph stays disabled. Do not surface them here.
+    """
+    if not isinstance(row, dict) or not row.get("ticker"):
+        return False
+    spread = row.get("spread") if isinstance(row.get("spread"), dict) else {}
+    listed_legs = _option_legs(row)
+    has_expiration = bool(
+        spread.get("expiration")
+        or row.get("expiration")
+        or _nested(row, "call.expiration", "put.expiration")
+        or any(leg.get("expiration") for leg in listed_legs)
+    )
+    has_strikes = bool(listed_legs) or any(
+        character.isdigit() for character in _strike_summary(row)
+    )
+    return bool(has_expiration and has_strikes)
+
+
 def _constructible_watchlist_rows(raw: dict) -> list[dict]:
     """Keep priced legacy near-matches, but never surface unavailable shells."""
-    result = []
-    for row in raw.get("watchlist_rows") or []:
-        if not isinstance(row, dict) or not row.get("ticker"):
-            continue
-        spread = row.get("spread") if isinstance(row.get("spread"), dict) else {}
-        legs = spread.get("legs") or row.get("legs") or []
-        has_expiration = bool(
-            spread.get("expiration")
-            or row.get("expiration")
-            or _nested(row, "call.expiration", "put.expiration")
-        )
-        has_strikes = bool(legs) or any(
-            character.isdigit() for character in _strike_summary(row)
-        )
-        if has_expiration and has_strikes:
-            result.append(row)
-    return result
+    return [
+        row for row in (raw.get("watchlist_rows") or [])
+        if _is_constructible_trade(row)
+    ]
 
 
 def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> dict:
@@ -781,8 +795,12 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
     if strategy == "put-call-condor":
         raw_rows.extend(raw.get("combined_packages") or [])
     rows = []
+    unpriced_dropped = 0
     for row in raw_rows:
         if not isinstance(row, dict) or not row.get("ticker"):
+            continue
+        if not _is_constructible_trade(row):
+            unpriced_dropped += 1
             continue
         copy = dict(row)
         copy["_general"] = _general_metrics(
@@ -839,6 +857,7 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
             ),
             "showing_near_matches": showing_near_matches,
             "candidates_evaluated": candidates_evaluated,
+            "unpriced_dropped": unpriced_dropped,
             "filter_rejections": dict(sorted(
                 rejection_counts.items(), key=lambda item: (-item[1], item[0])
             )),

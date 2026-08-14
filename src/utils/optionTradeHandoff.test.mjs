@@ -306,3 +306,18 @@ test('hydrates tracked legs with live IV while preserving actual fills', () => {
   assert.deepEqual(hydrated.map(leg => leg.market_price), [2.93, 2.015])
   assert.ok(hydrated.every(leg => leg.iv_source === 'live_chain'))
 })
+
+test('builds a cash-secured put from the nested put contract', () => {
+  const trade = buildScannerTrade('cash-secured-put', {
+    ticker: 'AAPL',
+    price: 305.87,
+    put: { expiration, strike: 280, mid: 0.97, delta: -0.10, iv: 0.22 },
+  })
+
+  assert.ok(trade)
+  assert.equal(trade.legs.length, 1)
+  assert.equal(trade.legs[0].side, 'SELL')
+  assert.equal(trade.legs[0].opt_type, 'PUT')
+  assert.equal(trade.legs[0].strike, 280)
+  assert.equal(trade.legs[0].expiration, expiration)
+})

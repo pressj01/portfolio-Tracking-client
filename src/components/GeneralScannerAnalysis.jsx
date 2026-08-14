@@ -111,7 +111,7 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
     const pad = Math.max(10, (max - min) * 0.12)
     return { prices, expiration, current, low, high, min: min - pad, max: max + pad }
   }, [trade, spot, dte, rangePct, ivPct])
-  if (!model) return <div className="gsa-empty">The selected row does not contain a complete option structure.</div>
+  if (!model) return <div className="gsa-empty">{!trade ? 'The selected row does not contain a complete option structure.' : 'This trade is missing an underlying price, so the P/L graph cannot be drawn.'}</div>
 
   const width = 760, height = 280, left = 56, right = 14, top = 24, bottom = 48
   const x = value => left + (value - model.low) / (model.high - model.low) * (width - left - right)
@@ -266,7 +266,7 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
           <label><span>Price Markers</span><input type="range" min="1" max="25" step="1" value={markerPct} onChange={event => setMarkerPct(Number(event.target.value))} /><output>{markerPct} <b>%</b></output></label>
           <label><span>Implied Volatility</span><input type="range" min="5" max="200" step="0.1" value={ivPct} onChange={event => setIvPct(Number(event.target.value))} /><output>{number(ivPct, 1)} <b>%</b></output></label>
         </div>
-        <PayoffChart trade={trade} spot={Number(meta.price)} dte={analysisDte} rangePct={rangePct} markerPct={markerPct} ivPct={ivPct} />
+        <PayoffChart trade={trade} spot={Number(meta.price) || Number(row.price)} dte={analysisDte} rangePct={rangePct} markerPct={markerPct} ivPct={ivPct} />
       </div> : <LegTable trade={trade} />}
       <div className="gsa-view-toggle"><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>Table</button><button className={view === 'controls' ? 'active' : ''} onClick={() => setView('controls')}>Controls</button></div>
     </>}
