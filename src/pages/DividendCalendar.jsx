@@ -1,6 +1,22 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
+import {
+  paymentsPerYear,
+  estimatePaymentIncome,
+  calendarPaymentIncome,
+  estimateAnnualYieldPct,
+  isoDate,
+  dateFromIso,
+  monthKey,
+  shiftMonthKey,
+  buildMonthCells,
+} from '../utils/dividendCalendar'
+import {
+  DividendMonthDayCell,
+  DividendMonthLegend,
+  DividendMonthWeekdays,
+} from '../components/DividendMonthGrid'
 
 const FILTERS = [
   { key: 'all', label: 'All' },
@@ -15,7 +31,6 @@ const TABS = [
 ]
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const CANDIDATE_PROVIDERS = [
   { name: 'NEOs', note: 'primary candidate source' },
@@ -142,16 +157,6 @@ function addFreqCycle(date, freq) {
   return addMonths(d, 1)
 }
 
-function paymentsPerYear(freq) {
-  const f = String(freq || '').toUpperCase()
-  if (f === '52' || f === 'W') return 52
-  if (f === 'M') return 12
-  if (f === 'Q') return 4
-  if (f === 'SA' || f === 'S') return 2
-  if (f === 'A') return 1
-  return 12
-}
-
 function money(n, digits = 0) {
   return formatMoney(n, { digits, zeroIfInvalid: true })
 }
@@ -169,89 +174,6 @@ function formatPct1(n) {
 function formatShares(n) {
   if (!Number.isFinite(Number(n))) return '-'
   return Math.ceil(Number(n)).toLocaleString()
-}
-
-function estimatePaymentIncome(ev) {
-  const annual = Number(ev.annual_income || 0)
-  if (annual > 0) return annual / paymentsPerYear(ev.freq)
-  const amount = Number(ev.amount || ev.dividend_paid || 0)
-  const qty = Number(ev.quantity || 0)
-  return amount > 0 && qty > 0 ? amount * qty : 0
-}
-
-function calendarPaymentIncome(ev) {
-  const scopedPayment = Number(ev.payment_income || 0)
-  if (scopedPayment > 0) return scopedPayment
-  const amount = Number(ev.amount || ev.dividend_paid || 0)
-  const qty = Number(ev.quantity || 0)
-  if (amount > 0 && qty > 0) return amount * qty
-  return estimatePaymentIncome(ev)
-}
-
-function estimateAnnualYieldPct(amount, freq, price) {
-  const amt = Number(amount || 0)
-  const px = Number(price || 0)
-  if (amt <= 0 || px <= 0) return null
-  return (amt * paymentsPerYear(freq) / px) * 100
-}
-
-function currentYieldPct(ev) {
-  const annualIncome = Number(ev.annual_income || 0)
-  const holdingValue = Number(ev.current_value || 0)
-    || Number(ev.quantity || 0) * Number(ev.current_price || 0)
-  if (annualIncome > 0 && holdingValue > 0) return (annualIncome / holdingValue) * 100
-  return estimateAnnualYieldPct(ev.amount, ev.freq, ev.current_price)
-}
-
-function isoDate(date) {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function dateFromIso(value) {
-  const [year, month, day] = String(value || '').split('-').map(Number)
-  if (!year || !month || !day) return null
-  const date = new Date(year, month - 1, day)
-  return Number.isNaN(date.getTime()) ? null : date
-}
-
-function monthKey(date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-}
-
-function shiftMonthKey(key, amount) {
-  const [year, month] = String(key || '').split('-').map(Number)
-  const date = new Date(year, (month || 1) - 1 + amount, 1)
-  return monthKey(date)
-}
-
-function buildMonthCells(selectedMonth, payments) {
-  const [year, month] = String(selectedMonth || '').split('-').map(Number)
-  if (!year || !month) return []
-  const first = new Date(year, month - 1, 1)
-  const leadingDays = (first.getDay() + 6) % 7
-  const daysInMonth = new Date(year, month, 0).getDate()
-  const cellCount = Math.ceil((leadingDays + daysInMonth) / 7) * 7
-  const byDate = new Map()
-
-  payments.forEach(payment => {
-    const key = payment.calendar_pay_date
-    if (!byDate.has(key)) byDate.set(key, [])
-    byDate.get(key).push(payment)
-  })
-
-  return Array.from({ length: cellCount }, (_, index) => {
-    const date = new Date(year, month - 1, index - leadingDays + 1)
-    const key = isoDate(date)
-    return {
-      key,
-      date,
-      currentMonth: date.getMonth() === month - 1,
-      payments: byDate.get(key) || [],
-    }
-  })
 }
 
 function providerForCandidate(ticker, description = '') {
@@ -838,82 +760,15 @@ function DividendMonthView({ events, holdings, payments, loading, today, selecte
       ) : (
         <div className="dc-month-scroll">
           <div className="dc-month-grid" role="grid" aria-label={`${monthTitle} dividend payments`}>
-            {WEEKDAYS.map(day => (
-              <div key={day} className="dc-month-weekday" role="columnheader">{day}</div>
+            <DividendMonthWeekdays />
+            {cells.map(cell => (
+              <DividendMonthDayCell key={cell.key} cell={cell} today={today} />
             ))}
-            {cells.map(cell => {
-              const dailyIncome = cell.payments.reduce((sum, ev) => sum + calendarPaymentIncome(ev), 0)
-              const isToday = cell.key === today
-              return (
-                <div
-                  key={cell.key}
-                  className={`dc-month-cell${cell.currentMonth ? '' : ' outside'}${isToday ? ' today' : ''}`}
-                  role="gridcell"
-                  aria-label={`${cell.date.toLocaleDateString()}: ${cell.payments.length} dividend payments`}
-                >
-                  <div className="dc-month-cell-head">
-                    <span className="dc-month-day-number">{cell.date.getDate()}</span>
-                    {cell.currentMonth && dailyIncome > 0 && (
-                      <span className="dc-month-day-total">+{formatMoney(dailyIncome)}</span>
-                    )}
-                  </div>
-                  {cell.currentMonth && (
-                    <div className="dc-month-cell-events">
-                      {cell.payments.map((ev, index) => {
-                        const payment = calendarPaymentIncome(ev)
-                        const yieldPct = currentYieldPct(ev)
-                        const estimated = ev.calendar_estimated ?? (ev.pay_estimated || ev.calendar_projected)
-                        const description = ev.description || 'Dividend payment'
-                        return (
-                          <div
-                            key={`${cell.key}-${ev.ticker}-${index}`}
-                            className="dc-month-event"
-                            style={{ borderLeftColor: ev.color || 'var(--teal)' }}
-                            title={`${ev.ticker} - ${description}\nPayment: ${formatMoney(payment)}\nYield: ${yieldPct == null ? 'Unavailable' : `${yieldPct.toFixed(2)}%`}\nEx-dividend: ${ev.date || 'Unavailable'}\n${estimated ? 'Estimated pay date' : 'Confirmed pay date'}`}
-                          >
-                            <div
-                              className="dc-month-event-icon"
-                              style={{ background: `${ev.color || '#8899aa'}22`, color: ev.color || 'var(--text-soft)' }}
-                              aria-hidden="true"
-                            >
-                              {String(ev.ticker || '?').slice(0, 2)}
-                            </div>
-                            <div className="dc-month-event-body">
-                              <div className="dc-month-event-title">
-                                <strong>{ev.ticker}</strong>
-                                <span>{description}</span>
-                              </div>
-                              <div className="dc-month-event-meta">
-                                <strong>{formatMoney(payment)}</strong>
-                                <span
-                                  className={`dc-month-date-status${estimated ? ' estimated' : ' confirmed'}`}
-                                  title={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
-                                  aria-label={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
-                                >
-                                  {estimated ? '~' : '\u2713'}
-                                </span>
-                                <span className="dc-month-meta-dot" aria-hidden="true">&bull;</span>
-                                <span>{yieldPct == null ? 'Yield unavailable' : `${yieldPct.toFixed(2)}% yield`}</span>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
           </div>
         </div>
       )}
 
-      <div className="dc-month-legend">
-        <span><i className="confirmed">{'\u2713'}</i> confirmed pay date</span>
-        <span><i className="confirmed">{'\u2713'}</i> matched to imported transaction history</span>
-        <span><i className="estimated">~</i> estimated from the current dividend schedule</span>
-        <span>Tickers and amounts follow the selected account; aggregate views combine only their configured members.</span>
-      </div>
+      <DividendMonthLegend />
     </div>
   )
 }

@@ -851,9 +851,11 @@ function DashboardHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Upcoming Dividends</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Below the summary cards, a card shows dividends expected this week based on ex-dividend dates,
-        with estimated payout amounts per holding. Pay dates prefixed with <strong>~</strong> are estimated;
-        pay dates without the tilde are confirmed (sourced from the holding's stored pay date data).
+        Below the summary cards, a one-week slice of the Dividend Calendar <strong>Month</strong> view
+        shows expected pay dates for the current Monday–Sunday. Each day uses the same ticker chips
+        as the full month calendar: estimated payment, yield, and a confirmed or estimated pay-date
+        marker. The week total is the sum of those expected payments. Open the Month calendar from
+        the link in the header to see the rest of the month.
       </p>
     </div>
   )
@@ -2579,11 +2581,12 @@ function DivCalendarHelp() {
     <div>
       <h2>Dividend Calendar</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Dividend Calendar has two views. <strong>Calendar</strong> shows ex-dividend and
-        pay-date events for your current holdings. <strong>Optimization</strong> projects those
-        payments across the next 12 months so you can see whether income is evenly distributed
-        or concentrated in certain months. Use this page for dividend timing and income-smoothing
-        research; it is not a buy/sell signal.
+        The Dividend Calendar has three views. <strong>Calendar</strong> shows ex-dividend and
+        pay-date events for your current holdings. <strong>Month</strong> places expected pay dates
+        on a Monday–Sunday calendar. The Dashboard reuses that Month layout for the current week.
+        <strong>Optimization</strong> projects those payments across the next 12 months so you can
+        see whether income is evenly distributed or concentrated in certain months. Use this page
+        for dividend timing and income-smoothing research; it is not a buy/sell signal.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>

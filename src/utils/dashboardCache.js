@@ -3,7 +3,7 @@
 // repeating the literal: when it moved to v17 on its own, every clear helper
 // here kept filtering for v16 and silently matched nothing, so an edit on the
 // Manage Holdings screen never actually dropped the Dashboard's cached copy.
-export const CACHE_PREFIX = 'portfolio_dashboard_v17_'
+export const CACHE_PREFIX = 'portfolio_dashboard_v18_'
 
 export function dashboardCacheKey(selection, basisMode) {
   return `${CACHE_PREFIX}${selection}_${basisMode}`
