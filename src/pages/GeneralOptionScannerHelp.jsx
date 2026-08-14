@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
+import { DefinitionList, HelpSection, helpImage } from '../components/GosHelpKit'
 
-const helpImage = filename => `${import.meta.env.BASE_URL}help/${filename}`
-const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['example', 'Example']]
+const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['strategies', 'Every strategy'], ['example', 'Example']]
 
 const universeRows = [
   ['Core index ETFs', 'SPY, QQQ, and IWM only. Choose this when those are the underlyings you expect.'],
@@ -31,17 +31,6 @@ const condorStructures = [
   ['Jeep', 'The scanner’s supported six-leg Jeep variation.'],
   ['All variations', 'Builds and compares every supported Iron Condor construction.'],
 ]
-
-function HelpSection({ id, eyebrow, title, children }) {
-  return <section className="gos-help-section" id={id}>
-    <header><span>{eyebrow}</span><h2>{title}</h2></header>
-    {children}
-  </section>
-}
-
-function DefinitionList({ rows }) {
-  return <dl className="gos-help-definitions">{rows.map(([term, definition]) => <div key={term}><dt>{term}</dt><dd>{definition}</dd></div>)}</dl>
-}
 
 export default function GeneralOptionScannerHelp() {
   return <main className="page gos-help-page">
@@ -120,7 +109,12 @@ export default function GeneralOptionScannerHelp() {
       <p className="gos-help-note">Probability of success/failure, expected value, maximum profit/loss, and the P/L graph are modeled estimates based on current chain data, pricing assumptions, implied volatility, and expiration payoff. They are not guarantees.</p>
     </HelpSection>
 
-    <HelpSection id="example" eyebrow="7 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
+    <HelpSection id="strategies" eyebrow="7 · EVERY STRATEGY" title="What the Strategy specific inputs do, trade by trade">
+      <p className="gos-help-lead">This guide covers the six filter groups that work the same way for every trade. The <strong>Strategy specific</strong> group is the one that changes — it holds that trade's own construction, payoff, and risk rules. The full field-by-field reference for all 30 supported strategies lives on its own page.</p>
+      <div className="gos-help-footer-actions"><Link className="btn btn-primary" to="/general-option-scanner/strategies">Open the strategy field reference</Link></div>
+    </HelpSection>
+
+    <HelpSection id="example" eyebrow="8 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
       <ol className="gos-help-example">
         <li>Select <strong>Iron Condor</strong>.</li>
         <li>Open <strong>Include symbols</strong>.</li>

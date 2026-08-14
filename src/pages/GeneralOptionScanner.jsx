@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
 import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
 import { useProfileFetch } from '../context/ProfileContext'
@@ -426,7 +426,13 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   return <main className="page gos-page">
     <header className="gos-page-header">
       <div><span>Option Samurai-style workflow · powered by the app’s existing scanners</span><h1>General Option Scanner</h1><p>Filter the market once, compare the best structure for each ticker, then drill into every candidate and model its payoff.</p></div>
-      <div className="gos-header-actions"><span className="gos-unified-note">One unified interface for every supported strategy</span></div>
+      <div className="gos-header-actions">
+        <span className="gos-unified-note">One unified interface for every supported strategy</span>
+        <div className="gos-header-help-links">
+          <Link to="/general-option-scanner/help">Scanner guide</Link>
+          <Link to="/general-option-scanner/strategies">Every strategy&apos;s inputs</Link>
+        </div>
+      </div>
     </header>
 
     <div className="scanner-filter-workspace">

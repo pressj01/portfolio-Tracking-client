@@ -89,6 +89,7 @@ import OptionTradeImport from './pages/OptionTradeImport'
 import OptionEducation from './pages/OptionEducation'
 import GeneralOptionScanner from './pages/GeneralOptionScanner'
 import GeneralOptionScannerHelp from './pages/GeneralOptionScannerHelp'
+import GeneralOptionScannerStrategyGuide from './pages/GeneralOptionScannerStrategyGuide'
 import GreeksGuide from './pages/GreeksGuide'
 import SplitScreen from './pages/SplitScreen'
 import { generalScannerRoute } from './utils/optionScannerCatalog'
@@ -111,6 +112,7 @@ export const PAGE_GROUPS = [
       { path: '/options', label: 'Strategy Lab', element: <OptionTradingTools /> },
       { path: '/general-option-scanner', label: 'General Option Scanner', element: <GeneralOptionScanner /> },
       { path: '/general-option-scanner/help', label: 'General Option Scanner Help', element: <GeneralOptionScannerHelp /> },
+      { path: '/general-option-scanner/strategies', label: 'Strategy Field Reference', element: <GeneralOptionScannerStrategyGuide /> },
       { path: '/option-education', label: 'Option Strategy Education', element: <OptionEducation /> },
       { path: '/option-greeks', label: 'Understanding the Greeks', element: <GreeksGuide /> },
     ],

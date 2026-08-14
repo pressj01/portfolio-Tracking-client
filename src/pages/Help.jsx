@@ -6580,7 +6580,10 @@ function GeneralOptionScannerHelpEntry() {
         Hover a white section heading or its <strong>?</strong> marker for a concise explanation. Each field also has a
         matching marker, and its editor includes a longer <strong>What does this mean?</strong> explanation.
       </p>
-      <a className="btn btn-sm btn-primary" href="#/general-option-scanner/help">Open the complete Option Scanner guide</a>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <a className="btn btn-sm btn-primary" href="#/general-option-scanner/help">Open the complete Option Scanner guide</a>
+        <a className="btn btn-sm btn-outline" href="#/general-option-scanner/strategies">Every strategy&apos;s inputs, explained</a>
+      </div>
     </div>
   )
 }
