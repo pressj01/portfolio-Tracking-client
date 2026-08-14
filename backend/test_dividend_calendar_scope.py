@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -139,6 +140,140 @@ class DividendCalendarScopeTest(unittest.TestCase):
         rows = {row["ticker"]: row for row in self._rows(False, [1])}
         self.assertEqual(rows["AAA"]["date"], "2026-07-15")
         self.assertTrue(rows["AAA"]["div_frequency_locked"])
+
+    def _add_fzdxx(self, profile_id=6, quantity=10000):
+        conn = self._connect()
+        conn.execute(
+            """INSERT OR REPLACE INTO all_account_info
+               (ticker, profile_id, description, quantity, current_price,
+                current_value, div, div_frequency, estim_payment_per_year)
+               VALUES ('FZDXX', ?, 'FIDELITY TREASURY MONEY MARKET', ?, 1, ?, 0, NULL, 0)""",
+            (profile_id, quantity, quantity),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_money_market_without_dates_stays_in_the_holding_universe(self):
+        self._add_fzdxx()
+        rows = {row["ticker"]: row for row in self._rows(False, [6])}
+        self.assertIn("FZDXX", rows)
+        self.assertEqual(rows["FZDXX"]["freq"], "M")
+        self.assertIsNone(rows["FZDXX"]["date"])
+
+    def test_money_market_without_dates_appears_on_every_calendar_surface(self):
+        self._add_fzdxx()
+        today = datetime.date.today()
+        expected_ex, expected_pay = app_module._money_market_calendar_dates(today)
+        app_module._DIVIDEND_CALENDAR_CACHE.clear()
+
+        with patch.object(app_module, "get_connection", self._connect), \
+             patch.object(app_module, "_fetch_official_distribution_snapshot", return_value=None), \
+             patch.object(app_module, "_yf_div_pay_date", return_value=None), \
+             patch.object(app_module, "_money_market_sec_yield", return_value=0.04):
+            holdings = self._rows(False, [6])
+            events = app_module._build_cal_events(holdings, False, [6])
+            payments = app_module._project_dividend_payments_for_month(
+                holdings, events, today.strftime("%Y-%m")
+            )
+
+        event = next(item for item in events if item["ticker"] == "FZDXX")
+        self.assertEqual(event["date"], expected_ex.isoformat())
+        self.assertEqual(event["pay_date"], expected_pay.isoformat())
+        self.assertEqual(event["freq"], "M")
+        self.assertAlmostEqual(event["annual_income"], 400.0, places=2)
+        self.assertAlmostEqual(event["payment_income"], 400.0 / 12.0, places=2)
+        self.assertTrue(any(item["ticker"] == "FZDXX" for item in payments))
+        self.assertFalse(any(item["ticker"] == "BBB" for item in events))
+
+    def test_money_market_blank_dates_and_guessed_cadence_still_appear(self):
+        # This is the Fidelity-test-account shape: refresh stored SA from an
+        # empty Yahoo history and wrote empty strings instead of NULL dates.
+        conn = self._connect()
+        conn.execute(
+            """INSERT OR REPLACE INTO all_account_info
+               (ticker, profile_id, description, quantity, current_price,
+                current_value, div, div_frequency, ex_div_date, div_pay_date,
+                estim_payment_per_year)
+               VALUES ('FZDXX', 6, 'Fidelity Hereford Street Trust - Fidelity Money Market Fund',
+                       100, 1, 100, NULL, 'SA', '', '', 0)"""
+        )
+        conn.commit()
+        conn.close()
+        app_module._DIVIDEND_CALENDAR_CACHE.clear()
+
+        with patch.object(app_module, "get_connection", self._connect), \
+             patch.object(app_module, "_fetch_official_distribution_snapshot", return_value=None), \
+             patch.object(app_module, "_yf_div_pay_date", return_value=None), \
+             patch.object(app_module, "_money_market_sec_yield", return_value=0.035):
+            holdings = self._rows(False, [6])
+            events = app_module._build_cal_events(holdings, False, [6])
+            payments = app_module._project_dividend_payments_for_month(
+                holdings, events, datetime.date.today().strftime("%Y-%m")
+            )
+
+        self.assertEqual(next(h["freq"] for h in holdings if h["ticker"] == "FZDXX"), "M")
+        event = next(item for item in events if item["ticker"] == "FZDXX")
+        self.assertEqual(event["freq"], "M")
+        self.assertTrue(event["date"])
+        self.assertTrue(any(item["ticker"] == "FZDXX" for item in payments))
+
+    def test_semiannual_default_months_are_march_and_september(self):
+        ex_date, pay_date = app_module._frequency_calendar_dates(
+            "SA", datetime.date(2026, 8, 14)
+        )
+        self.assertEqual(ex_date, datetime.date(2026, 9, 30))
+        self.assertEqual(pay_date, datetime.date(2026, 9, 30))
+        ex_date, pay_date = app_module._frequency_calendar_dates(
+            "SA", datetime.date(2026, 10, 1)
+        )
+        self.assertEqual(ex_date, datetime.date(2027, 3, 31))
+        self.assertEqual(pay_date, datetime.date(2027, 3, 31))
+
+    def test_pinned_semiannual_without_dates_appears_in_march_and_september(self):
+        # GIF on the Fidelity test account: user pinned SA, Yahoo has no
+        # ex-div / calendar / history, so the missing-date check dropped it.
+        conn = self._connect()
+        conn.execute(
+            """INSERT OR REPLACE INTO all_account_info
+               (ticker, profile_id, description, quantity, current_price,
+                current_value, div, div_frequency, div_frequency_locked,
+                ex_div_date, div_pay_date, estim_payment_per_year)
+               VALUES ('GIF', 6, 'Rex Growth & Income Universe ETF',
+                       100, 22.55, 2255, NULL, 'SA', 1, '', '', 0)"""
+        )
+        conn.commit()
+        conn.close()
+        app_module._DIVIDEND_CALENDAR_CACHE.clear()
+
+        with patch.object(app_module, "get_connection", self._connect), \
+             patch.object(app_module, "_fetch_official_distribution_snapshot", return_value=None), \
+             patch.object(app_module, "_yf_div_pay_date", return_value=None):
+            holdings = self._rows(False, [6])
+            events = app_module._build_cal_events(holdings, False, [6])
+            september = app_module._project_dividend_payments_for_month(
+                holdings, events, "2026-09"
+            )
+            march = app_module._project_dividend_payments_for_month(
+                holdings, events, "2026-03"
+            )
+            august = app_module._project_dividend_payments_for_month(
+                holdings, events, "2026-08"
+            )
+
+        event = next(item for item in events if item["ticker"] == "GIF")
+        self.assertEqual(event["freq"], "SA")
+        self.assertIn(event["date"][5:7], ("03", "09"))
+        self.assertTrue(any(item["ticker"] == "GIF" for item in september))
+        self.assertTrue(any(item["ticker"] == "GIF" for item in march))
+        self.assertFalse(any(item["ticker"] == "GIF" for item in august))
+
+    def test_plain_holding_without_dates_is_still_omitted(self):
+        app_module._DIVIDEND_CALENDAR_CACHE.clear()
+        with patch.object(app_module, "get_connection", self._connect), \
+             patch.object(app_module, "_fetch_official_distribution_snapshot", return_value=None), \
+             patch.object(app_module, "_yf_div_pay_date", return_value=None):
+            events = app_module._build_cal_events(self._rows(False, [6]), False, [6])
+        self.assertNotIn("BBB", {item["ticker"] for item in events})
 
 
 if __name__ == "__main__":

@@ -1478,6 +1478,8 @@ _PORTFOLIO_SUMMARY_TTL_SEC = 30 * 60
 _UPCOMING_DIVIDENDS_CACHE = {}
 _DIVIDEND_CALENDAR_CACHE = {}
 _DIVIDEND_CALENDAR_BUILD_LOCK = threading.Lock()
+_MONEY_MARKET_YIELD_CACHE = {}
+_MONEY_MARKET_YIELD_TTL_SEC = 6 * 60 * 60
 _EARNINGS_CALENDAR_CACHE = {}
 _DIVIDEND_GROWTH_CACHE = {}
 _DIVIDEND_EVENT_TTL_SEC = 60 * 60
@@ -1593,6 +1595,7 @@ def _cache_set(cache, key, payload):
 def _clear_dividend_event_caches():
     _UPCOMING_DIVIDENDS_CACHE.clear()
     _DIVIDEND_CALENDAR_CACHE.clear()
+    _MONEY_MARKET_YIELD_CACHE.clear()
 
 
 @app.errorhandler(500)
@@ -28638,6 +28641,146 @@ def etf_screen_tickers():
 
 # ── Dividend Calendar ──────────────────────────────────────────────────────────
 
+_MONEY_MARKET_TICKER_RE = re.compile(r"^[A-Z]{3,4}XX$")
+_MONEY_MARKET_NAME_MARKERS = (
+    "money market", "money mkt", "mmkt", "mmk fund", "mmkt fd",
+)
+
+
+def _row_field(row, *keys):
+    """Read a key from a mapping, pandas row, or sqlite row."""
+    if row is None:
+        return None
+    getter = row.get if hasattr(row, "get") else None
+    for key in keys:
+        try:
+            value = getter(key) if getter is not None else row[key]
+        except Exception:
+            value = None
+        if value is not None:
+            try:
+                if pd.isna(value):
+                    continue
+            except (TypeError, ValueError):
+                pass
+            return value
+    return None
+
+
+def _is_money_market_holding(row):
+    """True for cash-like funds that pay monthly but have no stock ex-div date.
+
+    FZDXX and the other *XX money-market funds are quoteType MONEYMARKET on
+    Yahoo: empty dividend history, empty calendar, no exDividendDate. The
+    calendar used to drop them at the missing-date check.
+    """
+    classification = str(
+        _row_field(row, "classification_type", "classification", "quote_type") or ""
+    ).strip().upper()
+    if classification == "MONEYMARKET":
+        return True
+    description = str(_row_field(row, "description") or "").lower()
+    if any(marker in description for marker in _MONEY_MARKET_NAME_MARKERS):
+        return True
+    ticker = str(_row_field(row, "ticker") or "").strip().upper()
+    return bool(_MONEY_MARKET_TICKER_RE.fullmatch(ticker))
+
+
+def _money_market_calendar_dates(today=None):
+    """Month-end cash date for a money-market fund.
+
+    These funds accrue daily and pay on the last business day. There is no
+    separate issuer ex-div to project from, so the card uses that pay date
+    for both sides.
+    """
+    today = today or datetime.date.today()
+    pay = _last_business_date(today.year, today.month)
+    if pay < today:
+        year, month = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+        pay = _last_business_date(year, month)
+    return pay, pay
+
+
+# When the issuer feed has no dates, these are the months a cadence still pays.
+# Semi-annual uses March/September — the pair named for GIF, and the common
+# CEF schedule when there is no payment history to read the months from.
+_FREQUENCY_DEFAULT_MONTHS = {
+    "Q": (3, 6, 9, 12),
+    "SA": (3, 9),
+    "S": (3, 9),
+    "A": (12,),
+}
+
+
+def _frequency_calendar_dates(freq, today=None):
+    """Next cash dates from a known cadence when the ledger has no ex-div date."""
+    today = today or datetime.date.today()
+    freq = str(freq or "").strip().upper()
+    if freq in ("W", "52"):
+        pay = _next_business_date(today + datetime.timedelta(days=1))
+        return pay, pay
+    if freq == "M":
+        return _money_market_calendar_dates(today)
+    months = _FREQUENCY_DEFAULT_MONTHS.get(freq)
+    if not months:
+        return None, None
+    for offset in range(0, 13):
+        month_index = today.month - 1 + offset
+        year = today.year + month_index // 12
+        month = month_index % 12 + 1
+        if month not in months:
+            continue
+        pay = _last_business_date(year, month)
+        if pay >= today:
+            return pay, pay
+    return None, None
+
+
+def _money_market_sec_yield(ticker):
+    """7-day / SEC yield as a decimal, or None. Cached; never required."""
+    ticker = str(ticker or "").strip().upper()
+    if not ticker:
+        return None
+    cached = _cache_get(_MONEY_MARKET_YIELD_CACHE, ticker, _MONEY_MARKET_YIELD_TTL_SEC)
+    if cached is False:
+        return None
+    if cached is not None:
+        return cached
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info or {}
+        raw = info.get("yield") or info.get("sevenDayYield") or info.get("trailingAnnualDividendYield")
+        yield_pct = float(raw) if raw not in (None, "") else None
+        if yield_pct is not None and yield_pct > 1:
+            yield_pct = yield_pct / 100.0
+        if yield_pct is None or yield_pct <= 0 or yield_pct > 0.25:
+            _cache_set(_MONEY_MARKET_YIELD_CACHE, ticker, False)
+            return None
+        _cache_set(_MONEY_MARKET_YIELD_CACHE, ticker, yield_pct)
+        return yield_pct
+    except Exception:
+        _cache_set(_MONEY_MARKET_YIELD_CACHE, ticker, False)
+        return None
+
+
+def _money_market_fill_income(
+    ticker, amount, quantity, current_price, current_value, annual_income, payment_income,
+):
+    """Fill missing MMF income from value × SEC yield when the ledger is blank."""
+    value = current_value or (
+        quantity * current_price if quantity and current_price else 0.0
+    )
+    if annual_income <= 0:
+        yld = _money_market_sec_yield(ticker)
+        if yld and value > 0:
+            annual_income = value * yld
+    if payment_income <= 0 and annual_income > 0:
+        payment_income = annual_income / 12.0
+    if (amount is None or amount <= 0) and payment_income > 0 and quantity > 0:
+        amount = payment_income / quantity
+    return amount, annual_income, payment_income
+
+
 def _yf_div_pay_date(ticker):
     """Fetch next dividend pay date from yfinance. Returns date or None."""
     try:
@@ -28795,6 +28938,11 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
             if holding["quantity"] > 0 and holding["current_value"] > 0
             else None
         )
+        if _is_money_market_holding(holding) and not holding.get("div_frequency_locked"):
+            # Daily-accrual funds have no issuer cadence. Refresh sometimes
+            # stores SA/A from an empty Yahoo history; that is not the cash
+            # schedule, and it also blocked the Month tab from projecting.
+            holding["freq"] = "M"
         holding["color"] = freq_colors.get(holding["freq"], "#8899aa")
         holding["payment_history"] = []
         holdings.append(holding)
@@ -29034,6 +29182,9 @@ def _project_cyclical_payment_date(history, anchor_date, frequency, year, month)
     months_per_cycle = {"Q": 3, "SA": 6, "S": 6, "A": 12}.get(frequency, 1)
     base = history[-1] if history else anchor_date
     if base is None:
+        default_months = _FREQUENCY_DEFAULT_MONTHS.get(str(frequency or "").strip().upper())
+        if default_months and month in default_months:
+            return _last_business_date(year, month)
         return None
     month_distance = ((year - base.year) * 12) + month - base.month
     if month_distance % months_per_cycle != 0:
@@ -29082,7 +29233,9 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 holding_value = holding.get(field)
                 if holding_value is not None and (field != "description" or holding_value):
                     item[field] = holding_value
-        if _dividend_payment_value(item) <= 0:
+        if _dividend_payment_value(item) <= 0 and not (
+            event or _is_money_market_holding(item) or _calendar_frequency_pinned(item)
+        ):
             continue
 
         history = _payment_history_dates(item.get("payment_history"))
@@ -29366,6 +29519,10 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             row.get("div_dates_manual_until")
         )
 
+        is_money_market = _is_money_market_holding(row)
+        if is_money_market and not freq_pinned:
+            freq = "M"
+
         official = official_snapshot_for(ticker, description)
         if official and official.get("has_dividend"):
             official_freq = (official.get("freq") or "").strip().upper()
@@ -29392,7 +29549,19 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
 
         dt_ts = _parse_timestamp_value(ex_value)
         if dt_ts is None:
-            continue
+            # No issuer ex-div. Invent a date only when the holdings screen
+            # already named the rhythm (a pinned SA on GIF) or the security
+            # never has an issuer calendar (money-market funds). An unpinned
+            # monthly with a blank date stays off the grid.
+            can_synthesize = is_money_market or freq_pinned
+            synth_ex, synth_pay = (
+                _frequency_calendar_dates(freq, today_d) if can_synthesize else (None, None)
+            )
+            if synth_ex is None:
+                continue
+            dt_ts = pd.Timestamp(synth_ex)
+            if _parse_timestamp_value(pay_value) is None:
+                pay_value = synth_pay.isoformat()
         dt = dt_ts.date()
         stored_pay_ts = _parse_timestamp_value(pay_value)
 
@@ -29461,7 +29630,18 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
                 description=description,
             )
             if pay_dt is None:
-                continue
+                if not (is_money_market or freq_pinned):
+                    continue
+                _synth_ex, synth_pay = _frequency_calendar_dates(freq, today_d)
+                if synth_pay is None:
+                    continue
+                pay_dt = synth_pay
+
+        if is_money_market:
+            amount, annual_income, payment_income = _money_market_fill_income(
+                ticker, amount, quantity, current_price, current_value,
+                annual_income, payment_income,
+            )
 
         normalized_pay_ts = _parse_timestamp_value(pay_dt)
         if normalized_pay_ts is None:

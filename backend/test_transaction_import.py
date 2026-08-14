@@ -223,6 +223,26 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(position["description"], "AVANTIS INTERNATIONAL SMALL CAP VAL ETF")
         self.assertEqual(position["purchase_value"], 1635.52)
 
+    def test_fidelity_positions_keeps_purchased_money_market_funds(self):
+        content = "\n".join([
+            "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Total gain/loss $,Quantity,Type,Dist. yield,Est. annual income",
+            ",ROTH IRA,SPAXX**,HELD IN MONEY MARKET,,$11.10,,,,,Cash,3.32%,",
+            ',ROTH IRA,FZDXX,FIDELITY TREASURY MONEY MARKET,$1.00,"$5,000.00","$5,000.00",$1.00,$0.00,5000,Cash,3.51%,175.50',
+            ',ROTH IRA,AVDV,AVANTIS INTERNATIONAL SMALL CAP VAL ETF,$102.22,"$1,581.03","$1,635.52",$105.74,($54.49),15.467,ETF,2.84%,',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Portfolio_Positions.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_fidelity_positions_xlsx(str(path), path.name)
+
+        tickers = {row["ticker"] for row in result["positions"]}
+        self.assertEqual(tickers, {"FZDXX", "AVDV"})
+        self.assertEqual(result["summary"]["cash"], 11.10)
+        fzdxx = next(row for row in result["positions"] if row["ticker"] == "FZDXX")
+        self.assertEqual(fzdxx["quantity"], 5000)
+        self.assertEqual(fzdxx["estim_payment_per_year"], 175.50)
+
     def test_fidelity_positions_accepts_file_that_is_already_clean(self):
         content = "\n".join([
             "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Total gain/loss $,Quantity,Dist. yield",

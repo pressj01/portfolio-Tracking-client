@@ -525,7 +525,7 @@ export default function DividendCalendar() {
   const [monthPayments, setMonthPayments] = useState([])
   const [monthLoading, setMonthLoading] = useState(false)
   const [loading, setLoading] = useState(true)
-  const cacheKey = useMemo(() => `portfolio_div_calendar_v5_${selection}`, [selection])
+  const cacheKey = useMemo(() => `portfolio_div_calendar_v7_${selection}`, [selection])
 
   useEffect(() => {
     let stale = false

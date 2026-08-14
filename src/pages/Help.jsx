@@ -2595,8 +2595,12 @@ function DivCalendarHelp() {
       {/* ── What the Page Shows ─────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calendar View</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The Calendar tab shows each holding with an ex-dividend date as a card in a grid layout.
-        Cards are sorted chronologically and contain:
+        The Calendar tab shows each paying holding as a card in a grid layout, including money-market
+        funds such as FZDXX that have no issuer ex-dividend date, and holdings whose frequency you
+        set by hand (for example a semi-annual fund pinned to March and September) when Yahoo has
+        no dates yet. Money-market funds use the last business day of the month; a pinned
+        semi-annual schedule uses the last business day of March and September. Cards are sorted
+        chronologically and contain:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>

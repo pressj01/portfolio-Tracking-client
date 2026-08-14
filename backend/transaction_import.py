@@ -1142,7 +1142,10 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         current_value = _safe_float(record.get("Current value"))
         quantity = _safe_float(record.get("Quantity"))
 
-        if holding_type.lower() == "cash" or ticker.endswith("**"):
+        # SPAXX** and unlabeled cash stay cash. A purchased money-market fund
+        # such as FZDXX is labeled Cash in some Fidelity exports, but it pays
+        # a monthly dividend and belongs in the holdings table / calendar.
+        if ticker.endswith("**") or (holding_type.lower() == "cash" and not ticker):
             cash_value += current_value or 0.0
             filtered_count += 1
             continue
