@@ -282,6 +282,11 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
     {tab === 'options' && <div className="gsa-options-tab"><div className="gsa-detail-grid">
       <article><span>Strategy</span><strong>{strategyLabel}</strong></article><article><span>Expiration</span><strong>{formatExpiration(meta.expiration)}</strong></article>
       <article><span>IV Rank</span><strong>{meta.iv_rank == null ? 'Warming up' : `${number(meta.iv_rank, 1)}%`}</strong></article>
+      <article><span>RV (1m)</span><strong>{meta.rv == null ? '—' : `${number(meta.rv, 1)}%`}</strong></article>
+      <article><span>IV − RV</span><strong>{meta.iv_rv == null ? '—' : `${Number(meta.iv_rv) > 0 ? '+' : ''}${number(meta.iv_rv, 1)}`}</strong></article>
+      <article><span>IV − RV Rank</span><strong>{meta.iv_rv_rank == null ? 'Warming up' : `${number(meta.iv_rv_rank, 1)}%`}</strong></article>
+      <article><span>RV Rank</span><strong>{meta.rv_rank == null ? '—' : `${number(meta.rv_rank, 1)}%`}</strong></article>
+      <article><span>Volatility score</span><strong>{meta.volatility_score == null ? '—' : number(meta.volatility_score, 1)}</strong></article>
       <article><span>Max loss</span><strong>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</strong></article>
     </div><LegTable trade={trade} /></div>}
   </section>

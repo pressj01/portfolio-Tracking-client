@@ -3,8 +3,8 @@
 The existing scanner endpoints remain the source of truth for constructing and
 pricing each strategy.  This module gives the new General Option Scanner one
 stable request and result shape, applies only metrics that a strategy actually
-reports, and enriches rows with transparent stock scores and accumulated Yahoo
-IV-rank history.
+reports, and enriches rows with transparent stock scores plus IV Rank,
+IV−RV, RV Rank, and Volatility score.
 """
 
 from __future__ import annotations
@@ -13,6 +13,8 @@ from datetime import date, datetime
 import math
 import re
 from typing import Any, Callable
+
+import numpy as np
 
 from flask import jsonify, request
 
@@ -23,7 +25,13 @@ from call_scanner import run_call_scan
 from four_eight_eight_scanner import run_488_scan
 from iron_butterfly_scanner import run_iron_butterfly_scan
 from iron_condor_scanner import run_iron_condor_scan
-from option_iv_history import record_iv_snapshot
+from option_iv_history import (
+    MIN_IV_RANK_OBSERVATIONS,
+    calculate_iv_rv,
+    calculate_percentile_rank,
+    fetch_iv_observations,
+    record_iv_snapshot,
+)
 from put_condor_scanner import run_condor_scan
 from put_scanner import (
     BENCHMARK,
@@ -91,6 +99,8 @@ INDEX_ONLY_STRATEGIES = frozenset({
     "sixty-forty-twenty-fly",
 })
 INDEX_ONLY_DEFAULT_TICKERS = ("SPY", "QQQ", "IWM", "VOO")
+RV_WINDOW = 21
+TRADING_DAYS = 252
 
 STANDARD_BROAD_OVERRIDES = {
     "min_market_cap": 0,
@@ -372,6 +382,64 @@ def _reference_deltas(legs: list[dict], mode: str) -> list[float]:
     return []
 
 
+def _as_day(value) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _rv_on_or_before(rv_by_date: dict, day: date | None) -> float | None:
+    if not rv_by_date or day is None:
+        return None
+    if day in rv_by_date:
+        return rv_by_date[day]
+    earlier = [key for key in rv_by_date if key <= day]
+    return rv_by_date[max(earlier)] if earlier else None
+
+
+def _realized_vol_metrics(history_frame) -> dict:
+    """One-month realized vol, its 1-year percentile, and the dated RV series."""
+    empty = {"rv": None, "rv_rank": None, "_rv_by_date": {}}
+    if history_frame is None:
+        return empty
+    try:
+        close = history_frame["Close"].dropna()
+    except Exception:
+        return empty
+    if len(close) < RV_WINDOW + 2:
+        return empty
+    log_ret = np.log(close / close.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(log_ret) < RV_WINDOW:
+        return empty
+    series = (log_ret.rolling(RV_WINDOW).std() * math.sqrt(TRADING_DAYS)).dropna()
+    values = [float(value) for value in series.tolist() if value is not None and float(value) > 0]
+    if not values:
+        return empty
+    current = values[-1]
+    ready = len(values) >= MIN_IV_RANK_OBSERVATIONS
+    rank = calculate_percentile_rank(values, current) if ready else None
+    by_date = {}
+    for index, value in series.items():
+        day = _as_day(index)
+        try:
+            reading = float(value)
+        except (TypeError, ValueError):
+            continue
+        if day is None or reading <= 0 or not math.isfinite(reading):
+            continue
+        by_date[day] = reading
+    return {
+        "rv": current,
+        "rv_rank": round(rank, 1) if rank is not None else None,
+        "_rv_by_date": by_date,
+    }
+
+
 def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> dict:
     max_profit = _num(_nested(
         row, "spread.max_profit_dollars", "spread.max_profit", "max_profit_dollars",
@@ -481,6 +549,12 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "iv_rank_source": row.get("iv_rank_source"),
         "iv_rank_observations": int(_num(row.get("iv_rank_observations")) or 0),
         "atm_iv": _num(_nested(row, "spread.atm_iv", "call.atm_iv", "put.atm_iv", "atm_iv", "iv")),
+        "rv": None,
+        "rv_rank": None,
+        "iv_rv": None,
+        "iv_rv_rank": None,
+        "iv_rv_observations": 0,
+        "volatility_score": None,
         "total_option_volume": _num(_nested(row, "spread.total_option_volume", "total_option_volume", "option_volume")),
         "delta": _num(_nested(row, "spread.position_delta", "spread.net_delta", "position_delta", "net_delta", "delta")),
         "reference_delta": round(sum(reference_deltas) / len(reference_deltas), 2) if reference_deltas else None,
@@ -561,6 +635,11 @@ def _score_rows(rows: list[dict]) -> None:
             pass
         meta["technicals"] = _technical_context(technicals, ticker_history)
         meta["market_technicals"] = market_context
+        realized = _realized_vol_metrics(ticker_history)
+        if realized["rv"] is not None:
+            meta["rv"] = round(float(realized["rv"]) * 100.0, 2)
+        meta["rv_rank"] = realized["rv_rank"]
+        meta["_rv_by_date"] = realized["_rv_by_date"]
         if not isinstance(scores, dict):
             scores = stock_selection_scores(
                 fundamentals.get(ticker) or {},
@@ -610,18 +689,49 @@ def _technical_context(technicals: dict, history_frame) -> dict:
 def _iv_history(rows: list[dict]) -> None:
     for row in rows:
         meta = row["_general"]
-        if not meta["ticker"] or not meta["atm_iv"]:
-            continue
-        try:
-            history = record_iv_snapshot(meta["ticker"], meta["atm_iv"], meta["expiration"])
-        except Exception:
-            continue
-        if history.get("rank") is not None:
-            meta["iv_rank"] = round(float(history["rank"]), 1)
-            meta["iv_rank_source"] = "history"
-        elif meta["iv_rank"] is None:
-            meta["iv_rank_source"] = "warming_up"
-        meta["iv_rank_observations"] = int(history.get("observations") or 0)
+        rv_by_date = meta.pop("_rv_by_date", None) or {}
+        ticker = meta.get("ticker")
+        atm_iv = _num(meta.get("atm_iv"))
+        rv_decimal = _num(meta.get("rv"))
+        if rv_decimal is not None and rv_decimal > 3:
+            rv_decimal = rv_decimal / 100.0
+        if ticker and atm_iv:
+            try:
+                history = record_iv_snapshot(ticker, atm_iv, meta.get("expiration"))
+            except Exception:
+                history = {}
+            if history.get("rank") is not None:
+                meta["iv_rank"] = round(float(history["rank"]), 1)
+                meta["iv_rank_source"] = "history"
+            elif meta.get("iv_rank") is None:
+                meta["iv_rank_source"] = "warming_up"
+            meta["iv_rank_observations"] = int(history.get("observations") or 0)
+        iv_rv = calculate_iv_rv(atm_iv, rv_decimal) if atm_iv is not None else None
+        meta["iv_rv"] = round(iv_rv, 2) if iv_rv is not None else None
+        observations = []
+        if ticker:
+            try:
+                observations = fetch_iv_observations(ticker)
+            except Exception:
+                observations = []
+        spreads = []
+        for item in observations:
+            day_rv = _rv_on_or_before(rv_by_date, item.get("observed_on"))
+            spread = calculate_iv_rv(item.get("atm_iv"), day_rv)
+            if spread is not None:
+                spreads.append(spread)
+        meta["iv_rv_observations"] = len(spreads)
+        if iv_rv is not None and len(spreads) >= MIN_IV_RANK_OBSERVATIONS:
+            rank = calculate_percentile_rank(spreads, iv_rv)
+            meta["iv_rv_rank"] = round(rank, 1) if rank is not None else None
+        else:
+            meta["iv_rv_rank"] = None
+        iv_rank = _num(meta.get("iv_rank"))
+        iv_rv_rank = _num(meta.get("iv_rv_rank"))
+        if iv_rank is not None and iv_rv_rank is not None:
+            meta["volatility_score"] = round((iv_rank + iv_rv_rank) / 2.0, 1)
+        else:
+            meta["volatility_score"] = None
 
 
 def _filter_reasons(meta: dict, payload: dict) -> list[str]:
@@ -632,6 +742,14 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         ("total_option_volume", "min_total_option_volume", "Option volume", "min"),
         ("iv_rank", "min_iv_rank", "IV Rank", "min"),
         ("iv_rank", "max_iv_rank", "IV Rank", "max"),
+        ("iv_rv", "min_iv_rv", "IV − RV", "min"),
+        ("iv_rv", "max_iv_rv", "IV − RV", "max"),
+        ("iv_rv_rank", "min_iv_rv_rank", "IV − RV Rank", "min"),
+        ("iv_rv_rank", "max_iv_rv_rank", "IV − RV Rank", "max"),
+        ("rv_rank", "min_rv_rank", "RV Rank", "min"),
+        ("rv_rank", "max_rv_rank", "RV Rank", "max"),
+        ("volatility_score", "min_volatility_score", "Volatility score", "min"),
+        ("volatility_score", "max_volatility_score", "Volatility score", "max"),
         ("prob_max_profit", "min_prob_max_profit", "Probability of max profit", "min"),
         ("prob_max_loss", "max_prob_max_loss", "Probability of max loss", "max"),
         ("expected_value", "min_expected_value", "Expected value", "min"),
@@ -809,6 +927,8 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
         rows.append(copy)
     _score_rows(rows)
     _iv_history(rows)
+    for row in rows:
+        row["_general"].pop("_rv_by_date", None)
     candidates_evaluated = len(rows)
     rejection_counts: dict[str, int] = {}
     for row in rows:

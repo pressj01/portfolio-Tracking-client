@@ -16,7 +16,7 @@ const filterRows = [
   ['Descriptive data', 'Chooses the underlyings: stocks, core or broad index ETFs, sector ETFs, commodity ETFs, or exact symbols.'],
   ['Fundamental data', 'Applies the app’s 1–10 Fundamental, Growth, and Technical scores. Fundamental and Growth are not required for ETFs because those company measures do not apply cleanly to funds.'],
   ['Technical market conditions', 'Filters by the SPY trend, the underlying trend, recent price direction, lookback, minimum move, and RSI.'],
-  ['Consolidated options data', 'Filters the option chain by total contract volume and locally collected IV Rank.'],
+  ['Consolidated options data', 'Filters the option chain by total contract volume, locally collected IV Rank (a percentile), IV − RV, IV − RV Rank, RV Rank, and Volatility score.'],
   ['Option data', 'Controls expiration/DTE, the assumed bid/ask fill, and the reference-leg delta when the construction uses one.'],
   ['Strategy specific', 'Changes with the selected trade. It contains payoff, risk, probability, moneyness, and construction rules.'],
 ]
@@ -90,7 +90,11 @@ export default function GeneralOptionScannerHelp() {
         <article><h3>Moneyness</h3><p>The strike’s percentage distance from the underlying price:</p><code>(strike − price) ÷ price × 100</code><p>Negative is below the current price; positive is above it. The effect depends on whether the leg is a put or call and whether it is bought or sold.</p></article>
         <article><h3>DTE</h3><p>Days to expiration. A 7–45 DTE rule lets the strategy evaluate listed expirations in that window and prefer its target DTE where supported.</p></article>
         <article><h3>Reference delta</h3><p>The absolute delta of the primary construction leg. For income/credit trades this is usually the short leg; for directional debit trades it is usually the long leg.</p></article>
-        <article><h3>IV Rank</h3><p>The percentile of current at-the-money implied volatility among observations saved locally by the app. It needs enough observations before it is fully available.</p></article>
+        <article><h3>IV Rank</h3><p>The column is called IV Rank to match common scanner language, but the value is a percentile: the share of prior daily ATM IV prints in the past year that were below today. Front-month (about 21–60 DTE) observations are preferred so weekly and LEAP scans do not mix, and one-day IV spikes are ignored. It needs about 20 daily observations. High values (for example above 80) have historically been followed by lower IV, and low values by higher IV.</p></article>
+        <article><h3>IV − RV</h3><p>Today’s at-the-money implied volatility minus the past month’s realized volatility, in volatility points. Positive means options look expensive versus recent realized movement; negative means they look cheaper than the past month.</p></article>
+        <article><h3>IV − RV Rank</h3><p>A 0–100 percentile of today’s IV − RV versus the same spread over the past year. It is mean-reverting. It uses the stored IV snapshots paired with realized vol from price history, so it warms up with IV Rank.</p></article>
+        <article><h3>RV Rank</h3><p>A 0–100 percentile of the past month’s realized volatility versus the previous year. It shows whether recent actual movement is high or low for this name and is also mean-reverting.</p></article>
+        <article><h3>Volatility score</h3><p>The average of IV Rank and IV − RV Rank. A high score is a smoother signal that options look overpriced; a low score that they look underpriced.</p></article>
         <article><h3>Expected value</h3><p>The probability-weighted expiration payoff from the model. Positive modeled EV does not guarantee a profitable trade.</p></article>
         <article><h3>Profit ratio</h3><p>Maximum profit divided by maximum loss. A 25% ratio means $25 of maximum profit for every $100 of maximum loss.</p></article>
         <article><h3>Stock Scores F / G / T</h3><p>Fundamental, Growth, and Technical scores from 1–10. ETFs normally show no Fundamental or Growth score; Technical can still be calculated.</p></article>

@@ -2,7 +2,15 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
-from general_option_scanner import _runner_payload, run_general_option_scan
+import pandas as pd
+
+from general_option_scanner import (
+    _filter_reasons,
+    _iv_history,
+    _realized_vol_metrics,
+    _runner_payload,
+    run_general_option_scan,
+)
 
 
 class GeneralOptionScannerTests(unittest.TestCase):
@@ -442,6 +450,76 @@ class GeneralOptionScannerTests(unittest.TestCase):
         )
         self.assertEqual(result["rows"], [])
         self.assertEqual(result["stats"]["unpriced_dropped"], 1)
+
+
+class VolatilityMetricTests(unittest.TestCase):
+    def test_realized_vol_rank_is_high_after_a_volatile_month(self):
+        dates = pd.bdate_range("2025-01-02", periods=252)
+        prices = [100.0]
+        for index in range(1, 231):
+            prices.append(prices[-1] * (1.001 if index % 2 == 0 else 0.999))
+        for index in range(231, 252):
+            prices.append(prices[-1] * (1.04 if index % 2 == 0 else 0.96))
+        metrics = _realized_vol_metrics(pd.DataFrame({"Close": prices}, index=dates))
+        self.assertGreater(metrics["rv"], 0.2)
+        self.assertGreaterEqual(metrics["rv_rank"], 90)
+
+    def test_missing_volatility_metrics_do_not_reject_a_row(self):
+        reasons = _filter_reasons(
+            {"ticker": "XYZ", "iv_rank": None, "iv_rv": None, "iv_rv_rank": None,
+             "rv_rank": None, "volatility_score": None},
+            {
+                "min_iv_rank": 80,
+                "min_iv_rv": 2,
+                "min_iv_rv_rank": 70,
+                "min_rv_rank": 70,
+                "min_volatility_score": 70,
+            },
+        )
+        self.assertEqual(reasons, [])
+
+    def test_volatility_filters_use_the_new_metrics(self):
+        expensive = _filter_reasons(
+            {"ticker": "RICH", "iv_rv": 6.0, "iv_rv_rank": 88, "rv_rank": 40,
+             "volatility_score": 82},
+            {"max_iv_rv": 2, "max_iv_rv_rank": 70, "max_volatility_score": 60},
+        )
+        cheap = _filter_reasons(
+            {"ticker": "CHEAP", "iv_rv": -3.0, "iv_rv_rank": 20, "rv_rank": 30,
+             "volatility_score": 25},
+            {"max_iv_rv": 2, "max_iv_rv_rank": 70, "max_volatility_score": 60},
+        )
+        self.assertEqual(set(expensive), {"IV − RV", "IV − RV Rank", "Volatility score"})
+        self.assertEqual(cheap, [])
+
+    @patch("general_option_scanner.fetch_iv_observations")
+    @patch("general_option_scanner.record_iv_snapshot")
+    def test_iv_history_builds_spread_rank_and_volatility_score(self, record, fetch):
+        start = date(2026, 1, 2)
+        fetch.return_value = [
+            {"observed_on": start + timedelta(days=index), "atm_iv": 0.16 + index * 0.002}
+            for index in range(20)
+        ]
+        record.return_value = {"rank": 70.0, "observations": 20, "ready": True}
+        rv_by_date = {
+            start + timedelta(days=index): 0.18
+            for index in range(20)
+        }
+        row = {"_general": {
+            "ticker": "SPY",
+            "atm_iv": 0.198,
+            "expiration": "2026-02-20",
+            "iv_rank": None,
+            "rv": 18.0,
+            "_rv_by_date": rv_by_date,
+        }}
+        _iv_history([row])
+        meta = row["_general"]
+        self.assertAlmostEqual(meta["iv_rv"], 1.8)
+        self.assertEqual(meta["iv_rank"], 70.0)
+        self.assertGreaterEqual(meta["iv_rv_rank"], 90)
+        self.assertAlmostEqual(meta["volatility_score"], round((70.0 + meta["iv_rv_rank"]) / 2.0, 1))
+        self.assertNotIn("_rv_by_date", meta)
 
 
 if __name__ == "__main__":

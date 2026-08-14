@@ -24,7 +24,7 @@ export default function OptionScannerHub() {
         <strong>General Option Scanner</strong>
         <span>
           Use one Samurai-style screen for shared filters, strategy-specific controls, ticker drilldown,
-          locally collected Yahoo IV Rank, and an interactive payoff model. A link from that screen still
+          locally collected Yahoo IV Rank, IV−RV, RV Rank, Volatility score, and an interactive payoff model. A link from that screen still
           provides access to the original strategy screen when needed.
         </span>
         <Link className="btn btn-xs btn-scan" to="/general-option-scanner">Open General Scanner</Link>
