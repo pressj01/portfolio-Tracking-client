@@ -4730,6 +4730,8 @@ def _import_snowball_categories(parsed, profile_id):
     stats = {
         "categories_created": 0,
         "categories_skipped": 0,
+        "subcategories_created": 0,
+        "subcategories_skipped": 0,
     }
 
     try:
@@ -4745,34 +4747,73 @@ def _import_snowball_categories(parsed, profile_id):
                 (profile_id, category_name),
             ).fetchone()
             if category:
+                category_id = category["id"]
                 stats["categories_skipped"] += 1
-                continue
+            else:
+                next_sort = conn.execute(
+                    """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
+                       FROM categories WHERE profile_id = ?""",
+                    (profile_id,),
+                ).fetchone()["n"]
+                category_id = conn.execute(
+                    """INSERT INTO categories (name, target_pct, sort_order, profile_id)
+                       VALUES (?, 0, ?, ?)""",
+                    (category_name, next_sort, profile_id),
+                ).lastrowid
+                stats["categories_created"] += 1
 
-            next_sort = conn.execute(
-                """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
-                   FROM categories WHERE profile_id = ?""",
-                (profile_id,),
-            ).fetchone()["n"]
-            category_id = conn.execute(
-                """INSERT INTO categories (name, target_pct, sort_order, profile_id)
-                   VALUES (?, 0, ?, ?)""",
-                (category_name, next_sort, profile_id),
-            ).lastrowid
-            stats["categories_created"] += 1
+            for subcategory_name in definition.get("subcategories") or []:
+                subcategory_name = str(subcategory_name or "").strip()
+                if not subcategory_name:
+                    continue
+                existing_sub = conn.execute(
+                    """SELECT id FROM subcategories
+                       WHERE category_id = ? AND profile_id = ?
+                         AND LOWER(TRIM(name)) = LOWER(?)
+                       ORDER BY id LIMIT 1""",
+                    (category_id, profile_id, subcategory_name),
+                ).fetchone()
+                if existing_sub:
+                    stats["subcategories_skipped"] += 1
+                    continue
+                next_sub_sort = conn.execute(
+                    """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
+                       FROM subcategories
+                       WHERE category_id = ? AND profile_id = ?""",
+                    (category_id, profile_id),
+                ).fetchone()["n"]
+                conn.execute(
+                    """INSERT INTO subcategories
+                       (category_id, name, target_pct, profile_id, sort_order)
+                       VALUES (?, ?, 0, ?, ?)""",
+                    (category_id, subcategory_name, profile_id, next_sub_sort),
+                )
+                stats["subcategories_created"] += 1
 
         conn.commit()
         summary = parsed.get("summary") or {}
+        created = stats["categories_created"]
+        skipped = stats["categories_skipped"]
+        subs_created = stats["subcategories_created"]
+        subs_skipped = stats["subcategories_skipped"]
         msg = (
-            f"Imported {stats['categories_created']} new Snowball categor"
-            f"{'y' if stats['categories_created'] == 1 else 'ies'}"
-            f"; skipped {stats['categories_skipped']} categor"
-            f"{'y' if stats['categories_skipped'] == 1 else 'ies'} that already exist."
+            f"Imported {created} new Snowball categor"
+            f"{'y' if created == 1 else 'ies'}"
+            f" and {subs_created} subcategor"
+            f"{'y' if subs_created == 1 else 'ies'}"
+            f"; skipped {skipped} categor"
+            f"{'y' if skipped == 1 else 'ies'}"
+            f" and {subs_skipped} subcategor"
+            f"{'y' if subs_skipped == 1 else 'ies'} that already exist."
         )
-        if not stats["categories_created"]:
+        if not created and not subs_created:
+            existing = summary.get("categories", 0)
+            existing_subs = summary.get("subcategories", 0)
             msg = (
                 f"No new Snowball categories were imported; all "
-                f"{summary.get('categories', 0)} categor"
-                f"{'y' if summary.get('categories', 0) == 1 else 'ies'} already exist."
+                f"{existing} categor{'y' if existing == 1 else 'ies'}"
+                f" and {existing_subs} subcategor"
+                f"{'y' if existing_subs == 1 else 'ies'} already exist."
             )
         return jsonify({"message": msg, **stats})
     except Exception as e:

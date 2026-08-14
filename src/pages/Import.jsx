@@ -787,7 +787,7 @@ export default function Import() {
 
           {txnFormat === 'snowball_categories' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Snowball categories import:</strong> the file must include a <strong>Category</strong> column. Labels such as <em>GROWTH / Growth-Stocks</em> import as <em>Growth-Stocks</em>. Duplicate entries in the file and categories already in this account are skipped.
+              <strong>Snowball categories import:</strong> the file must include a <strong>Category</strong> column. Labels such as <em>GROWTH / Growth-Stocks</em> import as category <em>GROWTH</em> with subcategory <em>Growth-Stocks</em>. A label without a slash, such as <em>CASH</em>, is a top-level category. Duplicate entries in the file and categories already in this account are skipped. Existing categories are never deleted.
             </div>
           )}
 

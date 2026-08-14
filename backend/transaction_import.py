@@ -451,26 +451,32 @@ def parse_snowball_holdings_csv(file_path, filename):
     }
 
 
-def _snowball_category_name(value):
-    """Return the actual category name from a Snowball category label."""
+def _parse_snowball_category_label(value):
+    """Split a Snowball label into a top-level category and optional subcategory.
+
+    ``GROWTH / Growth-Stocks`` is category ``GROWTH`` with subcategory
+    ``Growth-Stocks``. A label without a slash, such as ``CASH``, is a
+    top-level category with no subcategory.
+    """
     label = str(value or "").strip()
     if not label:
-        return ""
+        return "", ""
     parent, separator, child = label.partition("/")
-    # Snowball's leading label (for example ``GROWTH`` in
-    # ``GROWTH / Growth-Stocks``) is a visual grouping. The category itself is
-    # the value after the slash. A label without a slash, such as ``CASH``, is
-    # already the category name.
-    return (child if separator else parent).strip()
+    parent = parent.strip()
+    child = child.strip()
+    if separator and child:
+        return parent, child
+    return parent, ""
 
 
 def parse_snowball_categories_csv(file_path, filename):
-    """Parse the category assignments from a Snowball Holdings export.
+    """Parse the category tree from a Snowball Holdings export.
 
-    Snowball exports categories as labels such as ``GROWTH / Growth-Stocks``.
-    The leading value is a Snowball grouping; this import creates the actual
-    category name after the slash (``Growth-Stocks``). It deliberately does
-    not parse or import holdings, prices, dividends, or transactions.
+    Snowball exports labels such as ``GROWTH / Growth-Stocks``. The leading
+    value is the top-level category; the value after the slash is a
+    subcategory. Labels without a slash, such as ``CASH``, are top-level
+    categories with no children. This import does not parse holdings,
+    prices, dividends, or transactions.
     """
     headers, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
@@ -485,28 +491,37 @@ def parse_snowball_categories_csv(file_path, filename):
         raise ValueError("The file is empty or has no data rows.")
 
     categories = []
-    category_keys = set()
+    category_index = {}
+    subcategory_keys = set()
     filtered_count = 0
     duplicates_skipped = 0
     for row in rows:
-        category = _snowball_category_name(row.get("Category"))
-        if not category:
+        category_name, subcategory_name = _parse_snowball_category_label(row.get("Category"))
+        if not category_name:
             filtered_count += 1
             continue
-        category_key = category.casefold()
-        if category_key in category_keys:
+        category_key = category_name.casefold()
+        if category_key not in category_index:
+            category_index[category_key] = len(categories)
+            categories.append({"name": category_name, "subcategories": []})
+        if not subcategory_name:
+            continue
+        subcategory_key = (category_key, subcategory_name.casefold())
+        if subcategory_key in subcategory_keys:
             duplicates_skipped += 1
             continue
-        category_keys.add(category_key)
-        categories.append({"name": category})
+        subcategory_keys.add(subcategory_key)
+        categories[category_index[category_key]]["subcategories"].append(subcategory_name)
 
     if not categories:
         raise ValueError("No valid categories were found in the Snowball file.")
 
+    subcategory_count = sum(len(item["subcategories"]) for item in categories)
     return {
         "categories": categories,
         "summary": {
             "categories": len(categories),
+            "subcategories": subcategory_count,
             "filtered": filtered_count,
             "duplicates_skipped": duplicates_skipped,
         },

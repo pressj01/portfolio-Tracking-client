@@ -37,12 +37,13 @@ class TransactionImportParserTest(unittest.TestCase):
             {"ARCC": "BDC", "ADX": "CORE EQUITY"},
         )
 
-    def test_snowball_categories_deduplicates_flat_categories(self):
+    def test_snowball_categories_nests_subcategories_under_parents(self):
         content = "\n".join([
             "Holding,Category",
             "ARCC,GROWTH / Growth-Stocks",
             "ADX,GROWTH / Growth-Stocks",
             "WMT,GROWTH / Growth-Funds",
+            "KSLV,INCOME / Income-CC Silver",
             "ICSH,CASH",
         ])
         with tempfile.TemporaryDirectory() as tmp:
@@ -54,14 +55,14 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["format_type"], "categories")
         self.assertEqual(
             result["summary"],
-            {"categories": 3, "filtered": 0, "duplicates_skipped": 1},
+            {"categories": 3, "subcategories": 3, "filtered": 0, "duplicates_skipped": 1},
         )
         self.assertEqual(
             result["categories"],
             [
-                {"name": "Growth-Stocks"},
-                {"name": "Growth-Funds"},
-                {"name": "CASH"},
+                {"name": "GROWTH", "subcategories": ["Growth-Stocks", "Growth-Funds"]},
+                {"name": "INCOME", "subcategories": ["Income-CC Silver"]},
+                {"name": "CASH", "subcategories": []},
             ],
         )
 

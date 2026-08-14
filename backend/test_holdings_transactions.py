@@ -1204,10 +1204,14 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
             responses.append(response.get_json())
 
-        self.assertEqual(responses[0]["categories_created"], 3)
+        self.assertEqual(responses[0]["categories_created"], 2)
         self.assertEqual(responses[0]["categories_skipped"], 0)
+        self.assertEqual(responses[0]["subcategories_created"], 2)
+        self.assertEqual(responses[0]["subcategories_skipped"], 0)
         self.assertEqual(responses[1]["categories_created"], 0)
-        self.assertEqual(responses[1]["categories_skipped"], 3)
+        self.assertEqual(responses[1]["categories_skipped"], 2)
+        self.assertEqual(responses[1]["subcategories_created"], 0)
+        self.assertEqual(responses[1]["subcategories_skipped"], 2)
 
         conn = self._get_connection()
         try:
@@ -1229,10 +1233,83 @@ class HoldingsTransactionApiTest(unittest.TestCase):
 
         self.assertEqual(
             [row["name"] for row in categories],
-            ["Growth-Stocks", "Growth-Funds", "CASH"],
+            ["GROWTH", "CASH"],
         )
-        self.assertEqual(subcategories, [])
+        self.assertEqual(
+            [(row["category"], row["subcategory"]) for row in subcategories],
+            [("GROWTH", "Growth-Stocks"), ("GROWTH", "Growth-Funds")],
+        )
         self.assertEqual(assignments, 0)
+
+    def test_snowball_categories_import_adds_missing_subcategories_to_existing_parent(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (53, 'Snowball Nested', 'fidelity', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, target_pct, profile_id, sort_order) "
+            "VALUES (531, 'GROWTH', 0, 53, 0)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, target_pct, profile_id, sort_order) "
+            "VALUES (532, 'Growth-Stocks', 0, 53, 1)"
+        )
+        self._execute(
+            "INSERT INTO subcategories (category_id, name, profile_id, sort_order) "
+            "VALUES (531, 'Growth-Stocks', 53, 0)"
+        )
+        content = "\n".join([
+            "Holding,Category",
+            "WMT,GROWTH / Growth-Stocks",
+            "SMH,GROWTH / Growth-Indexes",
+            "KSLV,INCOME / Income-CC Silver",
+            "ICSH,CASH",
+        ])
+
+        response = self.client.post(
+            "/api/import/transactions?profile_id=53",
+            data={
+                "format": "snowball_categories",
+                "file": (io.BytesIO(content.encode()), "Snowball_Export_Holdings.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["categories_created"], 2)
+        self.assertEqual(payload["categories_skipped"], 1)
+        self.assertEqual(payload["subcategories_created"], 2)
+        self.assertEqual(payload["subcategories_skipped"], 1)
+
+        conn = self._get_connection()
+        try:
+            categories = conn.execute(
+                "SELECT name FROM categories WHERE profile_id = 53 ORDER BY sort_order, id"
+            ).fetchall()
+            subcategories = conn.execute(
+                """SELECT c.name AS category, s.name AS subcategory
+                   FROM subcategories s
+                   JOIN categories c ON c.id = s.category_id
+                   WHERE c.profile_id = 53
+                   ORDER BY c.sort_order, s.id"""
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(
+            [row["name"] for row in categories],
+            ["GROWTH", "Growth-Stocks", "INCOME", "CASH"],
+        )
+        self.assertEqual(
+            [(row["category"], row["subcategory"]) for row in subcategories],
+            [
+                ("GROWTH", "Growth-Stocks"),
+                ("GROWTH", "Growth-Indexes"),
+                ("INCOME", "Income-CC Silver"),
+            ],
+        )
 
     def test_generic_transactions_import_builds_positions_and_deduplicates_reimports(self):
         import io
