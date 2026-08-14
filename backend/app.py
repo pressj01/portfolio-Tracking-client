@@ -12904,10 +12904,14 @@ def refresh_market_data():
 
                 if new_div:
                     cur_freq = (new_freq or 'Q').upper()
-                    if div_override_active:
-                        # Annualize the hand-typed amount at the holding's own
-                        # cadence. The snapshot's payment history belongs to the
-                        # value being overridden and would undo the correction.
+                    if div_override_active or h["div_frequency_locked"]:
+                        # A hand-typed amount or cadence owns the forward
+                        # run-rate.  In particular, a weekly payer can have
+                        # sparse or stale monthly-looking provider history;
+                        # using that history here would leave the row labelled
+                        # weekly while annualizing it 12 times.  The latest
+                        # distribution must instead be annualized at the
+                        # holding's saved cadence.
                         annual_div = new_div * _refresh_frequency_multiplier(cur_freq)
                     else:
                         annual_div = _annual_dividend_per_share_from_snapshot(

@@ -158,6 +158,15 @@ class ManualDividendOverrideApiTest(unittest.TestCase):
         with patch.object(app_module, "_chunked_yf_download", return_value=history):
             return self.client.post(f"/api/refresh?profile_id={profile_id}")
 
+    def _refresh_with_monthly_history(self, profile_id=2, yahoo_div=0.309, close=27.23):
+        """Refresh with a provider history that incorrectly looks monthly."""
+        history = pd.DataFrame(
+            {"Close": [close, close, close], "Dividends": [0.0, yahoo_div, yahoo_div]},
+            index=pd.to_datetime(["2026-06-12", "2026-06-16", "2026-07-16"]),
+        )
+        with patch.object(app_module, "_chunked_yf_download", return_value=history):
+            return self.client.post(f"/api/refresh?profile_id={profile_id}")
+
     def test_edited_div_is_pinned_and_income_follows_it(self):
         self._add_holding(2)
 
@@ -206,6 +215,20 @@ class ManualDividendOverrideApiTest(unittest.TestCase):
         self.assertAlmostEqual(row["div"], 0.22, places=6)
         self.assertAlmostEqual(row["estim_payment_per_year"], 0.22 * 68.8091 * 12, places=2)
         self.assertIsNotNone(row["div_manual_until"])
+
+    def test_market_refresh_annualizes_a_locked_weekly_frequency_as_weekly(self):
+        self._add_holding(2)
+        self.client.put("/api/holdings/UTF?profile_id=2", json={"div_frequency": "W"})
+
+        res = self._refresh_with_monthly_history()
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row()
+        self.assertEqual(row["div_frequency"], "W")
+        self.assertTrue(row["div_frequency_locked"])
+        self.assertAlmostEqual(row["div"], 0.309, places=6)
+        self.assertAlmostEqual(row["estim_payment_per_year"], 0.309 * 68.8091 * 52, places=2)
+        self.assertAlmostEqual(row["approx_monthly_income"], 0.309 * 68.8091 * 52 / 12, places=2)
 
     def test_refresh_takes_market_data_back_once_the_override_expires(self):
         self._add_holding(2)
