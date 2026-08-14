@@ -103,6 +103,43 @@ class DividendCalendarScopeTest(unittest.TestCase):
         self.assertNotIn("CCC", rows)
         self.assertEqual(rows["DDD"]["payment_history"], [self.actual_date])
 
+    def _pin(self, profile_id, ticker, ex_div_date=None):
+        conn = self._connect()
+        conn.execute(
+            """UPDATE all_account_info
+               SET div_frequency = 'SA', div_frequency_locked = 1, ex_div_date = ?
+               WHERE ticker = ? AND profile_id = ?""",
+            (ex_div_date, ticker, profile_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_frequency_pin_survives_a_holding_with_no_ex_div_date(self):
+        # The issuer feed can still date the event, so the calendar went on to
+        # rebuild the cadence the holdings screen had just overruled.
+        self._pin(6, "BBB")
+
+        rows = {row["ticker"]: row for row in self._rows(False, [6])}
+        self.assertIsNone(rows["BBB"]["date"])
+        self.assertTrue(rows["BBB"]["div_frequency_locked"])
+
+    def test_frequency_pin_is_read_across_rows_not_just_the_dated_one(self):
+        # A later import can add an unpinned row for a ticker already pinned by
+        # hand. The merged holding takes its ex-div date from that new row, and
+        # the pin has to survive being read off a different one.
+        self._pin(7, "AAA")
+        conn = self._connect()
+        conn.execute(
+            "UPDATE all_account_info SET ex_div_date = '2026-07-15' "
+            "WHERE ticker = 'AAA' AND profile_id = 6"
+        )
+        conn.commit()
+        conn.close()
+
+        rows = {row["ticker"]: row for row in self._rows(False, [1])}
+        self.assertEqual(rows["AAA"]["date"], "2026-07-15")
+        self.assertTrue(rows["AAA"]["div_frequency_locked"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,3 +1,4 @@
+import datetime
 import sys
 import unittest
 from pathlib import Path
@@ -234,6 +235,81 @@ class DividendFrequencyTest(unittest.TestCase):
             ),
             "M",
         )
+
+
+class CalendarFrequencyPinTest(unittest.TestCase):
+    """A cadence corrected on the holdings screen must reach every calendar tab.
+
+    The card reads the stored frequency, but the schedule behind it was
+    re-derived from payment spacing, so a fund fixed to semi-annual kept drawing
+    the weekly payments its old history implied.
+    """
+
+    @staticmethod
+    def _holding(freq, locked, weekly_history=True):
+        history = [
+            (datetime.date(2026, 8, 1) - datetime.timedelta(days=7 * i)).isoformat()
+            for i in range(20)
+        ][::-1]
+        return {
+            "ticker": "TEST",
+            "description": "Test Fund",
+            "date": "2026-07-15",
+            "pay_date": "2026-07-20",
+            "amount": 0.50,
+            "freq": freq,
+            "div_frequency_locked": locked,
+            "div_manual_until": None,
+            "div_dates_manual_until": None,
+            "quantity": 100.0,
+            "current_price": 10.0,
+            "current_value": 1000.0,
+            "annual_income": 100.0,
+            "payment_income": 50.0,
+            "payment_history": history if weekly_history else [],
+        }
+
+    def _project(self, holding, month):
+        return app_module._project_dividend_payments_for_month([holding], [], month)
+
+    def test_pinned_semi_annual_stops_projecting_the_old_weekly_run(self):
+        rows = self._project(self._holding("SA", 1), "2026-09")
+
+        self.assertEqual(rows, [])
+
+    def test_pinned_semi_annual_projects_one_payment_on_its_own_cycle(self):
+        rows = self._project(self._holding("SA", 1), "2027-01")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["freq"], "SA")
+        self.assertEqual(rows[0]["calendar_pay_date"], "2027-01-20")
+
+    def test_unpinned_frequency_still_follows_the_payment_history(self):
+        rows = self._project(self._holding("SA", 0), "2026-09")
+
+        self.assertEqual([row["freq"] for row in rows], ["W"] * 4)
+
+    def test_pin_agreeing_with_history_keeps_the_recorded_rhythm(self):
+        rows = self._project(self._holding("W", 1), "2026-09")
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(
+            [row["calendar_pay_date"] for row in rows],
+            ["2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"],
+        )
+
+    def test_missing_pin_from_pandas_arrives_as_nan_and_does_not_pin(self):
+        # The calendar builder rounds-trips rows through pandas, where a NULL
+        # flag becomes NaN — and bool(NaN) is True.
+        rows = self._project(self._holding("SA", float("nan")), "2026-09")
+
+        self.assertEqual([row["freq"] for row in rows], ["W"] * 4)
+
+    def test_pinned_cadence_without_history_uses_the_stored_schedule(self):
+        rows = self._project(self._holding("SA", 1, weekly_history=False), "2027-01")
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["freq"], "SA")
 
 
 if __name__ == "__main__":

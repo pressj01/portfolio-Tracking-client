@@ -142,7 +142,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
         : holding[key]
       f[key] = value != null ? value : ''
     }
-    // An existing holding keeps a blank frequency as "no distributions".
+    // An existing holding keeps a blank frequency as "detect it for me".
     // Only a brand-new holding falls back to the EMPTY_HOLDING default.
     return f
   })
@@ -158,6 +158,9 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   // after which the projected schedule is the better answer again.
   const [clearDatesOverride, setClearDatesOverride] = useState(false)
   const datesOverrideUntil = holding?.div_dates_manual_until || null
+  // The cadence pin is the one with no clock on it: a wrong frequency is
+  // permanently wrong. Clearing the field is how it comes off.
+  const freqPinned = !!holding?.div_frequency_locked
 
   useEffect(() => {
     pf('/api/categories/data')
@@ -260,12 +263,10 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
     if (payload.div && payload.quantity && mult) {
       payload.estim_payment_per_year = parseFloat((payload.div * payload.quantity * mult).toFixed(3))
       payload.approx_monthly_income = parseFloat((payload.estim_payment_per_year / 12).toFixed(3))
-    } else if (!mult) {
-      // No cadence means no projected income, so clear any figure carried over
-      // from when the holding was marked as a payer.
-      payload.estim_payment_per_year = 0
-      payload.approx_monthly_income = 0
     }
+    // A blank cadence means "work it out", not "pays nothing", so the income
+    // figures are left alone: the backend carries the current annual estimate
+    // forward until the refresh re-derives a frequency to recompute it from.
     if (payload.estim_payment_per_year && payload.current_price && payload.reinvest === 'Y') {
       payload.shares_bought_from_dividend = parseFloat((payload.estim_payment_per_year / payload.current_price).toFixed(3))
     }
@@ -399,13 +400,29 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
             <div className="form-group">
               <label>Frequency</label>
               <select value={form.div_frequency || ''} onChange={(e) => set('div_frequency', e.target.value)} style={{ width: '100%' }}>
-                <option value="">None — no distributions</option>
+                <option value="">Auto — detect from market data</option>
                 <option value="W">Weekly</option>
                 <option value="M">Monthly</option>
                 <option value="Q">Quarterly</option>
                 <option value="SA">Semi-Annual</option>
                 <option value="A">Annual</option>
               </select>
+              {freqPinned && form.div_frequency && (
+                <div style={OVERRIDE_NOTE_STYLE}>
+                  Your cadence is in use everywhere until you change it.{' '}
+                  <button type="button" onClick={() => set('div_frequency', '')} style={OVERRIDE_LINK_STYLE}>
+                    Use market data now
+                  </button>
+                </div>
+              )}
+              {freqPinned && !form.div_frequency && (
+                <div style={OVERRIDE_NOTE_STYLE}>
+                  Market data resumes on save.{' '}
+                  <button type="button" onClick={() => set('div_frequency', holding?.div_frequency || 'M')} style={OVERRIDE_LINK_STYLE}>
+                    Undo
+                  </button>
+                </div>
+              )}
             </div>
             <div className="form-group">
               <label>DRIP</label>

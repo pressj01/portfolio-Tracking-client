@@ -4562,9 +4562,13 @@ def _propagate_security_level_fields(conn, ticker, data, source_profile_id, extr
     if not shared:
         return []
     if "div_frequency" in shared:
-        # Carry the pin with the value, or the refresh would re-derive a cadence
-        # for every account except the one that was edited.
-        shared["div_frequency_locked"] = 1
+        # Carry the pin — and equally its release — with the value, or the
+        # refresh would re-derive a cadence for every account except the one
+        # that was edited, and a cleared frequency would stay pinned everywhere
+        # else.
+        shared["div_frequency_locked"] = (
+            1 if str(shared["div_frequency"] or "").strip() else 0
+        )
 
     rows = conn.execute(
         "SELECT profile_id FROM all_account_info WHERE ticker = ? AND profile_id != ?",
@@ -13972,6 +13976,10 @@ def list_holdings():
                    CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as gain_or_loss_percentage,
                    CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as percent_change,
                    MAX(a.div_frequency) as div_frequency,
+                   -- Pinned if any account's row is: update_holding sets the
+                   -- lock on every row for the ticker, so MAX means "somebody
+                   -- corrected this" rather than an alphabetical accident.
+                   MAX(a.div_frequency_locked) as div_frequency_locked,
                    MAX(a.reinvest) as reinvest,
                    MAX(a.ex_div_date) as ex_div_date,
                    MAX(a.div_pay_date) as div_pay_date,
@@ -14338,11 +14346,13 @@ def update_holding(ticker):
             vals.append(data[field])
 
     # A frequency picked on the holdings screen is a deliberate correction of
-    # what the refresh infers, so pin it. Includes the blank "no distributions"
-    # choice, which the refresh would otherwise fill back in from Yahoo.
+    # what the refresh infers, so pin it. Clearing the field is how that pin is
+    # released — the only one of the three with no expiry, so without this a
+    # correction could never be taken back. Blank means "work it out", and both
+    # the refresh and the calendar go back to inferring the cadence.
     if "div_frequency" in data:
         updates.append("div_frequency_locked = ?")
-        vals.append(1)
+        vals.append(1 if str(data["div_frequency"] or "").strip() else 0)
 
     # Same for a hand-typed Div/Share, except this pin expires. Without it the
     # refresh puts Yahoo's amount straight back — and the dashboard runs one on
@@ -28750,9 +28760,21 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
             holding["description"] = description
         if not holding["date"] and _parse_timestamp_value(row["ex_div_date"]) is not None:
             holding["date"] = _parse_timestamp_value(row["ex_div_date"]).date().isoformat()
-            holding["div_frequency_locked"] = row["div_frequency_locked"]
-            holding["div_manual_until"] = row["div_manual_until"]
-            holding["div_dates_manual_until"] = row["div_dates_manual_until"]
+        # The pins describe the security, not one account's lot, and
+        # update_holding copies them to every profile holding the ticker. Taking
+        # them off whichever row supplied the ex-div date dropped them whenever
+        # no row carried one — and the issuer feed still dates that event, so the
+        # calendar went on to rebuild the very cadence just overruled by hand.
+        if row["div_frequency_locked"]:
+            holding["div_frequency_locked"] = True
+        for pin_field in ("div_manual_until", "div_dates_manual_until"):
+            pin_value = row[pin_field]
+            # Stored ISO, so the later expiry sorts last. Keep it: an override
+            # still running in one account is still running for the security.
+            if pin_value and (
+                holding[pin_field] is None or str(pin_value) > str(holding[pin_field])
+            ):
+                holding[pin_field] = pin_value
         if not holding["pay_date"] and _parse_timestamp_value(row["div_pay_date"]) is not None:
             holding["pay_date"] = _parse_timestamp_value(row["div_pay_date"]).date().isoformat()
         if not holding["freq"] and freq:
@@ -28846,6 +28868,24 @@ def _payment_history_dates(values):
         if parsed is not None:
             dates.add(parsed.date())
     return sorted(dates)
+
+
+def _calendar_frequency_pinned(row):
+    """True when the holdings screen pinned this row's cadence.
+
+    The calendar's counterpart to _holding_frequency_locked: its rows are plain
+    dicts, and one that came through pandas carries NaN rather than None for a
+    missing flag — bool(NaN) is True, which would pin every unpinned holding.
+    """
+    value = row.get("div_frequency_locked") if hasattr(row, "get") else None
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except (TypeError, ValueError):
+        pass
+    return bool(value)
 
 
 def _payment_history_frequency(history, fallback=None):
@@ -29058,10 +29098,31 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             and start <= event_pay_date <= end
             else None
         )
-        frequency = _payment_history_frequency(
-            history,
-            (event or {}).get("freq") or item.get("freq") or item.get("div_frequency"),
-        )
+        stored_frequency = str(
+            (event or {}).get("freq")
+            or item.get("freq")
+            or item.get("div_frequency")
+            or ""
+        ).strip().upper()
+        # A cadence picked on the holdings screen outranks the one inferred from
+        # payment spacing. Without this the correction reached the calendar card
+        # (which reads the stored value) but never the schedule, so a fund fixed
+        # to semi-annual kept drawing the weekly payments its old history
+        # implied — on this tab and on every screen resolving dates through it.
+        if _calendar_frequency_pinned(item) and stored_frequency:
+            frequency = stored_frequency
+            # Those recorded payments were produced under the cadence the user
+            # just overruled, so they cannot anchor the corrected schedule
+            # either. Real paid dates are still matched below; only the rhythm
+            # projected from them is dropped.
+            schedule_history = (
+                history
+                if _payment_history_frequency(history, frequency) == frequency
+                else []
+            )
+        else:
+            frequency = _payment_history_frequency(history, stored_frequency)
+            schedule_history = history
 
         def add_payment(value, source):
             if value is None or value < start or value > end:
@@ -29079,8 +29140,11 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
 
         if frequency in ("W", "52"):
             ex_ts = _parse_timestamp_value(item.get("date") or item.get("ex_div_date"))
-            anchor = history[-1] if history else event_pay_date or (ex_ts.date() if ex_ts is not None else None)
-            for value, is_actual in _project_weekly_payment_dates(history, anchor, start, end):
+            anchor = (
+                schedule_history[-1] if schedule_history
+                else event_pay_date or (ex_ts.date() if ex_ts is not None else None)
+            )
+            for value, is_actual in _project_weekly_payment_dates(schedule_history, anchor, start, end):
                 source = (
                     "confirmed"
                     if confirmed_event_date == value
@@ -29095,7 +29159,7 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
 
         predicted = None
         if frequency == "M":
-            predicted = _monthly_payment_pattern_date(history, year, month)
+            predicted = _monthly_payment_pattern_date(schedule_history, year, month)
             if predicted is None and event_pay_date is not None:
                 cursor = pd.Timestamp(event_pay_date)
                 guard = 0
@@ -29112,7 +29176,7 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             ex_ts = _parse_timestamp_value(item.get("date") or item.get("ex_div_date"))
             anchor = event_pay_date or (ex_ts.date() if ex_ts is not None else None)
             predicted = _project_cyclical_payment_date(
-                history, anchor, frequency, year, month
+                schedule_history, anchor, frequency, year, month
             )
 
         matching_actual = _closest_payment_date(selected_actuals, predicted, 4)
@@ -29296,10 +29360,7 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
         # the same terms the dashboard refresh applies. This screen re-derived
         # everything from the feed independently, so an edit could survive the
         # refresh and still be invisible here.
-        # via pandas, so a NULL in the column arrives as NaN — and bool(NaN) is
-        # True, which would pin every unlocked row.
-        freq_locked_raw = row.get("div_frequency_locked")
-        freq_pinned = bool(freq_locked_raw) if pd.notna(freq_locked_raw) else False
+        freq_pinned = _calendar_frequency_pinned(row)
         amount_pinned = _manual_dividend_override_active(row.get("div_manual_until"))
         dates_pinned = _manual_dividend_override_active(
             row.get("div_dates_manual_until")
@@ -29566,6 +29627,153 @@ def div_calendar():
                 "profile_ids": profile_ids,
             },
         )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+def _candidate_schedule_rows(conn, view_ids):
+    """Known pay schedules for tickers the current view's calendar does not show.
+
+    Everything held in the selected account already reaches the Optimization tab
+    as a calendar event. What it cannot see is the rest of what this app already
+    knows about — the watchlist, positions held in another account, and tickers
+    held previously — so without these rows the panel can only ever recommend
+    funds that are already owned.
+
+    Reads the whole database on purpose: a candidate is by definition something
+    the current view does not hold, so the usual profile scoping would exclude
+    exactly the rows worth returning.
+    """
+    from datetime import date
+
+    today = date.today()
+    view = sorted({int(pid) for pid in (view_ids or [])})
+
+    in_view = set()
+    if view:
+        in_view = {
+            str(row["ticker"] or "").strip().upper()
+            for row in conn.execute(
+                """SELECT DISTINCT ticker FROM all_account_info
+                   WHERE profile_id IN ({}) AND COALESCE(quantity, 0) > 0""".format(
+                    ",".join("?" * len(view))
+                ),
+                view,
+            ).fetchall()
+        }
+
+    # Largest position wins, the same way _security_level_metadata_by_ticker
+    # resolves a ticker held at different frequencies in different accounts.
+    holdings = {}
+    for row in conn.execute(
+        """SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, description, quantity,
+                  current_price, div, div_frequency, ex_div_date, div_pay_date
+           FROM all_account_info
+           WHERE COALESCE(quantity, 0) > 0
+           ORDER BY ticker, quantity DESC"""
+    ).fetchall():
+        holdings.setdefault(row["ticker"], row)
+
+    schedules = {}
+    for row in conn.execute(
+        """SELECT UPPER(TRIM(ticker)) AS ticker, ex_div_date, pay_date, frequency
+           FROM dividend_schedule_history
+           ORDER BY ticker, created_at DESC, id DESC"""
+    ).fetchall():
+        schedules.setdefault(row["ticker"], row)
+
+    watchlist = {
+        str(row["ticker"] or "").strip().upper()
+        for row in conn.execute("SELECT ticker FROM watchlist_watching").fetchall()
+    }
+    watchlist.discard("")
+
+    quotes = {
+        str(row["ticker"] or "").strip().upper(): row
+        for row in conn.execute(
+            "SELECT ticker, name, price FROM general_scanner_cache"
+        ).fetchall()
+    }
+
+    universe = (set(holdings) | set(schedules) | watchlist) - in_view - {""}
+
+    rows = []
+    for ticker in sorted(universe):
+        holding = holdings.get(ticker)
+        schedule = schedules.get(ticker)
+        quote = quotes.get(ticker)
+
+        freq = ""
+        ex_value = pay_value = None
+        if holding is not None:
+            freq = str(holding["div_frequency"] or "").strip().upper()
+            ex_value, pay_value = holding["ex_div_date"], holding["div_pay_date"]
+        if schedule is not None:
+            freq = freq or str(schedule["frequency"] or "").strip().upper()
+            ex_value = ex_value or schedule["ex_div_date"]
+            pay_value = pay_value or schedule["pay_date"]
+
+        pay_ts = _parse_timestamp_value(pay_value)
+        if pay_ts is None:
+            pay_ts = _estimate_dividend_pay_timestamp(ex_value, freq)
+        # Roll a stale schedule up to the next occurrence. The tab walks this
+        # date forward itself but gives up after 80 cycles, which a ticker last
+        # held two years ago would exhaust before reaching the current month.
+        steps = 0
+        while pay_ts is not None and pay_ts.date() < today and freq and steps < 160:
+            advanced = _advance_dividend_cycle(pay_ts, freq, 1)
+            if advanced is None or advanced <= pay_ts:
+                break
+            pay_ts = advanced
+            steps += 1
+
+        def num(value):
+            try:
+                value = float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
+            return value if value > 0 else 0.0
+
+        amount = num(holding["div"]) if holding is not None else 0.0
+        price = num(holding["current_price"]) if holding is not None else 0.0
+        if price <= 0 and quote is not None:
+            price = num(quote["price"])
+        description = ""
+        if holding is not None:
+            description = str(holding["description"] or "").strip()
+        if not description and quote is not None:
+            description = str(quote["name"] or "").strip()
+
+        rows.append({
+            "ticker": ticker,
+            "description": description,
+            "freq": freq,
+            "amount": round(amount, 6) if amount > 0 else None,
+            "current_price": round(price, 4) if price > 0 else None,
+            "pay_date": pay_ts.date().isoformat() if pay_ts is not None else None,
+            # Held somewhere, just not in the account being viewed — worth
+            # saying so, since adding to an existing position is a different
+            # decision from opening one.
+            "owned": holding is not None,
+            "owned_quantity": round(num(holding["quantity"]), 6) if holding is not None else 0.0,
+            "watchlist": ticker in watchlist,
+            "has_schedule": bool(freq and pay_ts is not None),
+        })
+    return rows
+
+
+@app.route("/api/div-calendar/candidates")
+def div_calendar_candidates():
+    """Return schedule metadata for the Optimization tab's candidate universe."""
+    try:
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            view_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+            candidates = _candidate_schedule_rows(conn, view_ids)
+        finally:
+            conn.close()
+        return jsonify(candidates=candidates)
     except Exception as e:
         return jsonify(error=str(e)), 500
 

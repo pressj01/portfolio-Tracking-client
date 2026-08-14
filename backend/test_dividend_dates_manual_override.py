@@ -8,7 +8,9 @@ the projected schedule is the better answer again.
 
 Unlike the amount pin next door this one is anchored on a date the user typed
 rather than on a projected cycle. Frequency is deliberately not on this clock:
-a wrong cadence is permanently wrong, so its lock never expires.
+a wrong cadence is permanently wrong, so its lock never expires on its own.
+Clearing the frequency field is how it comes off, at which point the refresh
+and the calendar go back to predicting the cadence.
 """
 
 import datetime
@@ -206,6 +208,41 @@ class ManualDividendDatesApiTest(unittest.TestCase):
         with patch.object(app_module, "_chunked_yf_download", return_value=history), \
              patch.object(
                  app_module, "_fetch_official_distribution_snapshot", return_value=official
+             ):
+            return self.client.post(f"/api/refresh?profile_id={profile_id}")
+
+    def _refresh_with_monthly_history(self, profile_id=2):
+        """Refresh against market data that plainly says monthly.
+
+        The dividend snapshot is stubbed rather than the download, because the
+        refresh reads cadence straight off yf.Ticker -- left live, XQQI's real
+        Yahoo data decides the outcome and the test proves nothing.
+        """
+        # A full year of them: the refresh reads cadence from the batch
+        # download first, and a handful of payments reads as quarterly however
+        # they are spaced.
+        dates = pd.to_datetime([
+            (datetime.date.today().replace(day=2) - datetime.timedelta(days=30 * i))
+            for i in range(12, 0, -1)
+        ])
+        snapshot = {
+            "known": True,
+            "has_dividend": True,
+            "div": 0.8236,
+            "ex_div_date": "07/02/26",
+            "div_pay_date": "07/04/26",
+            "freq": "M",
+            "history": pd.Series([0.8236] * 12, index=dates),
+        }
+        history = pd.DataFrame(
+            {"Close": [49.425] * 12, "Dividends": [0.8236] * 12}, index=dates
+        )
+        with patch.object(app_module, "_chunked_yf_download", return_value=history), \
+             patch.object(
+                 app_module, "_fetch_refresh_dividend_snapshot", return_value=snapshot
+             ), \
+             patch.object(
+                 app_module, "_fetch_official_distribution_snapshot", return_value=None
              ):
             return self.client.post(f"/api/refresh?profile_id={profile_id}")
 
@@ -427,6 +464,69 @@ class ManualDividendDatesApiTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["date"], self._future(9).isoformat())
         self.assertAlmostEqual(events[0]["amount"], 0.9, places=4)
+
+    def test_clearing_the_frequency_releases_the_pin(self):
+        self._add_holding(2)
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "A"})
+        self.assertEqual(self._row()["div_frequency_locked"], 1)
+
+        res = self.client.put(
+            "/api/holdings/XQQI?profile_id=2", json={"div_frequency": ""}
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self._row()["div_frequency_locked"], 0)
+        self.assertEqual(self._row()["div_frequency"], "")
+
+    def test_released_frequency_is_predicted_again_by_the_refresh(self):
+        self._add_holding(2)
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "A"})
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": ""})
+
+        self._refresh_with_monthly_history()
+
+        self.assertEqual(self._row()["div_frequency"], "M")
+
+    def test_a_frequency_still_pinned_survives_the_same_refresh(self):
+        # The contrast that makes the test above mean something: identical
+        # market data, and the only difference is whether the pin was released.
+        self._add_holding(2)
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "A"})
+
+        self._refresh_with_monthly_history()
+
+        self.assertEqual(self._row()["div_frequency"], "A")
+
+    def test_releasing_the_pin_reaches_every_account_holding_the_ticker(self):
+        # update_holding writes one row and propagates security-level fields to
+        # the rest, so the release has to travel with the cleared value or the
+        # other accounts stay pinned to a cadence nobody can see any more.
+        self._add_holding(2)
+        self._add_holding(3, quantity=100.0)
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "A"})
+        self.assertEqual(self._row(profile_id=3)["div_frequency_locked"], 1)
+
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": ""})
+
+        self.assertEqual(self._row(profile_id=3)["div_frequency_locked"], 0)
+        self.assertEqual(self._row(profile_id=3)["div_frequency"], "")
+
+    def test_calendar_follows_the_issuer_feed_again_once_the_pin_is_released(self):
+        self._add_holding(2)
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "A"})
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": "Q"})
+        self.client.put("/api/holdings/XQQI?profile_id=2", json={"div_frequency": ""})
+
+        events = self._calendar(official={
+            "has_dividend": True,
+            "freq": "M",
+            "div": 0.8236,
+            "ex_div_date": self._mdy(self._future(9)),
+            "div_pay_date": self._mdy(self._future(11)),
+        })
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["freq"], "M")
 
 
 if __name__ == "__main__":
