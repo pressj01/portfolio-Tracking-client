@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerEndLabelAxisY, comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -607,8 +607,7 @@ export default function StockComparer() {
     })
     if (showReturnLabels && labelCandidates.length) {
       const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
-      const scaleY = value => logScaleActive ? Math.log10(Math.max(Number(value), Number.MIN_VALUE)) : Number(value)
-      const unscaleY = value => logScaleActive ? 10 ** value : value
+      const scaleY = value => comparerEndLabelAxisY(value, logScaleActive)
       const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
       const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
       const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
@@ -637,7 +636,8 @@ export default function StockComparer() {
         annotations.push({
           x: 1,
           xref: 'paper',
-          y: unscaleY(label.displayY),
+          // Log-axis annotations use log10 range coordinates in Plotly.
+          y: label.displayY,
           text: label.text,
           showarrow: false,
           xanchor: 'left',

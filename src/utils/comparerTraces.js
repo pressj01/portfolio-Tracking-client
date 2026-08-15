@@ -214,6 +214,18 @@ export function comparerLogHoverData(returnValues = [], normalizedValues = []) {
   ])
 }
 
+// Plotly annotations use axis-range coordinates rather than trace-data
+// coordinates. Those are identical on a linear axis, but a log axis expects
+// log10(value). Passing the raw growth value (for example 77 instead of 1.89)
+// positions the end label far outside the plot and makes it appear missing.
+export function comparerEndLabelAxisY(value, logScaleActive = false) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return null
+  return logScaleActive
+    ? Math.log10(Math.max(number, Number.MIN_VALUE))
+    : number
+}
+
 function rounded(value) {
   return Number.isFinite(value) ? Number(value.toFixed(2)) : null
 }

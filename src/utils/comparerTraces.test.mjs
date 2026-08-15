@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   COMPARER_SERIES_COLORS,
+  comparerEndLabelAxisY,
   comparerLogHoverData,
   comparerReturnModeLabel,
   comparerSeriesColor,
@@ -149,6 +150,13 @@ test('preformats log-scale hover values to two decimal places', () => {
       ['-12.35%', '87.65'],
     ],
   )
+})
+
+test('positions end labels in Plotly axis coordinates', () => {
+  assert.equal(comparerEndLabelAxisY(77, false), 77)
+  assert.equal(comparerEndLabelAxisY(100, true), 2)
+  assert.equal(comparerEndLabelAxisY(77, true), Math.log10(77))
+  assert.equal(comparerEndLabelAxisY('not-a-number', true), null)
 })
 
 // --- series palette --------------------------------------------------------

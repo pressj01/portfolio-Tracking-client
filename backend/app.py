@@ -27861,6 +27861,56 @@ def _normalize_etf_comparer_price_basis(ticker, close_series):
     return normalized
 
 
+def _etf_screen_period_bounds(period, today=None):
+    """Return the displayed start/end dates for a preset return window."""
+    value = today or datetime.date.today()
+    if isinstance(value, datetime.datetime):
+        value = value.date()
+
+    # Rolling periods are measured back from the latest market session. This
+    # makes a Saturday 6M view run Feb. 14 -> Aug. 14, for example, matching
+    # StockAnalysis instead of letting the weekend shift the start date.
+    end_date = value
+    while not is_nyse_trading_day(end_date):
+        end_date -= datetime.timedelta(days=1)
+
+    key = str(period or "").strip().lower()
+    month_offsets = {"1mo": 1, "3mo": 3, "6mo": 6}
+    year_offsets = {
+        "1y": 1, "2y": 2, "3y": 3, "4y": 4,
+        "5y": 5, "10y": 10,
+    }
+    if key in month_offsets:
+        start_date = _calendar_months_ago(end_date, month_offsets[key])
+    elif key == "ytd":
+        start_date = datetime.date(end_date.year, 1, 1)
+    elif key in year_offsets:
+        start_date = _calendar_years_ago(end_date, year_offsets[key])
+    else:
+        return None
+    return start_date, end_date
+
+
+def _etf_screen_period_download_kwargs(period, today=None):
+    """Return a prior-close-anchored market-data request for a preset period.
+
+    Yahoo's native period requests begin at the first session *after* a closed
+    start date. StockAnalysis instead measures from the last close on or before
+    the displayed boundary. Over-request enough history to find that close,
+    then let the shared downloader anchor on it. MAX/ALL still begin at the
+    first available quote because no earlier baseline exists.
+    """
+    bounds = _etf_screen_period_bounds(period, today=today)
+    if bounds is None:
+        return {"period": period}
+    start_date, end_date = bounds
+    return {
+        "start": (start_date - datetime.timedelta(days=10)).isoformat(),
+        "end": (end_date + datetime.timedelta(days=1)).isoformat(),
+        "anchor_on_or_before": start_date.isoformat(),
+    }
+
+
 def _blend_price_drip(close_series, divs_series, frac, track_cash=True):
     """Simulate reinvestment of dividends.
 
@@ -28034,16 +28084,6 @@ def etf_screen_data():
     # distribution histories and issuer data through Security Research.
     defer_details = request.args.get("defer_details", "0").lower() in {"1", "true", "yes"}
 
-    # yfinance's `period` only accepts a fixed set of strings (1mo/3mo/6mo/ytd/
-    # 1y/2y/5y/10y/max). 3Y and 4Y aren't supported, so translate them into an
-    # explicit date window and let the existing range machinery handle them.
-    if not use_range and period in ("3y", "4y"):
-        years = int(period[0])
-        today = datetime.date.today()
-        start = (today - datetime.timedelta(days=365 * years)).strftime("%Y-%m-%d")
-        end = today.strftime("%Y-%m-%d")
-        use_range = True
-
     if not ticker:
         return jsonify(error="ticker is required"), 400
 
@@ -28067,7 +28107,7 @@ def etf_screen_data():
         """Download kwargs for the requested window (explicit dates or period)."""
         if use_range:
             return {"start": start, "end": _end_exclusive(end)}
-        return {"period": period}
+        return _etf_screen_period_download_kwargs(period)
 
     # Collect all symbols
     symbols = [ticker]
@@ -28097,7 +28137,8 @@ def etf_screen_data():
             period_intervals = {
                 "1mo": "1d", "3mo": "1d", "6mo": "1d",
                 "ytd": "1d", "1y": "1d", "2y": "1wk",
-                "5y": "1wk", "10y": "1mo", "max": "1mo",
+                "3y": "1d", "4y": "1wk", "5y": "1wk",
+                "10y": "1mo", "max": "1mo",
             }
             interval = period_intervals.get(period, "1d")
 
@@ -28337,7 +28378,14 @@ def etf_screen_data():
             # caches and rebase MAX comparisons to a zero-width window.
             if len(div_close) <= 1 or not _download_has_dividend_actions(div_df):
                 try:
-                    fallback = yf.Ticker(dl_sym).history(interval="1d", auto_adjust=False, actions=True, **_range_kwargs())
+                    fallback_kwargs = _range_kwargs()
+                    fallback_anchor = fallback_kwargs.pop("anchor_on_or_before", None)
+                    fallback = yf.Ticker(dl_sym).history(
+                        interval="1d", auto_adjust=False, actions=True,
+                        **fallback_kwargs,
+                    )
+                    if fallback_anchor:
+                        fallback = _anchor_from_prior_close(fallback, fallback_anchor)
                 except Exception:
                     fallback = pd.DataFrame()
                 fallback_close = (
@@ -28374,6 +28422,18 @@ def etf_screen_data():
             # daily return traces, causing misaligned chart data.
             base = div_close if not div_close.empty else close
             dates = [d.strftime("%Y-%m-%d") for d in base.index]
+            # Retain the prior close as the 100-point baseline, but present it
+            # at the requested boundary just like StockAnalysis. The source
+            # close can be Friday while the displayed 6M boundary is Saturday.
+            preset_bounds = (
+                _etf_screen_period_bounds(period)
+                if not use_range
+                else None
+            )
+            if preset_bounds and dates:
+                display_start = preset_bounds[0].isoformat()
+                if dates[0] < display_start:
+                    dates[0] = display_start
             norm_price = [round(float(v), 4) for v in (base / float(base.iloc[0]) * 100)]
 
             # Per-point dividend/price ratio so the client can rebuild the
