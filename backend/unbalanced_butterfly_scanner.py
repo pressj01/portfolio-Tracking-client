@@ -1153,15 +1153,15 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
     market_bias = _bias_name(p.get("market_bias"))
     target_dte = max(
         MIN_TARGET_DTE,
-        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 160) or 160)),
+        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 160))),
     )
     min_dte = max(
         MIN_TARGET_DTE,
-        int(_num(p.get("min_dte"), 120) or 120),
+        int(_num(p.get("min_dte"), 120)),
     )
     max_dte = min(
         MAX_TARGET_DTE,
-        max(min_dte, int(_num(p.get("max_dte"), 240) or 240)),
+        max(min_dte, int(_num(p.get("max_dte"), 240))),
     )
     target_dte = min(max_dte, max(min_dte, target_dte))
     tranche_quantity = max(

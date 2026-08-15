@@ -110,6 +110,19 @@ class ExpirationTests(unittest.TestCase):
         chosen, _, _ = ps._pick_expiration(exps, 35, 14, 70)
         self.assertIsNone(chosen)
 
+    def test_same_day_and_three_year_expirations_are_supported(self):
+        exps = [self._exp(0), self._exp(ps.MAX_TARGET_DTE)]
+        same_day, dte, _ = ps._pick_expiration(
+            exps, 0, ps.MIN_TARGET_DTE, ps.MAX_TARGET_DTE,
+        )
+        self.assertEqual(same_day, self._exp(0))
+        self.assertEqual(dte, 0)
+        leap, dte, _ = ps._pick_expiration(
+            exps, ps.MAX_TARGET_DTE, ps.MIN_TARGET_DTE, ps.MAX_TARGET_DTE,
+        )
+        self.assertEqual(leap, self._exp(ps.MAX_TARGET_DTE))
+        self.assertEqual(dte, ps.MAX_TARGET_DTE)
+
     def test_ignores_unparseable_dates(self):
         chosen, _, _ = ps._pick_expiration(["not-a-date", self._exp(30)], 35, 14, 70)
         self.assertEqual(chosen, self._exp(30))

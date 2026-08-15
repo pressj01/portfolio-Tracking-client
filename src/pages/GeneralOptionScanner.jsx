@@ -10,9 +10,20 @@ import {
   GENERAL_STRATEGY_CONFIG,
   helpForGeneralField,
   isIndexOnlyStrategy,
+  MAX_OPTION_DTE,
+  MIN_OPTION_DTE,
   riskProfileDefaultsForGeneralStrategy,
+  updateDteFilters,
 } from '../utils/generalOptionScannerConfig'
-import { hasScannerTrade } from '../utils/optionTradeHandoff'
+import { buildScannerTrade, hasScannerTrade } from '../utils/optionTradeHandoff'
+import {
+  DEFAULT_EXPIRATION_SCENARIO,
+  EXPIRATION_SCENARIO_REFERENCES,
+  EXPIRATION_SCENARIO_STRATEGIES,
+  calculateExpirationScenario,
+  describeExpirationScenario,
+  expirationScenarioPasses,
+} from '../utils/optionExpirationScenario'
 
 const money = value => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -189,6 +200,51 @@ function DynamicField({ field, value, onChange }) {
   return <label className="gos-input"><span>{field.label}</span><div>{field.prefix && <b>{field.prefix}</b>}<input type="number" value={value ?? ''} step={field.step ?? 1} min={field.min} max={field.max} onChange={event => onChange(event.target.value === '' ? null : Number(event.target.value))} />{field.suffix && <b>{field.suffix}</b>}</div></label>
 }
 
+function ExpirationScenarioEditor({ scenario, enabled, onChange, onToggle }) {
+  const reference = EXPIRATION_SCENARIO_REFERENCES.find(item => item.value === scenario.reference)
+    || EXPIRATION_SCENARIO_REFERENCES[0]
+  return <div className="gos-scenario-editor">
+    <p>Model the trade&apos;s P/L at expiration after an underlying-price move, then optionally filter the scan by P/L on margin.</p>
+    <label className="gos-input gos-wide"><span>Underlying price at expiration</span><select value={scenario.reference} onChange={event => onChange({ ...scenario, reference: event.target.value })}>{EXPIRATION_SCENARIO_REFERENCES.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+    <div className="gos-quick-pair">
+      <label className="gos-input"><span>Move</span><div><input type="number" value={scenario.amount} step="0.25" onChange={event => onChange({ ...scenario, amount: event.target.value === '' ? 0 : Number(event.target.value) })} /><b>{reference.unit}</b></div></label>
+      <label className="gos-input"><span>P/L on margin</span><select value={scenario.marginRule} onChange={event => onChange({ ...scenario, marginRule: event.target.value })}><option value="any">Any</option><option value="above">At or above</option><option value="below">At or below</option></select></label>
+    </div>
+    {scenario.marginRule !== 'any' && <label className="gos-input gos-wide"><span>P/L on margin threshold</span><div><input type="number" value={scenario.marginPct} step="0.5" onChange={event => onChange({ ...scenario, marginPct: event.target.value === '' ? 0 : Number(event.target.value) })} /><b>%</b></div></label>}
+    <div className="gos-scenario-actions">
+      <span>{enabled ? 'Scenario #1 is active and the expiry P/L column is visible.' : 'Add this scenario to the current scan.'}</span>
+      <button type="button" className={enabled ? 'btn btn-xs btn-outline' : 'btn btn-xs btn-primary'} onClick={() => onToggle(!enabled)}>{enabled ? 'Remove scenario' : 'Add scenario'}</button>
+    </div>
+  </div>
+}
+
+function scenarioContext(row) {
+  const meta = row?._general || {}
+  const technicals = meta.technicals || {}
+  return {
+    currentPrice: meta.price ?? row?.price,
+    atr14: technicals.atr_14 ?? row?.atr_14,
+    annualizedVolatility: technicals.rv_30 ?? meta.rv ?? row?.rv_30,
+    targetPrice: technicals.target_mean_price ?? row?.target_mean_price,
+    sma200: technicals.sma_200 ?? row?.sma_200,
+    week52High: technicals.week52_high ?? row?.week52_high,
+    week52Low: technicals.week52_low ?? row?.week52_low,
+  }
+}
+
+function calculateRowScenario(row, scenario, strategy) {
+  const meta = row?._general || {}
+  const trade = buildScannerTrade(meta.trade_kind || strategy, row)
+  if (!trade) return { spot: null, pnl: null, margin: null, pnlOnMarginPct: null, error: 'The scanner trade could not be reconstructed.' }
+  return calculateExpirationScenario(
+    trade,
+    scenario,
+    scenarioContext(row),
+    meta.dte,
+    meta.max_loss_unbounded ? null : meta.max_loss,
+  )
+}
+
 function ScoreCells({ scores }) {
   const scoreTypes = [
     ['fundamental', 'F', 'Fundamental'],
@@ -215,14 +271,15 @@ function TechnicalCells({ meta }) {
   </span>
 }
 
-function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelected }) {
+function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelected, scenario, scenarioResults }) {
   return <div className="gos-table-wrap"><table className="gos-table">
-    <thead><tr><th>Ticker</th><th>Price</th><th>IV Rank</th><th>IV−RV</th><th>IV−RV Rank</th><th>RV Rank</th><th>Vol Score</th><th>Strikes</th><th>Expiration</th><th>Total Opt. Vol.</th><th>Stock Scores</th><th>Technical Setup</th><th>Delta</th><th>Prob. Max Profit</th><th>Prob. Max Loss</th><th>Expected Value</th><th>Max Profit</th><th>Max Loss</th><th>Profit Ratio</th></tr></thead>
+    <thead><tr><th>Ticker</th><th>Price</th><th>IV Rank</th><th>IV−RV</th><th>IV−RV Rank</th><th>RV Rank</th><th>Vol Score</th><th>Strikes</th><th>Expiration</th><th>Total Opt. Vol.</th><th>Stock Scores</th><th>Technical Setup</th><th>Delta</th><th>Prob. Max Profit</th><th>Prob. Max Loss</th><th>Expected Value</th><th>Max Profit</th><th>Max Loss</th><th>Profit Ratio</th>{scenario && <th>P/L on Expiry #1</th>}</tr></thead>
     <tbody>{rows.map((row, index) => {
       const meta = row._general || {}
       const key = `${meta.ticker}:${meta.expiration}:${meta.strikes}:${index}`
       const active = selected === row
       const nearMatch = meta.match_status === 'near_match'
+      const scenarioResult = scenarioResults?.get(row)
       return <tr key={key} className={`${active ? 'selected ' : ''}${nearMatch ? 'near-match' : ''}`.trim()} onClick={() => setSelected(row)} title={nearMatch ? `Near match; missed: ${(meta.filter_reasons || []).join(', ')}` : 'Matches every active filter'}>
         <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small>{nearMatch && <em>{(meta.filter_reasons || []).length} rule{(meta.filter_reasons || []).length === 1 ? '' : 's'} missed</em>}</button></td>
         <td>{money(meta.price)}</td>
@@ -236,6 +293,7 @@ function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelec
         <td><ScoreCells scores={meta.stock_scores} /></td><td><TechnicalCells meta={meta} /></td><td>{number(meta.delta, 2)}</td>
         <td>{percent(meta.prob_max_profit)}</td><td>{percent(meta.prob_max_loss)}</td><td>{money(meta.expected_value)}</td>
         <td>{riskMoney(meta.max_profit, meta.max_profit_unbounded)}</td><td>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</td><td>{percent(meta.profit_ratio)}</td>
+        {scenario && <td className="gos-scenario-cell" title={scenarioResult?.error || `${describeExpirationScenario(scenario)}; modeled underlying ${money(scenarioResult?.spot)}`}><b className={scenarioResult?.pnl == null ? '' : Number(scenarioResult.pnl) >= 0 ? 'positive' : 'negative'}>{signedMoney(scenarioResult?.pnl)}</b><small>{scenarioResult?.pnlOnMarginPct == null ? 'margin N/A' : `${percent(scenarioResult.pnlOnMarginPct)} on margin`} · spot {money(scenarioResult?.spot)}</small></td>}
       </tr>
     })}</tbody>
   </table></div>
@@ -261,12 +319,22 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const [error, setError] = useState('')
   const [stats, setStats] = useState(restored?.stats || null)
   const [asOf, setAsOf] = useState(restored?.asOf || null)
+  const [expirationScenario, setExpirationScenario] = useState(() => ({
+    ...DEFAULT_EXPIRATION_SCENARIO,
+    ...(restored?.expirationScenario || {}),
+  }))
+  const [expirationScenarioEnabled, setExpirationScenarioEnabled] = useState(Boolean(restored?.expirationScenarioEnabled))
   const scanRequestRef = useRef({ id: 0, controller: null })
 
   const scanner = SCANNER_BY_KEY[strategy]
   const config = GENERAL_STRATEGY_CONFIG[strategy]
   const strategyFields = strategy ? fieldsForGeneralStrategy(strategy) : []
+  const expirationScenarioSupported = EXPIRATION_SCENARIO_STRATEGIES.has(strategy)
   const setFilter = (key, value) => setFilters(current => ({ ...current, risk_profile: 'custom', [key]: value }))
+  const setDteFilter = (key, value) => setFilters(current => ({
+    ...updateDteFilters(current, key, value),
+    risk_profile: 'custom',
+  }))
 
   const replaceFilters = nextFilters => {
     setFilters(nextFilters)
@@ -295,11 +363,13 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         focusedTicker,
         stats,
         asOf,
+        expirationScenario,
+        expirationScenarioEnabled,
       }))
     } catch {
       // A scan remains usable even when private browsing or storage quotas prevent restoration.
     }
-  }, [strategy, filters, rows, selected, focusedTicker, stats, asOf])
+  }, [strategy, filters, rows, selected, focusedTicker, stats, asOf, expirationScenario, expirationScenarioEnabled])
 
   useEffect(() => () => {
     scanRequestRef.current.controller?.abort()
@@ -308,6 +378,8 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const changeStrategy = next => {
     setStrategy(next)
     setSearchParams(next ? { strategy: next } : {}, { replace: true })
+    setExpirationScenario({ ...DEFAULT_EXPIRATION_SCENARIO })
+    setExpirationScenarioEnabled(false)
     replaceFilters(next ? defaultsForGeneralStrategy(next) : {})
   }
 
@@ -331,6 +403,9 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       ? 'These long-dated unbalanced structures are defined for broad index ETFs only. Enter symbols such as SPY, QQQ, IWM, or VOO; individual stocks and sector ETFs are not supported.'
       : 'Enter ticker symbols to scan only those names, including any mix such as SPY, QQQ, IWM, GLD, DBC, AAPL, and MSFT. Leave the list empty to choose stocks, index ETFs, sector ETFs, and commodity ETFs from the scan universe selector.'
     const groups = [
+    { title: 'Expiration (DTE)', help: 'Filters every strategy by days to expiration. Same-day contracts are 0 DTE, and the three-year upper limit includes LEAPS beyond 12 months.', items: [
+      { label: 'DTE filter', value: `${filters.min_dte}–${filters.max_dte} DTE · target ${filters.target_dte}`, help: 'Minimum and maximum DTE are hard filters. Target DTE picks the preferred listed expiration inside that range. Set all three values to the same number to request one exact DTE; the scanner uses a contract only when that DTE is listed.', editor: <div className="gos-dte-fields"><DynamicField field={{ key: 'min_dte', label: 'Minimum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.min_dte} onChange={value => setDteFilter('min_dte', value)} /><DynamicField field={{ key: 'target_dte', label: 'Target DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.target_dte} onChange={value => setDteFilter('target_dte', value)} /><DynamicField field={{ key: 'max_dte', label: 'Maximum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.max_dte} onChange={value => setDteFilter('max_dte', value)} /></div> },
+    ] },
     { title: 'Descriptive data', help: 'Select the stock and ETF symbols to scan. An exact symbol list takes precedence over the universe selections.', items: [{ label: 'Include symbols', value: restrictedCondor ? (filters.symbols || 'SPY') : indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: openingCashflowText(filters.entry_credit_mode), help: 'Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.', editor: null }] : [])] },
     { title: 'Fundamental data', help: 'Filters individual stocks using the app\'s Fundamental and Growth scores. ETFs do not require these company-level scores.', items: [
       { label: 'Stock Score Fundamental', value: scoreText(filters, 'fundamental'), help: 'A transparent 1–10 app score for company quality and value. It averages valuation (forward or trailing P/E), profit margin, return on equity, current ratio, and lower debt-to-equity. Higher is better; missing inputs are excluded. It applies only to individual stocks; index, sector, and commodity ETFs such as SPY, QQQ, IWM, and XLK skip this filter.', editor: <ScoreRange label="Quality and value" name="fundamental" filters={filters} setFilter={setFilter} /> },
@@ -353,15 +428,30 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       { label: 'RV Rank', value: rangeText(filters.min_rv_rank, filters.max_rv_rank), help: 'A 0–100 percentile of the past month’s realized (historical) volatility versus the previous year. It shows whether recent actual movement is high or low for this name and is also mean-reverting.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_rv_rank', label: 'Minimum RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_rv_rank} onChange={value => setFilter('min_rv_rank', Math.min(value, filters.max_rv_rank))} /><DynamicField field={{ key: 'max_rv_rank', label: 'Maximum RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_rv_rank} onChange={value => setFilter('max_rv_rank', Math.max(value, filters.min_rv_rank))} /></div> },
       { label: 'Volatility score', value: rangeText(filters.min_volatility_score, filters.max_volatility_score), help: 'The average of IV Rank and IV − RV Rank. It is a smoother way to find options that look overpriced (high score) or underpriced (low score).', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_volatility_score', label: 'Minimum Volatility score', step: 5, min: 0, max: 100 }} value={filters.min_volatility_score} onChange={value => setFilter('min_volatility_score', Math.min(value, filters.max_volatility_score))} /><DynamicField field={{ key: 'max_volatility_score', label: 'Maximum Volatility score', step: 5, min: 0, max: 100 }} value={filters.max_volatility_score} onChange={value => setFilter('max_volatility_score', Math.max(value, filters.min_volatility_score))} /></div> },
     ] },
-    { title: 'Option data', help: 'Sets the expiration window, price-fill assumption, and primary option-leg delta used to construct each trade.', items: [
-      { label: 'Expiration', value: `${filters.min_dte}–${filters.max_dte} DTE`, help: 'DTE means days to expiration. The scanner evaluates listed expirations inside this range and uses Target DTE to prefer the closest available expiration when the strategy supports it.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_dte', label: 'Minimum DTE', step: 1, min: 0 }} value={filters.min_dte} onChange={value => setFilter('min_dte', Math.min(value, filters.max_dte))} /><DynamicField field={{ key: 'target_dte', label: 'Target DTE', step: 1, min: 0 }} value={filters.target_dte} onChange={value => setFilter('target_dte', value)} /><DynamicField field={{ key: 'max_dte', label: 'Maximum DTE', step: 1, min: 1 }} value={filters.max_dte} onChange={value => setFilter('max_dte', Math.max(value, filters.min_dte))} /></div> },
+    { title: 'Option data', help: 'Sets the price-fill assumption and primary option-leg delta used to construct each trade.', items: [
       { label: 'Bid/Ask level', value: filters.bid_ask_level || config?.bidAsk || 'Mid', help: 'Controls the quote assumption used to estimate entry price. Conservative uses sell-at-bid and buy-at-ask values; Mid uses midpoint prices; 25% improvement assumes a fill one quarter of the way from the conservative price toward mid.', editor: <DynamicField field={{ key: 'bid_ask_level', label: 'Pricing assumption', type: 'select', options: [['Conservative (use bid/ask values)', 'Conservative (bid/ask)'], ['25% price improvement', '25% price improvement'], ['Mid', 'Mid']] }} value={filters.bid_ask_level} onChange={value => setFilter('bid_ask_level', value)} /> },
       { label: 'Reference option delta', value: filters.reference_delta_mode === 'none' ? 'Construction-specific' : `${filters.reference_delta_mode === 'short' ? 'Short' : 'Long'} ${filters.min_reference_delta}–${filters.max_reference_delta} Δ`, help: 'Controls the absolute delta of the primary risk-defining option. For income and credit trades this is normally the short leg; for directional debit trades it is the long leg. A displayed value of 10 means 0.10 delta. Neutral structures can leave this construction-specific.', editor: <div className="gos-inline-stack"><DynamicField field={{ key: 'reference_delta_mode', label: 'Reference leg', type: 'select', options: [['none', 'Use strategy construction'], ['short', 'Short option'], ['long', 'Long option']] }} value={filters.reference_delta_mode} onChange={value => setFilter('reference_delta_mode', value)} />{filters.reference_delta_mode !== 'none' && <div className="gos-quick-pair"><DynamicField field={{ key: 'min_reference_delta', label: 'Minimum absolute delta', step: 1, min: 1, max: 99 }} value={filters.min_reference_delta} onChange={value => setFilter('min_reference_delta', Math.min(value, filters.max_reference_delta))} /><DynamicField field={{ key: 'max_reference_delta', label: 'Maximum absolute delta', step: 1, min: 1, max: 99 }} value={filters.max_reference_delta} onChange={value => setFilter('max_reference_delta', Math.max(value, filters.min_reference_delta))} /></div>}</div> },
     ] },
     { title: 'Strategy specific', help: 'Defines the selected strategy\'s trade construction, risk and reward requirements, and any strategy-only mechanics.', items: strategyFields.map(item => ({ label: item.label, value: fieldText(item, filters[item.key]), help: helpForGeneralField(item), editor: <DynamicField field={item} value={filters[item.key]} onChange={value => setFilter(item.key, value)} /> })) },
     ]
+    if (expirationScenarioSupported) {
+      const marginText = expirationScenario.marginRule === 'any'
+        ? 'P/L on margin: Any'
+        : `P/L on margin: ${expirationScenario.marginRule === 'above' ? '≥' : '≤'} ${expirationScenario.marginPct}%`
+      groups.push({
+        title: 'Scenarios',
+        help: 'Model expiration P/L for the selected call, put, bull put spread, or bear call spread and optionally use P/L on margin as a results filter.',
+        items: [{
+          label: 'Scenario #1 (Expiry)',
+          value: expirationScenarioEnabled ? `${describeExpirationScenario(expirationScenario)} · ${marginText}` : 'Add scenario',
+          muted: !expirationScenarioEnabled,
+          help: 'Choose a reference price and move. Each row is repriced at expiration using its actual legs and entry prices. At or above / At or below makes P/L on margin a filter; Any displays the scenario without excluding results.',
+          editor: <ExpirationScenarioEditor scenario={expirationScenario} enabled={expirationScenarioEnabled} onChange={setExpirationScenario} onToggle={setExpirationScenarioEnabled} />,
+        }],
+      })
+    }
     return groups
-  }, [config?.bidAsk, filters, strategy, strategyFields])
+  }, [config?.bidAsk, expirationScenario, expirationScenarioEnabled, expirationScenarioSupported, filters, strategy, strategyFields])
 
   const runScan = async () => {
     if (!strategy) return
@@ -407,16 +497,30 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     }
   }
 
+  const scenarioResults = useMemo(() => {
+    const results = new Map()
+    if (!expirationScenarioSupported || !expirationScenarioEnabled) return results
+    rows.forEach(row => results.set(row, calculateRowScenario(row, expirationScenario, strategy)))
+    return results
+  }, [expirationScenario, expirationScenarioEnabled, expirationScenarioSupported, rows, strategy])
+
+  const scenarioFilteredRows = useMemo(() => (
+    !expirationScenarioSupported || !expirationScenarioEnabled
+      ? rows
+      : rows.filter(row => expirationScenarioPasses(scenarioResults.get(row), expirationScenario))
+  ), [expirationScenario, expirationScenarioEnabled, expirationScenarioSupported, rows, scenarioResults])
+
   const displayedRows = useMemo(() => {
-    if (focusedTicker) return rows.filter(row => row._general?.ticker === focusedTicker)
+    if (focusedTicker) return scenarioFilteredRows.filter(row => row._general?.ticker === focusedTicker)
     const seen = new Set()
-    return rows.filter(row => {
+    return scenarioFilteredRows.filter(row => {
       const ticker = row._general?.ticker
       if (!ticker || seen.has(ticker)) return false
       seen.add(ticker)
       return true
     })
-  }, [rows, focusedTicker])
+  }, [scenarioFilteredRows, focusedTicker])
+  const visibleSelected = displayedRows.includes(selected) ? selected : displayedRows[0] || null
 
   const rejectionSummary = useMemo(() => Object.entries(stats?.filter_rejections || {})
     .sort((left, right) => Number(right[1]) - Number(left[1]))
@@ -451,9 +555,10 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
           : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
         {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
         {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}
-        {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={selected} setSelected={setSelected} />}
+        {!loading && !error && rows.length > 0 && displayedRows.length === 0 && expirationScenarioEnabled && <div className="gos-empty gos-scenario-empty"><strong>No trades passed Scenario #1</strong><span>Change the P/L on margin threshold, choose Any to keep all results, or remove the scenario.</span></div>}
+        {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={visibleSelected} setSelected={setSelected} scenario={expirationScenarioEnabled && expirationScenarioSupported ? expirationScenario : null} scenarioResults={scenarioResults} />}
         {stats && <div className="gos-stats"><span>{stats.showing_near_matches ? `${stats.near_matches_returned || rows.length} near-match structures shown` : `${stats.general_results ?? rows.length} matching structures`}</span><span>{stats.chains_fetched ?? stats.expirations_priced ?? '—'} chains / expirations priced</span></div>}
-        <GeneralScannerAnalysis row={selected} strategyLabel={scanner?.label || strategy} />
+        <GeneralScannerAnalysis row={visibleSelected} strategyLabel={scanner?.label || strategy} />
       </section>
     </div>
   </main>

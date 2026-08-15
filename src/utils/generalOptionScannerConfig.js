@@ -1,3 +1,30 @@
+export const MIN_OPTION_DTE = 0
+export const MAX_OPTION_DTE = 1095
+
+export function updateDteFilters(current, key, rawValue) {
+  if (rawValue == null || rawValue === '') return current
+  const value = Math.min(MAX_OPTION_DTE, Math.max(MIN_OPTION_DTE, Math.round(Number(rawValue))))
+  if (!Number.isFinite(value)) return current
+
+  const next = { ...current, [key]: value }
+  const minimum = Number(next.min_dte)
+  const target = Number(next.target_dte)
+  const maximum = Number(next.max_dte)
+
+  if (key === 'min_dte') {
+    if (!Number.isFinite(target) || target < value) next.target_dte = value
+    if (!Number.isFinite(maximum) || maximum < value) next.max_dte = value
+  } else if (key === 'target_dte') {
+    if (!Number.isFinite(minimum) || value < minimum) next.min_dte = value
+    if (!Number.isFinite(maximum) || value > maximum) next.max_dte = value
+  } else if (key === 'max_dte') {
+    if (!Number.isFinite(minimum) || minimum > value) next.min_dte = value
+    if (!Number.isFinite(target) || target > value) next.target_dte = value
+  }
+
+  return next
+}
+
 const COMMON = {
   risk_profile: 'open',
   symbols: '',

@@ -229,7 +229,10 @@ def _reads_as_leveraged(text: str) -> bool:
 
 RISK_FREE = 0.0375
 TRADING_DAYS = 252
-MIN_TARGET_DTE = 1
+# Zero keeps same-day expirations available while the market still lists and
+# quotes them.  MAX_TARGET_DTE deliberately reaches well beyond one year so
+# every option scanner can use LEAPS through three years.
+MIN_TARGET_DTE = 0
 MAX_TARGET_DTE = 1095
 
 # ---------------------------------------------------------------------------

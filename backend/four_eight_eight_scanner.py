@@ -449,15 +449,15 @@ def run_488_scan(payload: dict) -> dict:
     market_bias = _bias_name(p.get("market_bias"))
     target_dte = max(
         MIN_TARGET_DTE,
-        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 200) or 200)),
+        min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 200))),
     )
     min_dte = max(
         MIN_TARGET_DTE,
-        int(_num(p.get("min_dte"), 160) or 160),
+        int(_num(p.get("min_dte"), 160)),
     )
     max_dte = min(
         MAX_TARGET_DTE,
-        max(min_dte, int(_num(p.get("max_dte"), 230) or 230)),
+        max(min_dte, int(_num(p.get("max_dte"), 230))),
     )
     target_dte = min(max_dte, max(min_dte, target_dte))
     quantity = max(

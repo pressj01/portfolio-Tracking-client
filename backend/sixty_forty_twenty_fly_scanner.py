@@ -28,6 +28,8 @@ import yfinance as yf
 from flask import jsonify, request
 
 from put_scanner import (
+    MAX_TARGET_DTE,
+    MIN_TARGET_DTE,
     _clean_tickers,
     _fetch_fundamentals_bulk,
     _index_only_tickers,
@@ -428,8 +430,8 @@ def run_sixty_forty_twenty_fly_scan(payload: dict) -> dict:
     if not tickers:
         raise ValueError("Enter at least one ticker to scan")
 
-    min_dte = int(_clamp(p.get("min_dte"), 60, 1, 1095))
-    max_dte = int(_clamp(p.get("max_dte"), 80, min_dte, 1095))
+    min_dte = int(_clamp(p.get("min_dte"), 60, MIN_TARGET_DTE, MAX_TARGET_DTE))
+    max_dte = int(_clamp(p.get("max_dte"), 80, min_dte, MAX_TARGET_DTE))
     target_dte = int(_clamp(p.get("target_dte"), 70, min_dte, max_dte))
     quantity = int(_clamp(p.get("quantity"), 1, 1, 100))
     delta_tolerance = _clamp(p.get("delta_tolerance"), 0.03, 0.005, 0.20)

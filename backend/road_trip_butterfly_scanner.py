@@ -150,7 +150,10 @@ def _as_bool(value) -> bool:
 
 
 def _clamp(value, default, low, high):
-    return min(high, max(low, _num(value, default) or default))
+    parsed = _num(value, default)
+    if parsed is None:
+        parsed = default
+    return min(high, max(low, parsed))
 
 
 def _expirations_in_window(

@@ -395,9 +395,9 @@ def run_put_condor_scan(payload: dict) -> dict:
     if placement_mode not in {"atm", "slightly_otm"}:
         raise ValueError("Debit-spread placement must be at the money or slightly OTM")
     target_otm_pct = min(5.0, max(0.0, _num(p.get("debit_otm_pct"), 0.5) or 0.0))
-    target_dte = max(MIN_TARGET_DTE, min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 42) or 42)))
-    min_dte = max(MIN_TARGET_DTE, int(_num(p.get("min_dte"), 30) or 30))
-    max_dte = min(MAX_TARGET_DTE, max(min_dte, int(_num(p.get("max_dte"), 60) or 60)))
+    target_dte = max(MIN_TARGET_DTE, min(MAX_TARGET_DTE, int(_num(p.get("target_dte"), 42))))
+    min_dte = max(MIN_TARGET_DTE, int(_num(p.get("min_dte"), 30)))
+    max_dte = min(MAX_TARGET_DTE, max(min_dte, int(_num(p.get("max_dte"), 60))))
     target_dte = min(max_dte, max(min_dte, target_dte))
     max_risk_dollars = min(100000.0, max(25.0, _num(p.get("max_risk_dollars"), 200.0) or 200.0))
     target_credit_short_delta = min(

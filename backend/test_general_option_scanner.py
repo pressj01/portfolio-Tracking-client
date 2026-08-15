@@ -5,15 +5,48 @@ from unittest.mock import patch
 import pandas as pd
 
 from general_option_scanner import (
+    STRATEGIES,
     _filter_reasons,
     _iv_history,
     _realized_vol_metrics,
     _runner_payload,
+    _technical_context,
     run_general_option_scan,
 )
 
 
 class GeneralOptionScannerTests(unittest.TestCase):
+    def test_technical_context_exposes_expiration_scenario_references(self):
+        context = _technical_context({
+            "price": 100,
+            "sma_200": 95,
+            "atr_14": 3.25,
+            "rv_30": 0.22,
+            "target_mean_price": 120,
+            "week52_high": 130,
+            "week52_low": 70,
+        }, None)
+
+        self.assertEqual(context["sma_200"], 95)
+        self.assertEqual(context["atr_14"], 3.25)
+        self.assertEqual(context["rv_30"], 0.22)
+        self.assertEqual(context["target_mean_price"], 120)
+        self.assertEqual(context["week52_high"], 130)
+        self.assertEqual(context["week52_low"], 70)
+
+    def test_every_strategy_receives_same_day_through_three_year_dte_filters(self):
+        for strategy in STRATEGIES:
+            with self.subTest(strategy=strategy):
+                payload = _runner_payload(strategy, {
+                    "symbols": "SPY",
+                    "min_dte": 0,
+                    "target_dte": 0,
+                    "max_dte": 1095,
+                })
+                self.assertEqual(payload["min_dte"], 0)
+                self.assertEqual(payload["target_dte"], 0)
+                self.assertEqual(payload["max_dte"], 1095)
+
     def test_standard_strategy_uses_custom_symbols_and_broad_source_scan(self):
         payload = _runner_payload("covered-call", {
             "symbols": "spy, AAPL spy",

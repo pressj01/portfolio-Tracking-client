@@ -1,6 +1,39 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { defaultsForGeneralStrategy, fieldsForGeneralStrategy, isIndexOnlyStrategy, riskProfileDefaultsForGeneralStrategy, strategyDefaultsForGeneralStrategy } from './generalOptionScannerConfig.js'
+import {
+  defaultsForGeneralStrategy,
+  fieldsForGeneralStrategy,
+  GENERAL_STRATEGY_CONFIG,
+  isIndexOnlyStrategy,
+  MAX_OPTION_DTE,
+  MIN_OPTION_DTE,
+  riskProfileDefaultsForGeneralStrategy,
+  strategyDefaultsForGeneralStrategy,
+  updateDteFilters,
+} from './generalOptionScannerConfig.js'
+
+test('every strategy receives the shared DTE filter values', () => {
+  for (const strategy of Object.keys(GENERAL_STRATEGY_CONFIG)) {
+    const filters = defaultsForGeneralStrategy(strategy)
+    assert.equal(Number.isFinite(filters.min_dte), true, `${strategy} minimum DTE`)
+    assert.equal(Number.isFinite(filters.target_dte), true, `${strategy} target DTE`)
+    assert.equal(Number.isFinite(filters.max_dte), true, `${strategy} maximum DTE`)
+    assert.ok(filters.min_dte >= MIN_OPTION_DTE, `${strategy} minimum is supported`)
+    assert.ok(filters.max_dte <= MAX_OPTION_DTE, `${strategy} maximum is supported`)
+  }
+})
+
+test('DTE filters support same-day through three-year expirations', () => {
+  let filters = { min_dte: 7, target_dte: 30, max_dte: 45 }
+  filters = updateDteFilters(filters, 'target_dte', MIN_OPTION_DTE)
+  assert.deepEqual(filters, { min_dte: 0, target_dte: 0, max_dte: 45 })
+  filters = updateDteFilters(filters, 'max_dte', MIN_OPTION_DTE)
+  assert.deepEqual(filters, { min_dte: 0, target_dte: 0, max_dte: 0 })
+  filters = updateDteFilters(filters, 'target_dte', MAX_OPTION_DTE)
+  assert.deepEqual(filters, { min_dte: 0, target_dte: 1095, max_dte: 1095 })
+  filters = updateDteFilters(filters, 'min_dte', MAX_OPTION_DTE)
+  assert.deepEqual(filters, { min_dte: 1095, target_dte: 1095, max_dte: 1095 })
+})
 
 test('credit vertical presets retain their different directional rules', () => {
   const bull = strategyDefaultsForGeneralStrategy('bull-put-spread')
