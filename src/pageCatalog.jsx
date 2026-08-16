@@ -14,8 +14,8 @@
  * pane opens a screen in its default state rather than a deep-linked one —
  * which is what a pane is for.
  *
- * The nav bar stays hand-written: it nests sub-groups and hides a few screens,
- * so deriving it from here would lose more than it saved.
+ * The nav bar has a separate data model because it nests sub-groups and hides
+ * a few screens. Menu Control reorders that model without changing routes.
  */
 import React from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'
@@ -92,6 +92,7 @@ import GeneralOptionScannerHelp from './pages/GeneralOptionScannerHelp'
 import GeneralOptionScannerStrategyGuide from './pages/GeneralOptionScannerStrategyGuide'
 import GreeksGuide from './pages/GreeksGuide'
 import SplitScreen from './pages/SplitScreen'
+import MenuControl from './pages/MenuControl'
 import { generalScannerRoute } from './utils/optionScannerCatalog'
 
 export const PAGE_GROUPS = [
@@ -204,6 +205,7 @@ export const PAGE_GROUPS = [
       { path: '/export', label: 'Export', element: <Export /> },
       { path: '/etf-provider-update', label: 'ETF Provider Update', element: <ETFProviderUpdate /> },
       { path: '/portfolios', label: 'Portfolios', element: <ManagePortfolios /> },
+      { path: '/menu-control', label: 'Menu Control', element: <MenuControl /> },
       { path: '/settings', label: 'Settings', element: <Settings /> },
       { path: '/help', label: 'Help', element: <Help /> },
     ],

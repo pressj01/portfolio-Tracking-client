@@ -7,7 +7,15 @@ import ThemeProvider, { useTheme } from './context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
+import MenuOrderProvider, { useMenuOrder } from './context/MenuOrderContext'
 import AppRoutes from './pageCatalog'
+import {
+  groupItemsScopeId,
+  groupOrderScopeId,
+  NAVIGATION_ITEMS,
+  orderMenuItems,
+  TOP_LEVEL_SCOPE_ID,
+} from './navigation/menuConfig'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -111,10 +119,12 @@ function App() {
     <ThemeProvider>
     <ProfileProvider>
     <MarketRefreshProvider>
+    <MenuOrderProvider>
     <PlotlyThemeBridge />
     <Router>
       <AppFrame />
     </Router>
+    </MenuOrderProvider>
     </MarketRefreshProvider>
     </ProfileProvider>
     </ThemeProvider>
@@ -171,108 +181,40 @@ function BasisModeSelector() {
 }
 
 function Nav() {
+  const { menuOrder } = useMenuOrder()
+
+  const renderLink = (item) => (
+    <NavLink key={item.id} to={item.path} title={item.title} end={item.end}>
+      {item.label}
+    </NavLink>
+  )
+
+  const renderMenu = (menu) => {
+    if (menu.kind === 'link') return renderLink(menu)
+
+    if (menu.kind === 'dropdown') {
+      return (
+        <NavDropdown key={menu.id} label={menu.label}>
+          {orderMenuItems(menu.items, menu.id, menuOrder).map(renderLink)}
+        </NavDropdown>
+      )
+    }
+
+    const groups = orderMenuItems(menu.groups, groupOrderScopeId(menu.id), menuOrder)
+    return (
+      <NavDropdown key={menu.id} label={menu.label}>
+        {groups.map(group => (
+          <NavMenuGroup key={group.id} title={group.label}>
+            {orderMenuItems(group.items, groupItemsScopeId(menu.id, group.id), menuOrder).map(renderLink)}
+          </NavMenuGroup>
+        ))}
+      </NavDropdown>
+    )
+  }
+
   return (
     <nav className="nav-bar">
-      <NavLink to="/">Dashboard</NavLink>
-      <NavLink to="/action-center">Action Center</NavLink>
-      <NavDropdown label="Options">
-        <NavLink to="/option-dashboard">Options Dashboard</NavLink>
-        <NavLink to="/option-probability-calculator">Probability Calculator</NavLink>
-        <NavLink to="/option-trades">Option Trades</NavLink>
-        <NavLink to="/option-trades/import">Import Option Trades</NavLink>
-        <NavLink to="/options">Strategy Lab</NavLink>
-        <NavLink to="/general-option-scanner">General Option Scanner</NavLink>
-        <NavLink to="/option-education">Option Strategy Education</NavLink>
-        <NavLink to="/option-greeks">Understanding the Greeks</NavLink>
-      </NavDropdown>
-      <NavDropdown label="Portfolio">
-        <NavLink to="/split-screen" title="Show two pages side by side, sharing one date range">Split View</NavLink>
-        <NavLink to="/holdings">Holdings</NavLink>
-        <NavLink to="/common-info">CommonInfo</NavLink>
-        <NavLink to="/categories">Categories</NavLink>
-        <NavLink to="/holding-targets">Holding Targets</NavLink>
-        <NavLink to="/growth">Growth</NavLink>
-        <NavLink to="/growth-2">Portfolio Growth 2</NavLink>
-        <NavLink to="/retirement-readiness">Retirement Readiness</NavLink>
-        <NavLink to="/cash-flow">Cash Flow &amp; Sustainability</NavLink>
-        <NavLink to="/dividends">Dividends</NavLink>
-        <NavLink to="/dividend-ledger">Daily, Weekly &amp; Monthly Payments</NavLink>
-        <NavLink to="/div-calendar">Dividend Calendar</NavLink>
-        <NavLink to="/earnings-calendar">Earnings Calendar</NavLink>
-        <NavLink to="/div-compare">Dividend Compare</NavLink>
-        <NavLink to="/dividend-history">Dividend History</NavLink>
-        <NavLink to="/reinvestment-impact">Reinvestment Impact</NavLink>
-        <NavLink to="/total-return">Total Return</NavLink>
-        <NavLink to="/gains-losses">Gains & Losses</NavLink>
-        <NavLink to="/safe-withdrawal">Safe Withdrawal</NavLink>
-        <NavLink to="/dividend-calculator">Dividend Calculator</NavLink>
-        <NavLink to="/watchlist">Watchlist</NavLink>
-      </NavDropdown>
-      <NavDropdown label="Checklists">
-        <NavLink to="/stock-buying-checklist">Stock Buying Checklist</NavLink>
-        <NavLink to="/etf-buying-checklist-evaluator">Non Income ETF Checklist Evaluator</NavLink>
-        <NavLink to="/option-income-etf-evaluator">Option-Income ETF Evaluator</NavLink>
-      </NavDropdown>
-      <NavDropdown label="Analysis">
-        <NavMenuGroup title="Research & Compare">
-          <NavLink to="/security-research">Security Research</NavLink>
-          <NavLink to="/etf-screen">Stock and ETF Analysis</NavLink>
-          <NavLink to="/etf-comparer">ETF Comparer</NavLink>
-          <NavLink to="/stock-comparer">Stock Comparer</NavLink>
-          <NavLink to="/stock-valuation">Stock Valuation (DCF)</NavLink>
-          <NavLink to="/dist-compare">Distribution Compare</NavLink>
-        </NavMenuGroup>
-        <NavMenuGroup title="Screeners & Signals">
-          <NavLink to="/general-scanner">General Scanner</NavLink>
-          <NavLink to="/scanner">Single Strategy Scanner</NavLink>
-          <NavLink to="/buy-sell-signals">Buy / Sell Signals</NavLink>
-        </NavMenuGroup>
-        <NavMenuGroup title="Income & NAV Risk">
-          <NavLink to="/nav-erosion">NAV Erosion</NavLink>
-          <NavLink to="/nav-erosion-portfolio">NAV Erosion Screener</NavLink>
-          <NavLink to="/drip-score">DRIP vs. Cash Analyzer</NavLink>
-          <NavLink to="/income-sim">Income Simulator</NavLink>
-          <NavLink to="/income-growth">Income Growth</NavLink>
-        </NavMenuGroup>
-        <NavMenuGroup title="Portfolio Diagnostics">
-          <NavLink to="/analytics">Portfolio Analytics</NavLink>
-          {/* `end` so the parent does not stay lit on /diversification/sectors —
-              without it react-router matches by prefix and both entries
-              highlight at once. */}
-          <NavLink to="/diversification" end>Diversification</NavLink>
-          <NavLink to="/diversification/sectors">Sector Exposure</NavLink>
-          <NavLink to="/fund-definitions">Fund Definitions</NavLink>
-          <NavLink to="/correlation">Correlation Matrix</NavLink>
-          <NavLink to="/consolidation">Consolidation Analysis</NavLink>
-          <NavLink to="/macro-dashboard">Macro Regime Dashboard</NavLink>
-        </NavMenuGroup>
-        <NavMenuGroup title="Planning & Optimization">
-          <NavLink to="/growth-income-freedom">Growth &amp; Income Freedom</NavLink>
-          <NavLink to="/portfolio-builder">Portfolio Builder</NavLink>
-          <NavLink to="/portfolio-tester">Portfolio Tester</NavLink>
-          <NavLink to="/rebalance-wizard">Rebalance Wizard</NavLink>
-        </NavMenuGroup>
-      </NavDropdown>
-      <NavDropdown label="CEF's">
-        <NavLink to="/closed-cef-info">Closed CEF Information</NavLink>
-        <NavLink to="/cef-buying-guide">What to Look For When Buying CEFs</NavLink>
-        <NavLink to="/cef-buying-checklist-evaluator">CEF Buying Checklist Evaluator</NavLink>
-        <NavLink to="/cef-vs-income-etf">CEFs &amp; Income ETFs: A Guide</NavLink>
-      </NavDropdown>
-      <NavDropdown label="Taxes">
-        <NavLink to="/tax-report">Annual Tax Report</NavLink>
-        <NavLink to="/tax-loss">Tax-Loss Harvest</NavLink>
-        <NavLink to="/blended-yield">Blended Yield</NavLink>
-      </NavDropdown>
-      {/* Option Education remains hidden while in development. */}
-      <NavDropdown label="Admin">
-        <NavLink to="/import">Import</NavLink>
-        <NavLink to="/export">Export</NavLink>
-        <NavLink to="/etf-provider-update">ETF Provider Update</NavLink>
-        <NavLink to="/portfolios">Portfolios</NavLink>
-        <NavLink to="/settings">Settings</NavLink>
-        <NavLink to="/help">Help</NavLink>
-      </NavDropdown>
+      {orderMenuItems(NAVIGATION_ITEMS, TOP_LEVEL_SCOPE_ID, menuOrder).map(renderMenu)}
       <BasisModeSelector />
       <ProfileSelector />
     </nav>

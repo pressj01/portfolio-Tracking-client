@@ -37846,6 +37846,77 @@ def builder_all_weather():
 
 # ── Settings API ──────────────────────────────────────────────────────────────
 
+_MENU_ORDER_SETTING_KEY = "menu_order"
+
+
+def _menu_order_validation_error(order):
+    """Return a user-facing validation error for a menu-order document."""
+    if not isinstance(order, dict):
+        return "order must be an object whose values are item ID arrays"
+    if len(order) > 100:
+        return "order contains too many menu sections"
+
+    total_items = 0
+    for scope_id, item_ids in order.items():
+        if not isinstance(scope_id, str) or not scope_id or len(scope_id) > 100:
+            return "menu section IDs must be non-empty strings of at most 100 characters"
+        if not isinstance(item_ids, list):
+            return f"order for {scope_id} must be an array"
+        if len(item_ids) > 100:
+            return f"order for {scope_id} contains too many items"
+        if any(not isinstance(item_id, str) or not item_id or len(item_id) > 100 for item_id in item_ids):
+            return f"item IDs for {scope_id} must be non-empty strings of at most 100 characters"
+        if len(set(item_ids)) != len(item_ids):
+            return f"order for {scope_id} contains duplicate item IDs"
+        total_items += len(item_ids)
+
+    if total_items > 1000:
+        return "order contains too many items"
+    return None
+
+
+@app.route("/api/menu-order", methods=["GET", "PUT", "DELETE"])
+def menu_order():
+    """Load or save the global navigation order used by the desktop app."""
+    if request.method == "GET":
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (_MENU_ORDER_SETTING_KEY,)
+        ).fetchone()
+        conn.close()
+        try:
+            order = json.loads(row["value"]) if row and row["value"] else {}
+        except (TypeError, ValueError, json.JSONDecodeError):
+            order = {}
+        if _menu_order_validation_error(order):
+            order = {}
+        return jsonify({"order": order})
+
+    if request.method == "DELETE":
+        conn = get_connection()
+        conn.execute("DELETE FROM settings WHERE key = ?", (_MENU_ORDER_SETTING_KEY,))
+        conn.commit()
+        conn.close()
+        return jsonify({"ok": True, "order": {}})
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or "order" not in data:
+        return jsonify({"error": "A menu order is required."}), 400
+    order = data["order"]
+    error = _menu_order_validation_error(order)
+    if error:
+        return jsonify({"error": error}), 400
+
+    serialized = json.dumps(order, separators=(",", ":"), sort_keys=True)
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (_MENU_ORDER_SETTING_KEY, serialized),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "order": order})
+
 @app.route("/api/single-stock-etfs", methods=["GET"])
 def get_single_stock_etfs():
     """Return built-in and user-added single-stock ETFs."""
