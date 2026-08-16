@@ -78,6 +78,11 @@ function num(v, dec = 2) {
   return Number(v).toFixed(dec)
 }
 
+function historicalRank(value, ready, observations) {
+  if (value == null) return <small>Warming up{observations != null ? <><br />{observations} {Number(observations) === 1 ? 'day' : 'days'}</> : null}</small>
+  return <span title={ready ? `${observations} daily observations` : `Provisional from ${observations || 0} daily observations; stabilizes after about 20`}>{pct(value, 1)}{ready ? null : <sup>*</sup>}</span>
+}
+
 // Option contracts are quoted in USD, so this screen stays in USD throughout —
 // same convention as the Strategy Lab. A strike converted to another currency
 // would no longer name a real contract.
@@ -333,6 +338,20 @@ function HelpPanel() {
         </p>
       </HelpSection>
 
+      <HelpSection title="Skew ranks and “Warming up”">
+        <p style={p}>
+          Put Skew Rank and Skew Rank compare today&rsquo;s roughly 30-DTE volatility gaps with the same ticker&rsquo;s own
+          daily history. The app stores at most one observation per ticker per day, so repeated scans today do not
+          make the history mature faster. The day count is historical observations, not days to expiration.
+        </p>
+        <Glossary items={[
+          ['Warming up · 0 days', 'Today’s chain did not contain the usable 25-delta and ATM IV inputs required for that specific metric. One skew column can have data while another does not.'],
+          ['Warming up · 1–2 days', 'The raw skew was recorded, but there are not yet enough distinct daily readings to calculate a useful percentile.'],
+          ['Provisional rank* · 3–19 days', 'A preliminary percentile is shown with an asterisk. It can move sharply because the history is still short.'],
+          ['Established rank · 20+ days', 'The asterisk disappears after about 20 usable daily observations; the rank continues using up to one trailing year.'],
+        ]} />
+      </HelpSection>
+
       <HelpSection title="Column glossary">
         <Glossary items={[
           ['Type', 'Stock, a broad Index fund, or a Sector/commodity fund.'],
@@ -342,6 +361,8 @@ function HelpPanel() {
           ['vs Market', 'The share of the decline that beta does not explain. More negative means more specific to this name.'],
           ['RSI', 'Wilder’s 14-day relative strength. Lower is more oversold.'],
           ['IV/RV', 'Implied volatility over realized volatility. Above 1.0 means option sellers are being paid above fair value — green in the table.'],
+          ['Put Skew Rank', 'Percentile of roughly 30-DTE 25-delta put IV minus ATM put IV versus this ticker’s own history.'],
+          ['Skew Rank', 'Percentile of roughly 30-DTE 25-delta put IV minus 25-delta call IV. High means puts are unusually expensive; low means calls are unusually expensive.'],
           ['Sell This Put', 'The suggested contract: strike, expiration, days to expiry, how far below spot the strike sits, and the credit per share.'],
           ['Earnings', 'Days until the next report and whether the suggested expiration closes before it.'],
           ['Ann. Return', 'The credit as an annualized return on the cash securing the put.'],
@@ -574,6 +595,8 @@ const COLUMNS = [
   { key: 'excess_drop_pct', label: 'vs Market', align: 'right', tip: 'The part of the drop that beta does not explain' },
   { key: 'rsi_14', label: 'RSI', align: 'right' },
   { key: 'iv_rv_ratio', label: 'IV/RV', align: 'right', tip: 'Implied vol over realized vol — above 1.0 means sellers are paid above fair value' },
+  { key: 'put_skew_rank', label: 'Put Skew Rank', align: 'right', tip: 'Percentile of 25-delta put IV minus ATM put IV versus this ticker’s trailing-year history' },
+  { key: 'skew_rank', label: 'Skew Rank', align: 'right', tip: 'Percentile of 25-delta put IV minus 25-delta call IV. High means puts are unusually expensive; low means calls are unusually expensive.' },
   { key: 'put_strike', label: 'Sell This Put', align: 'center', tip: 'The suggested strike and expiration to sell' },
   { key: 'dte', label: 'DTE', align: 'right', tip: 'Days to expiration for the suggested option chain' },
   { key: 'put_prob', label: 'Prob. OTM', align: 'right', tip: 'Modeled probability that the short strike remains out of the money at expiration' },
@@ -585,6 +608,8 @@ const COLUMNS = [
 ]
 
 const SORT_ACCESSORS = {
+  put_skew_rank: r => r.put?.put_skew_rank ?? null,
+  skew_rank: r => r.put?.skew_rank ?? null,
   put_strike: r => r.put?.strike ?? null,
   dte: r => r.put?.dte ?? null,
   put_prob: r => r.put?.prob_otm ?? null,
@@ -965,6 +990,12 @@ export default function PutSellingScanner() {
                       <td style={{ textAlign: 'right' }}>{num(r.rsi_14, 0)}</td>
                       <td style={{ textAlign: 'right', color: (r.iv_rv_ratio ?? 0) >= 1 ? 'var(--pos-strong)' : 'var(--text-muted)' }}>
                         {num(r.iv_rv_ratio)}
+                      </td>
+                      <td style={{ textAlign: 'right' }} title={`25-delta put IV minus ATM put IV: ${r.put?.put_skew == null ? '—' : `${Number(r.put.put_skew) > 0 ? '+' : ''}${num(r.put.put_skew)} volatility points`}`}>
+                        {r.put ? historicalRank(r.put.put_skew_rank, r.put.put_skew_rank_ready, r.put.put_skew_rank_observations) : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right' }} title={`25-delta put IV minus 25-delta call IV: ${r.put?.skew == null ? '—' : `${Number(r.put.skew) > 0 ? '+' : ''}${num(r.put.skew)} volatility points`}`}>
+                        {r.put ? historicalRank(r.put.skew_rank, r.put.skew_rank_ready, r.put.skew_rank_observations) : '—'}
                       </td>
                       <td style={{ textAlign: 'center' }}>
                         {r.put ? (

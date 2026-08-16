@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import RiskGraphButton from './RiskGraphButton'
 import { normalCdf } from '../utils/optionProbability'
 import { buildScannerTrade } from '../utils/optionTradeHandoff'
+import { optionMoneyness } from '../utils/optionMoneyness'
 
 const money = value => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -96,6 +97,13 @@ function formatExpiration(expiration) {
   return `${MONTH_LABELS[parsed.getMonth()]} ${ordinal(parsed.getDate())} ${parsed.getFullYear()} · ${daysTo(expiration)} DTE`
 }
 
+function formatExpirationDate(expiration) {
+  if (!expiration) return '—'
+  const parsed = new Date(`${expiration}T12:00:00`)
+  if (Number.isNaN(parsed.getTime())) return expiration
+  return `${MONTH_LABELS[parsed.getMonth()]} ${ordinal(parsed.getDate())} ${parsed.getFullYear()}`
+}
+
 function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
   const [hover, setHover] = useState(null)
   const model = useMemo(() => {
@@ -111,6 +119,18 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
     const pad = Math.max(10, (max - min) * 0.12)
     return { prices, expiration, current, low, high, min: min - pad, max: max + pad }
   }, [trade, spot, dte, rangePct, ivPct])
+  const strikeMarkers = useMemo(() => {
+    const seen = new Set()
+    return (trade?.legs || []).map(leg => {
+      const value = optionMoneyness(leg, spot)
+      if (!value) return null
+      const action = String(leg.side).toUpperCase() === 'SELL' ? 'SELL' : 'BUY'
+      const key = `${action}:${value.optType}:${value.strike}`
+      if (seen.has(key)) return null
+      seen.add(key)
+      return { ...value, action, key }
+    }).filter(Boolean)
+  }, [trade, spot])
   if (!model) return <div className="gsa-empty">{!trade ? 'The selected row does not contain a complete option structure.' : 'This trade is missing an underlying price, so the P/L graph cannot be drawn.'}</div>
 
   const width = 760, height = 280, left = 56, right = 14, top = 24, bottom = 48
@@ -142,6 +162,7 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
   if (!percentageTicks.includes(0)) percentageTicks.push(0)
   percentageTicks.sort((a, b) => a - b)
   const yTicks = Array.from({ length: 5 }, (_, index) => model.min + (model.max - model.min) * index / 4)
+  const visibleStrikeMarkers = strikeMarkers.filter(marker => marker.strike >= model.low && marker.strike <= model.high)
   const hoverPanelWidth = 152
   const hoverPanelHeight = 52
   const hoverPanel = hover ? {
@@ -166,6 +187,17 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
             <tspan>{changePct > 0 ? '+' : ''}{changePct}%</tspan>
             <tspan x={x(price)} dy="12">{number(price, 0)}</tspan>
           </text>
+        </g>
+      })}
+      {visibleStrikeMarkers.map((marker, index) => {
+        const markerX = x(marker.strike)
+        const labelX = Math.max(left + 70, Math.min(width - right - 70, markerX))
+        const detailed = visibleStrikeMarkers.length === 1
+          ? `${marker.action} ${marker.optType} ${priceMoney(marker.strike)} · ${number(marker.percentDistance, 1)}% ${marker.status}`
+          : `${marker.action[0]} ${marker.optType[0]} ${priceMoney(marker.strike)}`
+        return <g key={marker.key} className={`gsa-strike-marker ${marker.action.toLowerCase()}`} pointerEvents="none">
+          <line x1={markerX} x2={markerX} y1={top} y2={height - bottom} />
+          <text x={labelX} y={top + 11 + (index % 3) * 12} textAnchor="middle">{detailed}</text>
         </g>
       })}
       <line x1={left} x2={width - right} y1={y(0)} y2={y(0)} className="gsa-zero" />
@@ -199,10 +231,10 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
 
 function LegTable({ trade }) {
   return <div className="gsa-leg-table-wrap"><table className="gsa-leg-table">
-    <thead><tr><th>Type</th><th>Side</th><th>Quantity</th><th>Expiration</th><th>Strike</th><th>Entry</th><th>Delta</th><th>IV</th></tr></thead>
+    <thead><tr><th>Type</th><th>Side</th><th>Quantity</th><th>Expiration</th><th>DTE</th><th>Strike</th><th>Entry</th><th>Delta</th><th>IV</th></tr></thead>
     <tbody>{trade?.legs.map((leg, index) => <tr key={`${leg.opt_type}-${leg.strike}-${index}`}>
       <td>{leg.opt_type}</td><td><b className={leg.side === 'BUY' ? 'buy' : 'sell'}>{leg.side}</b></td><td>{leg.qty}</td>
-      <td>{formatExpiration(leg.expiration)}</td><td>{leg.opt_type === 'STOCK' ? '—' : number(leg.strike, 2)}</td>
+      <td>{formatExpirationDate(leg.expiration)}</td><td>{leg.opt_type === 'STOCK' ? '—' : daysTo(leg.expiration)}</td><td>{leg.opt_type === 'STOCK' ? '—' : number(leg.strike, 2)}</td>
       <td>{number(leg.entry_price, 2)}</td><td>{number(leg.delta, 2)}</td><td>{leg.iv ? `${number(Number(leg.iv) * 100, 1)}%` : '—'}</td>
     </tr>)}</tbody>
   </table></div>
@@ -286,7 +318,10 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
       <article><span>IV − RV</span><strong>{meta.iv_rv == null ? '—' : `${Number(meta.iv_rv) > 0 ? '+' : ''}${number(meta.iv_rv, 1)}`}</strong></article>
       <article><span>IV − RV Rank</span><strong>{meta.iv_rv_rank == null ? 'Warming up' : `${number(meta.iv_rv_rank, 1)}%`}</strong></article>
       <article><span>RV Rank</span><strong>{meta.rv_rank == null ? '—' : `${number(meta.rv_rank, 1)}%`}</strong></article>
-      <article><span>Volatility score</span><strong>{meta.volatility_score == null ? '—' : number(meta.volatility_score, 1)}</strong></article>
+      <article><span>Volatility score</span><strong>{meta.volatility_score == null ? 'Warming up' : <>{number(meta.volatility_score, 1)}{meta.volatility_score_provisional ? '*' : ''}</>}</strong></article>
+      {meta.trade_kind === 'cash-secured-put' && <article><span>Put Skew Rank</span><strong>{meta.put_skew_rank == null ? 'Warming up' : `${number(meta.put_skew_rank, 1)}%${meta.put_skew_rank_ready ? '' : '*'}`}</strong></article>}
+      {meta.trade_kind === 'covered-call' && <article><span>Call Skew Rank</span><strong>{meta.call_skew_rank == null ? 'Warming up' : `${number(meta.call_skew_rank, 1)}%${meta.call_skew_rank_ready ? '' : '*'}`}</strong></article>}
+      {['cash-secured-put', 'covered-call'].includes(meta.trade_kind) && <article><span>Skew Rank</span><strong>{meta.skew_rank == null ? 'Warming up' : `${number(meta.skew_rank, 1)}%${meta.skew_rank_ready ? '' : '*'}`}</strong></article>}
       <article><span>Max loss</span><strong>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</strong></article>
     </div><LegTable trade={trade} /></div>}
   </section>

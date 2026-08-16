@@ -43,10 +43,11 @@ const rangeText = (min, max, { floor = 0, ceil = 100, suffix = '' } = {}) => {
   if (high >= ceil) return `Above ${low}${suffix}`
   return `${low}–${high}${suffix}`
 }
-const rankCell = (value, observations, warmingTitle) => (
+const observationDays = observations => `${observations} ${Number(observations) === 1 ? 'day' : 'days'}`
+const rankCell = (value, observations, warmingTitle, provisional = false) => (
   value == null
-    ? <small title={warmingTitle}>Warming up{observations != null ? <><br />{observations} days</> : null}</small>
-    : percent(value)
+    ? <small title={warmingTitle}>Warming up{observations != null ? <><br />{observationDays(observations)}</> : null}</small>
+    : <span title={provisional ? `Provisional percentile from ${observations || 0} daily observations; stabilizes after about 20` : undefined}>{percent(value)}{provisional ? <sup>*</sup> : null}</span>
 )
 const riskMoney = (value, unbounded) => unbounded ? 'Unlimited' : money(value)
 const signedMoney = value => value != null && value !== '' && Number.isFinite(Number(value))
@@ -271,9 +272,14 @@ function TechnicalCells({ meta }) {
   </span>
 }
 
-function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelected, scenario, scenarioResults }) {
+function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelected, strategy, scenario, scenarioResults }) {
+  const sideSkew = strategy === 'cash-secured-put'
+    ? { label: 'Put Skew Rank', key: 'put_skew_rank', rawKey: 'put_skew', readyKey: 'put_skew_rank_ready', observationsKey: 'put_skew_rank_observations', explanation: '25-delta put IV minus ATM put IV' }
+    : strategy === 'covered-call'
+      ? { label: 'Call Skew Rank', key: 'call_skew_rank', rawKey: 'call_skew', readyKey: 'call_skew_rank_ready', observationsKey: 'call_skew_rank_observations', explanation: '25-delta call IV minus ATM call IV' }
+      : null
   return <div className="gos-table-wrap"><table className="gos-table">
-    <thead><tr><th>Ticker</th><th>Price</th><th>IV Rank</th><th>IV−RV</th><th>IV−RV Rank</th><th>RV Rank</th><th>Vol Score</th><th>Strikes</th><th>Expiration</th><th>Total Opt. Vol.</th><th>Stock Scores</th><th>Technical Setup</th><th>Delta</th><th>Prob. Max Profit</th><th>Prob. Max Loss</th><th>Expected Value</th><th>Max Profit</th><th>Max Loss</th><th>Profit Ratio</th>{scenario && <th>P/L on Expiry #1</th>}</tr></thead>
+    <thead><tr><th>Ticker</th><th>Price</th><th>IV Rank</th><th>IV−RV</th><th>IV−RV Rank</th><th>RV Rank</th><th>Vol Score</th>{sideSkew && <><th>{sideSkew.label}</th><th>Skew Rank</th></>}<th>Strikes</th><th>Expiration</th><th>DTE</th><th>Total Opt. Vol.</th><th>Stock Scores</th><th>Technical Setup</th><th>Delta</th><th>Prob. Max Profit</th><th>Prob. Max Loss</th><th>Expected Value</th><th>Max Profit</th><th>Max Loss</th><th>Profit Ratio</th>{scenario && <th>P/L on Expiry #1</th>}</tr></thead>
     <tbody>{rows.map((row, index) => {
       const meta = row._general || {}
       const key = `${meta.ticker}:${meta.expiration}:${meta.strikes}:${index}`
@@ -283,15 +289,19 @@ function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelec
       return <tr key={key} className={`${active ? 'selected ' : ''}${nearMatch ? 'near-match' : ''}`.trim()} onClick={() => setSelected(row)} title={nearMatch ? `Near match; missed: ${(meta.filter_reasons || []).join(', ')}` : 'Matches every active filter'}>
         <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small>{nearMatch && <em>{(meta.filter_reasons || []).length} rule{(meta.filter_reasons || []).length === 1 ? '' : 's'} missed</em>}</button></td>
         <td>{money(meta.price)}</td>
-        <td title={meta.iv_rank_source === 'history' ? `${meta.iv_rank_observations} locally collected Yahoo observations` : 'Yahoo IV history is still accumulating'}>{rankCell(meta.iv_rank, meta.iv_rank_observations)}</td>
+        <td title={meta.iv_rank_source === 'history' ? `${meta.iv_rank_observations} locally collected Yahoo observations` : 'Yahoo IV history is still accumulating'}>{rankCell(meta.iv_rank, meta.iv_rank_observations, 'IV Rank needs about 20 daily observations', meta.iv_rank_source === 'provisional_history')}</td>
         <td title="Today’s at-the-money IV minus the past month’s realized volatility, in volatility points. Positive means options look expensive versus recent realized vol.">{signedPoints(meta.iv_rv)}</td>
-        <td title={meta.iv_rv_rank == null ? 'IV−RV rank needs about 20 paired IV and realized-vol observations' : 'Percentile of today’s IV−RV versus the past year'}>{rankCell(meta.iv_rv_rank, meta.iv_rv_observations)}</td>
+        <td title={meta.iv_rv_rank == null ? 'IV−RV rank needs about 20 paired IV and realized-vol observations' : 'Percentile of today’s IV−RV versus the past year'}>{rankCell(meta.iv_rv_rank, meta.iv_rv_observations, 'IV−RV rank needs about 20 paired observations', !meta.iv_rv_rank_ready)}</td>
         <td title="Percentile of the past month’s realized volatility versus the previous year">{meta.rv_rank == null ? '—' : percent(meta.rv_rank)}</td>
-        <td title="Average of IV Rank and IV−RV Rank. High suggests overpriced options; low suggests underpriced options.">{meta.volatility_score == null ? '—' : number(meta.volatility_score, 1)}</td>
-        <td className="gos-strikes">{meta.strikes}</td><td>{formatExpiration(meta.expiration)}<small>{meta.dte == null ? '' : `${number(meta.dte, 0)} DTE`}</small></td>
-        <td>{meta.total_option_volume == null ? '—' : Number(meta.total_option_volume).toLocaleString()}</td>
+        <td title={meta.volatility_score_provisional ? `Provisional average from ${meta.volatility_score_observations || 0} daily observations; stabilizes after about 20` : 'Average of IV Rank and IV−RV Rank. High suggests overpriced options; low suggests underpriced options.'}>{meta.volatility_score == null ? <small>Warming up</small> : <>{number(meta.volatility_score, 1)}{meta.volatility_score_provisional ? <sup>*</sup> : null}</>}</td>
+        {sideSkew && <>
+          <td title={`${sideSkew.explanation}. Current gap: ${signedPoints(meta[sideSkew.rawKey])} volatility points.`}>{rankCell(meta[sideSkew.key], meta[sideSkew.observationsKey], `${sideSkew.label} needs about 20 daily observations`, !meta[sideSkew.readyKey])}</td>
+          <td title={`25-delta put IV minus 25-delta call IV. High means puts are unusually expensive; low means calls are unusually expensive. Current gap: ${signedPoints(meta.skew)} volatility points.`}>{rankCell(meta.skew_rank, meta.skew_rank_observations, 'Skew Rank needs about 20 daily observations', !meta.skew_rank_ready)}</td>
+        </>}
+        <td className="gos-strikes">{meta.strikes}</td><td>{formatExpiration(meta.expiration)}</td><td>{number(meta.dte, 0)}</td>
+        <td title={meta.total_option_volume_source === 'selected_legs' ? 'Full-chain volume was unavailable; this is the combined volume of the selected legs.' : 'Combined option volume reported by the scanner for the priced chain.'}>{meta.total_option_volume == null ? '—' : Number(meta.total_option_volume).toLocaleString()}</td>
         <td><ScoreCells scores={meta.stock_scores} /></td><td><TechnicalCells meta={meta} /></td><td>{number(meta.delta, 2)}</td>
-        <td>{percent(meta.prob_max_profit)}</td><td>{percent(meta.prob_max_loss)}</td><td>{money(meta.expected_value)}</td>
+        <td>{meta.prob_max_profit == null && meta.max_profit_unbounded ? 'N/A' : percent(meta.prob_max_profit)}</td><td>{meta.prob_max_loss == null && meta.max_loss_unbounded ? 'N/A' : percent(meta.prob_max_loss)}</td><td>{money(meta.expected_value)}</td>
         <td>{riskMoney(meta.max_profit, meta.max_profit_unbounded)}</td><td>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</td><td>{percent(meta.profit_ratio)}</td>
         {scenario && <td className="gos-scenario-cell" title={scenarioResult?.error || `${describeExpirationScenario(scenario)}; modeled underlying ${money(scenarioResult?.spot)}`}><b className={scenarioResult?.pnl == null ? '' : Number(scenarioResult.pnl) >= 0 ? 'positive' : 'negative'}>{signedMoney(scenarioResult?.pnl)}</b><small>{scenarioResult?.pnlOnMarginPct == null ? 'margin N/A' : `${percent(scenarioResult.pnlOnMarginPct)} on margin`} · spot {money(scenarioResult?.spot)}</small></td>}
       </tr>
@@ -556,7 +566,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
         {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}
         {!loading && !error && rows.length > 0 && displayedRows.length === 0 && expirationScenarioEnabled && <div className="gos-empty gos-scenario-empty"><strong>No trades passed Scenario #1</strong><span>Change the P/L on margin threshold, choose Any to keep all results, or remove the scenario.</span></div>}
-        {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={visibleSelected} setSelected={setSelected} scenario={expirationScenarioEnabled && expirationScenarioSupported ? expirationScenario : null} scenarioResults={scenarioResults} />}
+        {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={visibleSelected} setSelected={setSelected} strategy={strategy} scenario={expirationScenarioEnabled && expirationScenarioSupported ? expirationScenario : null} scenarioResults={scenarioResults} />}
         {stats && <div className="gos-stats"><span>{stats.showing_near_matches ? `${stats.near_matches_returned || rows.length} near-match structures shown` : `${stats.general_results ?? rows.length} matching structures`}</span><span>{stats.chains_fetched ?? stats.expirations_priced ?? '—'} chains / expirations priced</span></div>}
         <GeneralScannerAnalysis row={visibleSelected} strategyLabel={scanner?.label || strategy} />
       </section>

@@ -982,6 +982,9 @@ def _suggest_bear_call_spread(
         "expiration": expiration,
         "dte": dte,
         "atm_iv": atm_iv,
+        "total_option_volume": sum(
+            int(_num(leg.get("volume"), 0) or 0) for leg in calls
+        ),
         "upside_tail_ratio": upside_tail_ratio,
         "upside_tail_strikes": tail_strikes,
         "constraints_relaxed": not passing,

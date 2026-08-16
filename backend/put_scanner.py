@@ -36,6 +36,7 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_probability import profit_probability_schedule
+from option_skew_history import calculate_skew_metrics, record_skew_snapshot
 from option_strike_targets import strike_for_delta
 from options_pricing import black_scholes, implied_vol
 
@@ -246,6 +247,7 @@ _CHAIN_TTL = 300          # 5 min
 _history_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _info_cache: dict[str, tuple[float, dict]] = {}
 _put_chain_cache: dict[tuple[str, str], tuple[float, list]] = {}
+_put_skew_call_cache: dict[tuple[str, str], tuple[float, list]] = {}
 
 
 def _cache_get(cache: dict, key, ttl: float):
@@ -754,7 +756,7 @@ def _fetch_fundamentals_bulk(tickers: list[str], workers: int = 8) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float) -> list[dict]:
-    """Puts for one expiration with Black-Scholes greeks off our known spot."""
+    """Puts plus a cached call-side companion for 25-delta skew metrics."""
     key = (ticker, expiration)
     cached = _cache_get(_put_chain_cache, key, _CHAIN_TTL)
     if cached is not None:
@@ -762,45 +764,59 @@ def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float)
 
     try:
         chain = yf.Ticker(ticker).option_chain(expiration)
-        puts_df = chain.puts
     except Exception:
         _cache_set(_put_chain_cache, key, [])
+        _cache_set(_put_skew_call_cache, key, [])
         return []
 
     dte = max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 0)
     T = max(dte, 0.25) / 365.0
 
-    rows = []
-    for _, r in puts_df.iterrows():
-        strike = _num(r.get("strike"))
-        if not strike or strike <= 0:
-            continue
-        bid = _num(r.get("bid"), 0.0) or 0.0
-        ask = _num(r.get("ask"), 0.0) or 0.0
-        last = _num(r.get("lastPrice"), 0.0) or 0.0
-        iv = _num(r.get("impliedVolatility"), 0.0) or 0.0
-        mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last
-        delta = None
-        if iv > 0 and spot > 0:
-            try:
-                delta = _num(black_scholes(spot, strike, T, RISK_FREE, div_yield, iv, "put").get("delta"))
-            except Exception:
-                delta = None
-        rows.append({
-            "strike": strike,
-            "bid": bid,
-            "ask": ask,
-            "last": last,
-            "mid": mid,
-            "iv": iv,
-            "delta": delta,
-            "volume": int(_num(r.get("volume"), 0) or 0),
-            "open_interest": int(_num(r.get("openInterest"), 0) or 0),
-            "dte": dte,
-        })
+    def rows_for(frame, option_type):
+        rows = []
+        for _, r in frame.iterrows():
+            strike = _num(r.get("strike"))
+            if not strike or strike <= 0:
+                continue
+            bid = _num(r.get("bid"), 0.0) or 0.0
+            ask = _num(r.get("ask"), 0.0) or 0.0
+            last = _num(r.get("lastPrice"), 0.0) or 0.0
+            iv = _num(r.get("impliedVolatility"), 0.0) or 0.0
+            mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last
+            delta = None
+            if iv > 0 and spot > 0:
+                try:
+                    delta = _num(
+                        black_scholes(
+                            spot, strike, T, RISK_FREE, div_yield, iv, option_type
+                        ).get("delta")
+                    )
+                except Exception:
+                    delta = None
+            rows.append({
+                "strike": strike,
+                "bid": bid,
+                "ask": ask,
+                "last": last,
+                "mid": mid,
+                "iv": iv,
+                "delta": delta,
+                "volume": int(_num(r.get("volume"), 0) or 0),
+                "open_interest": int(_num(r.get("openInterest"), 0) or 0),
+                "dte": dte,
+            })
+        return rows
 
-    _cache_set(_put_chain_cache, key, rows)
-    return rows
+    puts = rows_for(getattr(chain, "puts", pd.DataFrame()), "put")
+    calls = rows_for(getattr(chain, "calls", pd.DataFrame()), "call")
+    _cache_set(_put_chain_cache, key, puts)
+    _cache_set(_put_skew_call_cache, key, calls)
+    return puts
+
+
+def _load_put_skew_calls(ticker: str, expiration: str) -> list[dict]:
+    """Return calls side-loaded by ``_load_put_chain`` without another request."""
+    return _cache_get(_put_skew_call_cache, (ticker, expiration), _CHAIN_TTL) or []
 
 
 def _prepare_option_quote(
@@ -970,6 +986,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         return None
 
     puts = _load_put_chain(ticker, expiration, spot, div_yield)
+    calls = _load_put_skew_calls(ticker, expiration)
     prepared_puts = [
         prepared
         for leg in puts
@@ -1016,6 +1033,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     # At-the-money IV drives the IV/RV comparison, not the OTM strike's skew.
     atm = min(prepared_puts, key=lambda p: abs(p["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else pick["iv"]
+    skew_metrics = calculate_skew_metrics(puts, calls)
 
     strike = pick["strike"]
     mid = pick["mid"]
@@ -1041,6 +1059,10 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         "prob_otm": (1.0 - abs(pick["delta"])) * 100.0 if pick["delta"] is not None else None,
         "open_interest": pick["open_interest"],
         "volume": pick["volume"],
+        "total_option_volume": sum(
+            int(_num(leg.get("volume"), 0) or 0) for leg in puts
+        ) + sum(int(_num(leg.get("volume"), 0) or 0) for leg in calls),
+        **skew_metrics,
         "spread_pct": spread_pct,
         "quote_source": pick.get("quote_source", "live_bid_ask"),
         "premium_yield_pct": premium_yield,
@@ -1821,6 +1843,23 @@ def run_put_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if put:
+            skew_history = record_skew_snapshot(
+                tech["ticker"],
+                put,
+                put.get("expiration"),
+                dte=put.get("dte"),
+            )
+            for metric in ("put_skew", "call_skew", "skew"):
+                rank_meta = skew_history.get(metric) or {}
+                put[f"{metric}_rank"] = (
+                    rank_meta.get("rank")
+                    if rank_meta.get("rank") is not None
+                    else rank_meta.get("provisional_rank")
+                )
+                put[f"{metric}_rank_ready"] = bool(rank_meta.get("ready"))
+                put[f"{metric}_rank_observations"] = int(
+                    rank_meta.get("observations") or 0
+                )
             buyback = recommend_buyback(put, rating)
             div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
             probability_schedule = profit_probability_schedule(
@@ -1954,6 +1993,8 @@ def _round_put(put: dict | None) -> dict | None:
         ("delta", 3), ("prob_otm", 1), ("spread_pct", 1), ("premium_yield_pct", 2),
         ("annualized_pct", 1), ("cash_required", 0), ("premium_dollars", 0),
         ("effective_basis", 2), ("discount_to_spot_pct", 1), ("otm_pct", 1),
+        ("put_skew", 2), ("call_skew", 2), ("skew", 2),
+        ("put_skew_rank", 1), ("call_skew_rank", 1), ("skew_rank", 1),
     ):
         if k in out:
             out[k] = _round(out[k], dec)

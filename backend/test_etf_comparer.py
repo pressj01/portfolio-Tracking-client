@@ -117,6 +117,41 @@ class ETFComparerPeriodRequestTest(unittest.TestCase):
         self.assertTrue(calls)
         self.assertEqual(calls[0][1]["anchor_on_or_before"], "2026-01-01")
 
+    def test_ohlcv_endpoint_keeps_internal_anchor_out_of_ticker_history(self):
+        dates = pd.DatetimeIndex(
+            pd.to_datetime(["2026-02-13", "2026-02-17", "2026-08-14"]),
+            tz="America/New_York",
+        )
+        frame = pd.DataFrame({
+            "Open": [100.0, 101.0, 102.0],
+            "High": [101.0, 102.0, 103.0],
+            "Low": [99.0, 100.0, 101.0],
+            "Close": [100.5, 101.5, 102.5],
+            "Volume": [1000, 1100, 1200],
+        }, index=dates)
+        history_calls = []
+
+        class FakeTicker:
+            options = []
+
+            def history(self, **kwargs):
+                history_calls.append(kwargs)
+                return frame
+
+        with (
+            patch("yfinance.Ticker", return_value=FakeTicker()),
+            patch("app._cached_yf_info", return_value={}),
+        ):
+            response = app.test_client().get(
+                "/api/etf-screen/data?ticker=AON&period=6mo&mode=ohlcv"
+                "&refresh=ohlcv-anchor-boundary-test",
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertTrue(history_calls)
+        self.assertNotIn("anchor_on_or_before", history_calls[0])
+        self.assertEqual(response.get_json()["records"][0]["date"], "2026-02-13")
+
 
 if __name__ == "__main__":
     unittest.main()

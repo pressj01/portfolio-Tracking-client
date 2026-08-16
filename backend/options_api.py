@@ -1038,6 +1038,30 @@ def _probability_range(spot: float, low: float, high: float, sigma: float,
     }
 
 
+def _canonical_probability_anchor(legs: list[dict], probability: dict) -> tuple[float, str]:
+    """Resolve the probability anchor from the position, not a stale UI label.
+
+    A scanner handoff can outlive the browser bundle that created it.  If that
+    bundle identifies a covered-call strike as a put, trusting the request would
+    reverse ITM and OTM even though the risk curve itself correctly prices the
+    call.  A unique option leg at the requested strike is authoritative.
+    """
+    anchor_strike = float(probability.get('anchor_strike') or 0.0)
+    requested_type = str(probability.get('opt_type') or '').upper()
+    matching_types = {
+        str(leg.get('opt_type') or '').upper()
+        for leg in legs
+        if str(leg.get('opt_type') or '').lower() in ('call', 'put')
+        and anchor_strike > 0
+        and abs(float(leg.get('strike') or 0.0) - anchor_strike) < 1e-6
+    }
+    if len(matching_types) == 1 and requested_type not in matching_types:
+        requested_type = next(iter(matching_types))
+    if requested_type not in ('CALL', 'PUT'):
+        requested_type = next(iter(matching_types), 'CALL')
+    return anchor_strike, requested_type
+
+
 def _position_probability_profile(legs: list[dict], spot: float, sigma: float,
                                   T: float, r: float, q: float, model: str,
                                   breakevens: list[float],
@@ -1256,6 +1280,13 @@ def register_routes(app):
             if probability_mode not in ('ITM', 'OTM', 'TOUCH'):
                 probability_mode = 'ITM'
             range_pct = min(max(float(probability_in.get('range_pct') or 68.27), 1.0), 99.9)
+            anchor_strike, anchor_type = _canonical_probability_anchor(legs, probability_in)
+            itm_pct = max(0.0, float(probability_in.get('itm_pct') or 0.0))
+            otm_pct = max(0.0, float(probability_in.get('otm_pct') or 0.0))
+            has_moneyness_percentages = (
+                probability_in.get('itm_pct') is not None
+                and probability_in.get('otm_pct') is not None
+            )
             range_low = float(probability_in.get('low') or 0.0)
             range_high = float(probability_in.get('high') or 0.0)
             lower_label = str(probability_in.get('lower_label') or '')
@@ -1272,6 +1303,17 @@ def register_routes(app):
                 upper_label = f'{tail_probability * 100.0:.1f}% upper tail'
             else:
                 range_mode = 'moneyness'
+                if anchor_strike > 0 and has_moneyness_percentages:
+                    if anchor_type == 'CALL':
+                        range_low = anchor_strike * (1.0 - otm_pct / 100.0)
+                        range_high = anchor_strike * (1.0 + itm_pct / 100.0)
+                        lower_label = f'{otm_pct:g}% OTM'
+                        upper_label = f'{itm_pct:g}% ITM'
+                    else:
+                        range_low = anchor_strike * (1.0 - itm_pct / 100.0)
+                        range_high = anchor_strike * (1.0 + otm_pct / 100.0)
+                        lower_label = f'{itm_pct:g}% ITM'
+                        upper_label = f'{otm_pct:g}% OTM'
             probability_out = _probability_range(
                 spot,
                 range_low,
@@ -1283,18 +1325,16 @@ def register_routes(app):
             )
             probability_out.update({
                 'date': horizon_d.isoformat(),
-                'anchor_strike': float(probability_in.get('anchor_strike') or 0.0),
-                'opt_type': (probability_in.get('opt_type') or 'CALL').upper(),
-                'itm_pct': float(probability_in.get('itm_pct') or 0.0),
-                'otm_pct': float(probability_in.get('otm_pct') or 0.0),
+                'anchor_strike': anchor_strike,
+                'opt_type': anchor_type,
+                'itm_pct': itm_pct,
+                'otm_pct': otm_pct,
                 'lower_label': lower_label,
                 'upper_label': upper_label,
                 'range_mode': range_mode,
                 'probability_mode': probability_mode,
                 'range_pct': range_pct,
             })
-            anchor_strike = probability_out['anchor_strike']
-            anchor_type = probability_out['opt_type']
             strike_cdf = _lognormal_cdf(spot, anchor_strike, probability_iv, probability_T, r, q)
             probability_otm = strike_cdf if anchor_type == 'CALL' else 1.0 - strike_cdf
             currently_itm = (

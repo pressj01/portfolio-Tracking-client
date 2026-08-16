@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta
 from config import get_connection
 
 MIN_IV_RANK_OBSERVATIONS = 20
+MIN_PROVISIONAL_IV_RANK_OBSERVATIONS = 3
 IV_RANK_LOOKBACK_DAYS = 365
 TARGET_IV_DTE = 30
 PREFERRED_IV_DTE_MIN = 21
@@ -213,7 +214,10 @@ def record_iv_snapshot(
     value = _valid_iv(atm_iv)
     day = observed_on or date.today()
     if not symbol or value is None:
-        return {"rank": None, "observations": 0, "ready": False}
+        return {
+            "rank": None, "provisional_rank": None,
+            "observations": 0, "ready": False,
+        }
 
     stored_dte = None
     try:
@@ -276,10 +280,16 @@ def record_iv_snapshot(
         item["atm_iv"] for item in prior
     ]
     ready = len(samples) >= max(2, int(min_observations)) and len(history) >= 2
-    rank = calculate_iv_rank(history, value) if ready else None
+    provisional_rank = (
+        calculate_iv_rank(history, value)
+        if len(samples) >= MIN_PROVISIONAL_IV_RANK_OBSERVATIONS and len(history) >= 2
+        else None
+    )
+    rank = provisional_rank if ready else None
     values = [item["atm_iv"] for item in samples]
     return {
         "rank": rank,
+        "provisional_rank": provisional_rank,
         "observations": len(samples),
         "ready": ready and rank is not None,
         "low": min(values) if values else None,

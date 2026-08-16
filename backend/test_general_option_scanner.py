@@ -166,6 +166,108 @@ class GeneralOptionScannerTests(unittest.TestCase):
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")
+    def test_cash_secured_put_fills_position_wide_table_calculations(
+        self, score_rows, iv_history
+    ):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        result = run_general_option_scan(
+            {"strategy": "cash-secured-put"},
+            runner=lambda _: {"rows": [{
+                "ticker": "XYZ", "price": 100,
+                "put": {
+                    "expiration": expiration, "dte": 30, "strike": 95,
+                    "mid": 2.0, "bid": 1.9, "ask": 2.1,
+                    "iv": 0.25, "atm_iv": 0.24, "delta": -0.20,
+                    "volume": 250, "total_option_volume": 12_345,
+                },
+            }]},
+        )
+        meta = result["rows"][0]["_general"]
+        self.assertEqual(meta["total_option_volume"], 12_345)
+        self.assertEqual(meta["total_option_volume_source"], "chain")
+        self.assertAlmostEqual(meta["delta"], 20.0)
+        self.assertGreater(meta["prob_max_profit"], 0)
+        self.assertEqual(meta["prob_max_loss"], 0.0)
+        self.assertIsNotNone(meta["expected_value"])
+        self.assertEqual(meta["max_profit"], 200.0)
+        self.assertEqual(meta["max_loss"], 9_300.0)
+        self.assertAlmostEqual(meta["profit_ratio"], 200 / 9_300 * 100)
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_credit_vertical_fills_delta_loss_probability_and_expected_value(
+        self, score_rows, iv_history
+    ):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        result = run_general_option_scan(
+            {"strategy": "bull-put-spread"},
+            runner=lambda _: {"rows": [{
+                "ticker": "XYZ", "price": 100,
+                "spread": {
+                    "expiration": expiration, "dte": 30, "atm_iv": 0.24,
+                    "short_strike": 95, "long_strike": 90,
+                    "max_profit_dollars": 150, "max_loss_dollars": 350,
+                    "prob_otm": 75, "total_option_volume": 4_200,
+                    "short_leg": {
+                        "strike": 95, "mid": 2.5, "bid": 2.4, "ask": 2.6,
+                        "iv": 0.25, "delta": -0.25, "volume": 300,
+                    },
+                    "long_leg": {
+                        "strike": 90, "mid": 1.0, "bid": 0.9, "ask": 1.1,
+                        "iv": 0.26, "delta": -0.10, "volume": 200,
+                    },
+                },
+            }]},
+        )
+        meta = result["rows"][0]["_general"]
+        self.assertEqual(meta["total_option_volume"], 4_200)
+        self.assertAlmostEqual(meta["delta"], 15.0)
+        self.assertEqual(meta["prob_max_profit"], 75.0)
+        self.assertGreater(meta["prob_max_loss"], 0)
+        self.assertLess(meta["prob_max_loss"], 100)
+        self.assertIsNotNone(meta["expected_value"])
+        self.assertEqual(meta["max_profit"], 150)
+        self.assertEqual(meta["max_loss"], 350)
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_covered_call_uses_the_whole_position_for_risk_and_delta(
+        self, score_rows, iv_history
+    ):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        result = run_general_option_scan(
+            {"strategy": "covered-call"},
+            runner=lambda _: {"rows": [{
+                "ticker": "XYZ", "price": 100, "cost_basis": 100,
+                "call": {
+                    "expiration": expiration, "dte": 30, "strike": 105,
+                    "mid": 2.0, "bid": 1.9, "ask": 2.1,
+                    "iv": 0.24, "atm_iv": 0.23, "delta": 0.30,
+                    "volume": 150,
+                },
+            }]},
+        )
+        meta = result["rows"][0]["_general"]
+        self.assertAlmostEqual(meta["delta"], 70.0)
+        self.assertEqual(meta["max_profit"], 700.0)
+        self.assertEqual(meta["max_loss"], 9_800.0)
+        self.assertGreater(meta["prob_max_profit"], 0)
+        self.assertEqual(meta["prob_max_loss"], 0.0)
+        self.assertIsNotNone(meta["expected_value"])
+        self.assertEqual(meta["total_option_volume"], 150)
+        self.assertEqual(meta["total_option_volume_source"], "selected_legs")
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
     def test_maps_complete_probability_breakdown(self, score_rows, iv_history):
         score_rows.side_effect = lambda rows: [
             row["_general"].update(stock_scores={}) for row in rows
@@ -553,6 +655,37 @@ class VolatilityMetricTests(unittest.TestCase):
         self.assertGreaterEqual(meta["iv_rv_rank"], 90)
         self.assertAlmostEqual(meta["volatility_score"], round((70.0 + meta["iv_rv_rank"]) / 2.0, 1))
         self.assertNotIn("_rv_by_date", meta)
+
+    @patch("general_option_scanner.fetch_iv_observations")
+    @patch("general_option_scanner.record_iv_snapshot")
+    def test_volatility_score_uses_disclosed_provisional_ranks_during_warmup(self, record, fetch):
+        days = [date.today() - timedelta(days=offset) for offset in (3, 2, 1)]
+        fetch.return_value = [
+            {"observed_on": day, "atm_iv": implied}
+            for day, implied in zip(days, (0.19, 0.21, 0.22))
+        ]
+        record.return_value = {
+            "rank": None,
+            "provisional_rank": 75.0,
+            "observations": 4,
+            "ready": False,
+        }
+        row = {"_general": {
+            "ticker": "SPY",
+            "atm_iv": 0.24,
+            "expiration": "2026-09-18",
+            "iv_rank": None,
+            "rv": 18.0,
+            "_rv_by_date": {day: 0.18 for day in days},
+        }}
+        _iv_history([row])
+        meta = row["_general"]
+        self.assertEqual(meta["iv_rank"], 75.0)
+        self.assertEqual(meta["iv_rank_source"], "provisional_history")
+        self.assertIsNotNone(meta["iv_rv_rank"])
+        self.assertIsNotNone(meta["volatility_score"])
+        self.assertTrue(meta["volatility_score_provisional"])
+        self.assertEqual(meta["volatility_score_observations"], 4)
 
 
 if __name__ == "__main__":

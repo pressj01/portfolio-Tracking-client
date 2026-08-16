@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime
 import math
 import re
+from statistics import NormalDist
 from typing import Any, Callable
 
 import numpy as np
@@ -32,6 +33,7 @@ from option_iv_history import (
     fetch_iv_observations,
     record_iv_snapshot,
 )
+from options_pricing import black_scholes
 from put_condor_scanner import run_condor_scan
 from put_scanner import (
     BENCHMARK,
@@ -101,6 +103,9 @@ INDEX_ONLY_STRATEGIES = frozenset({
 INDEX_ONLY_DEFAULT_TICKERS = ("SPY", "QQQ", "IWM", "VOO")
 RV_WINDOW = 21
 TRADING_DAYS = 252
+CONTRACT_MULTIPLIER = 100.0
+GENERAL_RISK_FREE_RATE = 0.0375
+_NORMAL = NormalDist()
 
 STANDARD_BROAD_OVERRIDES = {
     "min_market_cap": 0,
@@ -172,6 +177,14 @@ def _nested(row: dict, *paths):
             current = current.get(key)
         if current is not None and current != "":
             return current
+    return None
+
+
+def _first_num(*values):
+    for value in values:
+        number = _num(value)
+        if number is not None:
+            return number
     return None
 
 
@@ -315,8 +328,12 @@ def _strike_summary(row: dict) -> str:
     # so the table was showing "—" and the analysis panel treated them as empty.
     legs = _option_legs(row)
     if legs:
-        values = [_num(leg.get("strike")) for leg in legs if isinstance(leg, dict)]
-        values = [value for value in values if value is not None]
+        values = [
+            _num(leg.get("strike")) for leg in legs
+            if isinstance(leg, dict)
+            and str(leg.get("option_type") or leg.get("type") or "").lower() != "stock"
+        ]
+        values = [value for value in values if value is not None and value > 0]
         if values:
             return " / ".join(f"{value:g}" for value in values)
     keys = (
@@ -346,6 +363,301 @@ def _option_legs(row: dict) -> list[dict]:
                 if value.get("strike") is not None:
                     result.append({**value, "_role": key})
     return result
+
+
+def _position_leg(
+    source: dict | None,
+    *,
+    option_type: str,
+    quantity,
+    expiration=None,
+    strike=None,
+) -> dict | None:
+    """Normalize one scanner leg for position-wide table calculations."""
+    source = source if isinstance(source, dict) else {}
+    kind = str(option_type or source.get("option_type") or source.get("type") or "").lower()
+    if kind not in {"call", "put", "stock"}:
+        return None
+    qty = _num(quantity)
+    if qty in (None, 0):
+        return None
+    if kind == "stock":
+        entry_price = _first_num(
+            source.get("entry_price"), source.get("basis"), source.get("mid")
+        )
+        return {
+            "option_type": "stock",
+            "quantity": qty,
+            "entry_price": entry_price,
+            "delta": _first_num(source.get("delta"), 1.0),
+            "volume": None,
+        }
+    normalized_strike = _first_num(strike, source.get("strike"))
+    normalized_expiration = expiration or source.get("expiration")
+    if normalized_strike is None or normalized_strike <= 0 or not normalized_expiration:
+        return None
+    return {
+        "option_type": kind,
+        "quantity": qty,
+        "strike": normalized_strike,
+        "expiration": str(normalized_expiration),
+        "entry_price": _first_num(
+            source.get("entry_price"), source.get("mid"), source.get("last"),
+            source.get("ask"), source.get("bid"),
+        ),
+        "bid": _num(source.get("bid")),
+        "ask": _num(source.get("ask")),
+        "iv": _first_num(source.get("iv"), source.get("implied_volatility")),
+        "delta": _num(source.get("delta")),
+        "volume": _num(source.get("volume")),
+    }
+
+
+def _position_legs(strategy: str, row: dict) -> list[dict]:
+    """Return the exact signed position represented by any supported scanner.
+
+    This mirrors the scanner-to-Strategy-Lab handoff.  Keeping the signs and
+    quantities here lets the common table calculate the same payoff regardless
+    of which legacy scanner produced the row.
+    """
+    spread = row.get("spread") if isinstance(row.get("spread"), dict) else {}
+    expiration = _nested(
+        row, "spread.expiration", "call.expiration", "put.expiration", "expiration"
+    )
+
+    explicit = spread.get("legs") or row.get("legs")
+    if isinstance(explicit, list) and explicit:
+        result = []
+        for leg in explicit:
+            if not isinstance(leg, dict):
+                continue
+            kind = str(leg.get("option_type") or leg.get("type") or "").lower()
+            quantity = _first_num(leg.get("qty"), leg.get("quantity"))
+            normalized = _position_leg(
+                leg,
+                option_type=kind,
+                quantity=quantity,
+                expiration=leg.get("expiration") or expiration,
+                strike=leg.get("strike"),
+            )
+            if normalized:
+                result.append(normalized)
+        if result:
+            return result
+
+    result: list[dict] = []
+
+    def add(source, kind, quantity, strike=None):
+        normalized = _position_leg(
+            source,
+            option_type=kind,
+            quantity=quantity,
+            expiration=expiration,
+            strike=strike,
+        )
+        if normalized:
+            result.append(normalized)
+
+    if strategy == "cash-secured-put":
+        add(row.get("put"), "put", -1, _nested(row, "put.strike"))
+    elif strategy == "covered-call":
+        basis = _first_num(row.get("cost_basis"), row.get("price"))
+        add({"entry_price": basis, "delta": 1}, "stock", 100)
+        add(row.get("call"), "call", -1, _nested(row, "call.strike"))
+    elif strategy == "bull-put-spread":
+        add(spread.get("short_leg"), "put", -1, spread.get("short_strike"))
+        add(spread.get("long_leg"), "put", 1, spread.get("long_strike"))
+    elif strategy == "bear-put-spread":
+        add(spread.get("long_leg"), "put", 1, spread.get("long_strike"))
+        add(spread.get("short_leg"), "put", -1, spread.get("short_strike"))
+    elif strategy == "bear-call-spread":
+        add(spread.get("short_leg"), "call", -1, spread.get("short_strike"))
+        add(spread.get("long_leg"), "call", 1, spread.get("long_strike"))
+    elif strategy == "iron-condor":
+        quantity = abs(_first_num(spread.get("quantity"), 1) or 1)
+        add(spread.get("put_leg_long"), "put", quantity, spread.get("put_long_strike"))
+        add(spread.get("put_leg_short"), "put", -quantity, spread.get("put_short_strike"))
+        add(spread.get("call_leg_short"), "call", -quantity, spread.get("call_short_strike"))
+        add(spread.get("call_leg_long"), "call", quantity, spread.get("call_long_strike"))
+    elif strategy == "iron-butterfly":
+        quantity = abs(_first_num(row.get("quantity"), 1) or 1)
+        add(row.get("put_long_leg"), "put", quantity, row.get("put_long_strike"))
+        add(row.get("put_short_leg"), "put", -quantity, row.get("body_strike"))
+        add(row.get("call_short_leg"), "call", -quantity, row.get("body_strike"))
+        add(row.get("call_long_leg"), "call", quantity, row.get("call_long_strike"))
+    elif strategy in {"put-condor", "unbalanced-put-condor"}:
+        bought = abs(_first_num(row.get("bought_quantity"), 1) or 1)
+        sold = abs(_first_num(row.get("sold_quantity"), 1) or 1)
+        add(row.get("upper_long_leg"), "put", bought, row.get("upper_long_strike"))
+        add(row.get("upper_short_leg"), "put", -bought, row.get("upper_short_strike"))
+        add(row.get("lower_short_leg"), "put", -sold, row.get("lower_short_strike"))
+        add(row.get("lower_long_leg"), "put", sold, row.get("lower_long_strike"))
+    elif strategy == "call-condor":
+        add(row.get("debit_long_leg"), "call", 1, row.get("debit_long_strike"))
+        add(row.get("debit_short_leg"), "call", -1, row.get("debit_short_strike"))
+        add(row.get("credit_short_leg"), "call", -1, row.get("credit_short_strike"))
+        add(row.get("credit_long_leg"), "call", 1, row.get("credit_long_strike"))
+    elif strategy in {
+        "unbalanced-butterfly", "double-hedge-put-butterfly",
+        "road-trip-butterfly", "sixty-forty-twenty-fly",
+    }:
+        upper_qty = abs(_first_num(row.get("upper_long_quantity"), 1) or 1)
+        body_qty = abs(_first_num(row.get("body_short_quantity"), 2) or 2)
+        lower_qty = abs(_first_num(row.get("lower_long_quantity"), 1) or 1)
+        add(row.get("upper_long_leg"), "put", upper_qty, row.get("upper_long_strike"))
+        add(row.get("body_short_leg"), "put", -body_qty, row.get("body_short_strike"))
+        add(row.get("lower_long_leg"), "put", lower_qty, row.get("lower_long_strike"))
+    return result
+
+
+def _position_payoff(legs: list[dict], terminal_price: float) -> float | None:
+    total = 0.0
+    for leg in legs:
+        quantity = _num(leg.get("quantity"))
+        entry = _num(leg.get("entry_price"))
+        kind = str(leg.get("option_type") or "").lower()
+        if quantity is None or entry is None:
+            return None
+        if kind == "stock":
+            total += quantity * (terminal_price - entry)
+            continue
+        strike = _num(leg.get("strike"))
+        if strike is None:
+            return None
+        intrinsic = (
+            max(terminal_price - strike, 0.0)
+            if kind == "call" else max(strike - terminal_price, 0.0)
+        )
+        total += quantity * (intrinsic - entry) * CONTRACT_MULTIPLIER
+    return total
+
+
+def _terminal_cdf(price: float | None, *, spot: float, years: float, volatility: float,
+                  risk_free_rate: float, dividend_yield: float) -> float:
+    if price is None:
+        return 1.0
+    if price <= 0:
+        return 0.0
+    sigma_root_t = volatility * math.sqrt(years)
+    z_score = (
+        math.log(price / spot)
+        - (risk_free_rate - dividend_yield - 0.5 * volatility * volatility) * years
+    ) / sigma_root_t
+    return _NORMAL.cdf(z_score)
+
+
+def _position_profile(legs: list[dict], spot, dte, distribution_iv,
+                      risk_free_rate=GENERAL_RISK_FREE_RATE, dividend_yield=0.0) -> dict:
+    """Calculate expiration risk and probabilities for a same-expiry position."""
+    empty = {
+        "max_profit": None, "max_loss": None,
+        "max_profit_unbounded": False, "max_loss_unbounded": False,
+        "prob_max_profit": None, "prob_max_loss": None,
+        "expected_value": None,
+    }
+    spot = _num(spot)
+    dte = _num(dte)
+    volatility = _num(distribution_iv)
+    rate = _first_num(risk_free_rate, GENERAL_RISK_FREE_RATE)
+    yield_number = _first_num(dividend_yield, 0.0)
+    option_legs = [leg for leg in legs if leg.get("option_type") != "stock"]
+    expirations = {str(leg.get("expiration") or "") for leg in option_legs}
+    if (
+        not legs or not option_legs or len(expirations) != 1
+        or spot is None or spot <= 0 or dte is None or dte <= 0
+        or volatility is None or volatility <= 0
+    ):
+        return empty
+    if volatility > 3:
+        volatility /= 100.0
+    if yield_number > 1:
+        yield_number /= 100.0
+    if rate is None or rate < -1 or rate > 1 or yield_number < -1 or yield_number > 1:
+        return empty
+    if any(_num(leg.get("entry_price")) is None for leg in legs):
+        return empty
+
+    strikes = sorted({
+        float(leg["strike"]) for leg in option_legs
+        if _num(leg.get("strike")) is not None
+    })
+    if not strikes:
+        return empty
+    breakpoints = [0.0, *strikes]
+    payoffs = [_position_payoff(legs, price) for price in breakpoints]
+    if any(value is None for value in payoffs):
+        return empty
+    high_slope = sum(
+        (_num(leg.get("quantity")) or 0.0) * CONTRACT_MULTIPLIER
+        for leg in option_legs if leg.get("option_type") == "call"
+    ) + sum(
+        _num(leg.get("quantity")) or 0.0
+        for leg in legs if leg.get("option_type") == "stock"
+    )
+    max_profit_unbounded = high_slope > 1e-9
+    max_loss_unbounded = high_slope < -1e-9
+    max_profit = None if max_profit_unbounded else max(payoffs)
+    max_loss = None if max_loss_unbounded else max(0.0, -min(payoffs))
+
+    years = max(dte, 1.0) / 365.0
+    expected_terminal = spot * math.exp((rate - yield_number) * years)
+    expected_value = 0.0
+    for leg in legs:
+        quantity = float(leg["quantity"])
+        entry = float(leg["entry_price"])
+        kind = leg["option_type"]
+        if kind == "stock":
+            expected_value += quantity * (expected_terminal - entry)
+            continue
+        modeled = black_scholes(
+            spot, float(leg["strike"]), years, rate, yield_number, volatility, kind
+        )
+        expected_intrinsic = float(modeled["price"]) * math.exp(rate * years)
+        expected_value += quantity * (expected_intrinsic - entry) * CONTRACT_MULTIPLIER
+
+    intervals = []
+    for index, low in enumerate(breakpoints):
+        high = breakpoints[index + 1] if index + 1 < len(breakpoints) else None
+        probe = low + 1.0 if high is None else (low + high) / 2.0
+        slope = sum(
+            (_num(leg.get("quantity")) or 0.0)
+            * (1.0 if leg.get("option_type") == "stock" else CONTRACT_MULTIPLIER)
+            for leg in legs
+            if leg.get("option_type") == "stock"
+            or (leg.get("option_type") == "call" and probe > float(leg["strike"]))
+        ) - sum(
+            (_num(leg.get("quantity")) or 0.0) * CONTRACT_MULTIPLIER
+            for leg in option_legs
+            if leg.get("option_type") == "put" and probe < float(leg["strike"])
+        )
+        payoff = _position_payoff(legs, probe)
+        probability = _terminal_cdf(
+            high, spot=spot, years=years, volatility=volatility,
+            risk_free_rate=rate, dividend_yield=yield_number,
+        ) - _terminal_cdf(
+            low, spot=spot, years=years, volatility=volatility,
+            risk_free_rate=rate, dividend_yield=yield_number,
+        )
+        intervals.append((slope, payoff, max(0.0, probability)))
+
+    tolerance = 1e-6
+    prob_max_profit = None if max_profit is None else 100.0 * sum(
+        probability for slope, payoff, probability in intervals
+        if abs(slope) <= tolerance and abs((payoff or 0.0) - max_profit) <= tolerance
+    )
+    prob_max_loss = None if max_loss is None else 100.0 * sum(
+        probability for slope, payoff, probability in intervals
+        if abs(slope) <= tolerance and abs((payoff or 0.0) + max_loss) <= tolerance
+    )
+    return {
+        "max_profit": round(max_profit, 2) if max_profit is not None else None,
+        "max_loss": round(max_loss, 2) if max_loss is not None else None,
+        "max_profit_unbounded": max_profit_unbounded,
+        "max_loss_unbounded": max_loss_unbounded,
+        "prob_max_profit": round(prob_max_profit, 2) if prob_max_profit is not None else None,
+        "prob_max_loss": round(prob_max_loss, 2) if prob_max_loss is not None else None,
+        "expected_value": round(expected_value, 2),
+    }
 
 
 def _reference_deltas(legs: list[dict], mode: str) -> list[float]:
@@ -441,6 +753,34 @@ def _realized_vol_metrics(history_frame) -> dict:
 
 
 def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> dict:
+    trade_kind = _trade_kind(strategy, row)
+    expiration = _nested(
+        row, "spread.expiration", "call.expiration", "put.expiration", "expiration"
+    )
+    dte = _num(_nested(row, "spread.dte", "call.dte", "put.dte", "dte"))
+    if dte is None and expiration:
+        expiration_day = _as_day(expiration)
+        if expiration_day is not None:
+            dte = float((expiration_day - date.today()).days)
+    price = _num(row.get("price"))
+    atm_iv = _num(_nested(
+        row, "spread.atm_iv", "call.atm_iv", "put.atm_iv", "atm_iv", "iv",
+        "distribution_iv", "probability_iv",
+    ))
+    position_legs = _position_legs(trade_kind, row)
+    if atm_iv is None and price is not None:
+        iv_legs = [
+            leg for leg in position_legs
+            if leg.get("option_type") != "stock" and _num(leg.get("iv")) is not None
+        ]
+        if iv_legs:
+            atm_leg = min(iv_legs, key=lambda leg: abs((_num(leg.get("strike")) or price) - price))
+            atm_iv = _num(atm_leg.get("iv"))
+    profile = _position_profile(
+        position_legs, price, dte, atm_iv,
+        _nested(row, "spread.risk_free_rate", "risk_free_rate"),
+        _nested(row, "spread.dividend_yield", "dividend_yield"),
+    )
     max_profit = _num(_nested(
         row, "spread.max_profit_dollars", "spread.max_profit", "max_profit_dollars",
         "max_profit", "premium_dollars", "call.premium_dollars", "put.premium_dollars",
@@ -449,10 +789,21 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         row, "spread.max_loss_dollars", "spread.max_loss", "max_loss_dollars",
         "max_loss", "cash_required", "put.cash_required",
     ))
+    # The one-leg income scanners historically exposed collateral and premium,
+    # not the actual position-wide payoff extrema.  Use the exact expiration
+    # profile so the columns mean the same thing for every strategy.
+    if trade_kind in {"cash-secured-put", "covered-call"}:
+        max_profit = profile["max_profit"] if profile["max_profit"] is not None else max_profit
+        max_loss = profile["max_loss"] if profile["max_loss"] is not None else max_loss
+    else:
+        max_profit = max_profit if max_profit is not None else profile["max_profit"]
+        max_loss = max_loss if max_loss is not None else profile["max_loss"]
     ratio = _num(_nested(
         row, "spread.profit_ratio_pct", "spread.reward_risk", "profit_ratio_pct",
         "reward_risk", "return_on_risk_pct",
     ))
+    if trade_kind in {"cash-secured-put", "covered-call"}:
+        ratio = None
     if ratio is None and max_profit is not None and max_loss not in (None, 0):
         ratio = abs(max_profit / max_loss) * 100.0
     elif ratio is not None and ratio <= 10 and _nested(row, "spread.reward_risk", "reward_risk") is not None:
@@ -488,10 +839,17 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
     ))
     if prob_max_profit is None and strategy in {"bull-put-spread", "bear-call-spread"}:
         prob_max_profit = prob_otm
+    if prob_max_profit is None:
+        prob_max_profit = profile["prob_max_profit"]
+    prob_max_loss = _num(_nested(
+        row, "spread.prob_max_loss", "prob_max_loss", "probability_max_loss_pct"
+    ))
+    if prob_max_loss is None:
+        prob_max_loss = profile["prob_max_loss"]
     prob_touch = _num(_nested(row, "spread.prob_touch", "prob_touch"))
     if prob_touch is None and prob_itm is not None:
         prob_touch = min(100.0, 2.0 * prob_itm)
-    legs = _option_legs(row)
+    legs = position_legs or _option_legs(row)
     reference_deltas = _reference_deltas(legs, reference_mode)
     leg_spreads = [
         (_num(leg.get("ask")) or 0) - (_num(leg.get("bid")) or 0)
@@ -503,7 +861,6 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "put.strike", "short_strike", "body_strike", "upper_short_strike",
         "reference_strike",
     ))
-    price = _num(row.get("price"))
     moneyness = (
         (reference_strike - price) / price * 100.0
         if reference_strike is not None and price not in (None, 0) else None
@@ -514,6 +871,36 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
     entry_credit_dollars = _num(_nested(
         row, "spread.entry_credit_dollars", "entry_credit_dollars"
     ))
+    total_option_volume = _num(_nested(
+        row, "spread.total_option_volume", "call.total_option_volume",
+        "put.total_option_volume", "total_option_volume", "option_volume",
+    ))
+    total_option_volume_source = "chain" if total_option_volume is not None else None
+    if total_option_volume is None:
+        leg_volumes = [
+            _num(leg.get("volume")) for leg in position_legs
+            if leg.get("option_type") != "stock" and _num(leg.get("volume")) is not None
+        ]
+        if leg_volumes:
+            total_option_volume = sum(leg_volumes)
+            total_option_volume_source = "selected_legs"
+    position_delta = _num(_nested(
+        row, "spread.position_delta", "spread.net_delta", "position_delta", "net_delta", "delta"
+    ))
+    if position_delta is None and position_legs and all(
+        _num(leg.get("delta")) is not None for leg in position_legs
+    ):
+        position_delta = sum(
+            float(leg["quantity"]) * float(leg["delta"])
+            * (1.0 if leg.get("option_type") == "stock" else CONTRACT_MULTIPLIER)
+            for leg in position_legs
+        )
+    expected_value = _num(_nested(
+        row, "spread.expected_value_dollars", "spread.expected_value",
+        "expected_value_dollars", "expected_value",
+    ))
+    if expected_value is None:
+        expected_value = profile["expected_value"]
     condor_shapes = []
     if strategy == "iron-condor" and put_width is not None and call_width is not None:
         tolerance = max(0.051, max(put_width, call_width) * 0.01)
@@ -542,25 +929,61 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         ),
         "name": row.get("name") or row.get("company_name"),
         "price": price,
-        "expiration": _nested(row, "spread.expiration", "call.expiration", "put.expiration", "expiration"),
-        "dte": _num(_nested(row, "spread.dte", "call.dte", "put.dte", "dte")),
+        "expiration": expiration,
+        "dte": dte,
         "strikes": _strike_summary(row),
         "iv_rank": _num(row.get("iv_rank")) or _num(row.get("iv_rank_effective")),
         "iv_rank_source": row.get("iv_rank_source"),
         "iv_rank_observations": int(_num(row.get("iv_rank_observations")) or 0),
-        "atm_iv": _num(_nested(row, "spread.atm_iv", "call.atm_iv", "put.atm_iv", "atm_iv", "iv")),
+        "atm_iv": atm_iv,
         "rv": None,
         "rv_rank": None,
         "iv_rv": None,
         "iv_rv_rank": None,
         "iv_rv_observations": 0,
         "volatility_score": None,
-        "total_option_volume": _num(_nested(row, "spread.total_option_volume", "total_option_volume", "option_volume")),
-        "delta": _num(_nested(row, "spread.position_delta", "spread.net_delta", "position_delta", "net_delta", "delta")),
+        "volatility_score_provisional": False,
+        "volatility_score_observations": 0,
+        "put_skew": _num(_nested(row, "put.put_skew", "call.put_skew", "put_skew")),
+        "put_skew_rank": _num(_nested(
+            row, "put.put_skew_rank", "call.put_skew_rank", "put_skew_rank"
+        )),
+        "put_skew_rank_ready": bool(_nested(
+            row, "put.put_skew_rank_ready", "call.put_skew_rank_ready",
+            "put_skew_rank_ready",
+        )),
+        "put_skew_rank_observations": int(_num(_nested(
+            row, "put.put_skew_rank_observations", "call.put_skew_rank_observations",
+            "put_skew_rank_observations",
+        )) or 0),
+        "call_skew": _num(_nested(row, "call.call_skew", "put.call_skew", "call_skew")),
+        "call_skew_rank": _num(_nested(
+            row, "call.call_skew_rank", "put.call_skew_rank", "call_skew_rank"
+        )),
+        "call_skew_rank_ready": bool(_nested(
+            row, "call.call_skew_rank_ready", "put.call_skew_rank_ready",
+            "call_skew_rank_ready",
+        )),
+        "call_skew_rank_observations": int(_num(_nested(
+            row, "call.call_skew_rank_observations", "put.call_skew_rank_observations",
+            "call_skew_rank_observations",
+        )) or 0),
+        "skew": _num(_nested(row, "call.skew", "put.skew", "skew")),
+        "skew_rank": _num(_nested(row, "call.skew_rank", "put.skew_rank", "skew_rank")),
+        "skew_rank_ready": bool(_nested(
+            row, "call.skew_rank_ready", "put.skew_rank_ready", "skew_rank_ready"
+        )),
+        "skew_rank_observations": int(_num(_nested(
+            row, "call.skew_rank_observations", "put.skew_rank_observations",
+            "skew_rank_observations",
+        )) or 0),
+        "total_option_volume": total_option_volume,
+        "total_option_volume_source": total_option_volume_source,
+        "delta": round(position_delta, 4) if position_delta is not None else None,
         "reference_delta": round(sum(reference_deltas) / len(reference_deltas), 2) if reference_deltas else None,
         "reference_deltas": [round(value, 2) for value in reference_deltas],
         "prob_max_profit": prob_max_profit,
-        "prob_max_loss": _num(_nested(row, "spread.prob_max_loss", "prob_max_loss", "probability_max_loss_pct")),
+        "prob_max_loss": prob_max_loss,
         "prob_success": prob_success,
         "prob_failure": prob_failure,
         "prob_otm": prob_otm,
@@ -570,20 +993,26 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "prob_touch_put": _num(_nested(row, "spread.prob_touch_put", "prob_touch_put")),
         "prob_touch_call": _num(_nested(row, "spread.prob_touch_call", "prob_touch_call")),
         "probability_schedule": probability_schedule,
-        "expected_value": _num(_nested(row, "spread.expected_value_dollars", "spread.expected_value", "expected_value_dollars", "expected_value")),
+        "expected_value": expected_value,
         "entry_credit": entry_credit,
         "entry_credit_dollars": entry_credit_dollars,
         "max_profit": max_profit,
         "max_loss": max_loss,
-        "max_profit_unbounded": bool(_nested(row, "spread.max_profit_unbounded", "max_profit_unbounded")),
-        "max_loss_unbounded": bool(_nested(row, "spread.max_loss_unbounded", "max_loss_unbounded")),
+        "max_profit_unbounded": bool(
+            _nested(row, "spread.max_profit_unbounded", "max_profit_unbounded")
+            or profile["max_profit_unbounded"]
+        ),
+        "max_loss_unbounded": bool(
+            _nested(row, "spread.max_loss_unbounded", "max_loss_unbounded")
+            or profile["max_loss_unbounded"]
+        ),
         "profit_ratio": ratio,
         "moneyness": moneyness,
         "bid_ask_spread": max(leg_spreads) if leg_spreads else None,
         "return_pct": _num(_nested(row, "call.premium_yield_pct", "put.premium_yield_pct", "premium_yield_pct", "return_pct")),
         "annualized_return_pct": _num(_nested(row, "call.annualized_pct", "put.annualized_pct", "annualized_pct", "annualized_return_pct")),
         "status": row.get("status") or row.get("chain_status") or row.get("candidate_status"),
-        "trade_kind": _trade_kind(strategy, row),
+        "trade_kind": trade_kind,
         "condor_shapes": condor_shapes,
         "butterfly_shapes": butterfly_shapes,
     }
@@ -705,9 +1134,14 @@ def _iv_history(rows: list[dict]) -> None:
                 history = record_iv_snapshot(ticker, atm_iv, meta.get("expiration"))
             except Exception:
                 history = {}
-            if history.get("rank") is not None:
-                meta["iv_rank"] = round(float(history["rank"]), 1)
+            history_rank = history.get("rank")
+            provisional_rank = history.get("provisional_rank")
+            if history_rank is not None:
+                meta["iv_rank"] = round(float(history_rank), 1)
                 meta["iv_rank_source"] = "history"
+            elif provisional_rank is not None:
+                meta["iv_rank"] = round(float(provisional_rank), 1)
+                meta["iv_rank_source"] = "provisional_history"
             elif meta.get("iv_rank") is None:
                 meta["iv_rank_source"] = "warming_up"
             meta["iv_rank_observations"] = int(history.get("observations") or 0)
@@ -721,22 +1155,40 @@ def _iv_history(rows: list[dict]) -> None:
                 observations = []
         spreads = []
         for item in observations:
+            observed_day = _as_day(item.get("observed_on"))
+            if observed_day == date.today():
+                continue
             day_rv = _rv_on_or_before(rv_by_date, item.get("observed_on"))
             spread = calculate_iv_rv(item.get("atm_iv"), day_rv)
             if spread is not None:
                 spreads.append(spread)
-        meta["iv_rv_observations"] = len(spreads)
-        if iv_rv is not None and len(spreads) >= MIN_IV_RANK_OBSERVATIONS:
+        iv_rv_observations = len(spreads) + (1 if iv_rv is not None else 0)
+        meta["iv_rv_observations"] = iv_rv_observations
+        if iv_rv is not None and iv_rv_observations >= 3:
             rank = calculate_percentile_rank(spreads, iv_rv)
             meta["iv_rv_rank"] = round(rank, 1) if rank is not None else None
+            meta["iv_rv_rank_ready"] = (
+                iv_rv_observations >= MIN_IV_RANK_OBSERVATIONS and rank is not None
+            )
         else:
             meta["iv_rv_rank"] = None
+            meta["iv_rv_rank_ready"] = False
         iv_rank = _num(meta.get("iv_rank"))
         iv_rv_rank = _num(meta.get("iv_rv_rank"))
         if iv_rank is not None and iv_rv_rank is not None:
             meta["volatility_score"] = round((iv_rank + iv_rv_rank) / 2.0, 1)
+            meta["volatility_score_observations"] = min(
+                int(meta.get("iv_rank_observations") or 0),
+                int(meta.get("iv_rv_observations") or 0),
+            )
+            meta["volatility_score_provisional"] = not (
+                meta.get("iv_rank_source") == "history"
+                and meta.get("iv_rv_rank_ready")
+            )
         else:
             meta["volatility_score"] = None
+            meta["volatility_score_observations"] = 0
+            meta["volatility_score_provisional"] = False
 
 
 def _filter_reasons(meta: dict, payload: dict) -> list[str]:

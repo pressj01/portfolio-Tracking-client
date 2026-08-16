@@ -353,6 +353,9 @@ def _suggest_bull_put_spread(
         "expiration": expiration,
         "dte": dte,
         "atm_iv": atm_iv,
+        "total_option_volume": sum(
+            int(_num(leg.get("volume"), 0) or 0) for leg in puts
+        ),
         "constraints_relaxed": not passing,
         "pairs_considered": len(all_pairs),
         "earnings_date": earnings_d.isoformat() if earnings_d else None,

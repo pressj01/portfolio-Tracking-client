@@ -178,7 +178,16 @@ def _anchor_from_prior_close(frame, anchor_date):
     if trimmed.index.has_duplicates:
         trimmed = trimmed.loc[~trimmed.index.duplicated(keep="last")]
     trimmed = trimmed.sort_index()
-    eligible = trimmed.index[trimmed.index <= pd.Timestamp(anchor_date)]
+    anchor = pd.Timestamp(anchor_date)
+    if isinstance(trimmed.index, pd.DatetimeIndex):
+        index_timezone = trimmed.index.tz
+        if index_timezone is not None and anchor.tzinfo is None:
+            anchor = anchor.tz_localize(index_timezone)
+        elif index_timezone is not None:
+            anchor = anchor.tz_convert(index_timezone)
+        elif anchor.tzinfo is not None:
+            anchor = anchor.tz_localize(None)
+    eligible = trimmed.index[trimmed.index <= anchor]
     if len(eligible) == 0:
         # The window predates this ticker's history; its own first quote is the
         # earliest defensible baseline.
@@ -28147,7 +28156,11 @@ def etf_screen_data():
         dl_ticker = yahoo_by_symbol.get(ticker, ticker)
         try:
             tk = yf.Ticker(dl_ticker)
-            df = tk.history(interval=interval, auto_adjust=False, **_range_kwargs())
+            history_kwargs = _range_kwargs()
+            history_anchor = history_kwargs.pop("anchor_on_or_before", None)
+            df = tk.history(interval=interval, auto_adjust=False, **history_kwargs)
+            if history_anchor:
+                df = _anchor_from_prior_close(df, history_anchor)
             if df.empty:
                 return jsonify(error=f"No data found for {ticker}"), 404
 

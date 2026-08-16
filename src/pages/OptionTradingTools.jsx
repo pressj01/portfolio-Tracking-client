@@ -7,6 +7,7 @@ import { chartTheme } from '../utils/chartTheme'
 import { riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import { hydrateTrackedTradeLegs, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
+import { optionMoneyness, optionMoneynessRange } from '../utils/optionMoneyness'
 import {
   applyVolatilitySurfaceShock,
   buildVolatilityScenarioLeg,
@@ -307,6 +308,19 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       },
     ]
     const probability = result.probability_range
+    const spotValue = Number(result.spot)
+    const probabilityAnchorMoneyness = (() => {
+      const anchorStrike = Number(probability?.anchor_strike)
+      const anchorType = String(probability?.opt_type || '').toUpperCase()
+      if (!(spotValue > 0) || !(anchorStrike > 0) || !['CALL', 'PUT'].includes(anchorType)) return ''
+      const distancePct = Math.abs(spotValue - anchorStrike) / spotValue * 100
+      let status = 'ATM'
+      if (distancePct >= 0.01) {
+        const inTheMoney = anchorType === 'CALL' ? spotValue > anchorStrike : spotValue < anchorStrike
+        status = inTheMoney ? 'ITM' : 'OTM'
+      }
+      return ` · currently ${fmt(distancePct, 1)}% ${status}`
+    })()
     const probabilityMode = String(probability?.probability_mode || 'ITM').toUpperCase()
     const probabilityColors = {
       ITM: { line: '#35d07f', fill: 'rgba(53, 208, 127, 0.13)' },
@@ -339,7 +353,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         x: probability.anchor_strike,
         y: 1.02,
         yref: 'paper',
-        text: `<b>Reference strike</b> · $${fmt(probability.anchor_strike)}`,
+        text: `<b>Reference ${String(probability.opt_type || 'option').toLowerCase()}</b> · $${fmt(probability.anchor_strike)}${probabilityAnchorMoneyness}`,
         xanchor: 'center',
         yanchor: 'bottom',
         ...annotationTag('#7ecfff'),
@@ -402,7 +416,6 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       })
     })
     const spotColor = '#8eb6ff'
-    const spotValue = Number(result.spot)
     if (Number.isFinite(spotValue) && spotValue > 0) {
       shapes.push({
         type: 'line', x0: spotValue, x1: spotValue, y0: 0, y1: 1, yref: 'paper',
@@ -661,24 +674,6 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       </div>
     </div>
   )
-}
-
-const optionMoneyness = (leg, spot) => {
-  const strike = Number(leg?.strike)
-  const current = Number(spot)
-  const optType = String(leg?.opt_type || '').toUpperCase()
-  if (!strike || !current || !['CALL', 'PUT'].includes(optType)) return null
-  const signedDistance = optType === 'CALL' ? current - strike : strike - current
-  const percentDistance = Math.abs(signedDistance) / current * 100
-  const status = percentDistance < 0.01 ? 'ATM' : signedDistance > 0 ? 'ITM' : 'OTM'
-  return {
-    strike,
-    optType,
-    status,
-    percentDistance,
-    dollarDistance: Math.abs(current - strike),
-    relativePosition: strike >= current ? 'above' : 'below',
-  }
 }
 
 function spreadMoneynessLabelOffsets(rows, axisLow, axisHigh) {
@@ -1382,20 +1377,12 @@ export default function OptionTradingTools() {
     [activeOptionLegs],
   )
   const probabilityRange = useMemo(() => {
-    const strike = Number(probabilityAnchor?.strike)
-    if (!strike) return null
     const itmPct = Math.max(1, Number(itmRangePct) || 1)
     const otmPct = Math.max(1, Number(otmRangePct) || 1)
-    const isCall = String(probabilityAnchor.opt_type).toUpperCase() === 'CALL'
+    const range = optionMoneynessRange(probabilityAnchor, itmPct, otmPct)
+    if (!range) return null
     return {
-      low: strike * (1 - (isCall ? otmPct : itmPct) / 100),
-      high: strike * (1 + (isCall ? itmPct : otmPct) / 100),
-      anchor_strike: strike,
-      opt_type: isCall ? 'CALL' : 'PUT',
-      itm_pct: itmPct,
-      otm_pct: otmPct,
-      lower_label: `${isCall ? otmPct : itmPct}% ${isCall ? 'OTM' : 'ITM'}`,
-      upper_label: `${isCall ? itmPct : otmPct}% ${isCall ? 'ITM' : 'OTM'}`,
+      ...range,
       iv: buildVolatilityScenarioLeg(probabilityAnchor, {
         spot,
         surfaceShockPct: volatilitySurfaceShock,

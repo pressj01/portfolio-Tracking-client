@@ -430,6 +430,47 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
             places=1,
         )
 
+    def test_covered_call_probability_anchor_cannot_be_mislabeled_as_a_put(self):
+        expiration = self.today + timedelta(days=30)
+        payload = self.payload(self.today)
+        payload["underlying"] = "MRVL"
+        payload["spot_override"] = 222.02
+        payload["price_range"] = {"low": 120, "high": 300, "steps": 61}
+        payload["probability_range"] = {
+            "enabled": True,
+            "low": 175.5,
+            "high": 214.5,
+            "iv": 0.35,
+            "anchor_strike": 195,
+            # Simulate a stale client reversing the call-side labels.
+            "opt_type": "PUT",
+            "itm_pct": 10,
+            "otm_pct": 10,
+            "lower_label": "10% ITM",
+            "upper_label": "10% OTM",
+        }
+        payload["legs"] = [
+            {
+                "side": "BUY", "qty": 100, "opt_type": "STOCK", "strike": 0,
+                "expiration": "", "entry_price": 186.93,
+            },
+            {
+                "side": "SELL", "qty": 1, "opt_type": "CALL", "strike": 195,
+                "expiration": expiration.isoformat(), "entry_price": 0.0, "iv": 0.35,
+            },
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        probability = response.get_json()["probability_range"]
+        self.assertEqual(probability["opt_type"], "CALL")
+        self.assertEqual(probability["low"], 175.5)
+        self.assertEqual(probability["high"], 214.5)
+        self.assertEqual(probability["lower_label"], "10% OTM")
+        self.assertEqual(probability["upper_label"], "10% ITM")
+        self.assertEqual(probability["probability_touch_pct"], 100.0)
+
     @patch("options_api._fetch_quote", return_value={"last": 725.51, "div_yield": 0.0041})
     def test_covered_call_with_put_spread_reports_whole_domain_bounds(self, _quote):
         expiration = self.today + timedelta(days=40)

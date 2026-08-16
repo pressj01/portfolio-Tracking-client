@@ -49,6 +49,8 @@ const COMMON_FIELD_GROUPS = [
       ['IV − RV Rank', 'A 0–100 percentile of today’s IV − RV versus the same spread over the past year. Mean-reverting.'],
       ['RV Rank', 'A 0–100 percentile of the past month’s realized volatility versus the previous year.'],
       ['Volatility score', 'The average of IV Rank and IV − RV Rank. A smoother read on whether options look overpriced (high) or underpriced (low).'],
+      ['Put / Call Skew Rank', 'For short puts and covered calls, compares 25-delta option IV with same-side ATM IV and ranks that gap versus the ticker’s trailing-year history.'],
+      ['Skew Rank', 'Ranks the roughly 30-DTE 25-delta put-IV minus 25-delta call-IV gap. High means puts are unusually expensive; low means calls are unusually expensive.'],
     ],
   },
   {
