@@ -21,6 +21,50 @@ const formatShares = (value) => (
   value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : blankValue
 )
 
+// Formats offered on the Brokerage & Export Import tab.
+const TXN_FORMATS = [
+  { value: 'portfolio_export', label: 'Portfolio Export (Holdings + Transactions)' },
+  { value: 'generic_transactions', label: 'Generic Transactions' },
+  { value: 'snowball_holdings', label: 'Snowball Holdings (Migration)' },
+  { value: 'snowball_categories', label: 'Snowball Categories' },
+  { value: 'snowball', label: 'Snowball Transactions' },
+  { value: 'schwab', label: 'Charles Schwab (Positions)' },
+  { value: 'schwab_transactions', label: 'Charles Schwab (Transactions)' },
+  { value: 'etrade', label: 'E*Trade (Positions)' },
+  { value: 'etrade_transactions', label: 'E*Trade (Transactions)' },
+  { value: 'fidelity', label: 'Fidelity (Positions)' },
+  { value: 'fidelity_transactions', label: 'Fidelity (Transactions)' },
+  { value: 'robinhood', label: 'Robinhood (Positions PDF)' },
+  { value: 'robinhood_transactions', label: 'Robinhood (Transactions)' },
+  { value: 'shear_group', label: 'Shear Group (Positions)' },
+  { value: 'shear_group_activity', label: 'Shear Group (Activity)' },
+]
+
+const BROKER_FORMAT_KEY = 'portfolio_defaultBrokerImportFormat'
+
+// Until a default is pinned the dropdown sits on a placeholder, so an import
+// can never run under whichever format happened to be listed first.
+const NO_FORMAT = ''
+
+// Generic Transactions is reachable from its own tab, so pinning it as the
+// brokerage default would leave the two tabs fighting over the highlight.
+const isPinnableFormat = (value) => (
+  value !== 'generic_transactions' && TXN_FORMATS.some(f => f.value === value)
+)
+
+const readDefaultBrokerFormat = () => {
+  try {
+    const saved = localStorage.getItem(BROKER_FORMAT_KEY)
+    return isPinnableFormat(saved) ? saved : NO_FORMAT
+  } catch {
+    return NO_FORMAT
+  }
+}
+
+const formatLabel = (value) => (
+  TXN_FORMATS.find(f => f.value === value)?.label || value
+)
+
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
   const [dragOver, setDragOver] = useState(false)
@@ -109,7 +153,8 @@ export default function Import() {
   const [asTransactions, setAsTransactions] = useState(false)
 
   // Transaction History tab state
-  const [txnFormat, setTxnFormat] = useState('snowball')
+  const [txnFormat, setTxnFormat] = useState(readDefaultBrokerFormat)
+  const [defaultTxnFormat, setDefaultTxnFormat] = useState(readDefaultBrokerFormat)
   const [txnFile, setTxnFile] = useState(null)
   const [txnPreview, setTxnPreview] = useState(null)
   const [txnPreviewLoading, setTxnPreviewLoading] = useState(false)
@@ -222,7 +267,16 @@ export default function Import() {
 
   const handleBrokerageImportTab = () => {
     handleTabChange('txnHistory')
-    if (txnFormat === 'generic_transactions') setTxnFormat('snowball')
+    if (txnFormat === 'generic_transactions') setTxnFormat(defaultTxnFormat)
+  }
+
+  const pinDefaultTxnFormat = () => {
+    try {
+      localStorage.setItem(BROKER_FORMAT_KEY, txnFormat)
+    } catch {
+      // A blocked localStorage only costs the preference, not the import.
+    }
+    setDefaultTxnFormat(txnFormat)
   }
 
   const uploadFile = async (endpoint, extraFields = {}) => {
@@ -859,27 +913,33 @@ export default function Import() {
 
           <div className="form-group" style={{ marginBottom: '1rem' }}>
             <label>Format</label>
-            <select
-              value={txnFormat}
-              onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnFile(null); setResult(null); setError(null) }}
-              style={{ width: '250px' }}
-            >
-              <option value="portfolio_export">Portfolio Export (Holdings + Transactions)</option>
-              <option value="generic_transactions">Generic Transactions</option>
-              <option value="snowball_holdings">Snowball Holdings (Migration)</option>
-              <option value="snowball_categories">Snowball Categories</option>
-              <option value="snowball">Snowball Transactions</option>
-              <option value="schwab">Charles Schwab (Positions)</option>
-              <option value="schwab_transactions">Charles Schwab (Transactions)</option>
-              <option value="etrade">E*Trade (Positions)</option>
-              <option value="etrade_transactions">E*Trade (Transactions)</option>
-              <option value="fidelity">Fidelity (Positions)</option>
-              <option value="fidelity_transactions">Fidelity (Transactions)</option>
-              <option value="robinhood">Robinhood (Positions PDF)</option>
-              <option value="robinhood_transactions">Robinhood (Transactions)</option>
-              <option value="shear_group">Shear Group (Positions)</option>
-              <option value="shear_group_activity">Shear Group (Activity)</option>
-            </select>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <select
+                value={txnFormat}
+                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnFile(null); setResult(null); setError(null) }}
+                style={{ width: '250px' }}
+              >
+                <option value={NO_FORMAT} disabled>Select a format...</option>
+                {TXN_FORMATS.map(f => (
+                  <option key={f.value} value={f.value}>{f.label}</option>
+                ))}
+              </select>
+              {!isPinnableFormat(txnFormat) ? (
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                  {defaultTxnFormat
+                    ? `Default: ${formatLabel(defaultTxnFormat)}`
+                    : 'Pick a format to continue'}
+                </span>
+              ) : txnFormat === defaultTxnFormat ? (
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                  This tab opens here by default
+                </span>
+              ) : (
+                <button className="btn btn-secondary" onClick={pinDefaultTxnFormat}>
+                  Set as default
+                </button>
+              )}
+            </div>
           </div>
 
           <FileUpload
@@ -892,7 +952,7 @@ export default function Import() {
           <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem' }}>
             <button
               className="btn btn-secondary"
-              disabled={!txnFile || txnPreviewLoading}
+              disabled={!txnFile || txnPreviewLoading || !txnFormat}
               onClick={async () => {
                 setTxnPreviewLoading(true)
                 setError(null)
