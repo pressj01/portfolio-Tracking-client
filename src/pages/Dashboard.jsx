@@ -2390,6 +2390,40 @@ export default function Dashboard() {
         </div>
       </div>
 
+      <div className="dashboard-headline-grid" aria-label="Portfolio headline metrics">
+        <SummaryCard
+          className="dashboard-headline-card"
+          label="Portfolio Value"
+          value={fmt(totals.accountValue)}
+          color="var(--accent-bright)"
+          sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
+        />
+        <SummaryCard
+          className="dashboard-headline-card daily-change-card"
+          label="Account Change"
+          value={dailyChangeValue}
+          color={dailyChangeColor}
+          sub={dailyChangeSub}
+          title={dailyChangeTitle}
+        />
+        <SummaryCard
+          className="dashboard-headline-card"
+          label="Price Return"
+          value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
+          color={gradeColor(fullTrackerPriceReturn)}
+          sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+          title="Transaction-aware price return for the Shared Performance Date Range"
+        />
+        <SummaryCard
+          className="dashboard-headline-card"
+          label="Tracker TR"
+          value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
+          color={gradeColor(fullTrackerTotalReturn)}
+          sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+          title="The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages"
+        />
+      </div>
+
       {brokerImportStatus?.stale_accounts?.length > 0 && (() => {
         const accts = brokerImportStatus.stale_accounts
         const single = accts.length === 1
@@ -2510,47 +2544,22 @@ export default function Dashboard() {
         )
       })()}
 
-      {actionCenter?.items?.length > 0 && (
-        <div className="card" style={{ padding: '0.85rem 1rem', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '0.65rem', flexWrap: 'wrap' }}>
-            <div>
-              <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Action Center</h3>
-              <p style={{ color: 'var(--text-dim)', margin: '0.15rem 0 0', fontSize: '0.82rem' }}>
-                {actionCenter.summary?.item_count || actionCenter.items.length} follow-up{(actionCenter.summary?.item_count || actionCenter.items.length) !== 1 ? 's' : ''} found for this portfolio.
-              </p>
-            </div>
-            <NavLink className="btn btn-secondary" style={{ padding: '0.35rem 0.7rem', fontSize: '0.82rem' }} to="/action-center">
-              Open Action Center
-            </NavLink>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '0.5rem' }}>
-            {actionCenter.items.slice(0, 4).map(item => {
-              const color = item.priority === 'warning' ? 'var(--warning-text)' : item.priority === 'success' ? 'var(--pos)' : 'var(--accent-bright)'
-              return (
-                <NavLink
-                  key={item.id}
-                  to={item.route || '/action-center'}
-                  style={{
-                    display: 'block',
-                    border: `1px solid color-mix(in srgb, ${color} 35%, transparent)`,
-                    borderLeft: `3px solid ${color}`,
-                    borderRadius: 6,
-                    padding: '0.55rem 0.65rem',
-                    background: 'var(--surface-inset)',
-                    color: 'var(--text-strong)',
-                  }}
-                >
-                  <div style={{ color, fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', marginBottom: 2 }}>
-                    {item.kind || 'portfolio'}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: '0.88rem', lineHeight: 1.25 }}>{item.title}</div>
-                  <div style={{ color: 'var(--text-dim)', fontSize: '0.76rem', marginTop: 3, lineHeight: 1.35 }}>{item.detail}</div>
-                </NavLink>
-              )
-            })}
-          </div>
-        </div>
-      )}
+      {actionCenter?.items?.length > 0 && (() => {
+        const flaggedCount = actionCenter.summary?.item_count || actionCenter.items.length
+        return (
+          <NavLink
+            className="dashboard-flagged-warning"
+            to="/action-center"
+            aria-label={`Review ${flaggedCount} flagged Action Center ${flaggedCount === 1 ? 'item' : 'items'}`}
+          >
+            <span className="dashboard-flagged-icon" aria-hidden="true">⚑</span>
+            <span className="dashboard-flagged-copy">
+              <strong>Flagged:</strong> {flaggedCount} {flaggedCount === 1 ? 'item needs' : 'items need'} review
+            </span>
+            <span className="dashboard-flagged-review" aria-hidden="true">Review →</span>
+          </NavLink>
+        )
+      })()}
 
       <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
         <div className="growth-filter-group">
@@ -2632,34 +2641,6 @@ export default function Dashboard() {
             label="NAV Erosion Score"
             value={portfolioCoverage.toFixed(4)}
             color={portfolioNavColor}
-          />
-          <SummaryCard
-            label="Portfolio Value"
-            value={fmt(totals.accountValue)}
-            color="var(--accent-bright)"
-            sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
-          />
-          <SummaryCard
-            className="daily-change-card"
-            label="Account Day Change"
-            value={dailyChangeValue}
-            color={dailyChangeColor}
-            sub={dailyChangeSub}
-            title={dailyChangeTitle}
-          />
-          <SummaryCard
-            label={`Price Return \u2014 ${trackerPerformance?.period_label || 'Selected Period'}`}
-            value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
-            color={gradeColor(fullTrackerPriceReturn)}
-            sub={trackerPerformanceRange}
-            title="Transaction-aware price return for the Shared Performance Date Range"
-          />
-          <SummaryCard
-            label={`Tracker Total Return \u2014 ${trackerPerformance?.period_label || 'Selected Period'}`}
-            value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
-            color={gradeColor(fullTrackerTotalReturn)}
-            sub={trackerPerformanceRange}
-            title="The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages"
           />
         </div>
       )}
@@ -2771,14 +2752,6 @@ export default function Dashboard() {
         <SummaryCard label={`${currentMonth} Not Reinvested`} value={fmt(totals.currentMonthNotReinvested)} color="var(--warning-money)" sub={currentMonthSub} />
         <SummaryCard label={`${currentMonth} % Reinvested`} value={totals.currentMonthReinvestPct != null ? pct(totals.currentMonthReinvestPct) : '—'} color="var(--pos-muted)" sub={currentMonthSub} />
         <SummaryCard label="Est. Annual Income" value={fmt(totals.annualIncome)} color="var(--pos)" />
-        {portfolioCoverage == null && (
-          <SummaryCard
-            label="Portfolio Value"
-            value={fmt(totals.accountValue)}
-            color="var(--accent-bright)"
-            sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
-          />
-        )}
         <SummaryCard
           label={appliedIrrExclusions.length ? 'Filtered IRR' : 'Portfolio IRR'}
           value={irrExclusionLoading ? 'Updating…' : hasPortfolioIrr ? pct(portfolioIrr) : 'Unavailable'}
