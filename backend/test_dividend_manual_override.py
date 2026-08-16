@@ -306,6 +306,20 @@ class ManualDividendOverrideApiTest(unittest.TestCase):
         self.assertAlmostEqual(row["div"], 0.22, places=6)
         self.assertTrue(app_module._manual_dividend_override_active(row["div_manual_until"]))
 
+    def test_holdings_read_does_not_fetch_calendar_providers_on_cache_miss(self):
+        self._add_holding(2)
+        app_module._clear_dividend_event_caches()
+
+        with (
+            patch.object(app_module, "_yf_div_pay_date") as yahoo_pay_date,
+            patch.object(app_module, "_fetch_official_distribution_snapshot") as official_snapshot,
+        ):
+            res = self.client.get("/api/holdings?profile_id=2")
+
+        self.assertEqual(res.status_code, 200)
+        yahoo_pay_date.assert_not_called()
+        official_snapshot.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

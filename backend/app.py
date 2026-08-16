@@ -14369,13 +14369,14 @@ def list_holdings():
                         r["monthly_income_reinvested"] = 0
                         r["monthly_income_not_reinvested"] = mi
 
-    # Every pay-date display consumes the same issuer/history-aware calendar
-    # event. Keep the stored value available for editing and audit, but expose
-    # the resolved date as the normal holdings field used by the UI.
+    # Reuse an already-resolved calendar date when one is available, but never
+    # make the latency-sensitive holdings request populate that cache. Calendar
+    # and background paths own the external issuer/Yahoo lookups.
     try:
         calendar_holdings = _dividend_calendar_holdings_for_view(conn, is_agg, pids)
-        calendar_events = _build_cal_events(calendar_holdings, is_agg, pids)
-        _apply_resolved_pay_dates(results, calendar_events)
+        calendar_events = _cached_dividend_calendar_events(calendar_holdings, is_agg, pids)
+        if calendar_events is not None:
+            _apply_resolved_pay_dates(results, calendar_events)
     except Exception:
         # Holdings must remain available even when an external calendar source
         # is temporarily unavailable; the stored date is the safe fallback.
@@ -28524,12 +28525,6 @@ def etf_screen_data():
             close = _normalize_etf_comparer_price_basis(sym, close)
             div_close = _normalize_etf_comparer_price_basis(sym, div_close)
 
-            # Put every close on the same per-share basis before normalizing or
-            # combining it with Yahoo's already split-adjusted distributions.
-            # This removes NUSI's false +100% jump at its QQQH transition.
-            close = _normalize_etf_comparer_price_basis(sym, close)
-            div_close = _normalize_etf_comparer_price_basis(sym, div_close)
-
             # Use div_close (daily) for dates and price normalization so all
             # traces share the same x-axis.  close (from price_df) may use a
             # coarser interval (weekly/monthly) whose length differs from the
@@ -29622,6 +29617,47 @@ def _apply_payment_history_to_calendar_events(holdings, events):
     return resolved
 
 
+_DIVIDEND_CALENDAR_CACHE_COLUMNS = (
+    "ticker", "description", "date", "pay_date", "amount", "freq",
+    "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
+    "quantity", "current_price", "annual_income", "payment_income",
+    "payment_history",
+)
+
+
+def _dividend_calendar_frame_and_cache_key(
+    holdings, is_aggregate, profile_ids, today=None,
+):
+    """Normalize calendar input and derive the shared cache key."""
+    df = pd.DataFrame(holdings or [])
+    if df.empty:
+        return df, None
+    for column in ("div_frequency_locked", "div_manual_until", "div_dates_manual_until"):
+        if column not in df.columns:
+            df[column] = None
+    scope_key = (
+        "aggregate" if is_aggregate else "profile",
+        tuple(int(pid) for pid in (profile_ids or [1])),
+    )
+    today = today or datetime.date.today()
+    cache_key = (
+        scope_key,
+        today.isoformat(),
+        _rows_signature(df.to_dict("records"), _DIVIDEND_CALENDAR_CACHE_COLUMNS),
+    )
+    return df, cache_key
+
+
+def _cached_dividend_calendar_events(holdings, is_aggregate, profile_ids):
+    """Return cached calendar events without initiating provider lookups."""
+    _, cache_key = _dividend_calendar_frame_and_cache_key(
+        holdings, is_aggregate, profile_ids,
+    )
+    if cache_key is None:
+        return []
+    return _cache_get(_DIVIDEND_CALENDAR_CACHE, cache_key)
+
+
 def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None):
     """Build dividend calendar events from all_account_info."""
     from datetime import datetime, timedelta
@@ -29648,37 +29684,13 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             holdings = _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids)
         finally:
             conn.close()
-    df = pd.DataFrame(holdings or [])
-    if df.empty:
-        return []
-    # Callers that supply a prebuilt holding list (including older integrations)
-    # do not carry the optional manual-override fields. Normalize them before
-    # building the cache signature so those callers keep working.
-    for column in ("div_frequency_locked", "div_manual_until", "div_dates_manual_until"):
-        if column not in df.columns:
-            df[column] = None
-
-    is_owner_view = (not is_aggregate) and list(profile_ids or []) == [1]
-    scope_key = (
-        "aggregate" if is_aggregate else "profile",
-        tuple(int(pid) for pid in (profile_ids or [1])),
-    )
-
     today_d = datetime.today().date()
-    cache_columns = (
-        "ticker", "description", "date", "pay_date", "amount", "freq",
-        # The pin columns belong in the signature too, or releasing an override
-        # would leave the calendar serving the pinned dates from cache.
-        "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
-        "quantity", "current_price", "annual_income", "payment_income",
-        "payment_history",
+    df, cache_key = _dividend_calendar_frame_and_cache_key(
+        holdings, is_aggregate, profile_ids, today_d,
     )
-    cache_rows = df.to_dict("records")
-    cache_key = (
-        scope_key,
-        today_d.isoformat(),
-        _rows_signature(cache_rows, cache_columns),
-    )
+    if cache_key is None:
+        return []
+    is_owner_view = (not is_aggregate) and list(profile_ids or []) == [1]
     cached = _cache_get(_DIVIDEND_CALENDAR_CACHE, cache_key)
     if cached is not None:
         return cached
