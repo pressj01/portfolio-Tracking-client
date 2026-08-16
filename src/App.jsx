@@ -124,6 +124,8 @@ function App() {
 
 function ProfileSelector() {
   const { profiles, selection, isAggregate, aggregateId, setProfileId, currentProfileName, aggregates } = useProfile()
+  const visibleProfiles = profiles.filter(profile => !profile.hidden_from_selector)
+  const visibleAggregates = aggregates.filter(aggregate => !aggregate.hidden_from_selector)
 
   // Map the resolved selection back to a value the <select> can match
   const selectValue = isAggregate ? `a:${aggregateId}` : (selection.startsWith('p:') ? selection : `p:${selection}`)
@@ -135,12 +137,12 @@ function ProfileSelector() {
         onChange={(e) => setProfileId(e.target.value)}
         title={`Active portfolio: ${currentProfileName}`}
       >
-        {profiles.map(p => (
+        {visibleProfiles.map(p => (
           <option key={`p-${p.id}`} value={`p:${p.id}`}>{p.name}</option>
         ))}
-        {aggregates.length > 0 && (
+        {visibleAggregates.length > 0 && (
           <optgroup label="Aggregates">
-            {aggregates.map(agg => (
+            {visibleAggregates.map(agg => (
               <option key={`a-${agg.id}`} value={`a:${agg.id}`}>{agg.name}</option>
             ))}
           </optgroup>

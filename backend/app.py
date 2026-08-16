@@ -3750,13 +3750,23 @@ def _get_aggregate_member_profile_ids(conn, aggregate_id=None):
 
 def _list_aggregates(conn):
     """Return [{id, name, member_ids}] for every aggregate."""
-    agg_rows = conn.execute("SELECT id, name FROM aggregates ORDER BY id").fetchall()
+    agg_rows = conn.execute("""
+        SELECT id, name, display_order, hidden_from_selector
+        FROM aggregates
+        ORDER BY display_order, id
+    """).fetchall()
     aggregates = []
     for row in agg_rows:
         aid = row["id"] if isinstance(row, dict) else row[0]
         name = row["name"] if isinstance(row, dict) else row[1]
         members = _get_aggregate_member_profile_ids(conn, aid)
-        aggregates.append({"id": aid, "name": name, "member_ids": members})
+        aggregates.append({
+            "id": aid,
+            "name": name,
+            "display_order": row["display_order"],
+            "hidden_from_selector": row["hidden_from_selector"],
+            "member_ids": members,
+        })
     return aggregates
 
 
@@ -5095,7 +5105,11 @@ def _ensure_db():
 @app.route("/api/profiles", methods=["GET"])
 def list_profiles():
     conn = get_connection()
-    rows = conn.execute("SELECT id, name, created_at FROM profiles ORDER BY id").fetchall()
+    rows = conn.execute("""
+        SELECT id, name, created_at, display_order, hidden_from_selector
+        FROM profiles
+        ORDER BY display_order, id
+    """).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
 
@@ -5108,14 +5122,64 @@ def create_profile():
     if not name:
         return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
+    next_order = conn.execute(
+        "SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM profiles"
+    ).fetchone()["next_order"]
     cur = conn.execute(
-        "INSERT INTO profiles (name, broker_source, include_in_owner) VALUES (?, ?, 0)",
-        (name, broker_source),
+        "INSERT INTO profiles (name, broker_source, include_in_owner, display_order) VALUES (?, ?, 0, ?)",
+        (name, broker_source, next_order),
     )
     pid = cur.lastrowid
     conn.commit()
     conn.close()
     return jsonify({"id": pid, "name": name, "broker_source": broker_source}), 201
+
+
+@app.route("/api/profiles/order", methods=["PUT"])
+def update_profile_order():
+    """Persist the complete profile order shown in Manage Portfolios."""
+    data = request.get_json() or {}
+    ordered_ids = data.get("ordered_ids")
+    if not isinstance(ordered_ids, list):
+        return jsonify({"error": "ordered_ids must be a list"}), 400
+    try:
+        ordered_ids = [int(pid) for pid in ordered_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "ordered_ids must contain portfolio ids"}), 400
+
+    conn = get_connection()
+    try:
+        existing_ids = [row["id"] for row in conn.execute("SELECT id FROM profiles").fetchall()]
+        if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != set(existing_ids):
+            return jsonify({"error": "ordered_ids must include every portfolio exactly once"}), 400
+        for position, pid in enumerate(ordered_ids, start=1):
+            conn.execute("UPDATE profiles SET display_order = ? WHERE id = ?", (position, pid))
+        conn.commit()
+        return jsonify({"ordered_ids": ordered_ids})
+    finally:
+        conn.close()
+
+
+@app.route("/api/profiles/<int:pid>/selector-visibility", methods=["PUT"])
+def set_profile_selector_visibility(pid):
+    """Hide or show an individual portfolio in the navbar selector."""
+    data = request.get_json() or {}
+    visible = bool(data.get("visible", True))
+    if pid == 1 and not visible:
+        return jsonify({"error": "Owner must remain visible in the portfolio selector"}), 400
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM profiles WHERE id = ?", (pid,)).fetchone()
+        if not row:
+            return jsonify({"error": "Portfolio not found"}), 404
+        conn.execute(
+            "UPDATE profiles SET hidden_from_selector = ? WHERE id = ?",
+            (0 if visible else 1, pid),
+        )
+        conn.commit()
+        return jsonify({"id": pid, "visible": visible})
+    finally:
+        conn.close()
 
 
 @app.route("/api/profiles/<int:pid>", methods=["PUT"])
@@ -5223,13 +5287,14 @@ def profiles_summary():
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
+               p.display_order, p.hidden_from_selector,
                COALESCE(p.cash_value, 0) AS cash_value,
                COUNT(a.ticker) as holdings_count,
                COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
         FROM profiles p
         LEFT JOIN all_account_info a ON p.id = a.profile_id
         GROUP BY p.id
-        ORDER BY p.id
+        ORDER BY p.display_order, p.id
     """).fetchall()
     flag = conn.execute("SELECT value FROM settings WHERE key = 'owner_import_used'").fetchone()
     conn.close()
@@ -5254,7 +5319,13 @@ def create_aggregate():
     member_ids = data.get("member_ids") or []
     conn = get_connection()
     try:
-        cur = conn.execute("INSERT INTO aggregates (name) VALUES (?)", (name,))
+        next_order = conn.execute(
+            "SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM aggregates"
+        ).fetchone()["next_order"]
+        cur = conn.execute(
+            "INSERT INTO aggregates (name, display_order) VALUES (?, ?)",
+            (name, next_order),
+        )
         agg_id = cur.lastrowid
         for mid in member_ids:
             conn.execute(
@@ -5288,11 +5359,41 @@ def update_aggregate(agg_id):
                     "INSERT OR IGNORE INTO aggregate_config (aggregate_id, member_profile_id) VALUES (?, ?)",
                     (agg_id, int(mid)),
                 )
+        if "hidden_from_selector" in data:
+            conn.execute(
+                "UPDATE aggregates SET hidden_from_selector = ? WHERE id = ?",
+                (1 if data.get("hidden_from_selector") else 0, agg_id),
+            )
         conn.commit()
         name_row = conn.execute("SELECT name FROM aggregates WHERE id = ?", (agg_id,)).fetchone()
         name = name_row["name"] if isinstance(name_row, dict) else name_row[0]
         members = _get_aggregate_member_profile_ids(conn, agg_id)
         return jsonify({"id": agg_id, "name": name, "member_ids": members})
+    finally:
+        conn.close()
+
+
+@app.route("/api/aggregates/order", methods=["PUT"])
+def update_aggregate_order():
+    """Persist the complete aggregate order shown in Manage Portfolios."""
+    data = request.get_json() or {}
+    ordered_ids = data.get("ordered_ids")
+    if not isinstance(ordered_ids, list):
+        return jsonify({"error": "ordered_ids must be a list"}), 400
+    try:
+        ordered_ids = [int(agg_id) for agg_id in ordered_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "ordered_ids must contain aggregate ids"}), 400
+
+    conn = get_connection()
+    try:
+        existing_ids = [row["id"] for row in conn.execute("SELECT id FROM aggregates").fetchall()]
+        if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != set(existing_ids):
+            return jsonify({"error": "ordered_ids must include every aggregate exactly once"}), 400
+        for position, agg_id in enumerate(ordered_ids, start=1):
+            conn.execute("UPDATE aggregates SET display_order = ? WHERE id = ?", (position, agg_id))
+        conn.commit()
+        return jsonify({"ordered_ids": ordered_ids})
     finally:
         conn.close()
 

@@ -24,6 +24,7 @@ export default function ManagePortfolios() {
     aggregates,
     isAggregate,
     aggregateId,
+    profileId,
     setProfileId,
     setAggregateSelection,
   } = useProfile()
@@ -37,6 +38,7 @@ export default function ManagePortfolios() {
   const [editAggName, setEditAggName] = useState('')
   const [reconcileAggId, setReconcileAggId] = useState('owner') // 'owner' = use include_in_owner; else aggregate id
   const [reconciling, setReconciling] = useState(false)
+  const [selectorPreferenceError, setSelectorPreferenceError] = useState('')
 
   const loadSummary = useCallback(() => {
     fetch(`${API_BASE}/api/profiles/summary`)
@@ -136,6 +138,53 @@ export default function ManagePortfolios() {
     }
   }
 
+  const saveSelectorPreference = async (path, options, fallbackMessage) => {
+    try {
+      const res = await fetch(`${API_BASE}${path}`, options)
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setSelectorPreferenceError(data.error || `${fallbackMessage} (HTTP ${res.status})`)
+        return false
+      }
+      setSelectorPreferenceError('')
+      return true
+    } catch (error) {
+      setSelectorPreferenceError(`${fallbackMessage}: ${error.message}`)
+      return false
+    }
+  }
+
+  const toggleProfileSelectorVisibility = async (p) => {
+    const nextVisible = !!p.hidden_from_selector
+    const saved = await saveSelectorPreference(`/api/profiles/${p.id}/selector-visibility`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible: nextVisible }),
+    }, `Could not update ${p.name} selector visibility`)
+    if (saved) {
+      await refreshProfiles()
+      loadSummary()
+      if (!isAggregate && profileId === p.id && !nextVisible) setProfileId('1')
+    }
+  }
+
+  const moveProfile = async (profileIdToMove, direction) => {
+    const orderedIds = profiles.map(p => p.id)
+    const index = orderedIds.indexOf(profileIdToMove)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= orderedIds.length) return
+    ;[orderedIds[index], orderedIds[target]] = [orderedIds[target], orderedIds[index]]
+    const saved = await saveSelectorPreference('/api/profiles/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }, 'Could not save the portfolio order')
+    if (saved) {
+      await refreshProfiles()
+      loadSummary()
+    }
+  }
+
   // ── Aggregate CRUD ────────────────────────────────────────────────────
   const createAggregate = async () => {
     const name = await dialog.prompt('Name for the new aggregate:')
@@ -185,6 +234,33 @@ export default function ManagePortfolios() {
       body: JSON.stringify({ member_ids: nextMembers }),
     })
     if (res.ok) await refreshAggregates()
+  }
+
+  const toggleAggregateSelectorVisibility = async (agg) => {
+    const nextHidden = !agg.hidden_from_selector
+    const saved = await saveSelectorPreference(`/api/aggregates/${agg.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden_from_selector: nextHidden }),
+    }, `Could not update ${agg.name} selector visibility`)
+    if (saved) {
+      await refreshAggregates()
+      if (isAggregate && aggregateId === agg.id && nextHidden) setProfileId('1')
+    }
+  }
+
+  const moveAggregate = async (aggregateIdToMove, direction) => {
+    const orderedIds = aggregates.map(agg => agg.id)
+    const index = orderedIds.indexOf(aggregateIdToMove)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= orderedIds.length) return
+    ;[orderedIds[index], orderedIds[target]] = [orderedIds[target], orderedIds[index]]
+    const saved = await saveSelectorPreference('/api/aggregates/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ordered_ids: orderedIds }),
+    }, 'Could not save the aggregate order')
+    if (saved) await refreshAggregates()
   }
 
   // ── Owner reconciliation ─────────────────────────────────────────────
@@ -241,11 +317,17 @@ export default function ManagePortfolios() {
         <button className="btn btn-primary" onClick={createPortfolio}>+ New Portfolio</button>
       </div>
 
+      <p style={{ color: 'var(--p-aaa)', marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
+        Use the arrows to set the portfolio-selector order. Clear <strong>Show</strong> to keep a test portfolio out of the navbar dropdown without deleting it.
+      </p>
+      {selectorPreferenceError && <div className="alert alert-error">{selectorPreferenceError}</div>}
+
       <table className="holdings-table" style={{ marginBottom: '2rem' }}>
         <thead>
           <tr>
             <th>Name</th>
             <th>Broker Source</th>
+            <th style={{ textAlign: 'center' }} title="Show this portfolio in the navbar portfolio selector">Show</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
             <th style={{ textAlign: 'right' }}>Total Value</th>
@@ -254,7 +336,7 @@ export default function ManagePortfolios() {
           </tr>
         </thead>
         <tbody>
-          {summary.map(p => (
+          {summary.map((p, index) => (
             <tr key={p.id}>
               <td>
                 {editingId === p.id ? (
@@ -300,6 +382,16 @@ export default function ManagePortfolios() {
                 </select>
               </td>
               <td style={{ textAlign: 'center' }}>
+                <input
+                  type="checkbox"
+                  checked={!p.hidden_from_selector}
+                  disabled={p.id === 1}
+                  onChange={() => toggleProfileSelectorVisibility(p)}
+                  title={p.id === 1 ? 'Owner always remains visible in the portfolio selector' : 'Show this portfolio in the portfolio selector'}
+                  aria-label={`Show ${p.name} in the portfolio selector`}
+                />
+              </td>
+              <td style={{ textAlign: 'center' }}>
                 {p.id === 1 ? (
                   <input type="checkbox" checked disabled title="Owner is always included" />
                 ) : (
@@ -315,6 +407,8 @@ export default function ManagePortfolios() {
               <td style={{ textAlign: 'right' }}>{fmt(p.total_value)}</td>
               <td style={{ textAlign: 'right' }}>{p.created_at ? new Date(p.created_at).toLocaleDateString() : ''}</td>
               <td style={{ textAlign: 'center' }}>
+                <button className="btn btn-sm" onClick={() => moveProfile(p.id, -1)} disabled={index === 0} title="Move portfolio up" aria-label={`Move ${p.name} up`}>↑</button>
+                <button className="btn btn-sm" style={{ marginLeft: '0.3rem' }} onClick={() => moveProfile(p.id, 1)} disabled={index === summary.length - 1} title="Move portfolio down" aria-label={`Move ${p.name} down`}>↓</button>
                 <button className="btn btn-sm" onClick={() => setProfileId(String(p.id))} title="Switch to this portfolio">Select</button>
                 {p.holdings_count > 0 && (
                   <button className="btn btn-sm" style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }} onClick={() => clearPortfolioData(p)} title="Clear all data (keep portfolio)">Clear</button>
@@ -334,7 +428,7 @@ export default function ManagePortfolios() {
         <button className="btn btn-primary btn-sm" onClick={createAggregate}>+ Add Aggregate</button>
       </div>
       <p style={{ color: 'var(--p-aaa)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-        Define one or more virtual portfolios that combine selected real portfolios. Each aggregate appears in the portfolio selector.
+        Define one or more virtual portfolios that combine selected real portfolios. Use the controls below to order them or hide one from the portfolio selector.
       </p>
 
       {profiles.length <= 1 ? (
@@ -343,7 +437,7 @@ export default function ManagePortfolios() {
         <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>No aggregates yet. Click "+ Add Aggregate" to create one.</p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {aggregates.map(agg => (
+          {aggregates.map((agg, index) => (
             <div key={agg.id} style={{ border: '1px solid var(--p-333)', borderRadius: '6px', padding: '0.75rem 1rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.5rem' }}>
                 {editingAggId === agg.id ? (
@@ -369,7 +463,13 @@ export default function ManagePortfolios() {
                     <span style={{ fontSize: '0.75rem', opacity: 0.7 }} aria-hidden="true">✎</span>
                   </span>
                 )}
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.8rem', color: 'var(--p-aaa)', cursor: 'pointer' }} title="Show this aggregate in the portfolio selector">
+                    <input type="checkbox" checked={!agg.hidden_from_selector} onChange={() => toggleAggregateSelectorVisibility(agg)} />
+                    Show
+                  </label>
+                  <button className="btn btn-sm" onClick={() => moveAggregate(agg.id, -1)} disabled={index === 0} title="Move aggregate up" aria-label={`Move ${agg.name} up`}>↑</button>
+                  <button className="btn btn-sm" onClick={() => moveAggregate(agg.id, 1)} disabled={index === aggregates.length - 1} title="Move aggregate down" aria-label={`Move ${agg.name} down`}>↓</button>
                   <button className="btn btn-sm" onClick={() => setAggregateSelection(agg.id)} title="View this aggregate">Select</button>
                   <button className="btn btn-sm btn-danger" onClick={() => deleteAggregate(agg)}>Delete</button>
                 </div>

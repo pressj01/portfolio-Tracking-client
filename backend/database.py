@@ -69,6 +69,8 @@ def ensure_tables_exist(conn=None):
             broker_source    TEXT,
             include_in_owner INTEGER NOT NULL DEFAULT 0,
             positions_managed INTEGER NOT NULL DEFAULT 0,
+            display_order    INTEGER NOT NULL DEFAULT 0,
+            hidden_from_selector INTEGER NOT NULL DEFAULT 0,
             cash_value       REAL NOT NULL DEFAULT 0,
             cash_source      TEXT,
             cash_updated_at  TEXT,
@@ -82,6 +84,10 @@ def ensure_tables_exist(conn=None):
         cur.execute("UPDATE profiles SET include_in_owner = 1 WHERE id = 1")
     if "positions_managed" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN positions_managed INTEGER NOT NULL DEFAULT 0")
+    if "display_order" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
+    if "hidden_from_selector" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN hidden_from_selector INTEGER NOT NULL DEFAULT 0")
     if "broker_source" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN broker_source TEXT")
     if "cash_value" not in cols:
@@ -91,8 +97,11 @@ def ensure_tables_exist(conn=None):
     if "cash_updated_at" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN cash_updated_at TEXT")
     cur.execute("""
-        INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed) VALUES (1, 'Owner', 1, 0)
+        INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed, display_order) VALUES (1, 'Owner', 1, 0, 1)
     """)
+    # Existing databases and direct imports may not have assigned an order yet.
+    # Initialize only unset rows so a saved custom order is never disturbed.
+    cur.execute("UPDATE profiles SET display_order = id WHERE display_order = 0")
 
     # ── shared cash-flow plans ───────────────────────────────────────────────
     # A plan belongs to either one portfolio profile or one aggregate. Keeping
@@ -1133,10 +1142,18 @@ def ensure_tables_exist(conn=None):
     # ── aggregates ──────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS aggregates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                 TEXT NOT NULL,
+            display_order        INTEGER NOT NULL DEFAULT 0,
+            hidden_from_selector INTEGER NOT NULL DEFAULT 0
         )
     """)
+    _aggregate_cols = {r[1] for r in cur.execute("PRAGMA table_info(aggregates)").fetchall()}
+    if "display_order" not in _aggregate_cols:
+        cur.execute("ALTER TABLE aggregates ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0")
+    if "hidden_from_selector" not in _aggregate_cols:
+        cur.execute("ALTER TABLE aggregates ADD COLUMN hidden_from_selector INTEGER NOT NULL DEFAULT 0")
+    cur.execute("UPDATE aggregates SET display_order = id WHERE display_order = 0")
 
     # ── aggregate_config ────────────────────────────────────────────────────
     # New shape: (aggregate_id, member_profile_id) — supports many aggregates.

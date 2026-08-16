@@ -286,14 +286,19 @@ function ClosureRiskBadge({ info }) {
 }
 
 // A warning banner the user can hide and re-open. `signature` identifies the
-// current situation (e.g. the set of at-risk tickers or stale accounts): the
-// banner collapses to a slim "…— warning hidden. Show" bar while a dismissal
-// matches it, and re-alerts on its own if the situation later changes. The
-// dismissal persists in localStorage under `storageKey`.
-function DismissibleBanner({ storageKey, signature, collapsedContent, children }) {
+// current situation (e.g. the set of at-risk tickers or stale accounts). Most
+// warnings open until dismissed; especially verbose warnings can opt into a
+// compact initial state with `initiallyCollapsed`.
+function DismissibleBanner({ storageKey, signature, collapsedContent, initiallyCollapsed = false, children }) {
   const [dismissedSig, setDismissedSig] = useState(() => {
-    if (typeof window === 'undefined') return null
-    try { return window.localStorage.getItem(storageKey) } catch { return null }
+    if (typeof window === 'undefined') return initiallyCollapsed ? signature : null
+    try {
+      const storedSignature = window.localStorage.getItem(storageKey)
+      if (initiallyCollapsed && storedSignature !== signature) return signature
+      return storedSignature
+    } catch {
+      return initiallyCollapsed ? signature : null
+    }
   })
   const hide = () => {
     try { window.localStorage.setItem(storageKey, signature) } catch {}
@@ -310,9 +315,10 @@ function DismissibleBanner({ storageKey, signature, collapsedContent, children }
         <button
           type="button"
           onClick={show}
+          aria-label="Show warning details"
           style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--accent-bright)', fontWeight: 600, textDecoration: 'underline', padding: 0, fontSize: '0.8rem' }}
         >
-          Show
+          Show details
         </button>
       </div>
     )
@@ -2490,14 +2496,16 @@ export default function Dashboard() {
         const watch = atRisk.filter(h => h._closure.tier === 'watch')
         return (
           <DismissibleBanner
+            key={sig}
             storageKey={CLOSURE_DISMISS_KEY}
             signature={sig}
+            initiallyCollapsed
             collapsedContent={
               <>
                 <span style={{ color: highCount ? 'var(--neg)' : 'var(--warning-money)' }}>⚠</span>
                 <span>
                   {atRisk.length} ETF{atRisk.length !== 1 ? 's' : ''} flagged for possible closure
-                  {highCount ? ` (${highCount} high risk)` : ''} — warning hidden.
+                  {highCount ? ` (${highCount} high risk)` : ''}.
                 </span>
               </>
             }
