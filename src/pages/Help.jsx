@@ -219,6 +219,16 @@ function ImportHelp() {
         Dashboard data so the next Dashboard load reflects the newly imported holdings and payments.
       </div>
 
+      <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
+        <strong>Remembering your format:</strong> The <strong>Brokerage &amp; Export Import</strong> tab's Format dropdown
+        opens on a disabled "Select a format..." placeholder — and the Preview button stays disabled — until you pick a
+        format and click <strong>Set as default</strong> next to the dropdown. After that, the tab opens on your saved
+        format every time you come back, so someone who only ever imports E*TRADE files doesn't have to reselect it on
+        every visit. <strong>Generic Transactions</strong> has its own tab and cannot be pinned as the brokerage default.
+        The saved default lives in this browser's local storage, not the database, so it does not follow you to another
+        device or installation.
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
@@ -5383,70 +5393,78 @@ function PortfoliosHelp() {
     <div>
       <h2>Portfolios</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Portfolios page lets you create and manage multiple independent portfolios, configure an
-        Aggregate view that combines selected portfolios, and reconcile an Owner portfolio against
-        the combined totals of sub-portfolios.
+        The Portfolios page lets you create and manage multiple independent portfolios, control which
+        ones appear (and in what order) in the navbar selector, configure one or more Aggregate views
+        that combine selected portfolios, and sync the Owner portfolio against the combined totals of
+        sub-portfolios.
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing portfolio table with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/portfolios/manage-portfolios-overview-blurred.jpg" alt="Manage Portfolios page showing the Show/Owner columns, reorder arrows, and Aggregates section with total values blurred" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each row shows a portfolio's name, holding count, total value, and creation date.
+        Each row shows a portfolio's name, broker source, holdings count, total value, and creation date.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Rename</strong> — click a portfolio name (underlined in blue) to edit it inline. Press Enter or click away to save.</li>
+        <li><strong>Broker Source</strong> — which broker's imports are authorized to write into this portfolio, independent of its name. Matching broker imports check this field, not the portfolio name.</li>
+        <li><strong>Show</strong> — controls whether the portfolio appears in the navbar portfolio selector. Clear it to keep a test or retired portfolio around without deleting it or cluttering the dropdown. Owner (ID 1) is always shown and cannot be hidden.</li>
+        <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
+        <li><strong>↑ / ↓ arrows</strong> (Actions column) — move a portfolio up or down. This sets the order portfolios appear in the navbar selector.</li>
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
         <li><strong>Clear</strong> — removes all holdings and data from the portfolio but keeps the portfolio itself. Useful before a clean reimport.</li>
         <li><strong>Delete</strong> — permanently deletes the portfolio and all its data. The Owner/default portfolio (ID 1) cannot be deleted, so its row does not show a Delete button.</li>
-        <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Owner reconciliation and for calculating the DRIP/Cash income split on the Dashboard.</li>
-        <li><strong>Combined checkbox</strong> — marks a portfolio for inclusion in the Combined Portfolios aggregate. This can include accounts not part of Owner (e.g. a separate brokerage account).</li>
-        <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in both Owner and Combined.</li>
+        <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in Owner and shown in the selector.</li>
       </ul>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
         <strong>Owner and broker imports:</strong> Owner is a permanent portfolio, but it is not locked to one broker.
         To use a different broker for Owner, select Owner, clear or export first if needed, then import that broker's
         positions or transaction file. If Owner represents multiple source portfolios, import broker files into the
-        underlying source portfolios instead, then use Reconcile Owner to roll those accounts back up into Owner.
+        underlying source portfolios instead, then use Sync Owner to roll those accounts back up into Owner.
         Broker and Snowball imports into Owner are blocked when Owner is made up of more than one source account.
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
-        <strong>Owner vs Combined:</strong> These are independent configurations. Owner typically represents your primary
-        brokerage accounts, while Combined includes everything across all brokerages. For example, you might have
-        four accounts in Owner but five in Combined (adding an account at a different brokerage). The Dashboard's
-        DRIP$/Cash$ columns use the Owner configuration to determine which accounts' DRIP flags to consider.
+        <strong>Owner vs Aggregates:</strong> These are independent configurations. Owner typically represents your primary
+        brokerage accounts, while an aggregate such as Combined Portfolios can include everything across all brokerages.
+        For example, you might have four accounts in Owner but five in an aggregate (adding an account at a different
+        brokerage). The Dashboard's DRIP$/Cash$ columns use the Owner configuration to determine which accounts' DRIP
+        flags to consider.
       </div>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Combined Portfolios (Aggregate)</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Aggregates</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The Combined Portfolios aggregate is a read-only combined view of multiple portfolios. It appears in the navbar dropdown
-        when configured. Use the "Combined" checkboxes in the table above to select which portfolios are included.
-      </p>
-      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Check the "Combined" boxes for the portfolios you want included.</li>
-        <li>Enter a name for the aggregate in the <strong>Aggregate Name</strong> field.</li>
-        <li>Click <strong>"Save Aggregate Config"</strong> (or "Create Aggregate" for the first time).</li>
-        <li>To remove the aggregate entirely, click <strong>"Delete Aggregate"</strong>.</li>
-      </ol>
-
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Reconcile Owner</h3>
-      <p style={{ marginBottom: '0.75rem' }}>
-        This feature is available when the Owner-format import has been used. It updates the Owner portfolio
-        (profile 1) to match the combined holdings of all portfolios with <strong>Owner</strong> checked.
+        An aggregate is a read-only virtual portfolio that combines selected real portfolios — for example
+        "Combined Portfolios" for everything, or a household group like "Shear Portfolios". You can define
+        more than one. Each aggregate appears in the navbar selector alongside your real portfolios once configured.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li>Tickers present in sub-portfolios but missing from Owner are <strong>added</strong>.</li>
-        <li>Tickers in Owner that no longer exist in any included sub-portfolio are <strong>removed</strong>.</li>
+        <li><strong>+ Add Aggregate</strong> — creates a new empty aggregate. Click its name (underlined in blue) to rename it inline.</li>
+        <li><strong>Members</strong> — check the portfolios, listed below the aggregate's name, that should be combined into it. Owner itself is never a selectable member.</li>
+        <li><strong>Show</strong> — controls whether the aggregate appears in the navbar selector, the same idea as the Show column in the portfolio table above.</li>
+        <li><strong>↑ / ↓ arrows</strong> — move an aggregate up or down in the navbar selector order.</li>
+        <li><strong>Select</strong> — switches to viewing this aggregate.</li>
+        <li><strong>Delete</strong> — removes the aggregate definition. Member portfolios and their data are not affected.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Sync Owner</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This section appears once the Owner-format import has been used. It updates the Owner portfolio
+        (profile 1) to match the combined holdings of a chosen source: either the portfolios checked
+        <strong> Owner</strong> in the table above, or a specific aggregate.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>Tickers present in the source but missing from Owner are <strong>added</strong>.</li>
+        <li>Tickers in Owner that no longer exist in the source are <strong>removed</strong>.</li>
         <li>Share counts are updated to match the combined totals.</li>
-        <li>Click <strong>"Reconcile Owner"</strong> and confirm the prompt to proceed.</li>
+        <li>Pick a <strong>Source</strong>, click <strong>"Sync Owner"</strong>, and confirm the prompt to proceed.</li>
       </ul>
 
       <div className="alert alert-info" style={{ marginTop: '1rem' }}>
-        <strong>Note:</strong> Reconcile Owner is a destructive update to the Owner portfolio.
+        <strong>Note:</strong> Sync Owner is a destructive update to the Owner portfolio.
         Consider exporting the Owner portfolio first if you want a backup.
       </div>
     </div>
