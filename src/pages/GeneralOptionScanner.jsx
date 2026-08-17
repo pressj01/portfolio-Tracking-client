@@ -539,7 +539,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
 
   return <main className="page gos-page">
     <header className="gos-page-header">
-      <div><span>Option Samurai-style workflow · powered by the app’s existing scanners</span><h1>General Option Scanner</h1><p>Filter the market once, compare the best structure for each ticker, then drill into every candidate and model its payoff.</p></div>
+      <div><span>Inspired by <a href="https://optionsamurai.com/" target="_blank" rel="noreferrer">Option Samurai</a> · powered by the app’s existing scanners</span><h1>General Option Scanner</h1><p>Filter the market once, compare the best structure for each ticker, then drill into every candidate and model its payoff.</p></div>
       <div className="gos-header-actions">
         <span className="gos-unified-note">One unified interface for every supported strategy</span>
         <div className="gos-header-help-links">
