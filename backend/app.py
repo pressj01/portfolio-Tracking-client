@@ -31622,18 +31622,24 @@ def stock_checklist_scan():
 
     source = (payload.get("source") or "").strip().lower()
     if source == "portfolio":
-        profile_id = get_profile_id()
+        # Scoped to whatever account the page is on: the selected profile, or
+        # every member of the selected aggregate. Resolving a single profile
+        # here made an aggregate fall back to profile 1 (the owner rollup).
+        _, profile_ids = get_profile_filter()
         conn = get_connection()
         try:
+            placeholders = ",".join("?" * len(profile_ids))
             rows = conn.execute(
-                "SELECT DISTINCT ticker FROM all_account_info "
-                "WHERE profile_id = ? AND quantity > 0 ORDER BY ticker",
-                (profile_id,),
+                f"SELECT DISTINCT ticker FROM all_account_info "
+                f"WHERE profile_id IN ({placeholders}) AND quantity > 0 ORDER BY ticker",
+                profile_ids,
             ).fetchall()
         finally:
             conn.close()
         tickers += [r["ticker"] if isinstance(r, dict) else r[0] for r in rows]
     elif source == "watchlist":
+        # The watchlist is deliberately account-independent — one list shared by
+        # every profile — so it is not narrowed the way holdings are.
         tickers += [r["Ticker"] for r in _read_watchlist_rows() if r.get("Ticker")]
 
     # De-dupe while preserving order, then cap.

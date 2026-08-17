@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
+import { useProfile } from '../context/ProfileContext'
 import {
   gradeStock,
   computeSectorStats,
@@ -252,6 +253,10 @@ function DeepDive() {
 }
 
 function ScanTab() {
+  // The portfolio source is scoped to the account the page is on, so the scan
+  // has to carry the profile/aggregate selection. The watchlist is one list
+  // shared by every account and stays unscoped.
+  const { profileQueryString, currentProfileName } = useProfile()
   const [tickersText, setTickersText] = useState('')
   const [source, setSource] = useState('')
   const [loading, setLoading] = useState(false)
@@ -275,7 +280,7 @@ function ScanTab() {
       return
     }
 
-    fetch(`${API_BASE}/api/stock-checklist/scan`, {
+    fetch(`${API_BASE}/api/stock-checklist/scan?${profileQueryString}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -287,7 +292,7 @@ function ScanTab() {
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tickersText, source])
+  }, [tickersText, source, profileQueryString])
 
   const rows = useMemo(() => {
     if (!data?.results?.length) return []
@@ -360,8 +365,8 @@ function ScanTab() {
           onChange={e => setSource(e.target.value)}
         >
           <option value="">- or pick a source -</option>
-          <option value="portfolio">My portfolio</option>
-          <option value="watchlist">My watchlist</option>
+          <option value="portfolio">{currentProfileName ? `My portfolio (${currentProfileName})` : 'My portfolio'}</option>
+          <option value="watchlist">My watchlist (all accounts)</option>
         </select>
         <button type="button" className="btn btn-primary" onClick={runScan} disabled={loading}>Scan</button>
       </div>
