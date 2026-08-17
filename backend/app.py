@@ -32254,11 +32254,18 @@ def watchlist_data():
         ticker_info = {}
 
         for ticker in watching_tickers:
+            yf_ticker_obj = yf.Ticker(ticker)
             description = _watchlist_security_description(
                 ticker,
                 stored_descriptions.get(ticker, ""),
-                yf.Ticker(ticker),
+                yf_ticker_obj,
             )
+            try:
+                ticker_info_data = _cached_yf_info(yf_ticker_obj, ticker)
+                aum = ticker_info_data.get("totalAssets") or ticker_info_data.get("totalNetAssets")
+                aum = float(aum) if aum is not None else None
+            except Exception:
+                aum = None
             has_data = (ticker in close_df.columns and
                         ticker in high_df.columns and
                         ticker in low_df.columns)
@@ -32394,6 +32401,7 @@ def watchlist_data():
 
             ticker_info[ticker] = {
                 "description": description,
+                "aum": aum,
                 "price": round(price, 2) if price is not None else None,
                 "change_1d": change_1d,
                 "div_yield": div_yield,

@@ -3,7 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
-import { formatMoney } from '../utils/money'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
@@ -494,7 +494,7 @@ export default function Watchlist() {
   // Sorting
   const sortedRows = [...displayRows]
   if (sortCol !== null) {
-    const cols = ['ticker', 'description', 'price', 'change_1d', 'div_yield', 'signal', 'ao_sig',
+    const cols = ['ticker', 'description', 'price', 'change_1d', 'div_yield', 'aum', 'signal', 'ao_sig',
       'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'sharpe', 'sortino', 'one_yr_ret',
       'cov_ratio', 'cov_sig', 'nav_erosion_prob', 'notes']
     const key = cols[sortCol]
@@ -604,6 +604,7 @@ export default function Watchlist() {
                   { label: 'Price', tip: 'Current market price' },
                   { label: '1D Chg', tip: '1-day price change percentage' },
                   { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
+                  { label: 'AUM', tip: 'Assets under management (fund size)' },
                   { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
                   { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
                   { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
@@ -654,6 +655,7 @@ export default function Watchlist() {
                         onSave={updateYieldOverride}
                       />
                     </td>
+                    <td>{a?.aum != null ? formatMoneyCompact(a.aum) : '—'}</td>
                     <td><SignalBadge signal={a?.signal} /></td>
                     <td><SignalBadge signal={a?.ao_sig} /></td>
                     <td>
