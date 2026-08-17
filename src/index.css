@@ -8431,6 +8431,49 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .stock-check-details li {
   margin: 0.2rem 0;
 }
+/* "How the verdict is reached" — collapsed-by-default methodology block shared
+   by the Stock Buying Checklist, Non-Income ETF, and Option-Income ETF pages. */
+.stock-check-help {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  margin: 0 0 1rem; overflow: hidden;
+}
+.stock-check-help > summary {
+  color: var(--accent); cursor: pointer; font-size: 0.82rem; font-weight: 700;
+  list-style: none; padding: 0.65rem 0.9rem;
+}
+.stock-check-help > summary::-webkit-details-marker { display: none; }
+.stock-check-help > summary::before {
+  content: '?'; display: inline-grid; place-items: center;
+  width: 1.1rem; height: 1.1rem; margin-right: 0.5rem;
+  background: var(--surface-2); border: 1px solid var(--accent); border-radius: 50%;
+  font-size: 0.68rem;
+}
+.stock-check-help[open] > summary { border-bottom: 1px solid var(--border); }
+.stock-check-help-grid {
+  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.65rem; padding: 0.8rem 0.85rem;
+}
+.stock-check-help-grid section {
+  background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 5px;
+  grid-column: span 2; padding: 0.6rem 0.7rem;
+}
+.stock-check-help-grid .stock-check-help-wide { grid-column: span 3; }
+.stock-check-help-grid .stock-check-help-full { grid-column: span 6; }
+.stock-check-help-grid h3 { color: var(--text-strong); font-size: 0.78rem; margin: 0 0 0.3rem; }
+.stock-check-help-grid p { color: var(--text-dim); font-size: 0.74rem; line-height: 1.5; margin: 0 0 0.4rem; }
+.stock-check-help-grid p:last-child { margin-bottom: 0; }
+.stock-check-help-grid ul {
+  color: var(--text-dim); font-size: 0.74rem; line-height: 1.5;
+  margin: 0; padding-left: 1.1rem;
+}
+.stock-check-help-grid li + li { margin-top: 0.25rem; }
+.stock-check-help-grid li strong { color: var(--text-strong); }
+@media (max-width: 900px) {
+  .stock-check-help-grid { grid-template-columns: 1fr; }
+  .stock-check-help-grid section,
+  .stock-check-help-grid .stock-check-help-wide,
+  .stock-check-help-grid .stock-check-help-full { grid-column: auto; }
+}
 .stock-check-notes {
   padding: 0.8rem 0.95rem;
   margin-top: 1.5rem;

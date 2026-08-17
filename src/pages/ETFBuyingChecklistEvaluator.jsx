@@ -348,6 +348,48 @@ export default function ETFBuyingChecklistEvaluator() {
         </div>
       </div>
 
+      <details className="stock-check-help">
+        <summary>How the verdict is reached</summary>
+        <div className="stock-check-help-grid">
+          <section>
+            <h3>Six scored criteria, plus risk-adjusted return</h3>
+            <p>
+              Expense ratio, fund size &amp; liquidity, performance vs. strategy peers (3Y/5Y total
+              return), beta risk, and yield sustainability (yield vs. long-term total return) are
+              each scored 0–100 against your thresholds. A 7th criterion — Sharpe / Sortino / Calmar /
+              Omega / Ulcer bundled into one score — is added once there's enough price history.
+              Category Fit is shown for context but is never scored.
+            </p>
+          </section>
+          <section>
+            <h3>Composite = average of what's scored</h3>
+            <p>
+              The composite is a plain average of whichever criteria have a numeric score. It needs
+              at least 3 scored criteria, and at least one of Performance / Risk / Yield
+              Sustainability / Risk-adjusted Return — expense and fund size alone can describe a fund
+              without saying whether the strategy actually works, so they can't carry a verdict by themselves.
+            </p>
+          </section>
+          <section>
+            <h3>Thresholds are yours</h3>
+            <p>
+              Pass/fail lines for expense, fund size, beta, and the yield-sustainability gap are
+              editable on each criterion card in Deep Dive and saved to this browser. Performance is
+              graded against the scanned peer batch, not a threshold you set.
+            </p>
+          </section>
+          <section className="stock-check-help-full">
+            <h3>Verdict bands</h3>
+            <ul>
+              <li><strong>Strong Buy:</strong> composite ≥ 70 with 0 failing criteria.</li>
+              <li><strong>Weak Buy:</strong> composite ≥ 60 with at most 1 failing criterion.</li>
+              <li><strong>Do Not Buy:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. Two fails always caps the verdict at Do Not Buy, no matter how high the composite climbs.</li>
+              <li><strong>Not Enough Information to Evaluate:</strong> fewer than 3 criteria could be scored, or none of Performance / Risk / Yield Sustainability / Risk-adjusted Return had enough data.</li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       <div className="stock-check-tabs" role="tablist" aria-label="ETF checklist mode">
         {tabBtn('deep', 'Deep Dive')}
         {tabBtn('scan', 'Scan a List')}

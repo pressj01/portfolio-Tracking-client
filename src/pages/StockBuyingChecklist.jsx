@@ -455,6 +455,48 @@ export default function StockBuyingChecklist() {
         </div>
       </div>
 
+      <details className="stock-check-help">
+        <summary>How the verdict is reached</summary>
+        <div className="stock-check-help-grid">
+          <section>
+            <h3>Two composites, blended</h3>
+            <p>
+              Four fundamental groups (valuation, profitability, growth, balance-sheet health) and
+              four technical groups (trend, momentum, oscillators, volume) are each scored 0–100 and
+              averaged within their side. The blended score weights Fundamental 60% / Technical 40%.
+            </p>
+          </section>
+          <section>
+            <h3>Fundamentals are sector-relative</h3>
+            <p>
+              Each ratio (P/E, margins, growth, debt/equity, …) is graded against a benchmark: the
+              live median of your scanned cohort when at least 3 peers share the sector, otherwise a
+              built-in per-sector baseline. A cheap utility P/E and a cheap tech P/E are judged
+              against different bars.
+            </p>
+          </section>
+          <section>
+            <h3>Technicals are signal-based</h3>
+            <p>
+              Trend compares price with the 50-/200-day averages and the golden cross; Momentum
+              blends MACD and RSI; Oscillators blend the slow stochastic and awesome oscillator;
+              Volume blends on-balance volume with 52-week range position. Each BUY / SELL / NEUTRAL
+              signal scores 90 / 25 / 60 before averaging into its group.
+            </p>
+          </section>
+          <section className="stock-check-help-full">
+            <h3>Verdict bands</h3>
+            <ul>
+              <li><strong>Strong Buy:</strong> blended score ≥ 75, and the fundamental composite is ≥ 70 (or unavailable).</li>
+              <li><strong>Buy:</strong> blended score ≥ 60.</li>
+              <li><strong>Hold:</strong> blended score ≥ 45.</li>
+              <li><strong>Avoid:</strong> blended score below 45.</li>
+              <li><strong>Insufficient Data:</strong> neither the fundamental nor technical side has enough data to score.</li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       <div className="stock-check-tabs" role="tablist" aria-label="Stock checklist mode">
         {tabBtn('deep', 'Deep Dive')}
         {tabBtn('scan', 'Scan a List')}

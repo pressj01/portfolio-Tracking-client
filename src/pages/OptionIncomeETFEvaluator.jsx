@@ -714,6 +714,59 @@ export default function OptionIncomeETFEvaluator() {
         </div>
       </div>
 
+      <details className="stock-check-help">
+        <summary>How the verdict is reached</summary>
+        <div className="stock-check-help-grid">
+          <section>
+            <h3>Seven scored criteria, tuned for income</h3>
+            <p>
+              Yield sustainability, expense ratio, fund size, total return, NAV (share-price) trend,
+              fund-family track record, and a risk-adjusted bundle (Sharpe / Sortino / Calmar / Omega
+              / Ulcer) are each scored 0–100. Strategy Fit is shown for context but is never scored.
+            </p>
+          </section>
+          <section>
+            <h3>NAV erosion is the central question</h3>
+            <p>
+              Yield Sustainability compares yield against long-term total return — a wide gap means
+              the distribution is likely funded by NAV decay, not real income. NAV Trend checks the
+              same thing directly: it scores the fund's price-only return, since a persistently
+              falling share price is the hallmark of an at-the-money covered-call fund.
+            </p>
+          </section>
+          <section>
+            <h3>Under 1 year old = an automatic Track Record fail</h3>
+            <p>
+              <strong>Any fund younger than 1 year scores 25/100 on Track Record — a hard fail —
+              purely from its age.</strong> This is independent of performance: it applies even to a
+              fund with a great Sharpe ratio and strong total return so far, because there's no full
+              market-cycle history yet to judge it on. 1–3 years old scores only 50 (a warn). Combined
+              with one more failing criterion (expense, fund size, …), this alone is enough to cap a
+              young fund at Do Not Buy no matter how high its composite runs — see Verdict bands below.
+            </p>
+          </section>
+          <section className="stock-check-help-full">
+            <h3>Verdict bands</h3>
+            <ul>
+              <li><strong>Strong Buy:</strong> composite ≥ 70 with 0 failing criteria.</li>
+              <li><strong>Weak Buy:</strong> composite ≥ 60 with at most 1 failing criterion.</li>
+              <li><strong>Do Not Buy:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. A fund can score in the 70s and still land here if, say, its expense ratio sits above your threshold <em>and</em> it's under a year old — two fails always cap the verdict at Do Not Buy, no matter how high the composite climbs.</li>
+              <li><strong>Not Enough Information to Evaluate:</strong> fewer than 3 criteria could be scored, or none of Performance / NAV Trend / Yield Sustainability / Risk-adjusted Return had enough data.</li>
+            </ul>
+          </section>
+          <section className="stock-check-help-full">
+            <h3>Alternatives use a quality floor, not just a higher yield</h3>
+            <p>
+              Alternatives are restricted to funds tracking the same underlying (Nasdaq 100, S&amp;P
+              500, gold, crypto, single-stock, …), must clear a quality floor so a higher yield alone
+              can't recommend a structurally worse fund, and must show a concrete edge — higher
+              yield, a better NAV trend, higher total return, a lower expense ratio, or a larger fund
+              — not just a higher composite score.
+            </p>
+          </section>
+        </div>
+      </details>
+
       <div className="stock-check-tabs" role="tablist" aria-label="Option-income ETF checklist mode">
         {tabBtn('deep', 'Deep Dive')}
         {tabBtn('scan', 'Scan a List')}
