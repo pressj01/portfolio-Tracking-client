@@ -114,6 +114,7 @@ class ETFComparerPeriodRequestTest(unittest.TestCase):
             series["dates"], ["2026-01-01", "2026-01-02", "2026-08-14"],
         )
         self.assertAlmostEqual(series["traces"]["price"][-1], 77.1315, places=4)
+        self.assertEqual(series["closes"], [35.07, 35.74, 27.05])
         self.assertTrue(calls)
         self.assertEqual(calls[0][1]["anchor_on_or_before"], "2026-01-01")
 

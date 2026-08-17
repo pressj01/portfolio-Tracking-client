@@ -28635,7 +28635,15 @@ def etf_screen_data():
                 if _bclose is not None:
                     delta_up, delta_down = _capture_deltas(base, _bclose)
 
-            result["series"][sym] = {"dates": dates, "traces": traces, "div_ratio": div_ratio}
+            # Un-normalized closes so the comparer can chart actual share
+            # price instead of a 100-at-start relative return.
+            closes = [round(float(v), 4) for v in base]
+            result["series"][sym] = {
+                "dates": dates,
+                "traces": traces,
+                "div_ratio": div_ratio,
+                "closes": closes,
+            }
             result["stats"][sym] = {
                 "total_ret": total_ret,
                 "price_ret": price_ret,

@@ -100,6 +100,21 @@ export function computeBlendTrace(priceTrace = [], divRatio = [], frac = 1) {
   return out
 }
 
+// Reconstruct dollar closes for Actual Price mode. Prefer the un-normalized
+// series the backend now ships; fall back to scaling the indexed price trace
+// from the last known quote so an older backend still charts something.
+export function comparerActualCloses(series = {}, lastPrice = null) {
+  const closes = Array.isArray(series?.closes) ? series.closes : []
+  if (closes.length) return closes
+  const priceTrace = series?.traces?.price || []
+  const lastPx = Number(lastPrice)
+  const lastTrace = Number(priceTrace[priceTrace.length - 1])
+  if (priceTrace.length && lastPx > 0 && lastTrace > 0) {
+    return priceTrace.map(v => Number(v) / lastTrace * lastPx)
+  }
+  return []
+}
+
 // The comparer fetches one complete trace bundle so switching return modes is
 // a local display operation instead of another market-data request.
 export function selectComparerTraces(traceMap = {}, mode = 'total', reinvestPct = 100) {
@@ -123,11 +138,17 @@ export function selectComparerTraces(traceMap = {}, mode = 'total', reinvestPct 
     both: [totalKey, 'price'],
     all3: ['price', 'blend', 'drip'],
     all4: ['price', 'pricediv', 'blend', 'drip'],
+    // Actual share prices live on series.closes, not in the indexed traces.
+    actual: [],
   }
   const keys = keysByMode[mode] || keysByMode.total
   const selected = keys
     .filter(key => entries[key] != null)
     .map(key => [key, entries[key]])
+
+  // Actual Price is drawn from series.closes, so an empty selection is
+  // correct. Falling through to every indexed trace would mix scales.
+  if (mode === 'actual') return selected
 
   // Be tolerant of an older backend during a development hot reload.
   return selected.length ? selected : Object.entries(traceMap)
@@ -144,6 +165,7 @@ export function comparerReturnModeLabel(mode = 'total') {
     both: 'Total Return & Price Only',
     all3: 'Price Only, Reinvested & Total Return',
     all4: 'Price Only, Price + Dividends, Reinvested & Total Return',
+    actual: 'Actual Price',
   }
   return labels[mode] || labels.total
 }
@@ -157,6 +179,31 @@ export function shouldUseComparerLogScale(
   reinvestPct = 100,
   ratioThreshold = 50,
 ) {
+  // Actual Price plots dollar closes. Auto-log should fire when the visible
+  // share prices themselves span a huge range (SPY vs a $8 fund), not when
+  // the relative returns would.
+  if (mode === 'actual') {
+    let minPrice = Infinity
+    let maxPrice = -Infinity
+    let foundPrice = false
+    symbols.forEach(sym => {
+      const series = seriesBySymbol[sym]
+      const dates = series?.dates || []
+      const closes = series?.closes || []
+      for (let i = 0; i < closes.length; i += 1) {
+        const day = String(dates[i] || '').slice(0, 10)
+        if (visibleStart && day < visibleStart) continue
+        if (visibleEnd && day > visibleEnd) break
+        const value = Number(closes[i])
+        if (!Number.isFinite(value) || value <= 0) continue
+        foundPrice = true
+        minPrice = Math.min(minPrice, value)
+        maxPrice = Math.max(maxPrice, value)
+      }
+    })
+    return foundPrice && minPrice > 0 && maxPrice / minPrice >= ratioThreshold
+  }
+
   let minWealth = Infinity
   let maxWealth = -Infinity
   let found = false
@@ -245,6 +292,7 @@ export function comparerStatsForMode(series = {}, fallback = {}, mode = 'total',
     both: totalStatsKey,
     all3: 'blend',
     all4: 'blend',
+    actual: 'price',
   }
   const statsKey = statsKeyByMode[mode]
   const selectedValues = traceMap[statsKey]

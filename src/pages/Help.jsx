@@ -3786,7 +3786,7 @@ function ETFScreenHelp() {
         Switch to the <strong>Returns</strong> tab to analyze historical performance including dividends.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Return Mode</strong> — Toggle between Total Return (price + DRIP), Price Only, or Dividend Only.</li>
+        <li><strong>Return Mode</strong> — Toggle between Total Return (price + DRIP), Price Only (relative, indexed to the period start), Actual Price (the real dollar share price), Price + Divs, Both, All Three, or All Four.</li>
         <li><strong>Reinvestment Slider</strong> — Set 0–100% of dividends to reinvest. 0% = take all distributions as cash; 100% = reinvest everything. The slider updates results instantly.</li>
         <li><strong>Return Summary Strip</strong> — Shows the period, total return %, price return %, dividend contribution %, annualized return, and max drawdown for the loaded ticker.</li>
         <li><strong>Comparison Statistics</strong> — If comparison tickers are added, a sidebar shows the same metrics for each one side-by-side.</li>
@@ -10210,7 +10210,7 @@ function ETFComparerHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Period</strong> — 1M, 3M, 6M, YTD, 1Y, 2Y, 5Y, 10Y, or MAX.</li>
-        <li><strong>Return Mode</strong> — choose Total Return (price + reinvested dividends), Price Only, Price + Dividends (cash), Both (total and price), All Three, or All Four traces per ticker.</li>
+        <li><strong>Return Mode</strong> — choose Total Return (price + reinvested dividends), Price Only (relative share-price change, indexed to the period start), Actual Price (each ETF's real dollar share price, not a relative return), Price + Dividends (cash), Both (total and price), All Three, or All Four traces per ticker.</li>
         <li><strong>Reinvestment %</strong> — adjustable slider from 0% (all dividends taken as cash) to 100% (all dividends reinvested). Only applies to the blended trace in applicable modes.</li>
         <li><strong>% / Index toggle</strong> — show returns as a percentage gain/loss from period start, or as an indexed value starting at 100.</li>
         <li><strong>Labels</strong> — toggle end-of-period return labels on the chart.</li>
@@ -10319,8 +10319,8 @@ function StockComparerHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Return Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Identical controls to ETF Comparer: period selector (1M–MAX), return mode (Total Return, Price Only, Price + Divs, Both, All Three, All Four),
-        reinvestment % slider, % / index toggle, end labels, and a date range slider.
+        Identical controls to ETF Comparer: period selector (1M–MAX), return mode (Total Return, Price Only, Actual Price, Price + Divs, Both, All Three, All Four),
+        reinvestment % slider, % / index toggle, end labels, and a date range slider. Actual Price charts each stock&apos;s real dollar share price instead of a relative return.
       </p>
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/stock-comparer/distribution-history.jpg" alt="Stock Comparer distribution history chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />

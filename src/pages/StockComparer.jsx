@@ -6,7 +6,7 @@ import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
-import { comparerEndLabelAxisY, comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
+import { comparerActualCloses, comparerEndLabelAxisY, comparerLogHoverData, comparerReturnModeLabel, comparerSeriesColor, selectComparerTraces, shouldUseComparerLogScale, shiftColorForReinvest, computeBlendTrace } from '../utils/comparerTraces'
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
@@ -28,6 +28,7 @@ const PERIODS = [
 const RETURN_MODES = [
   { value: 'total', label: 'Total Return' },
   { value: 'price', label: 'Price Only' },
+  { value: 'actual', label: 'Actual Price' },
   { value: 'pricediv', label: 'Price + Divs' },
   { value: 'both', label: 'Both' },
   { value: 'all3', label: 'All Three' },
@@ -38,6 +39,7 @@ const DIMMED_COLOR = '#7c8595'
 
 const TRACE_STYLES = {
   price: { dash: 'dot', width: 2, label: 'Price' },
+  actual: { dash: 'solid', width: 2.6, label: 'Actual Price' },
   pricediv: { dash: 'longdash', width: 2.4, label: 'Price + Divs' },
   blend: { dash: 'dash', width: 2.4, label: '' },
   total: { dash: 'solid', width: 3, label: 'Total Return' },
@@ -473,7 +475,8 @@ export default function StockComparer() {
   const symbols = useMemo(() => tickers.map(normalize).filter(Boolean), [tickers])
   // Price-only style modes ignore reinvestment; every mode that draws a
   // Total Return line honors the slider via the bundled blend trace.
-  const reinvestDisabled = ['price', 'pricediv'].includes(returnMode)
+  const isActualPrice = returnMode === 'actual'
+  const reinvestDisabled = ['price', 'pricediv', 'actual'].includes(returnMode)
   const refreshComparison = useCallback(() => {
     if (!symbols.length) return
     const currentReinvest = reinvestRef.current
@@ -525,10 +528,48 @@ export default function StockComparer() {
     orderedSymbols.forEach((sym) => {
       const idx = symbols.indexOf(sym)
       const dates = data.series[sym]?.dates || []
+      const isDimmed = highlightedSymbol && highlightedSymbol !== sym
+      const baseColor = isDimmed ? DIMMED_COLOR : comparerSeriesColor(idx)
+
+      if (isActualPrice) {
+        const series = data.series[sym] || {}
+        const values = comparerActualCloses(series, data.profiles?.[sym]?.price)
+        if (!values.length) return
+        const style = TRACE_STYLES.actual
+        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
+        dates.forEach((date, i) => {
+          const value = Number(values[i])
+          if (!Number.isFinite(value)) return
+          const keyDate = dateKey(date)
+          if ((!visibleStart || keyDate >= visibleStart) && (!visibleEnd || keyDate <= visibleEnd)) {
+            visibleYValues.push(value)
+          }
+        })
+        traces.push({
+          x: dates,
+          y: values,
+          type: 'scatter',
+          mode: 'lines',
+          name: `${sym} (${style.label})`,
+          line: { color: baseColor, width: style.width, dash: style.dash },
+          hovertemplate: `<b>${sym}</b><br>%{x}<br>Share Price: $%{y:.2f}<extra></extra>`,
+        })
+        if (showReturnLabels && labelIdx >= 0) {
+          const last = Number(values[labelIdx])
+          if (Number.isFinite(last)) {
+            labelCandidates.push({
+              y: last,
+              text: formatMoney(last, { convert: false }),
+              color: baseColor,
+            })
+          }
+        }
+        return
+      }
+
       const traceMap = data.series[sym]?.traces || {}
       const divRatio = data.series[sym]?.div_ratio
       selectComparerTraces(traceMap, returnMode, effectiveReinvest).forEach(([key, rawValues]) => {
-        const isDimmed = highlightedSymbol && highlightedSymbol !== sym
         // Rebuild the blend line locally for the live slider % (exact, not an
         // approximation) so dragging Reinvest never refetches the chart.
         const values = key === 'blend'
@@ -538,7 +579,6 @@ export default function StockComparer() {
         // headline line — render it solid like full DRIP (no dashes) and only
         // tint the color so it still reads as this fund's line.
         const blendAsTotal = key === 'blend' && ['total', 'both'].includes(returnMode)
-        const baseColor = isDimmed ? DIMMED_COLOR : comparerSeriesColor(idx)
         const color = blendAsTotal && !isDimmed
           ? shiftColorForReinvest(baseColor, effectiveReinvest)
           : baseColor
@@ -606,12 +646,13 @@ export default function StockComparer() {
       })
     })
     if (showReturnLabels && labelCandidates.length) {
-      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
       const scaleY = value => comparerEndLabelAxisY(value, logScaleActive)
-      const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const axisBaseY = axisBase == null ? [] : [scaleY(axisBase)]
+      const yMin = Math.min(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const yMax = Math.max(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
       const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (returnPctMode ? 0.45 : 1.5))
+      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (isActualPrice ? 0.35 : (returnPctMode ? 0.45 : 1.5)))
       const sortedLabels = [...labelCandidates]
         .map(label => ({ ...label, scaledY: scaleY(label.y) }))
         .sort((a, b) => a.scaledY - b.scaledY)
@@ -646,27 +687,32 @@ export default function StockComparer() {
         })
       })
     }
-    const baselineY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
-    traces.push({
-      x: [minDate, maxDate],
-      y: [baselineY, baselineY],
-      type: 'scatter',
-      mode: 'lines',
-      name: 'Baseline',
-      line: { color: '#6b7280', width: 1, dash: 'dash' },
-      showlegend: false,
-      hoverinfo: 'skip',
-    })
+    if (!isActualPrice) {
+      const baselineY = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      traces.push({
+        x: [minDate, maxDate],
+        y: [baselineY, baselineY],
+        type: 'scatter',
+        mode: 'lines',
+        name: 'Baseline',
+        line: { color: '#6b7280', width: 1, dash: 'dash' },
+        showlegend: false,
+        hoverinfo: 'skip',
+      })
+    }
     // Constrain the y-axis to the visible date window. Plotly autoranges y over
     // all trace data (not just the x-visible portion), so without this the curve
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
     let visibleAbsMax = 0
     if (visibleYValues.length) {
-      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
       const labelYs = labelCandidates.map(l => l.y)
-      const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
-      const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
+      const rangeValues = axisBase == null
+        ? [...visibleYValues, ...labelYs]
+        : [axisBase, ...visibleYValues, ...labelYs]
+      const yLo = Math.min(...rangeValues)
+      const yHi = Math.max(...rangeValues)
       if (logScaleActive) {
         const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
         const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
@@ -680,10 +726,10 @@ export default function StockComparer() {
     }
     const returnModeLabel = comparerReturnModeLabel(returnMode)
     const baseTitle = titleWindow
-      ? `Cumulative ${returnModeLabel} — ${titleWindow[0]} → ${titleWindow[1]}`
-      : `Cumulative ${returnModeLabel} (%)`
+      ? `${isActualPrice ? returnModeLabel : `Cumulative ${returnModeLabel}`} — ${titleWindow[0]} → ${titleWindow[1]}`
+      : (isActualPrice ? `${returnModeLabel} ($)` : `Cumulative ${returnModeLabel} (%)`)
     const titleText = `${baseTitle}${logScaleActive ? ' — Log Scale' : ''}`
-    const largeReturnDisplay = !logScaleActive && returnPctMode && visibleAbsMax >= 1000
+    const largeReturnDisplay = !isActualPrice && !logScaleActive && returnPctMode && visibleAbsMax >= 1000
     return {
       data: traces,
       logScaleActive,
@@ -704,11 +750,14 @@ export default function StockComparer() {
         legend: { orientation: 'h', x: 0, y: 1.08 },
         yaxis: {
           type: logScaleActive ? 'log' : 'linear',
-          title: logScaleActive
-            ? 'Growth of $100 (log scale)'
-            : (returnPctMode ? `Cumulative ${returnModeLabel} (%)` : 'Normalized Return (100 = start)'),
-          ticksuffix: !logScaleActive && returnPctMode ? '%' : '',
-          tickformat: logScaleActive ? ',.0f' : (returnPctMode ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f'),
+          title: isActualPrice
+            ? (logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)')
+            : logScaleActive
+              ? 'Growth of $100 (log scale)'
+              : (returnPctMode ? `Cumulative ${returnModeLabel} (%)` : 'Normalized Return (100 = start)'),
+          tickprefix: isActualPrice ? '$' : '',
+          ticksuffix: !isActualPrice && !logScaleActive && returnPctMode ? '%' : '',
+          tickformat: logScaleActive && !isActualPrice ? ',.0f' : (returnPctMode && !isActualPrice ? (largeReturnDisplay ? ',.0f' : ',.2f') : ',.2f'),
           separatethousands: true,
           gridcolor: '#333',
           zerolinecolor: '#555',
@@ -866,7 +915,11 @@ export default function StockComparer() {
         </div>
         <div className="etfc-periods">
           <select className="etfc-select" value={returnMode} onChange={e => setReturnMode(e.target.value)}>
-            {RETURN_MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {RETURN_MODES.map(m => (
+              <option key={m.value} value={m.value} title={m.value === 'actual' ? "Chart each stock's actual share price in dollars, not a relative return" : undefined}>
+                {m.label}
+              </option>
+            ))}
           </select>
           {PERIODS.map(p => {
             // A custom date window overrides the period, so don't show a period
@@ -905,7 +958,12 @@ export default function StockComparer() {
       <div className="etfc-return-controls">
         <div className="etfc-mode-bar">
           {RETURN_MODES.map(m => (
-            <button key={m.value} className={`btn btn-sm${returnMode === m.value ? ' btn-active' : ''}`} onClick={() => setReturnMode(m.value)}>{m.label}</button>
+            <button
+              key={m.value}
+              className={`btn btn-sm${returnMode === m.value ? ' btn-active' : ''}`}
+              onClick={() => setReturnMode(m.value)}
+              title={m.value === 'actual' ? "Chart each stock's actual share price in dollars, not a relative return" : undefined}
+            >{m.label}</button>
           ))}
         </div>
         <div className={`etfc-reinvest${reinvestDisabled ? ' is-disabled' : ''}`}>
@@ -916,7 +974,12 @@ export default function StockComparer() {
         <div className="etfc-chart-options">
           <span>Chart</span>
           <button type="button" className="btn btn-sm" onClick={refreshComparison} disabled={!symbols.length || loading}>{loading ? 'Refreshing...' : 'Refresh'}</button>
-          <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
+          <button
+            className={`btn btn-sm${returnPctMode && !isActualPrice ? ' btn-active' : ''}`}
+            onClick={() => setReturnPctMode(v => !v)}
+            disabled={isActualPrice}
+            title={isActualPrice ? 'Return % applies to relative return modes, not actual share prices' : undefined}
+          >Return %</button>
           <button
             className={`btn btn-sm${chart.logScaleActive ? ' btn-active' : ''}`}
             onClick={() => setReturnScalePreference(chart.logScaleActive ? 'linear' : 'log')}

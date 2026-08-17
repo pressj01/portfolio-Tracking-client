@@ -7,6 +7,7 @@ import MarkovPanel from '../components/MarkovPanel'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
 import {
+  comparerActualCloses,
   comparerEndLabelAxisY,
   comparerLogHoverData,
   comparerStatsForMode,
@@ -1875,6 +1876,7 @@ const RETURN_PERIODS = [...PERIODS, { value: 'all', label: 'All' }]
 const RETURN_MODES = [
   { value: 'total', label: 'Total Return', desc: 'Full dividend-reinvested total return' },
   { value: 'price', label: 'Price Only', desc: 'Share price change only — dividends ignored' },
+  { value: 'actual', label: 'Actual Price', desc: "Each ticker's actual share price in dollars, not a relative return" },
   { value: 'pricediv', label: 'Price + Divs', desc: 'Price change plus dividends as cash — no reinvestment' },
   { value: 'both', label: 'Both', desc: 'Overlays full total return and Price Only' },
   { value: 'all3', label: 'All Three', desc: 'Price Only, blended %, 100% DRIP' },
@@ -1887,6 +1889,7 @@ const DIMMED_RETURN_COLOR = '#7c8595'
 // Match the web version: same blue family, distinct dash patterns
 const TRACE_STYLES = {
   price:    { dash: 'dot',       color: 'var(--accent-bright)', width: 2,   label: 'Price' },
+  actual:   { dash: 'solid',     color: 'var(--accent-bright)', width: 2.6, label: 'Actual Price' },
   pricediv: { dash: 'longdash',  color: 'var(--accent-bright)', width: 2.5, label: 'Price + Divs' },
   blend:    { dash: 'dash',      color: 'var(--accent-bright)', width: 2.5, label: '' },  // label set dynamically with %
   total:    { dash: 'solid',     color: 'var(--accent-bright)', width: 3,   label: 'Total Return' },
@@ -2778,6 +2781,7 @@ export default function ETFScreen() {
     )
     const logScaleActive = returnScalePreference === 'log'
       || (returnScalePreference === 'auto' && autoLogScale)
+    const isActualPrice = returnMode === 'actual'
 
     // When a symbol is highlighted, draw it last so its line sits on top of
     // the dimmed ones instead of being covered by them.
@@ -2786,10 +2790,47 @@ export default function ETFScreen() {
       : allSymbols
     orderedSymbols.forEach((sym) => {
       const si = allSymbols.indexOf(sym)
-      const { dates, traces: traceMap } = returnData.series[sym]
+      const series = returnData.series[sym] || {}
+      const dates = series.dates || []
       const isPrimary = si === 0
       const isDimmed = highlightedSymbol && highlightedSymbol !== sym
 
+      if (isActualPrice) {
+        const values = comparerActualCloses(series, returnData.profiles?.[sym]?.price)
+        if (!values.length) return
+        const style = TRACE_STYLES.actual
+        const color = isDimmed
+          ? DIMMED_RETURN_COLOR
+          : ((isPrimary || allSymbols.length === 1) ? style.color : compColors[(si - 1) % compColors.length])
+        const name = `${sym} (${style.label})`
+        const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
+        dates.forEach((date, i) => {
+          const value = Number(values[i])
+          if (!Number.isFinite(value)) return
+          const d = dateKey(date)
+          if ((!visibleStart || d >= visibleStart) && (!visibleEnd || d <= visibleEnd)) {
+            visibleYValues.push(value)
+          }
+        })
+        traces.push({
+          x: dates, y: values, type: 'scatter', mode: 'lines', name,
+          line: { color, dash: style.dash, width: style.width },
+          hovertemplate: `<b>%{x|%b %d, %Y}</b><br>Share Price: $%{y:.2f}<extra></extra>`,
+        })
+        if (showReturnLabels && labelIdx >= 0) {
+          const last = Number(values[labelIdx])
+          if (Number.isFinite(last)) {
+            labelCandidates.push({
+              y: last,
+              text: formatMoney(last, { convert: false }),
+              color,
+            })
+          }
+        }
+        return
+      }
+
+      const traceMap = series.traces || {}
       selectComparerTraces(traceMap, returnMode).forEach(([key, values]) => {
         const style = TRACE_STYLES[key] || { dash: 'solid', color: '#7ecfff', width: 2.5, label: key }
 
@@ -2867,8 +2908,8 @@ export default function ETFScreen() {
       })
     })
 
-    // Baseline reference
-    if (traces.length) {
+    // Baseline reference — skip for Actual Price; $0/$100 is not a useful dollar baseline.
+    if (traces.length && !isActualPrice) {
       const allDates = Object.values(returnData.series).flatMap(s => s.dates)
       const minDate = allDates.reduce((a, b) => a < b ? a : b)
       const maxDate = allDates.reduce((a, b) => a > b ? a : b)
@@ -2899,12 +2940,13 @@ export default function ETFScreen() {
     if (logScaleActive) titleText += ' — Log Scale'
 
     if (showReturnLabels && labelCandidates.length) {
-      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
       const scaleY = value => comparerEndLabelAxisY(value, logScaleActive)
-      const yMin = Math.min(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
-      const yMax = Math.max(scaleY(axisBase), ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const axisBaseY = axisBase == null ? [] : [scaleY(axisBase)]
+      const yMin = Math.min(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
+      const yMax = Math.max(...axisBaseY, ...visibleYValues.map(scaleY), ...labelCandidates.map(label => scaleY(label.y)))
       const ySpan = Math.max(logScaleActive ? 0.01 : 1, yMax - yMin)
-      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (returnPctMode ? 0.45 : 1.5))
+      const minLabelGap = Math.max(ySpan * 0.04, logScaleActive ? 0.035 : (isActualPrice ? 0.35 : (returnPctMode ? 0.45 : 1.5)))
       const sortedLabels = [...labelCandidates]
         .map(label => ({ ...label, scaledY: scaleY(label.y) }))
         .sort((a, b) => a.scaledY - b.scaledY)
@@ -2945,10 +2987,13 @@ export default function ETFScreen() {
     // stays scaled to the full series and looks misaligned after zooming.
     let yAxisRange = null
     if (visibleYValues.length) {
-      const axisBase = logScaleActive ? 100 : (returnPctMode ? 0 : 100)
+      const axisBase = isActualPrice ? null : (logScaleActive ? 100 : (returnPctMode ? 0 : 100))
       const labelYs = labelCandidates.map(l => l.y)
-      const yLo = Math.min(axisBase, ...visibleYValues, ...labelYs)
-      const yHi = Math.max(axisBase, ...visibleYValues, ...labelYs)
+      const rangeValues = axisBase == null
+        ? [...visibleYValues, ...labelYs]
+        : [axisBase, ...visibleYValues, ...labelYs]
+      const yLo = Math.min(...rangeValues)
+      const yHi = Math.max(...rangeValues)
       if (logScaleActive) {
         const logLo = Math.log10(Math.max(yLo, Number.MIN_VALUE))
         const logHi = Math.log10(Math.max(yHi, Number.MIN_VALUE))
@@ -2978,13 +3023,16 @@ export default function ETFScreen() {
       },
       yaxis: {
         type: logScaleActive ? 'log' : 'linear',
-        title: logScaleActive
-          ? 'Growth of $100 (log scale)'
-          : returnPctMode
-            ? `${RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'} (%)`
-            : 'Normalized Return (100 = start)',
-        ...(!logScaleActive && returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
-        ...(logScaleActive && { tickformat: ',.0f' }),
+        title: isActualPrice
+          ? (logScaleActive ? 'Share Price ($) (log scale)' : 'Share Price ($)')
+          : logScaleActive
+            ? 'Growth of $100 (log scale)'
+            : returnPctMode
+              ? `${RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'} (%)`
+              : 'Normalized Return (100 = start)',
+        ...(isActualPrice && { tickprefix: '$', tickformat: ',.2f' }),
+        ...(!isActualPrice && !logScaleActive && returnPctMode && { ticksuffix: '%', tickformat: '+.2f' }),
+        ...(!isActualPrice && logScaleActive && { tickformat: ',.0f' }),
         ...(yAxisRange ? { range: yAxisRange, autorange: false } : {}),
         gridcolor: '#333', showspikes: true, spikemode: 'across', spikethickness: 1, spikecolor: '#888', spikedash: 'dot',
       },
@@ -3062,6 +3110,7 @@ export default function ETFScreen() {
     returnPlotElementRef.current = graphDiv
   }, [])
 
+  const isActualPrice = returnMode === 'actual'
   const sliderDisabled = !['all3', 'all4'].includes(returnMode)
   const selectTab = useCallback((nextTab) => {
     if (nextTab !== 'returns' && period === 'all') setPeriod('max')
@@ -3310,7 +3359,12 @@ export default function ETFScreen() {
 
           <div className="etf-chart-options">
             <span className="etf-control-label">Chart</span>
-            <button className={`btn btn-sm${returnPctMode ? ' btn-active' : ''}`} onClick={() => setReturnPctMode(v => !v)}>Return %</button>
+            <button
+              className={`btn btn-sm${returnPctMode && !isActualPrice ? ' btn-active' : ''}`}
+              onClick={() => setReturnPctMode(v => !v)}
+              disabled={isActualPrice}
+              title={isActualPrice ? 'Return % applies to relative return modes, not actual share prices' : undefined}
+            >Return %</button>
             <button
               className={`btn btn-sm${returnLogScaleActive ? ' btn-active' : ''}`}
               onClick={() => setReturnScalePreference(returnLogScaleActive ? 'linear' : 'log')}
@@ -3463,16 +3517,23 @@ export default function ETFScreen() {
           ) : (
             <>
               <h3>Statistics</h3>
-              {displayedReturnStats && Object.entries(displayedReturnStats).map(([sym, st]) => (
+              {displayedReturnStats && Object.entries(displayedReturnStats).map(([sym, st]) => {
+                const lastPx = Number(comparerActualCloses(returnData?.series?.[sym], returnData?.profiles?.[sym]?.price).at(-1))
+                return (
                 <div key={sym} className="stat-card">
                   <h4>{sym}</h4>
-                  <div className="stat-row"><span>{RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'}</span><span style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</span></div>
+                  {isActualPrice ? (
+                    <div className="stat-row"><span>Last Price</span><span>{Number.isFinite(lastPx) ? formatMoney(lastPx, { convert: false }) : '—'}</span></div>
+                  ) : (
+                    <div className="stat-row"><span>{RETURN_MODES.find(mode => mode.value === returnMode)?.label || 'Return'}</span><span style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</span></div>
+                  )}
                   <div className="stat-row"><span>Price Return</span><span style={{ color: pctColor(st.price_ret) }}>{pct(st.price_ret)}</span></div>
                   <div className="stat-row"><span>Div Contrib</span><span style={{ color: pctColor(st.div_contrib) }}>{pct(st.div_contrib)}</span></div>
                   <div className="stat-row"><span>Annualised</span><span style={{ color: st.annualized != null ? pctColor(st.annualized) : 'var(--p-888)' }}>{pct(st.annualized)}</span></div>
                   <div className="stat-row"><span>Max Drawdown</span><span style={{ color: 'var(--neg-2)' }}>{pct(st.max_drawdown)}</span></div>
                 </div>
-              ))}
+                )
+              })}
               {returnData?.warnings?.length > 0 && (
                 <div className="stat-warnings">
                   {returnData.warnings.map((w, i) => <div key={i} className="stat-warning">{w}</div>)}
@@ -3490,6 +3551,7 @@ export default function ETFScreen() {
             const primarySym = Object.keys(displayedReturnStats)[0]
             const st = displayedReturnStats[primarySym]
             if (!st) return null
+            const lastPx = Number(comparerActualCloses(returnData?.series?.[primarySym], returnData?.profiles?.[primarySym]?.price).at(-1))
             const customWin = normalizeReturnRange(returnXRange)
             const periodLabel = customWin
               ? formatSpanLabel(customWin[0], customWin[1])
@@ -3502,22 +3564,28 @@ export default function ETFScreen() {
                   {customWin && <div className="rsc-sub">{customWin[0]} → {customWin[1]}</div>}
                 </div>
                 <div className="return-summary-card">
-                  <div className="rsc-label">{primarySym} RETURN</div>
-                  <div className="rsc-value" style={{ color: pctColor(st.total_ret) }}>{pct(st.total_ret)}</div>
+                  <div className="rsc-label">{isActualPrice ? `${primarySym} LAST` : `${primarySym} RETURN`}</div>
+                  <div className="rsc-value" style={{ color: isActualPrice ? 'var(--accent-2)' : pctColor(st.total_ret) }}>
+                    {isActualPrice
+                      ? (Number.isFinite(lastPx) ? formatMoney(lastPx, { convert: false }) : '—')
+                      : pct(st.total_ret)}
+                  </div>
                   <div className="rsc-sub">{
-                    returnMode === 'price'
-                      ? 'price only'
-                      : returnMode === 'pricediv'
-                        ? 'price + cash dividends'
-                        : returnMode === 'all3' || returnMode === 'all4'
-                          ? returnData.reinvest_pct + '% custom reinvest'
-                          : '100% DRIP'
+                    returnMode === 'actual'
+                      ? 'actual share price'
+                      : returnMode === 'price'
+                        ? 'price only'
+                        : returnMode === 'pricediv'
+                          ? 'price + cash dividends'
+                          : returnMode === 'all3' || returnMode === 'all4'
+                            ? returnData.reinvest_pct + '% custom reinvest'
+                            : '100% DRIP'
                   }</div>
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} PRICE</div>
                   <div className="rsc-value" style={{ color: pctColor(st.price_ret) }}>{pct(st.price_ret)}</div>
-                  <div className="rsc-sub">price only (dotted)</div>
+                  <div className="rsc-sub">{isActualPrice ? 'price return' : 'price only (dotted)'}</div>
                 </div>
                 <div className="return-summary-card">
                   <div className="rsc-label">{primarySym} DIV</div>

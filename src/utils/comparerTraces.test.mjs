@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   COMPARER_SERIES_COLORS,
+  comparerActualCloses,
   comparerEndLabelAxisY,
   comparerLogHoverData,
   comparerReturnModeLabel,
@@ -20,6 +21,14 @@ const bundle = {
   drip: [100, 104],
 }
 
+test('prefers backend dollar closes and reconstructs them from the last quote', () => {
+  const shipped = { closes: [42.5, 43.1], traces: { price: [100, 101.4] } }
+  assert.deepEqual(comparerActualCloses(shipped, 43.1), [42.5, 43.1])
+  const reconstructed = comparerActualCloses({ traces: { price: [100, 90] } }, 45)
+  assert.deepEqual(reconstructed, [50, 45])
+  assert.deepEqual(comparerActualCloses({ traces: { price: [100, 90] } }, null), [])
+})
+
 test('selects total return from the bundled DRIP trace', () => {
   assert.deepEqual(selectComparerTraces(bundle, 'total'), [['total', bundle.drip]])
 })
@@ -28,6 +37,8 @@ test('selects only the traces needed by each display mode', () => {
   assert.deepEqual(selectComparerTraces(bundle, 'both').map(([key]) => key), ['total', 'price'])
   assert.deepEqual(selectComparerTraces(bundle, 'all3').map(([key]) => key), ['price', 'blend', 'drip'])
   assert.deepEqual(selectComparerTraces(bundle, 'all4').map(([key]) => key), ['price', 'pricediv', 'blend', 'drip'])
+  // Actual Price is drawn from series.closes, so the indexed bundle is unused.
+  assert.deepEqual(selectComparerTraces(bundle, 'actual'), [])
 })
 
 test('accepts the legacy total trace while the backend hot reloads', () => {
@@ -60,6 +71,7 @@ test('derives mode-specific statistics from one trace bundle', () => {
   const priceStats = comparerStatsForMode(series, {}, 'price')
   const totalStats = comparerStatsForMode(series, {}, 'total')
   const allStats = comparerStatsForMode(series, {}, 'all4')
+  const actualStats = comparerStatsForMode(series, {}, 'actual')
   assert.equal(priceStats.total_ret, -10)
   assert.equal(priceStats.div_contrib, 0)
   assert.equal(totalStats.total_ret, 10)
@@ -67,6 +79,8 @@ test('derives mode-specific statistics from one trace bundle', () => {
   assert.equal(totalStats.div_contrib, 20)
   assert.equal(allStats.total_ret, 8)
   assert.equal(allStats.div_contrib, 18)
+  assert.equal(actualStats.total_ret, -10)
+  assert.equal(actualStats.price_ret, -10)
 
   // Partial reinvest moves the Total Return headline onto the blended trace.
   const partialStats = comparerStatsForMode(series, {}, 'total', 30)
@@ -127,6 +141,18 @@ test('automatically selects a log scale only for extreme visible wealth ranges',
     shouldUseComparerLogScale(extreme, ['MSFT', 'JNJ'], 'total', '2026-01-01', '2026-01-01'),
     false,
   )
+
+  const mixedPrices = {
+    SPY: { dates, closes: [400, 450, 500] },
+    TINY: { dates, closes: [8, 8.5, 9] },
+  }
+  const closePrices = {
+    JEPI: { dates, closes: [55, 56, 54] },
+    JEPQ: { dates, closes: [52, 53, 51] },
+  }
+  // Auto-log for Actual Price uses dollar closes, not relative wealth.
+  assert.equal(shouldUseComparerLogScale(mixedPrices, ['SPY', 'TINY'], 'actual'), true)
+  assert.equal(shouldUseComparerLogScale(closePrices, ['JEPI', 'JEPQ'], 'actual'), false)
 })
 
 test('labels comparer charts for the traces shown by each return mode', () => {
@@ -136,6 +162,7 @@ test('labels comparer charts for the traces shown by each return mode', () => {
   assert.equal(comparerReturnModeLabel('both'), 'Total Return & Price Only')
   assert.equal(comparerReturnModeLabel('all3'), 'Price Only, Reinvested & Total Return')
   assert.equal(comparerReturnModeLabel('all4'), 'Price Only, Price + Dividends, Reinvested & Total Return')
+  assert.equal(comparerReturnModeLabel('actual'), 'Actual Price')
   assert.equal(comparerReturnModeLabel('unknown'), 'Total Return')
 })
 
