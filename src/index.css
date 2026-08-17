@@ -8515,6 +8515,25 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+/* Fund evaluator scan results (Option-Income / Non-Income ETF / CEF).
+   The scan can return dozens of rows, so the wrap scrolls the body and pins
+   the header instead of letting it scroll off the top of the page. Scoped to
+   this modifier because .stock-check-table-wrap is shared with the Stock
+   Buying Checklist and Stock Valuation, which are short enough not to need it. */
+.fund-scan-table-wrap {
+  max-height: 75vh;
+  overflow: auto;
+}
+.fund-scan-table-wrap thead th {
+  /* Beats the `position: static` .stock-check-table th opts into (the global
+     `th` rule is sticky, and most stock-check tables don't want it). */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  /* border-collapse: collapse drops the th's own bottom border once it lifts
+     off, so paint the divider as an inset shadow that travels with the cell. */
+  box-shadow: inset 0 -1px 0 var(--border);
+}
 .stock-check-table tbody tr:hover {
   background: rgba(100, 181, 246, 0.06);
 }

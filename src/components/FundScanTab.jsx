@@ -255,7 +255,7 @@ export default function FundScanTab({
           )}
 
           {rows.length > 0 && (
-            <div className="stock-check-table-wrap">
+            <div className="stock-check-table-wrap fund-scan-table-wrap">
               <table className="stock-check-table">
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--p-243356)', background: 'var(--p-0f1e3b)' }}>
