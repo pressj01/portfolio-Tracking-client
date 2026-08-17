@@ -494,7 +494,7 @@ export default function Watchlist() {
   // Sorting
   const sortedRows = [...displayRows]
   if (sortCol !== null) {
-    const cols = ['ticker', 'price', 'change_1d', 'div_yield', 'signal', 'ao_sig',
+    const cols = ['ticker', 'description', 'price', 'change_1d', 'div_yield', 'signal', 'ao_sig',
       'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'sharpe', 'sortino', 'one_yr_ret',
       'cov_ratio', 'cov_sig', 'nav_erosion_prob', 'notes']
     const key = cols[sortCol]
@@ -600,6 +600,7 @@ export default function Watchlist() {
               <tr>
                 {[
                   { label: 'Ticker' },
+                  { label: 'Description', tip: 'Security or fund name' },
                   { label: 'Price', tip: 'Current market price' },
                   { label: '1D Chg', tip: '1-day price change percentage' },
                   { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
@@ -637,6 +638,9 @@ export default function Watchlist() {
                       >
                         {r.ticker}
                       </a>
+                    </td>
+                    <td className="watchlist-description" title={r.description || ''}>
+                      {r.description || '\u2014'}
                     </td>
                     <td>{formatMoney(a?.price)}</td>
                     <td className={pctClass(a?.change_1d)}>{a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}</td>

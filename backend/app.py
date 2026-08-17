@@ -31943,6 +31943,28 @@ def buy_sell_signals_data():
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 
+def _watchlist_security_description(ticker, stored_description="", ticker_obj=None):
+    """Return a concise display name, preferring an existing holding name."""
+    ticker = str(ticker or "").strip().upper()
+    stored = clean_security_description(stored_description or "").strip()
+    if stored and stored.upper() != ticker:
+        return stored[:200]
+
+    try:
+        if ticker_obj is None:
+            import yfinance as yf
+            ticker_obj = yf.Ticker(ticker)
+        info = _cached_yf_info(ticker_obj, ticker)
+        description = clean_security_description(
+            info.get("longName") or info.get("shortName") or ""
+        ).strip()
+        if description.upper() != ticker:
+            return description[:200]
+    except Exception:
+        pass
+    return ""
+
+
 @app.route("/api/watchlist/watching", methods=["GET", "POST"])
 def watchlist_watching_list():
     """GET: return watching rows.  POST: bulk-replace watching list."""
@@ -32021,9 +32043,30 @@ def watchlist_data():
         ).fetchall()
     except Exception:
         watching_rows = []
-    conn.close()
 
     watching_tickers = [r["ticker"] for r in watching_rows]
+    stored_descriptions = {}
+    if watching_tickers:
+        placeholders = ",".join("?" for _ in watching_tickers)
+        try:
+            description_rows = conn.execute(
+                f"""
+                SELECT UPPER(TRIM(ticker)) AS ticker,
+                       MAX(NULLIF(TRIM(description), '')) AS description
+                FROM all_account_info
+                WHERE UPPER(TRIM(ticker)) IN ({placeholders})
+                GROUP BY UPPER(TRIM(ticker))
+                """,
+                watching_tickers,
+            ).fetchall()
+            stored_descriptions = {
+                row["ticker"]: row["description"] or ""
+                for row in description_rows
+            }
+        except Exception:
+            stored_descriptions = {}
+    conn.close()
+
     yield_overrides = {
         r["ticker"]: r["div_yield_override"]
         for r in watching_rows
@@ -32211,6 +32254,11 @@ def watchlist_data():
         ticker_info = {}
 
         for ticker in watching_tickers:
+            description = _watchlist_security_description(
+                ticker,
+                stored_descriptions.get(ticker, ""),
+                yf.Ticker(ticker),
+            )
             has_data = (ticker in close_df.columns and
                         ticker in high_df.columns and
                         ticker in low_df.columns)
@@ -32345,6 +32393,7 @@ def watchlist_data():
                         nav_erosion = True
 
             ticker_info[ticker] = {
+                "description": description,
                 "price": round(price, 2) if price is not None else None,
                 "change_1d": change_1d,
                 "div_yield": div_yield,

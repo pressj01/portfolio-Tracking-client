@@ -5575,32 +5575,39 @@ th.col-drag-target {
 
 /* Watchlist freeze pane: keep Ticker through Signal visible while the
    indicator columns scroll horizontally. */
-.watchlist-wrap .sst { min-width: 1550px; }
-.watchlist-wrap .sst th:nth-child(-n + 5),
-.watchlist-wrap .sst td:nth-child(-n + 5) {
+.watchlist-wrap .sst { min-width: 1790px; }
+.watchlist-wrap .sst th:nth-child(-n + 6),
+.watchlist-wrap .sst td:nth-child(-n + 6) {
   position: sticky;
   z-index: 2;
   box-sizing: border-box;
 }
-.watchlist-wrap .sst thead th:nth-child(-n + 5) {
+.watchlist-wrap .sst thead th:nth-child(-n + 6) {
   z-index: 6;
   background: var(--surface-sunken);
 }
 .watchlist-wrap .sst th:nth-child(1),
 .watchlist-wrap .sst td:nth-child(1) { left: 0; min-width: 86px; width: 86px; max-width: 86px; }
 .watchlist-wrap .sst th:nth-child(2),
-.watchlist-wrap .sst td:nth-child(2) { left: 86px; min-width: 94px; width: 94px; max-width: 94px; }
+.watchlist-wrap .sst td:nth-child(2) { left: 86px; min-width: 240px; width: 240px; max-width: 240px; }
 .watchlist-wrap .sst th:nth-child(3),
-.watchlist-wrap .sst td:nth-child(3) { left: 180px; min-width: 90px; width: 90px; max-width: 90px; }
+.watchlist-wrap .sst td:nth-child(3) { left: 326px; min-width: 94px; width: 94px; max-width: 94px; }
 .watchlist-wrap .sst th:nth-child(4),
-.watchlist-wrap .sst td:nth-child(4) { left: 270px; min-width: 104px; width: 104px; max-width: 104px; }
+.watchlist-wrap .sst td:nth-child(4) { left: 420px; min-width: 90px; width: 90px; max-width: 90px; }
 .watchlist-wrap .sst th:nth-child(5),
-.watchlist-wrap .sst td:nth-child(5) {
-  left: 374px;
+.watchlist-wrap .sst td:nth-child(5) { left: 510px; min-width: 104px; width: 104px; max-width: 104px; }
+.watchlist-wrap .sst th:nth-child(6),
+.watchlist-wrap .sst td:nth-child(6) {
+  left: 614px;
   min-width: 96px;
   width: 96px;
   max-width: 96px;
   box-shadow: 2px 0 0 var(--border), 8px 0 14px rgba(0, 0, 0, 0.18);
+}
+.watchlist-wrap .watchlist-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
 }
 .sig { display: inline-block; padding: 1px 8px; border-radius: 3px; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.04em; }
 .sig-BUY { background: var(--pos-strong); color: var(--black); }
