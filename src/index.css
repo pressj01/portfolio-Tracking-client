@@ -1288,7 +1288,7 @@ a:hover {
 }
 .gos-page-header > div { min-width: 0; }
 .gos-page-header span { color: var(--accent-bright); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.08em; text-transform: uppercase; }
-.gos-page-header span a { color: inherit; text-underline-offset: 0.16em; }
+.gos-page-header span a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
 .gos-page-header h1 { color: var(--text-strong); font-size: 1.35rem; margin: 0.12rem 0; }
 .gos-page-header p { color: var(--text-muted); font-size: 0.68rem; margin: 0; }
 .gos-page .scanner-filter-workspace { grid-template-columns: 310px minmax(0, 1fr); }
