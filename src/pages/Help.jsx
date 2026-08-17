@@ -35,6 +35,7 @@ const GROUPS = [
       { id: 'export', label: 'Export' },
       { id: 'etf-provider-update', label: 'ETF Provider Update' },
       { id: 'portfolios', label: 'Portfolios' },
+      { id: 'menu-control', label: 'Menu Control' },
       { id: 'settings', label: 'Settings' },
       { id: 'general-option-scanner', label: 'Option Scanner Help' },
     ],
@@ -5447,6 +5448,78 @@ function PortfoliosHelp() {
       <div className="alert alert-info" style={{ marginTop: '1rem' }}>
         <strong>Note:</strong> Reconcile Owner is a destructive update to the Owner portfolio.
         Consider exporting the Owner portfolio first if you want a backup.
+      </div>
+    </div>
+  )
+}
+
+function MenuControlHelp() {
+  return (
+    <div>
+      <h2>Menu Control</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        Menu Control lets you change the <strong>order</strong> of items in the top navigation bar —
+        the top-level menus (Dashboard, Portfolio, Options, Admin, and so on), the pages listed inside
+        each dropdown, and the section headings inside dropdowns that have grouped sections (currently
+        just Analysis). It only reorders things. It cannot move a page into a different menu, hide a
+        page, or rename anything.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/menu-control/overview.png"
+        alt="Menu Control page with the Menus panel on the left and the Top navigation order on the right, showing Restore Defaults, Discard Changes, and Save Changes buttons"
+        caption="Pick a menu from the Menus panel on the left, then reorder its items on the right. Top navigation controls the order of the top-level menu bar itself."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Choosing a Menu</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Menus</strong> panel on the left lists every part of the navigation bar that can be reordered:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Top navigation</strong> — the order of Dashboard, Action Center, and each dropdown menu along the top bar.</li>
+        <li><strong>One entry per simple dropdown</strong> (Options menu, Portfolio menu, Checklists menu, CEF's menu, Taxes menu, Admin menu) — the order of the pages listed inside that dropdown.</li>
+        <li><strong>Analysis groups</strong> — Analysis is the one dropdown with section headings, so it gets its own scope for the headings themselves (Research &amp; Compare, Screeners &amp; Signals, Income &amp; NAV Risk, Portfolio Diagnostics, Planning &amp; Optimization).</li>
+        <li><strong>Analysis — &lt;section name&gt;</strong> — one entry per Analysis section, for reordering just the pages inside that section.</li>
+      </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/menu-control/admin-menu-scope.png"
+        alt="Menu Control with Admin menu selected, showing Import, Export, ETF Provider Update, Portfolios, Menu Control, Settings, and Help in a reorderable list"
+        caption="Selecting “Admin menu” shows the same pages you see in the Admin dropdown itself, including Menu Control and Help — reordering here changes the order they appear in the dropdown."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Reordering Items</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Drag</strong> a row by its <strong>⋮⋮</strong> handle (or anywhere on the row) and drop it where you want it to land.</li>
+        <li><strong>Or use the ↑ / ↓ buttons</strong> on the right of each row. They're grayed out once a row is already at the top or bottom of the list.</li>
+        <li>The numbered circle on the left of each row shows its current position and updates live as you move things.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Groups vs. Items Inside a Group</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Analysis is the only dropdown with sub-sections, so it needs the extra scope described above.
+        Selecting <strong>"Analysis groups"</strong> reorders the section headings themselves — moving
+        "Screeners &amp; Signals" above "Research &amp; Compare", for example, changes the order those
+        whole sections appear in the dropdown. To reorder the pages inside one section instead, select
+        that section by name (e.g. "Analysis — Screeners &amp; Signals").
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/menu-control/analysis-groups-scope.png"
+        alt="Menu Control with Analysis groups selected, showing Research & Compare, Screeners & Signals, Income & NAV Risk, Portfolio Diagnostics, and Planning & Optimization in a reorderable list"
+        caption="Analysis groups reorders the five section headings inside the Analysis dropdown. Each section also has its own entry in the Menus panel for reordering the pages inside it."
+      />
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Saving, Discarding, and Restoring Defaults</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Save Changes</strong> writes the current draft and immediately updates the navigation bar — no restart needed. It stays disabled until you've actually changed something.</li>
+        <li><strong>Discard Changes</strong> throws away every unsaved edit — across all menus, not just the one you're viewing — and reloads the last saved order.</li>
+        <li><strong>Restore Defaults</strong> resets the draft for every menu back to the app's built-in order, not just the one currently selected. It only changes the draft — click Save Changes afterward to actually apply it, or Discard Changes to back out.</li>
+      </ul>
+
+      <div className="alert alert-info" style={{ marginTop: '1rem' }}>
+        <strong>Note:</strong> Menu Control is a single, app-wide setting — it isn't tied to a portfolio
+        or profile. Saving here changes the navigation bar for the whole app immediately.
       </div>
     </div>
   )
@@ -11706,6 +11779,7 @@ const CONTENT_MAP = {
   export: ExportHelp,
   'etf-provider-update': ETFProviderUpdateHelp,
   portfolios: PortfoliosHelp,
+  'menu-control': MenuControlHelp,
   settings: SettingsHelp,
   'tax-report': AnnualTaxReportHelp,
   'tax-loss': TaxLossHarvestHelp,
