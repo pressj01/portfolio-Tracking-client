@@ -45979,6 +45979,9 @@ def _resolve_scan_tickers(payload, include_cef_universe=False):
     """Collect scan tickers from a pasted list + holdings + watchlist (+ the CEF
     universe for the CEF scanner). Mirrors the Stock Buying Checklist scanner.
 
+    Holdings follow the caller's ``profile_id``/``aggregate_id``; the watchlist
+    is global by design and is never narrowed.
+
     Returns (ordered_unique_tickers, sources_used).
     """
     tickers = []
@@ -46001,18 +46004,25 @@ def _resolve_scan_tickers(payload, include_cef_universe=False):
         sources = ["portfolio", "watchlist"]
 
     if "portfolio" in sources:
-        profile_id = get_profile_id()
+        # Holdings are scoped to whatever account the page is on: the selected
+        # profile, or every member of the selected aggregate. Scanning profile 1
+        # regardless (the old behaviour) pulled the owner rollup's combined
+        # holdings into every account's scan.
+        _, profile_ids = get_profile_filter()
         conn = get_connection()
         try:
+            placeholders = ",".join("?" * len(profile_ids))
             rows = conn.execute(
-                "SELECT DISTINCT ticker FROM all_account_info "
-                "WHERE profile_id = ? AND quantity > 0 ORDER BY ticker",
-                (profile_id,),
+                f"SELECT DISTINCT ticker FROM all_account_info "
+                f"WHERE profile_id IN ({placeholders}) AND quantity > 0 ORDER BY ticker",
+                profile_ids,
             ).fetchall()
         finally:
             conn.close()
         tickers += [r["ticker"] if isinstance(r, dict) else r[0] for r in rows]
     if "watchlist" in sources:
+        # The watchlist is deliberately account-independent — one list shared by
+        # every profile — so it is not narrowed the way holdings are.
         tickers += [r["Ticker"] for r in _read_watchlist_rows() if r.get("Ticker")]
     if include_cef_universe and "cef_universe" in sources:
         # The CEF universe is hundreds of funds — far more than one scan can

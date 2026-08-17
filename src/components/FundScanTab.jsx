@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
+import { useProfile } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
 
 // Shared "Scan a List" tab for the fund evaluators (Option-Income / ETF / CEF).
@@ -8,6 +9,10 @@ import { formatMoney } from '../utils/money'
 // funds that match this scanner's type (the backend gates this), then grades each
 // one client-side with the same grader the single-ticker deep dive uses — so the
 // composite, verdict, and the bundled risk-adjusted-ratio criterion all match.
+//
+// Holdings are scoped to the account the page is on, so the scan must carry the
+// profile/aggregate selection; the watchlist is one shared list across accounts
+// and stays unscoped.
 
 const LABEL_STYLE = { color: 'var(--text-dim)', fontSize: '0.78rem', display: 'block', marginBottom: 3 }
 
@@ -39,6 +44,7 @@ export default function FundScanTab({
   extraColumns = [],   // [{ key, label, fmt(row) }]
   allowCefUniverse = false,
 }) {
+  const { profileQueryString, currentProfileName } = useProfile()
   const [tickersText, setTickersText] = useState('')
   const [useHoldings, setUseHoldings] = useState(true)
   const [useWatchlist, setUseWatchlist] = useState(true)
@@ -91,7 +97,8 @@ export default function FundScanTab({
       return
     }
     setLoading(true); setError(''); setData(null)
-    fetch(`${API_BASE}${endpoint}`, {
+    const sep = endpoint.includes('?') ? '&' : '?'
+    fetch(`${API_BASE}${endpoint}${sep}${profileQueryString}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tickers: list, sources, cef_category: cefCategory, cef_strategy: cefStrategy }),
     })
@@ -102,7 +109,7 @@ export default function FundScanTab({
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
-  }, [tickersText, useHoldings, useWatchlist, scanningUniverse, cefCategory, cefStrategy, endpoint])
+  }, [tickersText, useHoldings, useWatchlist, scanningUniverse, cefCategory, cefStrategy, endpoint, profileQueryString])
 
   const rows = useMemo(() => {
     if (!data?.results?.length) return []
@@ -191,8 +198,8 @@ export default function FundScanTab({
         <button type="button" className="btn btn-primary" onClick={runScan} disabled={loading}>Scan</button>
       </div>
       <div style={{ display: 'flex', gap: '1.2rem', flexWrap: 'wrap', alignItems: 'center', marginBottom: '1rem' }}>
-        {cb(useHoldings, setUseHoldings, 'My holdings', scanningUniverse)}
-        {cb(useWatchlist, setUseWatchlist, 'My watchlist', scanningUniverse)}
+        {cb(useHoldings, setUseHoldings, currentProfileName ? `My holdings (${currentProfileName})` : 'My holdings', scanningUniverse)}
+        {cb(useWatchlist, setUseWatchlist, 'My watchlist (all accounts)', scanningUniverse)}
         {allowCefUniverse && cb(useCefUniverse, setUseCefUniverse, 'Entire CEF universe')}
       </div>
 
