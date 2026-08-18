@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 _TMPDIR = None
 _APP_MODULE = None
+_ORIG_DB_PATH = None
 
 
 def setUpModule():
@@ -31,6 +32,8 @@ def setUpModule():
     os.environ["PORTFOLIO_DB_PATH"] = db_path
 
     import config
+    global _ORIG_DB_PATH
+    _ORIG_DB_PATH = config.DB_PATH
     config.DB_PATH = db_path
 
     import app as app_module
@@ -47,6 +50,13 @@ def setUpModule():
 
 def tearDownModule():
     os.environ.pop("PORTFOLIO_DB_PATH", None)
+    # Put the real database path back before the temp directory goes away, or
+    # every later test module opens a file that no longer exists.
+    if _ORIG_DB_PATH is not None:
+        import config
+        config.DB_PATH = _ORIG_DB_PATH
+        if _APP_MODULE is not None:
+            _APP_MODULE.DB_PATH = _ORIG_DB_PATH
     if _TMPDIR is not None:
         _TMPDIR.cleanup()
 

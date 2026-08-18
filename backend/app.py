@@ -3916,6 +3916,10 @@ def _broker_import_target_error(profile_id, fmt, conn):
 
 _SNOWBALL_LAYERED_BROKER_SOURCES = {"schwab", "etrade", "fidelity", "shear_group", "generic", "other"}
 
+# Formats where one file carries several accounts and routes each to its own
+# portfolio, instead of importing into the portfolio currently selected.
+_MULTI_ACCOUNT_IMPORT_FORMATS = {"schwab_all_accounts"}
+
 
 def _profile_broker_source(profile_id, conn):
     try:
@@ -3934,7 +3938,10 @@ def _profile_broker_source(profile_id, conn):
 def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     """Return True when transaction imports should not recalculate holdings."""
     fmt = (fmt or "").strip().lower()
-    if fmt in {"schwab", "etrade", "fidelity", "snowball_holdings", "robinhood", "shear_group"}:
+    if fmt in {
+        "schwab", "schwab_all_accounts", "etrade", "fidelity",
+        "snowball_holdings", "robinhood", "shear_group",
+    }:
         return False
 
     existing_holdings = conn.execute(
@@ -3990,6 +3997,430 @@ def _shear_group_account_matches_profile(profile_name, account_name, account_num
         if alias in profile_tokens or alias in profile_compact:
             return True
     return False
+
+
+# -- Schwab All-Accounts positions import -------------------------------------
+# One All-Accounts export carries every Schwab account, so each block has to be
+# routed to its own portfolio. A routing the user confirms is remembered by
+# masked account number, so next month's file lands without picking again.
+_SCHWAB_ACCOUNT_MAP_SETTING = "schwab_account_profile_map"
+
+# Below this, a name overlap is too thin to route an account on its own.
+_SCHWAB_ACCOUNT_MATCH_MIN_SCORE = 0.3
+
+
+def _schwab_account_key(account):
+    """Stable key for one account block, preferring Schwab's masked number."""
+    number = re.sub(r"\W+", "", str(account.get("account_number") or ""))
+    if number:
+        return f"num:{number}"
+    return "label:" + str(account.get("account_label") or "").strip().lower()
+
+
+def _load_schwab_account_map(conn):
+    """Return the saved {account key: profile id} routing."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?",
+            (_SCHWAB_ACCOUNT_MAP_SETTING,),
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return {}
+    if not row:
+        return {}
+    raw = row["value"] if isinstance(row, dict) else row[0]
+    try:
+        stored = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(stored, dict):
+        return {}
+    cleaned = {}
+    for key, value in stored.items():
+        try:
+            cleaned[str(key)] = int(value)
+        except (TypeError, ValueError):
+            continue
+    return cleaned
+
+
+def _save_schwab_account_map(conn, mapping):
+    """Remember a confirmed routing so the next export maps itself."""
+    if not mapping:
+        return
+    stored = _load_schwab_account_map(conn)
+    stored.update({str(key): int(pid) for key, pid in mapping.items() if pid})
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (_SCHWAB_ACCOUNT_MAP_SETTING, json.dumps(stored)),
+    )
+
+
+def _schwab_import_target_profiles(conn):
+    """Portfolios one Schwab account block may be imported into."""
+    rows = conn.execute(
+        "SELECT id, name, broker_source FROM profiles "
+        "ORDER BY COALESCE(display_order, id), id"
+    ).fetchall()
+    owner_sources = _get_owner_source_profile_ids(conn)
+    candidates = []
+    for row in rows:
+        pid = row["id"] if isinstance(row, dict) else row[0]
+        name = row["name"] if isinstance(row, dict) else row[1]
+        broker = _normalize_broker_source(
+            row["broker_source"] if isinstance(row, dict) else row[2]
+        )
+        # A portfolio pinned to another broker rejects Schwab imports anyway.
+        if broker and broker != "schwab":
+            continue
+        # Owner rolls the other accounts up once more than one feeds it, so a
+        # single account block must never overwrite the rollup.
+        if pid == 1 and len(owner_sources) > 1:
+            continue
+        candidates.append({"id": pid, "name": name, "broker_source": broker})
+    return candidates
+
+
+def _schwab_account_match_score(account, profile_name):
+    """Score how well one file account block matches a portfolio name."""
+    account_tokens = {
+        tok for tok in _normalize_account_tokens(account.get("account_name"))
+        if tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
+    }
+    profile_tokens = {
+        tok for tok in _normalize_account_tokens(profile_name)
+        if tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
+    }
+    if not account_tokens or not profile_tokens:
+        return 0.0
+
+    # A portfolio named with the masked account number is unambiguous.
+    number = re.sub(r"\D+", "", str(account.get("account_number") or ""))
+    profile_digits = re.sub(r"\D+", "", profile_name or "")
+    if len(number) >= 3 and number in profile_digits:
+        return 1.0
+
+    if "".join(sorted(account_tokens)) == "".join(sorted(profile_tokens)):
+        return 1.0
+
+    overlap = account_tokens & profile_tokens
+    if not overlap:
+        return 0.0
+    return len(overlap) / len(account_tokens | profile_tokens)
+
+
+def _suggest_schwab_account_profiles(accounts, conn):
+    """Pick a target portfolio per account block; returns (suggestions, candidates).
+
+    A saved routing wins outright. The rest are matched on name, best score
+    first, and a portfolio is only ever claimed by one account.
+    """
+    candidates = _schwab_import_target_profiles(conn)
+    valid_ids = {candidate["id"] for candidate in candidates}
+    saved = _load_schwab_account_map(conn)
+
+    suggestions = {}
+    taken = set()
+
+    for account in accounts:
+        key = _schwab_account_key(account)
+        pid = saved.get(key)
+        if pid in valid_ids and pid not in taken:
+            suggestions[key] = {"profile_id": pid, "reason": "saved_mapping"}
+            taken.add(pid)
+
+    scored = []
+    for account in accounts:
+        key = _schwab_account_key(account)
+        if key in suggestions:
+            continue
+        for candidate in candidates:
+            score = _schwab_account_match_score(account, candidate["name"])
+            if score >= _SCHWAB_ACCOUNT_MATCH_MIN_SCORE:
+                scored.append((score, key, candidate["id"]))
+
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    for score, key, pid in scored:
+        if key in suggestions or pid in taken:
+            continue
+        # Two accounts can share a nickname ("Individual", "Joint"). When two
+        # still-unrouted accounts tie for the same portfolio, neither is routed:
+        # guessing would quietly load one account's holdings over the other's.
+        tied = any(
+            other_pid == pid
+            and other_score == score
+            and other_key != key
+            and other_key not in suggestions
+            for other_score, other_key, other_pid in scored
+        )
+        if tied:
+            continue
+        suggestions[key] = {
+            "profile_id": pid,
+            "reason": "name_match",
+            "score": round(score, 3),
+        }
+        taken.add(pid)
+
+    return suggestions, candidates
+
+
+def _schwab_new_profile_name(account, taken_names):
+    """A readable portfolio name for an account block that has no home yet."""
+    base = re.sub(r"[_\s]+", " ", str(account.get("account_name") or "")).strip()
+    if not base:
+        base = str(account.get("account_label") or "Schwab Account").strip()
+    if base.islower():
+        base = base[0].upper() + base[1:]
+
+    lowered = {str(name or "").strip().lower() for name in taken_names}
+    if base.lower() not in lowered:
+        return base
+
+    # Two accounts can share a nickname; the masked number tells them apart.
+    number = re.sub(r"\D+", "", str(account.get("account_number") or ""))
+    if number and f"{base} {number}".lower() not in lowered:
+        return f"{base} {number}"
+    suffix = 2
+    while f"{base} {suffix}".lower() in lowered:
+        suffix += 1
+    return f"{base} {suffix}"
+
+
+def _create_schwab_import_profile(conn, name):
+    """Create a Schwab portfolio to receive one account block."""
+    next_order = conn.execute(
+        "SELECT COALESCE(MAX(display_order), 0) + 1 AS next_order FROM profiles"
+    ).fetchone()["next_order"]
+    cur = conn.execute(
+        "INSERT INTO profiles (name, broker_source, include_in_owner, display_order) "
+        "VALUES (?, 'schwab', 0, ?)",
+        (name, next_order),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def _annotate_multi_account_positions(parsed):
+    """Attach the suggested portfolio and the pickable portfolios to a preview."""
+    accounts = parsed.get("accounts") or []
+    conn = get_connection()
+    try:
+        suggestions, candidates = _suggest_schwab_account_profiles(accounts, conn)
+    finally:
+        conn.close()
+
+    names = {candidate["id"]: candidate["name"] for candidate in candidates}
+    for account in accounts:
+        key = _schwab_account_key(account)
+        suggestion = suggestions.get(key) or {}
+        pid = suggestion.get("profile_id")
+        # A block with no holdings (a bank or cash-only account) would clear
+        # whatever portfolio it landed on, so it is never routed by a guess.
+        if not account.get("positions"):
+            suggestion = {"reason": "no_holdings"}
+            pid = None
+        account["account_key"] = key
+        account["suggested_profile_id"] = pid
+        account["suggested_profile_name"] = names.get(pid)
+        account["match_reason"] = suggestion.get("reason") or "unmatched"
+        account["new_profile_name"] = _schwab_new_profile_name(
+            account, [candidate["name"] for candidate in candidates]
+        )
+
+    parsed["profile_choices"] = candidates
+    parsed["summary"] = dict(parsed.get("summary") or {})
+    parsed["summary"]["accounts_matched"] = sum(
+        1 for account in accounts if account.get("suggested_profile_id")
+    )
+    return parsed
+
+
+def _flask_result_parts(result):
+    """Unpack an import helper's return value into (payload, status)."""
+    status = 200
+    if isinstance(result, tuple):
+        result, status = result[0], (result[1] if len(result) > 1 else 200)
+    payload = result.get_json(silent=True) if hasattr(result, "get_json") else result
+    return (payload if isinstance(payload, dict) else {}), status
+
+
+def _requested_schwab_account_map():
+    """Read the account -> portfolio routing the Import page posted, if any."""
+    raw = request.form.get("account_map")
+    if not raw:
+        return None
+    try:
+        mapping = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError("The account-to-portfolio selection could not be read.")
+    if not isinstance(mapping, dict):
+        raise ValueError("The account-to-portfolio selection could not be read.")
+    return mapping
+
+
+def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=None):
+    """Import a multi-account positions export, one portfolio per account block.
+
+    Each account is written with the same code path as a single-account
+    positions import, so holdings, cash, and NAV behave identically; only the
+    routing is new.
+    """
+    accounts = parsed.get("accounts") or []
+    if not accounts:
+        return jsonify({"error": "No account sections were found in the file."}), 400
+
+    conn = get_connection()
+    try:
+        suggestions, candidates = _suggest_schwab_account_profiles(accounts, conn)
+    finally:
+        conn.close()
+
+    valid_ids = {candidate["id"] for candidate in candidates}
+    profile_names = {candidate["id"]: candidate["name"] for candidate in candidates}
+    requested = account_map if account_map is not None else {}
+
+    targets = []
+    skipped = []
+    created = []
+    claimed = {}
+
+    for account in accounts:
+        key = _schwab_account_key(account)
+        label = account.get("account_label") or key
+        if key in requested:
+            raw = requested.get(key)
+        else:
+            raw = (suggestions.get(key) or {}).get("profile_id")
+
+        if raw in (None, "", "skip"):
+            skipped.append(label)
+            continue
+
+        # An account with no portfolio yet can open one on the spot, so a fresh
+        # install can take every Schwab account from the first import.
+        if raw == "new":
+            conn = get_connection()
+            try:
+                taken = [row["name"] for row in conn.execute("SELECT name FROM profiles").fetchall()]
+                taken.extend(profile_names.values())
+                new_name = _schwab_new_profile_name(account, taken)
+                pid = _create_schwab_import_profile(conn, new_name)
+            finally:
+                conn.close()
+            valid_ids.add(pid)
+            profile_names[pid] = new_name
+            created.append(new_name)
+            claimed[pid] = label
+            targets.append((account, pid, label))
+            continue
+
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({
+                "error": f"'{label}' has an invalid portfolio selection."
+            }), 400
+
+        if pid not in valid_ids:
+            return jsonify({
+                "error": (
+                    f"'{label}' is pointed at a portfolio that cannot accept a Charles Schwab "
+                    "positions import. Choose a portfolio whose Broker Source is Charles Schwab."
+                )
+            }), 400
+
+        if pid in claimed:
+            return jsonify({
+                "error": (
+                    f"'{label}' and '{claimed[pid]}' are both pointed at "
+                    f"'{profile_names.get(pid, 'the same portfolio')}'. Each account needs its "
+                    "own portfolio."
+                )
+            }), 400
+
+        claimed[pid] = label
+        targets.append((account, pid, label))
+
+    if not targets:
+        return jsonify({
+            "error": "No accounts were assigned to a portfolio, so nothing was imported."
+        }), 400
+
+    details = []
+    failures = []
+    confirmed = {}
+
+    for account, pid, label in targets:
+        single = {
+            "positions": account.get("positions") or [],
+            "summary": dict(account.get("summary") or {}),
+            "format_type": "positions",
+            "source_format": "schwab",
+        }
+        profile_name = profile_names.get(pid, f"Portfolio {pid}")
+        try:
+            if nav_only:
+                result = _record_positions_nav_only(single, pid, nav_date)
+            else:
+                result = _import_positions(single, pid, nav_date=nav_date)
+            payload, status = _flask_result_parts(result)
+        except ValueError as exc:
+            payload, status = {"error": str(exc)}, 400
+        except Exception as exc:  # noqa: BLE001 - one account must not sink the rest
+            payload, status = {"error": str(exc)}, 500
+
+        ok = status < 400
+        if ok:
+            confirmed[_schwab_account_key(account)] = pid
+        else:
+            failures.append(label)
+
+        details.append({
+            "account_label": label,
+            "profile_id": pid,
+            "profile_name": profile_name,
+            "ok": ok,
+            "message": payload.get("message") or payload.get("error") or "",
+            "updated": payload.get("updated", 0),
+            "inserted": payload.get("inserted", 0),
+            "removed": payload.get("removed", 0),
+        })
+
+    conn = get_connection()
+    try:
+        _save_schwab_account_map(conn, confirmed)
+        conn.commit()
+    finally:
+        conn.close()
+
+    imported = len(targets) - len(failures)
+    if imported == 0:
+        return jsonify({
+            "error": f"No accounts imported. {details[0]['message']}",
+            "details": details,
+        }), 400
+
+    verb = "Recorded NAV for" if nav_only else "Imported"
+    message = (
+        f"{verb} {imported} of {len(accounts)} account"
+        f"{'' if len(accounts) == 1 else 's'}."
+    )
+    if created:
+        message += f" Created portfolio{'' if len(created) == 1 else 's'}: {', '.join(created)}."
+    if failures:
+        message += f" {len(failures)} failed: {', '.join(failures)}."
+    if skipped:
+        message += f" Skipped: {', '.join(skipped)}."
+
+    return jsonify({
+        "message": message,
+        "details": details,
+        "imported_accounts": imported,
+        "failed_accounts": failures,
+        "skipped_accounts": skipped,
+        "created_profiles": created,
+    })
 
 
 def _merge_import_positions_by_ticker(positions):
@@ -6440,6 +6871,10 @@ def api_import_transactions_preview():
         blocked_msg = None
         if fmt == "portfolio_export" and _request_aggregate_id() is not None:
             blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
+        elif fmt in _MULTI_ACCOUNT_IMPORT_FORMATS:
+            # Every account block names its own portfolio, so the portfolio the
+            # user happens to be viewing is not the import target.
+            blocked_msg = None
         elif fmt != "portfolio_export":
             blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
     finally:
@@ -6453,6 +6888,8 @@ def api_import_transactions_preview():
     try:
         result = TXN_PARSERS[fmt](path, f.filename)
         result = _filter_shear_group_result_for_profile(result, profile_id)
+        if result.get("format_type") == "positions_multi":
+            return jsonify(_annotate_multi_account_positions(result))
         if result.get("format_type") == "categories":
             result["target_profile_name"] = _get_profile_name(profile_id)
         elif result.get("format_type") == "combined_export":
@@ -6899,6 +7336,10 @@ def api_import_transactions():
         blocked_msg = None
         if fmt == "portfolio_export" and _request_aggregate_id() is not None:
             blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
+        elif fmt in _MULTI_ACCOUNT_IMPORT_FORMATS:
+            # Every account block names its own portfolio, so the portfolio the
+            # user happens to be viewing is not the import target.
+            blocked_msg = None
         elif fmt != "portfolio_export":
             blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
     finally:
@@ -6908,7 +7349,9 @@ def api_import_transactions():
 
     # Create a backup before any import so the user can roll back. Portfolio
     # export imports touch multiple profiles, so leave those backups untagged.
-    backup_path = _create_import_backup(None if fmt == "portfolio_export" else profile_id)
+    backup_path = _create_import_backup(
+        None if fmt == "portfolio_export" or fmt in _MULTI_ACCOUNT_IMPORT_FORMATS else profile_id
+    )
 
     import uuid
     path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
@@ -6952,6 +7395,27 @@ def api_import_transactions():
 
     if parsed.get("format_type") == "categories":
         return _import_snowball_categories(parsed, profile_id)
+
+    # -- Multi-account positions import (Schwab All-Accounts) -----------------
+    if parsed.get("format_type") == "positions_multi":
+        nav_only = request.form.get("nav_only", "false").lower() == "true"
+        if not nav_only and _is_backdated_nav(nav_date):
+            return jsonify({
+                "error": (
+                    "Backdated position files can only be imported with Record NAV only. "
+                    "This prevents an older file from replacing current holdings."
+                )
+            }), 400
+        try:
+            account_map = _requested_schwab_account_map()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return _import_positions_multi(
+            parsed,
+            nav_date=nav_date,
+            nav_only=nav_only,
+            account_map=account_map,
+        )
 
     # ── Positions-based import (e.g. Schwab) ─────────────────────────────────
     if parsed.get("format_type") == "positions":

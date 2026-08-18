@@ -275,6 +275,15 @@ function ImportHelp() {
         <li>all custom categories, notes, and app-only fields</li>
       </ul>
 
+      <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (All Accounts Positions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Schwab, go to <strong>Accounts &gt; Positions</strong>, switch the account selector to <strong>All Accounts</strong>, then export to CSV or Excel.</li>
+        <li>Set the format selector to <strong>Charles Schwab (All Accounts Positions)</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this format automatically.</li>
+        <li>Preview splits the file into one block per Schwab account and matches each block to a portfolio by name or masked account number. Re-point any account, skip it, or create a new portfolio before importing.</li>
+        <li>Confirmed routing is remembered, so the next All-Accounts export maps itself. Option positions are shown for reconciliation but are not imported as holdings.</li>
+        <li>This import can run from an aggregate view because the selected portfolio is not the import target.</li>
+      </ul>
+
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Holdings (Migration)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Use this when migrating from Snowball and you want to bring over a holdings snapshot, dividend metadata, and categories.</li>

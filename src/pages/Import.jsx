@@ -29,6 +29,7 @@ const TXN_FORMATS = [
   { value: 'snowball_categories', label: 'Snowball Categories' },
   { value: 'snowball', label: 'Snowball Transactions' },
   { value: 'schwab', label: 'Charles Schwab (Positions)' },
+  { value: 'schwab_all_accounts', label: 'Charles Schwab (All Accounts Positions)' },
   { value: 'schwab_transactions', label: 'Charles Schwab (Transactions)' },
   { value: 'etrade', label: 'E*Trade (Positions)' },
   { value: 'etrade_transactions', label: 'E*Trade (Transactions)' },
@@ -160,6 +161,8 @@ export default function Import() {
   const [txnPreviewLoading, setTxnPreviewLoading] = useState(false)
   const [txnImporting, setTxnImporting] = useState(false)
   const [txnNavOnly, setTxnNavOnly] = useState(false)
+  // Account key -> portfolio id (or 'new' / 'skip') for multi-account files
+  const [txnAccountMap, setTxnAccountMap] = useState({})
 
   // Backup / restore state
   const [backups, setBackups] = useState([])
@@ -235,8 +238,16 @@ export default function Import() {
     loadBackups()
   }, [pf, selection])
 
+  const txnIsMultiAccount = txnPreview?.format_type === 'positions_multi'
+  const txnMappedAccounts = txnIsMultiAccount
+    ? (txnPreview.accounts || []).filter(a => (txnAccountMap[a.account_key] ?? '') !== 'skip'
+        && (txnAccountMap[a.account_key] ?? '') !== '')
+    : []
+
   const txnHasRows = txnPreview
-    ? (txnPreview.format_type === 'combined_export'
+    ? (txnPreview.format_type === 'positions_multi'
+        ? txnMappedAccounts.length > 0
+        : txnPreview.format_type === 'combined_export'
         ? ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0)
         : txnPreview.format_type === 'categories'
         ? (txnPreview.summary?.categories || 0) > 0
@@ -257,7 +268,24 @@ export default function Import() {
     resetState()
     setTxnFile(null)
     setTxnPreview(null)
+    setTxnAccountMap({})
     setTxnNavOnly(false)
+  }
+
+  const selectSchwabAllAccounts = () => {
+    setActiveTab('txnHistory')
+    setTxnFormat('schwab_all_accounts')
+    setTxnPreview(null)
+    setTxnAccountMap({})
+    setTxnFile(null)
+    setResult(null)
+    setError(null)
+  }
+
+  const maybeAutodetectSchwabAllAccounts = (file) => {
+    if (file && /all[-_\s]?accounts/i.test(file.name)) {
+      setTxnFormat('schwab_all_accounts')
+    }
   }
 
   const handleGenericTransactionsTab = () => {
@@ -456,13 +484,24 @@ export default function Import() {
     }
   }
 
-  if (isAggregate) {
+  const schwabAllAccountsFromAggregate = (
+    isAggregate && activeTab === 'txnHistory' && txnFormat === 'schwab_all_accounts'
+  )
+
+  if (isAggregate && !schwabAllAccountsFromAggregate) {
     return (
       <div className="page">
         <h1>Import Portfolio Data</h1>
         <div className="alert alert-info">
           Cannot import while viewing the Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.
         </div>
+        <p style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
+          A Schwab All-Accounts positions file is the exception: each account in the file
+          is matched to its own portfolio, so the aggregate selection is not used.
+        </p>
+        <button className="btn btn-primary" style={{ marginTop: '0.75rem' }} onClick={selectSchwabAllAccounts}>
+          Import Charles Schwab (All Accounts Positions)
+        </button>
       </div>
     )
   }
@@ -483,8 +522,16 @@ export default function Import() {
     <div className="page">
       <h1>Import Portfolio Data</h1>
       <p style={{ color: 'var(--accent-bright)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-        Importing into: <strong>{currentProfileName}</strong>
+        {txnFormat === 'schwab_all_accounts'
+          ? 'Each Schwab account in the file is imported into its own matched portfolio.'
+          : <>Importing into: <strong>{currentProfileName}</strong></>}
       </p>
+      {isAggregate && (
+        <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+          Viewing an aggregate. Other import types need a specific portfolio selected.
+          This All-Accounts import still works because each Schwab account is routed on its own.
+        </div>
+      )}
       {(marketRefreshing || waitingForRefresh) && (
         <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
           Price and dividend refresh is finishing. Imports will be available as soon as the refresh completes.
@@ -495,12 +542,16 @@ export default function Import() {
         <button
           className={`tab ${activeTab === 'generic' ? 'active' : ''}`}
           onClick={() => handleTabChange('generic')}
+          disabled={isAggregate}
+          title={isAggregate ? 'Select a specific portfolio to use Generic Positions' : undefined}
         >
           Generic Positions
         </button>
         <button
           className={`tab ${activeTab === 'txnHistory' && txnFormat === 'generic_transactions' ? 'active' : ''}`}
           onClick={handleGenericTransactionsTab}
+          disabled={isAggregate}
+          title={isAggregate ? 'Select a specific portfolio to use Generic Transactions' : undefined}
         >
           Generic Transactions
         </button>
@@ -786,6 +837,8 @@ export default function Import() {
               ? <>Import unique category names from a Snowball <strong>Holdings CSV or XLSX</strong>. Existing categories are skipped; this does not import holdings, ticker assignments, or sub-categories.</>
             : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
+            : txnFormat === 'schwab_all_accounts'
+              ? <>Import every Schwab account from one <strong>All-Accounts Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, switch the account selector to <strong>All Accounts</strong>, then export. Each account in the file is matched to a portfolio, which you can re-point before importing.</>
               : txnFormat === 'snowball_holdings'
                 ? <>Import a Snowball <strong>Holdings CSV or XLSX</strong> as a migration snapshot. This keeps only the holdings, dividend, and category fields the app can actually use, and ignores Snowball-only analytics columns.</>
               : txnFormat === 'schwab_transactions'
@@ -862,6 +915,16 @@ export default function Import() {
                   Download Schwab Template
                 </button>
               </div>
+            </div>
+          )}
+
+          {txnFormat === 'schwab_all_accounts' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>One file, every account:</strong> Schwab's All-Accounts export stacks each account
+              under its own label row (for example <em>Roth_IRA ...995</em>). Preview matches each account
+              to a portfolio by name or masked account number; anything unmatched can be pointed at a
+              portfolio or given a new one. Your choices are remembered, so the next export maps itself.
+              Options positions are listed for reconciliation but are not imported as holdings.
             </div>
           )}
 
@@ -953,11 +1016,12 @@ export default function Import() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
               <select
                 value={txnFormat}
-                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnFile(null); setResult(null); setError(null) }}
+                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnAccountMap({}); setTxnFile(null); setResult(null); setError(null) }}
                 style={{ width: '250px' }}
+                disabled={isAggregate}
               >
                 <option value={NO_FORMAT} disabled>Select a format...</option>
-                {TXN_FORMATS.map(f => (
+                {TXN_FORMATS.filter(f => !isAggregate || f.value === 'schwab_all_accounts').map(f => (
                   <option key={f.value} value={f.value}>{f.label}</option>
                 ))}
               </select>
@@ -980,7 +1044,14 @@ export default function Import() {
           </div>
 
           <FileUpload
-            onFileSelect={(f) => { setTxnFile(f); setTxnPreview(null); setResult(null); setError(null) }}
+            onFileSelect={(f) => {
+              setTxnFile(f)
+              setTxnPreview(null)
+              setTxnAccountMap({})
+              setResult(null)
+              setError(null)
+              maybeAutodetectSchwabAllAccounts(f)
+            }}
             accept={txnFormat === 'robinhood' ? '.pdf' : txnFormat === 'portfolio_export' ? '.xlsx' : '.xlsx,.xls,.csv'}
             file={txnFile}
           />
@@ -1003,6 +1074,17 @@ export default function Import() {
                   const data = await res.json()
                   if (!res.ok) throw new Error(data.error || 'Preview failed')
                   setTxnPreview(data)
+                  if (data.as_of) setNavSnapshotDate(data.as_of)
+                  if (data.format_type === 'positions_multi') {
+                    // Start on what the backend matched; the user can re-point
+                    // any account before importing.
+                    setTxnAccountMap(Object.fromEntries(
+                      (data.accounts || []).map(a => [
+                        a.account_key,
+                        a.suggested_profile_id != null ? String(a.suggested_profile_id) : '',
+                      ])
+                    ))
+                  }
                 } catch (e) {
                   setError(e.message)
                 } finally {
@@ -1025,15 +1107,23 @@ export default function Import() {
                   formData.append('file', txnFile)
                   formData.append('format', txnFormat)
                   formData.append('nav_date', navSnapshotDate)
-                  if (txnNavOnly && txnPreview?.format_type === 'positions') formData.append('nav_only', 'true')
+                  if (txnNavOnly && (txnPreview?.format_type === 'positions' || txnIsMultiAccount)) formData.append('nav_only', 'true')
+                  if (txnIsMultiAccount) formData.append('account_map', JSON.stringify(txnAccountMap))
                   try {
                     await waitForRefreshBeforeImport()
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
                     const data = await res.json()
                     if (!res.ok) throw new Error(data.error || 'Import failed')
-                    setResult([data.message])
+                    setResult([
+                      data.message,
+                      ...(data.details || []).map(d => (
+                        `  ${d.ok ? '' : 'FAILED - '}${d.account_label} -> ${d.profile_name}: ${d.message}`
+                      )),
+                    ])
                     setTxnPreview(null)
+                    setTxnAccountMap({})
                     setTxnFile(null)
+                    if (data.created_profiles?.length) refreshProfiles()
                     clearAllDashboardCache()
                     loadBackups()
                   } catch (e) {
@@ -1043,7 +1133,13 @@ export default function Import() {
                   }
                 }}
               >
-                {marketRefreshing || waitingForRefresh ? <><span className="spinner" /> Waiting...</> : txnImporting ? <><span className="spinner" /> Importing...</> : `Import into ${currentProfileName}`}
+                {marketRefreshing || waitingForRefresh
+                  ? <><span className="spinner" /> Waiting...</>
+                  : txnImporting
+                    ? <><span className="spinner" /> Importing...</>
+                    : txnIsMultiAccount
+                      ? `Import ${txnMappedAccounts.length} account${txnMappedAccounts.length === 1 ? '' : 's'}`
+                      : `Import into ${currentProfileName}`}
               </button>
             )}
           </div>
@@ -1167,6 +1263,138 @@ export default function Import() {
             </div>
           )}
 
+          {/* -- Multi-account positions preview (Schwab All Accounts) -- */}
+          {txnIsMultiAccount && (
+            <div style={{ marginTop: '1rem' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
+                <input
+                  type="checkbox"
+                  checked={txnNavOnly}
+                  onChange={(e) => setTxnNavOnly(e.target.checked)}
+                />
+                <strong>Record NAV only</strong>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                  (adds a chart snapshot to every mapped portfolio without changing holdings)
+                </span>
+              </label>
+
+              <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+                <strong>{txnPreview.summary.accounts}</strong> account{txnPreview.summary.accounts === 1 ? '' : 's'} found
+                {txnPreview.as_of && <> as of <strong>{txnPreview.as_of}</strong></>}:{' '}
+                <strong>{txnPreview.summary.holdings}</strong> holdings,{' '}
+                total <strong>{formatMoney(txnPreview.summary.account_value)}</strong>
+                {txnPreview.summary.cash > 0 && (
+                  <> including <strong>{formatMoney(txnPreview.summary.cash)}</strong> cash</>
+                )}.
+                {txnPreview.summary.options > 0 && (
+                  <> {txnPreview.summary.options} option position{txnPreview.summary.options === 1 ? '' : 's'}{' '}
+                    ({formatMoney(txnPreview.summary.options_value)}) are not imported as holdings.</>
+                )}
+              </div>
+
+              {txnMappedAccounts.length < (txnPreview.accounts || []).length && (
+                <div className="alert alert-warning" style={{ marginBottom: '0.75rem' }}>
+                  {(txnPreview.accounts || []).length - txnMappedAccounts.length} account
+                  {(txnPreview.accounts || []).length - txnMappedAccounts.length === 1 ? ' is' : 's are'}{' '}
+                  set to skip and will not be imported.
+                </div>
+              )}
+
+              {(txnPreview.accounts || []).map((account) => {
+                const selected = txnAccountMap[account.account_key] ?? ''
+                const skipped = selected === '' || selected === 'skip'
+                const summary = account.summary || {}
+                return (
+                  <div
+                    key={account.account_key}
+                    className="card"
+                    style={{ marginBottom: '0.75rem', opacity: skipped ? 0.6 : 1 }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                        <div style={{ fontWeight: 600 }}>{account.account_label}</div>
+                        <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                          {summary.holdings} holdings, {formatMoney(summary.account_value)}
+                          {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+                        </div>
+                      </div>
+                      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>Import into</span>
+                        <select
+                          value={selected}
+                          onChange={(e) => setTxnAccountMap(prev => ({
+                            ...prev,
+                            [account.account_key]: e.target.value,
+                          }))}
+                          style={{ width: '230px' }}
+                        >
+                          <option value="">Skip this account</option>
+                          {(txnPreview.profile_choices || []).map(choice => (
+                            <option key={choice.id} value={String(choice.id)}>{choice.name}</option>
+                          ))}
+                          <option value="new">New portfolio: {account.new_profile_name}</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {account.match_reason === 'saved_mapping' && (
+                      <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                        Matched from your last All-Accounts import.
+                      </div>
+                    )}
+                    {account.match_reason === 'unmatched' && (
+                      <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                        No portfolio matched this account by name - choose one above, or create a new portfolio for it.
+                      </div>
+                    )}
+                    {summary.options > 0 && (
+                      <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                        {summary.options} option position{summary.options === 1 ? '' : 's'} ({formatMoney(summary.options_value)})
+                        are skipped, so Schwab's account total of {formatMoney(summary.reported_total)} counts them and this does not.
+                      </div>
+                    )}
+
+                    <details style={{ marginTop: '0.6rem' }}>
+                      <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-bright)' }}>
+                        Show {summary.holdings} holdings
+                      </summary>
+                      <div style={{ maxHeight: '320px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px', marginTop: '0.5rem' }}>
+                        <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                          <thead>
+                            <tr>
+                              <th>Ticker</th>
+                              <th>Description</th>
+                              <th style={{ textAlign: 'right' }}>Shares</th>
+                              <th style={{ textAlign: 'right' }}>Cost/Share</th>
+                              <th style={{ textAlign: 'right' }}>Price</th>
+                              <th style={{ textAlign: 'right' }}>Mkt Value</th>
+                              <th style={{ textAlign: 'right' }}>G/L</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(account.positions || []).map((p, i) => (
+                              <tr key={i}>
+                                <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                                <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description}</td>
+                                <td style={{ textAlign: 'right' }}>{formatShares(p.quantity)}</td>
+                                <td style={{ textAlign: 'right' }}>{formatMoney(p.cost_per_share)}</td>
+                                <td style={{ textAlign: 'right' }}>{formatMoney(p.current_price, 4)}</td>
+                                <td style={{ textAlign: 'right' }}>{formatMoney(p.current_value)}</td>
+                                <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
+                                  {formatMoney(p.gain_or_loss || 0)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {txnPreview && txnPreview.format_type === 'positions' && (
             <div style={{ marginTop: '1rem' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
@@ -1244,7 +1472,7 @@ export default function Import() {
           )}
 
           {/* ── Transactions preview (Snowball) ── */}
-          {txnPreview && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'combined_export' && txnPreview.format_type !== 'categories' && (
+          {txnPreview && txnPreview.transactions && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'positions_multi' && txnPreview.format_type !== 'combined_export' && txnPreview.format_type !== 'categories' && (
             <div style={{ marginTop: '1rem' }}>
               {txnPreview.preserve_positions && txnPreview.preserve_positions_message && (
                 <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>

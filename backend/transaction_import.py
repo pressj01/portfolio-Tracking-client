@@ -587,46 +587,31 @@ _SCHWAB_POSITION_ALIASES = {
 }
 
 
-def parse_schwab_csv(file_path, filename):
-    """Parse a Schwab Positions CSV/XLSX export.
+def _schwab_positions_from_records(records):
+    """Turn Schwab position rows into holdings, cash, and skip counts.
 
-    The positions file is the source of truth for current holdings â€”
-    it includes shares from inter-account transfers, reverse splits,
-    and all corporate actions.
-
-    Returns a positions-based result dict (not transactions):
-        {
-            "positions": [ ... ],
-            "summary": { "holdings": int, "filtered": int, "options": int },
-            "format_type": "positions",
-        }
+    Shared by the single-account positions file and by each account block of
+    the All-Accounts export, which repeats the very same columns.
     """
-
-    # First line is a header like "Positions for account ..." â€” skip it
-    # Second line is blank, then the CSV header follows
-    rows = _read_table_rows(file_path, filename)
-    _, _, reader = _rows_to_flexible_dicts(
-        rows,
-        _SCHWAB_POSITION_ALIASES,
-        required={"Symbol", "Qty (Quantity)"},
-    )
-
-    if not reader:
-        raise ValueError(
-            "Could not find the positions header row. "
-            "Make sure this is a Schwab Positions export or a table with Symbol and Quantity columns."
-        )
-
     positions = []
     filtered_count = 0
     options_count = 0
+    options_value = 0.0
     cash_value = 0.0
     cash_seen = False
+    reported_total = None
 
-    for row in reader:
+    for row in records:
         sym = str(row.get("Symbol") or "").strip()
         desc = str(row.get("Description") or "").strip()
         asset_type = str(row.get("Asset Type") or "").strip()
+
+        if sym == "Positions Total":
+            # Schwab's own account total. It counts open options, which this
+            # importer does not carry as holdings, so keep it for reconciling.
+            reported_total = _safe_float(row.get("Mkt Val (Market Value)"))
+            filtered_count += 1
+            continue
 
         if sym == "Cash & Cash Investments":
             cash_value = _safe_float(row.get("Mkt Val (Market Value)")) or 0.0
@@ -642,6 +627,7 @@ def parse_schwab_csv(file_path, filename):
         # Skip options
         if asset_type == "Option" or " " in sym:
             options_count += 1
+            options_value += _safe_float(row.get("Mkt Val (Market Value)")) or 0.0
             continue
 
         ticker = sym.upper()
@@ -710,24 +696,72 @@ def parse_schwab_csv(file_path, filename):
         if not existing["asset_type"]:
             existing["asset_type"] = pos["asset_type"]
 
-    positions = list(merged.values())
+    return {
+        "positions": list(merged.values()),
+        "filtered": filtered_count,
+        "options": options_count,
+        "options_value": round(options_value, 2),
+        "cash": round(cash_value, 2),
+        "cash_seen": cash_seen,
+        "reported_total": round(reported_total, 2) if reported_total is not None else None,
+    }
+
+
+def parse_schwab_csv(file_path, filename):
+    """Parse a Schwab Positions CSV/XLSX export.
+
+    The positions file is the source of truth for current holdings -
+    it includes shares from inter-account transfers, reverse splits,
+    and all corporate actions.
+
+    Returns a positions-based result dict (not transactions):
+        {
+            "positions": [ ... ],
+            "summary": { "holdings": int, "filtered": int, "options": int },
+            "format_type": "positions",
+        }
+    """
+
+    # First line is a header like "Positions for account ..." - skip it
+    # Second line is blank, then the CSV header follows
+    rows = _read_table_rows(file_path, filename)
+    if _schwab_looks_like_all_accounts(rows):
+        raise ValueError(
+            "This is a Schwab All-Accounts positions export (every account in one file). "
+            "Import it with 'Charles Schwab (All Accounts Positions)' so each account "
+            "can be routed to its own portfolio."
+        )
+    _, _, reader = _rows_to_flexible_dicts(
+        rows,
+        _SCHWAB_POSITION_ALIASES,
+        required={"Symbol", "Qty (Quantity)"},
+    )
+
+    if not reader:
+        raise ValueError(
+            "Could not find the positions header row. "
+            "Make sure this is a Schwab Positions export or a table with Symbol and Quantity columns."
+        )
+
+    parsed = _schwab_positions_from_records(reader)
+    positions = parsed["positions"]
 
     if positions and all(p["purchase_value"] == 0 for p in positions):
         raise ValueError(
-            "No cost basis data found â€” every position has a $0 cost. "
+            "No cost basis data found - every position has a $0 cost. "
             "This usually means a Transactions file was selected with the Positions format. "
             "Please use 'Charles Schwab (Transactions)' for transaction history files."
         )
 
     summary = {
         "holdings": len(positions),
-        "filtered": filtered_count,
-        "options": options_count,
+        "filtered": parsed["filtered"],
+        "options": parsed["options"],
     }
-    if cash_seen:
-        summary["cash"] = round(cash_value, 2)
+    if parsed["cash_seen"]:
+        summary["cash"] = parsed["cash"]
         summary["account_value"] = round(
-            sum(position["current_value"] for position in positions) + cash_value,
+            sum(position["current_value"] for position in positions) + parsed["cash"],
             2,
         )
 
@@ -736,6 +770,195 @@ def parse_schwab_csv(file_path, filename):
         "summary": summary,
         "format_type": "positions",
         "source_format": "schwab",
+    }
+
+
+# The All-Accounts export stacks the accounts one after another. Each block
+# opens with a bare label row ("Roth_IRA ...995") on an otherwise empty line,
+# then repeats the same column header, so each block parses like its own
+# single-account file.
+_SCHWAB_FILE_TITLE_RE = re.compile(r"^positions\s+for\b", re.I)
+_SCHWAB_ACCOUNT_LABEL_RE = re.compile(
+    r"^(?P<name>.*?)\s*(?:\.{2,}|\u2026|[Xx*]{3,}-?)\s*(?P<number>[A-Za-z0-9]{3,})$"
+)
+_SCHWAB_AS_OF_RE = re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})")
+
+
+def _schwab_account_section_label(row):
+    """Return the account label when this row opens an account block.
+
+    Account labels sit on a short line of their own, unlike the column header
+    and the position rows. A name holding a comma ("Doe Family Trust, Jane Doe
+    ...426") is split into cells by the CSV reader, so a short row counts too
+    as long as it still reads as a masked account.
+    """
+    if not row:
+        return ""
+    cells = [str(cell or "").strip() for cell in row]
+    while cells and not cells[-1]:
+        cells.pop()
+    if not cells or not cells[0]:
+        return ""
+    if len(cells) > 3:
+        return ""
+
+    text = ", ".join(cell for cell in cells if cell)
+    # The file's own title line ("Positions for All-Accounts as of ...") sits
+    # on a short line too, but it names the export, not an account.
+    if _SCHWAB_FILE_TITLE_RE.match(text):
+        return ""
+    if len(cells) > 1 and not _SCHWAB_ACCOUNT_LABEL_RE.match(text):
+        return ""
+    return text
+
+
+def _split_schwab_account_label(label):
+    """Split "Roth_IRA ...995" into its name and masked account number."""
+    text = str(label or "").strip()
+    match = _SCHWAB_ACCOUNT_LABEL_RE.match(text)
+    if not match:
+        return text, ""
+    return match.group("name").strip(), match.group("number").strip()
+
+
+def _split_schwab_account_sections(rows):
+    """Group the export's rows under the account label that opens each block."""
+    sections = []
+    current = None
+    for row in rows:
+        label = _schwab_account_section_label(row)
+        if label:
+            current = {"label": label, "rows": []}
+            sections.append(current)
+            continue
+        if current is not None:
+            current["rows"].append(row)
+    return sections
+
+
+def _schwab_all_accounts_as_of(rows):
+    """Read the as-of date out of the export's title line, when it carries one."""
+    for row in rows[:5]:
+        if not row:
+            continue
+        first = str(row[0] or "").strip()
+        if not _SCHWAB_FILE_TITLE_RE.match(first):
+            continue
+        match = _SCHWAB_AS_OF_RE.search(first)
+        if match:
+            month, day, year = match.groups()
+            return f"{year}-{int(month):02d}-{int(day):02d}"
+    return ""
+
+
+_SCHWAB_ALL_ACCOUNTS_TITLE_RE = re.compile(r"all[-\s]?accounts", re.I)
+
+
+def _schwab_account_blocks(rows):
+    """Return the account blocks that actually carry a positions table.
+
+    A label row on its own proves nothing - export footers and note lines sit
+    on short lines too. Only a block with the position columns under it counts.
+    """
+    blocks = []
+    for section in _split_schwab_account_sections(rows):
+        _, _, records = _rows_to_flexible_dicts(
+            section["rows"],
+            _SCHWAB_POSITION_ALIASES,
+            required={"Symbol", "Qty (Quantity)"},
+        )
+        if records:
+            blocks.append((section["label"], records))
+    return blocks
+
+
+def _schwab_looks_like_all_accounts(rows):
+    """True when this is Schwab's stacked All-Accounts positions export."""
+    for row in rows[:8]:
+        if not row:
+            continue
+        first = str(row[0] or "").strip()
+        if _SCHWAB_FILE_TITLE_RE.match(first) and _SCHWAB_ALL_ACCOUNTS_TITLE_RE.search(first):
+            return True
+    return len(_schwab_account_blocks(rows)) > 1
+
+
+def parse_schwab_all_accounts_csv(file_path, filename):
+    """Parse a Schwab All-Accounts Positions export - every account at once.
+
+    Schwab's All-Accounts download stacks each account in its own block: a bare
+    label row ("Roth_IRA ...995"), the usual column header, that account's
+    holdings, its cash row, and a Positions Total row. Each block is parsed like
+    a single-account positions file and returned on its own, so one upload can
+    refresh every portfolio.
+
+    Returns:
+        {
+            "accounts": [ {"account_label", "account_name", "account_number",
+                           "positions": [...], "summary": {...}}, ... ],
+            "summary": { ... file-wide totals ... },
+            "format_type": "positions_multi",
+        }
+    """
+    rows = _read_table_rows(file_path, filename)
+    if not rows:
+        raise ValueError("The file is empty or has no data rows.")
+
+    accounts = []
+    for label, records in _schwab_account_blocks(rows):
+        parsed = _schwab_positions_from_records(records)
+        positions = parsed["positions"]
+        account_name, account_number = _split_schwab_account_label(label)
+        accounts.append({
+            "account_label": label,
+            "account_name": account_name,
+            "account_number": account_number,
+            "positions": positions,
+            "summary": {
+                "holdings": len(positions),
+                "filtered": parsed["filtered"],
+                "options": parsed["options"],
+                "options_value": parsed["options_value"],
+                "cash": parsed["cash"],
+                "account_value": round(
+                    sum(p["current_value"] for p in positions) + parsed["cash"], 2
+                ),
+                "reported_total": parsed["reported_total"],
+            },
+        })
+
+    if not accounts:
+        raise ValueError(
+            "No account sections were found. Schwab's All-Accounts export opens each account "
+            "with its own label row (for example 'Roth_IRA ...995'). If this is a single-account "
+            "download, import it with 'Charles Schwab (Positions)'."
+        )
+
+    all_positions = [pos for account in accounts for pos in account["positions"]]
+    total_cash = sum(account["summary"]["cash"] for account in accounts)
+    if not all_positions and not total_cash:
+        raise ValueError("No holdings or cash rows were found in the Schwab All-Accounts file.")
+    if all_positions and all(pos["purchase_value"] == 0 for pos in all_positions):
+        raise ValueError(
+            "No cost basis data found - every position has a $0 cost. "
+            "This usually means a Transactions file was selected with the "
+            "All Accounts Positions format."
+        )
+
+    return {
+        "accounts": accounts,
+        "summary": {
+            "accounts": len(accounts),
+            "holdings": len(all_positions),
+            "filtered": sum(a["summary"]["filtered"] for a in accounts),
+            "options": sum(a["summary"]["options"] for a in accounts),
+            "options_value": round(sum(a["summary"]["options_value"] for a in accounts), 2),
+            "cash": round(sum(a["summary"]["cash"] for a in accounts), 2),
+            "account_value": round(sum(a["summary"]["account_value"] for a in accounts), 2),
+        },
+        "as_of": _schwab_all_accounts_as_of(rows),
+        "format_type": "positions_multi",
+        "source_format": "schwab_all_accounts",
     }
 
 
@@ -2458,6 +2681,7 @@ PARSERS = {
     "snowball_holdings": parse_snowball_holdings_csv,
     "snowball_categories": parse_snowball_categories_csv,
     "schwab": parse_schwab_csv,
+    "schwab_all_accounts": parse_schwab_all_accounts_csv,
     "schwab_transactions": parse_schwab_transactions_csv,
     "etrade": parse_etrade_csv,
     "etrade_transactions": parse_etrade_transactions_xlsx,
@@ -2476,6 +2700,7 @@ PARSER_LABELS = {
     "snowball_holdings": "Snowball Holdings (Migration)",
     "snowball_categories": "Snowball Categories",
     "schwab": "Charles Schwab (Positions)",
+    "schwab_all_accounts": "Charles Schwab (All Accounts Positions)",
     "schwab_transactions": "Charles Schwab (Transactions)",
     "etrade": "E*Trade (Positions)",
     "etrade_transactions": "E*Trade (Transactions)",
