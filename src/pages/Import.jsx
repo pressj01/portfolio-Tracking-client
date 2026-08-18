@@ -734,6 +734,43 @@ export default function Import() {
               ? 'Import Generic Transactions'
               : 'Import Brokerage Positions, Transactions, and Snowball Data'}
           </h2>
+          {txnFormat !== 'generic_transactions' && (
+            <details
+              className="alert alert-info"
+              style={{ marginBottom: '1rem' }}
+            >
+              <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--accent-bright)' }}>
+                How to import brokerage files <span style={{ fontWeight: 400 }}>(positions first, transactions second)</span>
+              </summary>
+              <div style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
+                <ol style={{ paddingLeft: '1.5rem', margin: 0, lineHeight: 1.65 }}>
+                  <li>
+                    <strong>Import a complete, current Positions export first.</strong> Choose your broker&apos;s
+                    <em> Positions</em> format each time you want to update the account. A positions file is a snapshot
+                    of what you own today, so it updates shares, cost basis, and current values.
+                  </li>
+                  <li>
+                    <strong>Use a Transactions export only for account history.</strong> Transaction files record
+                    individual buys, sells, dividends, and DRIP activity for dividend tracking and realized gains.
+                    A DRIP row is recorded as a reinvested buy. After a Positions import, the positions snapshot
+                    remains authoritative, so transaction imports keep the DRIP history without changing the current
+                    share count.
+                  </li>
+                  <li>
+                    <strong>Then import new or overlapping transaction history if you need it.</strong> Start after
+                    your last import when possible; overlapping transactions are checked for duplicates. A transaction
+                    file can calculate positions only when there is no positions snapshot, and then it needs the
+                    account&apos;s complete history. Preview both files before importing, and use one brokerage account per file.
+                  </li>
+                </ol>
+                <p style={{ margin: '0.75rem 0 0' }}>
+                  <strong>Quick rule:</strong> Positions files tell the app <em>what you own now</em>; transaction files
+                  tell it <em>how the activity happened</em>. If you only want to add or update positions, use a complete
+                  Positions export—not a partial transaction file.
+                </p>
+              </div>
+            </details>
+          )}
           {txnFormat === 'generic_transactions' && (
             <GenericImportTypeSwitch
               activeType="transactions"
