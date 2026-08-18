@@ -2654,9 +2654,30 @@ th.col-drag-target {
 .holdings-table tfoot td.frozen-col {
   z-index: 3;
 }
-/* Single divider at the freeze boundary (only the last frozen column). */
+/* Single divider at the freeze boundary (only the last frozen column). The
+   shadow reaches ~4px past the divider, which stays inside the next column's
+   0.35rem padding so it shades the gutter and never the first character. */
 .holdings-table .frozen-col.frozen-col-edge {
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.28);
+}
+/* Scrolling columns pass *under* the pinned block, so without snapping a small
+   horizontal nudge parks a column half-hidden behind it and its first digits
+   read as truncated (the Ex-Div date, first past the freeze edge, lost its
+   leading "0"). Snap the scroll to column boundaries offset by the pinned
+   width: a column is then either fully visible or fully scrolled under, never
+   sliced. `proximity` (not `mandatory`) leaves long drags free. Only tables
+   that actually have a freeze pane opt in. */
+.holdings-table-wrap.frozen-pane {
+  scroll-snap-type: x proximity;
+  scroll-padding-left: var(--frozen-pane-width, 0px);
+}
+/* Snap positions come from the body cells, not the header. A snap area only
+   counts while it is visible in the scrollport, and the header is `position:
+   sticky` — once it sticks, its snap areas stop matching the columns and
+   horizontal snapping quietly dies exactly when the table is scrolled down.
+   Body cells always leave some visible row to carry the column positions. */
+.holdings-table-wrap.frozen-pane .holdings-table tbody td:not(.frozen-col) {
+  scroll-snap-align: start;
 }
 /* Keep pinned cells opaque under the row hover / NAV-erosion tints by
    compositing the same overlay used on the rest of the row over the base. */

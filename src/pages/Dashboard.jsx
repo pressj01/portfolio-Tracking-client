@@ -1104,6 +1104,9 @@ export default function Dashboard() {
   // Left offsets (px) for each frozen holdings column, measured from the
   // rendered header widths so freezing works with the auto-sized table.
   const [frozenColLefts, setFrozenColLefts] = useState([])
+  // Total width of the pinned block, used as the horizontal scroll padding so
+  // columns settle flush against the freeze edge instead of half-hidden under it.
+  const [frozenPaneWidth, setFrozenPaneWidth] = useState(0)
   const holdingsTableRef = useRef(null)
   const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
@@ -2092,7 +2095,7 @@ export default function Dashboard() {
         </a>
       </td>
     ) },
-    { id: 'description', label: 'Desc', name: 'Description', sortKey: 'description', group: 'Current', defaultVisible: true, tip: 'Security description / name', render: h => <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{textOrDash(h.description)}</td> },
+    { id: 'description', label: 'Desc', name: 'Description', sortKey: 'description', group: 'Current', defaultVisible: true, tip: 'Security description / name', render: h => <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.description || undefined}>{textOrDash(h.description)}</td> },
     { id: 'category', label: 'Cat', name: 'Category', sortKey: 'category', group: 'Current', defaultVisible: true, tip: 'Investment category', render: h => <td>{textOrDash(h.category)}</td> },
     { id: 'div_frequency', label: 'Freq', name: 'Dividend Frequency', sortKey: 'div_frequency', group: 'Current', defaultVisible: true, align: 'center', tip: 'Dividend payment frequency (M=Monthly, Q=Quarterly, W=Weekly)', render: h => <td style={{ textAlign: 'center' }}>{textOrDash(h.div_frequency)}</td> },
     { id: 'purchase_date', label: 'Purchased', name: 'Date Purchased', sortKey: 'purchase_date', group: 'Current', defaultVisible: true, render: h => <td>{dateOrDash(h.purchase_date)}</td> },
@@ -2215,6 +2218,7 @@ export default function Dashboard() {
       setFrozenColLefts(prev => (
         prev.length === lefts.length && prev.every((v, i) => Math.abs(v - lefts[i]) < 0.5)
       ) ? prev : lefts)
+      setFrozenPaneWidth(prev => Math.abs(prev - acc) < 0.5 ? prev : acc)
     }
     measure()
     const table = holdingsTableRef.current
@@ -3098,7 +3102,10 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="holdings-table-wrap">
+      <div
+        className="holdings-table-wrap frozen-pane"
+        style={{ '--frozen-pane-width': `${frozenPaneWidth}px` }}
+      >
         <table className="holdings-table" ref={holdingsTableRef}>
           <thead>
             <tr ref={holdingsHeadRowRef}>
