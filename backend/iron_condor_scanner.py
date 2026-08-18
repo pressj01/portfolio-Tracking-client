@@ -2799,7 +2799,7 @@ def run_iron_condor_scan(payload: dict) -> dict:
         if condor:
             management = recommend_management(condor, rating, tech)
             div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
-            probability_schedule = profit_probability_schedule(
+            probability_schedule, profit_capture = profit_probability_schedule(
                 spot=tech.get("price"),
                 dte=condor.get("dte"),
                 expiration=condor.get("expiration"),
@@ -2840,11 +2840,13 @@ def run_iron_condor_scan(payload: dict) -> dict:
                 ],
                 risk_free_rate=RISK_FREE,
                 dividend_yield=div_yield,
+                return_capture=True,
             )
             condor = {
                 **condor,
                 "management": management,
                 "probability_schedule": probability_schedule,
+                "profit_capture": profit_capture,
             }
 
         if condor and not condor.get("constraints_relaxed"):

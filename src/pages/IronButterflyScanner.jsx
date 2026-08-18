@@ -106,6 +106,7 @@ function Detail({ row, colSpan }) {
         <div style={{ padding: '0.85rem 1rem' }}>
           <OptionProbabilityCards
             schedule={row.probability_schedule}
+            capture={row.profit_capture}
             successHeadline="The complete iron butterfly has positive modeled P/L"
             failureHeadline="The complete iron butterfly has negative modeled P/L"
             methodNote={<>The four original contracts are repriced with current implied volatilities held constant. These are risk-neutral estimates before commissions and slippage, not forecasts.</>}

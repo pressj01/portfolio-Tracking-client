@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { DefinitionList, HelpSection, helpImage } from '../components/GosHelpKit'
 
-const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['strategies', 'Every strategy'], ['example', 'Example']]
+const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['probabilities', 'Probabilities'], ['strategies', 'Every strategy'], ['example', 'Example']]
 
 const universeRows = [
   ['Core index ETFs', 'SPY, QQQ, and IWM only. Choose this when those are the underlyings you expect.'],
@@ -112,12 +112,45 @@ export default function GeneralOptionScannerHelp() {
       <p className="gos-help-note">Probability of success/failure, expected value, maximum profit/loss, and the P/L graph are modeled estimates based on current chain data, pricing assumptions, implied volatility, and expiration payoff. They are not guarantees.</p>
     </HelpSection>
 
-    <HelpSection id="strategies" eyebrow="7 · EVERY STRATEGY" title="What the Strategy specific inputs do, trade by trade">
+
+    <HelpSection id="probabilities" eyebrow="7 · PROBABILITIES" title="Reading the success cards and the profit-capture table">
+      <p className="gos-help-lead">A selected trade carries two probability blocks, and they answer different questions. Mixing them up is the most common way to misread the analysis, so it is worth being precise about what each one measures.</p>
+
+      <div className="gos-help-two-column">
+        <article>
+          <h3>Probability of success</h3>
+          <p>The chance the complete position can be closed for more than $0 at <strong>one specific moment</strong>. The headline is expiration; each management checkpoint below it is the same calculation run at that earlier date.</p>
+        </article>
+        <article>
+          <h3>Taking profit early</h3>
+          <p>The chance a partial-profit target — half or two-thirds of the trade&rsquo;s maximum profit — is worth acting on. Most short-premium plans close there rather than holding to expiration, so these are the odds those plans actually run on.</p>
+        </article>
+      </div>
+
+      <aside className="gos-help-callout">
+        <b>Why the early checkpoints read lower, not higher</b>
+        <span>Exiting early feels safer, so the checkpoint figures look wrong at first glance. They are not. Closing early means buying back time value you have not yet earned, so the price you need is closer to today&rsquo;s than the expiration breakeven is. On a credit spread sold $10 out of the money for $0.45, the expiration breakeven sits near the short strike, but halfway through the trade the spread still has to be bought back for less than the credit — which needs the underlying several dollars nearer. The tighter price distribution over a shorter horizon helps, but the shrinking target hurts more. Early exit lowers your <em>risk</em>; it does not raise your odds of being green at that moment.</span>
+      </aside>
+
+      <aside className="gos-help-callout">
+        <b>The two numbers in each profit-capture cell</b>
+        <span><strong>Reached by then</strong> is a path measure: the chance the target is available at least once on or before that date, which is what a resting good-till-cancelled closing order needs in order to fill. <strong>Still there on the day</strong> is a single-moment measure: the chance the position is at or past the target on that date itself. The second is always lower, because a target reached early can be handed back.</span>
+      </aside>
+
+      <aside className="gos-help-warning">
+        <b>Why &ldquo;by expiration&rdquo; can exceed the probability of success</b>
+        <span>A trade can show 88.3% probability of success at expiration while the 50%-of-max-profit target shows 93.9% by expiration. That is not a contradiction. Success is measured only at expiration, so a path that reached the target in week two and then reversed into a loss counts against success but still counts as reached. To compare like with like, use <strong>still there on the day</strong> at expiration — in that example 87.7%, which sits just below 88.3%, as it must: finishing at the target is a subset of finishing profitable at all. On a credit spread those two sit close together because the payoff is nearly a step, and the band between breakeven and half the maximum profit is narrow.</span>
+      </aside>
+
+      <p className="gos-help-note">All of these are option-implied, risk-neutral estimates that hold each leg&rsquo;s implied volatility constant and exclude commissions and slippage. They are risk gauges, not forecasts.</p>
+    </HelpSection>
+
+    <HelpSection id="strategies" eyebrow="8 · EVERY STRATEGY" title="What the Strategy specific inputs do, trade by trade">
       <p className="gos-help-lead">This guide covers the six filter groups that work the same way for every trade. The <strong>Strategy specific</strong> group is the one that changes — it holds that trade's own construction, payoff, and risk rules. The full field-by-field reference for all 30 supported strategies lives on its own page.</p>
       <div className="gos-help-footer-actions"><Link className="btn btn-primary" to="/general-option-scanner/strategies">Open the strategy field reference</Link></div>
     </HelpSection>
 
-    <HelpSection id="example" eyebrow="8 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
+    <HelpSection id="example" eyebrow="9 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
       <ol className="gos-help-example">
         <li>Select <strong>Iron Condor</strong>.</li>
         <li>Open <strong>Include symbols</strong>.</li>

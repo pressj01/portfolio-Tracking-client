@@ -218,6 +218,7 @@ function DetailRow({ row, colSpan }) {
         {spread && (
           <OptionProbabilityCards
             schedule={spread.probability_schedule}
+            capture={spread.profit_capture}
             successHeadline="The complete put spread has positive modeled P/L"
             failureHeadline="The complete put spread has negative modeled P/L"
           />

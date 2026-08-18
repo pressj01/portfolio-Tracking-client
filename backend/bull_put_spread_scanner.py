@@ -959,7 +959,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
         if spread:
             management = recommend_management(spread, rating)
             div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
-            probability_schedule = profit_probability_schedule(
+            probability_schedule, profit_capture = profit_probability_schedule(
                 spot=tech.get("price"),
                 dte=spread.get("dte"),
                 expiration=spread.get("expiration"),
@@ -995,11 +995,13 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 ],
                 risk_free_rate=RISK_FREE,
                 dividend_yield=div_yield,
+                return_capture=True,
             )
             spread = {
                 **spread,
                 "management": management,
                 "probability_schedule": probability_schedule,
+                "profit_capture": profit_capture,
             }
 
         if lower_confidence:

@@ -122,8 +122,154 @@ function ProbabilityCard({
   )
 }
 
+function ProfitCaptureTable({ capture, expirationSuccessPct }) {
+  const targets = Array.isArray(capture?.targets) ? capture.targets : []
+  if (!targets.length) return null
+  const horizons = targets[0].horizons || []
+  if (!horizons.length) return null
+  const headline = targets[0].horizons[targets[0].horizons.length - 1]
+  return (
+    <div style={{
+      marginTop: '0.75rem',
+      background: 'var(--surface-inset)',
+      border: '1px solid var(--border)',
+      borderRadius: 7,
+      padding: '0.85rem 1rem',
+    }}>
+      <div style={{
+        color: 'var(--text-dim)',
+        fontSize: '0.66rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+      }}>
+        Taking profit early
+      </div>
+      <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.2rem' }}>
+        Odds a partial-profit target fills before expiration
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', marginTop: '0.25rem' }}>
+        Holding to expiration is worth {capture.max_profit_dollars != null
+          ? `$${Number(capture.max_profit_dollars).toFixed(0)} per contract`
+          : 'the maximum profit'} and nothing more. These are the odds of buying the
+        position back early for part of that instead &mdash; the plan most short-premium
+        trades are actually managed on.
+      </div>
+      <div style={{ overflowX: 'auto', marginTop: '0.6rem' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 460 }}>
+          <thead>
+            <tr>
+              <th style={{
+                textAlign: 'left',
+                padding: '0.3rem 0.6rem 0.35rem 0',
+                color: 'var(--text-dim)',
+                fontSize: '0.66rem',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+                whiteSpace: 'nowrap',
+              }}>
+                Buy it back for
+              </th>
+              {horizons.map(point => (
+                <th
+                  key={point.remaining_dte}
+                  style={{
+                    textAlign: 'right',
+                    padding: '0.3rem 0 0.35rem 0.6rem',
+                    color: 'var(--text-dim)',
+                    fontSize: '0.66rem',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <div style={{ color: 'var(--text-strong)', fontSize: '0.72rem' }}>
+                    {formatDate(point.exit_date)}
+                  </div>
+                  <div style={{ fontWeight: 400 }}>
+                    {point.kind === 'expiration'
+                      ? 'expiration'
+                      : `${point.remaining_dte} DTE left · ${point.label.replace(' through the trade', '')} through`}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {targets.map(target => (
+              <tr key={target.fraction} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{
+                  padding: '0.45rem 0.6rem 0.45rem 0',
+                  color: 'var(--text-strong)',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}>
+                  {target.label}
+                  <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontWeight: 400 }}>
+                    banking ${Number(target.target_profit_dollars).toFixed(0)} per contract
+                  </div>
+                </td>
+                {target.horizons.map(point => (
+                  <td
+                    key={point.remaining_dte}
+                    style={{ padding: '0.45rem 0 0.45rem 0.6rem', textAlign: 'right', whiteSpace: 'nowrap' }}
+                  >
+                    <strong style={{ fontSize: '1.1rem', color: 'var(--pos-strong)' }}>
+                      {pct(point.probability_by_pct)}
+                    </strong>
+                    <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+                      reached by then
+                    </div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                      {pct(point.probability_at_pct)} still there on the day
+                    </div>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{
+        borderTop: '1px solid var(--border)',
+        marginTop: '0.5rem',
+        paddingTop: '0.5rem',
+        color: 'var(--text-muted)',
+        fontSize: '0.72rem',
+        display: 'grid',
+        gap: '0.35rem',
+      }}>
+        <div>
+          <strong style={{ color: 'var(--text-strong)' }}>Reached by then</strong> is the chance
+          the target is available at least once on or before that date &mdash; what a resting
+          good-till-cancelled closing order needs in order to fill. It is the number to plan
+          around if you intend to take profit early.
+        </div>
+        <div>
+          <strong style={{ color: 'var(--text-strong)' }}>Still there on the day</strong> is the
+          chance the position is at or past the target on that date itself. It is lower because a
+          target reached early can be handed back.
+        </div>
+        {expirationSuccessPct != null && headline?.probability_by_pct != null && (
+          <div>
+            These two answer different questions from the {pct(expirationSuccessPct)} success
+            figure above, so they will not tie out to it directly. Success is measured only at
+            expiration; {pct(headline.probability_by_pct)} counts every path that reached the
+            target at any point, including paths that later gave it back, which is why it can be
+            the larger number. Compare like with like using
+            &ldquo;still there on the day&rdquo; at expiration
+            ({pct(headline.probability_at_pct)}): it always sits at or below
+            {' '}{pct(expirationSuccessPct)}, because finishing at the target is a subset of
+            finishing profitable at all.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function OptionProbabilityCards({
   schedule,
+  capture,
   successHeadline = 'The complete position has positive modeled P/L',
   failureHeadline = 'The complete position has negative modeled P/L',
   successFooter = 'Success means the complete position can be closed for more than $0 modeled P/L.',
@@ -180,6 +326,10 @@ export default function OptionProbabilityCards({
           scheduleTitle={scheduleTitle}
         />
       </div>
+      <ProfitCaptureTable
+        capture={capture}
+        expirationSuccessPct={expiration.probability_success_pct}
+      />
       <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.5rem' }}>
         {methodNote || (
           <>

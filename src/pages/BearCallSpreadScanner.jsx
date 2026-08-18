@@ -744,6 +744,7 @@ function DetailRow({ row, colSpan, onShowChart }) {
             {s && (
               <OptionProbabilityCards
                 schedule={s.probability_schedule}
+                capture={s.profit_capture}
                 successHeadline="The complete bear call spread has positive modeled P/L"
                 failureHeadline="The complete bear call spread has negative modeled P/L"
               />

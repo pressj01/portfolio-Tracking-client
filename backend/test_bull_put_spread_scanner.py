@@ -349,7 +349,7 @@ class SelectedFundFallbackTests(unittest.TestCase):
             patch.object(bps, "_compute_technicals", return_value=weak_tech),
             patch.object(bps, "_fetch_fundamentals_bulk", return_value={"GLD": commodity_fund}),
             patch.object(bps, "_suggest_bull_put_spread", return_value=quoted_spread),
-            patch.object(bps, "profit_probability_schedule", return_value=[]),
+            patch.object(bps, "profit_probability_schedule", return_value=([], None)),
         ):
             result = bps.run_bull_put_spread_scan({
                 "include_stocks": False,

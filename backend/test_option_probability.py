@@ -6,11 +6,13 @@ import math
 import os
 import sys
 import unittest
+from random import Random
 from statistics import NormalDist
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from option_probability import profit_probability_schedule
+from option_probability import profit_capture_schedule, profit_probability_schedule
+from options_pricing import black_scholes
 
 
 class ProfitProbabilityScheduleTests(unittest.TestCase):
@@ -175,3 +177,133 @@ class ProfitProbabilityScheduleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProfitCaptureScheduleTests(unittest.TestCase):
+    """The capture panel: odds of banking part of the maximum profit early."""
+
+    CREDIT_SPREAD = dict(
+        spot=100,
+        dte=31,
+        expiration="2026-09-18",
+        distribution_iv=0.30,
+        entry_cashflow=0.45,
+        legs=[
+            {"option_type": "call", "strike": 110, "iv": 0.30, "quantity": -1},
+            {"option_type": "call", "strike": 115, "iv": 0.30, "quantity": 1},
+        ],
+        risk_free_rate=0.04,
+    )
+
+    def test_credit_spread_max_profit_is_the_credit(self):
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        self.assertIsNotNone(capture)
+        self.assertAlmostEqual(capture["max_profit"], 0.45, places=2)
+        self.assertEqual(
+            [target["fraction"] for target in capture["targets"]],
+            [0.5, 0.6667],
+        )
+
+    def test_debit_spread_max_profit_is_width_less_debit(self):
+        capture = profit_capture_schedule(
+            spot=100,
+            dte=31,
+            expiration="2026-09-18",
+            distribution_iv=0.30,
+            entry_cashflow=-1.94,
+            legs=[
+                {"option_type": "put", "strike": 100, "iv": 0.30, "quantity": 1},
+                {"option_type": "put", "strike": 95, "iv": 0.30, "quantity": -1},
+            ],
+        )
+        self.assertIsNotNone(capture)
+        self.assertAlmostEqual(capture["max_profit"], 5 - 1.94, places=2)
+
+    def test_unbounded_payoff_gets_no_capture_targets(self):
+        # A long call has no maximum profit, so there is no fraction of it to
+        # target and the panel must stay off rather than invent a ceiling.
+        self.assertIsNone(profit_capture_schedule(
+            spot=100,
+            dte=31,
+            expiration="2026-09-18",
+            distribution_iv=0.30,
+            entry_cashflow=-2.5,
+            legs=[
+                {"option_type": "call", "strike": 105, "iv": 0.30, "quantity": 1},
+            ],
+        ))
+
+    def test_reaching_a_target_is_likelier_than_still_holding_it(self):
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        for target in capture["targets"]:
+            for point in target["horizons"]:
+                self.assertGreaterEqual(
+                    point["probability_by_pct"],
+                    point["probability_at_pct"] - 1e-9,
+                    f'{target["label"]} at {point["remaining_dte"]} DTE',
+                )
+
+    def test_odds_improve_with_time_and_worsen_with_a_greedier_target(self):
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        half, two_thirds = capture["targets"]
+        for target in capture["targets"]:
+            by_horizon = [point["probability_by_pct"] for point in target["horizons"]]
+            self.assertEqual(by_horizon, sorted(by_horizon))
+        for cheap, greedy in zip(half["horizons"], two_thirds["horizons"]):
+            self.assertGreater(cheap["probability_by_pct"], greedy["probability_by_pct"])
+
+    def test_horizons_land_on_the_requested_fractions_of_the_trade(self):
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        points = capture["targets"][0]["horizons"]
+        self.assertEqual([point["remaining_dte"] for point in points], [16, 10, 0])
+        self.assertEqual([point["exit_date"] for point in points], [
+            "2026-09-02", "2026-09-08", "2026-09-18",
+        ])
+        self.assertEqual(points[-1]["kind"], "expiration")
+
+    def test_first_passage_odds_match_a_monte_carlo_of_the_same_barrier(self):
+        # The panel's headline number is a first-passage probability computed on
+        # a grid. Simulating the same moving barrier independently confirms the
+        # grid is not merely self-consistent.
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        target = capture["targets"][0]
+        threshold = target["target_profit"]
+        credit, years = 0.45, 31 / 365.0
+        steps, paths = 248, 60_000
+
+        def spread_value(spot, remaining_years):
+            return (
+                black_scholes(spot, 110, remaining_years, 0.04, 0.0, 0.30, "call")["price"]
+                - black_scholes(spot, 115, remaining_years, 0.04, 0.0, 0.30, "call")["price"]
+            )
+
+        step_years = years / steps
+        random = Random(11)
+        drift = (0.04 - 0.5 * 0.30 * 0.30) * step_years
+        diffusion = 0.30 * math.sqrt(step_years)
+        barriers = []
+        for index in range(steps):
+            remaining = years - (index + 1) * step_years
+            low, high = 1.0, 400.0
+            for _ in range(60):
+                mid = 0.5 * (low + high)
+                if credit - spread_value(mid, remaining) >= threshold:
+                    low = mid
+                else:
+                    high = mid
+            barriers.append(low)
+
+        hits = 0
+        for _ in range(paths):
+            log_spot = math.log(100.0)
+            for index in range(steps):
+                log_spot += drift + diffusion * random.gauss(0.0, 1.0)
+                if math.exp(log_spot) <= barriers[index]:
+                    hits += 1
+                    break
+        simulated = hits / paths * 100.0
+        self.assertAlmostEqual(
+            target["horizons"][-1]["probability_by_pct"],
+            simulated,
+            delta=1.0,
+        )

@@ -925,6 +925,7 @@ function ScannerProbabilityPanel({ probabilities, risk }) {
     </div>}
     <OptionProbabilityCards
       schedule={schedule}
+      capture={probabilities?.profit_capture}
       successHeadline="The complete scanner trade has positive modeled P/L"
       failureHeadline="The complete scanner trade has negative modeled P/L"
       scheduleTitle="At every modeled management checkpoint"

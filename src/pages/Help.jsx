@@ -6643,6 +6643,39 @@ function OptionsHelp() {
         <img src="./help-screenshots/options/options-backtest.png" alt="Options Backtest results comparing an SPY iron condor with buy and hold, including metrics, equity curve, sensitivity tabs, and cycle audit trail" style={imageStyle} />
       </div>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reading the probability blocks</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A trade opened from a scanner carries two probability blocks. They answer different questions, and reading one
+        as though it were the other is the most common way to misjudge the analysis.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Probability of success</strong> is the chance the complete position can be closed for more than $0 at one
+        specific moment. The headline figure is expiration; each management checkpoint beneath it is the same calculation
+        run at that earlier date.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Those checkpoints read lower than the expiration figure, and that is correct.</strong> Exiting early feels
+        safer, so the numbers look backwards at first. Closing early means buying back time value you have not yet earned,
+        so the price you need is closer to today's than the expiration breakeven is. A shorter horizon narrows the price
+        distribution in your favour, but the target shrinks faster than the distribution tightens. Early exit lowers your
+        risk; it does not raise your odds of being green at that moment.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Taking profit early</strong> prices the plan most short-premium trades are actually managed on: buying the
+        position back for half or two-thirds of its maximum profit instead of holding to expiration. Each cell carries two
+        readings. <em>Reached by then</em> is a path measure — the chance the target is available at least once on or before
+        that date, which is what a resting good-till-cancelled closing order needs in order to fill. <em>Still there on the
+        day</em> is a single-moment measure, and is always lower, because a target reached early can be handed back.
+      </p>
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>Why &ldquo;by expiration&rdquo; can exceed the probability of success:</strong> a trade can show 88.3%
+        probability of success at expiration while its 50%-of-maximum-profit target shows 93.9% by expiration. Success is
+        measured only at expiration, so a path that reached the target in week two and then reversed into a loss counts
+        against success yet still counts as reached. Compare like with like using <em>still there on the day</em> at
+        expiration &mdash; 87.7% in that example, just below 88.3%, as it must be: finishing at the target is a subset of
+        finishing profitable at all.
+      </div>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Suggested Workflow</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li>Load the underlying and build a simulated position from the chain, broker text, or a template.</li>

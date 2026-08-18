@@ -537,6 +537,7 @@ function DetailRow({ row, colSpan }) {
         {condor && (
           <OptionProbabilityCards
             schedule={condor.probability_schedule}
+            capture={condor.profit_capture}
             successHeadline={`The complete ${condor.variant_label || 'iron condor'} has positive modeled P/L`}
             failureHeadline={`The complete ${condor.variant_label || 'iron condor'} has negative modeled P/L`}
           />

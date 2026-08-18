@@ -178,6 +178,7 @@ function Detail({ row, colSpan }) {
         }}>
           <OptionProbabilityCards
             schedule={row.probability_schedule}
+            capture={row.profit_capture}
             successHeadline="Price is above the upper long, inside the modeled tent, or in the recovered crash tail"
             failureHeadline="Price is in the complementary modeled loss region"
             successFooter="The doubled lower hedge adds a second success region below the downside breakeven when the crash tail recovers above $0."

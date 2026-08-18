@@ -1381,7 +1381,7 @@ def run_call_scan(payload: dict) -> dict:
                 ex_dividend_exit = (
                     ex_dividend_date - timedelta(days=1)
                 ).isoformat()
-            probability_schedule = profit_probability_schedule(
+            probability_schedule, profit_capture = profit_probability_schedule(
                 spot=tech.get("price"),
                 dte=call.get("dte"),
                 expiration=call.get("expiration"),
@@ -1408,11 +1408,13 @@ def run_call_scan(payload: dict) -> dict:
                 risk_free_rate=RISK_FREE,
                 dividend_yield=div_yield,
                 underlying_quantity=1,
+                return_capture=True,
             )
             call = {
                 **call,
                 "management": management,
                 "probability_schedule": probability_schedule,
+                "profit_capture": profit_capture,
             }
 
         pos = positions.get(ticker) or {}

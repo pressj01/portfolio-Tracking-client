@@ -402,9 +402,9 @@ def _build_iron_butterfly(
         if put_wing_delta is not None and call_wing_delta is not None
         else None
     )
-    probability_schedule = []
+    probability_schedule, profit_capture = [], None
     if include_analysis and distribution_iv:
-        probability_schedule = profit_probability_schedule(
+        probability_schedule, profit_capture = profit_probability_schedule(
             spot=spot,
             dte=dte,
             expiration=expiration,
@@ -423,6 +423,7 @@ def _build_iron_butterfly(
             risk_free_rate=RISK_FREE,
             dividend_yield=dividend_yield,
             include_breakeven=True,
+            return_capture=True,
         )
 
     expiration_point = next(
@@ -499,6 +500,7 @@ def _build_iron_butterfly(
         "volume_min": min_volume,
         "distribution_iv": distribution_iv,
         "probability_schedule": probability_schedule,
+        "profit_capture": profit_capture,
         "prob_profit": (
             expiration_point.get("probability_success_pct")
             if expiration_point else None
@@ -879,7 +881,7 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
             for key in (
                 "theta_dollars_per_day", "delta_theta_ratio_pct",
                 "distribution_iv", "probability_schedule", "prob_profit",
-                "management",
+                "profit_capture", "management",
             ):
                 best[key] = analyzed[key]
         return {

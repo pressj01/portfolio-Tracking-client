@@ -591,7 +591,7 @@ def _build_butterfly(
             "quantity": lower_quantity,
         },
     ]
-    probability_schedule = profit_probability_schedule(
+    probability_schedule, profit_capture = profit_probability_schedule(
         spot=spot,
         dte=dte,
         expiration=expiration,
@@ -609,6 +609,7 @@ def _build_butterfly(
         # this region when their trading plan explicitly repairs the upper line.
         always_success_above=upper_strike if always_success_above_upper else None,
         include_breakeven=True,
+        return_capture=True,
     )
     # Show how the tent develops instead of reducing the trade to one terminal
     # payoff. The body strike is the tent peak at expiration; unchanged spot
@@ -816,6 +817,7 @@ def _build_butterfly(
             ) else None
         ),
         "probability_schedule": probability_schedule,
+        "profit_capture": profit_capture,
         "early_close_estimates": early_close_estimates,
         "course_expected_hold_days": COURSE_EXPECTED_HOLD_DAYS,
         "course_quantity_scale": course_quantity_scale,

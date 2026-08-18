@@ -814,6 +814,9 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
     )
     if not isinstance(probability_schedule, list):
         probability_schedule = []
+    profit_capture = _nested(row, "spread.profit_capture", "profit_capture")
+    if not isinstance(profit_capture, dict):
+        profit_capture = None
     expiration_probability = next((
         point for point in probability_schedule
         if isinstance(point, dict)
@@ -993,6 +996,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "prob_touch_put": _num(_nested(row, "spread.prob_touch_put", "prob_touch_put")),
         "prob_touch_call": _num(_nested(row, "spread.prob_touch_call", "prob_touch_call")),
         "probability_schedule": probability_schedule,
+        "profit_capture": profit_capture,
         "expected_value": expected_value,
         "entry_credit": entry_credit,
         "entry_credit_dollars": entry_credit_dollars,

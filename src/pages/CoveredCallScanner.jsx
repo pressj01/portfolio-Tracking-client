@@ -568,6 +568,7 @@ function DetailRow({ row, colSpan, onShowChart }) {
             {c && (
               <OptionProbabilityCards
                 schedule={c.probability_schedule}
+                capture={c.profit_capture}
                 successHeadline="The covered-call package has positive modeled P/L"
                 failureHeadline="The covered-call package has negative modeled P/L"
                 successFooter="Success includes the shares’ move from today’s scan price plus the short call’s P/L; it is not measured from your historical cost basis."

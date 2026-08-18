@@ -490,6 +490,7 @@ function DetailRow({ row, colSpan, onShowChart }) {
             {p && (
               <OptionProbabilityCards
                 schedule={p.probability_schedule}
+                capture={p.profit_capture}
                 successHeadline="The short put has positive modeled P/L when closed"
                 failureHeadline="The short put has negative modeled P/L when closed"
                 successFooter="Success means the put can be bought back for less than the entry credit, or expires with a payoff smaller than that credit."

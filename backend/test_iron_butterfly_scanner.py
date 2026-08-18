@@ -125,7 +125,11 @@ class IronButterflyRules(unittest.TestCase):
         puts = [leg(strike, max(0.5, (strike - 40) * 0.12), -0.25) for strike in strikes]
         calls = [leg(strike, max(0.5, (160 - strike) * 0.12), 0.25) for strike in strikes]
 
-        with patch.object(scanner, "profit_probability_schedule") as probabilities:
+        with patch.object(
+            scanner,
+            "profit_probability_schedule",
+            return_value=([], None),
+        ) as probabilities:
             candidates = scanner._candidate_combinations(
                 puts,
                 calls,

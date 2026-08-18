@@ -1862,7 +1862,7 @@ def run_put_scan(payload: dict) -> dict:
                 )
             buyback = recommend_buyback(put, rating)
             div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
-            probability_schedule = profit_probability_schedule(
+            probability_schedule, profit_capture = profit_probability_schedule(
                 spot=tech.get("price"),
                 dte=put.get("dte"),
                 expiration=put.get("expiration"),
@@ -1881,11 +1881,13 @@ def run_put_scan(payload: dict) -> dict:
                 }],
                 risk_free_rate=RISK_FREE,
                 dividend_yield=div_yield,
+                return_capture=True,
             )
             put = {
                 **put,
                 "buyback": buyback,
                 "probability_schedule": probability_schedule,
+                "profit_capture": profit_capture,
             }
 
         row = {

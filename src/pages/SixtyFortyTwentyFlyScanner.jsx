@@ -162,6 +162,7 @@ function Detail({ row, colSpan }) {
         }}>
           <OptionProbabilityCards
             schedule={row.probability_schedule}
+            capture={row.profit_capture}
             primaryPointLabel={`${row.mandatory_exit_dte}-DTE exit`}
             primaryHorizonLabel={`at the mandatory ${row.mandatory_exit_dte}-DTE exit`}
             scheduleTitle="At the supplied review dates"

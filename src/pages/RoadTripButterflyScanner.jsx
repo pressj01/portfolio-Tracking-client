@@ -198,6 +198,7 @@ function Detail({ row, colSpan }) {
         }}>
           <OptionProbabilityCards
             schedule={row.probability_schedule}
+            capture={row.profit_capture}
             primaryPointLabel="Two-thirds close"
             primaryHorizonLabel="at two-thirds close"
             scheduleTitle="Across the preferred close window"

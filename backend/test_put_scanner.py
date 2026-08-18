@@ -758,7 +758,7 @@ class SelectedFundFallbackTests(unittest.TestCase):
             patch.object(ps, "_compute_technicals", return_value=weak_tech),
             patch.object(ps, "_fetch_fundamentals_bulk", return_value={"SPY": etf}),
             patch.object(ps, "_suggest_put", return_value=put),
-            patch.object(ps, "profit_probability_schedule", return_value=[]),
+            patch.object(ps, "profit_probability_schedule", return_value=([], None)),
         ):
             result = ps.run_put_scan({
                 "include_stocks": False,

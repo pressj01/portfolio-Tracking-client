@@ -592,6 +592,7 @@ function Detail({ row, colSpan }) {
         }}>
           <OptionProbabilityCards
             schedule={row.probability_schedule}
+            capture={row.profit_capture}
             successHeadline="Price is above the upper long or supported by the modeled profit tent"
             failureHeadline="Price is in the complementary downside loss region"
             successFooter="Success includes the untested region above the upper long and $0-or-better modeled P/L inside the structure."
