@@ -5595,7 +5595,7 @@ def _ensure_db():
 def list_profiles():
     conn = get_connection()
     rows = conn.execute("""
-        SELECT id, name, created_at, display_order, hidden_from_selector
+        SELECT id, name, created_at, display_order, hidden_from_selector, broker_source
         FROM profiles
         ORDER BY display_order, id
     """).fetchall()

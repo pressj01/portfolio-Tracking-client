@@ -170,7 +170,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions &amp; Transactions), E*TRADE (Positions &amp; Transactions), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions, All Accounts Positions, &amp; Transactions), E*TRADE (Positions &amp; Transactions), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
@@ -279,7 +279,9 @@ function ImportHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Schwab, go to <strong>Accounts &gt; Positions</strong>, switch the account selector to <strong>All Accounts</strong>, then export to CSV or Excel.</li>
         <li>Set the format selector to <strong>Charles Schwab (All Accounts Positions)</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this format automatically.</li>
-        <li>Preview splits the file into one block per Schwab account and matches each block to a portfolio by name or masked account number. Re-point any account, skip it, or create a new portfolio before importing.</li>
+        <li>The import lists every portfolio whose Broker Source is <strong>Charles Schwab</strong> (set on the Manage Portfolios page). Check the accounts you want this file to update. Unchecked portfolios are left alone. Use <strong>Select all</strong> or <strong>Select none</strong> to change the whole list at once.</li>
+        <li>Preview splits the file into one block per Schwab account and matches each selected portfolio by name or masked account number. You can re-point a selected portfolio to a different account in the file before importing.</li>
+        <li>Accounts in the file that are not mapped to a selected portfolio appear under <strong>Other accounts in this file</strong>. Skip them, point them at a portfolio, or create a new portfolio for them.</li>
         <li>Confirmed routing is remembered, so the next All-Accounts export maps itself. Option positions are shown for reconciliation but are not imported as holdings.</li>
         <li>This import can run from an aggregate view because the selected portfolio is not the import target.</li>
       </ul>

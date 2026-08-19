@@ -1,9 +1,19 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney as formatDisplayMoney } from '../utils/money'
+import {
+  applySchwabDestSelection,
+  assignFileAccountToProfile,
+  defaultSchwabDestSelection,
+  fileAccountForProfile,
+  isSchwabBrokerSource,
+  leftoverFileAccounts,
+  mergeSchwabDestSelection,
+  schwabImportDestinations,
+} from '../utils/schwabAllAccountsImport'
 
 const dateInputToday = () => {
   const d = new Date()
@@ -104,6 +114,173 @@ function FileUpload({ onFileSelect, accept, file }) {
   )
 }
 
+function SchwabDestinationPicker({
+  destinations,
+  destSelected,
+  onToggle,
+  onSelectAll,
+  onSelectNone,
+  accounts,
+  accountMap,
+  onAssignAccount,
+  previewed,
+}) {
+  const selectedCount = destinations.filter(profile => destSelected[String(profile.id)]).length
+
+  if (!destinations.length) {
+    return (
+      <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+        No portfolios are set up to receive a Charles Schwab import. Set Broker Source
+        to Charles Schwab on the Manage Portfolios page, or create a new portfolio
+        after previewing the file.
+      </div>
+    )
+  }
+
+  return (
+    <div className="form-group" style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '0.4rem' }}>
+        <label style={{ margin: 0 }}>Schwab accounts</label>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onSelectAll}
+          style={{ padding: '0.2rem 0.65rem', fontSize: '0.8rem' }}
+        >
+          Select all
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onSelectNone}
+          style={{ padding: '0.2rem 0.65rem', fontSize: '0.8rem' }}
+        >
+          Select none
+        </button>
+        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+          {selectedCount} selected
+        </span>
+      </div>
+      <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+        Choose which of your Schwab portfolios this file should update. Unchecked accounts are left alone.
+      </p>
+      <div style={{ border: '1px solid var(--p-333)', borderRadius: '6px', overflow: 'hidden' }}>
+        {destinations.map((profile, index) => {
+          const id = String(profile.id)
+          const checked = Boolean(destSelected[id])
+          const matched = fileAccountForProfile(accounts, accountMap, id)
+          const summary = matched?.summary || {}
+          return (
+            <div
+              key={id}
+              style={{
+                padding: '0.75rem 1rem',
+                borderBottom: index === destinations.length - 1 ? 'none' : '1px solid var(--p-333)',
+                opacity: checked ? 1 : 0.65,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', flex: '1 1 220px', minWidth: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => onToggle(id, e.target.checked)}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 600 }}>{profile.name}</span>
+                    {!isSchwabBrokerSource(profile.broker_source) && (
+                      <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}> (broker source not set)</span>
+                    )}
+                  </span>
+                </label>
+                {previewed && checked && (
+                  <div style={{ flex: '1 1 280px', display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                    <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>Import from</span>
+                    <select
+                      value={matched?.account_key || ''}
+                      onChange={(e) => onAssignAccount(e.target.value, id)}
+                      style={{ flex: 1, minWidth: '180px' }}
+                    >
+                      <option value="">No matching account in this file</option>
+                      {(accounts || []).map(account => (
+                        <option key={account.account_key} value={account.account_key}>
+                          {account.account_label}
+                          {account.summary
+                            ? ` · ${account.summary.holdings} holdings · ${formatMoney(account.summary.account_value)}`
+                            : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+              {previewed && checked && matched && (
+                <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginTop: '0.35rem', paddingLeft: '1.6rem' }}>
+                  {summary.holdings} holdings, {formatMoney(summary.account_value)}
+                  {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+                </div>
+              )}
+              {previewed && checked && !matched && (
+                <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.35rem', paddingLeft: '1.6rem' }}>
+                  Pick an account from the file, or uncheck to skip this portfolio.
+                </div>
+              )}
+              {matched?.match_reason === 'saved_mapping' && (
+                <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.25rem', paddingLeft: '1.6rem' }}>
+                  Matched from your last All-Accounts import.
+                </div>
+              )}
+              {summary.options > 0 && (
+                <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.25rem', paddingLeft: '1.6rem' }}>
+                  {summary.options} option position{summary.options === 1 ? '' : 's'} ({formatMoney(summary.options_value)})
+                  are skipped, so Schwab's account total of {formatMoney(summary.reported_total)} counts them and this does not.
+                </div>
+              )}
+              {previewed && checked && matched && (
+                <details style={{ marginTop: '0.5rem', paddingLeft: '1.6rem' }}>
+                  <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-bright)' }}>
+                    Show {summary.holdings} holdings
+                  </summary>
+                  <div style={{ maxHeight: '320px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px', marginTop: '0.5rem' }}>
+                    <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Ticker</th>
+                          <th>Description</th>
+                          <th style={{ textAlign: 'right' }}>Shares</th>
+                          <th style={{ textAlign: 'right' }}>Cost/Share</th>
+                          <th style={{ textAlign: 'right' }}>Price</th>
+                          <th style={{ textAlign: 'right' }}>Mkt Value</th>
+                          <th style={{ textAlign: 'right' }}>G/L</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(matched.positions || []).map((p, i) => (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600 }}>{p.ticker}</td>
+                            <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description}</td>
+                            <td style={{ textAlign: 'right' }}>{formatShares(p.quantity)}</td>
+                            <td style={{ textAlign: 'right' }}>{formatMoney(p.cost_per_share)}</td>
+                            <td style={{ textAlign: 'right' }}>{formatMoney(p.current_price, 4)}</td>
+                            <td style={{ textAlign: 'right' }}>{formatMoney(p.current_value)}</td>
+                            <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
+                              {formatMoney(p.gain_or_loss || 0)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
   return (
     <div
@@ -163,6 +340,8 @@ export default function Import() {
   const [txnNavOnly, setTxnNavOnly] = useState(false)
   // Account key -> portfolio id (or 'new' / 'skip') for multi-account files
   const [txnAccountMap, setTxnAccountMap] = useState({})
+  // Portfolio id -> whether this All-Accounts import should write to it
+  const [txnDestSelected, setTxnDestSelected] = useState({})
 
   // Backup / restore state
   const [backups, setBackups] = useState([])
@@ -239,10 +418,32 @@ export default function Import() {
   }, [pf, selection])
 
   const txnIsMultiAccount = txnPreview?.format_type === 'positions_multi'
+  const schwabDestinations = useMemo(
+    () => schwabImportDestinations(
+      txnIsMultiAccount ? (txnPreview.profile_choices || []) : profiles
+    ),
+    [txnIsMultiAccount, txnPreview, profiles],
+  )
   const txnMappedAccounts = txnIsMultiAccount
     ? (txnPreview.accounts || []).filter(a => (txnAccountMap[a.account_key] ?? '') !== 'skip'
         && (txnAccountMap[a.account_key] ?? '') !== '')
     : []
+  const txnLeftoverAccounts = txnIsMultiAccount
+    ? leftoverFileAccounts(txnPreview.accounts, txnAccountMap)
+    : []
+
+  useEffect(() => {
+    if (txnFormat !== 'schwab_all_accounts') {
+      setTxnDestSelected({})
+      return
+    }
+    const destinations = schwabImportDestinations(profiles)
+    setTxnDestSelected((prev) => (
+      Object.keys(prev).length
+        ? mergeSchwabDestSelection(prev, destinations)
+        : defaultSchwabDestSelection(destinations)
+    ))
+  }, [txnFormat, profiles])
 
   const txnHasRows = txnPreview
     ? (txnPreview.format_type === 'positions_multi'
@@ -277,6 +478,7 @@ export default function Import() {
     setTxnFormat('schwab_all_accounts')
     setTxnPreview(null)
     setTxnAccountMap({})
+    setTxnDestSelected({})
     setTxnFile(null)
     setResult(null)
     setError(null)
@@ -286,6 +488,48 @@ export default function Import() {
     if (file && /all[-_\s]?accounts/i.test(file.name)) {
       setTxnFormat('schwab_all_accounts')
     }
+  }
+
+  const handleToggleSchwabDest = (profileId, checked) => {
+    const nextSelected = { ...txnDestSelected, [String(profileId)]: checked }
+    setTxnDestSelected(nextSelected)
+    if (txnIsMultiAccount) {
+      setTxnAccountMap(applySchwabDestSelection(nextSelected, txnPreview.accounts, txnAccountMap))
+    }
+  }
+
+  const handleSelectAllSchwabDest = () => {
+    const nextSelected = Object.fromEntries(schwabDestinations.map(profile => [String(profile.id), true]))
+    setTxnDestSelected(nextSelected)
+    if (txnIsMultiAccount) {
+      setTxnAccountMap(applySchwabDestSelection(nextSelected, txnPreview.accounts, txnAccountMap))
+    }
+  }
+
+  const handleSelectNoneSchwabDest = () => {
+    const nextSelected = Object.fromEntries(schwabDestinations.map(profile => [String(profile.id), false]))
+    setTxnDestSelected(nextSelected)
+    if (txnIsMultiAccount) {
+      setTxnAccountMap(applySchwabDestSelection(nextSelected, txnPreview.accounts, txnAccountMap))
+    }
+  }
+
+  const handleAssignSchwabAccount = (accountKey, profileId) => {
+    setTxnDestSelected(prev => ({ ...prev, [String(profileId)]: true }))
+    setTxnAccountMap(prev => assignFileAccountToProfile(prev, accountKey, profileId))
+  }
+
+  const handleLeftoverAccountChange = (accountKey, value) => {
+    if (value === 'new') {
+      setTxnAccountMap(prev => ({ ...prev, [accountKey]: 'new' }))
+      return
+    }
+    if (!value) {
+      setTxnAccountMap(prev => ({ ...prev, [accountKey]: '' }))
+      return
+    }
+    setTxnDestSelected(prev => ({ ...prev, [String(value)]: true }))
+    setTxnAccountMap(prev => assignFileAccountToProfile(prev, accountKey, value))
   }
 
   const handleGenericTransactionsTab = () => {
@@ -496,8 +740,9 @@ export default function Import() {
           Cannot import while viewing the Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.
         </div>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
-          A Schwab All-Accounts positions file is the exception: each account in the file
-          is matched to its own portfolio, so the aggregate selection is not used.
+          A Schwab All-Accounts positions file is the exception: choose which of your Schwab
+          accounts to import into, then each selected account is matched from the file, so the
+          aggregate selection is not used.
         </p>
         <button className="btn btn-primary" style={{ marginTop: '0.75rem' }} onClick={selectSchwabAllAccounts}>
           Import Charles Schwab (All Accounts Positions)
@@ -523,7 +768,7 @@ export default function Import() {
       <h1>Import Portfolio Data</h1>
       <p style={{ color: 'var(--accent-bright)', marginBottom: '1rem', fontSize: '0.9rem' }}>
         {txnFormat === 'schwab_all_accounts'
-          ? 'Each Schwab account in the file is imported into its own matched portfolio.'
+          ? 'Each selected Schwab account is imported from the All-Accounts file into its own portfolio.'
           : <>Importing into: <strong>{currentProfileName}</strong></>}
       </p>
       {isAggregate && (
@@ -811,7 +1056,9 @@ export default function Import() {
                     <strong>Then import new or overlapping transaction history if you need it.</strong> Start after
                     your last import when possible; overlapping transactions are checked for duplicates. A transaction
                     file can calculate positions only when there is no positions snapshot, and then it needs the
-                    account&apos;s complete history. Preview both files before importing, and use one brokerage account per file.
+                    account&apos;s complete history. Preview both files before importing, and use one brokerage account per file
+                    unless you are using <strong>Charles Schwab (All Accounts Positions)</strong>, which lists your Schwab
+                    portfolios so you can choose which ones to import into from one All-Accounts export.
                   </li>
                 </ol>
                 <p style={{ margin: '0.75rem 0 0' }}>
@@ -838,7 +1085,7 @@ export default function Import() {
             : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
             : txnFormat === 'schwab_all_accounts'
-              ? <>Import every Schwab account from one <strong>All-Accounts Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, switch the account selector to <strong>All Accounts</strong>, then export. Each account in the file is matched to a portfolio, which you can re-point before importing.</>
+              ? <>Import every Schwab account from one <strong>All-Accounts Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, switch the account selector to <strong>All Accounts</strong>, then export. Choose which of your Schwab portfolios to import into; preview then matches each selected portfolio to an account in the file.</>
               : txnFormat === 'snowball_holdings'
                 ? <>Import a Snowball <strong>Holdings CSV or XLSX</strong> as a migration snapshot. This keeps only the holdings, dividend, and category fields the app can actually use, and ignores Snowball-only analytics columns.</>
               : txnFormat === 'schwab_transactions'
@@ -920,10 +1167,11 @@ export default function Import() {
 
           {txnFormat === 'schwab_all_accounts' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>One file, every account:</strong> Schwab's All-Accounts export stacks each account
-              under its own label row (for example <em>Roth_IRA ...995</em>). Preview matches each account
-              to a portfolio by name or masked account number; anything unmatched can be pointed at a
-              portfolio or given a new one. Your choices are remembered, so the next export maps itself.
+              <strong>One file, selected accounts:</strong> Schwab's All-Accounts export stacks each account
+              under its own label row (for example <em>Roth_IRA ...995</em>). Check the Schwab portfolios
+              you want this import to update. Preview matches each selected portfolio to an account in the
+              file; anything unmatched can be pointed at a portfolio or given a new one. Unchecked
+              portfolios are left alone. Your choices are remembered, so the next export maps itself.
               Options positions are listed for reconciliation but are not imported as holdings.
             </div>
           )}
@@ -1016,7 +1264,7 @@ export default function Import() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
               <select
                 value={txnFormat}
-                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnAccountMap({}); setTxnFile(null); setResult(null); setError(null) }}
+                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnAccountMap({}); setTxnDestSelected({}); setTxnFile(null); setResult(null); setError(null) }}
                 style={{ width: '250px' }}
                 disabled={isAggregate}
               >
@@ -1042,6 +1290,20 @@ export default function Import() {
               )}
             </div>
           </div>
+
+          {txnFormat === 'schwab_all_accounts' && (
+            <SchwabDestinationPicker
+              destinations={schwabDestinations}
+              destSelected={txnDestSelected}
+              onToggle={handleToggleSchwabDest}
+              onSelectAll={handleSelectAllSchwabDest}
+              onSelectNone={handleSelectNoneSchwabDest}
+              accounts={txnIsMultiAccount ? txnPreview.accounts : []}
+              accountMap={txnAccountMap}
+              onAssignAccount={handleAssignSchwabAccount}
+              previewed={txnIsMultiAccount}
+            />
+          )}
 
           <FileUpload
             onFileSelect={(f) => {
@@ -1076,13 +1338,15 @@ export default function Import() {
                   setTxnPreview(data)
                   if (data.as_of) setNavSnapshotDate(data.as_of)
                   if (data.format_type === 'positions_multi') {
-                    // Start on what the backend matched; the user can re-point
-                    // any account before importing.
-                    setTxnAccountMap(Object.fromEntries(
-                      (data.accounts || []).map(a => [
-                        a.account_key,
-                        a.suggested_profile_id != null ? String(a.suggested_profile_id) : '',
-                      ])
+                    const destSelected = mergeSchwabDestSelection(
+                      txnDestSelected,
+                      data.profile_choices || [],
+                    )
+                    setTxnDestSelected(destSelected)
+                    setTxnAccountMap(applySchwabDestSelection(
+                      destSelected,
+                      data.accounts || [],
+                      {},
                     ))
                   }
                 } catch (e) {
@@ -1299,99 +1563,70 @@ export default function Import() {
                   set to skip and will not be imported.
                 </div>
               )}
+              {schwabDestinations.some(profile => (
+                txnDestSelected[String(profile.id)]
+                && !fileAccountForProfile(txnPreview.accounts, txnAccountMap, profile.id)
+              )) && (
+                <div className="alert alert-warning" style={{ marginBottom: '0.75rem' }}>
+                  Some selected Schwab portfolios have no matching account in this file.
+                  Pick an account from the list above, or uncheck those portfolios.
+                </div>
+              )}
 
-              {(txnPreview.accounts || []).map((account) => {
-                const selected = txnAccountMap[account.account_key] ?? ''
-                const skipped = selected === '' || selected === 'skip'
-                const summary = account.summary || {}
-                return (
-                  <div
-                    key={account.account_key}
-                    className="card"
-                    style={{ marginBottom: '0.75rem', opacity: skipped ? 0.6 : 1 }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
-                      <div style={{ flex: '1 1 260px', minWidth: 0 }}>
-                        <div style={{ fontWeight: 600 }}>{account.account_label}</div>
-                        <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-                          {summary.holdings} holdings, {formatMoney(summary.account_value)}
-                          {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+              {txnLeftoverAccounts.length > 0 && (
+                <div style={{ marginTop: '0.5rem' }}>
+                  <h3 style={{ fontSize: '1rem', margin: '0 0 0.5rem' }}>Other accounts in this file</h3>
+                  <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                    These Schwab accounts were not mapped to a selected portfolio. Skip them, create a new
+                    portfolio, or point them at one of your accounts above.
+                  </p>
+                  {txnLeftoverAccounts.map((account) => {
+                    const selected = txnAccountMap[account.account_key] ?? ''
+                    const summary = account.summary || {}
+                    return (
+                      <div
+                        key={account.account_key}
+                        className="card"
+                        style={{ marginBottom: '0.75rem', opacity: selected === 'new' ? 1 : 0.75 }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                            <div style={{ fontWeight: 600 }}>{account.account_label}</div>
+                            <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                              {summary.holdings} holdings, {formatMoney(summary.account_value)}
+                              {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+                            </div>
+                          </div>
+                          <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>Import into</span>
+                            <select
+                              value={selected}
+                              onChange={(e) => handleLeftoverAccountChange(account.account_key, e.target.value)}
+                              style={{ width: '230px' }}
+                            >
+                              <option value="">Skip this account</option>
+                              {(txnPreview.profile_choices || schwabDestinations).map(choice => (
+                                <option key={choice.id} value={String(choice.id)}>{choice.name}</option>
+                              ))}
+                              <option value="new">New portfolio: {account.new_profile_name}</option>
+                            </select>
+                          </div>
                         </div>
+                        {account.match_reason === 'unmatched' && (
+                          <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                            No portfolio matched this account by name - choose one above, or create a new portfolio for it.
+                          </div>
+                        )}
+                        {account.match_reason === 'no_holdings' && (
+                          <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                            This account has no holdings, so it was not mapped automatically.
+                          </div>
+                        )}
                       </div>
-                      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>Import into</span>
-                        <select
-                          value={selected}
-                          onChange={(e) => setTxnAccountMap(prev => ({
-                            ...prev,
-                            [account.account_key]: e.target.value,
-                          }))}
-                          style={{ width: '230px' }}
-                        >
-                          <option value="">Skip this account</option>
-                          {(txnPreview.profile_choices || []).map(choice => (
-                            <option key={choice.id} value={String(choice.id)}>{choice.name}</option>
-                          ))}
-                          <option value="new">New portfolio: {account.new_profile_name}</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    {account.match_reason === 'saved_mapping' && (
-                      <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
-                        Matched from your last All-Accounts import.
-                      </div>
-                    )}
-                    {account.match_reason === 'unmatched' && (
-                      <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
-                        No portfolio matched this account by name - choose one above, or create a new portfolio for it.
-                      </div>
-                    )}
-                    {summary.options > 0 && (
-                      <div style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
-                        {summary.options} option position{summary.options === 1 ? '' : 's'} ({formatMoney(summary.options_value)})
-                        are skipped, so Schwab's account total of {formatMoney(summary.reported_total)} counts them and this does not.
-                      </div>
-                    )}
-
-                    <details style={{ marginTop: '0.6rem' }}>
-                      <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-bright)' }}>
-                        Show {summary.holdings} holdings
-                      </summary>
-                      <div style={{ maxHeight: '320px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px', marginTop: '0.5rem' }}>
-                        <table className="data-table" style={{ fontSize: '0.8rem' }}>
-                          <thead>
-                            <tr>
-                              <th>Ticker</th>
-                              <th>Description</th>
-                              <th style={{ textAlign: 'right' }}>Shares</th>
-                              <th style={{ textAlign: 'right' }}>Cost/Share</th>
-                              <th style={{ textAlign: 'right' }}>Price</th>
-                              <th style={{ textAlign: 'right' }}>Mkt Value</th>
-                              <th style={{ textAlign: 'right' }}>G/L</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(account.positions || []).map((p, i) => (
-                              <tr key={i}>
-                                <td style={{ fontWeight: 600 }}>{p.ticker}</td>
-                                <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.description}</td>
-                                <td style={{ textAlign: 'right' }}>{formatShares(p.quantity)}</td>
-                                <td style={{ textAlign: 'right' }}>{formatMoney(p.cost_per_share)}</td>
-                                <td style={{ textAlign: 'right' }}>{formatMoney(p.current_price, 4)}</td>
-                                <td style={{ textAlign: 'right' }}>{formatMoney(p.current_value)}</td>
-                                <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
-                                  {formatMoney(p.gain_or_loss || 0)}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </details>
-                  </div>
-                )
-              })}
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 
