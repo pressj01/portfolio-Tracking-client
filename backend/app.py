@@ -10360,8 +10360,9 @@ def _recompute_dividend_fields_from_payments(
                 or current_ex is None
                 or (official_ex is not None and official_ex >= current_ex)
             ):
-                base_snapshot.update(official)
-                metadata_snapshots[ticker] = base_snapshot
+                metadata_snapshots[ticker] = _merge_official_distribution_snapshot(
+                    base_snapshot, official
+                )
                 official_metadata_tickers.add(ticker)
             elif base_snapshot.get("has_dividend"):
                 metadata_snapshots[ticker] = base_snapshot
@@ -11039,6 +11040,139 @@ def _xfunds_distribution_schedule_from_page(page_html):
     return schedule
 
 
+_XFUNDS_PERIODS_PER_YEAR = {"W": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}
+
+
+def _xfunds_page_post_id(page_html):
+    """Return the Tidal Website Manager post id embedded in an XFUNDS fund page."""
+    page_html = str(page_html or "")
+    match = re.search(
+        r'data-twm-type=["\']fund-info-table["\'][^>]*data-post-id=["\'](\d+)["\']',
+        page_html,
+        re.I,
+    )
+    if not match:
+        match = re.search(
+            r'data-post-id=["\'](\d+)["\'][^>]*data-twm-type=["\']fund-info-table["\']',
+            page_html,
+            re.I,
+        )
+    return match.group(1) if match else None
+
+
+def _xfunds_placeholder_value(value):
+    text = str(value or "").strip().upper()
+    return not text or "XX" in text or text in {"-", "—", "-%", "N/A", "NA"}
+
+
+def _xfunds_parse_distribution_amount(value):
+    if _xfunds_placeholder_value(value):
+        return None
+    try:
+        return float(re.sub(r"[^0-9.\-]", "", str(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _xfunds_current_schedule_row(future_schedule, as_of=None):
+    """Pick the current or next published XFUNDS distribution cycle."""
+    as_of = pd.Timestamp(as_of or pd.Timestamp.now()).normalize()
+    dated = []
+    for row in future_schedule or []:
+        ex = pd.to_datetime(row.get("ex_dividend_date"), errors="coerce")
+        if pd.isna(ex):
+            continue
+        pay = pd.to_datetime(row.get("payable_date"), errors="coerce")
+        dated.append((
+            ex.normalize(),
+            None if pd.isna(pay) else pay.normalize(),
+            row,
+        ))
+    if not dated:
+        return None
+    in_cycle = [
+        item for item in dated
+        if item[0] <= as_of and (item[1] is None or as_of <= item[1])
+    ]
+    if in_cycle:
+        return in_cycle[0][2]
+    upcoming = [item for item in dated if item[0] >= as_of]
+    if upcoming:
+        return upcoming[0][2]
+    return dated[-1][2]
+
+
+def _xfunds_overlay_schedule_dates(ex_div_date, div_pay_date, future_schedule, as_of=None):
+    """New XFUNDS funds publish the next cycle before the amount table catches up."""
+    row = _xfunds_current_schedule_row(future_schedule, as_of)
+    if not row:
+        return ex_div_date, div_pay_date
+    sched_ex = pd.to_datetime(row.get("ex_dividend_date"), errors="coerce")
+    if pd.isna(sched_ex):
+        return ex_div_date, div_pay_date
+    current_ex = pd.to_datetime(ex_div_date, errors="coerce") if ex_div_date else pd.NaT
+    if not pd.isna(current_ex) and sched_ex.normalize() < current_ex.normalize():
+        return ex_div_date, div_pay_date
+    ex_div_date = sched_ex.strftime("%m/%d/%y")
+    pay = pd.to_datetime(row.get("payable_date"), errors="coerce")
+    if not pd.isna(pay):
+        div_pay_date = pay.strftime("%m/%d/%y")
+    return ex_div_date, div_pay_date
+
+
+def _xfunds_implied_distribution(rate_pct, nav, freq):
+    """Per-share amount from a published distribution rate, NAV, and cadence."""
+    periods = _XFUNDS_PERIODS_PER_YEAR.get(str(freq or "").strip().upper())
+    try:
+        rate = float(rate_pct)
+        nav_value = float(nav)
+    except (TypeError, ValueError):
+        return None
+    if not periods or rate <= 0 or nav_value <= 0:
+        return None
+    return round((rate / 100.0) * nav_value / periods, 6)
+
+
+def _xfunds_distribution_entries_from_rows(rows):
+    """Parse TWM distribution-table rows, skipping new-fund placeholders."""
+    entries = []
+    if not rows:
+        return entries
+    header = [re.sub(r"[^a-z]", "", str(cell or "").lower()) for cell in rows[0]]
+
+    def col(*names):
+        for name in names:
+            if name in header:
+                return header.index(name)
+        return None
+
+    ex_idx = col("exdate", "exrecorddate", "exdividenddate")
+    pay_idx = col("payabledate", "paydate", "paymentdate")
+    amt_idx = col("fundtotal", "distributionamount", "distribution", "amount")
+    if ex_idx is None:
+        return entries
+    for row in rows[1:]:
+        if ex_idx >= len(row):
+            continue
+        if _xfunds_placeholder_value(row[ex_idx]):
+            continue
+        ex_ts = pd.to_datetime(row[ex_idx], errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        amount = None
+        if amt_idx is not None and amt_idx < len(row):
+            amount = _xfunds_parse_distribution_amount(row[amt_idx])
+        if amount is None:
+            continue
+        pay_ts = None
+        if pay_idx is not None and pay_idx < len(row) and not _xfunds_placeholder_value(row[pay_idx]):
+            parsed_pay = pd.to_datetime(row[pay_idx], errors="coerce")
+            if not pd.isna(parsed_pay):
+                pay_ts = parsed_pay.normalize()
+        entries.append((ex_ts.normalize(), amount, pay_ts))
+    return entries
+
+
 def _merge_official_distribution_snapshot(snapshot, official):
     """Overlay issuer data while retaining Yahoo values for official gaps."""
     merged = dict(snapshot or {})
@@ -11065,22 +11199,76 @@ def _merge_official_distribution_snapshot(snapshot, official):
     return merged
 
 
-def _fetch_xfunds_distribution_snapshot(ticker, session=None):
+def _xfunds_csv_has_distribution_header(body):
+    if not body:
+        return False
+    first = body.splitlines()[0].lower().replace("-", " ")
+    return "ex date" in first or "exdate" in re.sub(r"[^a-z]", "", first)
+
+
+def _xfunds_distribution_entries_from_csv(body):
+    """Parse an XFUNDS distribution CSV, skipping empty new-fund placeholder rows."""
+    import csv
+    from io import StringIO
+
+    entries = []
+    if not _xfunds_csv_has_distribution_header(body):
+        return entries
+    try:
+        reader = csv.DictReader(StringIO(body))
+    except Exception:
+        return entries
+
+    def csv_value(row, *keys):
+        normalized = {
+            re.sub(r"[^a-z0-9]", "", str(key or "").lower()): value
+            for key, value in row.items()
+        }
+        for key in keys:
+            value = normalized.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        return ""
+
+    for row in reader:
+        ex_date = csv_value(row, "exdate", "exdividenddate", "exrecorddate")
+        if _xfunds_placeholder_value(ex_date):
+            continue
+        ex_ts = pd.to_datetime(ex_date, errors="coerce")
+        if pd.isna(ex_ts):
+            continue
+        amount = _xfunds_parse_distribution_amount(
+            csv_value(row, "fundtotal", "distributionamount", "distribution", "amount")
+        )
+        if amount is None:
+            continue
+        pay_date = csv_value(row, "payabledate", "paydate", "paymentdate")
+        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+        entries.append((
+            ex_ts.normalize(),
+            amount,
+            None if pd.isna(pay_ts) else pay_ts.normalize(),
+        ))
+    return entries
+
+
+def _fetch_xfunds_distribution_snapshot(ticker, session=None, as_of=None):
     """Fetch official X Funds distributions, with support for both site formats.
 
     Older pages publish a static ``TidalFG_Distribution_<TICKER>.csv`` file.
-    Newer pages, including DRMY, publish a nonce-protected download URL in the
-    page. Both official paths are attempted before the caller falls back to
-    Yahoo Finance.
+    Newer pages, including DRMY and FIZY, publish a nonce-protected download
+    URL and a live distribution table. Newly launched funds often have the
+    next ex/pay dates on the page before an amount is declared; those dates
+    are used immediately and Yahoo remains the fallback for any field the
+    issuer has not published yet.
     """
-    import csv
     import html as html_lib
     import requests
-    from io import StringIO
 
     ticker = (ticker or "").strip().upper()
     if not ticker:
         return None
+    as_of = pd.Timestamp(as_of or pd.Timestamp.now()).normalize()
 
     page_url = f"https://nicholasx.com/{ticker}/"
     static_url = (
@@ -11108,7 +11296,7 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None):
     except Exception:
         page_html = ""
 
-    if not body or "ex date" not in body.splitlines()[0].lower():
+    if not _xfunds_csv_has_distribution_header(body):
         body = ""
         try:
             match = re.search(r'distributionCsvUrl\s*=\s*"([^"]+)"', page_html, flags=re.I)
@@ -11136,123 +11324,81 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None):
     # the actual schedule win whenever the two disagree.
     official_freq = schedule_freq or page_freq
 
-    if not body:
-        if not official_freq and not future_schedule:
-            return None
-        next_row = next(
-            (
-                row for row in future_schedule
-                if pd.Timestamp(row["ex_dividend_date"]) >= pd.Timestamp.now().normalize()
-            ),
-            future_schedule[-1] if future_schedule else None,
-        )
-        return {
-            "known": True,
-            "has_dividend": False,
-            "div": None,
-            "ex_div_date": (
-                pd.Timestamp(next_row["ex_dividend_date"]).strftime("%m/%d/%y")
-                if next_row else None
-            ),
-            "div_pay_date": (
-                pd.Timestamp(next_row["payable_date"]).strftime("%m/%d/%y")
-                if next_row and next_row.get("payable_date") else None
-            ),
-            "freq": official_freq,
-            "history": pd.Series(dtype=float),
-            "future_schedule": future_schedule,
-            "source": "X Funds",
-            "source_url": page_url,
-        }
+    entries_by_ex = {}
+    for entry in _xfunds_distribution_entries_from_csv(body):
+        entries_by_ex[entry[0]] = entry
 
-    try:
-        reader = csv.DictReader(StringIO(body))
-    except Exception:
+    post_id = _xfunds_page_post_id(page_html)
+    distribution_rate_pct = None
+    nav_price = None
+    if post_id:
+        table_entries = _xfunds_distribution_entries_from_rows(
+            _xfunds_live_rows(session, post_id, "distribution-table")
+        )
+        for entry in table_entries:
+            entries_by_ex.setdefault(entry[0], entry)
+        fund_info = _xfunds_label_map(_xfunds_live_rows(session, post_id, "fund-info-table"))
+        daily_nav = _xfunds_label_map(_xfunds_live_rows(session, post_id, "daily-nav-table"))
+        distribution_rate_pct = _research_pct(
+            _xfunds_map_value(fund_info, "distribution rate")
+        )
+        nav_price = _xfunds_money(_xfunds_map_value(daily_nav, "nav"))
+
+    entries = [entries_by_ex[key] for key in sorted(entries_by_ex)]
+    history = pd.Series(dtype=float)
+    pay_map = {}
+    if entries:
+        history = pd.Series(
+            [item[1] for item in entries],
+            index=pd.DatetimeIndex([item[0] for item in entries]),
+        )
+        history = history[~history.index.duplicated(keep="last")].sort_index()
+        pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+
+    if history.empty and not official_freq and not future_schedule and distribution_rate_pct is None:
         return None
 
-    def _csv_value(row, *keys):
-        normalized = {
-            re.sub(r"[^a-z0-9]", "", str(key or "").lower()): value
-            for key, value in row.items()
-        }
-        for key in keys:
-            value = normalized.get(key)
-            if value not in (None, ""):
-                return str(value).strip()
-        return ""
+    freq = official_freq
+    if not freq and not history.empty:
+        one_year_ago = as_of - pd.Timedelta(days=365)
+        recent = history[history.index >= one_year_ago]
+        if len(recent) >= 2:
+            diffs = recent.index.to_series().diff().dt.days.dropna()
+            median_gap = float(diffs.median()) if not diffs.empty else 30.0
+        else:
+            median_gap = 30.0
+        if median_gap < 10:
+            freq = "W"
+        elif median_gap < 45:
+            freq = "M"
+        elif median_gap < 100:
+            freq = "Q"
+        elif median_gap < 200:
+            freq = "SA"
+        else:
+            freq = "A"
 
-    entries = []
-    for row in reader:
-        ex_date = _csv_value(row, "exdate", "exdividenddate")
-        pay_date = _csv_value(row, "payabledate", "paydate", "paymentdate")
-        amount = _csv_value(row, "fundtotal", "distributionamount", "distribution", "amount")
-        ex_ts = pd.to_datetime(ex_date, errors="coerce")
-        pay_ts = pd.to_datetime(pay_date, errors="coerce")
-        if pd.isna(ex_ts):
-            continue
-        try:
-            amt = float(re.sub(r"[^0-9.\-]", "", amount))
-        except (TypeError, ValueError):
-            continue
-        ex_ts = ex_ts.normalize()
-        pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
-        entries.append((ex_ts, amt, pay_ts))
-
-    if not entries:
-        if not official_freq and not future_schedule:
-            return None
-        return {
-            "known": True,
-            "has_dividend": False,
-            "div": None,
-            "ex_div_date": None,
-            "div_pay_date": None,
-            "freq": official_freq,
-            "history": pd.Series(dtype=float),
-            "future_schedule": future_schedule,
-            "source": "X Funds",
-            "source_url": page_url,
-        }
-
-    entries.sort(key=lambda item: item[0])
-    history = pd.Series(
-        [item[1] for item in entries],
-        index=pd.DatetimeIndex([item[0] for item in entries]),
+    amount = float(history.iloc[-1]) if not history.empty else None
+    ex_div_date = history.index[-1].strftime("%m/%d/%y") if not history.empty else None
+    latest_pay = pay_map.get(history.index[-1]) if not history.empty else None
+    div_pay_date = latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None
+    ex_div_date, div_pay_date = _xfunds_overlay_schedule_dates(
+        ex_div_date, div_pay_date, future_schedule, as_of=as_of
     )
-    history = history[~history.index.duplicated(keep="last")].sort_index()
 
-    pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
-    latest_ex = history.index[-1]
-    latest_pay = pay_map.get(latest_ex)
-
-    one_year_ago = pd.Timestamp.now().normalize() - pd.Timedelta(days=365)
-    recent = history[history.index >= one_year_ago]
-    if len(recent) >= 2:
-        diffs = recent.index.to_series().diff().dt.days.dropna()
-        median_gap = float(diffs.median()) if not diffs.empty else 30.0
-    else:
-        median_gap = 30.0
-
-    if median_gap < 10:
-        freq = "W"
-    elif median_gap < 45:
-        freq = "M"
-    elif median_gap < 100:
-        freq = "Q"
-    elif median_gap < 200:
-        freq = "SA"
-    else:
-        freq = "A"
+    if amount is None:
+        amount = _xfunds_implied_distribution(distribution_rate_pct, nav_price, freq)
 
     return {
         "known": True,
-        "has_dividend": True,
-        "div": float(history.iloc[-1]),
-        "ex_div_date": latest_ex.strftime("%m/%d/%y"),
-        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": official_freq or freq,
+        "has_dividend": amount is not None and amount > 0,
+        "div": amount,
+        "ex_div_date": ex_div_date,
+        "div_pay_date": div_pay_date,
+        "freq": freq,
         "history": history,
         "future_schedule": future_schedule,
+        "distribution_rate_pct": distribution_rate_pct,
         "source": "X Funds",
         "source_url": page_url,
     }
@@ -20929,20 +21075,9 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
     if "Page Not Found" in page_html or "data-twm-type" not in page_html:
         return None
 
-    post_match = re.search(
-        r'data-twm-type=["\']fund-info-table["\'][^>]*data-post-id=["\'](\d+)["\']',
-        page_html,
-        re.I,
-    )
-    if not post_match:
-        post_match = re.search(
-            r'data-post-id=["\'](\d+)["\'][^>]*data-twm-type=["\']fund-info-table["\']',
-            page_html,
-            re.I,
-        )
-    if not post_match:
+    post_id = _xfunds_page_post_id(page_html)
+    if not post_id:
         return None
-    post_id = post_match.group(1)
 
     fund_info = _xfunds_label_map(_xfunds_live_rows(session, post_id, "fund-info-table"))
     daily_nav = _xfunds_label_map(_xfunds_live_rows(session, post_id, "daily-nav-table"))
@@ -21555,23 +21690,25 @@ def security_research(kind, ticker):
                 }.get(official_snapshot["freq"], response.get("dividend_frequency"))
             if official_snapshot.get("future_schedule"):
                 response["future_distribution_schedule"] = official_snapshot["future_schedule"]
+        if official_snapshot:
+            rate = official_snapshot.get("distribution_rate_pct")
+            if rate is not None:
+                response["estimated_yield_pct"] = round(float(rate), 2)
+                response["target_yield_label"] = "Distribution Rate"
+                response["yield_source"] = official_snapshot.get("source") or "Fund Site"
+            last_entry = official_snapshot.get("div")
+            ex_date = official_snapshot.get("ex_div_date")
+            if last_entry and ex_date:
+                response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
         if official_snapshot and official_snapshot.get("history") is not None:
             h = official_snapshot["history"]
             if hasattr(h, "empty") and not h.empty:
                 dist_history_series = h
-                rate = official_snapshot.get("distribution_rate_pct")
-                if rate is not None:
-                    response["estimated_yield_pct"] = round(float(rate), 2)
-                    response["target_yield_label"] = "Distribution Rate"
                 if official_snapshot.get("freq"):
                     response["dividend_frequency"] = {
                         "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
                         "SA": "Semi-Annual", "A": "Annual",
                     }.get(official_snapshot["freq"], response.get("dividend_frequency"))
-                last_entry = official_snapshot.get("div")
-                ex_date = official_snapshot.get("ex_div_date")
-                if last_entry and ex_date:
-                    response["last_dividend"] = {"amount": round(float(last_entry), 4), "date": ex_date}
                 try:
                     trailing = h[h.index >= (pd.Timestamp.now(tz=h.index.tz) - pd.DateOffset(years=1))]
                     if not trailing.empty:
@@ -30302,7 +30439,7 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             freq = "M"
 
         official = official_snapshot_for(ticker, description)
-        if official and official.get("has_dividend"):
+        if official:
             official_freq = (official.get("freq") or "").strip().upper()
             if official_freq and not freq_pinned:
                 freq = official_freq

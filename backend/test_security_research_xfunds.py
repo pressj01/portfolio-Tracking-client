@@ -74,13 +74,25 @@ class _FakeSession:
 07/20/2026,DRMY,WDC,958102105,Western Digital Corp,100,90,9000,4.10%,1126687.50,25000,1
 """
 
+    DISTRIBUTION_TABLE = """
+        <table>
+          <tr><td>EX Date</td><td>Record Date</td><td>Payable Date</td><td>Fund Total</td></tr>
+        </table>
+    """
+
     def get(self, url, params=None, headers=None, timeout=None):
         if params:
-            table = self.FUND_INFO if params.get("type") == "fund-info-table" else self.DAILY_NAV
-            return _FakeResponse(payload={"html": table})
-        if "TidalFG_Holdings_DRMY.csv" in url:
+            table_type = params.get("type")
+            if table_type == "fund-info-table":
+                return _FakeResponse(payload={"html": self.FUND_INFO})
+            if table_type == "daily-nav-table":
+                return _FakeResponse(payload={"html": self.DAILY_NAV})
+            if table_type == "distribution-table":
+                return _FakeResponse(payload={"html": self.DISTRIBUTION_TABLE})
+            return _FakeResponse(status_code=404)
+        if "TidalFG_Holdings_DRMY.csv" in url or "TidalFG_Holdings_FIZY.csv" in url:
             return _FakeResponse(text=self.HOLDINGS)
-        if url.lower().endswith("/drmy/"):
+        if url.lower().endswith("/drmy/") or url.lower().endswith("/fizy/"):
             return _FakeResponse(text=self.PAGE)
         return _FakeResponse(status_code=404)
 
@@ -161,14 +173,16 @@ class XFundsSecurityResearchTests(unittest.TestCase):
 
     def test_distribution_snapshot_uses_official_dates_amounts_and_frequency(self):
         snapshot = _fetch_xfunds_distribution_snapshot(
-            "DRMY", session=_DistributionSession()
+            "DRMY", session=_DistributionSession(), as_of="2026-08-19"
         )
 
         self.assertTrue(snapshot["has_dividend"])
         self.assertEqual(snapshot["source"], "X Funds")
         self.assertEqual(snapshot["freq"], "W")
-        self.assertEqual(snapshot["ex_div_date"], "07/28/26")
-        self.assertEqual(snapshot["div_pay_date"], "07/29/26")
+        # Newly launched funds publish the current cycle on the page before the
+        # amount table catches up, so dates come from the schedule.
+        self.assertEqual(snapshot["ex_div_date"], "08/19/26")
+        self.assertEqual(snapshot["div_pay_date"], "08/20/26")
         self.assertEqual(snapshot["div"], 0.15)
         self.assertEqual(
             list(snapshot["history"].items()),
@@ -180,29 +194,59 @@ class XFundsSecurityResearchTests(unittest.TestCase):
         )
 
     def test_distribution_snapshot_keeps_official_schedule_when_amount_is_not_declared(self):
+        class _NoAmountSession(_FakeSession):
+            FUND_INFO = """
+                <table>
+                  <tr><td>Ticker</td><td>DRMY</td></tr>
+                  <tr><td>Distribution Rate</td><td>-%</td></tr>
+                </table>
+            """
+
         snapshot = _fetch_xfunds_distribution_snapshot(
-            "DRMY", session=_FakeSession()
+            "DRMY", session=_NoAmountSession(), as_of="2026-08-19"
         )
 
         self.assertFalse(snapshot["has_dividend"])
         self.assertEqual(snapshot["freq"], "W")
         self.assertTrue(snapshot["history"].empty)
-        expected = next(
-            (
-                row for row in snapshot["future_schedule"]
-                if pd.Timestamp(row["ex_dividend_date"]) >= pd.Timestamp.now().normalize()
-            ),
-            snapshot["future_schedule"][-1],
-        )
-        self.assertEqual(
-            snapshot["ex_div_date"],
-            pd.Timestamp(expected["ex_dividend_date"]).strftime("%m/%d/%y"),
-        )
-        self.assertEqual(
-            snapshot["div_pay_date"],
-            pd.Timestamp(expected["payable_date"]).strftime("%m/%d/%y"),
-        )
+        self.assertEqual(snapshot["ex_div_date"], "08/19/26")
+        self.assertEqual(snapshot["div_pay_date"], "08/20/26")
         self.assertEqual(len(snapshot["future_schedule"]), 3)
+
+    def test_new_xfunds_fund_uses_schedule_dates_and_implied_amount(self):
+        class _NewFundSession(_FakeSession):
+            FUND_INFO = """
+                <table>
+                  <tr><td>Ticker</td><td>FIZY</td></tr>
+                  <tr><td>Fund Inception</td><td>08/03/2026</td></tr>
+                  <tr><td>Distribution Rate**</td><td>14.00%</td></tr>
+                </table>
+            """
+            DAILY_NAV = """
+                <table>
+                  <tr><td>Net Assets</td><td>$8.16M</td></tr>
+                  <tr><td>NAV</td><td>$26.31</td></tr>
+                  <tr><td>Closing Price</td><td>$26.41</td></tr>
+                </table>
+            """
+            DISTRIBUTION_TABLE = """
+                <table>
+                  <tr><td>Ex-Date</td><td>Record Date</td><td>Payable Date</td><td>Fund Total</td></tr>
+                  <tr><td>XX/XX/XXXX</td><td>XX/XX/XXXX</td><td>XX/XX/XXXX</td><td>-</td></tr>
+                </table>
+            """
+
+        snapshot = _fetch_xfunds_distribution_snapshot(
+            "FIZY", session=_NewFundSession(), as_of="2026-08-19"
+        )
+
+        self.assertTrue(snapshot["has_dividend"])
+        self.assertEqual(snapshot["freq"], "W")
+        self.assertEqual(snapshot["ex_div_date"], "08/19/26")
+        self.assertEqual(snapshot["div_pay_date"], "08/20/26")
+        self.assertEqual(snapshot["div"], 0.070835)
+        self.assertEqual(snapshot["distribution_rate_pct"], 14.0)
+        self.assertTrue(snapshot["history"].empty)
 
     def test_published_schedule_overrides_stale_page_frequency(self):
         class StaleFrequencySession(_FakeSession):
@@ -217,7 +261,7 @@ class XFundsSecurityResearchTests(unittest.TestCase):
             "DRMY", session=StaleFrequencySession(), use_cache=False
         )
         snapshot = _fetch_xfunds_distribution_snapshot(
-            "DRMY", session=StaleFrequencySession()
+            "DRMY", session=StaleFrequencySession(), as_of="2026-08-19"
         )
 
         self.assertEqual(profile["dividend_frequency"], "Weekly")
