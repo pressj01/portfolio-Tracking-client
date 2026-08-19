@@ -1272,7 +1272,7 @@ export default function TotalReturn() {
           </div>
           <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
             Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>.{' '}
-            {positionView === 'unrealized' && 'Open positions only. Each row lists its effective held-period range.'}
+            {positionView === 'unrealized' && 'Open positions only. Each row lists its current open-lot range (the same lot Gains & Losses uses after a full sale and re-buy).'}
             {positionView === 'realized' && `Sales that settled inside this range, priced off the recorded buy and sell. Distributions are the dividends those shares earned before the sale.${realizedTotals.sale_count ? ` ${realizedTotals.sale_count} sale${realizedTotals.sale_count === 1 ? '' : 's'}.` : ''}`}
             {positionView === 'combined' && 'Open and closed legs summed per ticker. Net Ret % is money-weighted over basis (period start value plus realized cost), so it will not match the time-weighted Total Ret % in the Unrealized view.'}
             {' '}Click any column header to sort.

@@ -1223,9 +1223,15 @@ const lotCostOrProceeds = (txn) => {
 
 const lotUnrealizedGain = (txn, holding) => {
   if ((txn.transaction_type || 'BUY') === 'SELL') return null
-  const shares = Number(txn.shares) || 0
+  const originalShares = Number(txn.shares) || 0
+  const remaining = txn.shares_remaining
+  const shares = remaining == null ? originalShares : Number(remaining)
+  if (!Number.isFinite(shares) || shares <= 1e-9) return null
   const currentPrice = Number(holding.current_price) || 0
-  return (shares * currentPrice) - lotCostOrProceeds(txn)
+  const cost = originalShares > 0
+    ? lotCostOrProceeds(txn) * (shares / originalShares)
+    : 0
+  return (shares * currentPrice) - cost
 }
 
 const lotSortValue = (txn, holding, key) => {

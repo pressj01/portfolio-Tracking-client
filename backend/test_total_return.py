@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import (
     app,
     _anchor_from_prior_close,
+    _annotate_transaction_rows,
     _build_transaction_aware_portfolio_series,
     _normalize_prices_to_100,
     _portfolio_period_metrics,
@@ -442,6 +443,9 @@ class TotalReturnDashboardPeriodTest(unittest.TestCase):
             def fetchall(self):
                 return self
 
+            def fetchone(self):
+                return self[0] if self else None
+
         class FakeConnection:
             def execute(self, sql, _params=None):
                 if "FROM all_account_info" in sql:
@@ -853,6 +857,51 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         )
 
         self.assertEqual(result["market_value"], [None, None, None])
+
+    def test_sold_and_rebought_ticker_uses_current_open_lot(self):
+        """A closed cycle must not keep compounding on the current lot."""
+        dates = pd.to_datetime([
+            "2024-03-05", "2025-03-07", "2026-07-06", "2026-08-18",
+        ])
+        close = pd.DataFrame({"VGT": [64.38, 70.57, 116.82, 119.79]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        position = {"ticker": "VGT", "market_symbol": "VGT", "position_key": (99, "VGT")}
+        transactions = [
+            {**position, "transaction_type": "BUY", "transaction_date": "2024-03-05",
+             "shares": 152, "price_per_share": 64.38},
+            {**position, "transaction_type": "SELL", "transaction_date": "2025-03-07",
+             "shares": 152, "price_per_share": 70.57},
+            {**position, "transaction_type": "BUY", "transaction_date": "2026-07-06",
+             "shares": 85.605, "price_per_share": 116.82},
+        ]
+        holdings = [{**position, "quantity": 85.605, "purchase_date": "2026-07-06"}]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, holdings,
+        )
+        metrics = _portfolio_period_metrics(result)
+
+        self.assertEqual(metrics["actual_start_date"], "2026-07-06")
+        self.assertEqual(metrics["actual_end_date"], "2026-08-18")
+        self.assertAlmostEqual(metrics["total_return_pct"], (119.79 / 116.82 - 1) * 100, places=2)
+        self.assertLess(metrics["total_return_pct"], 10)
+        self.assertGreater(metrics["end_value"], 10_000)
+
+    def test_closed_buy_lots_report_no_unrealized_gain(self):
+        rows = [
+            {"id": 1, "transaction_type": "BUY", "shares": 152,
+             "price_per_share": 64.38, "fees": 0, "notes": None},
+            {"id": 2, "transaction_type": "SELL", "shares": 152,
+             "price_per_share": 70.57, "fees": 0, "notes": None},
+            {"id": 3, "transaction_type": "BUY", "shares": 85.605,
+             "price_per_share": 116.82, "fees": 0, "notes": None},
+        ]
+
+        annotated = _annotate_transaction_rows(rows, {})
+
+        self.assertEqual(annotated[0]["shares_remaining"], 0.0)
+        self.assertIsNone(annotated[1]["shares_remaining"])
+        self.assertAlmostEqual(annotated[2]["shares_remaining"], 85.605, places=3)
 
 
 if __name__ == "__main__":

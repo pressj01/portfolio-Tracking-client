@@ -494,7 +494,8 @@ export default function Growth() {
           holdings with one benchmark over one effective market-data window. The two index charts
           start at 100, so their ending value is a percentage return rather than a dollar balance.
           The cards, ticker bars, and growth map are recalculated from the same selected scope and date
-          range whenever a filter changes.
+          range whenever a filter changes. A ticker that was sold out and later re-bought is measured
+          from the current open lot — the same lot Gains &amp; Losses uses — not from the first-ever buy.
         </div>
 
         <div className="growth-help-grid">

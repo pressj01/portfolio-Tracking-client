@@ -601,6 +601,57 @@ def _stock_split_history_for_period(
     return history.combine_first(current_splits).sort_index()
 
 
+def _transactions_aligned_to_current_lots(transactions, current_holdings):
+    """Drop a closed cycle once a holding has been sold out and re-bought.
+
+    Gains & Losses, dividends, and realized gains already scope to the live
+    row's purchase_date (the earliest lot still open). Growth, Total Return,
+    Growth 2, and the Dashboard tracker must use the same floor or a prior
+    round-trip keeps compounding as if those shares were never sold. A trim
+    that never went to zero leaves purchase_date on the original lot, so its
+    intra-period buys and sells still replay.
+    """
+    lot_start_by_key = {}
+    for holding in current_holdings or []:
+        if not isinstance(holding, dict):
+            continue
+        try:
+            quantity = float(holding.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if quantity <= 1e-9:
+            continue
+        start = _portfolio_event_date(holding.get("purchase_date"))
+        if start is None:
+            continue
+        key = holding.get("position_key") or (
+            holding.get("profile_id"),
+            str(holding.get("ticker") or "").strip().upper(),
+        )
+        previous = lot_start_by_key.get(key)
+        if previous is None or start < previous:
+            lot_start_by_key[key] = start
+    if not lot_start_by_key:
+        return list(transactions or [])
+
+    clipped = []
+    for raw in transactions or []:
+        if not isinstance(raw, dict):
+            continue
+        key = raw.get("position_key") or (
+            raw.get("profile_id"),
+            str(raw.get("ticker") or "").strip().upper(),
+        )
+        start = lot_start_by_key.get(key)
+        if start is None:
+            clipped.append(raw)
+            continue
+        event_date = _portfolio_event_date(raw.get("transaction_date"))
+        if event_date is None or event_date >= start:
+            clipped.append(raw)
+    return clipped
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -618,6 +669,9 @@ def _build_transaction_aware_portfolio_series(
     without any transaction history begin on their saved purchase date, then
     their import date, or (when neither exists) the final market date. A
     holding is never assumed to have existed since the ticker's first quote.
+    Currently held positions replay only the lots still open, so a sold-and-
+    re-bought ticker matches Gains & Losses instead of compounding the closed
+    cycle as if those shares were never sold.
     """
     empty = {
         "price": [],
@@ -647,6 +701,10 @@ def _build_transaction_aware_portfolio_series(
     }
     if close is None or close.empty:
         return empty
+
+    transactions = _transactions_aligned_to_current_lots(
+        transactions, current_holdings,
+    )
 
     requested_market_symbols = sorted({
         str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
@@ -16429,6 +16487,17 @@ def _annotate_transaction_rows(rows, alloc_map, fallback_basis=None):
         txn["total_cost_after"] = round(total_cost, 2)
         txn["avg_cost_after"] = round(avg_cost, 4) if total_shares else 0
         annotated.append(txn)
+
+    remaining_by_id = {
+        lot["id"]: float(lot["shares"])
+        for lot in lots
+        if lot.get("id") is not None and float(lot.get("shares") or 0) > 1e-9
+    }
+    for txn in annotated:
+        if (txn.get("transaction_type") or "BUY").upper() == "BUY":
+            txn["shares_remaining"] = round(remaining_by_id.get(txn["id"], 0.0), 6)
+        else:
+            txn["shares_remaining"] = None
 
     return annotated
 
@@ -46848,16 +46917,36 @@ def growth_2_data():
         if current is None or ts < current:
             ownership_starts[ticker] = ts
 
+    holding_start_by_ticker = {}
     for r in active_rows:
-        _record_ownership_start(
-            r["ticker"],
-            r["purchase_date"] or r["import_date"],
-        )
-    # Any recorded trade is a safer ownership boundary than inventing history
-    # back to a ticker's inception. This covers legacy holdings whose purchase
-    # date was not imported.
+        start = r["purchase_date"] or r["import_date"]
+        _record_ownership_start(r["ticker"], start)
+        if not start:
+            continue
+        try:
+            ts = pd.Timestamp(start)
+            if ts.tzinfo is not None:
+                ts = ts.tz_localize(None)
+            holding_start_by_ticker[r["ticker"]] = ts.normalize()
+        except Exception:
+            pass
+    # Trades dated before the current lot are a closed cycle. Using them as the
+    # ownership start would draw today's cost basis back onto shares that were
+    # already sold, which is the same skew Gains & Losses already refuses.
     for tx in all_txns:
-        _record_ownership_start(tx.get("ticker"), tx.get("transaction_date"))
+        ticker = tx.get("ticker")
+        floor = holding_start_by_ticker.get(ticker)
+        tx_date = tx.get("transaction_date")
+        if floor is not None and tx_date:
+            try:
+                ts = pd.Timestamp(tx_date)
+                if ts.tzinfo is not None:
+                    ts = ts.tz_localize(None)
+                if ts.normalize() < floor:
+                    continue
+            except Exception:
+                pass
+        _record_ownership_start(ticker, tx_date)
 
     known_portfolio_start = min(ownership_starts.values()) if ownership_starts else None
     if known_portfolio_start is not None:
