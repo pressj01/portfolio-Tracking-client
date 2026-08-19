@@ -11180,6 +11180,7 @@ def _merge_official_distribution_snapshot(snapshot, official):
         return merged
     if official.get("has_dividend"):
         merged.update(official)
+        merged["known"] = True
         if official.get("div_pay_date"):
             merged["pay_date_confirmed"] = True
         return merged
@@ -11194,6 +11195,8 @@ def _merge_official_distribution_snapshot(snapshot, official):
         value = official.get(key)
         if value not in (None, "", []):
             merged[key] = value
+    if official.get("ex_div_date") or official.get("freq") or official.get("div_pay_date"):
+        merged["known"] = True
     if official.get("div_pay_date"):
         merged["pay_date_confirmed"] = True
     return merged
@@ -12681,13 +12684,34 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
     return snapshot
 
 
+def _distribution_per_share_from_holding_actuals(holding):
+    """Per-share amount from cash already on the holding when the issuer table is empty."""
+    try:
+        qty = float(holding.get("qty") or holding.get("quantity") or 0)
+    except (TypeError, ValueError):
+        qty = 0.0
+    if qty <= 0:
+        return None
+    for key in ("last_payment_cash", "current_month_income", "ytd_divs", "dividend_paid"):
+        try:
+            cash = float(holding.get(key) or 0)
+        except (TypeError, ValueError):
+            cash = 0.0
+        if cash > 0:
+            return round(cash / qty, 6)
+    return None
+
+
 def _apply_official_snapshot_override(ticker, snapshot, description=None):
     """Prefer official issuer data over Yahoo when the ticker belongs to a supported family."""
     ticker = (ticker or "").strip().upper()
     snapshot = dict(snapshot or {})
     description = description or ""
 
-    official = _fetch_official_distribution_snapshot(ticker, description)
+    try:
+        official = _fetch_official_distribution_snapshot(ticker, description)
+    except Exception:
+        official = None
 
     if not official:
         return snapshot
@@ -13165,9 +13189,10 @@ def refresh_market_data():
     lag_pattern_map = _build_dividend_lag_patterns(conn)
 
     actual_payment_history = {}
+    last_payment_cash = {}
     try:
         history_rows = conn.execute(
-            "SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date "
+            "SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date, amount "
             "FROM dividend_payments "
             "WHERE profile_id IN ({}) "
             "AND LOWER(COALESCE(source, '')) != 'refresh_estimate' "
@@ -13180,11 +13205,17 @@ def refresh_market_data():
         for history_row in history_rows:
             parsed = _parse_timestamp_value(history_row["payment_date"])
             if parsed is not None:
-                actual_payment_history.setdefault(
-                    (history_row["profile_id"], history_row["ticker"]), []
-                ).append(parsed.date().isoformat())
+                key = (history_row["profile_id"], history_row["ticker"])
+                actual_payment_history.setdefault(key, []).append(parsed.date().isoformat())
+                try:
+                    cash = float(history_row["amount"] or 0)
+                except (TypeError, ValueError):
+                    cash = 0.0
+                if cash > 0:
+                    last_payment_cash[key] = cash
     except Exception:
         actual_payment_history = {}
+        last_payment_cash = {}
 
     # Load known weekly tickers across all profiles
     weekly_set = set()
@@ -13471,11 +13502,19 @@ def refresh_market_data():
             has_dividend = bool(snapshot.get("has_dividend"))
             new_price = price_map.get(t)
             new_div = snapshot.get("div") if has_dividend else None
-            new_exdiv = snapshot.get("ex_div_date") if has_dividend else None
-            new_pay_date = snapshot.get("div_pay_date") if has_dividend else None
+            try:
+                if new_div is not None:
+                    new_div = float(new_div) or None
+            except (TypeError, ValueError):
+                new_div = None
+            # New funds often publish the next ex/pay dates before Yahoo (or
+            # even the issuer amount table) has a distribution. Keep those
+            # dates even when has_dividend is still false.
+            new_exdiv = snapshot.get("ex_div_date")
+            new_pay_date = snapshot.get("div_pay_date")
             new_freq = effective_freq.get(t)
 
-            if not new_price and not snapshot_known:
+            if not new_price and not snapshot_known and not new_exdiv and not new_div:
                 continue
 
             h = holding_map[key]
@@ -13543,6 +13582,15 @@ def refresh_market_data():
                 # Including a deliberate $0 ("this fund stopped paying"), which
                 # falls through to the zeroing branch below and stays there.
                 new_div = float(h.get("div") or 0) or None
+            if not new_div:
+                actuals_holding = dict(h)
+                actuals_holding["last_payment_cash"] = last_payment_cash.get((pid, t))
+                new_div = _distribution_per_share_from_holding_actuals(actuals_holding)
+                if new_div:
+                    has_dividend = True
+                    snapshot_known = True
+                    if not new_freq:
+                        new_freq = old_freq or snapshot.get("freq") or ("W" if t in weekly_set else None)
             existing_estim_annual = float(h.get("estim_payment_per_year") or 0)
             # Preserve the existing income estimate when:
             #  (a) this profile is positions-managed (broker-supplied income)
@@ -13710,7 +13758,7 @@ def refresh_market_data():
                              "gain_or_loss_percentage = ?", "percent_change = ?"])
                 vals.extend([new_price, current_value, gain, gain_pct, gain_pct])
 
-            if snapshot_known:
+            if snapshot_known or new_div or new_exdiv or new_freq:
                 if old_exdiv and old_pay_date and (
                     old_exdiv != new_exdiv or old_pay_date != new_pay_date or (old_freq or "") != (new_freq or "")
                 ):
@@ -13742,6 +13790,8 @@ def refresh_market_data():
                             snapshot,
                             cur_freq,
                         )
+                        if not annual_div:
+                            annual_div = new_div * _refresh_frequency_multiplier(cur_freq)
                     if preserve_income_estimate:
                         estim_annual = float(h.get("estim_payment_per_year") or 0)
                         estim_monthly = float(h.get("approx_monthly_income") or 0) or (
@@ -29852,7 +29902,7 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
         ticker_placeholders = ",".join("?" * len(tickers))
         history_start = (date.today() - timedelta(days=730)).isoformat()
         history_rows = conn.execute(
-            f"""SELECT UPPER(TRIM(ticker)) AS ticker, payment_date
+            f"""SELECT UPPER(TRIM(ticker)) AS ticker, payment_date, SUM(amount) AS amount
                 FROM dividend_payments
                 WHERE profile_id IN ({placeholders})
                   AND UPPER(TRIM(ticker)) IN ({ticker_placeholders})
@@ -29865,12 +29915,31 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
             [*ids, *tickers, history_start, date.today().isoformat()],
         ).fetchall()
         history_by_ticker = {}
+        last_payment_cash = {}
         for row in history_rows:
             parsed = _parse_timestamp_value(row["payment_date"])
             if parsed is not None:
                 history_by_ticker.setdefault(row["ticker"], []).append(parsed.date().isoformat())
+                try:
+                    cash = float(row["amount"] or 0)
+                except (TypeError, ValueError):
+                    cash = 0.0
+                if cash > 0:
+                    last_payment_cash[row["ticker"]] = cash
         for holding in holdings:
             holding["payment_history"] = history_by_ticker.get(holding["ticker"], [])
+            amt = holding.get("amount")
+            if (amt is None or amt <= 0) and holding["quantity"] > 0:
+                cash = last_payment_cash.get(holding["ticker"])
+                if cash:
+                    holding["amount"] = round(cash / holding["quantity"], 6)
+                    if not holding.get("payment_income"):
+                        holding["payment_income"] = round(cash, 2)
+                    if not holding.get("annual_income"):
+                        payments = {
+                            "52": 52, "W": 52, "M": 12, "Q": 4, "SA": 2, "S": 2, "A": 1,
+                        }.get(str(holding.get("freq") or "").strip().upper(), 12)
+                        holding["annual_income"] = round(cash * payments, 2)
 
     holdings.sort(key=lambda row: row["ticker"])
     return holdings
@@ -30558,6 +30627,22 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
                 annual_income, payment_income,
             )
 
+        freq_payments = {
+            "52": 52, "W": 52, "M": 12, "Q": 4, "SA": 2, "S": 2, "A": 1,
+        }.get(str(freq or "").strip().upper(), 12)
+        if (amount is None or amount <= 0) and quantity > 0:
+            derived = _distribution_per_share_from_holding_actuals({
+                "quantity": quantity,
+                "current_month_income": payment_income,
+                "ytd_divs": annual_income,
+            })
+            if derived:
+                amount = derived
+        if (payment_income is None or payment_income <= 0) and amount and quantity > 0:
+            payment_income = amount * quantity
+        if (annual_income is None or annual_income <= 0) and amount and quantity > 0:
+            annual_income = amount * quantity * freq_payments
+
         normalized_pay_ts = _parse_timestamp_value(pay_dt)
         if normalized_pay_ts is None:
             continue
@@ -30593,6 +30678,10 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
     # chronological order rather than ordering by the (secondary) pay date.
     events.sort(key=lambda e: (e["date"], e["ticker"]))
     _cache_set(_DIVIDEND_CALENDAR_CACHE, cache_key, events)
+    try:
+        _persist_calendar_dividend_metadata(events)
+    except Exception:
+        pass
     return events
 
 
@@ -30669,8 +30758,15 @@ def _canonical_upcoming_dividends(today=None):
     return events
 
 
+def _format_holding_date(value, output_format="%m/%d/%y"):
+    ts = _parse_timestamp_value(value)
+    if ts is None:
+        return None
+    return ts.strftime(output_format)
+
+
 def _apply_resolved_pay_dates(rows, events, output_format="%m/%d/%y"):
-    """Overlay canonical current pay dates on API rows without mutating storage."""
+    """Overlay calendar dividend dates and amounts on API rows without mutating storage."""
     event_by_ticker = {
         str(event.get("ticker") or "").strip().upper(): event
         for event in events or []
@@ -30681,15 +30777,110 @@ def _apply_resolved_pay_dates(rows, events, output_format="%m/%d/%y"):
         if not event:
             continue
         pay_ts = _parse_timestamp_value(event.get("pay_date"))
-        if pay_ts is None:
-            continue
-        row["stored_div_pay_date"] = row.get("div_pay_date")
-        row["div_pay_date"] = pay_ts.strftime(output_format)
-        row["div_pay_date_estimated"] = bool(event.get("pay_estimated", True))
-        row["div_pay_date_source"] = event.get("pay_source") or (
-            "confirmed" if event.get("pay_estimated") is False else "schedule"
-        )
+        if pay_ts is not None:
+            row["stored_div_pay_date"] = row.get("div_pay_date")
+            row["div_pay_date"] = pay_ts.strftime(output_format)
+            row["div_pay_date_estimated"] = bool(event.get("pay_estimated", True))
+            row["div_pay_date_source"] = event.get("pay_source") or (
+                "confirmed" if event.get("pay_estimated") is False else "schedule"
+            )
+        ex_fmt = _format_holding_date(event.get("date"), output_format)
+        if ex_fmt:
+            row["ex_div_date"] = ex_fmt
+        try:
+            amount = float(event.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if amount > 0 and not (row.get("div") and float(row.get("div") or 0) > 0):
+            row["div"] = amount
+        try:
+            annual = float(event.get("annual_income") or 0)
+        except (TypeError, ValueError):
+            annual = 0.0
+        if annual > 0 and not (row.get("estim_payment_per_year") and float(row.get("estim_payment_per_year") or 0) > 0):
+            row["estim_payment_per_year"] = annual
+            cv = float(row.get("current_value") or 0)
+            pv = float(row.get("purchase_value") or 0)
+            if cv > 0:
+                row["current_annual_yield"] = annual / cv
+            if pv > 0:
+                row["annual_yield_on_cost"] = annual / pv
+            row["approx_monthly_income"] = annual / 12.0
     return rows
+
+
+def _persist_calendar_dividend_metadata(events):
+    """Write issuer/calendar dividend metadata onto holdings that are still blank."""
+    if not events:
+        return
+    conn = get_connection()
+    try:
+        for event in events:
+            ticker = str(event.get("ticker") or "").strip().upper()
+            if not ticker:
+                continue
+            ex_fmt = _format_holding_date(event.get("date"))
+            pay_fmt = _format_holding_date(event.get("pay_date"))
+            try:
+                amount = float(event.get("amount") or 0)
+            except (TypeError, ValueError):
+                amount = 0.0
+            freq = str(event.get("freq") or "W").strip().upper()
+            freq_mult = {"W": 52, "52": 52, "M": 12, "Q": 4, "SA": 2, "A": 1}.get(freq, 12)
+            rows = conn.execute(
+                """SELECT profile_id, quantity, current_value, purchase_value, div,
+                          ex_div_date, div_pay_date, estim_payment_per_year, div_frequency,
+                          div_manual_until, div_dates_manual_until, div_frequency_locked
+                   FROM all_account_info
+                   WHERE ticker = ? AND COALESCE(quantity, 0) > 0""",
+                (ticker,),
+            ).fetchall()
+            for row in rows:
+                if _manual_dividend_override_active(row["div_dates_manual_until"]):
+                    continue
+                sets = []
+                vals = []
+                if ex_fmt and not (row["ex_div_date"] or "").strip():
+                    sets.append("ex_div_date = ?")
+                    vals.append(ex_fmt)
+                if pay_fmt and not (row["div_pay_date"] or "").strip():
+                    sets.append("div_pay_date = ?")
+                    vals.append(pay_fmt)
+                if amount > 0 and not _manual_dividend_override_active(row["div_manual_until"]):
+                    if not (row["div"] or 0):
+                        qty = float(row["quantity"] or 0)
+                        cv = float(row["current_value"] or 0)
+                        pv = float(row["purchase_value"] or 0)
+                        annual = amount * qty * freq_mult
+                        sets.extend([
+                            "div = ?",
+                            "estim_payment_per_year = ?",
+                            "approx_monthly_income = ?",
+                            "current_annual_yield = ?",
+                            "annual_yield_on_cost = ?",
+                        ])
+                        vals.extend([
+                            amount,
+                            annual,
+                            annual / 12.0 if annual else 0,
+                            (annual / cv) if cv > 0 else 0,
+                            (annual / pv) if pv > 0 else 0,
+                        ])
+                if not row["div_frequency_locked"] and freq and not str(row["div_frequency"] or "").strip():
+                    sets.append("div_frequency = ?")
+                    vals.append(freq)
+                if not sets:
+                    continue
+                vals.extend([ticker, row["profile_id"]])
+                conn.execute(
+                    f"UPDATE all_account_info SET {', '.join(sets)} WHERE ticker = ? AND profile_id = ?",
+                    vals,
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
 
 
 @app.route("/api/div-calendar")

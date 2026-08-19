@@ -5,6 +5,8 @@ import pandas as pd
 
 from backend.app import (
     _XFUNDS_CURRENT_TICKERS,
+    _apply_resolved_pay_dates,
+    _distribution_per_share_from_holding_actuals,
     _fetch_goldman_distribution_snapshot,
     _fetch_xfunds_distribution_snapshot,
     _fetch_xfunds_etf_profile,
@@ -300,6 +302,59 @@ class XFundsSecurityResearchTests(unittest.TestCase):
         self.assertEqual(merged["freq"], "W")
         self.assertEqual(merged["ex_div_date"], "08/12/26")
         self.assertEqual(merged["source"], "X Funds")
+        self.assertTrue(merged["known"])
+
+    def test_paid_cash_fills_per_share_when_issuer_amount_is_still_blank(self):
+        per_share = _distribution_per_share_from_holding_actuals({
+            "qty": 340.043,
+            "last_payment_cash": 99.14,
+            "current_month_income": 99.14,
+            "ytd_divs": 99.14,
+        })
+        self.assertAlmostEqual(per_share, 0.291552, places=5)
+
+    def test_schedule_only_official_data_is_still_known(self):
+        merged = _merge_official_distribution_snapshot(
+            {"known": False, "has_dividend": False, "div": 0.0},
+            {
+                "known": True,
+                "has_dividend": False,
+                "div": None,
+                "ex_div_date": "08/19/26",
+                "div_pay_date": "08/20/26",
+                "freq": "W",
+            },
+        )
+        self.assertTrue(merged["known"])
+        self.assertEqual(merged["ex_div_date"], "08/19/26")
+        self.assertEqual(merged["div_pay_date"], "08/20/26")
+        self.assertFalse(merged["has_dividend"])
+
+    def test_holdings_overlay_fills_blank_drmy_dates_from_calendar_event(self):
+        rows = [{
+            "ticker": "DRMY",
+            "div": 0.2916,
+            "ex_div_date": None,
+            "div_pay_date": None,
+            "estim_payment_per_year": 0,
+            "current_value": 15696.36,
+            "purchase_value": 16160.0,
+        }]
+        events = [{
+            "ticker": "DRMY",
+            "date": "2026-08-19",
+            "pay_date": "2026-08-20",
+            "pay_estimated": False,
+            "amount": 0.2933,
+            "annual_income": 5155.28,
+        }]
+        overlaid = _apply_resolved_pay_dates(rows, events)
+        self.assertEqual(overlaid[0]["ex_div_date"], "08/19/26")
+        self.assertEqual(overlaid[0]["div_pay_date"], "08/20/26")
+        self.assertEqual(overlaid[0]["div"], 0.2916)
+        self.assertEqual(overlaid[0]["estim_payment_per_year"], 5155.28)
+        self.assertGreater(overlaid[0]["current_annual_yield"], 0)
+        self.assertGreater(overlaid[0]["approx_monthly_income"], 0)
 
     def test_official_fields_override_yahoo_and_yahoo_fills_gaps(self):
         yahoo = {
