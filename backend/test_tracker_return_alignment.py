@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -180,6 +181,77 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
             [row["ticker"] for row in dashboard.get_json()["performance_rows"]],
             ["AAA"],
         )
+
+    def test_portfolio_tester_actual_history_reuses_tracker_total_return(self):
+        history = app_module._portfolio_tester_actual_history(
+            [6],
+            "2024-01-02",
+            "2024-12-31",
+            selected_tickers=["AAA"],
+        )
+        tracker = self.client.get(
+            "/api/total-return/charts?profile_id=6&period=custom"
+            "&start_date=2024-01-02&end_date=2024-12-31"
+        )
+
+        self.assertEqual(tracker.status_code, 200, tracker.get_json())
+        self.assertEqual(
+            history["metrics"]["total_return_pct"],
+            tracker.get_json()["portfolio_metrics"]["total_return_pct"],
+        )
+        self.assertEqual(history["actual_start_date"], "2024-01-02")
+        self.assertEqual(history["actual_end_date"], "2024-12-31")
+        self.assertAlmostEqual(history["values"][0], 100.0)
+        self.assertAlmostEqual(history["values"][-1], 140.0)
+        self.assertEqual(history["scope"], "selected_holdings")
+        self.assertEqual(history["selected_tickers"], ["AAA"])
+
+    def test_portfolio_tester_route_aligns_hypothetical_to_actual_coverage(self):
+        history = {
+            "dates": ["2024-03-01", "2024-12-31"],
+            "values": [100.0, 120.0],
+            "actual_start_date": "2024-03-01",
+            "actual_end_date": "2024-12-31",
+            "metrics": {"total_return_pct": 20.0},
+        }
+        run_result = {"valid": True, "portfolios": []}
+        with patch.object(
+            app_module,
+            "_portfolio_tester_actual_history",
+            return_value=history,
+        ) as actual_history, patch("portfolio_tester.run_backtest", return_value=run_result) as run:
+            response = self.client.post(
+                "/api/portfolio-tester/run?profile_id=6",
+                json={
+                    "portfolios": [
+                        {
+                            "name": "Actual",
+                            "source": "actual",
+                            "holdings": [],
+                            "actual_tickers": ["AAA"],
+                        },
+                        {
+                            "name": "Alternative",
+                            "source": "hypothetical",
+                            "holdings": [{"ticker": "SPY", "weight": 1.0}],
+                        },
+                    ],
+                    "start": "2024-01-01",
+                    "end": "2024-12-31",
+                    "initial": 10000,
+                    "include_div": True,
+                    "reinvest_div": True,
+                    "include_benchmark": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        kwargs = run.call_args.kwargs
+        self.assertEqual(kwargs["start"], "2024-03-01")
+        self.assertEqual(kwargs["end"], "2024-12-31")
+        self.assertEqual(kwargs["portfolios"][0]["history"], history)
+        self.assertEqual(response.get_json()["requested_start"], "2024-01-01")
+        self.assertEqual(actual_history.call_args.kwargs["selected_tickers"], ["AAA"])
 
 
 if __name__ == "__main__":

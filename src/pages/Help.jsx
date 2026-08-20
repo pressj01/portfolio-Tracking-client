@@ -5090,10 +5090,19 @@ function PortfolioTesterHelp() {
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Building Portfolio A and B</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each side has a source toggle. <strong>Hypothetical weights</strong> keeps the original editable
+        ticker-and-target-weight backtest. <strong>Actual account history</strong> uses the selected account&apos;s
+        dated buys and sells and the same transaction-aware Tracker Total Return as Growth and Total Return.
+        Actual mode shows the current holdings, values, and weights; its checkboxes can narrow the replay to
+        selected current holdings. Use <strong>Edit holdings &amp; weights as hypothetical</strong> to copy that
+        selection into the editable model when you want to assign weights that did not actually occur.
+        Only one side can use actual history, and actual history is available in Growth mode.
+      </p>
       <p style={{ marginBottom: '0.5rem' }}>Each portfolio card lets you build the allocation four different ways:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Type a ticker + optional weight %</strong> and click <strong>Add</strong> (or press Enter). If no weight is given, it's added at 0% and you can click Equal or Normalize to distribute.</li>
-        <li><strong>Load All Current</strong> — replaces the portfolio with every current holding, weighted by current dollar value. Useful when you want to benchmark your real portfolio against a hypothetical alternative.</li>
+        <li><strong>Load Portfolio</strong> — replaces the hypothetical side with every current holding, weighted by current dollar value. This is an editable target-weight simulation; use <strong>Actual account history</strong> when you want dated transaction-aware performance instead.</li>
         <li><strong>Pick Tickers…</strong> — opens an inline picker showing every current holding sorted alphabetically with checkboxes. Search by ticker, use <strong>Select All</strong> / <strong>Select None</strong>, then apply:
           <ul style={{ paddingLeft: '1.25rem', marginTop: '0.25rem' }}>
             <li><strong>Replace Portfolio</strong> — overwrites this portfolio with exactly the selected tickers, weighted by current value.</li>
@@ -5228,7 +5237,7 @@ function PortfolioTesterHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Tips</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>To compare your <strong>real portfolio</strong> against a single-fund alternative, click <strong>Load All Current</strong> on A and add a single ticker at 100% weight on B.</li>
+        <li>To compare today&apos;s <strong>portfolio allocation</strong> against a single-fund alternative, click <strong>Load Portfolio</strong> on A and add a single ticker at 100% weight on B. To compare the account&apos;s real dated performance, choose <strong>Actual account history</strong> instead.</li>
         <li>To compare <strong>two subsets</strong> of your portfolio (e.g., income sleeve vs. growth sleeve), use <strong>Pick Tickers…</strong> on each side to cherry-pick what goes where.</li>
         <li>Use <strong>Load Filtered</strong> if you've tagged your holdings on the Categories page — e.g., compare all "Covered Call" holdings against all "Core Equity" holdings with two clicks.</li>
         <li>If a run fails validation, don't panic — use the one-click remove button or shorten the start date to get inside every ticker's coverage window.</li>

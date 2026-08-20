@@ -37023,6 +37023,253 @@ def analytics_peers():
 
 # ── Portfolio Tester (head-to-head backtester) ────────────────────────────────
 
+def _portfolio_tester_actual_history(
+    profile_ids,
+    start_date,
+    end_date,
+    selected_tickers=None,
+):
+    """Build the selected account's audited tracker index for Portfolio Tester.
+
+    This deliberately reuses ``_build_transaction_aware_portfolio_series`` so
+    the actual-history line is the same quantity as Growth and Total Return,
+    including dated buys/sells and fallback-position coverage rules.
+    """
+    conn = get_connection()
+    try:
+        position_profile_ids = _tracker_position_profile_ids(conn, profile_ids)
+        placeholders = ",".join("?" * len(position_profile_ids))
+        holding_rows = conn.execute(
+            f"""SELECT ticker, profile_id, description, classification_type,
+                       purchase_value, quantity, purchase_date, import_date
+                  FROM all_account_info
+                 WHERE COALESCE(quantity, 0) > 0
+                   AND profile_id IN ({placeholders})
+                 ORDER BY ticker""",
+            position_profile_ids,
+        ).fetchall()
+        transaction_rows = conn.execute(
+            f"""SELECT ticker, profile_id, transaction_type, transaction_date,
+                       shares, price_per_share, fees, notes
+                  FROM transactions
+                 WHERE profile_id IN ({placeholders})
+                   AND transaction_date IS NOT NULL
+                 ORDER BY transaction_date, id""",
+            position_profile_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not holding_rows:
+        raise ValueError("The selected account has no open holdings to replay.")
+
+    selected_accounting_tickers = {
+        _accounting_symbol_for_ticker(ticker)
+        for ticker in (selected_tickers or [])
+        if str(ticker or "").strip()
+    }
+    holdings = []
+    market_symbols = []
+    for raw_row in holding_rows:
+        row = dict(raw_row)
+        accounting_ticker = _accounting_symbol_for_ticker(row.get("ticker"))
+        if selected_accounting_tickers and accounting_ticker not in selected_accounting_tickers:
+            continue
+        market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+        row["ticker"] = accounting_ticker
+        row["market_symbol"] = market_symbol
+        row["position_key"] = (row.get("profile_id"), accounting_ticker)
+        holdings.append(row)
+        if market_symbol:
+            market_symbols.append(market_symbol)
+
+    if not holdings:
+        raise ValueError("None of the selected holdings are open in this account.")
+
+    transactions = []
+    for raw_row in transaction_rows:
+        row = dict(raw_row)
+        accounting_ticker = _accounting_symbol_for_ticker(row.get("ticker"))
+        if selected_accounting_tickers and accounting_ticker not in selected_accounting_tickers:
+            continue
+        market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
+        row["ticker"] = accounting_ticker
+        row["market_symbol"] = market_symbol
+        row["position_key"] = (row.get("profile_id"), accounting_ticker)
+        transactions.append(row)
+        if market_symbol:
+            market_symbols.append(market_symbol)
+
+    period_range = _resolve_total_return_period(
+        "custom",
+        start_date=start_date,
+        end_date=end_date,
+        inception_date=_portfolio_inception_date(holdings, transactions),
+    )
+    symbols = list(dict.fromkeys(market_symbols))
+    raw = _chunked_yf_download(
+        " ".join(symbols),
+        **period_range["yf_kwargs"],
+        progress=False,
+        auto_adjust=False,
+        actions=True,
+    )
+    top_columns = (
+        raw.columns.get_level_values(0)
+        if isinstance(getattr(raw, "columns", None), pd.MultiIndex)
+        else getattr(raw, "columns", [])
+    )
+    if raw is None or raw.empty or "Close" not in top_columns:
+        raise ValueError("No market history is available for the selected account.")
+
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"]
+        adjusted = raw["Adj Close"] if "Adj Close" in top_columns else None
+        dividends = (
+            raw["Dividends"].fillna(0)
+            if "Dividends" in top_columns
+            else pd.DataFrame(0, index=close.index, columns=close.columns)
+        )
+        capital_gains = (
+            raw["Capital Gains"].fillna(0)
+            if "Capital Gains" in top_columns
+            else pd.DataFrame(0, index=close.index, columns=close.columns)
+        )
+        stock_splits = (
+            raw["Stock Splits"].fillna(0)
+            if "Stock Splits" in top_columns
+            else pd.DataFrame(0, index=close.index, columns=close.columns)
+        )
+    else:
+        close = raw[["Close"]]
+        close.columns = [symbols[0]]
+        adjusted = raw[["Adj Close"]] if "Adj Close" in raw.columns else None
+        if adjusted is not None:
+            adjusted.columns = [symbols[0]]
+        dividends = (
+            raw[["Dividends"]].fillna(0)
+            if "Dividends" in raw.columns
+            else pd.DataFrame(0, index=close.index, columns=[symbols[0]])
+        )
+        dividends.columns = [symbols[0]]
+        capital_gains = (
+            raw[["Capital Gains"]].fillna(0)
+            if "Capital Gains" in raw.columns
+            else pd.DataFrame(0, index=close.index, columns=[symbols[0]])
+        )
+        capital_gains.columns = [symbols[0]]
+        stock_splits = (
+            raw[["Stock Splits"]].fillna(0)
+            if "Stock Splits" in raw.columns
+            else pd.DataFrame(0, index=close.index, columns=[symbols[0]])
+        )
+        stock_splits.columns = [symbols[0]]
+
+    stock_splits = _stock_split_history_for_period(
+        symbols,
+        stock_splits,
+        period_range,
+        _portfolio_inception_date(holdings, transactions),
+    )
+    tracker = _build_transaction_aware_portfolio_series(
+        close,
+        adjusted,
+        dividends,
+        capital_gains,
+        transactions,
+        holdings,
+        stock_splits=stock_splits,
+    )
+    metrics = _portfolio_period_metrics(tracker)
+    dates = [pd.Timestamp(value).date().isoformat() for value in close.index]
+    history_pairs = []
+    for index, value in enumerate(tracker.get("total") or []):
+        if index >= len(dates) or value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number) and number > 0:
+            history_pairs.append((dates[index], number))
+    if len(history_pairs) < 2 or metrics is None:
+        raise ValueError("Actual portfolio history has fewer than two usable observations.")
+
+    return {
+        "dates": [item[0] for item in history_pairs],
+        "values": [item[1] for item in history_pairs],
+        "actual_start_date": metrics.get("actual_start_date"),
+        "actual_end_date": metrics.get("actual_end_date"),
+        "metrics": metrics,
+        "transaction_count": tracker.get("transaction_count", 0),
+        "fallback_positions": tracker.get("fallback_positions", 0),
+        "inferred_opening_positions": tracker.get("inferred_opening_positions", 0),
+        "missing_market_symbols": tracker.get("missing_market_symbols", []),
+        "scope": "selected_holdings" if selected_accounting_tickers else "entire_account",
+        "selected_tickers": sorted(selected_accounting_tickers),
+    }
+
+
+@app.route("/api/portfolio-tester/actual-earliest-date", methods=["GET"])
+def portfolio_tester_actual_earliest_date():
+    """Cheapest possible answer to "how far back can Actual history go".
+
+    Mirrors the fallback order _build_transaction_aware_portfolio_series uses
+    (transaction date, then purchase date, then import date) without paying
+    for a Yahoo download or a full replay, so the frontend can default the
+    Start field to a date that will not immediately trip the range-adjusted
+    warning on an ordinary page load.
+    """
+    _, profile_ids = get_profile_filter()
+    requested_tickers = {
+        _accounting_symbol_for_ticker(t)
+        for t in (request.args.get("tickers") or "").split(",")
+        if t.strip()
+    }
+    conn = get_connection()
+    try:
+        position_profile_ids = _tracker_position_profile_ids(conn, profile_ids)
+        placeholders = ",".join("?" * len(position_profile_ids))
+        holding_rows = conn.execute(
+            f"""SELECT ticker, profile_id, purchase_date, import_date
+                  FROM all_account_info
+                 WHERE COALESCE(quantity, 0) > 0
+                   AND profile_id IN ({placeholders})""",
+            position_profile_ids,
+        ).fetchall()
+        txn_min_rows = conn.execute(
+            f"""SELECT ticker, profile_id, MIN(transaction_date) AS earliest
+                  FROM transactions
+                 WHERE profile_id IN ({placeholders})
+                   AND transaction_date IS NOT NULL
+              GROUP BY ticker, profile_id""",
+            position_profile_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    txn_min_by_position = {
+        (row["profile_id"], _accounting_symbol_for_ticker(row["ticker"])): row["earliest"]
+        for row in txn_min_rows
+    }
+
+    earliest = None
+    for row in holding_rows:
+        accounting_ticker = _accounting_symbol_for_ticker(row["ticker"])
+        if requested_tickers and accounting_ticker not in requested_tickers:
+            continue
+        position_key = (row["profile_id"], accounting_ticker)
+        effective_date = (
+            txn_min_by_position.get(position_key)
+            or row["purchase_date"]
+            or row["import_date"]
+        )
+        if effective_date and (earliest is None or effective_date < earliest):
+            earliest = effective_date
+
+    return jsonify({"earliest_date": (earliest or "")[:10] or None})
+
+
 @app.route("/api/portfolio-tester/holdings", methods=["GET"])
 def portfolio_tester_holdings():
     """Return the user's current holdings with user-defined category names
@@ -37067,6 +37314,76 @@ def portfolio_tester_holdings():
     return jsonify({"holdings": out, "categories": all_cats})
 
 
+@app.route("/api/portfolio-tester/all-accounts-holdings", methods=["GET"])
+def portfolio_tester_all_accounts_holdings():
+    """Every ticker held anywhere across the user's visible accounts, regardless
+    of which profile or aggregate is currently selected in the top nav.
+
+    Lets either portfolio draw candidates from outside whatever single account
+    is currently selected up top, e.g. picking a ticker that only lives in
+    Etrade IRA while viewing the Owner rollup.
+
+    Only positions_managed=1 profiles are queried. Rollups like Owner
+    (positions_managed=0) hold a materialized copy of their members' rows for
+    display convenience, not an independent import — including them would
+    double-count every ticker their members already hold and list "Owner"
+    as a phantom account alongside the real ones.
+    """
+    conn = get_connection()
+    try:
+        profile_rows = conn.execute(
+            """SELECT id, name FROM profiles
+                WHERE COALESCE(hidden_from_selector, 0) = 0
+                  AND positions_managed = 1"""
+        ).fetchall()
+        profile_names = {row["id"]: row["name"] for row in profile_rows}
+        profile_ids = list(profile_names.keys())
+        if not profile_ids:
+            return jsonify({"holdings": [], "categories": []})
+        placeholders = ",".join("?" * len(profile_ids))
+        rows = conn.execute(
+            f"""SELECT ticker, profile_id, SUM(COALESCE(current_value, 0)) AS current_value
+                  FROM all_account_info
+                 WHERE profile_id IN ({placeholders})
+                   AND current_value IS NOT NULL
+                   AND current_value > 0
+              GROUP BY ticker, profile_id""",
+            profile_ids,
+        ).fetchall()
+        cat_rows = conn.execute(
+            f"""SELECT tc.ticker, c.name
+                  FROM ticker_categories tc
+                  JOIN categories c ON c.id = tc.category_id
+                 WHERE tc.profile_id IN ({placeholders})
+                   AND c.profile_id IN ({placeholders})""",
+            profile_ids + profile_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_ticker = {}
+    for r in rows:
+        entry = by_ticker.setdefault(r["ticker"], {"current_value": 0.0, "accounts": set()})
+        entry["current_value"] += float(r["current_value"] or 0)
+        entry["accounts"].add(profile_names.get(r["profile_id"], "?"))
+
+    cats_by_ticker = {}
+    for r in cat_rows:
+        cats_by_ticker.setdefault(r["ticker"], []).append(r["name"])
+
+    total = sum(entry["current_value"] for entry in by_ticker.values()) or 1.0
+    out = [{
+        "ticker": ticker,
+        "current_value": entry["current_value"],
+        "weight": entry["current_value"] / total,
+        "accounts": sorted(entry["accounts"]),
+        "categories": sorted(set(cats_by_ticker.get(ticker, []))),
+    } for ticker, entry in by_ticker.items()]
+    out.sort(key=lambda row: -row["current_value"])
+    all_cats = sorted({name for names in cats_by_ticker.values() for name in names})
+    return jsonify({"holdings": out, "categories": all_cats})
+
+
 @app.route("/api/portfolio-tester/run", methods=["POST"])
 def portfolio_tester_run():
     from portfolio_tester import run_backtest, MAX_TICKERS_PER_PORTFOLIO, MAX_YEARS
@@ -37085,6 +37402,14 @@ def portfolio_tester_run():
     include_div = bool(data.get("include_div", True))
     reinvest_div = bool(data.get("reinvest_div", True))
     rebalance = (data.get("rebalance") or "none").lower()
+
+    actual_requested = [
+        portfolio
+        for portfolio in portfolios
+        if str(portfolio.get("source") or "hypothetical").strip().lower() == "actual"
+    ]
+    if len(actual_requested) > 1:
+        return jsonify(error="Choose actual transaction-aware history for only one portfolio."), 400
 
     # Income-mode controls. distribution_policy, when supplied, is the canonical
     # control and overrides include_div/reinvest_div; otherwise the legacy flags
@@ -37125,10 +37450,47 @@ def portfolio_tester_run():
         benchmark = None
 
     try:
+        server_portfolios = []
+        if actual_requested:
+            if spend_income or not include_div or not reinvest_div:
+                return jsonify(error=(
+                    "Actual transaction-aware history is available in Growth mode "
+                    "with dividends included and reinvested."
+                )), 400
+            _, profile_ids = get_profile_filter()
+            actual_history = _portfolio_tester_actual_history(
+                profile_ids,
+                start,
+                end,
+                selected_tickers=actual_requested[0].get("actual_tickers") or [],
+            )
+            comparison_start = actual_history.get("actual_start_date") or start
+            comparison_end = actual_history.get("actual_end_date") or end
+        else:
+            actual_history = None
+            comparison_start = start
+            comparison_end = end
+
+        for portfolio in portfolios:
+            source = str(portfolio.get("source") or "hypothetical").strip().lower()
+            if source == "actual":
+                server_portfolios.append({
+                    "name": str(portfolio.get("name") or "Actual Portfolio"),
+                    "source": "actual",
+                    "holdings": [],
+                    "history": actual_history,
+                })
+            else:
+                server_portfolios.append({
+                    "name": str(portfolio.get("name") or "Hypothetical Portfolio"),
+                    "source": "hypothetical",
+                    "holdings": portfolio.get("holdings") or [],
+                })
+
         result = run_backtest(
-            portfolios=portfolios,
+            portfolios=server_portfolios,
             benchmark=benchmark,
-            start=start, end=end,
+            start=comparison_start, end=comparison_end,
             initial=initial,
             include_div=include_div,
             reinvest_div=reinvest_div,
@@ -37139,6 +37501,9 @@ def portfolio_tester_run():
             withdraw_rate=withdraw_rate,
             withdraw_inflation=withdraw_inflation,
         )
+        if actual_requested:
+            result["requested_start"] = start
+            result["requested_end"] = end
     except ValueError as e:
         return jsonify(error=str(e)), 400
     except Exception as e:

@@ -20,6 +20,8 @@ const PRESETS = [
 ]
 
 const MAX_TICKERS = 75
+const SOURCE_HYPOTHETICAL = 'hypothetical'
+const SOURCE_ACTUAL = 'actual'
 
 const fmtPct = (v, digits = 2) =>
   v == null || !isFinite(v) ? '—' : `${(v * 100).toFixed(digits)}%`
@@ -39,6 +41,13 @@ function subYearsISO(iso, yrs) {
   d.setFullYear(d.getFullYear() - Math.floor(yrs))
   if (yrs % 1 !== 0) d.setMonth(d.getMonth() - Math.round((yrs % 1) * 12))
   return d.toISOString().slice(0, 10)
+}
+// Matches the backend's own coverage slack (portfolio_tester.py validate_coverage),
+// so ordinary weekend/holiday alignment doesn't fire this as a "real" adjustment.
+const RANGE_ADJUST_SLACK_DAYS = 10
+function daysBetweenISO(a, b) {
+  if (!a || !b) return 0
+  return Math.abs(new Date(a) - new Date(b)) / (1000 * 60 * 60 * 24)
 }
 
 function PortfolioWeightInput({ ticker, weight, onChange }) {
@@ -88,23 +97,45 @@ function PortfolioWeightInput({ ticker, weight, onChange }) {
   )
 }
 
-function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAvailable, categories, onFilterLoad, currentHoldings, onPickApply }) {
+function PortfolioEditor({
+  label,
+  portfolio,
+  onChange,
+  onSourceChange,
+  actualDisabled,
+  actualAccountName,
+  onLoadCurrent,
+  currentAvailable,
+  categories,
+  onFilterLoad,
+  currentHoldings,
+  onPickApply,
+  allAccountHoldings,
+  onAllAccountPickApply,
+}) {
   const [input, setInput] = useState('')
   const [wt, setWt] = useState('')
   const [filter, setFilter] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
   const [picked, setPicked] = useState(() => new Set())
+  // 'current' = this account's holdings (currentHoldings); 'all' = every
+  // ticker across every visible account (allAccountHoldings). The 'all'
+  // source only exists when the parent passes allAccountHoldings down.
+  const [pickerSource, setPickerSource] = useState('current')
+  const canPickAllAccounts = !!allAccountHoldings
 
   // Reset picker selection every time it reopens so it isn't stale
   useEffect(() => {
     if (pickerOpen) {
       setPicked(new Set(portfolio.holdings.map(h => h.ticker)))
       setPickerSearch('')
+      setPickerSource('current')
     }
   }, [pickerOpen])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const visiblePicker = (currentHoldings || [])
+  const pickerPool = pickerSource === 'all' && canPickAllAccounts ? allAccountHoldings : currentHoldings
+  const visiblePicker = (pickerPool || [])
     .filter(h => {
       if (!pickerSearch.trim()) return true
       return h.ticker.toUpperCase().includes(pickerSearch.trim().toUpperCase())
@@ -124,6 +155,36 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
   const totalWeight = portfolio.holdings.reduce((s, h) => s + (Number(h.weight) || 0), 0)
   const wtDelta = Math.abs(totalWeight - 1)
   const wtOK = wtDelta < 0.001
+  const actualHistory = portfolio.source === SOURCE_ACTUAL
+  const actualScope = portfolio.actual_scope === 'selected' ? 'selected' : 'all'
+  const actualTickerSet = new Set(
+    actualScope === 'selected'
+      ? (portfolio.actual_tickers || [])
+      : (currentHoldings || []).map(holding => holding.ticker),
+  )
+  const actualScopeRows = (currentHoldings || []).filter(holding => actualTickerSet.has(holding.ticker))
+  const actualScopeValue = actualScopeRows.reduce(
+    (total, holding) => total + (Number(holding.current_value) || 0),
+    0,
+  )
+
+  const toggleActualTicker = (ticker) => {
+    const selected = new Set(actualTickerSet)
+    if (selected.has(ticker)) selected.delete(ticker)
+    else selected.add(ticker)
+    onChange({
+      ...portfolio,
+      actual_scope: 'selected',
+      actual_tickers: [...selected].sort(),
+    })
+  }
+
+  const editActualAsHypothetical = () => {
+    const tickers = [...actualTickerSet]
+    if (!tickers.length) return
+    onPickApply(tickers, 'replace')
+    onSourceChange(SOURCE_HYPOTHETICAL)
+  }
 
   const addRow = () => {
     const t = input.trim().toUpperCase()
@@ -178,6 +239,113 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
         />
       </div>
 
+      <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.65rem' }} role="group" aria-label={`${label} source`}>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => onSourceChange(SOURCE_HYPOTHETICAL)}
+          style={{
+            padding: '0.28rem 0.65rem', fontSize: '0.78rem',
+            borderColor: !actualHistory ? 'var(--accent)' : undefined,
+            color: !actualHistory ? 'var(--accent)' : 'var(--text-dim)',
+          }}
+        >
+          Hypothetical weights
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={actualDisabled || !currentAvailable}
+          onClick={() => onSourceChange(SOURCE_ACTUAL)}
+          title={actualDisabled
+            ? 'The other side already uses this account history'
+            : (!currentAvailable ? 'The selected account has no current holdings' : 'Use dated transactions and the shared Tracker Total Return history')}
+          style={{
+            padding: '0.28rem 0.65rem', fontSize: '0.78rem',
+            borderColor: actualHistory ? 'var(--accent)' : undefined,
+            color: actualHistory ? 'var(--accent)' : 'var(--text-dim)',
+          }}
+        >
+          Actual account history
+        </button>
+      </div>
+
+      {actualHistory ? (<>
+        <div className="alert alert-info" style={{ margin: '0 0 0.6rem' }}>
+          <strong>{actualAccountName} actual history:</strong> uses dated buys and sells with the same
+          transaction-aware Tracker Total Return calculation as Growth and Total Return. Current weights
+          are shown below for reference; historical weights follow the trades that actually occurred.
+        </div>
+        <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => onChange({ ...portfolio, actual_scope: 'all', actual_tickers: [] })}
+            style={{ padding: '0.3rem 0.7rem', color: actualScope === 'all' ? 'var(--accent)' : undefined }}
+          >
+            Use entire account
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!actualTickerSet.size}
+            onClick={editActualAsHypothetical}
+            title="Copy the selected current holdings and weights into the editable hypothetical mode"
+            style={{ padding: '0.3rem 0.7rem' }}
+          >
+            Edit holdings &amp; weights as hypothetical
+          </button>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem' }}>
+            {actualScope === 'all'
+              ? 'Entire history includes positions fully closed during the range.'
+              : `${actualTickerSet.size} current holding${actualTickerSet.size === 1 ? '' : 's'} selected.`}
+          </span>
+        </div>
+        <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--p-2a2a44)', borderRadius: 4 }}>
+          <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
+                <th style={{ padding: '0.3rem 0.5rem', width: 32 }}></th>
+                <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Current holding</th>
+                <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Current weight</th>
+                <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Current value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(currentHoldings || []).map(holding => {
+                const checked = actualTickerSet.has(holding.ticker)
+                const scopedWeight = actualScopeValue > 0
+                  ? (Number(holding.current_value) || 0) / actualScopeValue
+                  : 0
+                return (
+                  <tr key={holding.ticker} style={{ borderTop: '1px solid var(--p-2a2a44)', opacity: checked ? 1 : 0.5 }}>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleActualTicker(holding.ticker)}
+                        aria-label={`Include ${holding.ticker} in actual history`}
+                      />
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem' }}>{holding.ticker}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
+                      {checked ? `${(scopedWeight * 100).toFixed(2)}%` : '—'}
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
+                      {fmtMoney(holding.current_value)}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ marginTop: '0.4rem', color: 'var(--text-dim)', fontSize: '0.76rem' }}>
+          Changing checkboxes changes the actual-history ticker scope. To assign different weights, use
+          <strong> Edit holdings &amp; weights as hypothetical</strong>; arbitrary target weights are not actual trades.
+        </div>
+      </>
+      ) : <>
       <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
         <input
           value={input}
@@ -214,14 +382,16 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           onClick={() => onLoadCurrent('')}
           title="Replace with your current holdings, weighted by current value"
         >
-          Load All Current
+          Load Portfolio
         </button>
         <button
           className="btn"
           style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
-          disabled={!currentAvailable}
+          disabled={!currentAvailable && !canPickAllAccounts}
           onClick={() => setPickerOpen(o => !o)}
-          title="Cherry-pick individual tickers from your current holdings"
+          title={canPickAllAccounts
+            ? 'Cherry-pick tickers from this account, or from any of your accounts'
+            : 'Cherry-pick individual tickers from your current holdings'}
         >
           {pickerOpen ? 'Close Picker' : 'Pick Tickers…'}
         </button>
@@ -256,9 +426,40 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
           border: '1px solid var(--p-3a3a5c)', borderRadius: 4, marginBottom: '0.5rem',
           background: 'var(--p-0f0f1e)', padding: '0.5rem',
         }}>
+          {canPickAllAccounts && (
+            <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem' }} role="group" aria-label="Ticker source">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPickerSource('current')}
+                style={{
+                  padding: '0.2rem 0.55rem', fontSize: '0.74rem',
+                  borderColor: pickerSource === 'current' ? 'var(--accent)' : undefined,
+                  color: pickerSource === 'current' ? 'var(--accent)' : 'var(--text-dim)',
+                }}
+              >
+                This account
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setPickerSource('all')}
+                title="Every ticker held anywhere across your visible accounts, not just the one currently selected up top"
+                style={{
+                  padding: '0.2rem 0.55rem', fontSize: '0.74rem',
+                  borderColor: pickerSource === 'all' ? 'var(--accent)' : undefined,
+                  color: pickerSource === 'all' ? 'var(--accent)' : 'var(--text-dim)',
+                }}
+              >
+                All my accounts
+              </button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
-              Pick tickers from your current holdings ({currentHoldings?.length || 0} total):
+              {pickerSource === 'all'
+                ? `Pick tickers from all your accounts (${allAccountHoldings?.length || 0} total):`
+                : `Pick tickers from your current holdings (${currentHoldings?.length || 0} total):`}
             </span>
             <div style={{ flex: 1 }} />
             <input
@@ -283,14 +484,15 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                 <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
                   <th style={{ padding: '0.25rem 0.5rem', width: 28 }}></th>
                   <th style={{ padding: '0.25rem 0.5rem', textAlign: 'left' }}>Ticker</th>
+                  {pickerSource === 'all' && <th style={{ padding: '0.25rem 0.5rem', textAlign: 'left' }}>Account(s)</th>}
                   <th style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>Current Wt %</th>
                   <th style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>Value</th>
                 </tr>
               </thead>
               <tbody>
                 {visiblePicker.length === 0 && (
-                  <tr><td colSpan={4} style={{ padding: '0.5rem', color: 'var(--p-556677)', textAlign: 'center' }}>
-                    {currentHoldings?.length ? 'No tickers match your search' : 'No current holdings available'}
+                  <tr><td colSpan={pickerSource === 'all' ? 5 : 4} style={{ padding: '0.5rem', color: 'var(--p-556677)', textAlign: 'center' }}>
+                    {(pickerPool?.length ? 'No tickers match your search' : 'No holdings available')}
                   </td></tr>
                 )}
                 {visiblePicker.map(h => (
@@ -303,6 +505,11 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
                       <input type="checkbox" checked={picked.has(h.ticker)} onChange={() => togglePick(h.ticker)} onClick={e => e.stopPropagation()} />
                     </td>
                     <td style={{ padding: '0.25rem 0.5rem' }}>{h.ticker}</td>
+                    {pickerSource === 'all' && (
+                      <td style={{ padding: '0.25rem 0.5rem', color: 'var(--text-dim)' }}>
+                        {(h.accounts || []).join(', ') || '—'}
+                      </td>
+                    )}
                     <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>
                       {h.weight != null ? (h.weight * 100).toFixed(2) + '%' : '—'}
                     </td>
@@ -322,7 +529,10 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
             <button
               className="btn btn-primary"
               disabled={picked.size === 0}
-              onClick={() => { onPickApply([...picked], 'replace'); setPickerOpen(false) }}
+              onClick={() => {
+                (pickerSource === 'all' ? onAllAccountPickApply : onPickApply)([...picked], 'replace')
+                setPickerOpen(false)
+              }}
               style={{ padding: '0.25rem 0.7rem', fontSize: '0.8rem' }}
               title="Replace this portfolio with the selected tickers, weighted by current value"
             >
@@ -331,7 +541,10 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
             <button
               className="btn"
               disabled={picked.size === 0}
-              onClick={() => { onPickApply([...picked], 'add'); setPickerOpen(false) }}
+              onClick={() => {
+                (pickerSource === 'all' ? onAllAccountPickApply : onPickApply)([...picked], 'add')
+                setPickerOpen(false)
+              }}
               style={{ padding: '0.25rem 0.7rem', fontSize: '0.8rem' }}
               title="Add selected tickers to this portfolio (existing ones keep their weights; new ones are equal-weighted into the remainder)"
             >
@@ -383,6 +596,7 @@ function PortfolioEditor({ label, portfolio, onChange, onLoadCurrent, currentAva
         {portfolio.holdings.length} ticker{portfolio.holdings.length === 1 ? '' : 's'} · Total weight {(totalWeight * 100).toFixed(2)}%
         {!wtOK && portfolio.holdings.length > 0 && ' — click Normalize to scale to 100%'}
       </div>
+      </>}
     </div>
   )
 }
@@ -629,12 +843,12 @@ function MetricsRow({ name, color, m }) {
 
 export default function PortfolioTester() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
+  const { selection, currentProfileName } = useProfile()
   const { isDark } = useTheme()
   const dialog = useDialog()
 
-  const [portfolioA, setPortfolioA] = useState({ name: 'Portfolio A', holdings: [] })
-  const [portfolioB, setPortfolioB] = useState({ name: 'Portfolio B', holdings: [] })
+  const [portfolioA, setPortfolioA] = useState({ name: 'Portfolio A', source: SOURCE_HYPOTHETICAL, holdings: [] })
+  const [portfolioB, setPortfolioB] = useState({ name: 'Portfolio B', source: SOURCE_HYPOTHETICAL, holdings: [] })
   const [currentHoldings, setCurrentHoldings] = useState([])
   const [categories, setCategories] = useState([])
   const [end, setEnd] = useState(todayISO())
@@ -656,6 +870,36 @@ export default function PortfolioTester() {
   const [error, setError] = useState(null)
   const [invalidTickers, setInvalidTickers] = useState([])
   const [result, setResult] = useState(null)
+  const actualHistoryActive = portfolioA.source === SOURCE_ACTUAL || portfolioB.source === SOURCE_ACTUAL
+
+  const changePortfolioSource = (setter, defaultName) => (source) => {
+    setter(portfolio => ({
+      ...portfolio,
+      source,
+      ...(source === SOURCE_ACTUAL ? { actual_scope: 'all', actual_tickers: [] } : {}),
+      name: source === SOURCE_ACTUAL && portfolio.name === defaultName
+        ? `${currentProfileName} Actual`
+        : portfolio.name,
+    }))
+    if (source === SOURCE_ACTUAL) {
+      setMode('growth')
+      setIncludeDiv(true)
+      setReinvestDiv(true)
+      setError(null)
+      setInvalidTickers([])
+      setResult(null)
+      // Default Start predates most accounts' real inception (it's a plain
+      // "N years back" preset). Nudge it forward so a fresh switch to Actual
+      // history doesn't immediately trip the range-adjusted warning below.
+      pf('/api/portfolio-tester/actual-earliest-date')
+        .then(r => r.json())
+        .then(d => {
+          const earliest = d.earliest_date
+          if (earliest) setStart(current => current < earliest ? earliest : current)
+        })
+        .catch(() => {})
+    }
+  }
 
   useEffect(() => {
     pf('/api/portfolio-tester/holdings')
@@ -667,14 +911,27 @@ export default function PortfolioTester() {
       .catch(() => {})
   }, [pf, selection])
 
+  // Every ticker held anywhere across the user's visible accounts, independent
+  // of whichever profile/aggregate is currently selected up top. Only fetched
+  // once — it's meant to stay constant while you flip through accounts, so
+  // Portfolio B can pull in a ticker that lives in an account you're not
+  // currently viewing.
+  const [allAccountHoldings, setAllAccountHoldings] = useState([])
+  useEffect(() => {
+    pf('/api/portfolio-tester/all-accounts-holdings')
+      .then(r => r.json())
+      .then(d => setAllAccountHoldings(d.holdings || []))
+      .catch(() => {})
+  }, [pf])
+
   // Apply a set of picked tickers to the target portfolio.
   // mode: 'replace' → overwrite with picked tickers, weighted by their current value.
   //       'add'     → keep existing holdings at their current weights, then merge new
   //                   picked tickers allocated proportionally to their current value
   //                   across the *remaining* weight, renormalizing to 100%.
-  const applyPick = (setter) => (tickers, mode) => {
+  const applyPickFrom = (pool) => (setter) => (tickers, mode) => {
     if (!tickers || tickers.length === 0) return
-    const byTicker = Object.fromEntries((currentHoldings || []).map(h => [h.ticker, h]))
+    const byTicker = Object.fromEntries((pool || []).map(h => [h.ticker, h]))
     const picks = tickers.map(t => byTicker[t]).filter(Boolean)
     if (picks.length === 0) return
 
@@ -707,6 +964,8 @@ export default function PortfolioTester() {
       }
     })
   }
+  const applyPick = applyPickFrom(currentHoldings)
+  const applyAllAccountPick = applyPickFrom(allAccountHoldings)
 
   const loadCurrent = (setter) => (filter) => {
     let src = currentHoldings
@@ -731,6 +990,7 @@ export default function PortfolioTester() {
   }
 
   const stripInvalidFrom = (setter, portfolio) => {
+    if (portfolio.source === SOURCE_ACTUAL) return 0
     const bad = new Set(invalidTickers.map(t => t.ticker))
     const present = portfolio.holdings.some(h => bad.has(h.ticker))
     if (!present) return 0
@@ -764,21 +1024,45 @@ export default function PortfolioTester() {
   }
 
   const invalidInA = useMemo(
-    () => invalidTickers.filter(t => portfolioA.holdings.some(h => h.ticker === t.ticker)).length,
+    () => portfolioA.source === SOURCE_ACTUAL
+      ? 0
+      : invalidTickers.filter(t => portfolioA.holdings.some(h => h.ticker === t.ticker)).length,
     [invalidTickers, portfolioA]
   )
   const invalidInB = useMemo(
-    () => invalidTickers.filter(t => portfolioB.holdings.some(h => h.ticker === t.ticker)).length,
+    () => portfolioB.source === SOURCE_ACTUAL
+      ? 0
+      : invalidTickers.filter(t => portfolioB.holdings.some(h => h.ticker === t.ticker)).length,
     [invalidTickers, portfolioB]
   )
 
   const run = async () => {
     setError(null); setResult(null); setInvalidTickers([])
 
-    const valid = [portfolioA, portfolioB].filter(p => p.holdings.length > 0)
-    if (valid.length === 0) { setError('Add tickers to at least one portfolio.'); return }
+    const valid = [portfolioA, portfolioB].filter(p => (
+      p.source === SOURCE_ACTUAL || p.holdings.length > 0
+    ))
+    if (valid.length === 0) { setError('Add tickers or choose actual history for at least one portfolio.'); return }
+    if (valid.filter(p => p.source === SOURCE_ACTUAL).length > 1) {
+      setError('Choose actual transaction-aware history for only one portfolio.')
+      return
+    }
+    if (actualHistoryActive && mode !== 'growth') {
+      setError('Actual transaction-aware history is available in Growth mode.')
+      return
+    }
+    const emptyActualScope = valid.find(portfolio => (
+      portfolio.source === SOURCE_ACTUAL
+      && portfolio.actual_scope === 'selected'
+      && !(portfolio.actual_tickers || []).length
+    ))
+    if (emptyActualScope) {
+      setError(`${emptyActualScope.name}: select at least one holding or use the entire account.`)
+      return
+    }
 
     for (const p of valid) {
+      if (p.source === SOURCE_ACTUAL) continue
       if (p.holdings.length > MAX_TICKERS) { setError(`${p.name}: max ${MAX_TICKERS} tickers.`); return }
       const sum = p.holdings.reduce((s, h) => s + Number(h.weight || 0), 0)
       if (Math.abs(sum - 1) > 0.005) {
@@ -797,7 +1081,14 @@ export default function PortfolioTester() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          portfolios: valid,
+          portfolios: valid.map(portfolio => ({
+            name: portfolio.name,
+            source: portfolio.source || SOURCE_HYPOTHETICAL,
+            holdings: portfolio.source === SOURCE_ACTUAL ? [] : portfolio.holdings,
+            actual_tickers: portfolio.source === SOURCE_ACTUAL && portfolio.actual_scope === 'selected'
+              ? (portfolio.actual_tickers || [])
+              : [],
+          })),
           start, end,
           initial: Number(initial) || 10000,
           include_benchmark: includeBenchmark,
@@ -1018,6 +1309,8 @@ export default function PortfolioTester() {
         Backtest two portfolios head-to-head (up to 75 tickers each) against a benchmark.
         6 months to 25 years of Yahoo Finance history. <strong>Growth</strong> mode compares total return;
         <strong>Income</strong> mode adds distribution tax, spend-vs-reinvest, and a sell-the-index comparison.
+        Toggle either side between hypothetical target weights and the selected account&apos;s actual
+        transaction-aware history.
       </p>
 
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
@@ -1025,25 +1318,153 @@ export default function PortfolioTester() {
           label="Portfolio A"
           portfolio={portfolioA}
           onChange={setPortfolioA}
+          onSourceChange={changePortfolioSource(setPortfolioA, 'Portfolio A')}
+          actualDisabled={portfolioB.source === SOURCE_ACTUAL}
+          actualAccountName={currentProfileName}
           onLoadCurrent={loadCurrent(setPortfolioA)}
           onFilterLoad={loadCurrent(setPortfolioA)}
           onPickApply={applyPick(setPortfolioA)}
           currentHoldings={currentHoldings}
           currentAvailable={currentHoldings.length > 0}
           categories={categories}
+          allAccountHoldings={allAccountHoldings}
+          onAllAccountPickApply={applyAllAccountPick(setPortfolioA)}
         />
         <PortfolioEditor
           label="Portfolio B"
           portfolio={portfolioB}
           onChange={setPortfolioB}
+          onSourceChange={changePortfolioSource(setPortfolioB, 'Portfolio B')}
+          actualDisabled={portfolioA.source === SOURCE_ACTUAL}
+          actualAccountName={currentProfileName}
           onLoadCurrent={loadCurrent(setPortfolioB)}
           onFilterLoad={loadCurrent(setPortfolioB)}
           onPickApply={applyPick(setPortfolioB)}
           currentHoldings={currentHoldings}
           currentAvailable={currentHoldings.length > 0}
           categories={categories}
+          allAccountHoldings={allAccountHoldings}
+          onAllAccountPickApply={applyAllAccountPick(setPortfolioB)}
         />
       </div>
+
+      <details className="pt-help">
+        <summary>Hypothetical weights vs. actual history, and Growth vs. Income mode</summary>
+        <p className="pt-help-footer">
+          <strong>Two different questions live on this page.</strong> The source buttons on each portfolio
+          card (<strong>Hypothetical weights</strong> vs. <strong>Actual account history</strong>) decide
+          <em> what is simulated</em> — a fixed target allocation, or your real dated trades. The
+          <strong> Mode</strong> buttons below (<strong>Growth</strong> vs. <strong>Income</strong>) decide
+          <em> what the simulation does with distributions</em> — reinvest everything, or spend some of it
+          and account for tax and depletion. They are independent choices that both shape the result.
+        </p>
+        <div className="pt-help-grid">
+          <section>
+            <h3>Hypothetical weights</h3>
+            <p>
+              <strong>Load Portfolio</strong> pulls your current tickers at <em>today&apos;s</em> current-value
+              weights and simulates that fixed basket for the entire date range, from the Initial $ amount,
+              rebalanced on the schedule in the <strong>Rebalance</strong> selector. Dividend handling follows
+              the <strong>Include dividends</strong> / <strong>Reinvest dividends</strong> checkboxes.
+            </p>
+            <p>
+              This carries two biases worth knowing about: <strong>look-ahead</strong> — today&apos;s weights
+              (winners sized up, losers sized down) are applied back to the start of the range, before that
+              sizing existed — and <strong>survivorship</strong> — anything you fully sold before today is
+              simply not in the basket. It answers &quot;how would my current target allocation have performed
+              over this range,&quot; not &quot;how did my account actually do.&quot;
+            </p>
+            <p className="pt-help-note">
+              <strong>Picker / Filter by category</strong> loads a custom or filtered basket the same way, at
+              current-value weights — same math, different ticker selection. Whichever side is set to
+              Hypothetical weights, its picker also offers an <strong>All my accounts</strong> source, listing
+              every ticker held anywhere across your visible accounts — not just the one currently selected up
+              top — so it can hold a ticker that doesn&apos;t appear in the account you&apos;re currently
+              viewing. Actual account history has no picker; it replays real holdings instead.
+            </p>
+          </section>
+          <section>
+            <h3>Actual account history</h3>
+            <p>
+              Replays your <strong>dated buys and sells</strong> through the same transaction-aware Tracker
+              Total Return calculation used by Growth and Total Return, then rescales that index to the
+              Initial $ so it plots next to a hypothetical line. No look-ahead: each day&apos;s weighting is
+              whatever your account actually held that day.
+            </p>
+            <p>
+              The checkboxes in the holdings table set the <strong>ticker scope</strong>, not the weights —
+              the % shown is today&apos;s current weight for reference only. <strong>Use entire account</strong>{' '}
+              also includes positions fully closed during the range; narrowing the checkboxes still replays
+              each kept ticker on its own real trade dates.
+            </p>
+            <p>
+              This side forces <strong>Growth</strong> mode with dividends included and reinvested, ignores
+              the Rebalance setting (it shows &quot;(hypothetical only)&quot;), and clamps the comparison range to
+              the account&apos;s real start/end date. Only one portfolio can use it at a time.
+            </p>
+            <p className="pt-help-note">
+              <strong>Edit holdings &amp; weights as hypothetical</strong> copies the checked tickers at
+              today&apos;s value-weights into an editable Hypothetical portfolio — with every box checked this
+              is the same result as Load Portfolio. The moment you do this it stops being actual history and
+              becomes a static-weight hypothetical again, editable like any other row.
+            </p>
+            <p className="pt-help-note">
+              <strong>Useful pairing:</strong> Actual on one side, Load Portfolio on the other. The gap
+              between the two lines isolates what your trade timing actually cost or earned, versus having
+              bought today&apos;s exact book on day one.
+            </p>
+          </section>
+          <section>
+            <h3>Growth mode</h3>
+            <p>
+              A pure total-return comparison. <strong>Include dividends</strong> decides whether distributions
+              count at all; <strong>Reinvest dividends</strong> decides whether they DRIP back into more
+              shares or sit out. The chart is index/value growth of the Initial $ only — there is no separate
+              income accounting below it.
+            </p>
+            <p className="pt-help-note">
+              Required for Actual account history: that series already has dividends baked into the tracker
+              index, so it can only be compared on a total-return basis.
+            </p>
+          </section>
+          <section>
+            <h3>Income mode</h3>
+            <p>
+              Replaces the two dividend checkboxes with a <strong>Distributions</strong> policy that changes
+              what happens to each payout:
+            </p>
+            <ul>
+              <li><strong>Spend all distributions:</strong> every payout leaves the account as cash (after
+                Dist. tax %). The plotted value line tracks surviving principal only, since the cash exits —
+                expect it to look flatter or decline versus Growth mode&apos;s reinvested line.</li>
+              <li><strong>Spend target, reinvest surplus:</strong> withdraws a fixed <strong>Withdraw %/yr</strong>{' '}
+                of the Initial $ (grown by <strong>Inflation %</strong>). Distributions fund that target first;
+                anything above it reinvests into more shares (Reinvested Surplus), any shortfall sells shares —
+                this is the policy that can trigger a &quot;depleted&quot; warning.</li>
+              <li><strong>Reinvest (DRIP):</strong> behaves like Growth mode with both dividend checkboxes on —
+                full compounding, nothing spent.</li>
+              <li><strong>Exclude:</strong> distributions are ignored entirely; price return only.</li>
+            </ul>
+            <p>
+              <strong>Dist. tax %</strong> is one blended rate withheld from every distribution before it is
+              spent or reinvested. <strong>Benchmark = sell to match income</strong> (Spend policies only)
+              swaps the benchmark for a version that sells its own shares to deliver the identical net cash
+              your portfolio took — the &quot;what if I had just sold the index instead&quot; comparison.
+            </p>
+            <p className="pt-help-note">
+              Adds the <strong>Income Summary</strong> table below the chart: Income Taken, Reinvested Surplus
+              (target-spend only), Tax Paid, Residual Principal, Real Principal (Residual Principal restated
+              in start-date dollars at Inflation % — recalculates live, no re-run needed), Total Outcome
+              (Residual Principal + Income Taken — the number to compare against Growth mode&apos;s ending
+              value), Yield on Cost, and Worst 12-mo Income.
+            </p>
+            <p className="pt-help-note">
+              Disabled whenever Actual account history is active on either side — that series is a
+              total-return index with no separate cash-distribution stream to spend or tax.
+            </p>
+          </section>
+        </div>
+      </details>
 
       {/* Shared settings */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
@@ -1052,7 +1473,11 @@ export default function PortfolioTester() {
           {[['growth', 'Growth'], ['income', 'Income']].map(([v, l]) => (
             <button
               key={v}
+              disabled={v === 'income' && actualHistoryActive}
               onClick={() => { setMode(v); setError(null) }}
+              title={v === 'income' && actualHistoryActive
+                ? 'Actual transaction-aware history is a total-return series and is available in Growth mode'
+                : undefined}
               style={{
                 padding: '0.25rem 0.7rem', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem',
                 border: mode === v ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
@@ -1078,11 +1503,25 @@ export default function PortfolioTester() {
             <input type="date" value={end} onChange={e => { setEnd(e.target.value); setError(null); setInvalidTickers([]) }} style={dateStyle} />
           </div>
           <div style={{ display: 'flex', gap: '0.25rem' }}>
-            {PRESETS.map(p => (
-              <button key={p.label} className="btn" style={{ padding: '0.25rem 0.55rem', fontSize: '0.78rem' }} onClick={() => applyPreset(p.years)}>
-                {p.label}
-              </button>
-            ))}
+            {PRESETS.map(p => {
+              const active = start === subYearsISO(todayISO(), p.years) && end === todayISO()
+              return (
+                <button
+                  key={p.label}
+                  className="btn"
+                  onClick={() => applyPreset(p.years)}
+                  style={{
+                    padding: '0.25rem 0.55rem', fontSize: '0.78rem',
+                    border: active ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
+                    background: active ? 'var(--p-1a3a5c)' : 'var(--bg)',
+                    color: active ? 'var(--accent)' : 'var(--text-dim)',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >
+                  {p.label}
+                </button>
+              )
+            })}
           </div>
 
           <span style={{ color: 'var(--p-556677)' }}>|</span>
@@ -1117,7 +1556,9 @@ export default function PortfolioTester() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Rebalance</span>
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }} title={actualHistoryActive ? 'Applies to hypothetical portfolios only' : undefined}>
+              Rebalance{actualHistoryActive ? ' (hypothetical only)' : ''}
+            </span>
             <select value={rebalance} onChange={e => setRebalance(e.target.value)} style={dateStyle}>
               <option value="none">None</option>
               <option value="monthly">Monthly</option>
@@ -1129,7 +1570,7 @@ export default function PortfolioTester() {
           {mode === 'growth' ? (
             <>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem' }}>
-                <input type="checkbox" checked={includeDiv} onChange={e => setIncludeDiv(e.target.checked)} />
+                <input type="checkbox" checked={includeDiv} disabled={actualHistoryActive} onChange={e => setIncludeDiv(e.target.checked)} />
                 Include dividends
               </label>
 
@@ -1137,7 +1578,7 @@ export default function PortfolioTester() {
                 <input
                   type="checkbox"
                   checked={reinvestDiv}
-                  disabled={!includeDiv}
+                  disabled={!includeDiv || actualHistoryActive}
                   onChange={e => setReinvestDiv(e.target.checked)}
                 />
                 Reinvest dividends
@@ -1254,6 +1695,37 @@ export default function PortfolioTester() {
 
       {result && (
         <>
+          {result.portfolios.some(portfolio => portfolio.source === SOURCE_ACTUAL) && (() => {
+            const actual = result.portfolios.find(portfolio => portfolio.source === SOURCE_ACTUAL)
+            const effectiveStart = actual.actual_start_date || result.start
+            const effectiveEnd = actual.actual_end_date || result.end
+            const startAdjusted = result.requested_start
+              && daysBetweenISO(result.requested_start, effectiveStart) > RANGE_ADJUST_SLACK_DAYS
+              && new Date(effectiveStart) > new Date(result.requested_start)
+            const endAdjusted = result.requested_end
+              && daysBetweenISO(result.requested_end, effectiveEnd) > RANGE_ADJUST_SLACK_DAYS
+              && new Date(effectiveEnd) < new Date(result.requested_end)
+            return (<>
+              {(startAdjusted || endAdjusted) && (
+                <div className="alert alert-warning" style={{ marginBottom: '0.6rem' }}>
+                  <strong>Requested range adjusted:</strong> you asked for{' '}
+                  <strong>{result.requested_start}</strong> to <strong>{result.requested_end}</strong>, but{' '}
+                  {actual.name} has no recorded transactions
+                  {startAdjusted && <> before <strong>{effectiveStart}</strong></>}
+                  {startAdjusted && endAdjusted && ' or'}
+                  {endAdjusted && <> after <strong>{effectiveEnd}</strong></>}
+                  {' '}for the accounts included in this profile — actual history can only replay recorded
+                  trades. Showing <strong>{effectiveStart}</strong> to <strong>{effectiveEnd}</strong> instead.
+                </div>
+              )}
+              <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+                <strong>Actual tracker history:</strong> {actual.name} uses dated transactions over{' '}
+                <strong>{effectiveStart}</strong> to{' '}
+                <strong>{effectiveEnd}</strong>. Its return is scaled to{' '}
+                {fmtMoney(result.initial)} for comparison; deposits and withdrawals are not counted as performance.
+              </div>
+            </>)
+          })()}
           {/* Score cards */}
           <ScoreCards portfolios={result.portfolios} colors={colors} includeDiv={result.include_div} />
 
@@ -1284,6 +1756,12 @@ export default function PortfolioTester() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: '0.4rem' }}>
                       <span style={{ display: 'inline-block', width: 10, height: 10, background: colors[i], borderRadius: 2 }} />
                       <span style={{ color: 'var(--text)', fontWeight: 600 }}>{p.name}</span>
+                      {p.source === SOURCE_ACTUAL && (
+                        <span style={{
+                          fontSize: '0.66rem', color: 'var(--accent)', border: '1px solid var(--accent)',
+                          borderRadius: 3, padding: '0.05rem 0.3rem', textTransform: 'uppercase',
+                        }}>Actual tracker</span>
+                      )}
                     </div>
                     <div style={{
                       fontSize: '1.5rem',
