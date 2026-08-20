@@ -95,7 +95,7 @@ const COMBINED_COLS = [
   { key: 'net_total_gl', label: 'Net Total G/L', tip: 'Combined total gain/loss across all open and closed positions', fmt, gl: true },
 ]
 
-export default function GainsLosses() {
+export default function GainsLosses({ embedded = false }) {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
   const { isDark } = useTheme()
@@ -739,7 +739,7 @@ export default function GainsLosses() {
 
   return (
     <div className="page dashboard">
-      <h1 style={{ marginBottom: '0.5rem' }}>Gains & Losses</h1>
+      {!embedded && <h1 style={{ marginBottom: '0.5rem' }}>Gains & Losses</h1>}
 
       {/* Page-wide holdings and performance filters */}
       <div className="growth-filters" style={{ marginBottom: '1rem' }}>

@@ -153,7 +153,7 @@ function TabButtons({ options, value, onChange }) {
   )
 }
 
-export default function PortfolioGrowth2() {
+export default function PortfolioGrowth2({ embedded = false }) {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
@@ -375,7 +375,7 @@ export default function PortfolioGrowth2() {
 
   return (
     <div className="page dashboard">
-      <h1 style={{ marginBottom: '1rem' }}>Portfolio Growth 2</h1>
+      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Portfolio Growth 2</h1>}
 
       {/* ── Shared filters ── */}
       <div className="growth-filters">

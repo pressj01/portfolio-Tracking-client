@@ -25,7 +25,7 @@ import ManageHoldings from './pages/ManageHoldings'
 import CommonInfo from './pages/CommonInfo'
 import Settings from './pages/Settings'
 import Categories from './pages/Categories'
-import Growth from './pages/Growth'
+import GrowthWorkspace from './pages/GrowthWorkspace'
 import DividendAnalysis from './pages/DividendAnalysis'
 import TotalReturn from './pages/TotalReturn'
 import ETFScreen from './pages/ETFScreen'
@@ -66,7 +66,6 @@ import PortfolioTester from './pages/PortfolioTester'
 import SecurityResearch from './pages/SecurityResearch'
 import DividendCalculator from './pages/DividendCalculator'
 import AnnualTaxReport from './pages/AnnualTaxReport'
-import PortfolioGrowth2 from './pages/PortfolioGrowth2'
 import ETFProviderUpdate from './pages/ETFProviderUpdate'
 import ETFComparer from './pages/ETFComparer'
 import StockComparer from './pages/StockComparer'
@@ -125,8 +124,7 @@ export const PAGE_GROUPS = [
       { path: '/common-info', label: 'CommonInfo', element: <CommonInfo /> },
       { path: '/categories', label: 'Categories', element: <Categories /> },
       { path: '/holding-targets', label: 'Holding Targets', element: <HoldingTargets /> },
-      { path: '/growth', label: 'Growth', element: <Growth /> },
-      { path: '/growth-2', label: 'Portfolio Growth 2', element: <PortfolioGrowth2 /> },
+      { path: '/growth', label: 'Growth', element: <GrowthWorkspace /> },
       { path: '/retirement-readiness', label: 'Retirement Readiness', element: <RetirementReadiness /> },
       { path: '/cash-flow', label: 'Cash Flow & Sustainability', element: <CashFlowSustainability /> },
       { path: '/dividends', label: 'Dividends', element: <DividendAnalysis /> },
@@ -237,6 +235,7 @@ const EXTRA_ROUTES = [
   // Split view is reachable from the menu but deliberately not offered inside a
   // pane: a pane showing the split page would nest panes inside panes.
   { path: '/split-screen', element: <SplitScreen /> },
+  { path: '/growth-2', element: <Navigate to="/growth?tab=dollars" replace /> },
 ]
 
 const ALL_PAGES = PAGE_GROUPS.flatMap(section => section.pages)
@@ -258,13 +257,18 @@ export const isKnownPagePath = (path) => {
   // then render as `undefined`, which falls back to the address bar's page.
   if (typeof path !== 'string' || !path.startsWith('/')) return false
   const pathname = pathnameOf(path)
+  if (pathname === '/growth-2') return true
   if (PAGE_BY_PATH.has(pathname)) return true
   // Detail routes (/closed-cef-info/AGD) are known by their parent.
   return ALL_PAGES.some(page => page.path !== '/' && pathname.startsWith(`${page.path}/`))
 }
 
 /** The screen a Split View pane should render, or null if the path is stale. */
-export const pageElement = (path) => PAGE_BY_PATH.get(pathnameOf(path))?.element || null
+export const pageElement = (path) => {
+  const pathname = pathnameOf(path)
+  if (pathname === '/growth-2') return PAGE_BY_PATH.get('/growth')?.element || null
+  return PAGE_BY_PATH.get(pathname)?.element || null
+}
 
 export default function AppRoutes() {
   return (

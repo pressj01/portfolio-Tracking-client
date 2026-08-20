@@ -35,7 +35,6 @@ export const NAVIGATION_ITEMS = [
     link('categories', 'Categories', '/categories'),
     link('holding-targets', 'Holding Targets', '/holding-targets'),
     link('growth', 'Growth', '/growth'),
-    link('portfolio-growth-2', 'Portfolio Growth 2', '/growth-2'),
     link('retirement-readiness', 'Retirement Readiness', '/retirement-readiness'),
     link('cash-flow', 'Cash Flow & Sustainability', '/cash-flow'),
     link('dividends', 'Dividends', '/dividends'),

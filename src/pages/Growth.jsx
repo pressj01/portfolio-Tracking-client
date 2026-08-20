@@ -72,7 +72,7 @@ function ReturnCard({ label, value, benchLabel, benchValue, range }) {
   )
 }
 
-export default function Growth() {
+export default function Growth({ embedded = false }) {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
@@ -353,7 +353,7 @@ export default function Growth() {
 
   return (
     <div className="page dashboard">
-      <h1 style={{ marginBottom: '1rem' }}>Growth & Performance</h1>
+      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Growth & Performance</h1>}
 
       {/* Filters */}
       <div className="growth-filters">
