@@ -1,3 +1,5 @@
+import { invalidateSharedTrackerCharts } from './sharedTrackerCharts.js'
+
 // Bumped whenever the cached payload shape changes, which retires old entries.
 // Dashboard.jsx must build its key from dashboardCacheKey() rather than
 // repeating the literal: when it moved to v17 on its own, every clear helper
@@ -68,4 +70,5 @@ export function clearAllDashboardCache() {
   } catch {
     // best-effort
   }
+  invalidateSharedTrackerCharts()
 }

@@ -41,12 +41,16 @@ export function useColumnLayout({
   lockedKeys,
   migrate,
   defaultLayout,
+  adoptNewKeys,
 }) {
   const allKeys = columns.map(col => col?.[keyField])
   // Resolved once, from the first render's column list: the defaults describe
   // the screen, not whatever data happens to be loaded.
   const [defaults] = useState(() => resolveDefaultLayout(defaultLayout, allKeys))
-  const [layout, setLayout] = useState(() => readStored(storageKey, migrate) || defaults)
+  const [layout, setLayout] = useState(() => {
+    const stored = readStored(storageKey, migrate) || defaults
+    return adoptNewKeys ? (adoptNewKeys(stored) || stored) : stored
+  })
   const [dragKey, setDragKey] = useState(null)
   const [dropKey, setDropKey] = useState(null)
 

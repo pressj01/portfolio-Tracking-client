@@ -149,6 +149,19 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("both", response.get_json()["error"].lower())
 
+    def test_lifetime_period_does_not_grade(self):
+        response = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=lifetime"
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertTrue(payload["grade_not_applicable"])
+        self.assertEqual(payload["period_key"], "lifetime")
+        self.assertIsNone(payload["portfolio_grade"].get("overall"))
+        self.assertTrue(payload["portfolio_grade"]["grade_not_applicable"])
+        self.assertEqual(payload["ticker_grades"]["AAA"]["grade"], "N/A")
+
 
 if __name__ == "__main__":
     unittest.main()

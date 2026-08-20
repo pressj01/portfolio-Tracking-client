@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -7,6 +7,29 @@ import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
+import { insertMissingKeysAfter } from '../utils/columnLayout'
+import {
+  MIN_PERFORMANCE_DATE,
+  PERFORMANCE_PERIODS,
+  PERFORMANCE_RANGE_NOTE,
+  addCustomRangeParams,
+  customRangeError,
+  formatPerformanceRange,
+  HOLDINGS_LIFETIME_MATCH_NOTE,
+  TRACKER_SCOPE_NOTE,
+  OPEN_LOT_SCOPE_NOTE,
+  COST_BASIS_SCOPE_NOTE,
+  isLifetimePerformancePeriod,
+  readSharedPerformanceRange,
+  todayInputValue,
+} from '../utils/performancePeriods'
+import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
+import {
+  accountPercent,
+  computeHoldingsTableTotals,
+  sharesIfReinvested,
+} from '../utils/holdingsTableTotals'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1177,8 +1200,10 @@ const COLUMNS = [
   { key: 'current_price', label: 'Current', type: 'number', width: 95, tip: 'Current market price per share' },
   { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115, tip: 'Total original cost basis (price paid × shares)' },
   { key: 'current_value', label: 'Value', type: 'number', width: 105, tip: 'Current market value (current price × shares)' },
-  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115, tip: 'Unrealized gain or loss in dollars (current value − cost basis)' },
-  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90, tip: 'Unrealized gain or loss as a percentage of cost basis' },
+  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115, tip: 'Each row is this ticker\'s current lot during the selected range. The Totals row is the portfolio tracker Price Return for the range, including lots you sold — the same figure as Growth and Total Return cards. Not lifetime cost-basis G/L.' },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90, tip: 'Each row is this ticker\'s current-lot price return for the range. The Totals row is the portfolio tracker Price Return %, including lots you sold — the same figure as Growth. Life G/L % is cost basis instead.' },
+  { key: 'lifetime_gain_or_loss', label: 'Life G/L', type: 'number', width: 110, tip: 'Current value minus what you paid for shares you still hold. Does not follow the date range and does not include sold lots.' },
+  { key: 'lifetime_gain_or_loss_percentage', label: 'Life G/L %', type: 'number', width: 100, tip: 'Lifetime cost-basis G/L as a percent of what you paid for shares you still hold. Does not follow the date range.' },
   { key: 'div', label: 'Div/Share', type: 'number', width: 95, tip: 'Most recent dividend paid per share' },
   { key: 'div_frequency', label: 'Freq', type: 'string', width: 70, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
   { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string', width: 110, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
@@ -1579,7 +1604,7 @@ export default function ManageHoldings() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
   const { runMarketRefresh } = useMarketRefresh()
-  const { profileId, isAggregate, selection, basisMode } = useProfile()
+  const { profileId, isAggregate, selection, basisMode, profileQueryString } = useProfile()
   const dialog = useDialog()
   const holdingsRequestRef = useRef(0)
   const [holdings, setHoldings] = useState([])
@@ -1618,11 +1643,40 @@ export default function ManageHoldings() {
   }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
+  const [initialPerformanceRange] = useState(() => readSharedPerformanceRange())
+  const [performancePeriod, setPerformancePeriod] = useState(initialPerformanceRange.period)
+  const [customStart, setCustomStart] = useState(initialPerformanceRange.start)
+  const [customEnd, setCustomEnd] = useState(initialPerformanceRange.end)
+  const performanceRangeError = customRangeError(performancePeriod, customStart, customEnd)
+  const isLifetimeRange = isLifetimePerformancePeriod(performancePeriod)
+
+  useSharedPerformanceRange(performancePeriod, customStart, customEnd, (next) => {
+    setPerformancePeriod(next.period)
+    setCustomStart(next.start)
+    setCustomEnd(next.end)
+  })
+
+  const trackerChartsEnabled = holdings.length > 0 && !isLifetimeRange && !performanceRangeError
+  const sharedTrackerCharts = useSharedTrackerCharts({
+    pf,
+    profileQueryString,
+    period: performancePeriod,
+    start: customStart,
+    end: customEnd,
+    enabled: trackerChartsEnabled,
+  })
+  const trackerPerformance = sharedTrackerCharts.data
+  const trackerPerformanceLoading = trackerChartsEnabled && sharedTrackerCharts.loading
+  const trackerPerformanceError = trackerChartsEnabled ? sharedTrackerCharts.error : null
 
   const holdingsLayout = useColumnLayout({
     storageKey: 'manage-holdings-columns-v1',
     columns: COLUMNS,
     lockedKeys: HOLDINGS_LOCKED_COLS,
+    adoptNewKeys: layout => insertMissingKeysAfter(layout, [
+      { key: 'lifetime_gain_or_loss', after: 'gain_or_loss_percentage' },
+      { key: 'lifetime_gain_or_loss_percentage', after: 'lifetime_gain_or_loss' },
+    ]),
   })
 
   // `silent` re-fetches without flashing the table spinner — used to reconcile
@@ -1687,26 +1741,73 @@ export default function ManageHoldings() {
   }
 
   const getSortValue = (h, key) => {
-    if (key === '_shares_if_reinvested') {
-      return (h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price)
-        ? h.estim_payment_per_year / h.current_price : 0
-    }
-    if (key === 'percent_of_account') {
-      return h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0)
-    }
+    if (key === '_shares_if_reinvested') return sharesIfReinvested(h)
+    if (key === 'percent_of_account') return accountPercent(h, totalCurrentValue)
     return h[key]
   }
 
-  const filteredHoldings = holdings.filter(h => {
+  const filteredHoldings = useMemo(() => holdings.filter(h => {
     if (divSourceFilter === 'all') return true
     const source = normalizeDivSource(h.dividend_actuals_source)
     if (divSourceFilter === 'imported') return IMPORTED_DIV_SOURCES.includes(source)
     return source === divSourceFilter
-  })
+  }), [holdings, divSourceFilter])
 
   const totalCurrentValue = holdings.reduce((sum, h) => sum + (Number(h.current_value) || 0), 0)
+  const isHoldingsFiltered = divSourceFilter !== 'all'
 
-  const sortedHoldings = [...filteredHoldings].sort((a, b) => {
+  const trackerPerformanceByTicker = useMemo(() => new Map(
+    (trackerPerformance?.performance_rows || []).map(row => [
+      String(row.ticker || '').trim().toUpperCase(),
+      row,
+    ]),
+  ), [trackerPerformance])
+
+  const displayHoldings = useMemo(() => (
+    filteredHoldings.map(holding => {
+      const trackerRow = trackerPerformanceByTicker.get(
+        String(holding.ticker || '').trim().toUpperCase(),
+      )
+      const periodPct = trackerRow?.price_return_pct
+      return {
+        ...holding,
+        percent_of_account: accountPercent(holding, totalCurrentValue),
+        lifetime_gain_or_loss: holding.gain_or_loss,
+        lifetime_gain_or_loss_percentage: holding.gain_or_loss_percentage,
+        gain_or_loss: isLifetimeRange
+          ? holding.gain_or_loss
+          : (trackerRow?.price_return_dollar ?? null),
+        gain_or_loss_percentage: isLifetimeRange
+          ? holding.gain_or_loss_percentage
+          : (periodPct == null ? null : Number(periodPct) / 100),
+        tracker_start_value: trackerRow?.start_value,
+        tracker_actual_start_date: trackerRow?.actual_start_date,
+        tracker_actual_end_date: trackerRow?.actual_end_date,
+      }
+    })
+  ), [filteredHoldings, trackerPerformanceByTicker, totalCurrentValue, isLifetimeRange])
+
+  // Same series Growth, Total Return cards, Dashboard PrRtn, and Gains & Losses
+  // use: the portfolio replay for the shared range, including lots that closed
+  // during the window. The open-position-only footer is a different total and
+  // belongs on the Total Return "Open Position Total" row, not here.
+  const trackerPortfolioMetrics = trackerPerformance?.portfolio_metrics || null
+  const tableTotals = useMemo(() => computeHoldingsTableTotals(displayHoldings, {
+    accountValue: totalCurrentValue,
+    openPositionMetrics: trackerPortfolioMetrics,
+    matchOpenPositionTotals: !isHoldingsFiltered && !isLifetimeRange && !!trackerPortfolioMetrics,
+  }), [displayHoldings, totalCurrentValue, trackerPortfolioMetrics, isHoldingsFiltered, isLifetimeRange])
+
+  const trackerPerformanceRange = formatPerformanceRange(
+    trackerPortfolioMetrics?.actual_start_date
+      || trackerPerformance?.actual_start_date
+      || trackerPerformance?.requested_start_date,
+    trackerPortfolioMetrics?.actual_end_date
+      || trackerPerformance?.actual_end_date
+      || trackerPerformance?.requested_end_date,
+  )
+
+  const sortedHoldings = [...displayHoldings].sort((a, b) => {
     const col = COLUMNS.find(c => c.key === sortKey)
     const av = getSortValue(a, sortKey)
     const bv = getSortValue(b, sortKey)
@@ -1903,6 +2004,31 @@ export default function ManageHoldings() {
     return (Number(v) * 100).toFixed(2) + '%'
   }
 
+  const glColor = (v) => {
+    if (v == null || v === '') return undefined
+    const number = Number(v)
+    if (!Number.isFinite(number) || number === 0) return undefined
+    return number >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)'
+  }
+
+  const trackerCellTitle = (h) => {
+    if (isLifetimeRange) return COST_BASIS_SCOPE_NOTE
+    const range = formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)
+    const scope = OPEN_LOT_SCOPE_NOTE
+    if (range) return `${range}. ${scope}`
+    if (trackerPerformanceLoading) return 'Loading period price return…'
+    if (trackerPerformanceError) return trackerPerformanceError
+    return scope
+  }
+
+  const periodButtonLabel = PERFORMANCE_PERIODS.find(option => option.key === performancePeriod)?.label
+  const holdingsColumnLabel = (col) => {
+    if (col.key === 'gain_or_loss' || col.key === 'gain_or_loss_percentage') {
+      return periodButtonLabel ? `${col.label} (${periodButtonLabel})` : col.label
+    }
+    return col.label
+  }
+
   const fmtCurrency = (v) => formatMoney(v, { zeroIfInvalid: true })
 
   const fmtDateLabel = (v) => {
@@ -2031,7 +2157,7 @@ export default function ManageHoldings() {
       case 'category':
         return <td>{h.category || '-'}</td>
       case 'percent_of_account':
-        return <td>{fmtPct(h.percent_of_account ?? (totalCurrentValue > 0 ? (Number(h.current_value) || 0) / totalCurrentValue : 0))}</td>
+        return <td>{fmtPct(h.percent_of_account)}</td>
       case 'quantity':
         return <td>{fmt(h.quantity)}</td>
       case 'purchase_date':
@@ -2052,14 +2178,26 @@ export default function ManageHoldings() {
         return <td>{fmtM(h.current_value)}</td>
       case 'gain_or_loss':
         return (
-          <td style={{ color: h.gain_or_loss >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
-            {fmtM(h.gain_or_loss)}
+          <td style={{ color: glColor(h.gain_or_loss) }} title={trackerCellTitle(h)}>
+            {!isLifetimeRange && trackerPerformanceLoading && h.gain_or_loss == null ? '…' : fmtM(h.gain_or_loss)}
           </td>
         )
       case 'gain_or_loss_percentage':
         return (
-          <td style={{ color: h.gain_or_loss_percentage >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)' }}>
-            {fmtPct(h.gain_or_loss_percentage)}
+          <td style={{ color: glColor(h.gain_or_loss_percentage) }} title={trackerCellTitle(h)}>
+            {!isLifetimeRange && trackerPerformanceLoading && h.gain_or_loss_percentage == null ? '…' : fmtPct(h.gain_or_loss_percentage)}
+          </td>
+        )
+      case 'lifetime_gain_or_loss':
+        return (
+          <td style={{ color: glColor(h.lifetime_gain_or_loss) }}>
+            {fmtM(h.lifetime_gain_or_loss)}
+          </td>
+        )
+      case 'lifetime_gain_or_loss_percentage':
+        return (
+          <td style={{ color: glColor(h.lifetime_gain_or_loss_percentage) }}>
+            {fmtPct(h.lifetime_gain_or_loss_percentage)}
           </td>
         )
       case 'div':
@@ -2140,14 +2278,10 @@ export default function ManageHoldings() {
         return <td>{fmtPct(h.paid_for_itself)}</td>
       case 'dividend_actuals_source':
         return <td>{sourceBadge(h.dividend_actuals_source)}</td>
-      case '_shares_if_reinvested':
-        return (
-          <td>
-            {h.reinvest === 'Y' && h.estim_payment_per_year && h.current_price
-              ? fmt(h.estim_payment_per_year / h.current_price, 3)
-              : '-'}
-          </td>
-        )
+      case '_shares_if_reinvested': {
+        const shares = sharesIfReinvested(h)
+        return <td>{shares ? fmt(shares, 3) : '-'}</td>
+      }
       case 'realized_gains':
         return (
           <td style={{ color: h.realized_gains > 0 ? 'var(--p-81c784)' : h.realized_gains < 0 ? 'var(--p-ef9a9a)' : undefined }}>
@@ -2159,6 +2293,53 @@ export default function ManageHoldings() {
     }
   }
 
+  const renderFooterValue = (col) => {
+    const value = tableTotals[col.key]
+    if (col.key === 'gain_or_loss' || col.key === 'gain_or_loss_percentage') {
+      if (!isLifetimeRange && trackerPerformanceLoading && value == null) return '…'
+      if (value == null) return ''
+      return col.key === 'gain_or_loss_percentage' ? fmtPct(value) : fmtM(value)
+    }
+    if (value == null) return ''
+    switch (col.key) {
+      case 'percent_of_account':
+      case 'lifetime_gain_or_loss_percentage':
+      case 'annual_yield_on_cost':
+      case 'current_annual_yield':
+      case 'paid_for_itself':
+        return fmtPct(value)
+      case 'quantity':
+      case 'base_quantity':
+      case 'shares_bought_from_dividend':
+        return fmt(value, col.key === 'quantity' ? 2 : 4)
+      case '_shares_if_reinvested':
+        return fmt(value, 3)
+      case 'lifetime_gain_or_loss':
+      case 'realized_gains':
+      case 'total_cash_reinvested':
+      case 'purchase_value':
+      case 'current_value':
+      case 'estim_payment_per_year':
+      case 'approx_monthly_income':
+      case 'dividend_paid':
+      case 'ytd_divs':
+      case 'total_divs_received':
+        return col.key === 'estim_payment_per_year' || col.key === 'approx_monthly_income'
+          ? fmtM(value, 3)
+          : fmtM(value)
+      default:
+        return ''
+    }
+  }
+
+  const footerValueColor = (col) => {
+    if (col.key === 'gain_or_loss' || col.key === 'gain_or_loss_percentage'
+      || col.key === 'lifetime_gain_or_loss' || col.key === 'lifetime_gain_or_loss_percentage'
+      || col.key === 'realized_gains') {
+      return glColor(tableTotals[col.key])
+    }
+    return undefined
+  }
 
   return (
     <div className="page">
@@ -2445,6 +2626,63 @@ export default function ManageHoldings() {
         />
       </div>
 
+      {!loading && holdings.length > 0 && (
+        <div className="growth-filter-group" style={{ marginBottom: '0.75rem' }}>
+          <label>Shared Performance Date Range</label>
+          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+            {PERFORMANCE_PERIODS.map(periodOption => (
+              <button
+                type="button"
+                key={periodOption.key}
+                className={`tr-pbtn${performancePeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
+                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
+                title={periodOption.hint}
+                onClick={() => setPerformancePeriod(periodOption.key)}
+              >
+                {periodOption.label}
+              </button>
+            ))}
+          </div>
+          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {performancePeriod === 'custom' && (
+            <div className="g2-custom-range" role="group" aria-label="Custom performance date range">
+              <label>
+                <span>Start date</span>
+                <input
+                  type="date"
+                  value={customStart}
+                  min={MIN_PERFORMANCE_DATE}
+                  max={customEnd || todayInputValue()}
+                  onChange={e => setCustomStart(e.target.value)}
+                />
+              </label>
+              <label>
+                <span>End date</span>
+                <input
+                  type="date"
+                  value={customEnd}
+                  min={customStart || MIN_PERFORMANCE_DATE}
+                  max={todayInputValue()}
+                  onChange={e => setCustomEnd(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+          {isLifetimeRange && (
+            <p className="tr-note" style={{ marginTop: '0.45rem' }}>{HOLDINGS_LIFETIME_MATCH_NOTE}</p>
+          )}
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: 'var(--text-dim)', lineHeight: 1.4 }}>
+            This range does not hide tickers or change Cost Basis, Value, or shares — those are always the current position.
+            {isLifetimeRange
+              ? ` Gain/Loss is ${COST_BASIS_SCOPE_NOTE}`
+              : ` Each Gain/Loss row is that ticker's current lot. The Totals row is the portfolio Price Return${trackerPerformanceRange ? ` (${trackerPerformanceRange})` : ''}: ${TRACKER_SCOPE_NOTE} Life G/L is ${COST_BASIS_SCOPE_NOTE}`}
+            {performanceRangeError ? ` ${performanceRangeError}` : ''}
+            {trackerPerformanceError ? ` ${trackerPerformanceError}` : ''}
+            {trackerPerformanceLoading ? ' Loading period Gain/Loss…' : ''}
+          </p>
+        </div>
+      )}
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
       ) : holdings.length === 0 ? (
@@ -2452,7 +2690,7 @@ export default function ManageHoldings() {
           <p>No holdings yet. Add one manually or import from the Import page.</p>
         </div>
       ) : (
-        <div className="sticky-table-wrap">
+        <div className="sticky-table-wrap manage-holdings-table-wrap">
           <table style={{ minWidth: holdingsTableMinWidth, tableLayout: 'fixed' }}>
             <colgroup>
               {activeCols.map(col => (
@@ -2486,7 +2724,7 @@ export default function ManageHoldings() {
                       }}
                       {...holdingsLayout.dragHandlers(col.key)}
                     >
-                      {col.label}{col.tip && !col.compact ? ' \u24d8' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
+                      {holdingsColumnLabel(col)}{col.tip && !col.compact ? ' \u24d8' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
                     </th>
                   )
                 })}
@@ -2617,6 +2855,53 @@ export default function ManageHoldings() {
                 </React.Fragment>
               ))}
             </tbody>
+            {sortedHoldings.length > 0 && (
+              <tfoot>
+                <tr>
+                  {activeCols.map((col, i) => {
+                    const frozen = i < frozenCount
+                    const width = columnWidth(col)
+                    return (
+                      <td
+                        key={col.key}
+                        className={frozen ? 'frozen-col' : undefined}
+                        style={{
+                          fontWeight: 700,
+                          textAlign: col.align || 'left',
+                          color: footerValueColor(col),
+                          width,
+                          minWidth: width,
+                          boxSizing: 'border-box',
+                          ...(frozen ? {
+                            ...frozenCellStyle(i),
+                            zIndex: 3,
+                            background: 'var(--surface)',
+                          } : null),
+                        }}
+                        title={
+                          col.key === 'gain_or_loss' || col.key === 'gain_or_loss_percentage'
+                            ? (isLifetimeRange
+                              ? COST_BASIS_SCOPE_NOTE
+                              : isHoldingsFiltered
+                                ? 'Sum of the visible current holdings for this range.'
+                                : TRACKER_SCOPE_NOTE)
+                            : (col.key === 'lifetime_gain_or_loss' || col.key === 'lifetime_gain_or_loss_percentage'
+                              ? COST_BASIS_SCOPE_NOTE
+                              : undefined)
+                        }
+                      >
+                        {i === 0
+                          ? (isHoldingsFiltered
+                            ? 'Filtered Totals'
+                            : (isLifetimeRange ? 'Totals' : 'Portfolio total'))
+                          : renderFooterValue(col)}
+                      </td>
+                    )
+                  })}
+                  <td />
+                </tr>
+              </tfoot>
+            )}
           </table>
           {sortedHoldings.length === 0 && (
             <div style={{ padding: '1.25rem', textAlign: 'center', color: 'var(--text-dim-2)' }}>

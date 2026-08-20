@@ -240,6 +240,47 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertAlmostEqual(row["estim_payment_per_year"], 16.36, places=2)
         self.assertAlmostEqual(row["approx_monthly_income"], 1.36, places=2)
 
+    def test_holdings_read_honors_lifetime_category_subcategory_and_ticker_scope(self):
+        self._execute(
+            "INSERT INTO categories (id, name, profile_id) VALUES "
+            "(10, 'Core', 1), (20, 'Income', 1)"
+        )
+        self._execute(
+            "INSERT INTO subcategories (id, category_id, name) "
+            "VALUES (21, 20, 'Monthly')"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, "
+            "purchase_value, current_value, gain_or_loss, gain_or_loss_percentage) "
+            "VALUES ('AAA', 1, 1, 10, 12, 10, 12, 2, 0.2), "
+            "('BBB', 1, 1, 20, 18, 20, 18, -2, -0.1), "
+            "('CCC', 1, 1, 30, 33, 30, 33, 3, 0.1)"
+        )
+        self._execute(
+            "INSERT INTO ticker_categories "
+            "(ticker, category_id, subcategory_id, profile_id) VALUES "
+            "('AAA', 10, NULL, 1), ('BBB', 20, 21, 1)"
+        )
+
+        category_or_subcategory = self.client.get(
+            "/api/holdings?profile_id=1&category=10&subcategory=21"
+        )
+        ticker_only = self.client.get(
+            "/api/holdings?profile_id=1&tickers=BBB"
+        )
+
+        self.assertEqual(category_or_subcategory.status_code, 200)
+        self.assertEqual(
+            [row["ticker"] for row in category_or_subcategory.get_json()],
+            ["AAA", "BBB"],
+        )
+        self.assertEqual(ticker_only.status_code, 200)
+        self.assertEqual(
+            [row["ticker"] for row in ticker_only.get_json()],
+            ["BBB"],
+        )
+
     def test_aggregate_dashboard_ticker_return_uses_member_holdings(self):
         self._execute(
             "CREATE TABLE aggregate_config "

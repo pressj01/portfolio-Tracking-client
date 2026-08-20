@@ -7,8 +7,13 @@ import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
   PERFORMANCE_RANGE_NOTE,
+  HOLDINGS_LIFETIME_MATCH_NOTE,
+  GRADE_LIFETIME_CARD_NOTE,
+  TRACKER_SCOPE_NOTE,
+  COST_BASIS_SCOPE_NOTE,
   addCustomRangeParams,
   customRangeError,
+  isLifetimePerformancePeriod,
   formatAccountingCoverage,
   formatPerformanceChartRange,
   formatPerformanceRange,
@@ -16,6 +21,11 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import {
+  fetchHoldingsJson,
+  lifetimeGrowthPayload,
+} from '../utils/lifetimePerformance'
+import GradePeriodHelp from '../components/GradePeriodHelp'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -62,11 +72,13 @@ function ReturnCard({ label, value, benchLabel, benchValue, range }) {
       <div className="summary-value" style={{ color: (value ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
         {fmtPct(value)}
       </div>
-      <div className="summary-sub">
-        {benchValue != null
-          ? <>{benchLabel} {fmtPct(benchValue)} &middot; <span style={{ color: (diff ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtSignedPct(diff)} vs {benchLabel}</span></>
-          : `No ${benchLabel} data for this range`}
-      </div>
+      {benchLabel && (
+        <div className="summary-sub">
+          {benchValue != null
+            ? <>{benchLabel} {fmtPct(benchValue)} &middot; <span style={{ color: (diff ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtSignedPct(diff)} vs {benchLabel}</span></>
+            : `No ${benchLabel} data for this range`}
+        </div>
+      )}
       {range && <div className="summary-sub">Range: {range}</div>}
     </div>
   )
@@ -119,6 +131,26 @@ export default function Growth({ embedded = false }) {
 
     setLoading(true)
     setError(null)
+    if (isLifetimePerformancePeriod(period)) {
+      Promise.all([
+        fetchHoldingsJson(pf, { categories, subcategories }),
+        pf('/api/total-return/summary?period=all').then(async response => {
+          const payload = await response.json().catch(() => ({}))
+          if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
+          return payload
+        }),
+      ])
+        .then(([rows, metadata]) => {
+          if (active) setData(lifetimeGrowthPayload(rows, metadata.categories))
+        })
+        .catch(e => {
+          if (!active) return
+          setData(null)
+          setError(e.message)
+        })
+        .finally(() => { if (active) setLoading(false) })
+      return () => { active = false }
+    }
     const params = new URLSearchParams({ period, benchmark })
     addCustomRangeParams(params, period, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
@@ -152,7 +184,7 @@ export default function Growth({ embedded = false }) {
   }, [period, customStart, customEnd, rangeError, benchmark, categories, subcategories, selection, pf])
 
   useEffect(() => {
-    if (!data || !window.Plotly) return
+    if (!data || !window.Plotly || !data.portfolio_price?.dates?.length) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
     const chartRange = formatPerformanceChartRange(
@@ -460,6 +492,18 @@ export default function Growth({ embedded = false }) {
             ))}
           </div>
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {isLifetimePerformancePeriod(period) && (
+            <>
+              <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+                <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+              </div>
+              <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+                <strong>Grade cannot be computed for the Lifetime setting.</strong>{' '}
+                Life is cost-basis G/L, not a daily price series, so Portfolio Grade, Sharpe,
+                and Sortino stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom to grade that market window.
+              </div>
+            </>
+          )}
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom date range">
@@ -536,12 +580,13 @@ export default function Growth({ embedded = false }) {
 
             <h4>Shared Performance Date Range</h4>
             <p>
-              The preset buttons are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All</strong>, and
-              <strong> Custom</strong>. Presets end at the most recent available market close.
+              The preset buttons are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, Life</strong>, and
+              <strong> Custom</strong>. Presets except Life end at the most recent available market close.
               <strong> 1D</strong> uses the last two trading sessions, so weekends and holidays do
               not become fake data points. The month and year presets use calendar dates, then use
               the close on or before the requested start when that date is not a trading day.
               <strong> YTD</strong> starts from the close on or before January 1.
+              <strong> Life</strong> is Holdings cost-basis G/L, not a market window.
             </p>
             <p>
               <strong>All</strong> starts with the portfolio&apos;s own first recorded trade, purchase,
@@ -550,6 +595,7 @@ export default function Growth({ embedded = false }) {
               screens that use the shared performance range. The page prints the requested range and,
               when necessary, the actual market-observation range so you can see any adjustment.
             </p>
+            <GradePeriodHelp />
 
             <h4>Custom dates</h4>
             <p>
@@ -575,6 +621,7 @@ export default function Growth({ embedded = false }) {
                 and diversification—not a simple ranking of the largest percentage return. It is
                 calculated from adjusted prices and the current-value weighting of the selected
                 holdings, so a concentrated position can affect the result more than a small one.
+                Lifetime does not have a grade — Life is cost-basis G/L, so this card stays blank.
               </li>
               <li>
                 <strong>Tracker Total Return %:</strong> the portfolio&apos;s transaction-aware,
@@ -585,7 +632,9 @@ export default function Growth({ embedded = false }) {
               </li>
               <li>
                 <strong>Price Return %:</strong> the same transaction-aware portfolio measurement
-                using market-price movement only. Dividends and other distributions are excluded.
+                using market-price movement only. It includes every lot you held during the range,
+                even lots you already sold — the same figure as the Total Return Price Return cards
+                and the Holdings Totals row. Dividends are excluded.
                 Comparing this card with Tracker Total Return % indicates how much reinvested
                 distributions contributed during the window.
               </li>
@@ -703,20 +752,31 @@ export default function Growth({ embedded = false }) {
             {data.requested_start_date && data.actual_start_date !== data.requested_start_date
               ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
               : ''}
-            . The period and category filters apply to every metric and chart below.
+            . The period and category filters apply to every metric{isLifetimePerformancePeriod(period) ? '.' : ' and chart below.'}
             {formatAccountingCoverage(data.portfolio_metrics)
               ? ` ${formatAccountingCoverage(data.portfolio_metrics)}`
               : ''}
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-            <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
-            ticker bars use the same transaction-aware calculation as the Total Return Dashboard. With
-            the same account, date range, and holdings scope, <strong>Total Return %</strong> here matches
-            Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong> after the close.
-            Separately read live quotes can differ intraday. Buys and sells
-            change portfolio weights; they are not counted as gains or losses. The index starts at 100,
-            so its final value minus 100 is the displayed return percentage.
-            {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+            {isLifetimePerformancePeriod(period) ? (
+              <>
+                <strong>Lifetime cost-basis standard:</strong> Life Price G/L and Life Price G/L %
+                match Holdings, Dashboard, Gains &amp; Losses, and Total Return when the account and
+                category scope match. Life is not a market-return index, so the risk metrics and
+                performance charts are intentionally omitted.
+              </>
+            ) : (
+              <>
+                <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
+                ticker bars use the same transaction-aware calculation as the Total Return Dashboard. With
+                the same account, date range, and holdings scope, <strong>Total Return %</strong> here matches
+                Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong> after the close.
+                Separately read live quotes can differ intraday. Buys and sells
+                change portfolio weights; they are not counted as gains or losses. The index starts at 100,
+                so its final value minus 100 is the displayed return percentage.
+                {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+              </>
+            )}
           </div>
           {/* Metrics strip */}
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
@@ -725,9 +785,11 @@ export default function Growth({ embedded = false }) {
               <div className="summary-value">
                 {data.grade?.overall ? <GradeBadge grade={data.grade.overall} large /> : '—'}
               </div>
-              {data.grade?.score != null && (
+              {isLifetimePerformancePeriod(period) ? (
+                <div className="summary-sub">{GRADE_LIFETIME_CARD_NOTE}</div>
+              ) : data.grade?.score != null ? (
                 <div className="summary-sub">Score: {data.grade.score}</div>
-              )}
+              ) : null}
               {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
             {/* Price Return, Price Return % and Tracker Total Return % appear in
@@ -737,53 +799,61 @@ export default function Growth({ embedded = false }) {
                 series as that screen's, so it can be checked directly rather
                 than by converting a percentage back into money. */}
             <MetricCard
-              label="Price Return"
+              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Price Return'}
               value={<span style={{ color: (data.portfolio_metrics?.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(data.portfolio_metrics?.price_return_dollar)}</span>}
-              sub="Market price only, dividends excluded"
+              sub={isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
               range={cardRange}
             />
             <ReturnCard
-              label="Price Return %"
+              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L %' : 'Price Return %'}
               value={data.portfolio_metrics?.price_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_price)}
               range={cardRange}
             />
             <ReturnCard
-              label="Tracker Total Return %"
+              label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'}
               value={data.portfolio_metrics?.total_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}
               range={cardRange}
             />
-            <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} range={cardRange} />
-            <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} range={cardRange} />
-            <MetricCard label={`${data.benchmark_ticker} Sharpe`} value={data.benchmark_metrics?.sharpe} range={cardRange} />
-            <MetricCard label={`${data.benchmark_ticker} Sortino`} value={data.benchmark_metrics?.sortino} range={cardRange} />
+            {!isLifetimePerformancePeriod(period) && (
+              <>
+                <MetricCard label="Portfolio Sharpe" value={data.grade?.sharpe} range={cardRange} />
+                <MetricCard label="Portfolio Sortino" value={data.grade?.sortino} range={cardRange} />
+                <MetricCard label={`${data.benchmark_ticker} Sharpe`} value={data.benchmark_metrics?.sharpe} range={cardRange} />
+                <MetricCard label={`${data.benchmark_ticker} Sortino`} value={data.benchmark_metrics?.sortino} range={cardRange} />
+              </>
+            )}
           </div>
 
           {/* Each chart in its own block-level container */}
-          <div className="growth-charts-row">
-            <div className="growth-chart-box" id="growth-price-chart" />
-            <div className="growth-chart-box" id="growth-total-chart" />
-          </div>
-
-          <div id="growth-bar-chart" style={{ marginBottom: '1rem' }} />
-
-          <section className="growth-treemap-panel" aria-labelledby="growth-treemap-title">
-            <div className="growth-treemap-heading">
-              <div>
-                <h2 id="growth-treemap-title">Portfolio growth map</h2>
-                <p>Tile size shows current portfolio value. Color shows total return for the selected period.</p>
+          {!isLifetimePerformancePeriod(period) && (
+            <>
+              <div className="growth-charts-row">
+                <div className="growth-chart-box" id="growth-price-chart" />
+                <div className="growth-chart-box" id="growth-total-chart" />
               </div>
-              <div className="growth-treemap-legend" aria-label="Treemap return colors">
-                <span><i className="growth-treemap-swatch growth-treemap-swatch-loss" /> Loss</span>
-                <span><i className="growth-treemap-swatch growth-treemap-swatch-flat" /> Flat</span>
-                <span><i className="growth-treemap-swatch growth-treemap-swatch-gain" /> Gain</span>
-              </div>
-            </div>
-            <div id="growth-treemap" className="growth-treemap-chart" />
-          </section>
+
+              <div id="growth-bar-chart" style={{ marginBottom: '1rem' }} />
+
+              <section className="growth-treemap-panel" aria-labelledby="growth-treemap-title">
+                <div className="growth-treemap-heading">
+                  <div>
+                    <h2 id="growth-treemap-title">Portfolio growth map</h2>
+                    <p>Tile size shows current portfolio value. Color shows total return for the selected period.</p>
+                  </div>
+                  <div className="growth-treemap-legend" aria-label="Treemap return colors">
+                    <span><i className="growth-treemap-swatch growth-treemap-swatch-loss" /> Loss</span>
+                    <span><i className="growth-treemap-swatch growth-treemap-swatch-flat" /> Flat</span>
+                    <span><i className="growth-treemap-swatch growth-treemap-swatch-gain" /> Gain</span>
+                  </div>
+                </div>
+                <div id="growth-treemap" className="growth-treemap-chart" />
+              </section>
+            </>
+          )}
         </>
       )}
     </div>

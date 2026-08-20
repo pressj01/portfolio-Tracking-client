@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  insertMissingKeysAfter,
   layoutFromVisibleKeys,
   moveKey,
   normalizeLayout,
@@ -90,4 +91,33 @@ test('orderKeys and sameLayout support the cross-window sync', () => {
   assert.equal(sameLayout({ order: ['a'], hidden: [] }, { order: ['a'], hidden: [] }), true)
   assert.equal(sameLayout({ order: ['a'], hidden: [] }, { order: ['b'], hidden: [] }), false)
   assert.equal(sameLayout({ order: [], hidden: ['a'] }, { order: [], hidden: [] }), false)
+})
+
+test('insertMissingKeysAfter parks new columns next to a related one', () => {
+  const next = insertMissingKeysAfter(
+    { order: ['ticker', 'gain_or_loss', 'gain_or_loss_percentage', 'div'], hidden: [] },
+    [
+      { key: 'price_return_dollar', after: 'gain_or_loss_percentage' },
+      { key: 'price_return_pct', after: 'price_return_dollar' },
+    ],
+  )
+  assert.deepEqual(next.order, [
+    'ticker',
+    'gain_or_loss',
+    'gain_or_loss_percentage',
+    'price_return_dollar',
+    'price_return_pct',
+    'div',
+  ])
+})
+
+test('insertMissingKeysAfter leaves a user-placed new column where it is', () => {
+  const layout = {
+    order: ['ticker', 'price_return_pct', 'gain_or_loss'],
+    hidden: ['price_return_pct'],
+  }
+  const next = insertMissingKeysAfter(layout, [
+    { key: 'price_return_pct', after: 'gain_or_loss' },
+  ])
+  assert.equal(next, layout)
 })

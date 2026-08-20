@@ -58,6 +58,24 @@ export function orderKeys(allKeys, savedOrder = []) {
   return [...saved, ...allKeys.filter(key => !seen.has(key))]
 }
 
+// Put newly added columns next to a related one instead of dumping them at the
+// end of a layout that was saved before they existed. Keys already in `order`
+// stay where the user put them.
+export function insertMissingKeysAfter(layout, insertions = []) {
+  const order = [...(layout?.order || [])]
+  let changed = false
+  for (const item of insertions) {
+    const key = item?.key
+    if (!key || order.includes(key)) continue
+    const after = order.indexOf(item.after)
+    if (after >= 0) order.splice(after + 1, 0, key)
+    else order.push(key)
+    changed = true
+  }
+  if (!changed) return layout
+  return { order, hidden: [...(layout?.hidden || [])] }
+}
+
 // Drop `fromKey` where `toKey` currently sits. Dragging left lands on the target
 // and pushes it right; dragging right lands just past it — the behaviour a drag
 // reads as, in both directions.

@@ -19,8 +19,15 @@ import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
   PERFORMANCE_RANGE_NOTE,
+  HOLDINGS_LIFETIME_MATCH_NOTE,
+  GRADE_WINDOW_NOTE,
+  GRADE_LIFETIME_CARD_NOTE,
+  TRACKER_SCOPE_NOTE,
+  OPEN_LOT_SCOPE_NOTE,
+  COST_BASIS_SCOPE_NOTE,
   addCustomRangeParams,
   customRangeError,
+  isLifetimePerformancePeriod,
   formatAccountingCoverage,
   formatPerformanceChartRange,
   formatPerformanceRange,
@@ -28,7 +35,10 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
+import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
 import ColumnCustomizer from '../components/ColumnCustomizer'
+import GradePeriodHelp from '../components/GradePeriodHelp'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { layoutFromVisibleKeys } from '../utils/columnLayout'
 
@@ -844,6 +854,12 @@ function TickerModal({
 
   useEffect(() => {
     if (!ticker) return undefined
+    if (isLifetimePerformancePeriod(period)) {
+      setData(null)
+      setLoading(false)
+      setError(null)
+      return undefined
+    }
     if (rangeError) {
       setData(null)
       setLoading(false)
@@ -984,6 +1000,11 @@ function TickerModal({
             ))}
           </div>
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {isLifetimePerformancePeriod(period) && (
+            <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+            </div>
+          )}
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom holding return date range" style={{ marginBottom: '0.75rem' }}>
@@ -1011,6 +1032,9 @@ function TickerModal({
         )}
         {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
         {error && <div className="alert alert-error">{error}</div>}
+        {isLifetimePerformancePeriod(period) && !loading && (
+          <p className="tr-note">{HOLDINGS_LIFETIME_MATCH_NOTE}</p>
+        )}
         {data && (
           <>
             {data.calculation_method && (
@@ -1051,7 +1075,7 @@ export default function Dashboard() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
   const { runMarketRefresh } = useMarketRefresh()
-  const { profileId, profiles, isAggregate, selection, currentProfileName, basisMode } = useProfile()
+  const { profileId, profiles, isAggregate, selection, currentProfileName, basisMode, profileQueryString } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
@@ -1066,9 +1090,6 @@ export default function Dashboard() {
   const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
   const [gradeCustomEnd, setGradeCustomEnd] = useState(initialGradeCustomDates.end)
   const [gradeRefreshToken, setGradeRefreshToken] = useState(0)
-  const [trackerPerformance, setTrackerPerformance] = useState(null)
-  const [trackerPerformanceLoading, setTrackerPerformanceLoading] = useState(false)
-  const [trackerPerformanceError, setTrackerPerformanceError] = useState(null)
   const [betaBenchmark, setBetaBenchmark] = useState('sp500')
   const [weekPayments, setWeekPayments] = useState([])
   const [weekToday, setWeekToday] = useState('')
@@ -1131,43 +1152,42 @@ export default function Dashboard() {
   })
 
   const gradeRangeError = customRangeError(gradePeriod, gradeCustomStart, gradeCustomEnd)
-
-  useEffect(() => {
-    if (!holdings.length) return undefined
-    if (gradeRangeError) {
-      setTrackerPerformance(null)
-      setTrackerPerformanceLoading(false)
-      setTrackerPerformanceError(null)
-      return undefined
-    }
-    const controller = new AbortController()
-    let active = true
-    const params = new URLSearchParams({ period: gradePeriod })
-    addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
-    setTrackerPerformance(null)
-    setTrackerPerformanceLoading(true)
-    setTrackerPerformanceError(null)
-    pf(`/api/total-return/charts?${params}`, { signal: controller.signal })
-      .then(safeJson)
-      .then(result => { if (active) setTrackerPerformance(result) })
-      .catch(error => {
-        if (active && error.name !== 'AbortError') setTrackerPerformanceError(error.message)
-      })
-      .finally(() => { if (active) setTrackerPerformanceLoading(false) })
-    return () => {
-      active = false
-      controller.abort()
-    }
-  }, [
-    gradePeriod,
-    gradeCustomStart,
-    gradeCustomEnd,
-    gradeRangeError,
-    gradeRefreshToken,
-    holdings.length,
-    selection,
+  const trackerChartsEnabled = (
+    holdings.length > 0
+    && !isLifetimePerformancePeriod(gradePeriod)
+    && !gradeRangeError
+  )
+  const sharedTrackerCharts = useSharedTrackerCharts({
     pf,
-  ])
+    profileQueryString,
+    period: gradePeriod,
+    start: gradeCustomStart,
+    end: gradeCustomEnd,
+    enabled: trackerChartsEnabled,
+  })
+  const overviewTrackerCategories = useMemo(
+    () => overviewCategoryId != null && overviewSubcategoryId == null ? [String(overviewCategoryId)] : [],
+    [overviewCategoryId, overviewSubcategoryId],
+  )
+  const overviewTrackerSubcategories = useMemo(
+    () => overviewSubcategoryId != null ? [String(overviewSubcategoryId)] : [],
+    [overviewSubcategoryId],
+  )
+  const scopedTrackerCharts = useSharedTrackerCharts({
+    pf,
+    profileQueryString,
+    period: gradePeriod,
+    start: gradeCustomStart,
+    end: gradeCustomEnd,
+    categories: overviewTrackerCategories,
+    subcategories: overviewTrackerSubcategories,
+    enabled: trackerChartsEnabled && overviewCategoryId != null,
+  })
+  const trackerPerformance = isLifetimePerformancePeriod(gradePeriod) && holdings.length
+    ? lifetimeTotalReturnPayload(holdings)
+    : sharedTrackerCharts.data
+  const trackerPerformanceLoading = trackerChartsEnabled && sharedTrackerCharts.loading
+  const trackerPerformanceError = trackerChartsEnabled ? sharedTrackerCharts.error : null
 
   useEffect(() => {
     const cached = readDashboardCache(SP500_CACHE_KEY)
@@ -1442,6 +1462,16 @@ export default function Dashboard() {
       setGradeStatus(gradeRangeError)
       return undefined
     }
+    // Life is cost-basis G/L, not a market window. Skip the request and blank
+    // the risk cards instead of showing one period's grade under the Life label.
+    if (isLifetimePerformancePeriod(gradePeriod)) {
+      setTickerRiskLoading(false)
+      setGradeStatus(null)
+      setPortfolioGrade({})
+      setTickerGrades({})
+      setTickerRisk({})
+      return undefined
+    }
 
     const controller = new AbortController()
     let active = true
@@ -1462,7 +1492,13 @@ export default function Dashboard() {
       return previous
     })
     pf(`/api/portfolio-summary/data?${params}`, { signal: controller.signal })
-      .then(safeJson)
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(payload.error || payload.detail || `Request failed (${response.status})`)
+        }
+        return payload
+      })
       .then(g => {
         if (!active || !g) return
         if (g.ticker_grades) setTickerGrades(g.ticker_grades)
@@ -1475,7 +1511,9 @@ export default function Dashboard() {
         setTimeout(() => { if (active) setGradeStatus(null) }, 3000)
       })
       .catch(error => {
-        if (active && error.name !== 'AbortError') setGradeStatus('Grade loading failed.')
+        if (!active || error?.name === 'AbortError' || controller.signal.aborted) return
+        const detail = error?.message ? ` ${error.message}` : ''
+        setGradeStatus(`Grade loading failed.${detail}`)
       })
       .finally(() => {
         if (active) setTickerRiskLoading(false)
@@ -1824,22 +1862,6 @@ export default function Dashboard() {
     const gainLoss = sum('gain_or_loss')
     const lifetimeIncome = sum('total_divs_received')
     const annualIncome = sum('estim_payment_per_year')
-    const trackerRows = rows.filter(holding => (
-      Number.isFinite(Number(holding.tracker_start_value))
-      && Number(holding.tracker_start_value) > 0
-    ))
-    const trackerBasis = trackerRows.reduce(
-      (total, holding) => total + Number(holding.tracker_start_value || 0),
-      0,
-    )
-    const trackerPriceReturn = trackerBasis
-      ? trackerRows.reduce((total, holding) => total
-        + Number(holding.price_return_pct || 0) * Number(holding.tracker_start_value || 0), 0) / trackerBasis
-      : null
-    const trackerTotalReturn = trackerBasis
-      ? trackerRows.reduce((total, holding) => total
-        + Number(holding.total_return_pct || 0) * Number(holding.tracker_start_value || 0), 0) / trackerBasis
-      : null
     const yieldRows = rows.filter(holding => Number(holding.purchase_value) > 0 && holding.annual_yield_on_cost != null)
     const yieldBasis = yieldRows.reduce((total, holding) => total + Number(holding.purchase_value || 0), 0)
     const avgYoc = yieldBasis
@@ -1847,8 +1869,8 @@ export default function Dashboard() {
       : 0
 
     return {
-      priceReturn: trackerPriceReturn,
-      totalReturn: trackerTotalReturn,
+      priceReturn: null,
+      totalReturn: null,
       currentYield: currentValue ? annualIncome / currentValue : 0,
       avgYoc,
       ytdDivs: sum('ytd_divs'),
@@ -1875,6 +1897,13 @@ export default function Dashboard() {
     }
   }, [filteredEnrichedHoldings])
   const isHoldingsFiltered = overviewCategoryId != null
+  const scopedTrackerMetrics = useMemo(() => {
+    if (!isHoldingsFiltered) return null
+    if (isLifetimePerformancePeriod(gradePeriod)) {
+      return lifetimeTotalReturnPayload(filteredEnrichedHoldings).portfolio_metrics
+    }
+    return scopedTrackerCharts.data?.portfolio_metrics || null
+  }, [filteredEnrichedHoldings, gradePeriod, isHoldingsFiltered, scopedTrackerCharts.data])
   const fullTrackerPriceReturn = trackerPortfolioMetrics.price_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.price_return_pct) / 100
@@ -1882,7 +1911,15 @@ export default function Dashboard() {
     ? null
     : Number(trackerPortfolioMetrics.total_return_pct) / 100
   const tableTotals = isHoldingsFiltered
-    ? calculatedTableTotals
+    ? {
+        ...calculatedTableTotals,
+        priceReturn: scopedTrackerMetrics?.price_return_pct == null
+          ? null
+          : Number(scopedTrackerMetrics.price_return_pct) / 100,
+        totalReturn: scopedTrackerMetrics?.total_return_pct == null
+          ? null
+          : Number(scopedTrackerMetrics.total_return_pct) / 100,
+      }
     : {
         ...totals,
         priceReturn: fullTrackerPriceReturn,
@@ -2112,8 +2149,8 @@ export default function Dashboard() {
     { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
     { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },
     { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>, footer: () => pct(tablePctOfAccount) },
-    { id: 'price_return_pct', label: 'PrRtn', name: 'Tracker Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Transaction-aware price-only return for the Shared Performance Date Range', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }}>{pct(totals.priceReturn)}</span> },
-    { id: 'total_return_pct', label: 'TrkTR', name: 'Tracker Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: 'Transaction-aware Total Return for the Shared Performance Date Range; matches the Total Return page', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
+    { id: 'price_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeG/L' : 'PrRtn', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Tracker Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : `${OPEN_LOT_SCOPE_NOTE} The footer is the portfolio Price Return for the range, including sold lots — the same figure as Growth and Total Return cards.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : TRACKER_SCOPE_NOTE}>{pct(totals.priceReturn)}</span> },
+    { id: 'total_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeTR' : 'TrkTR', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? 'Cost-basis total return for open holdings; not a transaction-aware market return.' : 'Transaction-aware Total Return for the Shared Performance Date Range; matches the Total Return page', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
     { id: 'beta', label: 'Beta', name: 'Benchmark Beta', sortKey: '_beta_sort', group: 'Current', defaultVisible: true, align: 'right', tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ", render: h => {
       const risk = h._risk || {}
       return (
@@ -2151,11 +2188,11 @@ export default function Dashboard() {
     { id: 'paid_for_itself', label: 'PFI%', name: 'Paid For Itself', sortKey: 'paid_for_itself', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percentage of original cost recovered through dividends', render: h => <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>{h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}</td> },
     { id: 'nav', label: 'NAV', name: 'NAV Erosion', sortKey: '_coverage', group: 'Current', defaultVisible: true, align: 'right', tip: 'NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.', render: renderNavCell },
     { id: 'closure_risk', label: 'Close?', name: 'Closure Risk', sortKey: '_closure_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Risk the ETF issuer shuts the fund down for being too small to be profitable. Estimated from AUM × expense ratio (annual fee revenue) with AUM floors and a grace period for newly launched funds. Individual stocks are not rated.', render: h => <td style={{ textAlign: 'center' }}><ClosureRiskBadge info={h._closure} /></td> },
-    { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade based on yield, growth, and risk metrics', render: h => <td style={{ textAlign: 'center' }}>{tickerGrades[h.ticker] ? <GradeBadge grade={tickerGrades[h.ticker].grade} /> : '—'}</td> },
+    { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade for the selected market window. Blank on Life — Life is cost-basis G/L and does not produce a grade.', render: h => <td style={{ textAlign: 'center' }}>{tickerGrades[h.ticker] ? <GradeBadge grade={tickerGrades[h.ticker].grade} /> : '—'}</td> },
     { id: 'percent_change', label: '% Chg', name: 'Daily Percent Change', sortKey: 'percent_change', group: 'Calculated Additions', align: 'right', tip: 'Daily percent change calculated from the current holding data', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.percent_change || 0) }}>{pct(h.percent_change)}</td> },
     { id: 'purchase_value', label: 'Invested', name: 'Purchase Value', sortKey: 'purchase_value', group: 'Calculated Additions', align: 'right', tip: 'Cost basis / purchase value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.purchase_value)}</td>, footer: () => moneyOrDash(totals.purchaseValue) },
     { id: 'current_value', label: 'Value', name: 'Current Value', sortKey: 'current_value', group: 'Calculated Additions', align: 'right', tip: 'Current market value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_value)}</td>, footer: () => moneyOrDash(totals.currentValue) },
-    { id: 'gain_or_loss', label: 'Gain$', name: 'Gain/Loss Dollars', sortKey: 'gain_or_loss', group: 'Calculated Additions', align: 'right', tip: 'Current value minus purchase value', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss || 0) }}>{moneyOrDash(h.gain_or_loss)}</td>, footer: () => <span style={{ color: gradeColor(totals.gainLoss || 0) }}>{moneyOrDash(totals.gainLoss)}</span> },
+    { id: 'gain_or_loss', label: 'Gain$', name: 'Gain/Loss Dollars', sortKey: 'gain_or_loss', group: 'Calculated Additions', align: 'right', tip: COST_BASIS_SCOPE_NOTE, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss || 0) }}>{moneyOrDash(h.gain_or_loss)}</td>, footer: () => <span style={{ color: gradeColor(totals.gainLoss || 0) }} title={COST_BASIS_SCOPE_NOTE}>{moneyOrDash(totals.gainLoss)}</span> },
     { id: 'reinvest', label: 'DRIP', name: 'DRIP Flag', sortKey: 'reinvest', group: 'Calculated Additions', align: 'center', tip: 'Whether dividends are reinvested for this holding', render: h => <td style={{ textAlign: 'center' }}>{textOrDash(h.reinvest)}</td> },
     { id: 'dividend_paid', label: 'Div Paid', name: 'Dividend Paid', sortKey: 'dividend_paid', group: 'Calculated Additions', align: 'right', tip: 'Dividend paid amount calculated from the current holding data', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.dividend_paid)}</td>, footer: () => moneyOrDash(totals.dividendPaid) },
     { id: 'withdraw_8pct_cost_annually', label: '8% Yr Wd', name: '8% Annual Withdrawal', sortKey: 'withdraw_8pct_cost_annually', group: 'Calculated Additions', align: 'right', tip: '8% annual withdrawal based on cost', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.withdraw_8pct_cost_annually)}</td>, footer: () => moneyOrDash(totals.withdraw8Annual) },
@@ -2392,7 +2429,10 @@ export default function Dashboard() {
             </span>
           )}
           {gradeStatus && (
-            <span className="alert alert-info" style={{ margin: 0, padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}>
+            <span
+              className={`alert ${gradeStatus === 'Loading risk grades...' || gradeStatus === 'Grades loaded.' ? 'alert-info' : 'alert-error'}`}
+              style={{ margin: 0, padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
+            >
               {gradeStatus === 'Loading risk grades...' && <span className="spinner" style={{ width: 14, height: 14, marginRight: 6 }} />}
               {gradeStatus}
             </span>
@@ -2418,19 +2458,21 @@ export default function Dashboard() {
         />
         <SummaryCard
           className="dashboard-headline-card"
-          label="Price Return"
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Price Return'}
           value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
           color={gradeColor(fullTrackerPriceReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
-          title="Transaction-aware price return for the Shared Performance Date Range"
+          title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : TRACKER_SCOPE_NOTE}
         />
         <SummaryCard
           className="dashboard-headline-card"
-          label="Tracker TR"
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker TR'}
           value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
           color={gradeColor(fullTrackerTotalReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
-          title="The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages"
+          title={isLifetimePerformancePeriod(gradePeriod)
+            ? 'Cost-basis total return using the same lifetime components as the other tracking screens.'
+            : 'The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages'}
         />
       </div>
 
@@ -2590,6 +2632,12 @@ export default function Dashboard() {
             ))}
           </div>
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {isLifetimePerformancePeriod(gradePeriod) && (
+            <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+            </div>
+          )}
+          <p className="tr-note" style={{ marginTop: '0.45rem' }}>{GRADE_WINDOW_NOTE}</p>
         </div>
         {gradePeriod === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom grade date range">
@@ -2704,6 +2752,14 @@ export default function Dashboard() {
         </div>
       </details>
 
+      {isLifetimePerformancePeriod(gradePeriod) ? (
+        <div className="alert alert-info" style={{ marginTop: 0 }}>
+          <strong>Grade cannot be computed for the Lifetime setting.</strong>{' '}
+          Life is cost-basis G/L, not a daily price series, so Portfolio Grade, beta, Sharpe,
+          Sortino, Calmar, Omega, and Ulcer stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom
+          to grade that market window.
+        </div>
+      ) : (
       <p className="tr-note" style={{ marginTop: 0 }}>
         <strong>{portfolioGrade.period_label || 'Grade period'}:</strong>{' '}
         {formatPerformanceRange(
@@ -2733,6 +2789,7 @@ export default function Dashboard() {
           </>
         )}
       </p>
+      )}
 
       {/* Summary Cards Strip */}
       <div className="summary-strip">
@@ -2740,7 +2797,11 @@ export default function Dashboard() {
           className="summary-card-grade"
           label="Portfolio Grade"
           value={portfolioGrade.overall ? <GradeBadge grade={portfolioGrade.overall} large /> : '—'}
-          sub={portfolioGrade.score != null ? `Score: ${portfolioGrade.score}` : null}
+          sub={
+            isLifetimePerformancePeriod(gradePeriod)
+              ? GRADE_LIFETIME_CARD_NOTE
+              : (portfolioGrade.score != null ? `Score: ${portfolioGrade.score}` : null)
+          }
         />
         <BenchmarkBetaCard
           benchmark={betaBenchmark}
@@ -3030,6 +3091,11 @@ export default function Dashboard() {
       {/* Grade Thresholds (collapsible) */}
       <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
         <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>Grade & Exposure Guide</summary>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.75rem 0 0' }}>
+          When Life is selected, Portfolio Grade and the risk indexes stay blank. Expand this guide
+          for how long Lifetime is, which filters grade, and why 5Y and All work but Life does not.
+        </p>
+        <GradePeriodHelp variant="dashboard" />
         <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.75rem 0 0' }}>
           Portfolio beta is an exposure readout, not an input to the composite grade. It estimates how sensitive the portfolio is to the selected benchmark: 1.00x moves roughly with the benchmark, 0.80x moves about 80% as much, and 1.20x moves about 120% as much. The dollar estimate below beta translates a 1% benchmark move into an approximate portfolio-value move.
         </p>

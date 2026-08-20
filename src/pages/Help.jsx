@@ -1,4 +1,5 @@
 ﻿import React, { useState } from 'react'
+import GradePeriodHelp from '../components/GradePeriodHelp'
 
 const APP_VERSION = '1.35.0'
 
@@ -15,6 +16,13 @@ const GROUPS = [
     label: 'Action Center',
     sections: [
       { id: 'action-center', label: 'Action Center' },
+    ],
+  },
+  {
+    id: 'dashboard',
+    label: 'Dashboard',
+    sections: [
+      { id: 'dashboard', label: 'Dashboard' },
     ],
   },
   {
@@ -44,7 +52,6 @@ const GROUPS = [
     id: 'portfolio',
     label: 'Portfolio',
     sections: [
-      { id: 'dashboard', label: 'Dashboard' },
       { id: 'holdings', label: 'Holdings' },
       { id: 'reinvestment-impact', label: 'Reinvestment Impact' },
       { id: 'categories', label: 'Categories' },
@@ -654,23 +661,37 @@ function DashboardHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
-          <strong>Grade &amp; Risk Period</strong> — choose <strong>7D, 1M, 3M, 6M, YTD, 1Y,
-          5Y, All, or Custom</strong>. All begins with the portfolio&apos;s earliest recorded trade
+          <strong>Grade &amp; Risk Period</strong> — the Shared Performance Date Range. Grade, beta,
+          Sharpe, Sortino, Calmar, Omega, and Ulcer follow market windows such as
+          <strong> YTD, 1M, 1Y, 5Y, All, and Custom</strong>. See
+          <strong> Portfolio Grade and the date range</strong> below for which filters produce a grade.
+          All begins with the portfolio&apos;s earliest recorded trade
           (or saved purchase/import date when trade history is incomplete). The exact market-data
           start and end dates are printed below the selector; a requested date can move to the next
           trading day for weekends or market holidays.
         </li>
         <li>
           <strong>Portfolio Grade</strong> — a composite risk-adjusted performance grade for the
-          selected dates. Dashboard and Growth &amp; Performance use the same calculation, holdings,
+          selected market window. Dashboard and Growth &amp; Performance use the same calculation, holdings,
           and current-value weights, so their grades match when the same period and holdings are selected.
+          Blank on <strong>Life</strong> — that filter is cost-basis G/L, not a daily price series.
         </li>
-        <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios for the selected dates.</li>
+        <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios for the selected market window. Blank on Life, same as Portfolio Grade.</li>
         <li><strong>Lifetime Income</strong> — total dividend income received by the selected account across all years.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
         <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
         <li><strong>Est. Monthly Income</strong> — estimated monthly dividend income across all holdings (annual estimate ÷ 12).</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Grade and the date range</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The Shared Performance Date Range controls Price Return and Tracker Total Return on the Dashboard,
+        and it also controls whether a Portfolio Grade and the risk indexes are computed.
+        <strong> Life</strong> is Holdings cost-basis G/L; <strong>All</strong> is the time-weighted
+        replay from the first recorded trade — they are not the same history. The same
+        explanation is in the Dashboard&apos;s collapsible <strong>Grade &amp; Exposure Guide</strong>.
+      </p>
+      <GradePeriodHelp />
 
       <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.4rem' }}>Reinvestment cards: Estimated vs. Actual</h4>
       <p style={{ marginBottom: '0.6rem' }}>
@@ -792,7 +813,7 @@ function DashboardHelp() {
         <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
         <li><strong>RvY</strong> — Return vs. Yield. Compares each holding's selected-period Tracker Total Return to its dividend yield. <strong>Good</strong> (green) means total return exceeds yield; <strong>Poor</strong> (red) means yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, the default) and <strong>YOC</strong> (yield on cost).</li>
         <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
-        <li><strong>Grd</strong> — composite grade for the holding.</li>
+        <li><strong>Grd</strong> — composite grade for the holding over the selected market window. Blank when <strong>Life</strong> is selected, because Life is cost-basis G/L and does not produce a grade.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Return vs. Yield (RvY)</h3>
@@ -910,6 +931,15 @@ function HoldingsHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Sorting</strong> — Click any column header to sort ascending/descending. An arrow indicates the active sort.</li>
         <li><strong>Frozen columns</strong> — Ticker, Description, Category, and Shares stay visible as you scroll horizontally.</li>
+        <li><strong>Totals row</strong> — The footer sums share and dollar columns (Shares, Cost Basis, Value, Gain/Loss, income, dividends, realized G/L). Percentage columns are recomputed from those totals rather than adding the percents: G/L % is total gain ÷ total cost, YOC is estimated annual income ÷ cost, Yield is estimated annual income ÷ current value, and % Acct should total about 100%. Per-share prices (Price Paid, Current, Div/Share) are left blank because summing them is not meaningful.</li>
+        <li><strong>Shared Performance Date Range</strong> — The same 1D / 7D / YTD / 1Y / <em>Life</em> / Custom control used on Total Return, Gains &amp; Losses, Growth, and the Dashboard. Changing it on any of those screens updates the others. <strong>Life</strong> is cost-basis G/L (current value − what you paid) and those screens show a <em>Matches Holdings</em> note with the same totals as this table. The other buttons are the tracker replay and match Total Return Period Price Return.</li>
+        <li><strong>Gain/Loss and G/L %</strong> — Follow the shared range. Three different measurements exist, and screens that share a measurement use the same number:
+          <ul>
+            <li><strong>Portfolio Price Return</strong> (YTD / 1Y / All Totals, Growth Price Return, Total Return cards, Dashboard PrRtn footer, Gains &amp; Losses period cards) — every lot held during the range, including lots already sold.</li>
+            <li><strong>Open lots only</strong> (each Holdings row, Total Return table rows and Open lots only footer) — current holdings. Sold lots are left out, so this total can differ from Portfolio Price Return.</li>
+            <li><strong>Lifetime cost basis</strong> (Life, Life G/L) — current value minus what you paid for shares you still hold. Not a selected-period return.</li>
+          </ul>
+        </li>
         <li><strong>DRIP checkbox</strong> — Toggle dividend reinvestment directly in the table without opening the edit form. When enabled, all future dividends are automatically reinvested as new shares at the ex-dividend date using historical prices. The Holdings page and Historical Dividend History page will automatically calculate the reinvested shares and show the DRIP status.</li>
         <li><strong>Expand transactions</strong> — Click the small arrow (&#9654;) next to a ticker to expand and see its transaction lots inline. This section reflects transactions recorded for that ticker only.</li>
       </ul>
@@ -2179,13 +2209,20 @@ function GrowthHelp() {
         </li>
         <li>
           <strong>Period</strong> — The shared choices are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y,
-          All, and Custom</strong>. All begins with the portfolio&apos;s first recorded trade rather than
+          All, Life, and Custom</strong>. All begins with the portfolio&apos;s first recorded trade rather than
           the benchmark&apos;s older history. Custom start and end dates are inclusive. The selected
-          range controls every metric and chart on the page.
+          range controls every metric and chart on the page. <strong>Life</strong> is cost-basis G/L
+          and does not produce a Portfolio Grade — see <strong>Portfolio Grade and the date range</strong> below.
         </li>
       </ul>
 
-      {/* ── Metrics Strip ──────────────────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Grade and the date range</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Growth uses the same grade rules as the Dashboard. The same table is in this page&apos;s
+        collapsible help under <strong>How to read the charts, metric bubbles, and filters</strong>.
+      </p>
+      <GradePeriodHelp />
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Metrics Strip</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         A row of summary cards appears below the filters:
@@ -2196,6 +2233,7 @@ function GrowthHelp() {
           overall risk-adjusted performance for the selected dates. It uses the same adjusted-price,
           current-value-weighted calculation as the Dashboard, so the two pages match when the same
           holdings and period are selected. The exact effective dates appear on the grade card.
+          Blank on <strong>Life</strong>, because Life is cost-basis G/L, not a daily price series.
         </li>
         <li>
           <strong>Tracker Total Return %</strong> — The portfolio&apos;s transaction-aware, dividend-reinvested

@@ -11,8 +11,12 @@ import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
   PERFORMANCE_RANGE_NOTE,
+  HOLDINGS_LIFETIME_MATCH_NOTE,
+  TRACKER_SCOPE_NOTE,
+  COST_BASIS_SCOPE_NOTE,
   addCustomRangeParams,
   customRangeError,
+  isLifetimePerformancePeriod,
   formatAccountingCoverage,
   formatPerformanceChartRange,
   formatPerformanceAsOf,
@@ -23,6 +27,11 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import {
+  fetchHoldingsJson,
+  lifetimeTotalReturnPayload,
+} from '../utils/lifetimePerformance'
+import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
 
 const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
@@ -97,7 +106,7 @@ const COMBINED_COLS = [
 
 export default function GainsLosses({ embedded = false }) {
   const pf = useProfileFetch()
-  const { selection, basisMode } = useProfile()
+  const { selection, basisMode, profileQueryString } = useProfile()
   const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
   const [subcategories, setSubcategories] = useState([])
@@ -174,12 +183,22 @@ export default function GainsLosses({ embedded = false }) {
     setChartLoading(true)
     setChartError(null)
     setChartData(null)
-    const params = new URLSearchParams({ period })
-    addCustomRangeParams(params, period, customStart, customEnd)
-    if (categories.length) params.set('category', categories.join(','))
-    if (subcategories.length) params.set('subcategory', subcategories.join(','))
+    if (isLifetimePerformancePeriod(period)) {
+      fetchHoldingsJson(pf, { categories, subcategories })
+        .then(rows => { if (active) setChartData(lifetimeTotalReturnPayload(rows)) })
+        .catch(e => { if (active) setChartError(e.message) })
+        .finally(() => { if (active) setChartLoading(false) })
+      return () => { active = false }
+    }
+    const params = trackerChartsSearchParams({
+      period,
+      start: customStart,
+      end: customEnd,
+      categories,
+      subcategories,
+    })
     Promise.all([
-      pf(`/api/total-return/charts?${params}`).then(r => r.json()),
+      loadTrackerCharts(pf, profileQueryString, params),
       pf(`/api/total-return/summary?${params}`).then(r => r.json()),
     ])
       .then(([performance, periodSummary]) => {
@@ -194,7 +213,7 @@ export default function GainsLosses({ embedded = false }) {
       .catch(e => { if (active) setChartError(e.message) })
       .finally(() => { if (active) setChartLoading(false) })
     return () => { active = false }
-  }, [period, customStart, customEnd, rangeError, categories, subcategories, selection, basisMode, pf])
+  }, [period, customStart, customEnd, rangeError, categories, subcategories, selection, basisMode, pf, profileQueryString])
 
   // Render Plotly charts
   useEffect(() => {
@@ -817,6 +836,11 @@ export default function GainsLosses({ embedded = false }) {
             ))}
           </div>
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {isLifetimePerformancePeriod(period) && (
+            <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+            </div>
+          )}
         </div>
 
         {period === 'custom' && (
@@ -935,20 +959,40 @@ export default function GainsLosses({ embedded = false }) {
       {chartData && !chartLoading && (
         <>
           <p className="tr-note">
-            <strong>{chartData.period_label} performance:</strong>{' '}
-            {performanceRange || 'effective dates unavailable'}. The figures below come from the same
-            transaction-aware calculation as Total Return; purchases and sales change portfolio weights
-            without being counted as returns.
-            {formatAccountingCoverage(periodMetrics)
-              ? ` ${formatAccountingCoverage(periodMetrics)}`
-              : ''}
+            {isLifetimePerformancePeriod(period) ? (
+              <>
+                <strong>Lifetime cost-basis result:</strong>{' '}
+                {performanceRange || 'effective dates unavailable'}. Price G/L is current value minus
+                the selected cost basis for open holdings; it is not a transaction-aware market replay.
+              </>
+            ) : (
+              <>
+                <strong>{chartData.period_label} performance:</strong>{' '}
+                {performanceRange || 'effective dates unavailable'}. The figures below come from the same
+                transaction-aware calculation as Total Return; purchases and sales change portfolio weights
+                without being counted as returns.
+                {formatAccountingCoverage(periodMetrics)
+                  ? ` ${formatAccountingCoverage(periodMetrics)}`
+                  : ''}
+              </>
+            )}
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-            <strong>Reconciliation figure:</strong> <strong>Tracker Total Return %</strong> is the value
-            that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2
-            after the close when the account, holdings filter, and shared date range match. Separately
-            read live quotes can differ intraday. Lifetime G/L below answers
-            a different cost-basis accounting question.
+            {isLifetimePerformancePeriod(period) ? (
+              <>
+                <strong>Reconciliation figure:</strong> <strong>Life Price G/L %</strong> matches the
+                Holdings Life G/L total and the Life setting on Dashboard, Total Return, and Growth
+                when the account and holdings filter match.
+              </>
+            ) : (
+              <>
+                <strong>Reconciliation figure:</strong> <strong>Tracker Total Return %</strong> is the value
+                that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2
+                after the close when the account, holdings filter, and shared date range match. Separately
+                read live quotes can differ intraday. Lifetime G/L below answers
+                a different cost-basis accounting question.
+              </>
+            )}
           </div>
           <div className="summary-strip" style={{ marginBottom: '1.25rem' }}>
             <MetricCard label="Start Value" value={fmtInt(periodMetrics.start_value)}
@@ -963,20 +1007,27 @@ export default function GainsLosses({ embedded = false }) {
             </MetricCard>
             <AccountValueCard data={periodMetrics.account_reconciliation}
               basisLabel={periodAsOf(chartData?.actual_end_date, periodMetrics.priced_at)} />
-            <MetricCard label="Price Return" range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Price Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>}>
-              <div className="summary-sub">Market price only, dividends excluded</div>
+              <div className="summary-sub">
+                {isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
+              </div>
             </MetricCard>
             <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange}>
-              <div className="summary-sub">Dividends paid during the range</div>
+              <div className="summary-sub">{isLifetimePerformancePeriod(period) ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
-            <MetricCard label="Total Return" range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Total Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>}>
-              <div className="summary-sub">Price Return + Distributions</div>
+              <div className="summary-sub">
+                Price {fmtInt(periodMetrics.price_return_dollar)} + distributions {fmtInt(periodMetrics.distribution_dollar)}
+                {Number(periodMetrics.realized_return_dollar || 0) !== 0
+                  ? ` + realized trims ${fmtInt(periodMetrics.realized_return_dollar)}`
+                  : ''}
+              </div>
             </MetricCard>
-            <MetricCard label="Tracker Total Return %" range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>}>
-              <div className="summary-sub">Same calculation as Total Return &amp; Dashboard; live quotes can differ intraday</div>
+              <div className="summary-sub">Same calculation as Total Return &amp; Dashboard</div>
             </MetricCard>
           </div>
         </>
@@ -1104,12 +1155,15 @@ export default function GainsLosses({ embedded = false }) {
       )}
 
       {/* Charts section */}
-      <h2 style={{ marginTop: '2rem', marginBottom: '0.25rem' }}>Selected-Period Performance Charts</h2>
+      <h2 style={{ marginTop: '2rem', marginBottom: '0.25rem' }}>
+        {isLifetimePerformancePeriod(period) ? 'Lifetime Cost-Basis Charts' : 'Selected-Period Performance Charts'}
+      </h2>
       <p className="tr-note">
-        These charts use the Shared Performance Date Range above and the same transaction-aware
-        return series as Total Return. The realized timeline includes only sales inside that range.
+        {isLifetimePerformancePeriod(period)
+          ? 'These ticker charts show open-holding cost-basis results. They do not plot a market-return timeline.'
+          : 'These charts use the Shared Performance Date Range above and the same transaction-aware return series as Total Return. The realized timeline includes only sales inside that range.'}
       </p>
-      {extremePerformanceRows.length > 0 && (
+      {!isLifetimePerformancePeriod(period) && extremePerformanceRows.length > 0 && (
         <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
           <strong>Percentage outlier:</strong>{' '}
           {extremePerformanceRows.map((row, index) => (
@@ -1132,7 +1186,7 @@ export default function GainsLosses({ embedded = false }) {
       {chartData?.realized_rows?.length > 0 && (
         <div id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
       )}
-      {chartData && !chartLoading && !chartData.realized_rows?.length && (
+      {!isLifetimePerformancePeriod(period) && chartData && !chartLoading && !chartData.realized_rows?.length && (
         <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales occurred inside the selected performance range.</p>
       )}
     </div>

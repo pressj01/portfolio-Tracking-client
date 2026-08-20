@@ -8,7 +8,9 @@ import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
   PERFORMANCE_RANGE_NOTE,
+  HOLDINGS_LIFETIME_MATCH_NOTE,
   customRangeError,
+  isLifetimePerformancePeriod,
   formatAccountingCoverage,
   formatPerformanceChartRange,
   formatPerformanceAsOf,
@@ -17,6 +19,10 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import {
+  fetchHoldingsJson,
+  lifetimeGrowth2Payload,
+} from '../utils/lifetimePerformance'
 
 function TickerFilter({ tickers, selected, onChange }) {
   const [open, setOpen] = useState(false)
@@ -203,6 +209,15 @@ export default function PortfolioGrowth2({ embedded = false }) {
     let active = true
     setLoading(true)
     setError(null)
+    if (isLifetimePerformancePeriod(period)) {
+      fetchHoldingsJson(pf)
+        .then(rows => {
+          if (active) setData(lifetimeGrowth2Payload(rows, { selectedTickers }))
+        })
+        .catch(e => { if (active) setError(e.message) })
+        .finally(() => { if (active) setLoading(false) })
+      return () => { active = false }
+    }
     const params = new URLSearchParams({
       period: period.toLowerCase(),
       profit_mode: profitMode,
@@ -236,7 +251,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
   // ── Chart 1: Portfolio Value ──
   useEffect(() => {
-    if (!data || !window.Plotly) return
+    if (!data || !window.Plotly || isLifetimePerformancePeriod(period)) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
     const chartRange = formatPerformanceChartRange(
@@ -312,7 +327,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
   // ── Chart 2: Portfolio Performance ──
   useEffect(() => {
-    if (!data || !window.Plotly) return
+    if (!data || !window.Plotly || isLifetimePerformancePeriod(period)) return
     const Plotly = window.Plotly
     const ct = chartTheme(isDark)
     const chartRange = formatPerformanceChartRange(
@@ -395,6 +410,11 @@ export default function PortfolioGrowth2({ embedded = false }) {
             ))}
           </div>
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
+          {isLifetimePerformancePeriod(period) && (
+            <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
+              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+            </div>
+          )}
         </div>
         {period === 'custom' && (
           <div className="g2-custom-range" role="group" aria-label="Custom date range">
@@ -432,11 +452,21 @@ export default function PortfolioGrowth2({ embedded = false }) {
       <details className="tracker-help">
         <summary>What are these charts showing?</summary>
         <p className="tracker-help-footer">
-          <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
-          transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
-          the account, date range, and holdings scope match. Separately read live quotes can differ
-          intraday. The dollar card and return chart use
-          the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
+          {isLifetimePerformancePeriod(period) ? (
+            <>
+              <strong>One lifetime cost-basis result across the app:</strong> Life Price G/L uses
+              current value minus the selected cost basis for the open holdings. It matches Holdings,
+              Dashboard, Gains &amp; Losses, Growth, and Total Return for the same ticker scope.
+            </>
+          ) : (
+            <>
+              <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
+              transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
+              the account, date range, and holdings scope match. Separately read live quotes can differ
+              intraday. The dollar card and return chart use
+              the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
+            </>
+          )}
         </p>
         <div className="tracker-help-grid">
           <section>
@@ -510,7 +540,9 @@ export default function PortfolioGrowth2({ embedded = false }) {
           </section>
         </div>
         <p className="tracker-help-footer">
-          Period and ticker filters apply to both charts. Custom start and end dates are inclusive.
+          {isLifetimePerformancePeriod(period)
+            ? 'The ticker filter applies to every Life card. Life has no market timeline.'
+            : 'Period and ticker filters apply to both charts. Custom start and end dates are inclusive.'}
         </p>
       </details>
 
@@ -525,18 +557,29 @@ export default function PortfolioGrowth2({ embedded = false }) {
             {data.requested_start_date && data.actual_start_date !== data.requested_start_date
               ? ` (requested from ${formatPerformanceRange(data.requested_start_date, data.requested_end_date)})`
               : ''}.
-            {' The value chart and the return card share one replayed series, so both use the tracker range shown on them.'}
+            {isLifetimePerformancePeriod(period)
+              ? ' These are open-holding cost-basis values, not a replayed market series.'
+              : ' The value chart and the return card share one replayed series, so both use the tracker range shown on them.'}
             {formatAccountingCoverage(data.tracker_coverage)
               ? ` ${formatAccountingCoverage(data.tracker_coverage)}`
               : ''}
           </p>
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-            <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
-            this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure;
-            separately read live quotes can differ intraday.
-            <strong> Tracker Total Return $</strong> is the matching cash-flow-adjusted dollar result:
-            price return plus distributions, without treating deposits, purchases, or sales as performance.
-            {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+            {isLifetimePerformancePeriod(period) ? (
+              <>
+                <strong>Reconcile this page:</strong> Life Price G/L and Life Total Return match the
+                Life setting on the other tracking screens for the same account and ticker scope.
+              </>
+            ) : (
+              <>
+                <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
+                this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure;
+                separately read live quotes can differ intraday.
+                <strong> Tracker Total Return $</strong> is the matching cash-flow-adjusted dollar result:
+                price return plus distributions, without treating deposits, purchases, or sales as performance.
+                {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+              </>
+            )}
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
             <div className="summary-card">
@@ -560,23 +603,26 @@ export default function PortfolioGrowth2({ embedded = false }) {
               <AccountReconciliation data={data.summary?.account_reconciliation} />
             </div>
             <div className="summary-card">
-              <div className="summary-label">Tracker Total Return $</div>
+              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return $'}</div>
               <div className="summary-value">{formatMoney(data.summary?.total_profit_amount)}</div>
               <div className="summary-sub">
                 Price {formatMoney(data.summary?.price_return_amount)} + distributions {formatMoney(data.summary?.distribution_amount)}
+                {Number(data.summary?.realized_return_amount || 0) !== 0
+                  ? ` + realized trims ${formatMoney(data.summary.realized_return_amount)}`
+                  : ''}
               </div>
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
             <div className="summary-card">
-              <div className="summary-label">Tracker Total Return %</div>
+              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'}</div>
               <div className="summary-value">
                 {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
               </div>
-              <div className="summary-sub">Same calculation as Growth &amp; Total Return; live quotes can differ intraday</div>
+              <div className="summary-sub">Same calculation as Growth &amp; Total Return{isLifetimePerformancePeriod(period) ? '' : '; live quotes can differ intraday'}</div>
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
           </div>
-          {/* ── Chart 1: Portfolio Value ── */}
+          {!isLifetimePerformancePeriod(period) && <>{/* ── Chart 1: Portfolio Value ── */}
           <div className="g2-chart-section">
             <div className="g2-chart-area">
               <div id="g2-value-chart" className="g2-chart-box" />
@@ -603,6 +649,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
             </div>
           </div>
+          </>}
         </>
       )}
     </div>

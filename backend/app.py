@@ -14852,6 +14852,47 @@ def list_holdings():
     _ensure_basis_columns(conn)
     placeholders = ",".join("?" * len(pids))
     basis_total = _basis_total_expr("a")
+    category_ids = [
+        int(value)
+        for value in request.args.get("category", "").split(",")
+        if value.strip().isdigit()
+    ]
+    subcategory_ids = _parse_subcategory_ids(request.args.get("subcategory"))
+    requested_tickers = {
+        _accounting_symbol_for_ticker(value)
+        for value in request.args.get("tickers", "").split(",")
+        if value.strip()
+    }
+    selected_tickers = None
+    if category_ids or subcategory_ids:
+        conditions = []
+        category_params = list(pids)
+        if category_ids:
+            conditions.append(
+                f"category_id IN ({','.join('?' * len(category_ids))})"
+            )
+            category_params.extend(category_ids)
+        if subcategory_ids:
+            conditions.append(
+                f"subcategory_id IN ({','.join('?' * len(subcategory_ids))})"
+            )
+            category_params.extend(subcategory_ids)
+        selected_tickers = {
+            _accounting_symbol_for_ticker(row["ticker"])
+            for row in conn.execute(
+                f"""SELECT DISTINCT ticker
+                    FROM ticker_categories
+                    WHERE profile_id IN ({placeholders})
+                      AND ({' OR '.join(conditions)})""",
+                category_params,
+            ).fetchall()
+        }
+    if requested_tickers:
+        selected_tickers = (
+            requested_tickers
+            if selected_tickers is None
+            else selected_tickers & requested_tickers
+        )
     if _repair_drip_tracking_for_profiles(conn, pids):
         conn.commit()
 
@@ -14984,6 +15025,11 @@ def list_holdings():
 
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
+    if selected_tickers is not None:
+        results = [
+            row for row in results
+            if _accounting_symbol_for_ticker(row.get("ticker")) in selected_tickers
+        ]
     if is_agg and len(pids) > 1:
         # Replace the aggregate query's MAX() picks for security-level text
         # columns, which order alphabetically and so can report a quarterly
@@ -19238,6 +19284,33 @@ def portfolio_summary_data():
     period = request.args.get("period", "1y").strip().lower()
     custom_start = request.args.get("start_date", "").strip()
     custom_end = request.args.get("end_date", "").strip()
+    # Life is cost-basis G/L, not a daily-return window. Grade/Sharpe/beta
+    # need a price series, so do not resolve `lifetime` through the market
+    # calendar (that raises 400) and do not pretend cost basis is a grade.
+    if period == "lifetime":
+        tickers = [r["ticker"] for r in rows]
+        blank_risk = {
+            "beta": None,
+            "beta_benchmark": None,
+            "delta_up": None,
+            "delta_down": None,
+        }
+        return jsonify({
+            "ticker_grades": {t: {"grade": "N/A", "score": None} for t in tickers},
+            "ticker_risk": {t: dict(blank_risk) for t in tickers},
+            "portfolio_grade": {
+                "period_key": "lifetime",
+                "period_label": "Lifetime",
+                "grade_not_applicable": True,
+            },
+            "ticker_closure_risk": {},
+            "period_key": "lifetime",
+            "period_label": "Lifetime",
+            "grade_not_applicable": True,
+            "window_too_short": False,
+            "window_observations": 0,
+            "min_observations": None,
+        })
     holdings_for_inception = [dict(row) for row in rows]
     transactions_for_inception = [dict(row) for row in transaction_rows]
     inception_date = _portfolio_inception_date(

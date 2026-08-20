@@ -2604,6 +2604,17 @@ th.col-drag-target {
   background: var(--p-1a2744);
 }
 
+.sticky-table-wrap.manage-holdings-table-wrap tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+  border-top: 2px solid var(--border);
+  z-index: 2;
+}
+.sticky-table-wrap.manage-holdings-table-wrap tfoot td.frozen-col {
+  z-index: 3;
+}
+
 /* Gains & Losses — individual sells expanded under a rolled-up ticker row */
 .gl-lot-row td {
   background: var(--surface-sunken);

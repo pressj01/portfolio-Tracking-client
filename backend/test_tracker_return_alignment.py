@@ -63,11 +63,19 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
 
         dates = pd.to_datetime(["1972-01-03", "2024-01-02", "2024-12-31"])
         close = pd.DataFrame(
-            {"AAA": [1.0, 10.0, 12.0], "SPY": [2.0, 100.0, 110.0]},
+            {
+                "AAA": [1.0, 10.0, 12.0],
+                "BBB": [1.0, 20.0, 18.0],
+                "SPY": [2.0, 100.0, 110.0],
+            },
             index=dates,
         )
         adjusted = pd.DataFrame(
-            {"AAA": [1.0, 10.0, 14.0], "SPY": [2.0, 100.0, 115.0]},
+            {
+                "AAA": [1.0, 10.0, 14.0],
+                "BBB": [1.0, 20.0, 17.0],
+                "SPY": [2.0, 100.0, 115.0],
+            },
             index=dates,
         )
         zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
@@ -131,6 +139,47 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         growth_2_dollar = growth_2.get_json()["summary"]["price_return_amount"]
         self.assertEqual(growth_dollar, total_return_dollar)
         self.assertEqual(growth_dollar, growth_2_dollar)
+
+    def test_category_scope_matches_between_dashboard_growth_and_total_return(self):
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            INSERT INTO all_account_info VALUES (
+                'BBB', 6, 'Other', 'Stock', 1, 18, 20, 20, '2024-01-02', NULL
+            );
+            INSERT INTO transactions
+                VALUES (2, 'BBB', 6, 'BUY', '2024-01-02', 1, 20, 0, 0, '');
+            INSERT INTO categories VALUES (10, 'Core', 6, 0);
+            INSERT INTO categories VALUES (20, 'Other', 6, 1);
+            INSERT INTO ticker_categories VALUES ('AAA', 6, 10, NULL);
+            INSERT INTO ticker_categories VALUES ('BBB', 6, 20, NULL);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        params = "profile_id=6&period=all&category=10"
+        dashboard = self.client.get(f"/api/total-return/charts?{params}")
+        growth = self.client.get(f"/api/growth/data?{params}&benchmark=SPY")
+
+        self.assertEqual(dashboard.status_code, 200, dashboard.get_json())
+        self.assertEqual(growth.status_code, 200, growth.get_json())
+        dashboard_metrics = dashboard.get_json()["portfolio_metrics"]
+        growth_metrics = growth.get_json()["portfolio_metrics"]
+        for key in (
+            "start_value",
+            "end_value",
+            "price_return_dollar",
+            "price_return_pct",
+            "distribution_dollar",
+            "total_return_dollar",
+            "total_return_pct",
+        ):
+            self.assertEqual(dashboard_metrics[key], growth_metrics[key], key)
+        self.assertEqual(
+            [row["ticker"] for row in dashboard.get_json()["performance_rows"]],
+            ["AAA"],
+        )
 
 
 if __name__ == "__main__":
