@@ -652,6 +652,46 @@ def _transactions_aligned_to_current_lots(transactions, current_holdings):
     return clipped
 
 
+def _transactions_for_current_positions(transactions, current_holdings):
+    """Keep transaction history only for position keys that are still open.
+
+    The open-holdings footer and rows must cover the same scope. A
+    transaction-only ticker is a fully closed position: replaying it in that
+    footer while omitting it from the rows makes the footer differ from their
+    sum and contaminates its time-weighted percentage. Match on profile plus
+    canonical accounting symbol so an old lot in one account cannot leak into
+    the same ticker that remains open in another account.
+    """
+
+    def position_key(row):
+        explicit = row.get("position_key") if isinstance(row, dict) else None
+        has_explicit_key = isinstance(explicit, (tuple, list)) and bool(explicit)
+        profile_id = explicit[0] if has_explicit_key else row.get("profile_id")
+        ticker = (
+            explicit[1]
+            if isinstance(explicit, (tuple, list)) and len(explicit) > 1
+            else row.get("ticker")
+        )
+        return profile_id, _accounting_symbol_for_ticker(ticker)
+
+    open_keys = set()
+    for holding in current_holdings or []:
+        if not isinstance(holding, dict):
+            continue
+        try:
+            quantity = float(holding.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if quantity > 1e-9:
+            open_keys.add(position_key(holding))
+
+    return [
+        transaction
+        for transaction in transactions or []
+        if isinstance(transaction, dict) and position_key(transaction) in open_keys
+    ]
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -26222,14 +26262,19 @@ def total_return_charts():
     ).fetchall()
     conn.close()
 
-    filtered_transaction_records = [
-        dict(row) for row in transaction_rows
-        if not (cat_ids or sub_ids)
-        or _accounting_symbol_for_ticker(row["ticker"]) in allowed_accounting_tickers
+    normalized_transaction_records = []
+    for raw_row in transaction_rows:
+        row = dict(raw_row)
+        row["ticker"] = _accounting_symbol_for_ticker(row.get("ticker"))
+        row["position_key"] = (row.get("profile_id"), row["ticker"])
+        normalized_transaction_records.append(row)
+    historical_transaction_records = [
+        row for row in normalized_transaction_records
+        if not (cat_ids or sub_ids) or row["ticker"] in allowed_accounting_tickers
     ]
     inception_date = _portfolio_inception_date(
         filtered_holding_records,
-        filtered_transaction_records,
+        historical_transaction_records,
     )
     try:
         period_range = _resolve_total_return_period(
@@ -26303,14 +26348,9 @@ def total_return_charts():
         if source:
             payment_sources.add(source)
 
-    for raw_row in transaction_rows:
+    for raw_row in historical_transaction_records:
         row = dict(raw_row)
         raw_ticker = str(row.get("ticker") or "").strip().upper()
-        if (
-            filter_is_active
-            and _accounting_symbol_for_ticker(raw_ticker) not in allowed_accounting_tickers
-        ):
-            continue
         accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
         market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
         row["ticker"] = accounting_ticker
@@ -26331,6 +26371,11 @@ def total_return_charts():
         portfolio_holdings.append(row)
         if market_symbol:
             portfolio_symbols.append(market_symbol)
+
+    open_portfolio_transactions = _transactions_for_current_positions(
+        portfolio_transactions,
+        portfolio_holdings,
+    )
 
     try:
         tickers_list = df["ticker"].astype(str).str.upper().tolist()
@@ -26374,29 +26419,38 @@ def total_return_charts():
             inception_date,
         )
 
-        transactions_by_ticker = {}
+        historical_transactions_by_ticker = {}
+        open_transactions_by_ticker = {}
         holdings_by_ticker = {}
         for row in portfolio_transactions:
-            transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
+            historical_transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
+        for row in open_portfolio_transactions:
+            open_transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
         for row in portfolio_holdings:
             holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
 
         ticker_result_cache = {}
 
-        def ticker_result_for(ticker):
-            if ticker in ticker_result_cache:
-                return ticker_result_cache[ticker]
+        def ticker_result_for(ticker, open_only=True):
+            cache_key = (ticker, open_only)
+            if cache_key in ticker_result_cache:
+                return ticker_result_cache[cache_key]
             accounting_ticker = _accounting_symbol_for_ticker(ticker)
             market_symbol = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
             if market_symbol not in close.columns:
-                ticker_result_cache[ticker] = None
+                ticker_result_cache[cache_key] = None
                 return None
+            transactions = (
+                open_transactions_by_ticker
+                if open_only
+                else historical_transactions_by_ticker
+            )
             result = _build_transaction_aware_portfolio_series(
                 close[[market_symbol]],
                 adjusted_close[[market_symbol]] if adjusted_close is not None and market_symbol in adjusted_close.columns else None,
                 dividends[[market_symbol]] if market_symbol in dividends.columns else None,
                 capital_gains[[market_symbol]] if market_symbol in capital_gains.columns else None,
-                transactions_by_ticker.get(accounting_ticker, []),
+                transactions.get(accounting_ticker, []),
                 holdings_by_ticker.get(accounting_ticker, []),
                 stock_splits=(
                     stock_splits[[market_symbol]]
@@ -26404,7 +26458,7 @@ def total_return_charts():
                     else None
                 ),
             )
-            ticker_result_cache[ticker] = result
+            ticker_result_cache[cache_key] = result
             return result
 
         performance_rows = []
@@ -26453,27 +26507,45 @@ def total_return_charts():
             portfolio_holdings,
             stock_splits=stock_splits,
         )
+        open_position_result = _build_transaction_aware_portfolio_series(
+            close,
+            adjusted_close,
+            dividends,
+            capital_gains,
+            open_portfolio_transactions,
+            portfolio_holdings,
+            stock_splits=stock_splits,
+        )
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
-        if portfolio_metrics is not None:
-            portfolio_tickers = set(transactions_by_ticker) | set(holdings_by_ticker)
-            portfolio_distribution = 0.0
+        open_position_metrics = _portfolio_period_metrics(open_position_result)
+
+        def apply_distribution_metrics(metrics, tickers, open_only):
+            if metrics is None:
+                return
+            distribution_total = 0.0
             yahoo_fallback_tickers = 0
-            for ticker in portfolio_tickers:
+            for ticker in tickers:
                 if ticker in payment_covered_tickers:
-                    portfolio_distribution += period_payment_totals.get(ticker, 0)
+                    distribution_total += period_payment_totals.get(ticker, 0)
                     continue
-                ticker_result = ticker_result_for(ticker)
-                ticker_metrics = _portfolio_period_metrics(ticker_result) if ticker_result is not None else None
+                ticker_result = ticker_result_for(ticker, open_only=open_only)
+                ticker_metrics = (
+                    _portfolio_period_metrics(ticker_result)
+                    if ticker_result is not None
+                    else None
+                )
                 if ticker_metrics is not None:
-                    portfolio_distribution += float(ticker_metrics.get("distribution_dollar") or 0)
+                    distribution_total += float(
+                        ticker_metrics.get("distribution_dollar") or 0
+                    )
                     yahoo_fallback_tickers += 1
-            portfolio_metrics["distribution_dollar"] = round(portfolio_distribution, 4)
-            portfolio_metrics["total_return_dollar"] = round(
-                float(portfolio_metrics.get("price_return_dollar") or 0)
-                + portfolio_distribution,
+            metrics["distribution_dollar"] = round(distribution_total, 4)
+            metrics["total_return_dollar"] = round(
+                float(metrics.get("price_return_dollar") or 0)
+                + distribution_total,
                 4,
             )
-            portfolio_metrics["distribution_source"] = (
+            metrics["distribution_source"] = (
                 "Broker payment history"
                 + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
                    f"{'' if yahoo_fallback_tickers == 1 else 's'}"
@@ -26481,6 +26553,24 @@ def total_return_charts():
                 if payment_covered_tickers
                 else "Yahoo market history"
             )
+
+        historical_portfolio_tickers = (
+            set(historical_transactions_by_ticker) | set(holdings_by_ticker)
+        )
+        open_position_tickers = (
+            set(open_transactions_by_ticker) | set(holdings_by_ticker)
+        )
+        apply_distribution_metrics(
+            portfolio_metrics,
+            historical_portfolio_tickers,
+            open_only=False,
+        )
+        apply_distribution_metrics(
+            open_position_metrics,
+            open_position_tickers,
+            open_only=True,
+        )
+        if portfolio_metrics is not None:
             portfolio_metrics["payment_sources"] = sorted(payment_sources)
             # End Value here is the charted positions alone — this page leaves
             # cash out on purpose, because a cash balance is not a return.
@@ -26613,6 +26703,7 @@ def total_return_charts():
             "spy_actual_start_date": spy_actual_start,
             "spy_actual_end_date": spy_actual_end,
             "portfolio_metrics": portfolio_metrics,
+            "open_position_metrics": open_position_metrics,
             "portfolio_series": portfolio_series,
             "performance_rows": performance_rows,
             "period_key": period_range["key"],

@@ -658,11 +658,11 @@ export default function TotalReturn() {
     { key: 'category_name', label: 'Category' },
     { key: 'start_value', label: 'Start Value', fmt, numeric: true },
     { key: 'end_value', label: 'End Value', fmt, numeric: true },
-    { key: 'price_return_dollar', label: 'Price Return', fmt, numeric: true, gl: true },
-    { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'price_return_dollar', label: 'Period Price Return', title: 'Market-price dollars gained or lost during the selected date range; this is not current cost-basis gain/loss.', fmt, numeric: true, gl: true },
+    { key: 'price_return_pct', label: 'Period Price Ret %', title: 'Time-weighted price return for the selected date range; Fidelity/Snowball current-position gain/loss uses cost basis instead.', fmt: fmtPct, numeric: true, gl: true },
     { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
-    { key: 'total_return_dollar', label: 'Total Return', fmt, numeric: true, gl: true },
-    { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'total_return_dollar', label: 'Period Total Return', fmt, numeric: true, gl: true },
+    { key: 'total_return_pct', label: 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
     { key: 'period_range', label: 'Effective Range' },
     { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
   ]
@@ -769,17 +769,20 @@ export default function TotalReturn() {
   ), [summary])
 
   const t = chartData?.portfolio_metrics || {}
+  const openPositionTotals = chartData?.open_position_metrics || t
 
-  // The open leg uses the portfolio-level metrics behind the cards above, not a
-  // sum of the visible rows, so the footer agrees with the Total Return card.
+  // The cards include every position held during the selected period, including
+  // positions that were fully closed. The Holdings footer must instead use the
+  // open-position replay behind its visible rows; otherwise closed history is
+  // silently added to a table that says "Open positions only."
   const combinedTotals = (() => {
-    const basis = (t.start_value || 0) + (realizedTotals.start_value || 0)
-    const net = (t.total_return_dollar || 0) + (realizedTotals.total_return_dollar || 0)
+    const basis = (openPositionTotals.start_value || 0) + (realizedTotals.start_value || 0)
+    const net = (openPositionTotals.total_return_dollar || 0) + (realizedTotals.total_return_dollar || 0)
     return {
       net_basis: basis,
-      unrealized_total_dollar: t.total_return_dollar || 0,
+      unrealized_total_dollar: openPositionTotals.total_return_dollar || 0,
       realized_total_dollar: realizedTotals.total_return_dollar || 0,
-      net_distribution_dollar: (t.distribution_dollar || 0) + (realizedTotals.distribution_dollar || 0),
+      net_distribution_dollar: (openPositionTotals.distribution_dollar || 0) + (realizedTotals.distribution_dollar || 0),
       net_total_dollar: net,
       net_total_pct: basis >= MIN_BASIS ? (net / basis) * 100 : null,
     }
@@ -1049,11 +1052,11 @@ export default function TotalReturn() {
                 read side by side without hunting for the matching card. */}
             <MetricCard label="Price Return" range={dashboardCardRange}
               value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>}>
-              <div className="summary-sub">Market price only, dividends excluded</div>
+              <div className="summary-sub">Whole portfolio history; market price only</div>
             </MetricCard>
             <MetricCard label="Price Return %" range={dashboardCardRange}
               value={<span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>}>
-              <div className="summary-sub">Time-weighted — dividends excluded</div>
+              <div className="summary-sub">Whole portfolio history; time-weighted</div>
               <div className="summary-sub">Compare with Growth &amp; Performance</div>
             </MetricCard>
             <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange}>
@@ -1272,7 +1275,7 @@ export default function TotalReturn() {
           </div>
           <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
             Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>.{' '}
-            {positionView === 'unrealized' && 'Open positions only. Each row lists its current open-lot range (the same lot Gains & Losses uses after a full sale and re-buy).'}
+            {positionView === 'unrealized' && 'Open positions only. Each row lists its current open-lot range (the same lot Gains & Losses uses after a full sale and re-buy). Period Price Return is selected-period market performance, not the current cost-basis G/L shown by a Fidelity positions screen or Snowball. The footer excludes fully closed positions; the tracker cards above retain them as part of the portfolio history.'}
             {positionView === 'realized' && `Sales that settled inside this range, priced off the recorded buy and sell. Distributions are the dividends those shares earned before the sale.${realizedTotals.sale_count ? ` ${realizedTotals.sale_count} sale${realizedTotals.sale_count === 1 ? '' : 's'}.` : ''}`}
             {positionView === 'combined' && 'Open and closed legs summed per ticker. Net Ret % is money-weighted over basis (period start value plus realized cost), so it will not match the time-weighted Total Ret % in the Unrealized view.'}
             {' '}Click any column header to sort.
@@ -1285,7 +1288,7 @@ export default function TotalReturn() {
             </p>
           )}
           {sortedRows.length > 0 && (
-          <div className="sticky-table-wrap" style={{ maxHeight: '70vh' }}>
+          <div className="sticky-table-wrap tr-total-return-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -1307,7 +1310,7 @@ export default function TotalReturn() {
                       )
                     }
                     return (
-                      <th key={col.key} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col) }} onClick={() => handleSort(sk)}>
+                      <th key={col.key} title={col.title} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col) }} onClick={() => handleSort(sk)}>
                         {col.label}
                         <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(sk)}
@@ -1352,14 +1355,14 @@ export default function TotalReturn() {
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                   {positionView === 'unrealized' && (
                     <>
-                      <td colSpan={2}><strong>Portfolio Total</strong></td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.start_value)}</strong></td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.end_value)}</strong></td>
-                      <td style={{ textAlign: 'right', color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.price_return_dollar)}</strong></td>
-                      <td style={{ textAlign: 'right', color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.price_return_pct)}</strong></td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(t.distribution_dollar)}</strong></td>
-                      <td style={{ textAlign: 'right', color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(t.total_return_dollar)}</strong></td>
-                      <td style={{ textAlign: 'right', color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(t.total_return_pct)}</strong></td>
+                      <td colSpan={2}><strong>Open Position Total</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(openPositionTotals.start_value)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(openPositionTotals.end_value)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (openPositionTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(openPositionTotals.price_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (openPositionTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(openPositionTotals.price_return_pct)}</strong></td>
+                      <td style={{ textAlign: 'right' }}><strong>{fmt(openPositionTotals.distribution_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (openPositionTotals.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(openPositionTotals.total_return_dollar)}</strong></td>
+                      <td style={{ textAlign: 'right', color: (openPositionTotals.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(openPositionTotals.total_return_pct)}</strong></td>
                       <td>{dashboardCardRange}</td>
                       <td></td>
                     </>

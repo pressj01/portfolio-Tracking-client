@@ -16,6 +16,7 @@ from app import (
     _portfolio_period_metrics,
     _resolve_total_return_period,
     _stock_split_history_for_period,
+    _transactions_for_current_positions,
     _trim_to_last_bars,
 )
 from market_symbols import accounting_symbol_for_ticker, yahoo_symbol_for_ticker
@@ -507,8 +508,122 @@ class TotalReturnDashboardPeriodTest(unittest.TestCase):
         self.assertEqual(data["bar"]["data"][0]["text"], ["+10.00%"])
         self.assertIn("%{x:+.2f}%", data["bar"]["data"][0]["hovertemplate"])
 
+    def test_open_holdings_total_excludes_fully_closed_transaction_history(self):
+        dates = pd.to_datetime(["2025-12-31", "2026-01-02", "2026-01-05"])
+        close = pd.DataFrame({
+            "AAA": [90.0, 100.0, 110.0],
+            "OLD": [100.0, 150.0, 200.0],
+            "SPY": [400.0, 402.0, 404.0],
+        }, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        market_data = pd.concat({
+            "Close": close,
+            "Adj Close": close,
+            "Dividends": zeros,
+            "Capital Gains": zeros,
+            "Stock Splits": zeros,
+        }, axis=1)
+
+        class FakeRows(list):
+            def fetchall(self):
+                return self
+
+            def fetchone(self):
+                return self[0] if self else None
+
+        class FakeConnection:
+            def execute(self, sql, _params=None):
+                if "FROM all_account_info" in sql:
+                    return FakeRows([{
+                        "ticker": "AAA",
+                        "profile_id": 1,
+                        "description": "Open position",
+                        "classification_type": "Stock",
+                        "purchase_value": 100,
+                        "quantity": 1,
+                        "purchase_date": "2026-01-02",
+                        "import_date": "2026-01-02",
+                    }])
+                if "FROM transactions" in sql:
+                    return FakeRows([
+                        {
+                            "ticker": "OLD",
+                            "profile_id": 1,
+                            "transaction_type": "BUY",
+                            "transaction_date": "2025-12-31",
+                            "shares": 1,
+                            "price_per_share": 100,
+                            "fees": 0,
+                            "notes": "",
+                        },
+                        {
+                            "ticker": "OLD",
+                            "profile_id": 1,
+                            "transaction_type": "SELL",
+                            "transaction_date": "2026-01-02",
+                            "shares": 1,
+                            "price_per_share": 150,
+                            "fees": 0,
+                            "notes": "",
+                        },
+                        {
+                            "ticker": "AAA",
+                            "profile_id": 1,
+                            "transaction_type": "BUY",
+                            "transaction_date": "2026-01-02",
+                            "shares": 1,
+                            "price_per_share": 100,
+                            "fees": 0,
+                            "notes": "",
+                        },
+                    ])
+                return FakeRows()
+
+            def close(self):
+                return None
+
+        with (
+            patch("app.get_profile_filter", return_value=(False, [1])),
+            patch("app.get_connection", return_value=FakeConnection()),
+            patch("app.ensure_tables_exist"),
+            patch("app._chunked_yf_download", return_value=market_data),
+        ):
+            response = app.test_client().get(
+                "/api/total-return/charts?period=custom"
+                "&start_date=2025-12-31&end_date=2026-01-05"
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        data = response.get_json()
+        rows = data["performance_rows"]
+        portfolio = data["portfolio_metrics"]
+        open_positions = data["open_position_metrics"]
+        self.assertEqual([row["ticker"] for row in rows], ["AAA"])
+        self.assertEqual(portfolio["transaction_count"], 3)
+        self.assertEqual(open_positions["transaction_count"], 1)
+        self.assertEqual(open_positions["price_return_dollar"], 10.0)
+        self.assertEqual(
+            open_positions["price_return_dollar"],
+            sum(row["price_return_dollar"] for row in rows),
+        )
+        self.assertEqual(open_positions["price_return_pct"], 10.0)
+
 
 class PortfolioReturnSeriesTest(unittest.TestCase):
+    def test_current_position_scope_matches_account_and_ticker(self):
+        transactions = [
+            {"profile_id": 1, "ticker": "AAA", "transaction_type": "BUY"},
+            {"profile_id": 2, "ticker": "AAA", "transaction_type": "BUY"},
+            {"profile_id": 1, "ticker": "OLD", "transaction_type": "BUY"},
+        ]
+        holdings = [
+            {"profile_id": 1, "ticker": "AAA", "quantity": 5},
+        ]
+
+        result = _transactions_for_current_positions(transactions, holdings)
+
+        self.assertEqual(result, [transactions[0]])
+
     def test_reverse_split_normalizes_historical_transaction_shares(self):
         dates = pd.to_datetime(["2022-01-03", "2022-01-04", "2024-01-23"])
         close = pd.DataFrame({"SIRC": [100.0, 50.0, 50.0]}, index=dates)
