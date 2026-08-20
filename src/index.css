@@ -2561,15 +2561,16 @@ th.col-drag-target {
   border-radius: 8px;
   background: var(--surface);
 }
-/* The Total Return page already has several tall charts above a long holdings
-   table. Giving the table its own vertical scroller traps the mouse wheel when
-   the table's top has moved above the viewport, making its heading and first
-   rows feel unreachable. Let the page own vertical scrolling here; retain the
-   wrapper only for narrow-screen horizontal overflow. */
+/* Keep the long Total Return holdings list in its own scroll region so the
+   column labels remain available while reviewing positions farther down. */
 .sticky-table-wrap.tr-total-return-table-wrap {
-  max-height: none;
-  overflow-x: auto;
-  overflow-y: visible;
+  max-height: 70vh;
+  overflow: auto;
+}
+.sticky-table-wrap.tr-total-return-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 5;
 }
 .sticky-table-wrap table {
   width: 100%;
