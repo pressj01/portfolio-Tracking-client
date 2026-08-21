@@ -426,6 +426,13 @@ function buildOptimization(events, todayIso, currentMonthSummary = null) {
     currentMonth.recordedIncome = recordedIncome
     currentMonth.remainingIncome = remainingIncome
     currentMonth.isCurrentBlended = true
+    if (currentMonthSummary.ticker_income_complete) {
+      currentMonth.tickers = new Map(
+        Object.entries(currentMonthSummary.ticker_income || {})
+          .map(([ticker, income]) => [ticker, Number(income || 0)])
+          .filter(([, income]) => income > 0),
+      )
+    }
   }
 
   months.forEach(m => {
@@ -450,6 +457,7 @@ export default function DividendCalendar() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const [events, setEvents] = useState([])
+  const [agendaPayments, setAgendaPayments] = useState([])
   const [holdings, setHoldings] = useState([])
   const [watchlistRows, setWatchlistRows] = useState([])
   const [candidateRows, setCandidateRows] = useState([])
@@ -461,13 +469,14 @@ export default function DividendCalendar() {
   const [monthPayments, setMonthPayments] = useState([])
   const [monthLoading, setMonthLoading] = useState(true)
   const [loading, setLoading] = useState(true)
-  const cacheKey = useMemo(() => `portfolio_div_calendar_v7_${selection}`, [selection])
+  const cacheKey = useMemo(() => `portfolio_div_calendar_v8_${selection}`, [selection])
 
   useEffect(() => {
     let stale = false
     const cached = readCalendarCache(cacheKey)
     if (cached) {
       setEvents(cached.events || [])
+      setAgendaPayments(cached.agendaPayments || cached.events || [])
       setHoldings(cached.holdings || cached.events || [])
       setToday(cached.today || new Date().toISOString().slice(0, 10))
       setOptimizationCurrentMonth(cached.optimizationCurrentMonth || null)
@@ -475,6 +484,7 @@ export default function DividendCalendar() {
       setLoading(false)
     } else {
       setEvents([])
+      setAgendaPayments([])
       setHoldings([])
       setToday('')
       setOptimizationCurrentMonth(null)
@@ -489,12 +499,14 @@ export default function DividendCalendar() {
       .then(data => {
         if (stale) return
         setEvents(data.events || [])
+        setAgendaPayments(data.agenda_payments || data.events || [])
         setHoldings(data.holdings || data.events || [])
         setToday(data.today || new Date().toISOString().slice(0, 10))
         setOptimizationCurrentMonth(data.optimization_current_month || null)
         setSelectedMonth((data.today || isoDate(new Date())).slice(0, 7))
         writeCalendarCache(cacheKey, {
           events: data.events || [],
+          agendaPayments: data.agenda_payments || data.events || [],
           holdings: data.holdings || data.events || [],
           today: data.today || new Date().toISOString().slice(0, 10),
           optimizationCurrentMonth: data.optimization_current_month || null,
@@ -549,9 +561,9 @@ export default function DividendCalendar() {
   }, [pf, selection])
 
   const filtered = useMemo(() => {
-    if (!today) return events
+    if (!today) return agendaPayments
     const next30end = addDays(today, 30)
-    return events.filter(ev => {
+    return agendaPayments.filter(ev => {
       const d = ev.pay_date || ev.date
       if (filter === 'all') return true
       if (filter === 'upcoming') return d >= today
@@ -561,7 +573,7 @@ export default function DividendCalendar() {
       (a.date || '').localeCompare(b.date || '')
       || (a.ticker || '').localeCompare(b.ticker || '')
     ))
-  }, [events, filter, today])
+  }, [agendaPayments, filter, today])
 
   const agendaGroups = useMemo(() => buildPaymentAgenda(filtered), [filtered])
 
@@ -639,11 +651,11 @@ export default function DividendCalendar() {
             <span className="dc-paydate-note">~ estimated date &nbsp;|&nbsp; ✓ confirmed date</span>
           </div>
 
-          {filtered.length === 0 && events.length > 0 && (
+          {filtered.length === 0 && agendaPayments.length > 0 && (
             <p className="divcal-agenda-empty">No payments match this date filter.</p>
           )}
 
-          {events.length === 0 && (
+          {agendaPayments.length === 0 && (
             <p className="divcal-agenda-empty">No dividend schedule found. Refresh dividend data or import holdings first.</p>
           )}
 

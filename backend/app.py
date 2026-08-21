@@ -5811,6 +5811,160 @@ def _delete_profile_ticker_records(conn, profile_id, ticker, include_transaction
         )
 
 
+class _TickerRenameConflict(ValueError):
+    """Raised when a ticker rename would merge two independently stored records."""
+
+
+_HOLDING_TICKER_RENAME_TABLES = (
+    # Core position plus derived mirrors.
+    ("all_account_info", "ticker"),
+    ("holdings", "ticker"),
+    ("dividends", "ticker"),
+    ("income_tracking", "ticker"),
+    # Position history.
+    ("transactions", "ticker"),
+    ("dividend_payments", "ticker"),
+    ("dividend_schedule_history", "ticker"),
+    # Portfolio configuration tied to the position.
+    ("ticker_categories", "ticker"),
+    ("drip_settings", "ticker"),
+    ("drip_contribution_targets", "ticker"),
+    ("weekly_payout_tickers", "ticker"),
+    ("monthly_payout_tickers", "ticker"),
+    ("swap_candidates", "ticker"),
+    ("rebalance_candidate_preferences", "ticker"),
+    ("macro_overrides", "ticker"),
+    ("income_overrides", "ticker"),
+    ("dividend_tax_overrides", "ticker"),
+    ("tax_loss_plan", "ticker"),
+)
+
+# These tables can legitimately contain many rows for one ticker and profile.
+# Every other table above has ticker in a uniqueness constraint, so finding the
+# destination symbol there is ambiguous and must stop the rename.
+_HOLDING_TICKER_RENAME_MULTIROW_TABLES = {
+    "income_tracking",
+    "transactions",
+    "tax_loss_plan",
+}
+
+_HOLDING_TICKER_RENAME_LABELS = {
+    "all_account_info": "holding",
+    "dividend_payments": "dividend history",
+    "dividend_schedule_history": "dividend schedule history",
+    "ticker_categories": "category assignment",
+    "drip_settings": "DRIP setting",
+    "drip_contribution_targets": "DRIP contribution target",
+    "drip_redirects": "DRIP redirect",
+}
+
+
+def _table_columns(conn, table):
+    """Return a table's columns, or an empty set for optional/legacy tables."""
+    try:
+        return {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+    except sqlite3.OperationalError:
+        return set()
+
+
+def _ticker_rename_has_profile_conflict(conn, table, column, old_ticker, new_ticker, profile_ids):
+    """Whether old and new symbols both have rows in any affected profile."""
+    if not profile_ids:
+        return False
+    placeholders = ",".join("?" * len(profile_ids))
+    row = conn.execute(
+        f'''SELECT 1
+              FROM "{table}" old_row
+             WHERE old_row."{column}" = ?
+               AND old_row.profile_id IN ({placeholders})
+               AND EXISTS (
+                   SELECT 1 FROM "{table}" new_row
+                    WHERE new_row."{column}" = ?
+                      AND new_row.profile_id = old_row.profile_id
+               )
+             LIMIT 1''',
+        [old_ticker] + list(profile_ids) + [new_ticker],
+    ).fetchone()
+    return bool(row)
+
+
+def _rename_holding_ticker_records(conn, old_ticker, new_ticker):
+    """Rename one economic security everywhere it is currently held.
+
+    A fund's symbol is security-level data, so the change follows the holding
+    through every portfolio that currently owns it. All writes use the caller's
+    transaction; a collision aborts before any row is changed.
+    """
+    affected_rows = conn.execute(
+        "SELECT DISTINCT profile_id FROM all_account_info WHERE ticker = ? ORDER BY profile_id",
+        (old_ticker,),
+    ).fetchall()
+    profile_ids = [int(row[0]) for row in affected_rows]
+    if not profile_ids:
+        raise _TickerRenameConflict(f"{old_ticker} is not an active holding.")
+
+    available_tables = []
+    for table, column in _HOLDING_TICKER_RENAME_TABLES:
+        columns = _table_columns(conn, table)
+        if not {column, "profile_id"}.issubset(columns):
+            continue
+        available_tables.append((table, column))
+        if table in _HOLDING_TICKER_RENAME_MULTIROW_TABLES:
+            continue
+        if _ticker_rename_has_profile_conflict(
+            conn, table, column, old_ticker, new_ticker, profile_ids
+        ):
+            label = _HOLDING_TICKER_RENAME_LABELS.get(table, "ticker-linked setting")
+            raise _TickerRenameConflict(
+                f"Cannot rename {old_ticker} to {new_ticker}: {new_ticker} already has "
+                f"a {label} in one of the affected portfolios."
+            )
+
+    redirect_columns = _table_columns(conn, "drip_redirects")
+    if {"profile_id", "source_ticker", "target_ticker"}.issubset(redirect_columns):
+        if _ticker_rename_has_profile_conflict(
+            conn, "drip_redirects", "source_ticker", old_ticker, new_ticker, profile_ids
+        ):
+            raise _TickerRenameConflict(
+                f"Cannot rename {old_ticker} to {new_ticker}: {new_ticker} already has "
+                "a DRIP redirect in one of the affected portfolios."
+            )
+
+    placeholders = ",".join("?" * len(profile_ids))
+    params = [new_ticker, old_ticker] + profile_ids
+    changed = 0
+    for table, column in available_tables:
+        cursor = conn.execute(
+            f'''UPDATE "{table}" SET "{column}" = ?
+                 WHERE "{column}" = ? AND profile_id IN ({placeholders})''',
+            params,
+        )
+        changed += max(0, cursor.rowcount)
+
+    if {"profile_id", "source_ticker", "target_ticker"}.issubset(redirect_columns):
+        for column in ("source_ticker", "target_ticker"):
+            cursor = conn.execute(
+                f'''UPDATE drip_redirects SET {column} = ?
+                     WHERE {column} = ? AND profile_id IN ({placeholders})''',
+                params,
+            )
+            changed += max(0, cursor.rowcount)
+
+    # A planned tax-loss replacement can point at the renamed holding even when
+    # the plan's primary ticker is a different security.
+    tax_loss_columns = _table_columns(conn, "tax_loss_plan")
+    if {"profile_id", "replacement"}.issubset(tax_loss_columns):
+        cursor = conn.execute(
+            f'''UPDATE tax_loss_plan SET replacement = ?
+                 WHERE UPPER(COALESCE(replacement, '')) = ?
+                   AND profile_id IN ({placeholders})''',
+            params,
+        )
+        changed += max(0, cursor.rowcount)
+
+    return {"profile_ids": profile_ids, "records_changed": changed}
+
+
 @app.route("/api/profiles/<int:pid>/clear", methods=["POST"])
 def clear_profile_data(pid):
     """Clear all data for a profile without deleting the profile itself."""
@@ -15310,10 +15464,17 @@ def update_holding(ticker):
     """Update a holding's fields."""
     is_agg, pids = get_profile_filter()
     data = request.get_json() or {}
-    ticker = ticker.upper()
+    old_ticker = ticker.upper()
+    requested_ticker = str(data.pop("ticker", old_ticker) or "").strip().upper()
+    if not requested_ticker:
+        return jsonify({"error": "Ticker is required"}), 400
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9.-]{0,19}", requested_ticker):
+        return jsonify({
+            "error": "Ticker must start with a letter or number and contain only letters, numbers, periods, or hyphens."
+        }), 400
 
     if is_agg:
-        profile_id = _resolve_aggregate_profile(ticker, pids)
+        profile_id = _resolve_aggregate_profile(old_ticker, pids)
     else:
         profile_id = pids[0]
 
@@ -15327,11 +15488,11 @@ def update_holding(ticker):
         "       broker_purchase_value, original_price_paid, original_purchase_value, "
         "       div, div_frequency, ex_div_date, div_pay_date "
         "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
-        (ticker, profile_id),
+        (old_ticker, profile_id),
     ).fetchone()
     if not existing:
         conn.close()
-        return jsonify({"error": f"{ticker} not found"}), 404
+        return jsonify({"error": f"{old_ticker} not found"}), 404
     clear_div_override = bool(data.pop("div_manual_clear", False))
     # Released separately from the amount: the two pins answer different
     # questions and the modal offers each its own "use market data now".
@@ -15425,15 +15586,39 @@ def update_holding(ticker):
         updates.append("import_date = ?")
         vals.append(_date.today().isoformat())
 
-    if not updates:
+    renaming = requested_ticker != old_ticker
+    if not updates and not renaming:
         conn.close()
         return jsonify({"error": "No fields to update"}), 400
 
-    vals.extend([ticker, profile_id])
-    conn.execute(
-        f"UPDATE all_account_info SET {', '.join(updates)} WHERE ticker = ? AND profile_id = ?",
-        vals,
-    )
+    rename_result = {"profile_ids": [], "records_changed": 0}
+    if renaming:
+        try:
+            rename_result = _rename_holding_ticker_records(
+                conn, old_ticker, requested_ticker
+            )
+        except _TickerRenameConflict as exc:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": str(exc)}), 409
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.close()
+            return jsonify({
+                "error": (
+                    f"Cannot rename {old_ticker} to {requested_ticker} because the new ticker "
+                    "already has conflicting portfolio data."
+                )
+            }), 409
+
+    ticker = requested_ticker
+
+    if updates:
+        vals.extend([ticker, profile_id])
+        conn.execute(
+            f"UPDATE all_account_info SET {', '.join(updates)} WHERE ticker = ? AND profile_id = ?",
+            vals,
+        )
     # Handle category assignment
     if "category" in data:
         cat_name = (data["category"] or "").strip()
@@ -15476,11 +15661,26 @@ def update_holding(ticker):
     )
     conn.commit()
 
-    for pid in [profile_id] + propagated_pids:
+    refresh_profile_ids = list(dict.fromkeys(
+        [profile_id] + rename_result["profile_ids"] + propagated_pids
+    ))
+    for pid in refresh_profile_ids:
         populate_holdings(pid)
         populate_dividends(pid)
     conn.close()
-    return jsonify({"ticker": ticker, "message": f"{ticker} updated"})
+    message = (
+        f"{old_ticker} renamed to {ticker} and updated across "
+        f"{len(rename_result['profile_ids'])} portfolio"
+        f"{'' if len(rename_result['profile_ids']) == 1 else 's'}"
+        if renaming else f"{ticker} updated"
+    )
+    return jsonify({
+        "ticker": ticker,
+        "old_ticker": old_ticker if renaming else None,
+        "renamed_profiles": rename_result["profile_ids"],
+        "records_changed": rename_result["records_changed"],
+        "message": message,
+    })
 
 
 @app.route("/api/holdings/<ticker>/nav-erosion-scope", methods=["PUT"])
@@ -30638,6 +30838,25 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 add_payment(value, source)
             continue
 
+        # A recorded cash transaction is the authoritative answer for a
+        # non-weekly distribution that already paid in the selected month.
+        # Do not discard it merely because the issuer changed its usual week:
+        # the old four-day proximity check moved real payments back onto the
+        # projected date whenever the schedule shifted by a full week.
+        if selected_actuals:
+            for value in selected_actuals:
+                add_payment(value, "history")
+            # A distinct confirmed date can represent another distribution in
+            # the same month. Keep it when it is not merely the issuer-side
+            # version of an imported cash date; Optimization then counts the
+            # recorded payment plus the genuinely remaining one.
+            if (
+                confirmed_event_date is not None
+                and _closest_payment_date(selected_actuals, confirmed_event_date, 4) is None
+            ):
+                add_payment(confirmed_event_date, "confirmed")
+            continue
+
         if confirmed_event_date is not None:
             add_payment(confirmed_event_date, "confirmed")
             continue
@@ -30664,8 +30883,7 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 schedule_history, anchor, frequency, year, month
             )
 
-        matching_actual = _closest_payment_date(selected_actuals, predicted, 4)
-        add_payment(matching_actual or predicted, "history" if matching_actual else "projected")
+        add_payment(predicted, "projected")
 
     return sorted(
         projected,
@@ -30715,6 +30933,12 @@ def _dividend_optimization_current_month(
     ).fetchall()
 
     recorded_income = sum(float(row["amount"] or 0) for row in actual_rows)
+    ticker_income = {}
+    for row in actual_rows:
+        ticker = str(row["ticker"] or "").strip().upper()
+        if ticker:
+            ticker_income[ticker] = ticker_income.get(ticker, 0.0) + float(row["amount"] or 0)
+    ticker_income_complete = True
     actual_keys = {
         (str(row["ticker"] or "").strip().upper(), str(row["payment_date"] or "")[:10])
         for row in actual_rows
@@ -30738,6 +30962,8 @@ def _dividend_optimization_current_month(
         if payout_rows:
             recorded_income += sum(float(row["amount"] or 0) for row in payout_rows)
             recorded_source = "mixed" if actual_rows else "monthly_payouts"
+            # Monthly payout totals have no ticker attribution.
+            ticker_income_complete = False
             payout_profile_ids = {int(row["profile_id"]) for row in payout_rows}
             fallback_ids = [pid for pid in fallback_ids if pid not in payout_profile_ids]
 
@@ -30748,18 +30974,23 @@ def _dividend_optimization_current_month(
     if fallback_ids:
         fallback_placeholders = ",".join("?" * len(fallback_ids))
         holding_actual_rows = conn.execute(
-            f"""SELECT profile_id, SUM(COALESCE(current_month_income, 0)) AS amount
+            f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker,
+                       SUM(COALESCE(current_month_income, 0)) AS amount
                 FROM all_account_info
                 WHERE profile_id IN ({fallback_placeholders})
                   AND COALESCE(quantity, 0) > 0
                   AND current_month_income IS NOT NULL
-                GROUP BY profile_id""",
+                GROUP BY profile_id, UPPER(TRIM(ticker))""",
             fallback_ids,
         ).fetchall()
         if holding_actual_rows:
             recorded_income += sum(
                 float(row["amount"] or 0) for row in holding_actual_rows
             )
+            for row in holding_actual_rows:
+                ticker = str(row["ticker"] or "").strip().upper()
+                if ticker:
+                    ticker_income[ticker] = ticker_income.get(ticker, 0.0) + float(row["amount"] or 0)
             recorded_source = (
                 "mixed" if recorded_source != "none" else "holding_actuals"
             )
@@ -30777,6 +31008,10 @@ def _dividend_optimization_current_month(
             remaining.append(row)
 
     remaining_income = sum(_dividend_payment_value(row) for row in remaining)
+    for row in remaining:
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if ticker:
+            ticker_income[ticker] = ticker_income.get(ticker, 0.0) + _dividend_payment_value(row)
     return {
         "month": month_key,
         "recorded_income": round(recorded_income, 2),
@@ -30785,6 +31020,11 @@ def _dividend_optimization_current_month(
         "recorded_rows": len(actual_rows),
         "remaining_rows": len(remaining),
         "recorded_source": recorded_source,
+        "ticker_income": {
+            ticker: round(amount, 2)
+            for ticker, amount in sorted(ticker_income.items())
+        },
+        "ticker_income_complete": ticker_income_complete,
     }
 
 
@@ -30842,6 +31082,71 @@ def _apply_payment_history_to_calendar_events(holdings, events):
         })
         resolved.append(event)
     return resolved
+
+
+def _dividend_agenda_payments(holdings, events, today=None):
+    """Blend this month's transaction-backed rows with the forward agenda.
+
+    ``events`` intentionally contains one current/next schedule per holding,
+    which is useful for forward projections but drops a payment as soon as a
+    refresh advances that holding to its next cycle. Agenda promises recent
+    paid statuses too, so retain every current-month Month row and then append
+    forward events that are not already represented.
+    """
+    today = today or datetime.date.today()
+    month_rows = _project_dividend_payments_for_month(
+        holdings, events, today.strftime("%Y-%m")
+    )
+    agenda = []
+    seen = set()
+
+    def append_row(source, calendar_date=None):
+        row = dict(source)
+        pay_ts = _parse_timestamp_value(
+            calendar_date or row.get("calendar_pay_date") or row.get("pay_date")
+        )
+        if pay_ts is None:
+            return
+        pay_date = pay_ts.date()
+        ticker = str(row.get("ticker") or "").strip().upper()
+        key = (ticker, pay_date.isoformat())
+        if not ticker or key in seen:
+            return
+
+        raw_pay_ts = _parse_timestamp_value(row.get("pay_date"))
+        raw_ex_ts = _parse_timestamp_value(row.get("date"))
+        if (
+            raw_pay_ts is not None
+            and raw_ex_ts is not None
+            and raw_pay_ts.date() != pay_date
+        ):
+            # The event metadata may already describe the next cycle. Preserve
+            # its ex-to-pay spacing instead of showing that future ex-date next
+            # to a transaction-backed payment from the current cycle.
+            lag = raw_pay_ts.date() - raw_ex_ts.date()
+            row["date"] = (pay_date - lag).isoformat()
+
+        estimated = row.get("calendar_estimated")
+        if estimated is None:
+            estimated = row.get("pay_estimated", True)
+        source_name = row.get("calendar_source") or row.get("pay_source")
+        row.update({
+            "ticker": ticker,
+            "pay_date": pay_date.isoformat(),
+            "pay_month": pay_date.strftime("%b"),
+            "pay_day": str(pay_date.day),
+            "pay_estimated": bool(estimated),
+            "pay_source": source_name,
+        })
+        seen.add(key)
+        agenda.append(row)
+
+    for payment in month_rows:
+        append_row(payment)
+    for event in events or []:
+        append_row(event)
+
+    return sorted(agenda, key=lambda row: (row["pay_date"], row["ticker"]))
 
 
 _DIVIDEND_CALENDAR_CACHE_COLUMNS = (
@@ -31378,6 +31683,9 @@ def div_calendar():
         finally:
             conn.close()
         events = _build_cal_events(holdings, is_aggregate, profile_ids)
+        agenda_payments = _dividend_agenda_payments(
+            holdings, events, today=date.today()
+        )
         payments = (
             _project_dividend_payments_for_month(holdings, events, requested_month)
             if requested_month else []
@@ -31396,6 +31704,7 @@ def div_calendar():
             conn.close()
         return jsonify(
             events=events,
+            agenda_payments=agenda_payments,
             holdings=holdings,
             payments=payments,
             payment_month=requested_month or None,

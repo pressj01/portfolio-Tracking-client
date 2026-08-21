@@ -2799,7 +2799,10 @@ th.col-drag-target {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  /* Confirm/alert dialogs can be opened from another fixed modal. Keep the
+     shared dialog layer above every screen-level editor and chart overlay so
+     it never waits for input behind the surface that launched it. */
+  z-index: 20000;
 }
 .dialog-box {
   background: var(--surface);

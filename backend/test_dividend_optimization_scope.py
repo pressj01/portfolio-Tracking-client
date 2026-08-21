@@ -71,6 +71,47 @@ class DividendOptimizationScopeTest(unittest.TestCase):
         self.assertEqual(result["remaining_scheduled_income"], 50.0)
         self.assertEqual(result["total_income"], 175.0)
         self.assertEqual(result["recorded_source"], "dividend_payments")
+        self.assertEqual(result["ticker_income"], {"AAA": 175.0})
+        self.assertTrue(result["ticker_income_complete"])
+
+    def test_current_month_transaction_replaces_distant_estimate_without_double_counting(self):
+        self.conn.execute("DELETE FROM dividend_payments WHERE profile_id = 2")
+        self.conn.execute(
+            """INSERT INTO dividend_payments
+               (ticker, profile_id, payment_date, amount, source)
+               VALUES ('SHIFT', 2, '2026-08-21', 215, 'broker_transactions')"""
+        )
+        self.conn.commit()
+        holding = {
+            "ticker": "SHIFT",
+            "quantity": 10,
+            "amount": 5,
+            "payment_income": 50,
+            "annual_income": 600,
+            "freq": "M",
+            "pay_date": "2026-08-28",
+            "payment_history": ["2026-08-21"],
+        }
+        event = {
+            **holding,
+            "date": "2026-08-26",
+            "pay_date": "2026-08-28",
+            "pay_estimated": True,
+        }
+
+        result = app_module._dividend_optimization_current_month(
+            self.conn,
+            [holding],
+            [event],
+            False,
+            [2],
+            today=datetime.date(2026, 8, 21),
+        )
+
+        self.assertEqual(result["recorded_income"], 215.0)
+        self.assertEqual(result["remaining_scheduled_income"], 0.0)
+        self.assertEqual(result["total_income"], 215.0)
+        self.assertEqual(result["ticker_income"], {"SHIFT": 215.0})
 
     def test_monthly_payout_fallback_is_scoped_to_selected_account(self):
         self.conn.execute(

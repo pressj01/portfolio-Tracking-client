@@ -113,7 +113,9 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 name TEXT,
                 include_in_owner INTEGER DEFAULT 0
             );
-            INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0);
+            INSERT INTO profiles (id, name, include_in_owner) VALUES
+                (1, 'Owner', 0),
+                (2, 'IRA', 1);
             """
         )
         conn.close()
@@ -217,6 +219,83 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(row["gain_or_loss"], -20)
         self.assertEqual(row["gain_or_loss_percentage"], -0.1)
         self.assertEqual(row["percent_change"], -0.1)
+
+    def test_update_can_rename_ticker_and_migrates_history_across_portfolios(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, current_price, purchase_value, current_value) "
+            "VALUES ('TUGN', 1, 'Fund', 10, 20, 25, 200, 250), "
+            "('TUGN', 2, 'Fund', 5, 22, 25, 110, 125)"
+        )
+        self._execute(
+            "INSERT INTO categories (id, name, profile_id) VALUES "
+            "(10, 'Income', 1), (20, 'Income', 2)"
+        )
+        self._execute(
+            "INSERT INTO ticker_categories (ticker, category_id, profile_id) VALUES "
+            "('TUGN', 10, 1), ('TUGN', 20, 2)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share) VALUES "
+            "('TUGN', 1, 'BUY', '2026-01-02', 10, 20), "
+            "('TUGN', 2, 'BUY', '2026-02-03', 5, 22)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments "
+            "(ticker, profile_id, payment_date, amount, source) VALUES "
+            "('TUGN', 1, '2026-07-24', 10, 'broker'), "
+            "('TUGN', 2, '2026-07-24', 5, 'broker')"
+        )
+
+        res = self.client.put(
+            "/api/holdings/TUGN?profile_id=1",
+            json={"ticker": "sepq"},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        payload = res.get_json()
+        self.assertEqual(payload["ticker"], "SEPQ")
+        self.assertEqual(payload["old_ticker"], "TUGN")
+        self.assertEqual(payload["renamed_profiles"], [1, 2])
+        for table in (
+            "all_account_info",
+            "ticker_categories",
+            "transactions",
+            "dividend_payments",
+        ):
+            self.assertIsNone(
+                self._row(f"SELECT 1 FROM {table} WHERE ticker = 'TUGN'")
+            )
+            self.assertIsNotNone(
+                self._row(f"SELECT 1 FROM {table} WHERE ticker = 'SEPQ'")
+            )
+
+    def test_ticker_rename_rejects_existing_destination_holding_without_changes(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, current_value) VALUES "
+            "('TUGN', 1, 10, 250), ('SEPQ', 1, 3, 75)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share) "
+            "VALUES ('TUGN', 1, 'BUY', '2026-01-02', 10, 20)"
+        )
+
+        res = self.client.put(
+            "/api/holdings/TUGN?profile_id=1",
+            json={"ticker": "SEPQ"},
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("already has a holding", res.get_json()["error"])
+        self.assertIsNotNone(
+            self._row("SELECT 1 FROM all_account_info WHERE ticker = 'TUGN'")
+        )
+        self.assertIsNotNone(
+            self._row("SELECT 1 FROM transactions WHERE ticker = 'TUGN'")
+        )
 
     def test_dashboard_holdings_read_returns_saved_frequency_and_recomputed_income(self):
         self._execute(

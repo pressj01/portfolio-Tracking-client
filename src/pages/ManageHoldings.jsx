@@ -333,7 +333,6 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
                   value={form.ticker}
                   onChange={(e) => set('ticker', e.target.value.toUpperCase())}
                   onBlur={(e) => { if (!isEdit && e.target.value.trim()) lookupTicker(e.target.value) }}
-                  disabled={isEdit}
                   required
                   style={{ flex: 1 }}
                 />
@@ -349,6 +348,11 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
                   </button>
                 )}
               </div>
+              {isEdit && form.ticker.trim().toUpperCase() !== holding?.ticker?.toUpperCase() && (
+                <small style={{ display: 'block', marginTop: '0.35rem', color: 'var(--warning-text)', lineHeight: 1.35 }}>
+                  Saving will rename {holding.ticker} to {form.ticker.trim().toUpperCase()} across every portfolio that holds it, including its transactions, dividends, categories, and ticker settings.
+                </small>
+              )}
             </div>
             <div className="form-group">
               <label>Description</label>
@@ -1973,9 +1977,19 @@ export default function ManageHoldings() {
     setDividendRefreshAccounts(null)
     setDividendRefreshDate(null)
     const isEdit = !!editHolding
+    const oldTicker = String(editHolding?.ticker || '').trim().toUpperCase()
+    const newTicker = String(payload.ticker || '').trim().toUpperCase()
+
+    if (isEdit && oldTicker && newTicker !== oldTicker) {
+      const confirmed = await dialog.confirm(
+        `Rename ${oldTicker} to ${newTicker} across every portfolio that holds it? ` +
+        'Transactions, dividend history, categories, and ticker settings will move to the new symbol.'
+      )
+      if (!confirmed) return
+    }
 
     try {
-      const url = isEdit ? `/api/holdings/${payload.ticker}` : `/api/holdings`
+      const url = isEdit ? `/api/holdings/${oldTicker}` : `/api/holdings`
       const res = await pf(url, {
         method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },

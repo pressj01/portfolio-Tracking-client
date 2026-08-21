@@ -73,6 +73,54 @@ class DividendPayDatePipelineTest(unittest.TestCase):
         )
         self.assertEqual(month_payments[0]["calendar_pay_date"], "2026-08-03")
 
+    def test_actual_transaction_wins_when_monthly_schedule_moves_a_full_week(self):
+        holding = self._holding([
+            "2026-05-22", "2026-06-18", "2026-07-24", "2026-08-21",
+        ])
+        holding.update({"freq": "M", "pay_date": "2026-08-28"})
+        event = self._event()
+        event.update({"freq": "M", "pay_date": "2026-08-28", "pay_day": "28"})
+
+        payments = app_module._project_dividend_payments_for_month(
+            [holding], [event], "2026-08"
+        )
+        resolved = app_module._apply_payment_history_to_calendar_events(
+            [holding], [event]
+        )
+
+        self.assertEqual(len(payments), 1)
+        self.assertEqual(payments[0]["calendar_pay_date"], "2026-08-21")
+        self.assertEqual(payments[0]["calendar_source"], "history")
+        self.assertFalse(payments[0]["calendar_estimated"])
+        self.assertEqual(resolved[0]["pay_date"], "2026-08-21")
+        self.assertEqual(resolved[0]["pay_source"], "history")
+
+    def test_agenda_keeps_current_transaction_after_event_advances_to_next_month(self):
+        holding = self._holding([
+            "2026-05-22", "2026-06-18", "2026-07-24", "2026-08-21",
+        ])
+        holding.update({"freq": "M", "pay_date": "2026-09-18"})
+        event = self._event(confirmed=True)
+        event.update({
+            "freq": "M",
+            "date": "2026-09-16",
+            "pay_date": "2026-09-18",
+            "pay_month": "Sep",
+            "pay_day": "18",
+        })
+
+        agenda = app_module._dividend_agenda_payments(
+            [holding], [event], today=datetime.date(2026, 8, 21)
+        )
+
+        self.assertEqual(
+            [(row["pay_date"], row["ticker"]) for row in agenda],
+            [("2026-08-21", "PIPE"), ("2026-09-18", "PIPE")],
+        )
+        self.assertEqual(agenda[0]["pay_source"], "history")
+        self.assertFalse(agenda[0]["pay_estimated"])
+        self.assertEqual(agenda[0]["date"], "2026-08-19")
+
     def test_dashboard_and_month_use_the_same_resolved_date(self):
         holding = self._holding([
             "2025-02-03", "2025-05-05", "2025-08-04",
