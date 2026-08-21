@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  buildPaymentAgenda,
   buildMonthCells,
   buildWeekCells,
   monthKeysForWeek,
   weekPaymentTotal,
 } from './dividendCalendar.js'
+
+test('buildPaymentAgenda groups and sorts events by pay date', () => {
+  const groups = buildPaymentAgenda([
+    { ticker: 'SPYI', pay_date: '2026-08-21', payment_income: 51.40 },
+    { ticker: 'CHPY', pay_date: '2026-08-20', payment_income: 109.76 },
+    { ticker: 'BLOX', pay_date: '2026-08-21', payment_income: 18.08 },
+    { ticker: 'TBD', date: '2026-08-19', payment_income: 5 },
+  ])
+
+  assert.deepEqual(groups.map(group => group.date), ['2026-08-20', '2026-08-21', null])
+  assert.deepEqual(groups[1].events.map(event => event.ticker), ['BLOX', 'SPYI'])
+  assert.equal(groups[1].income, 69.48)
+})
 
 test('buildWeekCells returns the Monday-Sunday containing the given day', () => {
   const cells = buildWeekCells('2026-08-13', [

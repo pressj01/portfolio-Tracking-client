@@ -71,6 +71,7 @@ def ensure_tables_exist(conn=None):
             positions_managed INTEGER NOT NULL DEFAULT 0,
             display_order    INTEGER NOT NULL DEFAULT 0,
             hidden_from_selector INTEGER NOT NULL DEFAULT 0,
+            is_user_owned    INTEGER NOT NULL DEFAULT 1,
             cash_value       REAL NOT NULL DEFAULT 0,
             cash_source      TEXT,
             cash_updated_at  TEXT,
@@ -90,6 +91,8 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE profiles ADD COLUMN hidden_from_selector INTEGER NOT NULL DEFAULT 0")
     if "broker_source" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN broker_source TEXT")
+    if "is_user_owned" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN is_user_owned INTEGER NOT NULL DEFAULT 1")
     if "cash_value" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN cash_value REAL NOT NULL DEFAULT 0")
     if "cash_source" not in cols:
@@ -102,6 +105,7 @@ def ensure_tables_exist(conn=None):
     # Existing databases and direct imports may not have assigned an order yet.
     # Initialize only unset rows so a saved custom order is never disturbed.
     cur.execute("UPDATE profiles SET display_order = id WHERE display_order = 0")
+    cur.execute("UPDATE profiles SET is_user_owned = 1 WHERE id = 1")
 
     # ── shared cash-flow plans ───────────────────────────────────────────────
     # A plan belongs to either one portfolio profile or one aggregate. Keeping

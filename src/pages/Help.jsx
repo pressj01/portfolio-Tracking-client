@@ -2643,9 +2643,10 @@ function DivCalendarHelp() {
     <div>
       <h2>Dividend Calendar</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Dividend Calendar has three views. <strong>Calendar</strong> shows ex-dividend and
-        pay-date events for your current holdings. <strong>Month</strong> places expected pay dates
-        on a Monday–Sunday calendar. The Dashboard reuses that Month layout for the current week.
+        The Dividend Calendar has three views. <strong>Month</strong>, the default view, places expected
+        pay dates on a Monday–Sunday calendar. <strong>Agenda</strong> groups the same payments by the
+        date cash is expected to arrive and shows ex-dividend dates as supporting information.
+        The Dashboard reuses the Month layout for the current week.
         <strong>Optimization</strong> projects those payments across the next 12 months so you can
         see whether income is evenly distributed or concentrated in certain months. Use this page
         for dividend timing and income-smoothing research; it is not a buy/sell signal.
@@ -2656,77 +2657,69 @@ function DivCalendarHelp() {
       </div>
 
       {/* ── What the Page Shows ─────────────────────────────── */}
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calendar View</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Agenda View</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The Calendar tab shows each paying holding as a card in a grid layout, including money-market
+        The Agenda tab shows a chronological payment schedule, including money-market
         funds such as FZDXX that have no issuer ex-dividend date, and holdings whose frequency you
         set by hand (for example a semi-annual fund pinned to March and September) when Yahoo has
         no dates yet. Money-market funds use the last business day of the month; a pinned
-        semi-annual schedule uses the last business day of March and September. Cards are sorted
-        chronologically and contain:
+        semi-annual schedule uses the last business day of March and September. Payments are grouped
+        by expected pay date so the primary date always means when cash is scheduled to arrive. Each row contains:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>Date column (left)</strong> — The day, month abbreviation, and day-of-week for the
-          ex-dividend date.
+          <strong>Pay-date group</strong> — The full expected payment date, number of payments, and
+          combined portfolio income scheduled for that date.
         </li>
         <li>
-          <strong>Ticker icon</strong> — A colored circle showing the first letter of the ticker symbol.
-          The color is unique to each holding and matches the card's left border color.
+          <strong>Ticker &amp; Description</strong> — The symbol and name of the paying holding.
         </li>
         <li>
-          <strong>Ticker &amp; Description</strong> — The symbol and a truncated name of the holding.
+          <strong>Ex-dividend date</strong> — The eligibility date shown as secondary information.
+          To receive the dividend, you must own shares before this date.
         </li>
         <li>
-          <strong>Ex-Div chip</strong> — The ex-dividend date. To receive the dividend, you must own
-          shares <em>before</em> this date. Buying on or after the ex-div date means you won't receive
-          that period's dividend.
+          <strong>Portfolio income</strong> — The estimated cash payment based on the selected account's
+          share quantity, followed by the amount per share and payment frequency when available.
         </li>
         <li>
-          <strong>Pay Date chip</strong> — The date the dividend payment is deposited. Dates marked
-          with an asterisk (*) are <strong>estimated</strong> — the actual pay date has not yet been
-          confirmed by the company. Dates without an asterisk are confirmed.
-        </li>
-        <li>
-          <strong>Amount &amp; Frequency</strong> — The dividend amount per share and the payment
-          frequency (e.g., Monthly, Quarterly, Weekly).
+          <strong>Date status</strong> — A Confirmed or Estimated badge for future payments; recent
+          dates can show paid-this-week or paid-this-month status.
         </li>
       </ul>
 
       {/* ── Paid Status ─────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Paid Status Indicators</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Cards automatically show whether a payment has already been made:
+        Agenda rows identify recent payment dates:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Paid this week</strong> — The pay date fell within the current calendar week
-          (Monday through today). The card dims slightly, the left border turns dark green,
-          and a green <span style={{ color: 'var(--pos-bright)' }}>✓ paid this week</span> badge appears
-          next to the ticker.
+          (Monday through today). A green <span style={{ color: 'var(--pos-bright)' }}>✓ paid this week</span> badge appears.
         </li>
         <li>
           <strong>Paid this month</strong> — The pay date was earlier in the current month but
-          before this week. Same visual treatment but shows "paid this month".
+          before this week. The badge shows "paid this month".
         </li>
         <li>
-          <strong>No badge</strong> — The payment is upcoming (pay date is today or in the future).
+          <strong>Confirmed / Estimated</strong> — Future dates show whether the source has confirmed
+          the date or the app inferred it from the current schedule.
         </li>
       </ul>
 
       {/* ── Filters ─────────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Filters</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Three filter buttons appear above the card grid. Click one to narrow the view:
+        Three filter buttons appear above the agenda. Click one to narrow the payment dates:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
-          <strong>All</strong> — Shows every holding with an ex-dividend date on record,
-          including past and future. This is the default view.
+          <strong>All Dates</strong> — Shows every scheduled payment, including past and future dates.
         </li>
         <li>
-          <strong>Upcoming</strong> — Shows only holdings whose pay date is today or in the future.
-          Hides already-paid events, giving you a clean forward-looking view.
+          <strong>Upcoming</strong> — Shows only payments dated today or later. This is the default
+          Agenda filter and gives you a clean forward-looking view.
         </li>
         <li>
           <strong>Next 30 Days</strong> — Shows only holdings with a pay date within the next
@@ -2734,16 +2727,16 @@ function DivCalendarHelp() {
         </li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        A count next to the filter buttons shows how many holdings match the current filter
-        (e.g., "12 holdings"). If no events match the active filter, a "No events match this filter"
+        A count next to the filter buttons shows how many payments match the current filter
+        (e.g., "12 payments"). If no events match the active filter, a "No payments match this date filter"
         message is shown.
       </p>
 
       {/* ── Estimated vs Confirmed ──────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Estimated vs. Confirmed Pay Dates</h3>
       <p style={{ marginBottom: '1rem' }}>
-        A note in the filter bar explains the asterisk convention:
-        <em> "* estimated pay date | no asterisk = confirmed"</em>.
+        A note in the filter bar explains the status convention:
+        <em> "~ estimated date | ✓ confirmed date"</em>.
         Estimated pay dates are calculated by the app based on the holding's typical payment schedule.
         Confirmed dates come directly from the data source (Yahoo Finance or your import).
         Always check your broker for the official payment date on high-value holdings.
@@ -2753,16 +2746,16 @@ function DivCalendarHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>
-          <strong>Select "Upcoming" filter</strong> to see your forward dividend schedule. This clears
-          out past payments and shows only what's coming.
+          <strong>Open Agenda</strong> to see the forward dividend schedule grouped by the date cash
+          should arrive. Upcoming is selected automatically.
         </li>
         <li>
           <strong>Use "Next 30 Days"</strong> when you want to plan short-term cash flow or know
           exactly what income to expect this month.
         </li>
         <li>
-          <strong>Check the Pay Date chip</strong> for each card to know when cash will land in your
-          account. If it has an asterisk, treat the date as approximate.
+          <strong>Check the date status</strong> for each payment. Treat dates marked with ~ Estimated
+          as approximate until the source confirms them.
         </li>
         <li>
           <strong>Watch for the ex-dividend date</strong> if you're considering adding to a position —
@@ -2770,7 +2763,7 @@ function DivCalendarHelp() {
           waiting until the next cycle.
         </li>
         <li>
-          <strong>Switch to "All"</strong> to review past payments and confirm which holdings paid
+          <strong>Switch to "All Dates"</strong> to review past payments and confirm which holdings paid
           this week or this month using the green badge indicators.
         </li>
         <li>
@@ -5452,7 +5445,7 @@ function PortfoliosHelp() {
       <h2>Portfolios</h2>
       <p style={{ marginBottom: '1rem' }}>
         The Portfolios page lets you create and manage multiple independent portfolios, control which
-        ones appear (and in what order) in the navbar selector, configure one or more Aggregate views
+        ones are user-owned versus test/non-owned, choose which appear (and in what order) in the navbar selector, configure one or more Aggregate views
         that combine selected portfolios, and sync the Owner portfolio against the combined totals of
         sub-portfolios.
       </p>
@@ -5463,11 +5456,12 @@ function PortfoliosHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Table</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each row shows a portfolio's name, broker source, holdings count, total value, and creation date.
+        Each row shows a portfolio's name, broker source, account type, holdings count, total value, and creation date.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Rename</strong> — click a portfolio name (underlined in blue) to edit it inline. Press Enter or click away to save.</li>
         <li><strong>Broker Source</strong> — which broker's imports are authorized to write into this portfolio, independent of its name. Matching broker imports check this field, not the portfolio name.</li>
+        <li><strong>Account Type</strong> — mark the portfolio as User-owned or Test / non-owned. Test/non-owned portfolios remain selectable and keep their data, but are clearly labeled and cannot be included in Owner.</li>
         <li><strong>Show</strong> — controls whether the portfolio appears in the navbar portfolio selector. Clear it to keep a test or retired portfolio around without deleting it or cluttering the dropdown. Owner (ID 1) is always shown and cannot be hidden.</li>
         <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
         <li><strong>↑ / ↓ arrows</strong> (Actions column) — move a portfolio up or down. This sets the order portfolios appear in the navbar selector.</li>

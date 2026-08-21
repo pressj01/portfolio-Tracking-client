@@ -5635,7 +5635,8 @@ def _ensure_db():
 def list_profiles():
     conn = get_connection()
     rows = conn.execute("""
-        SELECT id, name, created_at, display_order, hidden_from_selector, broker_source
+        SELECT id, name, created_at, display_order, hidden_from_selector,
+               broker_source, is_user_owned
         FROM profiles
         ORDER BY display_order, id
     """).fetchall()
@@ -5661,7 +5662,12 @@ def create_profile():
     pid = cur.lastrowid
     conn.commit()
     conn.close()
-    return jsonify({"id": pid, "name": name, "broker_source": broker_source}), 201
+    return jsonify({
+        "id": pid,
+        "name": name,
+        "broker_source": broker_source,
+        "is_user_owned": 1,
+    }), 201
 
 
 @app.route("/api/profiles/order", methods=["PUT"])
@@ -5733,6 +5739,31 @@ def update_profile(pid):
     return jsonify({"id": pid, "name": name, "broker_source": broker_source})
 
 
+@app.route("/api/profiles/<int:pid>/ownership", methods=["PUT"])
+def set_profile_ownership(pid):
+    """Classify a portfolio as user-owned or test/non-owned."""
+    data = request.get_json() or {}
+    is_user_owned = 1 if data.get("is_user_owned", True) else 0
+    if pid == 1 and not is_user_owned:
+        return jsonify({"error": "Owner must remain a user-owned portfolio"}), 400
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM profiles WHERE id = ?", (pid,)).fetchone()
+        if not row:
+            return jsonify({"error": "Portfolio not found"}), 404
+        conn.execute(
+            "UPDATE profiles SET is_user_owned = ?, "
+            "include_in_owner = CASE WHEN ? = 0 THEN 0 ELSE include_in_owner END "
+            "WHERE id = ?",
+            (is_user_owned, is_user_owned, pid),
+        )
+        conn.commit()
+        return jsonify({"id": pid, "is_user_owned": is_user_owned})
+    finally:
+        conn.close()
+
+
 @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
 def delete_profile(pid):
     if pid == 1:
@@ -5799,6 +5830,17 @@ def set_include_in_owner(pid):
     val = 1 if data.get("include") else 0
     conn = get_connection()
     ensure_tables_exist(conn)
+    profile = conn.execute(
+        "SELECT is_user_owned FROM profiles WHERE id = ?", (pid,)
+    ).fetchone()
+    if not profile:
+        conn.close()
+        return jsonify({"error": "Portfolio not found"}), 404
+    if val and not profile["is_user_owned"]:
+        conn.close()
+        return jsonify({
+            "error": "Test / non-owned portfolios cannot be included in Owner"
+        }), 400
     conn.execute("UPDATE profiles SET include_in_owner = ? WHERE id = ?", (val, pid))
     conn.commit()
     # Newly included sub-accounts share Owner's household bills, so their
@@ -5816,6 +5858,7 @@ def profiles_summary():
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
+               p.is_user_owned,
                p.display_order, p.hidden_from_selector,
                COALESCE(p.cash_value, 0) AS cash_value,
                COUNT(a.ticker) as holdings_count,
@@ -30630,6 +30673,121 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
     )
 
 
+def _dividend_optimization_current_month(
+    conn, holdings, events, is_aggregate, profile_ids, today=None
+):
+    """Blend recorded cash with the selected view's remaining month schedule.
+
+    Optimization used to treat the current month exactly like a future month,
+    so its annual-income rescaling could show less than the cash already paid.
+    Recorded broker payments are authoritative through today. Only payments
+    after that boundary are estimated from the current account's holdings.
+    """
+    today = today or datetime.date.today()
+    month_key = today.strftime("%Y-%m")
+    month_start = today.replace(day=1)
+    read_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+    read_ids = list(dict.fromkeys(int(pid) for pid in read_ids))
+    if not read_ids:
+        return {
+            "month": month_key,
+            "recorded_income": 0.0,
+            "remaining_scheduled_income": 0.0,
+            "total_income": 0.0,
+            "recorded_rows": 0,
+            "remaining_rows": 0,
+            "recorded_source": "none",
+        }
+
+    placeholders = ",".join("?" * len(read_ids))
+    actual_rows = conn.execute(
+        f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date,
+                   SUM(COALESCE(amount, 0)) AS amount
+            FROM dividend_payments
+            WHERE profile_id IN ({placeholders})
+              AND payment_date >= ? AND payment_date <= ?
+              AND LOWER(COALESCE(source, '')) NOT IN
+                  ('refresh_estimate', 'projection', 'estimate', 'estimated')
+              AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'
+            GROUP BY profile_id, UPPER(TRIM(ticker)), payment_date
+            ORDER BY payment_date, ticker""",
+        [*read_ids, month_start.isoformat(), today.isoformat()],
+    ).fetchall()
+
+    recorded_income = sum(float(row["amount"] or 0) for row in actual_rows)
+    actual_keys = {
+        (str(row["ticker"] or "").strip().upper(), str(row["payment_date"] or "")[:10])
+        for row in actual_rows
+    }
+    actual_profile_ids = {int(row["profile_id"]) for row in actual_rows}
+    recorded_source = "dividend_payments" if actual_rows else "none"
+
+    # Some older/import-only profiles store received cash solely as one monthly
+    # total. Use that value only for members without exact payment rows, so an
+    # aggregate can combine both ledger styles without double-counting.
+    fallback_ids = [pid for pid in read_ids if pid not in actual_profile_ids]
+    if fallback_ids:
+        fallback_placeholders = ",".join("?" * len(fallback_ids))
+        payout_rows = conn.execute(
+            f"""SELECT profile_id, amount
+                FROM monthly_payouts
+                WHERE profile_id IN ({fallback_placeholders})
+                  AND year = ? AND month = ?""",
+            [*fallback_ids, today.year, today.month],
+        ).fetchall()
+        if payout_rows:
+            recorded_income += sum(float(row["amount"] or 0) for row in payout_rows)
+            recorded_source = "mixed" if actual_rows else "monthly_payouts"
+            payout_profile_ids = {int(row["profile_id"]) for row in payout_rows}
+            fallback_ids = [pid for pid in fallback_ids if pid not in payout_profile_ids]
+
+    # Refresh stores month-to-date distribution history on each holding. It is
+    # less precise than imported broker cash, but it is still an actual-to-date
+    # source and prevents an account without transaction imports from showing a
+    # current-month projection below what its holdings have already paid.
+    if fallback_ids:
+        fallback_placeholders = ",".join("?" * len(fallback_ids))
+        holding_actual_rows = conn.execute(
+            f"""SELECT profile_id, SUM(COALESCE(current_month_income, 0)) AS amount
+                FROM all_account_info
+                WHERE profile_id IN ({fallback_placeholders})
+                  AND COALESCE(quantity, 0) > 0
+                  AND current_month_income IS NOT NULL
+                GROUP BY profile_id""",
+            fallback_ids,
+        ).fetchall()
+        if holding_actual_rows:
+            recorded_income += sum(
+                float(row["amount"] or 0) for row in holding_actual_rows
+            )
+            recorded_source = (
+                "mixed" if recorded_source != "none" else "holding_actuals"
+            )
+
+    scheduled_rows = _project_dividend_payments_for_month(
+        holdings, events, month_key
+    )
+    remaining = []
+    for row in scheduled_rows:
+        pay_date = str(row.get("calendar_pay_date") or "")[:10]
+        ticker = str(row.get("ticker") or "").strip().upper()
+        if pay_date > today.isoformat() or (
+            pay_date == today.isoformat() and (ticker, pay_date) not in actual_keys
+        ):
+            remaining.append(row)
+
+    remaining_income = sum(_dividend_payment_value(row) for row in remaining)
+    return {
+        "month": month_key,
+        "recorded_income": round(recorded_income, 2),
+        "remaining_scheduled_income": round(remaining_income, 2),
+        "total_income": round(recorded_income + remaining_income, 2),
+        "recorded_rows": len(actual_rows),
+        "remaining_rows": len(remaining),
+        "recorded_source": recorded_source,
+    }
+
+
 def _apply_payment_history_to_calendar_events(holdings, events):
     """Resolve each current calendar event through the shared Month pipeline."""
     if not events:
@@ -31224,11 +31382,24 @@ def div_calendar():
             _project_dividend_payments_for_month(holdings, events, requested_month)
             if requested_month else []
         )
+        conn = get_connection()
+        try:
+            optimization_current_month = _dividend_optimization_current_month(
+                conn,
+                holdings,
+                events,
+                is_aggregate,
+                profile_ids,
+                today=date.today(),
+            )
+        finally:
+            conn.close()
         return jsonify(
             events=events,
             holdings=holdings,
             payments=payments,
             payment_month=requested_month or None,
+            optimization_current_month=optimization_current_month,
             today=date.today().isoformat(),
             scope={
                 "type": "aggregate" if is_aggregate else "profile",
@@ -31242,33 +31413,28 @@ def div_calendar():
 def _candidate_schedule_rows(conn, view_ids):
     """Known pay schedules for tickers the current view's calendar does not show.
 
-    Everything held in the selected account already reaches the Optimization tab
-    as a calendar event. What it cannot see is the rest of what this app already
-    knows about — the watchlist, positions held in another account, and tickers
-    held previously — so without these rows the panel can only ever recommend
-    funds that are already owned.
-
-    Reads the whole database on purpose: a candidate is by definition something
-    the current view does not hold, so the usual profile scoping would exclude
-    exactly the rows worth returning.
+    Current holdings already reach Optimization as calendar events. Candidate
+    metadata is limited to the selected account (or selected aggregate members)
+    plus the global watchlist. Holdings in unrelated accounts must never appear
+    as "Owned" or influence this account's schedule-fit research.
     """
     from datetime import date
 
     today = date.today()
     view = sorted({int(pid) for pid in (view_ids or [])})
+    if not view:
+        return []
+    placeholders = ",".join("?" * len(view))
 
-    in_view = set()
-    if view:
-        in_view = {
-            str(row["ticker"] or "").strip().upper()
-            for row in conn.execute(
-                """SELECT DISTINCT ticker FROM all_account_info
-                   WHERE profile_id IN ({}) AND COALESCE(quantity, 0) > 0""".format(
-                    ",".join("?" * len(view))
-                ),
-                view,
-            ).fetchall()
-        }
+    in_view = {
+        str(row["ticker"] or "").strip().upper()
+        for row in conn.execute(
+            f"""SELECT DISTINCT ticker FROM all_account_info
+                WHERE profile_id IN ({placeholders})
+                  AND COALESCE(quantity, 0) > 0""",
+            view,
+        ).fetchall()
+    }
 
     # Largest position wins, the same way _security_level_metadata_by_ticker
     # resolves a ticker held at different frequencies in different accounts.
@@ -31277,8 +31443,10 @@ def _candidate_schedule_rows(conn, view_ids):
         """SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, description, quantity,
                   current_price, div, div_frequency, ex_div_date, div_pay_date
            FROM all_account_info
-           WHERE COALESCE(quantity, 0) > 0
+           WHERE profile_id IN ({}) AND COALESCE(quantity, 0) > 0
            ORDER BY ticker, quantity DESC"""
+        .format(placeholders),
+        view,
     ).fetchall():
         holdings.setdefault(row["ticker"], row)
 
@@ -31286,7 +31454,10 @@ def _candidate_schedule_rows(conn, view_ids):
     for row in conn.execute(
         """SELECT UPPER(TRIM(ticker)) AS ticker, ex_div_date, pay_date, frequency
            FROM dividend_schedule_history
+           WHERE profile_id IN ({})
            ORDER BY ticker, created_at DESC, id DESC"""
+        .format(placeholders),
+        view,
     ).fetchall():
         schedules.setdefault(row["ticker"], row)
 
@@ -31359,11 +31530,8 @@ def _candidate_schedule_rows(conn, view_ids):
             "amount": round(amount, 6) if amount > 0 else None,
             "current_price": round(price, 4) if price > 0 else None,
             "pay_date": pay_ts.date().isoformat() if pay_ts is not None else None,
-            # Held somewhere, just not in the account being viewed — worth
-            # saying so, since adding to an existing position is a different
-            # decision from opening one.
-            "owned": holding is not None,
-            "owned_quantity": round(num(holding["quantity"]), 6) if holding is not None else 0.0,
+            "owned": False,
+            "owned_quantity": 0.0,
             "watchlist": ticker in watchlist,
             "has_schedule": bool(freq and pay_ts is not None),
         })

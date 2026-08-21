@@ -154,6 +154,19 @@ export default function ManagePortfolios() {
     }
   }
 
+  const saveAccountOwnership = async (p, isUserOwned) => {
+    const res = await fetch(`${API_BASE}/api/profiles/${p.id}/ownership`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_user_owned: isUserOwned }),
+    })
+    if (res.ok) {
+      clearDashboardCacheForSelection('p:1')
+      await refreshProfiles()
+      loadSummary()
+    }
+  }
+
   const toggleProfileSelectorVisibility = async (p) => {
     const nextVisible = !!p.hidden_from_selector
     const saved = await saveSelectorPreference(`/api/profiles/${p.id}/selector-visibility`, {
@@ -318,7 +331,7 @@ export default function ManagePortfolios() {
       </div>
 
       <p style={{ color: 'var(--p-aaa)', marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
-        Use the arrows to set the portfolio-selector order. Clear <strong>Show</strong> to keep a test portfolio out of the navbar dropdown without deleting it.
+        Use <strong>Account Type</strong> to identify test or non-user-owned data. Optimization stays scoped to the active account; test/non-owned accounts are also kept out of Owner.
       </p>
       {selectorPreferenceError && <div className="alert alert-error">{selectorPreferenceError}</div>}
 
@@ -327,6 +340,7 @@ export default function ManagePortfolios() {
           <tr>
             <th>Name</th>
             <th>Broker Source</th>
+            <th>Account Type</th>
             <th style={{ textAlign: 'center' }} title="Show this portfolio in the navbar portfolio selector">Show</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
@@ -381,6 +395,19 @@ export default function ManagePortfolios() {
                   ))}
                 </select>
               </td>
+              <td>
+                <select
+                  value={p.is_user_owned ? 'owned' : 'test'}
+                  disabled={p.id === 1}
+                  onChange={(e) => saveAccountOwnership(p, e.target.value === 'owned')}
+                  style={{ width: '150px' }}
+                  title={p.id === 1 ? 'Owner is always user-owned' : 'Classify this portfolio without deleting its data'}
+                  aria-label={`Account type for ${p.name}`}
+                >
+                  <option value="owned">User-owned</option>
+                  <option value="test">Test / non-owned</option>
+                </select>
+              </td>
               <td style={{ textAlign: 'center' }}>
                 <input
                   type="checkbox"
@@ -398,8 +425,9 @@ export default function ManagePortfolios() {
                   <input
                     type="checkbox"
                     checked={!!p.include_in_owner}
+                    disabled={!p.is_user_owned}
                     onChange={() => toggleIncludeInOwner(p)}
-                    title="Include in Owner aggregate"
+                    title={p.is_user_owned ? 'Include in Owner aggregate' : 'Test / non-owned accounts cannot be included in Owner'}
                   />
                 )}
               </td>
@@ -485,7 +513,7 @@ export default function ManagePortfolios() {
                       checked={agg.member_ids.includes(p.id)}
                       onChange={() => toggleAggMember(agg, p.id)}
                     />
-                    {p.name}
+                    {p.name}{p.is_user_owned ? '' : ' (test / non-owned)'}
                   </label>
                 ))}
               </div>

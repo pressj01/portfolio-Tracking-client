@@ -2,8 +2,8 @@
 
 Everything held in the selected account already reaches that tab as a calendar
 event. The point of this endpoint is the rest of what the app knows about -- the
-watchlist, positions held in another account, and tickers held previously --
-because without those the panel can only ever recommend funds already owned.
+global watchlist and tickers held previously in this account. Positions and
+schedules from unrelated accounts must never leak into the active view.
 """
 
 import datetime
@@ -41,7 +41,7 @@ class DividendCalendarCandidatesTest(unittest.TestCase):
             conn.execute(
                 """INSERT INTO dividend_schedule_history
                    (ticker, profile_id, ex_div_date, pay_date, frequency, source)
-                   VALUES ('SOLD', 4, '01/08/26', '01/10/26', 'M', 'refresh')"""
+                   VALUES ('SOLD', 2, '01/08/26', '01/10/26', 'M', 'refresh')"""
             )
             conn.execute(
                 "INSERT INTO general_scanner_cache (ticker, name, price) "
@@ -89,14 +89,14 @@ class DividendCalendarCandidatesTest(unittest.TestCase):
         rows = self._candidates("?profile_id=2")
 
         self.assertNotIn("HELD", rows)
-        self.assertIn("ELSEWHERE", rows)
+        self.assertNotIn("ELSEWHERE", rows)
 
-    def test_same_ticker_becomes_a_candidate_from_an_account_without_it(self):
+    def test_other_accounts_are_not_candidate_sources(self):
         rows = self._candidates("?profile_id=4")
 
-        self.assertIn("HELD", rows)
-        self.assertTrue(rows["HELD"]["owned"])
-        self.assertEqual(rows["HELD"]["owned_quantity"], 100)
+        self.assertNotIn("HELD", rows)
+        self.assertNotIn("ELSEWHERE", rows)
+        self.assertNotIn("SOLD", rows)
 
     def test_owner_view_excludes_everything_its_source_accounts_hold(self):
         rows = self._candidates("?profile_id=1")
@@ -131,18 +131,18 @@ class DividendCalendarCandidatesTest(unittest.TestCase):
         self.assertGreaterEqual(pay_date, datetime.date.today())
         self.assertEqual(pay_date.day, 10)
 
-    def test_schedule_comes_from_the_largest_position_in_any_account(self):
+    def test_unrelated_account_cannot_override_selected_schedule(self):
         conn = self._get_connection()
         try:
-            self._holding(conn, 4, "ELSEWHERE", 500, "M", "07/09/26", "07/11/26", 0.20)
+            self._holding(conn, 4, "SOLD", 500, "W", "07/09/26", "07/11/26", 0.20)
             conn.commit()
         finally:
             conn.close()
 
         rows = self._candidates("?profile_id=2")
 
-        self.assertEqual(rows["ELSEWHERE"]["freq"], "M")
-        self.assertEqual(rows["ELSEWHERE"]["amount"], 0.20)
+        self.assertEqual(rows["SOLD"]["freq"], "M")
+        self.assertIsNone(rows["SOLD"]["amount"])
 
     def test_each_ticker_appears_once(self):
         conn = self._get_connection()

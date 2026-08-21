@@ -27,6 +27,32 @@ export function calendarPaymentIncome(ev) {
   return estimatePaymentIncome(ev)
 }
 
+export function buildPaymentAgenda(events = []) {
+  const groups = new Map()
+  ;(events || []).forEach((event) => {
+    const date = event?.calendar_pay_date || event?.pay_date || null
+    const key = date || 'unscheduled'
+    if (!groups.has(key)) groups.set(key, { date, events: [], income: 0 })
+    const group = groups.get(key)
+    group.events.push(event)
+    group.income += calendarPaymentIncome(event)
+  })
+
+  return [...groups.values()]
+    .map(group => ({
+      ...group,
+      income: Math.round(group.income * 100) / 100,
+      events: [...group.events].sort((a, b) => (
+        String(a?.ticker || '').localeCompare(String(b?.ticker || ''))
+      )),
+    }))
+    .sort((a, b) => {
+      if (!a.date) return 1
+      if (!b.date) return -1
+      return a.date.localeCompare(b.date)
+    })
+}
+
 export function estimateAnnualYieldPct(amount, freq, price) {
   const amt = Number(amount || 0)
   const px = Number(price || 0)

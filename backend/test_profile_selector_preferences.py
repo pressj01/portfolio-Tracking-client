@@ -74,6 +74,36 @@ class ProfileSelectorPreferencesApiTest(unittest.TestCase):
         self.assertEqual([aggregate["id"] for aggregate in aggregates], [2, 1])
         self.assertEqual(aggregates[0]["hidden_from_selector"], 1)
 
+    def test_test_account_is_labeled_and_excluded_from_owner(self):
+        included = self.client.put(
+            "/api/profiles/3/include-in-owner", json={"include": True}
+        )
+        self.assertEqual(included.status_code, 200)
+
+        classified = self.client.put(
+            "/api/profiles/3/ownership", json={"is_user_owned": False}
+        )
+        self.assertEqual(classified.status_code, 200)
+
+        profiles = self.client.get("/api/profiles").get_json()
+        test_profile = next(profile for profile in profiles if profile["id"] == 3)
+        self.assertEqual(test_profile["is_user_owned"], 0)
+
+        summary = self.client.get("/api/profiles/summary").get_json()["profiles"]
+        test_summary = next(profile for profile in summary if profile["id"] == 3)
+        self.assertEqual(test_summary["is_user_owned"], 0)
+        self.assertEqual(test_summary["include_in_owner"], 0)
+
+        rejected = self.client.put(
+            "/api/profiles/3/include-in-owner", json={"include": True}
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+        owner_rejected = self.client.put(
+            "/api/profiles/1/ownership", json={"is_user_owned": False}
+        )
+        self.assertEqual(owner_rejected.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

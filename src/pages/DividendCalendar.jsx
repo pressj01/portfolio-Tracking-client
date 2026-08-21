@@ -5,6 +5,7 @@ import {
   paymentsPerYear,
   estimatePaymentIncome,
   calendarPaymentIncome,
+  buildPaymentAgenda,
   estimateAnnualYieldPct,
   isoDate,
   dateFromIso,
@@ -19,14 +20,14 @@ import {
 } from '../components/DividendMonthGrid'
 
 const FILTERS = [
-  { key: 'all', label: 'All' },
+  { key: 'all', label: 'All Dates' },
   { key: 'upcoming', label: 'Upcoming' },
   { key: 'next30', label: 'Next 30 Days' },
 ]
 
 const TABS = [
-  { key: 'calendar', label: 'Calendar' },
   { key: 'month', label: 'Month' },
+  { key: 'agenda', label: 'Agenda' },
   { key: 'optimization', label: 'Optimization' },
 ]
 
@@ -359,7 +360,7 @@ function buildCandidateRecommendations(data, events, watchlistRows = [], candida
   return { recommendations, tracked }
 }
 
-function buildOptimization(events, todayIso) {
+function buildOptimization(events, todayIso, currentMonthSummary = null) {
   const start = todayIso ? new Date(todayIso + 'T00:00:00') : new Date()
   const startMonth = new Date(start.getFullYear(), start.getMonth(), 1)
   const end = addMonths(startMonth, 12)
@@ -415,6 +416,18 @@ function buildOptimization(events, todayIso) {
     })
   }
 
+  const currentMonth = currentMonthSummary?.month
+    ? byKey.get(currentMonthSummary.month)
+    : null
+  if (currentMonth) {
+    const recordedIncome = Math.max(0, Number(currentMonthSummary.recorded_income || 0))
+    const remainingIncome = Math.max(0, Number(currentMonthSummary.remaining_scheduled_income || 0))
+    currentMonth.income = recordedIncome + remainingIncome
+    currentMonth.recordedIncome = recordedIncome
+    currentMonth.remainingIncome = remainingIncome
+    currentMonth.isCurrentBlended = true
+  }
+
   months.forEach(m => {
     m.income = Math.round(m.income * 100) / 100
     m.tickerList = Array.from(m.tickers.entries())
@@ -441,11 +454,12 @@ export default function DividendCalendar() {
   const [watchlistRows, setWatchlistRows] = useState([])
   const [candidateRows, setCandidateRows] = useState([])
   const [today, setToday] = useState('')
-  const [filter, setFilter] = useState('all')
-  const [tab, setTab] = useState('calendar')
+  const [optimizationCurrentMonth, setOptimizationCurrentMonth] = useState(null)
+  const [filter, setFilter] = useState('upcoming')
+  const [tab, setTab] = useState('month')
   const [selectedMonth, setSelectedMonth] = useState(() => monthKey(new Date()))
   const [monthPayments, setMonthPayments] = useState([])
-  const [monthLoading, setMonthLoading] = useState(false)
+  const [monthLoading, setMonthLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const cacheKey = useMemo(() => `portfolio_div_calendar_v7_${selection}`, [selection])
 
@@ -456,12 +470,14 @@ export default function DividendCalendar() {
       setEvents(cached.events || [])
       setHoldings(cached.holdings || cached.events || [])
       setToday(cached.today || new Date().toISOString().slice(0, 10))
+      setOptimizationCurrentMonth(cached.optimizationCurrentMonth || null)
       setSelectedMonth((cached.today || isoDate(new Date())).slice(0, 7))
       setLoading(false)
     } else {
       setEvents([])
       setHoldings([])
       setToday('')
+      setOptimizationCurrentMonth(null)
       setSelectedMonth(monthKey(new Date()))
       setLoading(true)
     }
@@ -475,11 +491,13 @@ export default function DividendCalendar() {
         setEvents(data.events || [])
         setHoldings(data.holdings || data.events || [])
         setToday(data.today || new Date().toISOString().slice(0, 10))
+        setOptimizationCurrentMonth(data.optimization_current_month || null)
         setSelectedMonth((data.today || isoDate(new Date())).slice(0, 7))
         writeCalendarCache(cacheKey, {
           events: data.events || [],
           holdings: data.holdings || data.events || [],
           today: data.today || new Date().toISOString().slice(0, 10),
+          optimizationCurrentMonth: data.optimization_current_month || null,
         })
         setLoading(false)
       })
@@ -545,7 +563,12 @@ export default function DividendCalendar() {
     ))
   }, [events, filter, today])
 
-  const optimization = useMemo(() => buildOptimization(events, today), [events, today])
+  const agendaGroups = useMemo(() => buildPaymentAgenda(filtered), [filtered])
+
+  const optimization = useMemo(
+    () => buildOptimization(events, today, optimizationCurrentMonth),
+    [events, today, optimizationCurrentMonth],
+  )
 
   // Determine paid status for each card
   const now = today ? new Date(today + 'T00:00:00') : new Date()
@@ -589,98 +612,120 @@ export default function DividendCalendar() {
         ))}
       </div>
 
-      {tab === 'calendar' && (
+      {tab === 'agenda' && (
         <>
-      <div className="dc-filters">
-        {FILTERS.map(f => (
-          <button
-            key={f.key}
-            className={`dc-filter-btn${filter === f.key ? ' active' : ''}`}
-            onClick={() => setFilter(f.key)}
-          >
-            {f.label}
-          </button>
-        ))}
-        <span className="dc-count">
-          {filtered.length} holding{filtered.length !== 1 ? 's' : ''}
-        </span>
-        <span className="dc-paydate-note">* estimated pay date &nbsp;|&nbsp; no asterisk = confirmed</span>
-      </div>
-
-      {filtered.length === 0 && events.length > 0 && (
-        <p style={{ color: 'var(--text-dim)', padding: '1rem 0' }}>
-          No events match this filter.
-        </p>
-      )}
-
-      {events.length === 0 && (
-        <p style={{ color: 'var(--text-dim)' }}>No ex-dividend date data found. Import data first.</p>
-      )}
-
-      <div className="dc-grid">
-        {filtered.map((ev, i) => {
-          const paidStatus = getPaidStatus(ev)
-          const isPaid = !!paidStatus
-          // Color logic: if paid, pay date is green; if not paid, ex-div color matches pay date color
-          const cardBorderColor = isPaid ? '#2a6655' : ev.color
-          const payChipBorderColor = isPaid ? '#2a6655' : '#00c9a7'
-
-          return (
-            <div
-              key={`${ev.ticker}-${ev.date}-${i}`}
-              className={`dc-card${ev.date === today ? ' dc-today' : ''}${isPaid ? ' dc-paid' : ''}`}
-              style={{ borderLeftColor: cardBorderColor }}
-            >
-              <div className="dc-date-col">
-                <span className="dc-day">{ev.day}</span>
-                <span className="dc-month">{ev.month}</span>
-                <span className="dc-wday">{ev.weekday}</span>
-              </div>
-              <div className="dc-body">
-                <div className="dc-label">Ex-Dividend Date</div>
-                <div className="dc-ticker-row">
-                  <div
-                    className="dc-icon"
-                    style={{ background: ev.color + '22', color: ev.color }}
-                  >
-                    {ev.ticker[0]}
-                  </div>
-                  <div className="dc-ticker-info">
-                    <span className="dc-ticker">{ev.ticker}</span>
-                    {isPaid && <span className="dc-paid-badge">✓ {paidStatus}</span>}
-                    <span className="dc-desc">
-                      {ev.description.length > 45
-                        ? ev.description.slice(0, 45) + '…'
-                        : ev.description}
-                    </span>
-                  </div>
-                </div>
-                <div className="dc-dates-row">
-                  <div className="dc-date-chip dc-exdiv-chip" style={{ borderTopColor: isPaid ? 'var(--p-334455)' : ev.color }}>
-                    <span className="dc-chip-label">Ex-Div</span>
-                    <span className="dc-chip-val" style={{ color: isPaid ? 'var(--p-b0c0d0)' : ev.color }}>
-                      {ev.month} {ev.day}
-                    </span>
-                  </div>
-                  <div className="dc-date-chip dc-pay-chip" style={{ borderTopColor: isPaid ? 'var(--p-2a6655)' : ev.color }}>
-                    <span className="dc-chip-label">Pay Date</span>
-                    <span
-                      className="dc-chip-val"
-                      style={{ color: isPaid ? 'var(--pos-bright)' : ev.color, fontWeight: isPaid ? 700 : 600 }}
-                    >
-                      {ev.pay_month} {ev.pay_day}{ev.pay_estimated ? ' *' : ''}
-                    </span>
-                  </div>
-                </div>
-                <div className="dc-amount">
-                  {ev.amount !== null && `${formatMoney(ev.amount)}/share`}
-                  {ev.freq_label && <span className="dc-freq">, {ev.freq_label}</span>}
-                </div>
-              </div>
+          <div className="divcal-agenda-intro">
+            <strong>Payment agenda</strong>
+            <span>
+              Grouped by the date cash is expected to arrive. The ex-dividend date is shown inside each payment.
+            </span>
           </div>
-        )
-      })}
-      </div>
+
+          <div className="dc-filters" aria-label="Payment date filters">
+            {FILTERS.map(f => (
+              <button
+                key={f.key}
+                type="button"
+                className={`dc-filter-btn${filter === f.key ? ' active' : ''}`}
+                aria-pressed={filter === f.key}
+                onClick={() => setFilter(f.key)}
+              >
+                {f.label}
+              </button>
+            ))}
+            <span className="dc-count">
+              {filtered.length} payment{filtered.length !== 1 ? 's' : ''}
+            </span>
+            <span className="dc-paydate-note">~ estimated date &nbsp;|&nbsp; ✓ confirmed date</span>
+          </div>
+
+          {filtered.length === 0 && events.length > 0 && (
+            <p className="divcal-agenda-empty">No payments match this date filter.</p>
+          )}
+
+          {events.length === 0 && (
+            <p className="divcal-agenda-empty">No dividend schedule found. Refresh dividend data or import holdings first.</p>
+          )}
+
+          <div className="divcal-agenda">
+            {agendaGroups.map((group) => {
+              const groupDate = dateFromIso(group.date)
+              const fullDate = groupDate?.toLocaleDateString(undefined, {
+                weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+              }) || 'Pay date unavailable'
+              const shortMonth = groupDate?.toLocaleDateString(undefined, { month: 'short' }) || 'TBD'
+              const weekday = groupDate?.toLocaleDateString(undefined, { weekday: 'short' }) || 'Date'
+              return (
+                <section className="divcal-agenda-day" key={group.date || 'unscheduled'}>
+                  <header className="divcal-agenda-day-head">
+                    <time className="divcal-agenda-date" dateTime={group.date || undefined}>
+                      <span>{weekday}</span>
+                      <strong>{groupDate?.getDate() || '—'}</strong>
+                      <span>{shortMonth}</span>
+                    </time>
+                    <div className="divcal-agenda-day-title">
+                      <h2>{fullDate}</h2>
+                      <span>
+                        {group.events.length} payment{group.events.length !== 1 ? 's' : ''}
+                        {group.income > 0 ? ` · ${formatMoney(group.income)} portfolio income` : ''}
+                      </span>
+                    </div>
+                  </header>
+
+                  <div className="divcal-agenda-list">
+                    {group.events.map((ev, index) => {
+                      const paidStatus = getPaidStatus(ev)
+                      const paymentIncome = calendarPaymentIncome(ev)
+                      const description = String(ev.description || 'Dividend payment')
+                      const exDate = dateFromIso(ev.date)
+                      const exDateLabel = exDate?.toLocaleDateString(undefined, {
+                        month: 'short', day: 'numeric', year: 'numeric',
+                      }) || 'Not available'
+                      const isPast = Boolean(group.date && today && group.date < today)
+                      const statusKind = paidStatus
+                        ? 'paid'
+                        : isPast
+                          ? 'past'
+                          : ev.pay_estimated ? 'estimated' : 'confirmed'
+                      const statusLabel = paidStatus
+                        ? `✓ ${paidStatus}`
+                        : isPast
+                          ? 'Past date'
+                          : ev.pay_estimated ? '~ Estimated' : '✓ Confirmed'
+
+                      return (
+                        <article
+                          className="divcal-agenda-item"
+                          key={`${group.date || 'unscheduled'}-${ev.ticker}-${ev.date}-${index}`}
+                        >
+                          <div
+                            className="divcal-agenda-icon"
+                            style={{ background: `${ev.color || '#8899aa'}22`, color: ev.color || 'var(--text-soft)' }}
+                            aria-hidden="true"
+                          >
+                            {String(ev.ticker || '?').slice(0, 2)}
+                          </div>
+                          <div className="divcal-agenda-body">
+                            <div className="divcal-agenda-security">
+                              <strong>{ev.ticker}</strong>
+                              <span>{description}</span>
+                            </div>
+                            <div className="divcal-agenda-meta">
+                              <span>Ex-dividend <strong>{exDateLabel}</strong></span>
+                              {paymentIncome > 0 && <span>Portfolio income <strong>{formatMoney(paymentIncome)}</strong></span>}
+                              {ev.amount != null && <span><strong>{formatMoney(ev.amount)}</strong>/share</span>}
+                              {ev.freq_label && <span>{ev.freq_label}</span>}
+                            </div>
+                          </div>
+                          <span className={`divcal-agenda-status ${statusKind}`}>{statusLabel}</span>
+                        </article>
+                      )
+                    })}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
         </>
       )}
 
@@ -784,14 +829,19 @@ function DividendOptimization({ data, events, watchlistRows, candidateRows }) {
 
   if (!hasIncome) {
     return (
-      <div className="dc-opt-empty">
-        No dividend income estimates are available yet. Refresh dividend metadata or import annual income and payment amounts first.
+      <div className="dc-opt">
+        <DividendOptimizationHelp />
+        <div className="dc-opt-empty">
+          No dividend income estimates are available yet. Refresh dividend metadata or import annual income and payment amounts first.
+        </div>
       </div>
     )
   }
 
   return (
     <div className="dc-opt">
+      <DividendOptimizationHelp />
+
       <div className="dc-opt-stats">
         <OptStat label="Average monthly income" value={money(data.average)} />
         <OptStat label="Lowest month" value={`${data.lowest.label} ${money(data.lowest.income)}`} tone="low" />
@@ -814,6 +864,11 @@ function DividendOptimization({ data, events, watchlistRows, candidateRows }) {
                 <span className="dc-heat-month">{m.label}</span>
                 <span className="dc-heat-income">{money(m.income)}</span>
                 <span className="dc-heat-gap">{gap > 0 ? `${formatPct((gap / data.average) * 100)} below avg` : 'above avg'}</span>
+                {m.isCurrentBlended && (
+                  <span className="dc-heat-basis">
+                    {money(m.recordedIncome)} paid to date + {money(m.remainingIncome)} scheduled
+                  </span>
+                )}
               </div>
             )
           })}
@@ -887,9 +942,50 @@ function DividendOptimization({ data, events, watchlistRows, candidateRows }) {
       </section>
 
       <div className="dc-opt-footnote">
-        Projection uses {events.length} calendar event{events.length !== 1 ? 's' : ''}; confirmed and estimated pay dates are both included.
+        Current month uses paid-to-date income through today plus remaining scheduled payments for the active account. Future months use {events.length} calendar event{events.length !== 1 ? 's' : ''}; confirmed and estimated pay dates are both included.
       </div>
     </div>
+  )
+}
+
+function DividendOptimizationHelp() {
+  return (
+    <details className="dc-opt-help">
+      <summary>
+        <span aria-hidden="true">ⓘ</span>
+        <strong>What does Optimization show?</strong>
+        <small>How projections, shortfalls, and schedule-fit candidates are calculated</small>
+      </summary>
+      <div className="dc-opt-help-body">
+        <p>
+          Optimization is a <strong>dividend cash-flow timing tool</strong>. It estimates when your
+          current holdings will pay over the next 12 months and highlights months where projected
+          income falls below your portfolio&apos;s monthly average.
+        </p>
+        <div className="dc-opt-help-grid">
+          <div>
+            <strong>12-month projection</strong>
+            <span>The current month combines imported cash (or holding-level paid-to-date actuals when no cash import exists) with payments still scheduled for this account. Future months repeat current pay dates, then reconcile the schedule to estimated annual income.</span>
+          </div>
+          <div>
+            <strong>Monthly average and shortfall</strong>
+            <span>The average is projected annual income divided across 12 months. A shortfall is the amount a month would need to reach that average.</span>
+          </div>
+          <div>
+            <strong>Schedule-fit candidates</strong>
+            <span>Ranks known funds whose payment schedules overlap weak months and estimates the shares and capital needed to fill one modeled gap.</span>
+          </div>
+          <div>
+            <strong>Confirmed and estimated dates</strong>
+            <span>Both are included. Results can change when issuers confirm dates, distributions change, or your holdings change.</span>
+          </div>
+        </div>
+        <p className="dc-opt-help-warning">
+          <strong>Research only:</strong> this is not a buy/sell recommendation and does not evaluate
+          total return, fund quality, taxes, diversification, NAV erosion, or investment risk.
+        </p>
+      </div>
+    </details>
   )
 }
 

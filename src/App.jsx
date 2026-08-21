@@ -148,7 +148,9 @@ function ProfileSelector() {
         title={`Active portfolio: ${currentProfileName}`}
       >
         {visibleProfiles.map(p => (
-          <option key={`p-${p.id}`} value={`p:${p.id}`}>{p.name}</option>
+          <option key={`p-${p.id}`} value={`p:${p.id}`}>
+            {p.name}{p.is_user_owned ? '' : ' [Test / non-owned]'}
+          </option>
         ))}
         {visibleAggregates.length > 0 && (
           <optgroup label="Aggregates">
