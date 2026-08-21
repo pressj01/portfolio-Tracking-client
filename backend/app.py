@@ -27900,8 +27900,8 @@ def gains_losses_descriptions():
         """Returns (ticker, name, answered).
 
         An answer that simply has no name in it is a real miss and worth
-        remembering. A request that never got an answer â€” Yahoo's rate limiter,
-        a dropped connection â€” is not: caching that would blank a perfectly live
+        remembering. A request that never got an answer — Yahoo's rate limiter,
+        a dropped connection — is not: caching that would blank a perfectly live
         ticker for a month because one burst ran too fast.
         """
         try:
