@@ -2439,7 +2439,11 @@ export default function Dashboard() {
       <div className="page">
         <h1>Portfolio Dashboard</h1>
         <div className="card">
-          <p>No holdings yet. Go to <NavLink to="/import">Import</NavLink> to upload your spreadsheet, or <NavLink to="/holdings">Manage Holdings</NavLink> to add manually.</p>
+          <p>
+            No holdings yet. Open <NavLink to="/import">Broker Import</NavLink> and import a current
+            Positions file for this account first, then transaction history if you want dividends,
+            DRIP, and lots. Or <NavLink to="/holdings">add holdings manually</NavLink>.
+          </p>
         </div>
       </div>
     )

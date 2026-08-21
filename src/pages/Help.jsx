@@ -177,7 +177,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions, All Accounts Positions, &amp; Transactions), E*TRADE (Positions &amp; Transactions), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Starts on Broker Import: positions first, then transactions, then refresh. Supports Schwab (Positions, optional All Accounts Positions, and Transactions), E*TRADE, Fidelity, Robinhood, and Shear Group. Generic Positions/Transactions and Snowball (migration only) have their own tabs. Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Daily inbox of follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Data, Dividend, Options, NAV / CEF, Risk, Rebalance, Tax, etc.). Refresh Data runs a market refresh in place.</li>
@@ -198,24 +198,34 @@ function Overview() {
 function ImportHelp() {
   return (
     <div>
-      <h2>Import Brokerage Positions, Transactions, and Snowball Data</h2>
+      <h2>Import</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The <strong>Import Brokerage Positions and Snowball Data</strong> page lets you bulk-load holdings into a portfolio from an Excel or CSV file.
-        Use <strong>Generic Positions</strong> for flexible spreadsheet uploads, <strong>Generic Transactions</strong> for broker-neutral history,
-        or <strong>Brokerage &amp; Export Import</strong> for supported brokerage and app exports.
+        The Import page opens on the <strong>Broker Import</strong> tab. The tabs, left to right, are
+        <strong> Broker Import</strong>, <strong>Generic Positions</strong>, <strong>Generic Transactions</strong>,
+        and <strong>Snowball</strong>.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        On Broker Import, pick a broker and follow the checklist: <strong>Positions</strong> first, then
+        <strong> Transactions</strong>, then <strong>Refresh</strong>. Positions set current shares and cost basis.
+        Transactions add dividends, DRIP, and lots after that snapshot exists. If this portfolio has no
+        positions yet, a transaction import is blocked until you confirm that the file is complete history —
+        a partial history file will otherwise rebuild share counts from those rows alone.
+        <strong>Generic Positions</strong> and <strong>Generic Transactions</strong> are for spreadsheet uploads
+        that are not a broker export. The <strong>Snowball</strong> tab is only for migrating an old Snowball
+        export — skip it if you import from Schwab or another broker.
         Position imports support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
         while app-only fields (like DRIP toggles or pay dates you edited manually) are preserved unless the spreadsheet provides them.
       </p>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
-        <strong>Brokerage templates:</strong> The Generic Upload area also includes downloadable brokerage-position templates.
+        <strong>Brokerage templates:</strong> Broker Import and Generic Positions include downloadable brokerage-position templates.
         Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
         The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus generic holdings and generic transaction templates and a Snowball holdings migration template.
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
-        <strong>App export import:</strong> The <strong>Import Brokerage Positions and Snowball Data</strong> tab also includes
-        <strong> Portfolio Export (Holdings + Transactions)</strong>. Use it to round-trip a workbook exported from the app's Export page;
+        <strong>App export import:</strong> Broker Import also includes
+        <strong> Portfolio Export (Holdings + Transactions)</strong> under App export. Use it to round-trip a workbook exported from the app's Export page;
         the preview shows both the holdings sheets and the Transactions sheet before import.
       </div>
 
@@ -227,11 +237,9 @@ function ImportHelp() {
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
-        <strong>Remembering your format:</strong> The <strong>Brokerage &amp; Export Import</strong> tab's Format dropdown
-        opens on a disabled "Select a format..." placeholder — and the Preview button stays disabled — until you pick a
-        format and click <strong>Set as default</strong> next to the dropdown. After that, the tab opens on your saved
-        format every time you come back, so someone who only ever imports E*TRADE files doesn't have to reselect it on
-        every visit. <strong>Generic Transactions</strong> has its own tab and cannot be pinned as the brokerage default.
+        <strong>Remembering your format:</strong> Broker Import opens on the broker tagged on the selected portfolio,
+        or on the last format you pinned with <strong>Set as default</strong>. Preview stays disabled until a format
+        is chosen. <strong>Generic Transactions</strong> has its own tab and cannot be pinned as the brokerage default.
         The saved default lives in this browser's local storage, not the database, so it does not follow you to another
         device or installation.
       </div>
@@ -239,7 +247,7 @@ function ImportHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Brokerage Position Templates</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/brokerage-import-tab-overview.jpg" alt="Import Brokerage Positions and Snowball Data tab showing format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/brokerage-import-tab-overview.jpg" alt="Broker Import tab first, with Positions, Transactions, and Refresh steps, broker buttons, and Schwab This account versus All Accounts" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
@@ -248,20 +256,20 @@ function ImportHelp() {
         <li><strong>Fidelity (Positions) template</strong> — use this when preparing a Fidelity positions workbook with the exact columns the importer reads.</li>
         <li><strong>Robinhood Holdings reference</strong> — a CSV showing the fields read from the Robinhood Holdings PDF. The actual import still expects the PDF export.</li>
         <li><strong>Robinhood Transactions template</strong> — a CSV with the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.</li>
-        <li><strong>Snowball Holdings template</strong> — use this for a migration-style holdings snapshot when moving from Snowball into the app.</li>
+        <li><strong>Snowball Holdings template</strong> — on the Snowball tab, for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
         <li><strong>Generic Transactions template</strong> — use this broker-neutral XLSX for one-row-per-event BUY, SELL, DIVIDEND, and DRIP history.</li>
       </ul>
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/schwab-positions-import.jpg" alt="Charles Schwab Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+          <img src="./help-screenshots/import/schwab-positions-import.jpg" alt="Charles Schwab Positions import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/etrade-positions-import.jpg" alt="E*TRADE Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+          <img src="./help-screenshots/import/etrade-positions-import.jpg" alt="E*TRADE Positions import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
         <div style={{ flex: '1 1 30%', minWidth: '200px' }}>
-          <img src="./help-screenshots/import/fidelity-positions-import.jpg" alt="Fidelity Positions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+          <img src="./help-screenshots/import/fidelity-positions-import.jpg" alt="Fidelity Positions import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         </div>
       </div>
 
@@ -285,7 +293,7 @@ function ImportHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (All Accounts Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Schwab, go to <strong>Accounts &gt; Positions</strong>, switch the account selector to <strong>All Accounts</strong>, then export to CSV or Excel.</li>
-        <li>Set the format selector to <strong>Charles Schwab (All Accounts Positions)</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this format automatically unless you already chose the single-account Schwab Positions format. Schwab may use the All-Accounts filename even when the export contains only one account.</li>
+        <li>On Broker Import, choose <strong>Charles Schwab</strong>, stay on the <strong>Positions</strong> step, and click <strong>All Accounts</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this automatically unless you already chose <strong>This account</strong>. Schwab may use the All-Accounts filename even when the export contains only one account. There is no All-Accounts importer for transactions, and other brokers do not have one.</li>
         <li>The import lists every portfolio whose Broker Source is <strong>Charles Schwab</strong> (set on the Manage Portfolios page). Check the accounts you want this file to update. Unchecked portfolios are left alone. Use <strong>Select all</strong> or <strong>Select none</strong> to change the whole list at once.</li>
         <li>Preview splits the file into one block per Schwab account and matches each selected portfolio by name or masked account number. You can re-point a selected portfolio to a different account in the file before importing.</li>
         <li>Accounts in the file that are not mapped to a selected portfolio appear under <strong>Other accounts in this file</strong>. Skip them, point them at a portfolio, or create a new portfolio for them.</li>
@@ -293,21 +301,23 @@ function ImportHelp() {
         <li>This import can run from an aggregate view because the selected portfolio is not the import target.</li>
       </ul>
 
-      <h4 style={{ marginBottom: '0.4rem' }}>Snowball Holdings (Migration)</h4>
+      <h4 style={{ marginBottom: '0.4rem' }}>Snowball tab (migration only)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Use this when migrating from Snowball and you want to bring over a holdings snapshot, dividend metadata, and categories.</li>
-        <li>It keeps only the fields the app already supports and discards Snowball-only analytics columns.</li>
-        <li>For the most accurate broker-current holdings, use a broker Positions import instead of treating Snowball as the final source of truth.</li>
+        <li>Snowball is the last tab on the Import page, not a step on Broker Import. Open it only when moving an old Snowball export into this app.</li>
+        <li>On that tab, choose <strong>Holdings</strong>, <strong>Categories</strong>, or <strong>Transactions</strong>.</li>
+        <li>Skip the tab if you import from Schwab or another broker — those files already set holdings and history.</li>
+        <li>Holdings keeps only the fields the app already supports and discards Snowball-only analytics columns.</li>
+        <li>For the most accurate broker-current holdings, use Broker Import positions instead of treating Snowball as the final source of truth.</li>
       </ul>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
-          <li>Import a <strong>Positions</strong> file first (Schwab, E*TRADE, Fidelity, or Robinhood) to set accurate current holdings, share counts, and cost basis.</li>
-          <li>Then import <strong>Transaction History</strong> (Generic Transactions, Schwab Transactions, E*TRADE Transactions, Fidelity Transactions, Robinhood Transactions, or Snowball Transactions) for dividend tracking and realized gain records.</li>
-          <li>Run <strong>Refresh Prices &amp; Divs</strong> to update market data, dividend fields, and pay-date estimates.</li>
+          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab All-Accounts is an optional positions shortcut when one file should update several Schwab portfolios; it does not replace transaction imports, and other brokers do not have an All-Accounts importer.</li>
+          <li>Then import that same account&apos;s <strong>Transaction History</strong> for dividends, DRIP, lots, and realized gains. Do this after the positions snapshot so a partial history file cannot rebuild share counts.</li>
+          <li>Run <strong>Refresh Prices &amp; Divs</strong> last to update market data, dividend fields, and pay-date estimates.</li>
         </ol>
-        When a Positions import has been done first, transaction imports store history without overwriting your holdings data.
+        When a Positions import has been done first, transaction imports store history without overwriting your holdings data. Snowball is on its own tab and is not a step on this path.
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reimporting Old or Partial Files</h3>
@@ -315,7 +325,7 @@ function ImportHelp() {
         <li><strong>Transaction-history files are incremental.</strong> Reimporting an older transaction file skips duplicate BUY/SELL rows that already exist for the same ticker, date, shares, and price. New rows in a later export are added.</li>
         <li><strong>Dividend payments are deduped by ticker, account, and payment date.</strong> If the app previously created a refresh estimate for that date, an imported broker dividend replaces the estimate; otherwise the duplicate payment is skipped.</li>
         <li><strong>Broker Positions and Snowball Holdings imports are current snapshots.</strong> Existing tickers are updated, new tickers are inserted, and holdings missing from the imported snapshot can be removed as stale.</li>
-        <li><strong>Do not use a partial Positions file to add only new holdings.</strong> Because positions imports represent the full current account, a partial file can remove holdings that are not listed in the file. Use a complete current positions export, or use Generic Upload when you want an additive/update-style holdings merge.</li>
+        <li><strong>Do not use a partial Positions file to add only new holdings.</strong> Because positions imports represent the full current account, a partial file can remove holdings that are not listed in the file. Use a complete current positions export, or use Generic Positions when you want an additive/update-style holdings merge.</li>
         <li><strong>Reimporting an old Positions file can roll holdings back.</strong> It will update share counts, cost basis, values, and stale holdings to match that older file. Restore from the automatic backup if the snapshot was not the one you meant to apply.</li>
       </ul>
 
@@ -335,7 +345,7 @@ function ImportHelp() {
 
       <h4 style={{ marginBottom: '0.4rem' }}>Generic Transactions</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Select <strong>Generic Transactions</strong>, then download the XLSX template and replace its sample rows.</li>
+        <li>Open the <strong>Generic Transactions</strong> tab, then download the XLSX template and replace its sample rows.</li>
         <li>Required on every row: <strong>Date</strong>, <strong>Type</strong>, and <strong>Ticker</strong>.</li>
         <li>BUY, SELL, and DRIP rows also require <strong>Shares</strong> and <strong>Price Per Share</strong>. DIVIDEND rows require <strong>Dividend Amount</strong>.</li>
         <li>Supported types are BUY, SELL, DIVIDEND, and DRIP. Fees and Notes are optional.</li>
@@ -346,91 +356,91 @@ function ImportHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Schwab, go to <strong>Accounts &gt; History</strong>, set the date range, then export to CSV.</li>
-        <li>Set the format selector to <strong>Charles Schwab (Transactions)</strong>.</li>
+        <li>On Broker Import, choose <strong>Charles Schwab</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, DRIP reinvestment shares, cash dividends, reinvested dividends, capital gain distributions, return of capital, and dividend adjustments.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
         <li>DRIP reinvestments are tagged as <code>[DRIP]</code> buys.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/schwab-transactions-import.jpg" alt="Partial history warning and Charles Schwab Transactions format" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/schwab-transactions-import.jpg" alt="Charles Schwab Transactions import and partial history warning" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>E*TRADE (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, choose all transaction activity types, then download the XLSX or CSV.</li>
-        <li>Set the format selector to <strong>E*TRADE (Transactions)</strong>.</li>
+        <li>On Broker Import, choose <strong>E*TRADE</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY and SELL transactions, cash dividend payments, capital gain distributions, and DRIP reinvestment buys.</li>
         <li>Transfers, interest, and cash-only rows are ignored.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/etrade-transactions-import.jpg" alt="E*TRADE Transactions format selector" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/etrade-transactions-import.jpg" alt="E*TRADE Transactions import" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Fidelity, export the <strong>Transactions XLSX</strong> workbook for a single account.</li>
-        <li>Set the format selector to <strong>Fidelity (Transactions)</strong>.</li>
+        <li>On Broker Import, choose <strong>Fidelity</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, cash dividend receipts, and DRIP reinvestment rows.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
         <li>If the portfolio already has holdings from a positions import, the transaction import preserves those holdings and stores the Fidelity history for recordkeeping.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/fidelity-transactions-import.jpg" alt="Fidelity Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/fidelity-transactions-import.jpg" alt="Fidelity Transactions import drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Positions PDF)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Robinhood, download your <strong>Holdings PDF</strong> from the app or website.</li>
-        <li>Set the format selector to <strong>Robinhood (Positions PDF)</strong>.</li>
+        <li>On Broker Import, choose <strong>Robinhood</strong> and the <strong>Positions</strong> step.</li>
         <li>Imports: current positions with ticker, shares, and current value.</li>
         <li><strong>Note:</strong> Robinhood does not include cost basis in the Holdings PDF, so the current value is used as the initial cost basis. Update cost basis manually on the Holdings page or import Robinhood Transactions to build lot-level cost basis.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/robinhood-positions-import.jpg" alt="Robinhood Positions PDF format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/robinhood-positions-import.jpg" alt="Robinhood Positions PDF import drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Robinhood (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Robinhood, export your <strong>Activity CSV</strong>.</li>
-        <li>Set the format selector to <strong>Robinhood (Transactions)</strong>.</li>
+        <li>On Broker Import, choose <strong>Robinhood</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, cash dividends, manufactured dividends, capital gain distributions, and ACAT share transfers.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/robinhood-transactions-import.jpg" alt="Robinhood Transactions format selector and drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/robinhood-transactions-import.jpg" alt="Robinhood Transactions import drop zone" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball Transactions</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Set the format selector to <strong>Snowball Transactions</strong>.</li>
+        <li>Open the <strong>Snowball</strong> tab and choose <strong>Transactions</strong>. Do not use this if you already import from Schwab or another broker.</li>
         <li>Upload a <strong>single-account CSV export</strong>. Combined or merged exports are rejected.</li>
         <li>Imports: BUY, SELL, and DIVIDEND transactions. Stock splits are applied to pre-split lots automatically.</li>
-        <li>Snowball exports may not exactly match the broker's live positions — use Positions imports for accurate current holdings.</li>
+        <li>Snowball exports may not exactly match the broker's live positions — use Broker Import positions for accurate current holdings.</li>
       </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Portfolio Export (Holdings + Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Use the workbook exported from the <strong>Export</strong> page's <strong>Export Holdings with Transactions</strong> option.</li>
-        <li>Set the format selector to <strong>Portfolio Export (Holdings + Transactions)</strong>.</li>
+        <li>On Broker Import, open <strong>App export</strong> and choose <strong>Portfolio Export (Holdings + Transactions)</strong>.</li>
         <li>The preview shows the portfolio sheet(s) and the Transactions sheet together so you can confirm both before importing.</li>
         <li>Import restores the holdings sheets and transaction history from the same workbook in one pass.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/snowball-transactions-import.jpg" alt="Snowball Transactions format selector with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/snowball-transactions-import.jpg" alt="Snowball Transactions import with automatic backup notice" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Common Steps (All Transaction Formats)</h4>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2', marginBottom: '1rem' }}>
         <li>Select the correct portfolio from the navbar dropdown.</li>
-        <li>Open the <strong>Import Brokerage Positions and Snowball Data</strong> tab.</li>
-        <li>Choose the format from the dropdown and upload the file.</li>
+        <li>Open <strong>Broker Import</strong> (or <strong>Generic Transactions</strong> / <strong>Snowball</strong> if that is the source).</li>
+        <li>Pick the broker and the Transactions step (or the matching tab), then upload the file.</li>
         <li>Click <strong>Preview</strong> to parse and review the data before committing.</li>
         <li>Click <strong>Import into &lt;Portfolio&gt;</strong> to load the data.</li>
         <li>Duplicate transactions (same ticker, date, shares, price) are automatically skipped on re-import.</li>
@@ -457,7 +467,7 @@ function ImportHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Generic Positions</h3>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Upload tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/generic-upload-tab.jpg" alt="Generic Positions tab showing portfolio upload and watchlist import sections" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <p style={{ marginBottom: '0.75rem' }}>
@@ -472,7 +482,7 @@ function ImportHelp() {
           <strong>Select the correct portfolio</strong> from the navbar dropdown.
         </li>
         <li>
-          <strong>Click the "Generic Upload" tab.</strong>
+          <strong>Click the Generic Positions tab.</strong>
         </li>
         <li>
           <strong>(Optional) Download a template</strong> — click the download button that matches your import type.
@@ -554,7 +564,7 @@ function ImportHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/import/generic-upload-merge-mode-notice.jpg" alt="Generic Upload merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/import/generic-upload-merge-mode-notice.jpg" alt="Generic Positions merge mode notice and Merge Portfolio button" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
     </div>
   )
@@ -5391,7 +5401,7 @@ function ExportHelp() {
       <h2>Export</h2>
       <p style={{ marginBottom: '1rem' }}>
         The Export page lets you download your current portfolio data as an Excel or CSV file.
-        The exported format matches the Generic Upload template, and the combined workbook also includes
+        The exported format matches the Generic Positions template, and the combined workbook also includes
         a Transactions sheet so you can round-trip holdings and lot history from one file.
       </p>
 
@@ -5426,7 +5436,7 @@ function ExportHelp() {
       <p style={{ marginBottom: '0.75rem' }}>
         When the <strong>Aggregate</strong> portfolio is selected, the Excel export creates one sheet per
         sub-portfolio. The combined holdings + transactions export also keeps one sheet per portfolio and adds a Transactions sheet.
-        To reimport it later, use the <em>Generic Upload</em> tab with
+        To reimport it later, use the <em>Generic Positions</em> tab with
         <strong> "Import all tabs as separate portfolios"</strong> checked for the holdings-only workbook, or the
         <strong> Portfolio Export (Holdings + Transactions)</strong> format on the Import page for the combined workbook.
         The CSV export combines all portfolios into a single flat file.
@@ -5434,7 +5444,7 @@ function ExportHelp() {
 
       <div className="alert alert-info" style={{ marginTop: '1rem' }}>
         <strong>Tip:</strong> Export is a great way to back up your data before a major reimport or
-        before clearing a portfolio. The holdings-only Excel file is fully compatible with the Generic Upload importer,
+        before clearing a portfolio. The holdings-only Excel file is fully compatible with the Generic Positions importer,
         and the combined workbook is compatible with the Portfolio Export importer.
       </div>
     </div>

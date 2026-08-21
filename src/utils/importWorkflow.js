@@ -1,0 +1,211 @@
+// Broker Import is a checklist, not a format encyclopedia.
+// Positions snapshot first, then transactions, then refresh.
+// Schwab All-Accounts is an optional multi-account positions file, not a universal first step.
+// Snowball formats are a migration path only — they are not a workflow step.
+
+export const NO_FORMAT = ''
+
+export const IMPORT_BROKERS = [
+  {
+    id: 'schwab',
+    label: 'Charles Schwab',
+    source: 'schwab',
+    positionsFormat: 'schwab',
+    positionsMultiFormat: 'schwab_all_accounts',
+    transactionsFormat: 'schwab_transactions',
+  },
+  {
+    id: 'etrade',
+    label: 'E*TRADE',
+    source: 'etrade',
+    positionsFormat: 'etrade',
+    transactionsFormat: 'etrade_transactions',
+  },
+  {
+    id: 'fidelity',
+    label: 'Fidelity',
+    source: 'fidelity',
+    positionsFormat: 'fidelity',
+    transactionsFormat: 'fidelity_transactions',
+  },
+  {
+    id: 'robinhood',
+    label: 'Robinhood',
+    source: 'robinhood',
+    positionsFormat: 'robinhood',
+    transactionsFormat: 'robinhood_transactions',
+  },
+  {
+    id: 'shear_group',
+    label: 'Shear Group',
+    source: 'shear_group',
+    positionsFormat: 'shear_group',
+    transactionsFormat: 'shear_group_activity',
+  },
+]
+
+export const TXN_FORMATS = [
+  { value: 'schwab', label: 'Charles Schwab (Positions)' },
+  { value: 'schwab_all_accounts', label: 'Charles Schwab (All Accounts Positions)' },
+  { value: 'schwab_transactions', label: 'Charles Schwab (Transactions)' },
+  { value: 'etrade', label: 'E*Trade (Positions)' },
+  { value: 'etrade_transactions', label: 'E*Trade (Transactions)' },
+  { value: 'fidelity', label: 'Fidelity (Positions)' },
+  { value: 'fidelity_transactions', label: 'Fidelity (Transactions)' },
+  { value: 'robinhood', label: 'Robinhood (Positions PDF)' },
+  { value: 'robinhood_transactions', label: 'Robinhood (Transactions)' },
+  { value: 'shear_group', label: 'Shear Group (Positions)' },
+  { value: 'shear_group_activity', label: 'Shear Group (Activity)' },
+  { value: 'portfolio_export', label: 'Portfolio Export (Holdings + Transactions)' },
+  { value: 'generic_transactions', label: 'Generic Transactions' },
+  { value: 'snowball_holdings', label: 'Snowball Holdings (Migration)' },
+  { value: 'snowball_categories', label: 'Snowball Categories' },
+  { value: 'snowball', label: 'Snowball Transactions' },
+]
+
+export const POSITIONS_FORMATS = new Set([
+  'schwab',
+  'schwab_all_accounts',
+  'etrade',
+  'fidelity',
+  'robinhood',
+  'shear_group',
+  'snowball_holdings',
+])
+
+export const TRANSACTION_FORMATS = new Set([
+  'generic_transactions',
+  'snowball',
+  'schwab_transactions',
+  'etrade_transactions',
+  'fidelity_transactions',
+  'robinhood_transactions',
+  'shear_group_activity',
+])
+
+export const MULTI_ACCOUNT_FORMATS = new Set(['schwab_all_accounts'])
+
+export const SNOWBALL_FORMATS = new Set([
+  'snowball_holdings',
+  'snowball_categories',
+  'snowball',
+])
+
+export const IMPORT_STEPS = [
+  {
+    id: 'positions',
+    kicker: 'Step 1',
+    label: 'Positions',
+    detail: 'Current shares and cost basis for this account',
+  },
+  {
+    id: 'transactions',
+    kicker: 'Step 2',
+    label: 'Transactions',
+    detail: 'Dividends, DRIP, and lots — after positions',
+  },
+  {
+    id: 'refresh',
+    kicker: 'Step 3',
+    label: 'Refresh',
+    detail: 'Update prices and dividend fields',
+  },
+]
+
+const formatIndex = Object.fromEntries(TXN_FORMATS.map((item) => [item.value, item.label]))
+
+export const formatLabel = (value) => formatIndex[value] || value
+
+export const isPinnableFormat = (value) => (
+  value !== 'generic_transactions'
+  && !SNOWBALL_FORMATS.has(value)
+  && TXN_FORMATS.some((item) => item.value === value)
+)
+
+export function brokerById(brokerId) {
+  return IMPORT_BROKERS.find((broker) => broker.id === brokerId) || null
+}
+
+export function brokerIdFromSource(source) {
+  const normalized = String(source || '').trim().toLowerCase()
+  return IMPORT_BROKERS.find((broker) => broker.source === normalized)?.id || ''
+}
+
+export function describeWorkflow(format) {
+  const value = String(format || '').trim()
+  const broker = IMPORT_BROKERS.find((item) => (
+    value === item.positionsFormat
+    || value === item.positionsMultiFormat
+    || value === item.transactionsFormat
+  ))
+  if (broker) {
+    const role = value === broker.transactionsFormat ? 'transactions' : 'positions'
+    return {
+      brokerId: broker.id,
+      role,
+      schwabAllAccounts: value === broker.positionsMultiFormat,
+      kind: role,
+    }
+  }
+  if (SNOWBALL_FORMATS.has(value)) {
+    return { brokerId: '', role: 'migration', schwabAllAccounts: false, kind: 'migration' }
+  }
+  if (value === 'generic_transactions') {
+    return { brokerId: '', role: 'transactions', schwabAllAccounts: false, kind: 'generic' }
+  }
+  if (value === 'portfolio_export') {
+    return { brokerId: '', role: 'other', schwabAllAccounts: false, kind: 'other' }
+  }
+  return { brokerId: '', role: '', schwabAllAccounts: false, kind: '' }
+}
+
+export function formatForWorkflow({ brokerId, role, schwabAllAccounts = false } = {}) {
+  if (role === 'refresh' || role === 'other' || role === 'migration') return NO_FORMAT
+  const broker = brokerById(brokerId)
+  if (!broker) return NO_FORMAT
+  if (role === 'transactions') return broker.transactionsFormat
+  if (role === 'positions' && schwabAllAccounts && broker.positionsMultiFormat) {
+    return broker.positionsMultiFormat
+  }
+  if (role === 'positions') return broker.positionsFormat
+  return NO_FORMAT
+}
+
+export function needsPositionsSnapshotFirst(format) {
+  return TRANSACTION_FORMATS.has(String(format || '').trim())
+}
+
+export function completedWorkflowSteps(format, { navOnly = false } = {}) {
+  if (navOnly) return []
+  const value = String(format || '').trim()
+  if (value === 'portfolio_export') return ['positions', 'transactions']
+  const role = describeWorkflow(value).role
+  return role === 'positions' || role === 'transactions' ? [role] : []
+}
+
+export function formatImportDetail(detail = {}) {
+  const failed = detail.ok === false ? 'FAILED - ' : ''
+  const source = detail.account_label || detail.source_sheet || ''
+  const target = detail.profile_name || ''
+  const route = source && target && source !== target
+    ? `${source} -> ${target}`
+    : source || target || 'Import'
+  return `  ${failed}${route}: ${detail.message || ''}`
+}
+
+export function isPositionsFormat(format) {
+  return POSITIONS_FORMATS.has(String(format || '').trim())
+}
+
+export function isSnowballFormat(format) {
+  return SNOWBALL_FORMATS.has(String(format || '').trim())
+}
+
+export function workflowStepForFormat(format, currentStep) {
+  if (currentStep === 'refresh') return 'refresh'
+  if (isSnowballFormat(format)) return 'migration'
+  const role = describeWorkflow(format).role
+  if (role === 'positions' || role === 'transactions') return role
+  if (role === 'other' || role === 'migration') return currentStep || 'positions'
+  return currentStep || 'positions'
+}

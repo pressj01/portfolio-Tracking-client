@@ -1,9 +1,24 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react'
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { API_BASE } from '../config'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
+import ImportWorkflowPicker, { TransactionOrderWarning } from '../components/ImportWorkflowPicker'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney as formatDisplayMoney } from '../utils/money'
+import {
+  NO_FORMAT,
+  TXN_FORMATS,
+  completedWorkflowSteps,
+  describeWorkflow,
+  formatForWorkflow,
+  formatImportDetail,
+  formatLabel,
+  isPinnableFormat,
+  isSnowballFormat,
+  brokerIdFromSource,
+  needsPositionsSnapshotFirst,
+  workflowStepForFormat,
+} from '../utils/importWorkflow'
 import {
   applySchwabDestSelection,
   assignFileAccountToProfile,
@@ -32,37 +47,7 @@ const formatShares = (value) => (
   value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : blankValue
 )
 
-// Formats offered on the Brokerage & Export Import tab.
-const TXN_FORMATS = [
-  { value: 'portfolio_export', label: 'Portfolio Export (Holdings + Transactions)' },
-  { value: 'generic_transactions', label: 'Generic Transactions' },
-  { value: 'snowball_holdings', label: 'Snowball Holdings (Migration)' },
-  { value: 'snowball_categories', label: 'Snowball Categories' },
-  { value: 'snowball', label: 'Snowball Transactions' },
-  { value: 'schwab', label: 'Charles Schwab (Positions)' },
-  { value: 'schwab_all_accounts', label: 'Charles Schwab (All Accounts Positions)' },
-  { value: 'schwab_transactions', label: 'Charles Schwab (Transactions)' },
-  { value: 'etrade', label: 'E*Trade (Positions)' },
-  { value: 'etrade_transactions', label: 'E*Trade (Transactions)' },
-  { value: 'fidelity', label: 'Fidelity (Positions)' },
-  { value: 'fidelity_transactions', label: 'Fidelity (Transactions)' },
-  { value: 'robinhood', label: 'Robinhood (Positions PDF)' },
-  { value: 'robinhood_transactions', label: 'Robinhood (Transactions)' },
-  { value: 'shear_group', label: 'Shear Group (Positions)' },
-  { value: 'shear_group_activity', label: 'Shear Group (Activity)' },
-]
-
 const BROKER_FORMAT_KEY = 'portfolio_defaultBrokerImportFormat'
-
-// Until a default is pinned the dropdown sits on a placeholder, so an import
-// can never run under whichever format happened to be listed first.
-const NO_FORMAT = ''
-
-// Generic Transactions is reachable from its own tab, so pinning it as the
-// brokerage default would leave the two tabs fighting over the highlight.
-const isPinnableFormat = (value) => (
-  value !== 'generic_transactions' && TXN_FORMATS.some(f => f.value === value)
-)
 
 const readDefaultBrokerFormat = () => {
   try {
@@ -72,10 +57,6 @@ const readDefaultBrokerFormat = () => {
     return NO_FORMAT
   }
 }
-
-const formatLabel = (value) => (
-  TXN_FORMATS.find(f => f.value === value)?.label || value
-)
 
 function FileUpload({ onFileSelect, accept, file }) {
   const inputRef = useRef()
@@ -282,6 +263,33 @@ function SchwabDestinationPicker({
   )
 }
 
+function SnowballImportTypeSwitch({ format, onSelect }) {
+  const options = [
+    { value: 'snowball_holdings', label: 'Holdings' },
+    { value: 'snowball_categories', label: 'Categories' },
+    { value: 'snowball', label: 'Transactions' },
+  ]
+  return (
+    <div
+      className="alert alert-info"
+      style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}
+    >
+      <strong>Snowball file:</strong>
+      {options.map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          className={`btn ${format === item.value ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => onSelect(item.value)}
+          aria-pressed={format === item.value}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
   return (
     <div
@@ -311,9 +319,14 @@ function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
 
 export default function Import() {
   const pf = useProfileFetch()
-  const { isRefreshing: marketRefreshing, waitForMarketRefresh } = useMarketRefresh()
-  const { selection, profiles, isAggregate, refreshProfiles, currentProfileName } = useProfile()
-  const [activeTab, setActiveTab] = useState('generic')
+  const {
+    isRefreshing: marketRefreshing,
+    waitForMarketRefresh,
+    runMarketRefresh,
+    message: refreshMessage,
+  } = useMarketRefresh()
+  const { selection, profiles, profileId, isAggregate, refreshProfiles, currentProfileName } = useProfile()
+  const [activeTab, setActiveTab] = useState('txnHistory')
   const [file, setFile] = useState(null)
   const [sheetName, setSheetName] = useState('All Accounts')
   const [loading, setLoading] = useState(false)
@@ -324,6 +337,7 @@ export default function Import() {
   const [navSnapshotDate, setNavSnapshotDate] = useState(dateInputToday)
 
   const [hasData, setHasData] = useState(false)
+  const [hasPositions, setHasPositions] = useState(false)
 
   // Owner-format additional imports
   const [importWeekly, setImportWeekly] = useState(true)
@@ -343,6 +357,10 @@ export default function Import() {
   const [txnAccountMap, setTxnAccountMap] = useState({})
   // Portfolio id -> whether this All-Accounts import should write to it
   const [txnDestSelected, setTxnDestSelected] = useState({})
+  const [workflowStep, setWorkflowStep] = useState(() => workflowStepForFormat(readDefaultBrokerFormat(), 'positions'))
+  const [txnOrderAck, setTxnOrderAck] = useState(false)
+  const [completedSteps, setCompletedSteps] = useState({})
+  const [lastImportKind, setLastImportKind] = useState('')
 
   // Backup / restore state
   const [backups, setBackups] = useState([])
@@ -362,9 +380,29 @@ export default function Import() {
   const [wlResult, setWlResult] = useState(null)
   const [wlError, setWlError] = useState(null)
 
-  const loadBackups = () => {
-    pf('/api/import/backups').then(r => r.json()).then(d => setBackups(d.backups || [])).catch(() => {})
-  }
+  const loadBackups = useCallback((shouldApply) => {
+    pf('/api/import/backups')
+      .then(r => r.json())
+      .then(d => {
+        if (!shouldApply || shouldApply()) setBackups(d.backups || [])
+      })
+      .catch(() => {})
+  }, [pf])
+
+  const loadDataStats = useCallback(async (shouldApply) => {
+    try {
+      const response = await pf('/api/data/stats')
+      if (!response.ok) return null
+      const data = await response.json()
+      if (!shouldApply || shouldApply()) {
+        setHasData(data.holdings > 0)
+        setHasPositions((data.active_holdings ?? data.dividends) > 0)
+      }
+      return data
+    } catch {
+      return null
+    }
+  }, [pf])
 
   const checkCostBasis = async () => {
     setBasisChecking(true)
@@ -411,12 +449,27 @@ export default function Import() {
   }
 
   useEffect(() => {
-    pf('/api/data/stats')
-      .then(r => r.json())
-      .then(d => setHasData(d.holdings > 0))
-      .catch(() => {})
-    loadBackups()
-  }, [pf, selection])
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled) return
+      setHasData(false)
+      setHasPositions(false)
+      setCompletedSteps({})
+      setLastImportKind('')
+      setTxnOrderAck(false)
+      setTxnFile(null)
+      setTxnPreview(null)
+      setTxnAccountMap({})
+      setTxnDestSelected({})
+      setTxnNavOnly(false)
+      setResult(null)
+      setError(null)
+      setBackups([])
+      loadDataStats(() => !cancelled)
+      loadBackups(() => !cancelled)
+    })
+    return () => { cancelled = true }
+  }, [selection, loadBackups, loadDataStats])
 
   const txnIsMultiAccount = txnPreview?.format_type === 'positions_multi'
   const schwabDestinations = useMemo(
@@ -434,16 +487,18 @@ export default function Import() {
     : []
 
   useEffect(() => {
-    if (txnFormat !== 'schwab_all_accounts') {
-      setTxnDestSelected({})
-      return
-    }
+    if (txnFormat !== 'schwab_all_accounts') return undefined
+    let cancelled = false
     const destinations = schwabImportDestinations(profiles)
-    setTxnDestSelected((prev) => (
-      Object.keys(prev).length
-        ? mergeSchwabDestSelection(prev, destinations)
-        : defaultSchwabDestSelection(destinations)
-    ))
+    queueMicrotask(() => {
+      if (cancelled) return
+      setTxnDestSelected((prev) => (
+        Object.keys(prev).length
+          ? mergeSchwabDestSelection(prev, destinations)
+          : defaultSchwabDestSelection(destinations)
+      ))
+    })
+    return () => { cancelled = true }
   }, [txnFormat, profiles])
 
   const txnHasRows = txnPreview
@@ -458,12 +513,47 @@ export default function Import() {
         : txnPreview.transactions.length > 0)
     : false
   const txnAccountMismatch = Boolean(txnPreview?.account_match && txnPreview.account_match.matched === false)
+  const currentProfile = useMemo(
+    () => profiles.find(profile => profile.id === profileId) || null,
+    [profiles, profileId],
+  )
+  const workflow = useMemo(() => describeWorkflow(txnFormat), [txnFormat])
+  const txnNeedsPositionsAck = needsPositionsSnapshotFirst(txnFormat) && !hasPositions
+  const txnImportBlocked = txnNeedsPositionsAck && !txnOrderAck
 
   const resetState = () => {
     setFile(null)
     setResult(null)
     setError(null)
   }
+
+  const applyTxnFormat = useCallback((nextFormat, nextStep) => {
+    setTxnFormat(nextFormat)
+    setTxnPreview(null)
+    setTxnAccountMap({})
+    setTxnDestSelected({})
+    setTxnFile(null)
+    setTxnNavOnly(false)
+    setResult(null)
+    setError(null)
+    setTxnOrderAck(false)
+    setLastImportKind('')
+    if (nextStep) setWorkflowStep(nextStep)
+    else setWorkflowStep((current) => workflowStepForFormat(nextFormat, current))
+  }, [])
+
+  useEffect(() => {
+    if (txnFormat || isAggregate) return
+    const brokerId = brokerIdFromSource(currentProfile?.broker_source)
+    if (!brokerId) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) {
+        applyTxnFormat(formatForWorkflow({ brokerId, role: 'positions' }), 'positions')
+      }
+    })
+    return () => { cancelled = true }
+  }, [applyTxnFormat, currentProfile, isAggregate, txnFormat])
 
   const handleTabChange = (tab) => {
     setActiveTab(tab)
@@ -472,22 +562,59 @@ export default function Import() {
     setTxnPreview(null)
     setTxnAccountMap({})
     setTxnNavOnly(false)
+    if (tab === 'txnHistory') {
+      setWorkflowStep(workflowStepForFormat(txnFormat, 'positions'))
+    }
+  }
+
+  const selectWorkflowStep = (step) => {
+    setWorkflowStep(step)
+    setResult(null)
+    setError(null)
+    setLastImportKind('')
+    if (step === 'refresh') return
+    if (workflow.brokerId) {
+      applyTxnFormat(formatForWorkflow({
+        brokerId: workflow.brokerId,
+        role: step,
+        schwabAllAccounts: step === 'positions' && workflow.schwabAllAccounts,
+      }), step)
+      return
+    }
+    const brokerId = brokerIdFromSource(currentProfile?.broker_source)
+    if (brokerId) {
+      applyTxnFormat(formatForWorkflow({ brokerId, role: step }), step)
+    }
+  }
+
+  const selectImportBroker = (brokerId) => {
+    const role = workflowStep === 'transactions' ? 'transactions' : 'positions'
+    applyTxnFormat(formatForWorkflow({
+      brokerId,
+      role,
+      schwabAllAccounts: brokerId === 'schwab' && workflow.schwabAllAccounts && role === 'positions',
+    }), role)
+  }
+
+  const selectSchwabScope = (allAccounts) => {
+    applyTxnFormat(formatForWorkflow({
+      brokerId: 'schwab',
+      role: 'positions',
+      schwabAllAccounts: allAccounts,
+    }), 'positions')
   }
 
   const selectSchwabAllAccounts = () => {
     setActiveTab('txnHistory')
-    setTxnFormat('schwab_all_accounts')
-    setTxnPreview(null)
-    setTxnAccountMap({})
-    setTxnDestSelected({})
-    setTxnFile(null)
-    setResult(null)
-    setError(null)
+    applyTxnFormat('schwab_all_accounts', 'positions')
   }
 
   const maybeAutodetectSchwabAllAccounts = (file) => {
     if (file && shouldAutodetectSchwabAllAccounts(file.name, txnFormat)) {
-      setTxnFormat('schwab_all_accounts')
+      applyTxnFormat('schwab_all_accounts', 'positions')
+      // applyTxnFormat clears the previous upload; keep the file that triggered
+      // autodetection so the user can preview it without selecting it twice.
+      setTxnFile(file)
     }
   }
 
@@ -535,12 +662,23 @@ export default function Import() {
 
   const handleGenericTransactionsTab = () => {
     handleTabChange('txnHistory')
-    setTxnFormat('generic_transactions')
+    applyTxnFormat('generic_transactions', 'transactions')
+  }
+
+  const handleSnowballTab = () => {
+    handleTabChange('txnHistory')
+    if (!isSnowballFormat(txnFormat)) applyTxnFormat('snowball_holdings', 'migration')
   }
 
   const handleBrokerageImportTab = () => {
     handleTabChange('txnHistory')
-    if (txnFormat === 'generic_transactions') setTxnFormat(defaultTxnFormat)
+    if (txnFormat === 'generic_transactions' || isSnowballFormat(txnFormat)) {
+      const fallback = defaultTxnFormat || formatForWorkflow({
+        brokerId: brokerIdFromSource(currentProfile?.broker_source) || 'schwab',
+        role: 'positions',
+      })
+      applyTxnFormat(fallback, 'positions')
+    }
   }
 
   const pinDefaultTxnFormat = () => {
@@ -627,6 +765,7 @@ export default function Import() {
 
       setResult(results)
       clearAllDashboardCache()
+      await loadDataStats()
       loadBackups()
     } catch (e) {
       setError(e.message)
@@ -652,6 +791,7 @@ export default function Import() {
         refreshProfiles()
       }
       clearAllDashboardCache()
+      await loadDataStats()
       loadBackups()
     } catch (e) {
       setError(e.message)
@@ -741,9 +881,10 @@ export default function Import() {
           Cannot import while viewing the Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.
         </div>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
-          A Schwab All-Accounts positions file is the exception: choose which of your Schwab
-          accounts to import into, then each selected account is matched from the file, so the
-          aggregate selection is not used.
+          Positions, transactions, and Snowball files import into the selected account.
+          The exception is a Schwab All-Accounts Positions export: that one file can update
+          several Schwab portfolios because you map accounts after preview. There is no
+          All-Accounts importer for transactions or for other brokers.
         </p>
         <button className="btn btn-primary" style={{ marginTop: '0.75rem' }} onClick={selectSchwabAllAccounts}>
           Import Charles Schwab (All Accounts Positions)
@@ -786,6 +927,12 @@ export default function Import() {
 
       <div className="tabs">
         <button
+          className={`tab ${activeTab === 'txnHistory' && txnFormat !== 'generic_transactions' && !isSnowballFormat(txnFormat) ? 'active' : ''}`}
+          onClick={handleBrokerageImportTab}
+        >
+          Broker Import
+        </button>
+        <button
           className={`tab ${activeTab === 'generic' ? 'active' : ''}`}
           onClick={() => handleTabChange('generic')}
           disabled={isAggregate}
@@ -802,10 +949,12 @@ export default function Import() {
           Generic Transactions
         </button>
         <button
-          className={`tab ${activeTab === 'txnHistory' && txnFormat !== 'generic_transactions' ? 'active' : ''}`}
-          onClick={handleBrokerageImportTab}
+          className={`tab ${activeTab === 'txnHistory' && isSnowballFormat(txnFormat) ? 'active' : ''}`}
+          onClick={handleSnowballTab}
+          disabled={isAggregate}
+          title={isAggregate ? 'Select a specific portfolio to import Snowball data' : undefined}
         >
-          Brokerage &amp; Export Import
+          Snowball
         </button>
       </div>
 
@@ -1029,46 +1178,51 @@ export default function Import() {
           <h2>
             {txnFormat === 'generic_transactions'
               ? 'Import Generic Transactions'
-              : 'Import Brokerage Positions, Transactions, and Snowball Data'}
+              : isSnowballFormat(txnFormat)
+                ? 'Import Snowball (Migration)'
+                : 'Broker Import'}
           </h2>
-          {txnFormat !== 'generic_transactions' && (
-            <details
-              className="alert alert-info"
-              style={{ marginBottom: '1rem' }}
-            >
-              <summary style={{ cursor: 'pointer', fontWeight: 600, color: 'var(--accent-bright)' }}>
-                How to import brokerage files <span style={{ fontWeight: 400 }}>(positions first, transactions second)</span>
-              </summary>
-              <div style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
-                <ol style={{ paddingLeft: '1.5rem', margin: 0, lineHeight: 1.65 }}>
-                  <li>
-                    <strong>Import a complete, current Positions export first.</strong> Choose your broker&apos;s
-                    <em> Positions</em> format each time you want to update the account. A positions file is a snapshot
-                    of what you own today, so it updates shares, cost basis, and current values.
-                  </li>
-                  <li>
-                    <strong>Use a Transactions export only for account history.</strong> Transaction files record
-                    individual buys, sells, dividends, and DRIP activity for dividend tracking and realized gains.
-                    A DRIP row is recorded as a reinvested buy. After a Positions import, the positions snapshot
-                    remains authoritative, so transaction imports keep the DRIP history without changing the current
-                    share count.
-                  </li>
-                  <li>
-                    <strong>Then import new or overlapping transaction history if you need it.</strong> Start after
-                    your last import when possible; overlapping transactions are checked for duplicates. A transaction
-                    file can calculate positions only when there is no positions snapshot, and then it needs the
-                    account&apos;s complete history. Preview both files before importing, and use one brokerage account per file
-                    unless you are using <strong>Charles Schwab (All Accounts Positions)</strong>, which lists your Schwab
-                    portfolios so you can choose which ones to import into from one All-Accounts export.
-                  </li>
-                </ol>
-                <p style={{ margin: '0.75rem 0 0' }}>
-                  <strong>Quick rule:</strong> Positions files tell the app <em>what you own now</em>; transaction files
-                  tell it <em>how the activity happened</em>. If you only want to add or update positions, use a complete
-                  Positions export—not a partial transaction file.
-                </p>
-              </div>
-            </details>
+          {isSnowballFormat(txnFormat) && (
+            <>
+              <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
+                Use this tab only when moving an old Snowball portfolio into the app.
+                If you import from Schwab or another broker, stay on <strong>Broker Import</strong> —
+                you do not need Snowball.
+              </p>
+              <SnowballImportTypeSwitch
+                format={txnFormat}
+                onSelect={(value) => applyTxnFormat(value, 'migration')}
+              />
+            </>
+          )}
+          {txnFormat !== 'generic_transactions' && !isSnowballFormat(txnFormat) && (
+            <ImportWorkflowPicker
+              format={txnFormat}
+              step={workflowStep}
+              workflow={workflow}
+              completedSteps={completedSteps}
+              hasPositions={hasPositions}
+              currentProfileName={currentProfileName}
+              isAggregate={isAggregate}
+              txnOrderAck={txnOrderAck}
+              onTxnOrderAckChange={setTxnOrderAck}
+              onSelectStep={selectWorkflowStep}
+              onSelectBroker={selectImportBroker}
+              onSelectSchwabScope={selectSchwabScope}
+              onSelectOtherFormat={(value) => applyTxnFormat(value, workflowStepForFormat(value, 'positions'))}
+              onRefresh={async () => {
+                setError(null)
+                try {
+                  await runMarketRefresh({ statusMessage: 'Updating prices & dividends...' })
+                  setCompletedSteps((prev) => ({ ...prev, refresh: true }))
+                  setResult(['Prices and dividend fields refreshed.'])
+                } catch (e) {
+                  setError(e.message)
+                }
+              }}
+              refreshing={marketRefreshing}
+              refreshMessage={refreshMessage}
+            />
           )}
           {txnFormat === 'generic_transactions' && (
             <GenericImportTypeSwitch
@@ -1076,13 +1230,24 @@ export default function Import() {
               onPositions={() => handleTabChange('generic')}
             />
           )}
+          {(txnFormat === 'generic_transactions' || isSnowballFormat(txnFormat)) && (
+            <TransactionOrderWarning
+              format={txnFormat}
+              hasPositions={hasPositions}
+              currentProfileName={currentProfileName}
+              txnOrderAck={txnOrderAck}
+              onTxnOrderAckChange={setTxnOrderAck}
+            />
+          )}
+          {(txnFormat === 'generic_transactions' || workflowStep !== 'refresh') && (
+          <>
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             {txnFormat === 'portfolio_export'
               ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
             : txnFormat === 'generic_transactions'
               ? <>Import broker-neutral transaction history from the app's <strong>Generic Transactions XLSX or CSV</strong> format. BUY, SELL, DIVIDEND, and DRIP rows use the same preview, duplicate protection, position rollup, dividend tracking, and realized-gain workflow as broker transaction imports.</>
             : txnFormat === 'snowball_categories'
-              ? <>Import unique category names from a Snowball <strong>Holdings CSV or XLSX</strong>. Existing categories are skipped; this does not import holdings, ticker assignments, or sub-categories.</>
+              ? <>Import categories, slash-delimited sub-categories, and ticker assignments from a Snowball <strong>Holdings CSV or XLSX</strong>. Existing assignments are preserved; position values and transactions are not imported.</>
             : txnFormat === 'schwab'
               ? <>Import current positions from a Schwab <strong>Positions CSV or XLSX</strong> export. In Schwab, go to Accounts {'>'} Positions, then export to CSV or Excel. This sets holdings, cost basis, and current prices directly.</>
             : txnFormat === 'schwab_all_accounts'
@@ -1260,37 +1425,42 @@ export default function Import() {
             </div>
           )}
 
-          <div className="form-group" style={{ marginBottom: '1rem' }}>
-            <label>Format</label>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <select
-                value={txnFormat}
-                onChange={(e) => { setTxnFormat(e.target.value); setTxnPreview(null); setTxnAccountMap({}); setTxnDestSelected({}); setTxnFile(null); setResult(null); setError(null) }}
-                style={{ width: '250px' }}
-                disabled={isAggregate}
-              >
-                <option value={NO_FORMAT} disabled>Select a format...</option>
-                {TXN_FORMATS.filter(f => !isAggregate || f.value === 'schwab_all_accounts').map(f => (
-                  <option key={f.value} value={f.value}>{f.label}</option>
-                ))}
-              </select>
-              {!isPinnableFormat(txnFormat) ? (
-                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-                  {defaultTxnFormat
-                    ? `Default: ${formatLabel(defaultTxnFormat)}`
-                    : 'Pick a format to continue'}
-                </span>
-              ) : txnFormat === defaultTxnFormat ? (
-                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-                  This tab opens here by default
-                </span>
-              ) : (
-                <button className="btn btn-secondary" onClick={pinDefaultTxnFormat}>
-                  Set as default
-                </button>
-              )}
+          {txnFormat !== 'generic_transactions' && workflowStep !== 'refresh' && !isSnowballFormat(txnFormat) && (
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label>Format</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                <select
+                  value={txnFormat}
+                  onChange={(e) => applyTxnFormat(e.target.value)}
+                  style={{ width: '250px' }}
+                  disabled={isAggregate}
+                >
+                  <option value={NO_FORMAT} disabled>Select a format...</option>
+                  {TXN_FORMATS.filter(f => (
+                    (!isAggregate || f.value === 'schwab_all_accounts')
+                    && (workflowStep === 'migration' || !isSnowballFormat(f.value))
+                  )).map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </select>
+                {!isPinnableFormat(txnFormat) ? (
+                  <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                    {defaultTxnFormat
+                      ? `Default: ${formatLabel(defaultTxnFormat)}`
+                      : 'Pick a broker above to continue'}
+                  </span>
+                ) : txnFormat === defaultTxnFormat ? (
+                  <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+                    This tab opens here by default
+                  </span>
+                ) : (
+                  <button className="btn btn-secondary" onClick={pinDefaultTxnFormat}>
+                    Set as default
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
+          )}
 
           {txnFormat === 'schwab_all_accounts' && (
             <SchwabDestinationPicker
@@ -1311,6 +1481,7 @@ export default function Import() {
               setTxnFile(f)
               setTxnPreview(null)
               setTxnAccountMap({})
+              setTxnNavOnly(false)
               setResult(null)
               setError(null)
               maybeAutodetectSchwabAllAccounts(f)
@@ -1363,7 +1534,7 @@ export default function Import() {
             {txnPreview && (
               <button
                 className="btn btn-primary"
-                disabled={txnImporting || marketRefreshing || waitingForRefresh || !txnHasRows || txnAccountMismatch}
+                disabled={txnImporting || marketRefreshing || waitingForRefresh || !txnHasRows || txnAccountMismatch || txnImportBlocked}
                 onClick={async () => {
                   setTxnImporting(true)
                   setError(null)
@@ -1379,17 +1550,26 @@ export default function Import() {
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
                     const data = await res.json()
                     if (!res.ok) throw new Error(data.error || 'Import failed')
+                    const completedKinds = completedWorkflowSteps(txnFormat, { navOnly: txnNavOnly })
+                    const nextKind = completedKinds.includes('transactions')
+                      ? 'transactions'
+                      : completedKinds[0] || ''
+                    setLastImportKind(nextKind)
+                    setCompletedSteps((prev) => ({
+                      ...prev,
+                      ...Object.fromEntries(completedKinds.map((kind) => [kind, true])),
+                    }))
                     setResult([
                       data.message,
-                      ...(data.details || []).map(d => (
-                        `  ${d.ok ? '' : 'FAILED - '}${d.account_label} -> ${d.profile_name}: ${d.message}`
-                      )),
+                      ...(data.details || []).map(formatImportDetail),
                     ])
                     setTxnPreview(null)
                     setTxnAccountMap({})
                     setTxnFile(null)
+                    setTxnNavOnly(false)
                     if (data.created_profiles?.length) refreshProfiles()
                     clearAllDashboardCache()
+                    await loadDataStats()
                     loadBackups()
                   } catch (e) {
                     setError(e.message)
@@ -1779,6 +1959,8 @@ export default function Import() {
               )}
             </div>
           )}
+          </>
+          )}
         </div>
       )}
 
@@ -1791,6 +1973,20 @@ export default function Import() {
           {result.map((msg, i) => (
             <div key={i}>{msg}</div>
           ))}
+          {activeTab === 'txnHistory' && lastImportKind === 'positions' && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => selectWorkflowStep('transactions')}>
+                Next: import transactions
+              </button>
+            </div>
+          )}
+          {activeTab === 'txnHistory' && lastImportKind === 'transactions' && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => selectWorkflowStep('refresh')}>
+                Next: refresh prices
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1996,6 +2192,7 @@ export default function Import() {
                           const data = await res.json()
                           if (!res.ok) throw new Error(data.error || 'Restore failed')
                           setResult([data.message])
+                          await loadDataStats()
                         } catch (e) {
                           setError(e.message)
                         } finally {

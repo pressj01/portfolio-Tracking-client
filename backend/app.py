@@ -23006,7 +23006,12 @@ def data_stats():
         f"SELECT COUNT(*) as c FROM income_tracking WHERE profile_id IN ({placeholders})", pids
     ).fetchone()["c"]
     conn.close()
-    return jsonify({"holdings": holdings, "dividends": dividends, "income_tracking": income})
+    return jsonify({
+        "holdings": holdings,
+        "active_holdings": dividends,
+        "dividends": dividends,
+        "income_tracking": income,
+    })
 
 
 def _nav_benchmark_overrides():
