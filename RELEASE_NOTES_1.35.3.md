@@ -1,4 +1,4 @@
-# Portfolio Tracking Client v1.36.0
+# Portfolio Tracking Client v1.35.3
 
 Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Mac.
 
@@ -46,4 +46,4 @@ GitHub Actions produces installers from this release tag:
 - **macOS Intel:** `.dmg` installer (x64)
 - **macOS Apple Silicon:** `.dmg` installer (arm64)
 
-**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.35.2...v1.36.0
+**Full Changelog**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.35.2...v1.35.3
