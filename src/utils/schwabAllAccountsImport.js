@@ -9,6 +9,11 @@ export const isOtherBrokerSource = (value) => {
   return Boolean(broker) && broker !== 'schwab'
 }
 
+export const shouldAutodetectSchwabAllAccounts = (fileName, selectedFormat) => (
+  selectedFormat !== 'schwab'
+  && /all[-_\s]?accounts/i.test(String(fileName || ''))
+)
+
 const profileId = (profile) => String(profile?.id)
 
 export const schwabImportDestinations = (profiles) => {

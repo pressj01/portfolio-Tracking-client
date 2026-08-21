@@ -8,6 +8,7 @@ import {
   fileAccountForProfile,
   leftoverFileAccounts,
   mergeSchwabDestSelection,
+  shouldAutodetectSchwabAllAccounts,
   schwabImportDestinations,
 } from './schwabAllAccountsImport.js'
 
@@ -19,6 +20,13 @@ const profiles = [
   { id: 5, name: 'Jim Fidelity', broker_source: 'fidelity' },
   { id: 6, name: 'Untagged', broker_source: '' },
 ]
+
+test('does not override the single-account Schwab format for an All-Accounts filename', () => {
+  const name = 'All-Accounts-Positions-2026-08-21-141808.csv'
+  assert.equal(shouldAutodetectSchwabAllAccounts(name, 'schwab'), false)
+  assert.equal(shouldAutodetectSchwabAllAccounts(name, ''), true)
+  assert.equal(shouldAutodetectSchwabAllAccounts(name, 'etrade'), true)
+})
 
 test('lists Schwab portfolios, not other brokers, untagged accounts, or Owner rollup', () => {
   const destinations = schwabImportDestinations(profiles)

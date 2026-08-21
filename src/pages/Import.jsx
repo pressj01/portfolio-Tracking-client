@@ -12,6 +12,7 @@ import {
   isSchwabBrokerSource,
   leftoverFileAccounts,
   mergeSchwabDestSelection,
+  shouldAutodetectSchwabAllAccounts,
   schwabImportDestinations,
 } from '../utils/schwabAllAccountsImport'
 
@@ -485,7 +486,7 @@ export default function Import() {
   }
 
   const maybeAutodetectSchwabAllAccounts = (file) => {
-    if (file && /all[-_\s]?accounts/i.test(file.name)) {
+    if (file && shouldAutodetectSchwabAllAccounts(file.name, txnFormat)) {
       setTxnFormat('schwab_all_accounts')
     }
   }

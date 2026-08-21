@@ -285,7 +285,7 @@ function ImportHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (All Accounts Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Schwab, go to <strong>Accounts &gt; Positions</strong>, switch the account selector to <strong>All Accounts</strong>, then export to CSV or Excel.</li>
-        <li>Set the format selector to <strong>Charles Schwab (All Accounts Positions)</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this format automatically.</li>
+        <li>Set the format selector to <strong>Charles Schwab (All Accounts Positions)</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this format automatically unless you already chose the single-account Schwab Positions format. Schwab may use the All-Accounts filename even when the export contains only one account.</li>
         <li>The import lists every portfolio whose Broker Source is <strong>Charles Schwab</strong> (set on the Manage Portfolios page). Check the accounts you want this file to update. Unchecked portfolios are left alone. Use <strong>Select all</strong> or <strong>Select none</strong> to change the whole list at once.</li>
         <li>Preview splits the file into one block per Schwab account and matches each selected portfolio by name or masked account number. You can re-point a selected portfolio to a different account in the file before importing.</li>
         <li>Accounts in the file that are not mapped to a selected portfolio appear under <strong>Other accounts in this file</strong>. Skip them, point them at a portfolio, or create a new portfolio for them.</li>

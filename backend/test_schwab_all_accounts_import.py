@@ -212,6 +212,24 @@ class SchwabAllAccountsParserTest(unittest.TestCase):
                 parse_schwab_csv(str(path), path.name)
         self.assertIn("All Accounts Positions", str(ctx.exception))
 
+    def test_single_account_parser_accepts_one_account_all_accounts_export(self):
+        content = build_export([
+            ("Roth_IRA ...995", [
+                position_row("SPYI", 10, 50.0, 54.0),
+                cash_row(75.22),
+                total_row(615.22),
+            ]),
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "All-Accounts-Positions-2026-08-21-141808.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_schwab_csv(str(path), path.name)
+
+        self.assertEqual(result["format_type"], "positions")
+        self.assertEqual(result["summary"]["holdings"], 1)
+        self.assertEqual(result["positions"][0]["ticker"], "SPYI")
+        self.assertEqual(result["summary"]["account_value"], 615.22)
+
     def test_merges_split_lots_and_comma_quantities(self):
         lots = (
             '"KYLD","KURV HIGH INCOME ETF","112,967","$23.66","21.15","21.15","0.00","0%",'

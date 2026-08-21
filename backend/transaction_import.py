@@ -848,9 +848,6 @@ def _schwab_all_accounts_as_of(rows):
     return ""
 
 
-_SCHWAB_ALL_ACCOUNTS_TITLE_RE = re.compile(r"all[-\s]?accounts", re.I)
-
-
 def _schwab_account_blocks(rows):
     """Return the account blocks that actually carry a positions table.
 
@@ -869,15 +866,31 @@ def _schwab_account_blocks(rows):
     return blocks
 
 
-def _schwab_looks_like_all_accounts(rows):
-    """True when this is Schwab's stacked All-Accounts positions export."""
-    for row in rows[:8]:
-        if not row:
+def _schwab_position_table_count(rows):
+    """Count distinct Schwab position headers, even if an account label is odd."""
+    count = 0
+    required = {"Symbol", "Qty (Quantity)"}
+    for row in rows:
+        if not _row_has_values(row):
             continue
-        first = str(row[0] or "").strip()
-        if _SCHWAB_FILE_TITLE_RE.match(first) and _SCHWAB_ALL_ACCOUNTS_TITLE_RE.search(first):
-            return True
-    return len(_schwab_account_blocks(rows)) > 1
+        header = _canonical_header(row, _SCHWAB_POSITION_ALIASES)
+        if required.issubset({column for column in header if column}):
+            count += 1
+    return count
+
+
+def _schwab_looks_like_all_accounts(rows):
+    """True only when the export actually contains multiple account tables.
+
+    Schwab names an export ``All-Accounts-Positions-...`` and gives it an
+    All-Accounts title even when the customer has only one account. That file
+    is safe for the single-account importer; rejecting by title alone prevents
+    a valid import.
+    """
+    return (
+        len(_schwab_account_blocks(rows)) > 1
+        or _schwab_position_table_count(rows) > 1
+    )
 
 
 def parse_schwab_all_accounts_csv(file_path, filename):
