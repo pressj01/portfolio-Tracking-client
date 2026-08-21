@@ -48,7 +48,13 @@ export function useColumnLayout({
   // the screen, not whatever data happens to be loaded.
   const [defaults] = useState(() => resolveDefaultLayout(defaultLayout, allKeys))
   const [layout, setLayout] = useState(() => {
-    const stored = readStored(storageKey, migrate) || defaults
+    // Only a layout the user actually saved needs adopting. The defaults are
+    // written against the current column list, so running the adoption over
+    // them would insert a key into an order that describes nothing yet and
+    // hoist the newest column to the front of the table for everyone who has
+    // never customised it.
+    const stored = readStored(storageKey, migrate)
+    if (!stored) return defaults
     return adoptNewKeys ? (adoptNewKeys(stored) || stored) : stored
   })
   const [dragKey, setDragKey] = useState(null)

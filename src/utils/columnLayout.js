@@ -63,6 +63,10 @@ export function orderKeys(allKeys, savedOrder = []) {
 // stay where the user put them.
 export function insertMissingKeysAfter(layout, insertions = []) {
   const order = [...(layout?.order || [])]
+  // An empty order means "definition order", which already puts a new column
+  // where its definition says. Inserting into it would turn that into a partial
+  // explicit order whose only entry is the new key — first place in the table.
+  if (!order.length) return layout
   let changed = false
   for (const item of insertions) {
     const key = item?.key

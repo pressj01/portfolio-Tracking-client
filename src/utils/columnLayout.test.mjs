@@ -111,6 +111,19 @@ test('insertMissingKeysAfter parks new columns next to a related one', () => {
   ])
 })
 
+test('insertMissingKeysAfter leaves an uncustomised layout alone', () => {
+  // An empty order means "definition order". Inserting into it would make the
+  // new column the only ordered key, which resolveColumns then renders first —
+  // a column added in release 2 jumping ahead of the ticker it describes.
+  const layout = { order: [], hidden: [] }
+  const next = insertMissingKeysAfter(layout, [{ key: 'description', after: 'ticker' }])
+
+  assert.equal(next, layout)
+  assert.deepEqual(
+    resolveColumns(cols, next).ordered.map(col => col.key), ['a', 'b', 'c', 'd'],
+  )
+})
+
 test('insertMissingKeysAfter leaves a user-placed new column where it is', () => {
   const layout = {
     order: ['ticker', 'price_return_pct', 'gain_or_loss'],

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
@@ -7,6 +7,7 @@ import { formatMoney, formatMoneyWhole } from '../utils/money'
 import { AccountValueCard } from '../components/AccountReconciliation'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
+import { insertMissingKeysAfter } from '../utils/columnLayout'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -76,6 +77,7 @@ const UNREALIZED_COLS = [
 
 const REALIZED_COLS = [
   { key: 'ticker', label: 'Ticker', locked: true, tip: 'Stock or ETF ticker symbol' },
+  { key: 'description', label: 'Description', tip: 'Full name of the holding' },
   { key: 'sell_date', label: 'Sell Date', sortKey: 'sell_date_sort', tip: 'Date the shares were sold — a grouped row shows the range from first to last sell' },
   { key: 'buy_price', label: 'Buy Price', tip: 'Price per share when originally purchased', fmt, numeric: true },
   { key: 'sell_price', label: 'Sell Price', tip: 'Price per share when sold', fmt, numeric: true },
@@ -125,6 +127,12 @@ export default function GainsLosses({ embedded = false }) {
   const [customStart, setCustomStart] = useState(initialPerformanceRange.start)
   const [customEnd, setCustomEnd] = useState(initialPerformanceRange.end)
 
+  // Ticker -> name for closed positions the summary could not name locally.
+  // requestedNames remembers what has already been asked for, so a ticker Yahoo
+  // cannot name either (a delisted symbol) is not re-requested on every render.
+  const [resolvedNames, setResolvedNames] = useState({})
+  const requestedNames = useRef(new Set())
+
   const [tab, setTab] = useState('unrealized')
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(false)
@@ -167,6 +175,51 @@ export default function GainsLosses({ embedded = false }) {
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [categories, subcategories, selection, basisMode, pf])
+
+  // Names for sold-out tickers are fetched after the summary lands, never with
+  // it: the lookup goes out to Yahoo and the table's numbers must not wait on
+  // it. The server caches every answer, so this costs one round-trip per ticker
+  // for the life of the database, not one per visit.
+  useEffect(() => {
+    if (!data) return undefined
+    const missing = []
+    const seen = new Set()
+    const collect = rows => (rows || []).forEach(row => {
+      const sym = String(row.ticker || '').trim().toUpperCase()
+      if (!sym || seen.has(sym)) return
+      seen.add(sym)
+      if (!row.description && !requestedNames.current.has(sym)) missing.push(sym)
+    })
+    collect(data.unrealized)
+    collect(data.realized)
+    collect(data.combined)
+    if (!missing.length) return undefined
+    missing.forEach(sym => requestedNames.current.add(sym))
+
+    let active = true
+    const run = async () => {
+      for (let i = 0; i < missing.length && active; i += 100) {
+        try {
+          const res = await pf('/api/gains-losses/descriptions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tickers: missing.slice(i, i + 100) }),
+          })
+          const payload = await res.json()
+          if (!active) return
+          if (payload?.descriptions && Object.keys(payload.descriptions).length) {
+            setResolvedNames(prev => ({ ...prev, ...payload.descriptions }))
+          }
+        } catch {
+          // A name is a nicety; the table already rendered every number. Stop
+          // rather than walking the remaining chunks into the same failure.
+          break
+        }
+      }
+    }
+    run()
+    return () => { active = false }
+  }, [data, pf])
 
   // Selected-period performance is read from the same two endpoints as the
   // Total Return page. That makes "Tracker Total Return" a single calculation,
@@ -449,6 +502,14 @@ export default function GainsLosses({ embedded = false }) {
       ))
   }, [chartData, data])
 
+  // A closed position is gone from the holdings tables, so the summary cannot
+  // always name it. Whatever the backend recovered locally arrives on the row;
+  // anything still blank is looked up once, cached server-side, and merged in
+  // here after the table has already rendered its numbers.
+  const describe = useCallback((row) => (
+    row.description || resolvedNames[String(row.ticker || '').trim().toUpperCase()] || ''
+  ), [resolvedNames])
+
   const enrichedUnrealized = useMemo(() => {
     if (!data?.unrealized) return []
     return data.unrealized.map(r => {
@@ -467,6 +528,7 @@ export default function GainsLosses({ embedded = false }) {
         : null
       return {
         ...r,
+        description: describe(r),
         rvy_annual_yield_pct: annualYld,
         period_total_return_pct: comparableReturn,
         period_total_return_dollar: performance?.total_return_dollar,
@@ -478,7 +540,7 @@ export default function GainsLosses({ embedded = false }) {
         ret_vs_yld_sort: rvy ? rvy.spread : -999,
       }
     })
-  }, [data, performanceByTicker, rvyMode, chartData])
+  }, [data, performanceByTicker, rvyMode, chartData, describe])
 
   // Spells out both sides of the comparison, so the window-scaled yield is not
   // mistaken for the annual one.
@@ -517,8 +579,12 @@ export default function GainsLosses({ embedded = false }) {
       const dates = lots.map(r => r.sell_date).filter(Boolean).sort()
       const first = dates[0] || ''
       const last = dates[dates.length - 1] || ''
+      // Every lot of a ticker is the same fund, so the first name any of them
+      // carries names the whole group.
+      const named = lots.find(r => r.description)
       return {
         ticker,
+        description: describe({ ticker, description: named?.description }),
         lots,
         lot_count: lots.length,
         sell_date: first && last && first !== last ? `${first} → ${last}` : first,
@@ -535,7 +601,7 @@ export default function GainsLosses({ embedded = false }) {
         total_gl_pct: cost ? (totalGl / cost) * 100 : 0,
       }
     })
-  }, [data])
+  }, [data, describe])
 
   const multiLotTickers = groupedRealized.filter(r => r.lot_count > 1).map(r => r.ticker)
   const allLotsExpanded = multiLotTickers.length > 0
@@ -544,6 +610,11 @@ export default function GainsLosses({ embedded = false }) {
     allLotsExpanded ? {} : Object.fromEntries(multiLotTickers.map(ticker => [ticker, true]))
   )
   const realizedLotCount = groupedRealized.reduce((acc, r) => acc + r.lot_count, 0)
+
+  const describedCombined = useMemo(
+    () => (data?.combined || []).map(row => ({ ...row, description: describe(row) })),
+    [data, describe],
+  )
 
   // One saved layout per tab. The three tables answer different questions and
   // share barely any columns, so a single shared layout would be meaningless.
@@ -556,6 +627,12 @@ export default function GainsLosses({ embedded = false }) {
     storageKey: 'gains-losses-columns-realized-v1',
     columns: REALIZED_COLS,
     lockedKeys: GL_LOCKED_COLS,
+    // Description arrived after this tab shipped. A layout saved before it
+    // existed would otherwise park the new column at the far right, a screen
+    // away from the ticker it names.
+    adoptNewKeys: layout => insertMissingKeysAfter(layout, [
+      { key: 'description', after: 'ticker' },
+    ]),
   })
   const combinedLayout = useColumnLayout({
     storageKey: 'gains-losses-columns-combined-v1',
@@ -566,7 +643,7 @@ export default function GainsLosses({ embedded = false }) {
   const tabConfig = {
     unrealized: { layout: unrealizedLayout, rows: enrichedUnrealized },
     realized: { layout: realizedLayout, rows: groupedRealized },
-    combined: { layout: combinedLayout, rows: data?.combined },
+    combined: { layout: combinedLayout, rows: describedCombined },
   }
   const columnLayout = tabConfig[tab].layout
   const activeCols = columnLayout.activeColumns
@@ -579,6 +656,9 @@ export default function GainsLosses({ embedded = false }) {
     const val = row[col.key]
     let display = col.fmt ? col.fmt(val) : (val ?? '')
     let style = (col.numeric || col.gl) ? { textAlign: 'right' } : {}
+    // Every lot under an expander is the same fund, so repeating its name down
+    // the whole group buries the one thing that differs between the rows.
+    if (isLot && col.key === 'description') display = ''
     if (col.key === 'ticker') {
       if (isLot) {
         display = <span className="gl-lot-marker">↳</span>

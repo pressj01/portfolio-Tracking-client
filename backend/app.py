@@ -27334,6 +27334,60 @@ def _gains_losses_dividend_allocation(conn, profile_ids):
     }
 
 
+# A sold-out ticker is deleted from all_account_info along with its description,
+# so a Realized or Combined row for a closed fund has no name left to show. These
+# tables are already populated by imports, fund scans and the provider catalog,
+# so recovering the name costs no network round-trip. Order is by trust: the
+# portfolio's own wording first, then the curated fund catalogs, and last the
+# constituent names scraped out of fund holdings, which are the least consistent.
+_SECURITY_NAME_SOURCES = (
+    ("security_names", "ticker", "name"),
+    ("all_account_info", "ticker", "description"),
+    ("holdings", "ticker", "description"),
+    ("etf_provider_funds", "symbol", "fund_name"),
+    ("general_scanner_cache", "ticker", "name"),
+    ("fund_holdings", "symbol", "name"),
+)
+
+
+def _resolve_security_descriptions(conn, tickers):
+    """Ticker (upper-cased) -> best locally known display name."""
+    wanted = {str(t or "").strip().upper() for t in tickers}
+    wanted.discard("")
+    resolved = {}
+    for table, key_col, name_col in _SECURITY_NAME_SOURCES:
+        missing = sorted(wanted - set(resolved))
+        if not missing:
+            break
+        for start in range(0, len(missing), 400):
+            chunk = missing[start:start + 400]
+            placeholders = ",".join("?" * len(chunk))
+            try:
+                rows = conn.execute(
+                    f"SELECT UPPER(TRIM({key_col})) AS sym, {name_col} AS name FROM {table} "
+                    f"WHERE UPPER(TRIM({key_col})) IN ({placeholders}) "
+                    f"AND COALESCE(TRIM({name_col}), '') <> ''",
+                    chunk,
+                ).fetchall()
+            except Exception:
+                # An older database may not have this table yet; the remaining
+                # sources still get their turn.
+                break
+            for row in rows:
+                sym = row["sym"]
+                if sym and sym not in resolved:
+                    resolved[sym] = str(row["name"]).strip()[:200]
+    return resolved
+
+
+def _description_for(ticker, current, fallbacks):
+    """Keep the row's own description, falling back to the resolved name."""
+    text = "" if current is None else str(current).strip()
+    if text and text.lower() not in ("nan", "none"):
+        return text
+    return fallbacks.get(str(ticker or "").strip().upper(), "")
+
+
 @app.route("/api/gains-losses/summary", methods=["GET"])
 def gains_losses_summary():
     """Unified unrealized + realized gains/losses with price-only and total (price+divs) columns."""
@@ -27539,6 +27593,15 @@ def gains_losses_summary():
     if (cat_ids or sub_ids) and not rdf.empty:
         rdf = rdf[rdf["ticker"].map(_passes_category_filter)]
 
+    # Closed positions no longer exist in the holdings tables, so their name has
+    # to be recovered before the connection closes. Open rows that imported
+    # without a description get the same treatment.
+    named_tickers = set(rdf["ticker"].tolist()) if not rdf.empty else set()
+    if not udf.empty:
+        blank_desc = udf["description"].isna() | (udf["description"].astype(str).str.strip() == "")
+        named_tickers |= set(udf.loc[blank_desc, "ticker"].tolist())
+    security_names = _resolve_security_descriptions(conn, named_tickers)
+
     conn.close()
 
     def _safe(v):
@@ -27601,7 +27664,7 @@ def gains_losses_summary():
             u_totals["total_gl"] += tgl
             unrealized.append({
                 "ticker": row["ticker"],
-                "description": row.get("description", ""),
+                "description": _description_for(row["ticker"], row.get("description"), security_names),
                 "category_name": row.get("category_name", ""),
                 "quantity": _safe_shares(row.get("quantity")),
                 "price_paid": _safe(row.get("price_paid")),
@@ -27645,6 +27708,7 @@ def gains_losses_summary():
             r_totals["total_gl"] += tgl
             realized.append({
                 "ticker": row["ticker"],
+                "description": _description_for(row["ticker"], row.get("description"), security_names),
                 "buy_price": _safe(bp),
                 "sell_price": _safe(sp),
                 "shares_sold": _safe_shares(sh),
@@ -27675,12 +27739,14 @@ def gains_losses_summary():
         t = r["ticker"]
         if t not in combined_map:
             combined_map[t] = {
-                "ticker": t, "description": "",
+                "ticker": t, "description": r.get("description") or "",
                 "unrealized_price_gl": 0, "unrealized_divs": 0, "unrealized_total_gl": 0,
                 "realized_price_gl": 0, "realized_divs": 0, "realized_total_gl": 0,
                 "status": "Closed",
             }
         entry = combined_map[t]
+        if not entry.get("description"):
+            entry["description"] = r.get("description") or ""
         entry["realized_price_gl"] += (r["price_gl"] or 0)
         entry["realized_divs"] += (r["divs_received"] or 0)
         entry["realized_total_gl"] += (r["total_gl"] or 0)
@@ -27738,6 +27804,98 @@ def gains_losses_summary():
         unrealized=unrealized, realized=realized, combined=combined,
         totals=totals, categories=categories,
     )
+
+
+_SECURITY_NAME_LOOKUP_LIMIT = 120
+# How long a failed lookup is believed. Yahoo has no name for a delisted symbol
+# and never will, so the miss is cached rather than retried on every page load.
+_SECURITY_NAME_MISS_TTL = "-30 days"
+
+
+@app.route("/api/gains-losses/descriptions", methods=["POST"])
+def gains_losses_descriptions():
+    """Name the sold-out tickers that no local table knows.
+
+    The summary endpoint resolves every name it can from the database for free.
+    This is the paid follow-up the table asks for once it has rendered, so a slow
+    Yahoo round-trip never holds up the numbers. Answers are cached in
+    security_names, so a ticker costs one lookup rather than one per visit.
+    """
+    import yfinance as yf
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    payload = request.get_json(silent=True) or {}
+    requested = []
+    seen = set()
+    for raw in (payload.get("tickers") or []):
+        sym = str(raw or "").strip().upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            requested.append(sym)
+    if not requested:
+        return jsonify(descriptions={}, unresolved=[], truncated=False)
+    truncated = len(requested) > _SECURITY_NAME_LOOKUP_LIMIT
+    requested = requested[:_SECURITY_NAME_LOOKUP_LIMIT]
+
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    descriptions = _resolve_security_descriptions(conn, requested)
+
+    placeholders = ",".join("?" * len(requested))
+    recent_misses = {
+        row["ticker"]
+        for row in conn.execute(
+            f"SELECT ticker FROM security_names WHERE ticker IN ({placeholders}) "
+            "AND COALESCE(TRIM(name), '') = '' "
+            "AND COALESCE(updated_at, '') >= datetime('now', ?)",
+            [*requested, _SECURITY_NAME_MISS_TTL],
+        ).fetchall()
+    }
+    pending = [s for s in requested if s not in descriptions and s not in recent_misses]
+
+    def _load_name(sym):
+        """Returns (ticker, name, answered).
+
+        An answer that simply has no name in it is a real miss and worth
+        remembering. A request that never got an answer â€” Yahoo's rate limiter,
+        a dropped connection â€” is not: caching that would blank a perfectly live
+        ticker for a month because one burst ran too fast.
+        """
+        try:
+            info = yf.Ticker(sym).info or {}
+        except Exception:  # noqa: BLE001 - one bad ticker must not kill the batch
+            return sym, "", False
+        name = str(info.get("longName") or info.get("shortName") or "").strip()[:200]
+        return sym, name, True
+
+    fetched = {}
+    answered = {}
+    if pending:
+        # Deliberately shallow. Yahoo throttles bursts, and a throttled reply
+        # here reads as "this fund has no name", which is the one wrong answer
+        # this endpoint must not produce.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(_load_name, sym) for sym in pending]
+            for fut in as_completed(futures):
+                sym, name, ok = fut.result()
+                fetched[sym] = name
+                answered[sym] = ok
+
+    cacheable = [(sym, name) for sym, name in fetched.items() if answered.get(sym)]
+    if cacheable:
+        conn.executemany(
+            "INSERT INTO security_names (ticker, name, source, updated_at) "
+            "VALUES (?, ?, 'yfinance', CURRENT_TIMESTAMP) "
+            "ON CONFLICT(ticker) DO UPDATE SET "
+            "name = excluded.name, source = excluded.source, updated_at = excluded.updated_at",
+            cacheable,
+        )
+        conn.commit()
+    conn.close()
+
+    descriptions.update({sym: name for sym, name in fetched.items() if name})
+    unresolved = [sym for sym in requested if not descriptions.get(sym)]
+    return jsonify(descriptions=descriptions, unresolved=unresolved, truncated=truncated)
 
 
 @app.route("/api/gains-losses/chart", methods=["GET"])

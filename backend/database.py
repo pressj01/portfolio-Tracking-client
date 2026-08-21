@@ -1772,6 +1772,20 @@ def ensure_tables_exist(conn=None):
     if "source" not in _nav_cols:
         cur.execute("ALTER TABLE portfolio_nav ADD COLUMN source TEXT")
 
+    # Ticker -> display name, kept outside every profile because a name is not
+    # portfolio data. A fully sold position is deleted from all_account_info, so
+    # this is the only place a closed holding's name can survive. A row whose
+    # name is blank records a completed lookup that found nothing (the normal
+    # answer for a delisted symbol) so it is not retried on every page load.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS security_names (
+            ticker     TEXT PRIMARY KEY,
+            name       TEXT,
+            source     TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS etf_type_overrides (
             ticker    TEXT PRIMARY KEY,
