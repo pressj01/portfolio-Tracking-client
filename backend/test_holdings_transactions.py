@@ -1177,6 +1177,74 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             [("ADX", "CORE EQUITY"), ("ARCC", "Legacy Income")],
         )
 
+    def test_snowball_holdings_slash_label_assigns_parent_and_subcategory(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (54, 'Snowball Slash', 'other', 0, 0)"
+        )
+        content = "\n".join([
+            "Holding,Holdings' name,Shares,Cost basis,Current value,Share price,Sector,Category",
+            "WMT,Walmart,5,100,110,22,Consumer,GROWTH / Growth-Stocks",
+            "ICSH,BlackRock Ultra Short,10,500,505,50.5,Bonds,CASH",
+        ])
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            response = self.client.post(
+                "/api/import/transactions?profile_id=54",
+                data={
+                    "format": "snowball_holdings",
+                    "file": (io.BytesIO(content.encode()), "Snowball_Export_Holdings.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+
+        conn = self._get_connection()
+        try:
+            categories = conn.execute(
+                "SELECT name FROM categories WHERE profile_id = 54 ORDER BY sort_order, id"
+            ).fetchall()
+            subcategories = conn.execute(
+                """SELECT c.name AS category, s.name AS subcategory
+                   FROM subcategories s
+                   JOIN categories c ON c.id = s.category_id
+                   WHERE c.profile_id = 54
+                   ORDER BY c.sort_order, s.id"""
+            ).fetchall()
+            assignments = conn.execute(
+                """SELECT tc.ticker, c.name AS category, tc.subcategory_id, s.name AS subcategory
+                   FROM ticker_categories tc
+                   JOIN categories c ON c.id = tc.category_id
+                   LEFT JOIN subcategories s ON s.id = tc.subcategory_id
+                   WHERE tc.profile_id = 54
+                   ORDER BY tc.ticker"""
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual([row["name"] for row in categories], ["GROWTH", "CASH"])
+        self.assertEqual(
+            [(row["category"], row["subcategory"]) for row in subcategories],
+            [("GROWTH", "Growth-Stocks")],
+        )
+        self.assertEqual(assignments[0]["ticker"], "ICSH")
+        self.assertEqual(assignments[0]["category"], "CASH")
+        self.assertIsNone(assignments[0]["subcategory_id"])
+        self.assertEqual(assignments[1]["ticker"], "WMT")
+        self.assertEqual(assignments[1]["category"], "GROWTH")
+        self.assertEqual(assignments[1]["subcategory"], "Growth-Stocks")
+        self.assertIsNotNone(assignments[1]["subcategory_id"])
+
     def test_snowball_categories_import_only_creates_new_categories(self):
         import io
 
@@ -1226,8 +1294,13 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                    ORDER BY c.sort_order, s.id"""
             ).fetchall()
             assignments = conn.execute(
-                "SELECT COUNT(*) FROM ticker_categories WHERE profile_id = 52"
-            ).fetchone()[0]
+                """SELECT tc.ticker, c.name AS category, s.name AS subcategory
+                   FROM ticker_categories tc
+                   JOIN categories c ON c.id = tc.category_id
+                   LEFT JOIN subcategories s ON s.id = tc.subcategory_id
+                   WHERE tc.profile_id = 52
+                   ORDER BY tc.ticker"""
+            ).fetchall()
         finally:
             conn.close()
 
@@ -1239,7 +1312,16 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             [(row["category"], row["subcategory"]) for row in subcategories],
             [("GROWTH", "Growth-Stocks"), ("GROWTH", "Growth-Funds")],
         )
-        self.assertEqual(assignments, 0)
+        self.assertEqual(
+            [(row["ticker"], row["category"], row["subcategory"]) for row in assignments],
+            [
+                ("ADX", "GROWTH", "Growth-Funds"),
+                ("ARCC", "GROWTH", "Growth-Stocks"),
+                ("ICSH", "CASH", None),
+            ],
+        )
+        self.assertEqual(responses[0]["assignments_added"], 3)
+        self.assertEqual(responses[1]["assignments_added"], 0)
 
     def test_snowball_categories_import_adds_missing_subcategories_to_existing_parent(self):
         import io

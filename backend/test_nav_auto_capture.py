@@ -4,8 +4,10 @@ import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app as app_module
 import normalize
 import market_calendar as mc
 
@@ -113,6 +115,65 @@ class SnapshotSourceTest(unittest.TestCase):
         value = normalize.snapshot_nav(6, nav_date="2026-06-29", source="close")
         self.assertEqual(value, 1050.0)
         self.assertEqual(self._row(), (1050.0, "close"))
+
+
+class PartialRefreshCloseGateTest(unittest.TestCase):
+    def test_payload_with_failures_is_not_complete(self):
+        self.assertFalse(app_module._refresh_payload_complete_for_close({
+            "price_failures": ["DRMY"],
+            "price_complete": False,
+        }))
+        self.assertTrue(app_module._refresh_payload_complete_for_close({
+            "price_failures": [],
+            "price_complete": True,
+        }))
+        self.assertFalse(app_module._refresh_payload_complete_for_close({
+            "price_failures": [],
+        }))
+        self.assertFalse(app_module._refresh_payload_complete_for_close(None))
+
+    def _run_auto_capture(self, refresh_payload, snapshot=None):
+        et = timezone(timedelta(hours=-4))
+        now = datetime(2026, 7, 1, 16, 30, tzinfo=et)
+        response = MagicMock()
+        response.status_code = 200
+        response.get_json.return_value = refresh_payload
+        conn = MagicMock()
+        conn.execute.return_value.fetchone.return_value = None
+        orig_initialized = getattr(app_module.app, "_db_initialized", False)
+        app_module.app._db_initialized = True
+        try:
+            with patch.object(app_module, "eastern_now", return_value=now), \
+                 patch.object(app_module, "is_nyse_trading_day", return_value=True), \
+                 patch.object(app_module, "market_has_closed", return_value=True), \
+                 patch.object(app_module, "refresh_market_data", return_value=response), \
+                 patch.object(app_module, "snapshot_nav", snapshot or MagicMock(return_value=1000.0)) as snap, \
+                 patch.object(app_module, "_nav_snapshot_profile_ids", return_value=[6]), \
+                 patch.object(app_module, "get_connection", return_value=conn):
+                with app_module.app.test_request_context("/api/nav/auto-capture?profile_id=6", method="POST"):
+                    payload = app_module.api_nav_auto_capture().get_json()
+        finally:
+            app_module.app._db_initialized = orig_initialized
+        return payload, snap
+
+    def test_auto_capture_skips_close_when_refresh_is_partial(self):
+        snapshot = MagicMock()
+        payload, snap = self._run_auto_capture(
+            {"price_failures": ["AAA", "BBB"], "price_complete": False},
+            snapshot=snapshot,
+        )
+        self.assertFalse(payload["captured"])
+        self.assertTrue(payload["skipped"])
+        self.assertIn("incomplete", payload["reason"])
+        self.assertEqual(payload["price_failures"], ["AAA", "BBB"])
+        snap.assert_not_called()
+
+    def test_auto_capture_stamps_close_when_refresh_is_complete(self):
+        payload, snap = self._run_auto_capture(
+            {"price_failures": [], "price_complete": True},
+        )
+        self.assertTrue(payload["captured"])
+        snap.assert_called_with(6, nav_date="2026-07-01", source="close")
 
 
 if __name__ == "__main__":

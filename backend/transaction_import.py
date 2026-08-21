@@ -30,6 +30,8 @@ import re
 from collections import defaultdict
 from datetime import datetime
 
+from snowball_assign import parse_snowball_category_label
+
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-/]{0,10}$")
 ADJUSTMENT_NOTE = "Automatically generated transaction to adjust"
 
@@ -451,22 +453,7 @@ def parse_snowball_holdings_csv(file_path, filename):
     }
 
 
-def _parse_snowball_category_label(value):
-    """Split a Snowball label into a top-level category and optional subcategory.
-
-    ``GROWTH / Growth-Stocks`` is category ``GROWTH`` with subcategory
-    ``Growth-Stocks``. A label without a slash, such as ``CASH``, is a
-    top-level category with no subcategory.
-    """
-    label = str(value or "").strip()
-    if not label:
-        return "", ""
-    parent, separator, child = label.partition("/")
-    parent = parent.strip()
-    child = child.strip()
-    if separator and child:
-        return parent, child
-    return parent, ""
+_parse_snowball_category_label = parse_snowball_category_label
 
 
 def parse_snowball_categories_csv(file_path, filename):
@@ -475,8 +462,8 @@ def parse_snowball_categories_csv(file_path, filename):
     Snowball exports labels such as ``GROWTH / Growth-Stocks``. The leading
     value is the top-level category; the value after the slash is a
     subcategory. Labels without a slash, such as ``CASH``, are top-level
-    categories with no children. This import does not parse holdings,
-    prices, dividends, or transactions.
+    categories with no children. Ticker/category assignments are retained,
+    but position values, prices, dividends, and transactions are not parsed.
     """
     headers, rows = _rows_to_dicts(_read_table_rows(file_path, filename))
 
@@ -493,6 +480,7 @@ def parse_snowball_categories_csv(file_path, filename):
     categories = []
     category_index = {}
     subcategory_keys = set()
+    assignments = []
     filtered_count = 0
     duplicates_skipped = 0
     for row in rows:
@@ -504,6 +492,13 @@ def parse_snowball_categories_csv(file_path, filename):
         if category_key not in category_index:
             category_index[category_key] = len(categories)
             categories.append({"name": category_name, "subcategories": []})
+        ticker = (row.get("Holding") or "").strip().upper()
+        if ticker and TICKER_RE.match(ticker):
+            assignments.append({
+                "ticker": ticker,
+                "category": category_name,
+                "subcategory": subcategory_name,
+            })
         if not subcategory_name:
             continue
         subcategory_key = (category_key, subcategory_name.casefold())
@@ -519,9 +514,11 @@ def parse_snowball_categories_csv(file_path, filename):
     subcategory_count = sum(len(item["subcategories"]) for item in categories)
     return {
         "categories": categories,
+        "assignments": assignments,
         "summary": {
             "categories": len(categories),
             "subcategories": subcategory_count,
+            "assignments": len(assignments),
             "filtered": filtered_count,
             "duplicates_skipped": duplicates_skipped,
         },

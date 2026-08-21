@@ -511,6 +511,24 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # Last-successful Yahoo/XFUNDS payloads. In-memory caches are a cold start
+    # after restart; a scrape miss must not silently fall back to Yahoo for
+    # issuer-first names such as DRMY/FIZY.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS market_data_cache (
+            cache_key   TEXT PRIMARY KEY,
+            source      TEXT NOT NULL,
+            ticker      TEXT NOT NULL,
+            kind        TEXT NOT NULL,
+            fetched_at  TEXT NOT NULL,
+            payload     TEXT NOT NULL
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_market_data_cache_ticker
+        ON market_data_cache (ticker, source, kind)
+    """)
+
     # ── income_tracking ────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS income_tracking (
@@ -1067,6 +1085,7 @@ def ensure_tables_exist(conn=None):
             realized_gain   REAL,
             notes           TEXT,
             acquired_date   TEXT,
+            dedupe_hash     TEXT,
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -1076,6 +1095,9 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'BUY'")
     if "realized_gain" not in _txn_cols:
         cur.execute("ALTER TABLE transactions ADD COLUMN realized_gain REAL")
+    if "dedupe_hash" not in _txn_cols:
+        cur.execute("ALTER TABLE transactions ADD COLUMN dedupe_hash TEXT")
+        _txn_cols.add("dedupe_hash")
     # When shares arrive by transfer the transaction_date is the day they
     # landed at the receiving broker, not the day they were bought. The
     # holding period for capital-gains purposes carries over from the
@@ -1084,6 +1106,13 @@ def ensure_tables_exist(conn=None):
     # NULL means "same as transaction_date", which is the ordinary case.
     if "acquired_date" not in _txn_cols:
         cur.execute("ALTER TABLE transactions ADD COLUMN acquired_date TEXT")
+    from transaction_identity import backfill_equity_dedupe_hashes
+    backfill_equity_dedupe_hashes(conn)
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_dedupe
+        ON transactions (dedupe_hash)
+        WHERE dedupe_hash IS NOT NULL
+    """)
     # Index for fast rollup queries
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_transactions_ticker_profile

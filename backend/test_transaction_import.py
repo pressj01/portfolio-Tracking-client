@@ -55,7 +55,23 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["format_type"], "categories")
         self.assertEqual(
             result["summary"],
-            {"categories": 3, "subcategories": 3, "filtered": 0, "duplicates_skipped": 1},
+            {
+                "categories": 3,
+                "subcategories": 3,
+                "assignments": 5,
+                "filtered": 0,
+                "duplicates_skipped": 1,
+            },
+        )
+        self.assertEqual(
+            result["assignments"],
+            [
+                {"ticker": "ARCC", "category": "GROWTH", "subcategory": "Growth-Stocks"},
+                {"ticker": "ADX", "category": "GROWTH", "subcategory": "Growth-Stocks"},
+                {"ticker": "WMT", "category": "GROWTH", "subcategory": "Growth-Funds"},
+                {"ticker": "KSLV", "category": "INCOME", "subcategory": "Income-CC Silver"},
+                {"ticker": "ICSH", "category": "CASH", "subcategory": ""},
+            ],
         )
         self.assertEqual(
             result["categories"],

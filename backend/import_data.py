@@ -717,34 +717,18 @@ def _apply_category_assignments(cur, profile_id, category_assignments):
     if not category_assignments:
         return
 
+    from snowball_assign import apply_snowball_assignment
+
     for ticker, cat_names in category_assignments.items():
         cur.execute(
             "DELETE FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
             (ticker, profile_id),
         )
 
+        # ticker_categories is unique per ticker+profile, so the last label wins.
+        # Slash labels such as "GROWTH / Growth-Stocks" become parent + subcategory.
         for cat_name in cat_names:
-            existing_cat = cur.execute(
-                "SELECT id FROM categories WHERE name = ? AND profile_id = ?",
-                (cat_name, profile_id),
-            ).fetchone()
-            if existing_cat:
-                cat_id = existing_cat[0]
-            else:
-                max_pos = cur.execute(
-                    "SELECT COALESCE(MAX(sort_order), 0) FROM categories WHERE profile_id = ?",
-                    (profile_id,),
-                ).fetchone()[0]
-                cur.execute(
-                    "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
-                    (cat_name, max_pos + 1, profile_id),
-                )
-                cat_id = cur.lastrowid
-
-            cur.execute(
-                "INSERT OR IGNORE INTO ticker_categories (ticker, category_id, profile_id) VALUES (?, ?, ?)",
-                (ticker, cat_id, profile_id),
-            )
+            apply_snowball_assignment(cur, profile_id, ticker, cat_name)
 
 
 def import_from_upload(df, profile_id):

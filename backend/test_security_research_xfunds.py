@@ -1,9 +1,16 @@
+import os
+import sqlite3
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
 
-from backend.app import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app as app_mod
+from app import (
     _XFUNDS_CURRENT_TICKERS,
     _apply_resolved_pay_dates,
     _distribution_per_share_from_holding_actuals,
@@ -129,6 +136,29 @@ class _GoldmanSession:
 
 
 class XFundsSecurityResearchTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self._orig_get_connection = app_mod.get_connection
+
+        def _gc():
+            conn = sqlite3.connect(self._tmp.name)
+            conn.row_factory = sqlite3.Row
+            return conn
+
+        app_mod.get_connection = _gc
+        app_mod._XFUNDS_RESEARCH_CACHE.clear()
+        app_mod._OFFICIAL_DISTRIBUTION_CACHE.clear()
+
+    def tearDown(self):
+        app_mod.get_connection = self._orig_get_connection
+        app_mod._XFUNDS_RESEARCH_CACHE.clear()
+        app_mod._OFFICIAL_DISTRIBUTION_CACHE.clear()
+        try:
+            os.unlink(self._tmp.name)
+        except OSError:
+            pass
+
     def test_current_official_lineup_is_recognized(self):
         expected = {
             "DRMY", "GLDN", "SLVX", "NUKX", "WEPN", "BLOX",
@@ -140,7 +170,7 @@ class XFundsSecurityResearchTests(unittest.TestCase):
 
     def test_goldman_snapshot_includes_the_official_fund_name(self):
         fund = {"pvNumber": "123", "shareClassId": "456", "fundName": "GPIX"}
-        with patch("backend.app._fetch_goldman_fund_map", return_value={"GPIX": fund}):
+        with patch("app._fetch_goldman_fund_map", return_value={"GPIX": fund}):
             snapshot = _fetch_goldman_distribution_snapshot("GPIX", session=_GoldmanSession())
 
         self.assertEqual(snapshot["fund_name"], "Goldman Sachs S&P 500 Premium Income ETF")

@@ -44,6 +44,15 @@ class NanSafeJSONProvider(DefaultJSONProvider):
         return super().dumps(_sanitize_nan(obj), **kwargs)
 from config import get_connection, FRED_API_KEY, DB_PATH
 from database import ensure_tables_exist
+from db_backup import remove_sidecars, sqlite_backup, sqlite_restore
+from snowball_assign import apply_snowball_assignment, ensure_snowball_category
+from transaction_identity import (
+    equity_identity,
+    equity_identity_hash,
+    insert_equity_transaction,
+    refresh_transaction_dedupe_hash,
+    stored_equity_hash,
+)
 from cash_flow import (
     HOLDING_SCENARIO_PROFILES,
     OPTION_INCOME_TICKERS,
@@ -1636,12 +1645,22 @@ def _cached_yf_info(yf_ticker_obj, symbol):
     cached = _cache_get(_YF_INFO_CACHE, symbol, _YF_INFO_TTL_SEC)
     if cached is not None:
         return cached
+    persisted = _load_persisted_market_payload("yahoo", symbol, "info", ttl=_YF_INFO_TTL_SEC)
+    if persisted:
+        _cache_set(_YF_INFO_CACHE, symbol, persisted)
+        return persisted
     try:
         info = yf_ticker_obj.info or {}
     except Exception:
         info = {}
     if info:
         _cache_set(_YF_INFO_CACHE, symbol, info)
+        _persist_market_payload("yahoo", symbol, "info", info)
+        return info
+    stale = _load_persisted_market_payload("yahoo", symbol, "info")
+    if stale:
+        _cache_set(_YF_INFO_CACHE, symbol, stale)
+        return stale
     return info
 
 
@@ -1650,12 +1669,24 @@ def _cached_yf_dividends(yf_ticker_obj, symbol):
     cached = _cache_get(_YF_DIVIDENDS_CACHE, symbol, _YF_DIVIDENDS_TTL_SEC)
     if cached is not None:
         return cached
+    persisted = _load_persisted_market_payload("yahoo", symbol, "dividends", ttl=_YF_DIVIDENDS_TTL_SEC)
+    if persisted is not None:
+        _cache_set(_YF_DIVIDENDS_CACHE, symbol, persisted)
+        return persisted
     try:
         dividends = yf_ticker_obj.dividends
     except Exception:
         dividends = pd.Series(dtype=float)
     if dividends is None:
         dividends = pd.Series(dtype=float)
+    if dividends is not None and len(dividends):
+        _cache_set(_YF_DIVIDENDS_CACHE, symbol, dividends)
+        _persist_market_payload("yahoo", symbol, "dividends", dividends)
+        return dividends
+    stale = _load_persisted_market_payload("yahoo", symbol, "dividends")
+    if stale is not None:
+        _cache_set(_YF_DIVIDENDS_CACHE, symbol, stale)
+        return stale
     _cache_set(_YF_DIVIDENDS_CACHE, symbol, dividends)
     return dividends
 
@@ -1703,6 +1734,42 @@ def _clear_dividend_event_caches():
     _UPCOMING_DIVIDENDS_CACHE.clear()
     _DIVIDEND_CALENDAR_CACHE.clear()
     _MONEY_MARKET_YIELD_CACHE.clear()
+
+
+def _clear_market_data_memory_caches():
+    _YF_INFO_CACHE.clear()
+    _YF_DIVIDENDS_CACHE.clear()
+    _XFUNDS_RESEARCH_CACHE.clear()
+    _OFFICIAL_DISTRIBUTION_CACHE.clear()
+
+
+def _persist_market_payload(source, ticker, kind, payload):
+    """Write a successful Yahoo/XFUNDS payload so a restart is not a cold start."""
+    if payload is None:
+        return
+    try:
+        import market_data_store as mds
+        conn = get_connection()
+        try:
+            mds.save(conn, source, ticker, kind, payload)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        return
+
+
+def _load_persisted_market_payload(source, ticker, kind, ttl=None):
+    """Load a persisted payload. ttl=None returns even a stale last-success."""
+    try:
+        import market_data_store as mds
+        conn = get_connection()
+        try:
+            return mds.load(conn, source, ticker, kind, max_age_sec=ttl)
+        finally:
+            conn.close()
+    except Exception:
+        return None
 
 
 @app.errorhandler(500)
@@ -5209,59 +5276,14 @@ def _assign_position_category(
     category_name,
     preserve_existing_assignment=False,
 ):
-    category_name = (category_name or "").strip()
-    if not category_name:
-        return {
-            "category_created": False,
-            "assignment_added": False,
-            "assignment_preserved": False,
-        }
-
-    existing_cat = conn.execute(
-        """SELECT id FROM categories
-           WHERE profile_id = ? AND LOWER(TRIM(name)) = LOWER(?)
-           ORDER BY id LIMIT 1""",
-        (profile_id, category_name),
-    ).fetchone()
-    category_created = False
-    if existing_cat:
-        category_id = existing_cat["id"] if isinstance(existing_cat, dict) else existing_cat[0]
-    else:
-        max_pos = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), 0) AS max_sort FROM categories WHERE profile_id = ?",
-            (profile_id,),
-        ).fetchone()
-        next_sort = (max_pos["max_sort"] if isinstance(max_pos, dict) else max_pos[0]) + 1
-        cur = conn.execute(
-            "INSERT INTO categories (name, target_pct, sort_order, profile_id) VALUES (?, 0, ?, ?)",
-            (category_name, next_sort, profile_id),
-        )
-        category_id = cur.lastrowid
-        category_created = True
-
-    existing_assignment = conn.execute(
-        "SELECT category_id FROM ticker_categories WHERE ticker = ? AND profile_id = ?",
-        ((ticker or "").strip().upper(), profile_id),
-    ).fetchone()
-    if existing_assignment:
-        existing_category_id = (
-            existing_assignment["category_id"]
-            if isinstance(existing_assignment, dict)
-            else existing_assignment[0]
-        )
-        if preserve_existing_assignment or existing_category_id == category_id:
-            return {
-                "category_created": category_created,
-                "assignment_added": False,
-                "assignment_preserved": preserve_existing_assignment,
-            }
-
-    _replace_ticker_category(conn, profile_id, ticker, category_id)
-    return {
-        "category_created": category_created,
-        "assignment_added": True,
-        "assignment_preserved": False,
-    }
+    """Assign a holdings-file category label, splitting Snowball slash labels."""
+    return apply_snowball_assignment(
+        conn,
+        profile_id,
+        ticker,
+        category_name,
+        preserve_existing_assignment=preserve_existing_assignment,
+    )
 
 
 def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_id=None):
@@ -5279,14 +5301,17 @@ def _replace_ticker_category(conn, profile_id, ticker, category_id, subcategory_
 
 
 def _import_snowball_categories(parsed, profile_id):
-    """Import only new Snowball categories and their sub-categories."""
+    """Import Snowball categories, sub-categories, and ticker assignments."""
     conn = get_connection()
     categories = parsed.get("categories") or []
+    assignments = parsed.get("assignments") or []
     stats = {
         "categories_created": 0,
         "categories_skipped": 0,
         "subcategories_created": 0,
         "subcategories_skipped": 0,
+        "assignments_added": 0,
+        "assignments_preserved": 0,
     }
 
     try:
@@ -5294,56 +5319,34 @@ def _import_snowball_categories(parsed, profile_id):
             category_name = str(definition.get("name") or "").strip()
             if not category_name:
                 continue
-
-            category = conn.execute(
-                """SELECT id FROM categories
-                   WHERE profile_id = ? AND LOWER(TRIM(name)) = LOWER(?)
-                   ORDER BY id LIMIT 1""",
-                (profile_id, category_name),
-            ).fetchone()
-            if category:
-                category_id = category["id"]
-                stats["categories_skipped"] += 1
-            else:
-                next_sort = conn.execute(
-                    """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
-                       FROM categories WHERE profile_id = ?""",
-                    (profile_id,),
-                ).fetchone()["n"]
-                category_id = conn.execute(
-                    """INSERT INTO categories (name, target_pct, sort_order, profile_id)
-                       VALUES (?, 0, ?, ?)""",
-                    (category_name, next_sort, profile_id),
-                ).lastrowid
+            _, _, cat_stats = ensure_snowball_category(conn, profile_id, category_name, "")
+            if cat_stats["category_created"]:
                 stats["categories_created"] += 1
+            else:
+                stats["categories_skipped"] += 1
 
             for subcategory_name in definition.get("subcategories") or []:
                 subcategory_name = str(subcategory_name or "").strip()
                 if not subcategory_name:
                     continue
-                existing_sub = conn.execute(
-                    """SELECT id FROM subcategories
-                       WHERE category_id = ? AND profile_id = ?
-                         AND LOWER(TRIM(name)) = LOWER(?)
-                       ORDER BY id LIMIT 1""",
-                    (category_id, profile_id, subcategory_name),
-                ).fetchone()
-                if existing_sub:
-                    stats["subcategories_skipped"] += 1
-                    continue
-                next_sub_sort = conn.execute(
-                    """SELECT COALESCE(MAX(sort_order), -1) + 1 AS n
-                       FROM subcategories
-                       WHERE category_id = ? AND profile_id = ?""",
-                    (category_id, profile_id),
-                ).fetchone()["n"]
-                conn.execute(
-                    """INSERT INTO subcategories
-                       (category_id, name, target_pct, profile_id, sort_order)
-                       VALUES (?, ?, 0, ?, ?)""",
-                    (category_id, subcategory_name, profile_id, next_sub_sort),
+                _, _, sub_stats = ensure_snowball_category(
+                    conn, profile_id, category_name, subcategory_name
                 )
-                stats["subcategories_created"] += 1
+                if sub_stats["subcategory_created"]:
+                    stats["subcategories_created"] += 1
+                else:
+                    stats["subcategories_skipped"] += 1
+
+        for assignment in assignments:
+            ticker = assignment.get("ticker")
+            parent = assignment.get("category") or ""
+            child = assignment.get("subcategory") or ""
+            label = f"{parent} / {child}" if child else parent
+            result = apply_snowball_assignment(conn, profile_id, ticker, label)
+            if result.get("assignment_added"):
+                stats["assignments_added"] += 1
+            elif result.get("assignment_preserved"):
+                stats["assignments_preserved"] += 1
 
         conn.commit()
         summary = parsed.get("summary") or {}
@@ -5351,6 +5354,7 @@ def _import_snowball_categories(parsed, profile_id):
         skipped = stats["categories_skipped"]
         subs_created = stats["subcategories_created"]
         subs_skipped = stats["subcategories_skipped"]
+        assigned = stats["assignments_added"]
         msg = (
             f"Imported {created} new Snowball categor"
             f"{'y' if created == 1 else 'ies'}"
@@ -5361,6 +5365,11 @@ def _import_snowball_categories(parsed, profile_id):
             f" and {subs_skipped} subcategor"
             f"{'y' if subs_skipped == 1 else 'ies'} that already exist."
         )
+        if assigned:
+            msg += (
+                f" Assigned {assigned} holding"
+                f"{'' if assigned == 1 else 's'} to parent + subcategory."
+            )
         if not created and not subs_created:
             existing = summary.get("categories", 0)
             existing_subs = summary.get("subcategories", 0)
@@ -5370,6 +5379,11 @@ def _import_snowball_categories(parsed, profile_id):
                 f" and {existing_subs} subcategor"
                 f"{'y' if existing_subs == 1 else 'ies'} already exist."
             )
+            if assigned:
+                msg += (
+                    f" Assigned {assigned} holding"
+                    f"{'' if assigned == 1 else 's'} to parent + subcategory."
+                )
         return jsonify({"message": msg, **stats})
     except Exception as e:
         conn.rollback()
@@ -6523,7 +6537,6 @@ def api_import_monthly_tickers():
 
 # ── Import Backup / Restore ───────────────────────────────────────────────────
 
-import shutil
 import glob as _glob
 import re as _re
 
@@ -6563,13 +6576,16 @@ def _database_backup_timestamp_part(filename):
 
 
 def _create_import_backup(profile_id=None):
-    """Create a timestamped copy of the database before a write operation.
+    """Create a timestamped WAL-safe snapshot of the database before a write.
+
+    Uses SQLite's backup() API so uncheckpointed WAL pages are included, then
+    checkpoints the copy so it does not need -wal/-shm sidecars.
 
     When `profile_id` is given, the backup is tagged with that profile so
     pruning keeps a separate history per profile. Untagged backups (used by
     operations that affect multiple profiles) share their own retention bucket.
 
-    Returns the backup file path, or None if the copy failed.
+    Returns the backup file path, or None if the snapshot failed.
     """
     os.makedirs(_BACKUP_DIR, exist_ok=True)
     from datetime import datetime as _dt
@@ -6580,7 +6596,7 @@ def _create_import_backup(profile_id=None):
         fname = f"{_BACKUP_PREFIX}{ts}.db"
     backup_path = os.path.join(_BACKUP_DIR, fname)
     try:
-        shutil.copy2(DB_PATH, backup_path)
+        sqlite_backup(DB_PATH, backup_path)
     except Exception:
         return None
 
@@ -6598,6 +6614,7 @@ def _create_import_backup(profile_id=None):
                 os.remove(old)
             except OSError:
                 pass
+            remove_sidecars(old)
 
     return backup_path
 
@@ -6658,7 +6675,7 @@ def list_import_backups():
 
 @app.route("/api/import/restore", methods=["POST"])
 def restore_import_backup():
-    """Restore the database from a backup.
+    """Restore the database from a backup without replaying leftover WAL.
 
     Expects JSON: {"filename": "portfolio_backup_20260414_120000.db"}
     Legacy portfolio_pre_import_* backup filenames are also accepted.
@@ -6674,11 +6691,15 @@ def restore_import_backup():
         return jsonify({"error": "Backup file not found"}), 404
 
     try:
-        shutil.copy2(backup_path, DB_PATH)
+        sqlite_restore(backup_path, DB_PATH)
     except Exception as e:
         return jsonify({"error": f"Restore failed: {e}"}), 500
 
+    # A restored backup may predate the current schema. Force the normal
+    # before-request migration to run on the next API call.
+    app._db_initialized = False
     _clear_dividend_event_caches()
+    _clear_market_data_memory_caches()
     return jsonify({"message": f"Database restored from {fname}. Refresh your browser to see the changes."})
 
 
@@ -6731,6 +6752,7 @@ def delete_backup(filename):
         os.remove(backup_path)
     except OSError as e:
         return jsonify({"error": f"Delete failed: {e}"}), 500
+    remove_sidecars(backup_path)
     return jsonify({"message": f"Deleted {filename}."})
 
 
@@ -6998,6 +7020,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             # The projection this payment settles almost never shares its date.
             _prune_superseded_refresh_estimates(conn, ticker, profile_id, date_str, div_freq)
 
+        import_hash_occ = {}
         for txn in non_div_txns:
             profile_key = str(txn.get("profile") or "").strip().lower()
             profile_id = profile_by_name.get(profile_key, transaction_profile_fallback)
@@ -7011,6 +7034,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             fees = txn.get("fees") or 0
             realized_gain = txn.get("realized_gain")
             notes = txn.get("notes") or "Imported from portfolio export"
+            ident = equity_identity(profile_id, ticker, txn_type, txn_date, shares, price, fees)
+            import_hash_occ[ident] = import_hash_occ.get(ident, 0) + 1
 
             # Match on date+shares with a sub-cent price tolerance: the same
             # fill can arrive from two feeds that round the price differently
@@ -7040,11 +7065,23 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 transaction_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
                 continue
 
-            conn.execute(
-                "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, "
-                "shares, price_per_share, fees, realized_gain, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (ticker, profile_id, txn_type, txn_date, shares, price, fees, realized_gain, notes),
+            new_id = insert_equity_transaction(
+                conn,
+                ticker,
+                profile_id,
+                transaction_type=txn_type,
+                transaction_date=txn_date,
+                shares=shares,
+                price_per_share=price,
+                fees=fees,
+                realized_gain=realized_gain,
+                notes=notes,
+                dedupe_hash=stored_equity_hash(equity_identity_hash(ident), import_hash_occ[ident]),
             )
+            if new_id is None:
+                duplicates_skipped += 1
+                transaction_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
+                continue
             if txn_type == "BUY":
                 inserted_buys += 1
             else:
@@ -7803,9 +7840,15 @@ def api_import_transactions():
             _prune_superseded_refresh_estimates(conn, ticker, profile_id, date_str, div_freq)
 
         # Insert BUY/SELL transactions
+        import_hash_occ = {}
         for txn in non_div_txns:
             ticker = txn["ticker"]
             tickers_seen_txns.add(ticker)
+            ident = equity_identity(
+                profile_id, ticker, txn["type"], txn["date"],
+                txn["shares"], txn.get("price_per_share") or 0, txn.get("fees") or 0,
+            )
+            import_hash_occ[ident] = import_hash_occ.get(ident, 0) + 1
             # Count-based duplicate check so legitimate identical transactions
             # (same day/qty/price) are preserved while re-imports are deduped.
             # DB count includes uncommitted inserts from this batch (same conn).
@@ -7859,12 +7902,21 @@ def api_import_transactions():
                     (ticker, profile_id, "", _date.today().isoformat()),
                 )
 
-            conn.execute(
-                "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, "
-                "shares, price_per_share, fees, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ticker, profile_id, txn["type"], txn["date"],
-                 txn["shares"], txn["price_per_share"], txn["fees"], txn.get("notes", "")),
+            new_id = insert_equity_transaction(
+                conn,
+                ticker,
+                profile_id,
+                transaction_type=txn["type"],
+                transaction_date=txn["date"],
+                shares=txn["shares"],
+                price_per_share=txn["price_per_share"],
+                fees=txn["fees"],
+                notes=txn.get("notes", ""),
+                dedupe_hash=stored_equity_hash(equity_identity_hash(ident), import_hash_occ[ident]),
             )
+            if new_id is None:
+                duplicates_skipped += 1
+                continue
 
             if txn["type"] == "BUY":
                 inserted_buys += 1
@@ -8279,6 +8331,23 @@ def api_nav_snapshot():
     })
 
 
+def _refresh_payload_complete_for_close(payload):
+    """True only when every holding received a fresh price this refresh.
+
+    A partial Yahoo download leaves yesterday's price on the failed tickers.
+    Stamping source='close' on that mix would record an official NAV that is not
+    today's close.
+    """
+    if not isinstance(payload, dict):
+        return False
+    failures = payload.get("price_failures")
+    if failures:
+        return False
+    if payload.get("price_complete") is not True:
+        return False
+    return True
+
+
 @app.route("/api/nav/auto-capture", methods=["POST"])
 def api_nav_auto_capture():
     """Record the official closing NAV once the market has closed for the day.
@@ -8335,13 +8404,48 @@ def api_nav_auto_capture():
     # "refresh, then Record NAV" exactly rather than reusing a stale intraday
     # price. Reuses the same refresh the manual button runs.
     try:
-        refresh_market_data()
+        refresh_response = refresh_market_data()
     except Exception as exc:  # noqa: BLE001 - never let a refresh hiccup 500 the poll
         return jsonify({
             "captured": False,
             "skipped": True,
             "reason": f"Price refresh failed: {exc}",
             "nav_date": market_date_str,
+        })
+
+    refresh_payload = {}
+    status_code = getattr(refresh_response, "status_code", 200)
+    if hasattr(refresh_response, "get_json"):
+        try:
+            refresh_payload = refresh_response.get_json() or {}
+        except Exception:
+            refresh_payload = {}
+    if status_code >= 400:
+        detail = (refresh_payload or {}).get("error") or f"HTTP {status_code}"
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": f"Price refresh failed: {detail}",
+            "nav_date": market_date_str,
+        })
+    if not _refresh_payload_complete_for_close(refresh_payload):
+        failures = list(refresh_payload.get("price_failures") or [])
+        shown = ", ".join(failures[:8])
+        extra = len(failures) - 8
+        detail = shown + (f", +{extra} more" if extra > 0 else "")
+        reason = (
+            "Price refresh was incomplete; today's close was not recorded "
+            f"because {len(failures)} ticker(s) kept a prior price"
+        )
+        if detail:
+            reason += f" ({detail})"
+        reason += "."
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": reason,
+            "nav_date": market_date_str,
+            "price_failures": failures,
         })
 
     values = {}
@@ -11596,7 +11700,8 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None, as_of=None):
         pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
 
     if history.empty and not official_freq and not future_schedule and distribution_rate_pct is None:
-        return None
+        stale = _load_persisted_market_payload("xfunds", ticker, "distribution")
+        return stale
 
     freq = official_freq
     if not freq and not history.empty:
@@ -11629,7 +11734,7 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None, as_of=None):
     if amount is None:
         amount = _xfunds_implied_distribution(distribution_rate_pct, nav_price, freq)
 
-    return {
+    snapshot = {
         "known": True,
         "has_dividend": amount is not None and amount > 0,
         "div": amount,
@@ -11642,6 +11747,8 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None, as_of=None):
         "source": "X Funds",
         "source_url": page_url,
     }
+    _persist_market_payload("xfunds", ticker, "distribution", snapshot)
+    return snapshot
 
 
 def _fetch_kurv_distribution_snapshot(ticker):
@@ -12799,23 +12906,41 @@ def _fetch_official_distribution_snapshot(ticker, description=None):
     if entry is None:
         return None
     cache_key = (ticker, entry["fetcher"])
+    persist_kind = str(entry["fetcher"] or "distribution")
     cached = _cache_get(
         _OFFICIAL_DISTRIBUTION_CACHE,
         cache_key,
         _OFFICIAL_DISTRIBUTION_TTL_SEC,
     )
     if cached is False:
-        return None
+        stale = _load_persisted_market_payload("official", ticker, persist_kind)
+        if stale is not None:
+            _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, stale)
+        return stale
     if cached is not None:
         return cached
+    persisted = _load_persisted_market_payload(
+        "official", ticker, persist_kind, ttl=_OFFICIAL_DISTRIBUTION_TTL_SEC
+    )
+    if persisted is not None:
+        _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, persisted)
+        return persisted
     fetcher = globals().get(entry["fetcher"])
     if fetcher is None:
         return None
     result = fetcher(ticker)
+    if result is not None:
+        _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, result)
+        _persist_market_payload("official", ticker, persist_kind, result)
+        return result
+    stale = _load_persisted_market_payload("official", ticker, persist_kind)
+    if stale is not None:
+        _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, stale)
+        return stale
     # Cache misses too. Unsupported/new tickers otherwise repeatedly wait on
     # the same issuer page every time the return mode changes.
-    _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, result if result is not None else False)
-    return result
+    _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, False)
+    return None
 
 
 def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
@@ -13249,6 +13374,8 @@ def refresh_market_data():
             "daily_change": None,
             "refresh_date": _dt.now().date().isoformat(),
             "message": "No holdings to refresh",
+            "price_failures": [],
+            "price_complete": True,
         })
 
     tickers = list({r["ticker"] for r in all_rows})
@@ -13422,6 +13549,8 @@ def refresh_market_data():
                             pass
             except Exception:
                 pass
+
+    price_failures = sorted(t for t in tickers if t not in price_map)
 
     lag_pattern_map = _build_dividend_lag_patterns(conn)
 
@@ -14344,6 +14473,8 @@ def refresh_market_data():
         "daily_change": daily_change,
         "refresh_date": refresh_date.isoformat(),
         "message": msg,
+        "price_failures": price_failures,
+        "price_complete": not price_failures,
     })
 
 
@@ -15823,11 +15954,16 @@ def _import_as_transactions(profile_id, pre_snapshot):
         if not old:
             # New ticker — create first BUY from imported data
             if imp_qty > 0:
-                conn.execute(
-                    "INSERT INTO transactions (ticker, profile_id, transaction_type, "
-                    "transaction_date, shares, price_per_share, fees, notes) "
-                    "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Imported from spreadsheet')",
-                    (ticker, profile_id, imp_date, imp_qty, imp_price),
+                insert_equity_transaction(
+                    conn,
+                    ticker,
+                    profile_id,
+                    transaction_type="BUY",
+                    transaction_date=imp_date,
+                    shares=imp_qty,
+                    price_per_share=imp_price,
+                    fees=0,
+                    notes="Imported from spreadsheet",
                 )
                 conn.commit()
                 _rollup_transactions(ticker, profile_id, conn)
@@ -15839,30 +15975,44 @@ def _import_as_transactions(profile_id, pre_snapshot):
         if not old["has_txns"]:
             # Seed the pre-import position as the first transaction
             if old_qty > 0:
-                conn.execute(
-                    "INSERT INTO transactions (ticker, profile_id, transaction_type, "
-                    "transaction_date, shares, price_per_share, fees, notes) "
-                    "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Seed from pre-import position')",
-                    (ticker, profile_id, old["date"] or _date.today().isoformat(),
-                     old_qty, old["price"] or 0),
+                insert_equity_transaction(
+                    conn,
+                    ticker,
+                    profile_id,
+                    transaction_type="BUY",
+                    transaction_date=old["date"] or _date.today().isoformat(),
+                    shares=old_qty,
+                    price_per_share=old["price"] or 0,
+                    fees=0,
+                    notes="Seed from pre-import position",
                 )
                 conn.commit()
 
         if delta > 0:
-            conn.execute(
-                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
-                "transaction_date, shares, price_per_share, fees, notes) "
-                "VALUES (?, ?, 'BUY', ?, ?, ?, 0, 'Imported from spreadsheet')",
-                (ticker, profile_id, imp_date, delta, imp_price),
+            insert_equity_transaction(
+                conn,
+                ticker,
+                profile_id,
+                transaction_type="BUY",
+                transaction_date=imp_date,
+                shares=delta,
+                price_per_share=imp_price,
+                fees=0,
+                notes="Imported from spreadsheet",
             )
             conn.commit()
             _rollup_transactions(ticker, profile_id, conn)
         elif delta < 0:
-            conn.execute(
-                "INSERT INTO transactions (ticker, profile_id, transaction_type, "
-                "transaction_date, shares, price_per_share, fees, notes) "
-                "VALUES (?, ?, 'SELL', ?, ?, ?, 0, 'Imported from spreadsheet')",
-                (ticker, profile_id, imp_date, abs(delta), imp_price),
+            insert_equity_transaction(
+                conn,
+                ticker,
+                profile_id,
+                transaction_type="SELL",
+                transaction_date=imp_date,
+                shares=abs(delta),
+                price_per_share=imp_price,
+                fees=0,
+                notes="Imported from spreadsheet",
             )
             conn.commit()
             _rollup_transactions(ticker, profile_id, conn)
@@ -16556,10 +16706,16 @@ def _seed_transaction_if_needed(ticker, profile_id, conn):
     pdate = holding["purchase_date"] if isinstance(holding, dict) else holding[2]
     if not qty:
         return
-    conn.execute(
-        "INSERT INTO transactions (ticker, profile_id, transaction_date, shares, price_per_share, fees, notes) "
-        "VALUES (?, ?, ?, ?, ?, 0, 'Initial seed from existing holding')",
-        (ticker, profile_id, pdate, qty, price),
+    insert_equity_transaction(
+        conn,
+        ticker,
+        profile_id,
+        transaction_type="BUY",
+        transaction_date=pdate,
+        shares=qty,
+        price_per_share=price,
+        fees=0,
+        notes="Initial seed from existing holding",
     )
 
 
@@ -17572,14 +17728,21 @@ def add_transaction(ticker):
         conn.close()
         return jsonify({"error": str(e)}), 400
 
-    cur = conn.execute(
-        "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, acquired_date) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (ticker, profile_id, txn_type, data.get("transaction_date"), shares,
-         data.get("price_per_share"), data.get("fees", 0), data.get("notes"),
-         data.get("acquired_date") or None),
+    new_txn_id = insert_equity_transaction(
+        conn,
+        ticker,
+        profile_id,
+        transaction_type=txn_type,
+        transaction_date=data.get("transaction_date"),
+        shares=shares,
+        price_per_share=data.get("price_per_share"),
+        fees=data.get("fees", 0),
+        notes=data.get("notes"),
+        acquired_date=data.get("acquired_date") or None,
     )
-    new_txn_id = cur.lastrowid
+    if new_txn_id is None:
+        conn.close()
+        return jsonify({"error": "This transaction matches an existing one and was not added."}), 409
     conn.commit()
 
     # Store specific-lot allocations if provided
@@ -17705,6 +17868,7 @@ def update_transaction(ticker, txn_id):
 
     vals.append(txn_id)
     conn.execute(f"UPDATE transactions SET {', '.join(updates)} WHERE id = ?", vals)
+    refresh_transaction_dedupe_hash(conn, txn_id)
     conn.execute("DELETE FROM transaction_lot_allocations WHERE sell_txn_id = ?", (txn_id,))
     if new_type == "SELL" and normalized_allocs:
         for alloc in normalized_allocs:
@@ -21467,23 +21631,38 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
     ticker = (ticker or "").strip().upper()
     if not ticker or not _is_xfunds_fund(ticker):
         return None
+
+    def _stale_xfunds_profile():
+        stale = _load_persisted_market_payload("xfunds", ticker, "research")
+        if stale is not None:
+            if use_cache:
+                _cache_set(_XFUNDS_RESEARCH_CACHE, ticker, dict(stale))
+            return dict(stale)
+        return None
+
     if use_cache:
         cached = _cache_get(_XFUNDS_RESEARCH_CACHE, ticker, _XFUNDS_RESEARCH_TTL_SEC)
         if cached is not None:
             return dict(cached)
+        persisted = _load_persisted_market_payload(
+            "xfunds", ticker, "research", ttl=_XFUNDS_RESEARCH_TTL_SEC
+        )
+        if persisted is not None:
+            _cache_set(_XFUNDS_RESEARCH_CACHE, ticker, dict(persisted))
+            return dict(persisted)
 
     session = session or requests.Session()
     source_url = f"{_XFUNDS_BASE_URL}/{ticker.lower()}/"
     page_response = _xfunds_http_get(session, source_url)
     if page_response is None:
-        return None
+        return _stale_xfunds_profile()
     page_html = page_response.text or ""
     if "Page Not Found" in page_html or "data-twm-type" not in page_html:
-        return None
+        return _stale_xfunds_profile()
 
     post_id = _xfunds_page_post_id(page_html)
     if not post_id:
-        return None
+        return _stale_xfunds_profile()
 
     fund_info = _xfunds_label_map(_xfunds_live_rows(session, post_id, "fund-info-table"))
     daily_nav = _xfunds_label_map(_xfunds_live_rows(session, post_id, "daily-nav-table"))
@@ -21499,7 +21678,7 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
 
     official_ticker = (_xfunds_map_value(fund_info, "ticker") or holdings_meta.get("ticker") or "").upper()
     if official_ticker and official_ticker != ticker:
-        return None
+        return _stale_xfunds_profile()
 
     summary = _xfunds_page_section(page_html, "Fund Summary", max_paragraphs=2)
     objective = _xfunds_page_section(page_html, "Fund Objective", max_paragraphs=2)
@@ -21550,8 +21729,9 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
         "nav_price", "inception_date", "top_holdings",
     )
     if not any(_research_has_value(profile.get(field)) for field in useful_fields):
-        return None
+        return _stale_xfunds_profile()
     _cache_set(_XFUNDS_RESEARCH_CACHE, ticker, dict(profile))
+    _persist_market_payload("xfunds", ticker, "research", dict(profile))
     return profile
 
 
