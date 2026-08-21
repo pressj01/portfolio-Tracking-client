@@ -41,6 +41,11 @@ import ColumnCustomizer from '../components/ColumnCustomizer'
 import GradePeriodHelp from '../components/GradePeriodHelp'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { layoutFromVisibleKeys } from '../utils/columnLayout'
+import {
+  NAV_HISTORY_INTERVALS,
+  isNavHistoryInterval,
+  resampleNavHistory,
+} from '../utils/navHistoryInterval'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
@@ -58,6 +63,7 @@ const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
 const SHORT_WINDOW_MIN_TRADING_DAYS = 15
 const OVERVIEW_RETURN_MODE_KEY = 'dashboard_overview_return_mode_v1'
 const NAV_RETURN_MODE_KEY = 'dashboard_nav_return_mode_v1'
+const NAV_HISTORY_INTERVAL_KEY = 'dashboard_nav_history_interval_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
 const IRR_EXCLUSIONS_KEY_PREFIX = 'dashboard_irr_exclusions_v1_'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
@@ -203,6 +209,23 @@ const persistNavReturnMode = (mode) => {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(NAV_RETURN_MODE_KEY, mode)
+  } catch {}
+}
+
+const readNavHistoryInterval = () => {
+  if (typeof window === 'undefined') return 'daily'
+  try {
+    const interval = window.localStorage.getItem(NAV_HISTORY_INTERVAL_KEY)
+    return isNavHistoryInterval(interval) ? interval : 'daily'
+  } catch {
+    return 'daily'
+  }
+}
+
+const persistNavHistoryInterval = (interval) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(NAV_HISTORY_INTERVAL_KEY, interval)
   } catch {}
 }
 
@@ -1118,6 +1141,7 @@ export default function Dashboard() {
   const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
   const [navReturnMode, setNavReturnMode] = useState(readNavReturnMode)
+  const [navHistoryInterval, setNavHistoryInterval] = useState(readNavHistoryInterval)
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
@@ -2290,13 +2314,13 @@ export default function Dashboard() {
     const el = navChartRef.current
     if (!el || !window.Plotly || navHistory.length < 1) return
     const isTotalReturn = navReturnMode === 'total'
-    const points = navHistory
+    const points = resampleNavHistory(navHistory
       .map(r => ({
         date: r.date,
         value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
         dividends: Number(r.cumulative_dividends) || 0,
       }))
-      .filter(r => r.date && Number.isFinite(r.value))
+      .filter(r => r.date && Number.isFinite(r.value)), navHistoryInterval)
     if (points.length < 1) return
 
     const dates = points.map(r => r.date)
@@ -2396,7 +2420,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory, navReturnMode, isDark])
+  }, [navHistory, navReturnMode, navHistoryInterval, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -2964,8 +2988,32 @@ export default function Dashboard() {
           <h3 style={{ color: 'var(--accent-2)', margin: 0, fontSize: '1rem' }}>Portfolio Value Over Time</h3>
           <div
             role="group"
-            aria-label="Portfolio value chart return type"
+            aria-label="Portfolio value chart interval"
             style={{ display: 'flex', marginLeft: 'auto' }}
+          >
+            {NAV_HISTORY_INTERVALS.map((option, index, options) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`btn btn-sm${navHistoryInterval === option.value ? ' btn-active' : ''}`}
+                style={{
+                  borderRadius: index === 0 ? '4px 0 0 4px' : index === options.length - 1 ? '0 4px 4px 0' : 0,
+                }}
+                aria-pressed={navHistoryInterval === option.value}
+                title={option.title}
+                onClick={() => {
+                  setNavHistoryInterval(option.value)
+                  persistNavHistoryInterval(option.value)
+                }}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <div
+            role="group"
+            aria-label="Portfolio value chart return type"
+            style={{ display: 'flex' }}
           >
             {[
               { value: 'price', label: 'Price Return', title: 'Show recorded portfolio value without adding dividend payments' },
