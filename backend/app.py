@@ -103,9 +103,11 @@ from diversification import (
 )
 from sector_exposure import register_routes as register_sector_exposure_routes
 from option_trade_tracker import (
+    expired_open_legs,
     open_option_liquidating_value,
     realized_option_income,
     register_routes as register_option_trade_routes,
+    _option_trade_read_scope,
 )
 from put_scanner import register_routes as register_put_scanner_routes
 from call_scanner import register_routes as register_call_scanner_routes
@@ -8175,6 +8177,60 @@ def api_portfolio_value():
 BROKER_IMPORT_STALE_DAYS = 30
 
 
+def _parse_holding_import_date(value):
+    if not value:
+        return None
+    from datetime import datetime as _dt
+    for fmt in ("%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y"):
+        try:
+            return _dt.strptime(str(value).strip(), fmt).date()
+        except Exception:
+            pass
+    return None
+
+
+def _stale_broker_import_accounts(conn, profile_ids, today=None):
+    """Broker-managed DRIP accounts whose positions snapshot is overdue."""
+    from datetime import date as _date
+    today = today or _date.today()
+    if not profile_ids:
+        return []
+    placeholders = ",".join("?" * len(profile_ids))
+    managed_rows = conn.execute(
+        f"SELECT id, name FROM profiles "
+        f"WHERE positions_managed = 1 AND id IN ({placeholders})",
+        profile_ids,
+    ).fetchall()
+    stale_accounts = []
+    for row in managed_rows:
+        pid = row["id"] if isinstance(row, dict) else row[0]
+        name = row["name"] if isinstance(row, dict) else row[1]
+        drip_row = conn.execute(
+            """SELECT COUNT(*), MAX(import_date)
+               FROM all_account_info
+               WHERE profile_id = ? AND quantity > 0
+                 AND UPPER(COALESCE(reinvest, '')) = 'Y'""",
+            (pid,),
+        ).fetchone()
+        drip_count = (drip_row[0] if drip_row else 0) or 0
+        if drip_count <= 0:
+            continue
+        last_import = _parse_holding_import_date(drip_row[1] if drip_row else None)
+        if last_import is None:
+            continue
+        days = (today - last_import).days
+        if days >= BROKER_IMPORT_STALE_DAYS:
+            stale_accounts.append({
+                "profile_id": pid,
+                "name": name or f"Profile {pid}",
+                "days_since_import": days,
+                "drip_holdings": int(drip_count),
+                "last_import": last_import.isoformat(),
+            })
+    stale_accounts.sort(key=lambda a: a["days_since_import"], reverse=True)
+    return stale_accounts
+
+
 @app.route("/api/broker-import-status", methods=["GET"])
 def api_broker_import_status():
     """Flag broker-managed accounts with DRIP holdings that are overdue for an import.
@@ -8183,62 +8239,13 @@ def api_broker_import_status():
     reinvesting holding are considered, since those are the only accounts whose
     share counts silently drift when imports stop.
     """
-    from datetime import datetime as _dt, date as _date
-
-    def _parse_import_date(value):
-        if not value:
-            return None
-        for fmt in ("%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y"):
-            try:
-                return _dt.strptime(str(value).strip(), fmt).date()
-            except Exception:
-                pass
-        return None
+    from datetime import date as _date
 
     conn = get_connection()
     try:
         info = _get_refresh_target_info(conn)
         source_pids = info["source_profile_ids"]
-        if not source_pids:
-            return jsonify({"stale": False, "stale_accounts": []})
-
-        placeholders = ",".join("?" * len(source_pids))
-        managed_rows = conn.execute(
-            f"SELECT id, name FROM profiles "
-            f"WHERE positions_managed = 1 AND id IN ({placeholders})",
-            source_pids,
-        ).fetchall()
-
-        today = _date.today()
-        stale_accounts = []
-        for row in managed_rows:
-            pid = row["id"] if isinstance(row, dict) else row[0]
-            name = row["name"] if isinstance(row, dict) else row[1]
-            # Only accounts with at least one DRIP-enabled holding can drift.
-            drip_row = conn.execute(
-                """SELECT COUNT(*), MAX(import_date)
-                   FROM all_account_info
-                   WHERE profile_id = ? AND quantity > 0
-                     AND UPPER(COALESCE(reinvest, '')) = 'Y'""",
-                (pid,),
-            ).fetchone()
-            drip_count = (drip_row[0] if drip_row else 0) or 0
-            if drip_count <= 0:
-                continue
-            last_import = _parse_import_date(drip_row[1] if drip_row else None)
-            if last_import is None:
-                continue
-            days = (today - last_import).days
-            if days >= BROKER_IMPORT_STALE_DAYS:
-                stale_accounts.append({
-                    "profile_id": pid,
-                    "name": name or f"Profile {pid}",
-                    "days_since_import": days,
-                    "drip_holdings": int(drip_count),
-                    "last_import": last_import.isoformat(),
-                })
-
-        stale_accounts.sort(key=lambda a: a["days_since_import"], reverse=True)
+        stale_accounts = _stale_broker_import_accounts(conn, source_pids, today=_date.today())
         return jsonify({
             "stale": bool(stale_accounts),
             "stale_days": BROKER_IMPORT_STALE_DAYS,
@@ -14713,6 +14720,190 @@ def _action_center_refresh_profile_ids(conn, is_agg, pids):
     return [profile_id]
 
 
+def _action_center_option_followups(conn, is_agg, pids, today):
+    """Open option trades that are past expiration or inside a 21-day roll window."""
+    expired = []
+    upcoming = []
+    try:
+        option_pids, _ = _option_trade_read_scope(conn, is_agg, pids)
+        expired = expired_open_legs(conn, option_pids, today=today)
+        if not option_pids:
+            return expired, upcoming
+        placeholders = ",".join("?" * len(option_pids))
+        horizon = (today + datetime.timedelta(days=21)).isoformat()
+        today_iso = today.isoformat()
+        rows = conn.execute(
+            f"""SELECT t.id, t.underlying, t.strategy_type, t.profile_id,
+                       MIN(substr(l.expiration, 1, 10)) AS expiration
+                  FROM option_trades t
+                  JOIN option_trade_legs l ON l.trade_id = t.id
+                 WHERE t.profile_id IN ({placeholders})
+                   AND t.status = 'OPEN'
+                   AND l.status = 'OPEN'
+                 GROUP BY t.id
+                 ORDER BY expiration, t.underlying""",
+            option_pids,
+        ).fetchall()
+        sql_expired = []
+        for row in rows:
+            expiration = str(row["expiration"] or "")[:10]
+            if not expiration:
+                continue
+            payload = dict(row)
+            if expiration < today_iso:
+                sql_expired.append(payload)
+            elif expiration <= horizon:
+                upcoming.append(payload)
+        if not expired:
+            expired = sql_expired
+    except sqlite3.OperationalError:
+        pass
+    return expired, upcoming
+
+
+def _action_center_unconfirmed_estimates(conn, pids, today):
+    """Refresh-estimate dividend rows whose pay date has already passed."""
+    if not pids:
+        return []
+    placeholders = ",".join("?" * len(pids))
+    try:
+        rows = conn.execute(
+            f"""SELECT ticker, profile_id, payment_date, amount
+                  FROM dividend_payments
+                 WHERE profile_id IN ({placeholders})
+                   AND LOWER(COALESCE(source, '')) = 'refresh_estimate'""",
+            pids,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    today_iso = today.isoformat()
+    past = []
+    for row in rows:
+        iso = _action_iso_date(row["payment_date"])
+        if iso and iso < today_iso:
+            past.append({
+                "ticker": row["ticker"],
+                "profile_id": row["profile_id"],
+                "payment_date": iso,
+                "amount": float(row["amount"] or 0),
+            })
+    past.sort(key=lambda item: (item["payment_date"], item["ticker"]))
+    return past
+
+
+def _action_center_etf_closure_rows(conn, holdings):
+    """Flag held ETFs whose seed AUM is small enough to carry closure risk."""
+    tickers = sorted({str(h.get("ticker") or "").strip().upper() for h in holdings if h.get("ticker")})
+    if not tickers:
+        return []
+    placeholders = ",".join("?" * len(tickers))
+    try:
+        rows = conn.execute(
+            f"""SELECT UPPER(symbol) AS ticker, MAX(assets) AS assets
+                  FROM etf_provider_funds
+                 WHERE UPPER(symbol) IN ({placeholders})
+                 GROUP BY UPPER(symbol)""",
+            tickers,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    flagged = []
+    for row in rows:
+        if row["assets"] is None:
+            continue
+        try:
+            aum = float(row["assets"])
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(aum) or aum <= 0:
+            continue
+        if aum < 10_000_000:
+            tier = "high"
+        elif aum < 25_000_000:
+            tier = "elevated"
+        elif aum < 50_000_000:
+            tier = "watch"
+        else:
+            continue
+        flagged.append({
+            "ticker": row["ticker"],
+            "aum": aum,
+            "tier": tier,
+        })
+    rank = {"high": 3, "elevated": 2, "watch": 1}
+    flagged.sort(key=lambda item: (-rank.get(item["tier"], 0), item["aum"], item["ticker"]))
+    return flagged
+
+
+def _action_center_cef_discount_rows(holdings):
+    """CEF Connect discounts/premiums for tickers currently held."""
+    held = {str(h.get("ticker") or "").strip().upper() for h in holdings if h.get("ticker")}
+    if not held:
+        return []
+    try:
+        cef_map = _cef_row_map()
+    except Exception:
+        return []
+    flagged = []
+    for ticker in held:
+        row = cef_map.get(ticker) or {}
+        discount = row.get("premium_discount")
+        try:
+            discount = float(discount)
+        except (TypeError, ValueError):
+            continue
+        if discount <= -10 or discount >= 8:
+            flagged.append({
+                "ticker": ticker,
+                "premium_discount": discount,
+                "nav": row.get("nav"),
+            })
+    flagged.sort(key=lambda item: abs(item["premium_discount"]), reverse=True)
+    return flagged
+
+
+def _action_center_nav_erosion_rows(holdings, profile_ids):
+    """High NAV-erosion names from the latest cached coverage payload, if any."""
+    held = {str(h.get("ticker") or "").strip().upper() for h in holdings if h.get("ticker")}
+    scoped_profile_ids = {int(pid) for pid in profile_ids if pid is not None}
+    if not held or not scoped_profile_ids:
+        return []
+    now = time.time()
+    ttl = globals().get("_PORTFOLIO_SUMMARY_TTL_SEC", 15 * 60)
+    latest_by_profile = {}
+    for cache_key, entry in _PORTFOLIO_COVERAGE_CACHE.items():
+        if not entry:
+            continue
+        try:
+            cache_profile_id = int(cache_key[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if cache_profile_id not in scoped_profile_ids:
+            continue
+        ts, payload = entry
+        if now - ts > ttl:
+            continue
+        previous = latest_by_profile.get(cache_profile_id)
+        if previous is None or ts >= previous[0]:
+            latest_by_profile[cache_profile_id] = (ts, payload)
+    high_by_ticker = {}
+    for _ts, payload in latest_by_profile.values():
+        for row in payload.get("results") or []:
+            ticker = str(row.get("ticker") or "").strip().upper()
+            if ticker not in held:
+                continue
+            if str(row.get("nav_erosion_severity") or "").strip().lower() != "high":
+                continue
+            high_by_ticker[ticker] = {
+                "ticker": ticker,
+                "coverage_ratio": row.get("coverage_ratio"),
+                "price_change_pct": row.get("price_change_pct"),
+            }
+    high = list(high_by_ticker.values())
+    high.sort(key=lambda item: item["ticker"])
+    return high
+
+
 @app.route("/api/action-center", methods=["GET"])
 def action_center():
     """Return prioritized portfolio follow-up items assembled from existing data."""
@@ -14749,6 +14940,7 @@ def action_center():
         total_monthly_income = sum(float(h.get("approx_monthly_income") or 0) for h in holdings)
 
         refresh_pids = _action_center_refresh_profile_ids(conn, is_agg, pids)
+        action_read_pids = list(dict.fromkeys([*pids, *refresh_pids]))
         missing_names = [pid for pid in refresh_pids if pid not in profile_names]
         if missing_names:
             name_placeholders = ",".join("?" * len(missing_names))
@@ -14788,8 +14980,181 @@ def action_center():
                 f"{len(refresh_items)} account{'s' if len(refresh_items) != 1 else ''} may be stale. {label}.",
                 "/holdings",
                 cta="Refresh Prices & Divs",
+                action="refresh",
                 metric=oldest,
                 id="refresh-market-data",
+            )
+
+        stale_accounts = _stale_broker_import_accounts(conn, refresh_pids, today=today)
+        if stale_accounts:
+            names = ", ".join(
+                f"{acct['name']} ({acct['days_since_import']} days)"
+                for acct in stale_accounts[:4]
+            )
+            extra = len(stale_accounts) - 4
+            if extra > 0:
+                names += f", +{extra} more"
+            title = (
+                f"Re-import {stale_accounts[0]['name']} positions"
+                if len(stale_accounts) == 1
+                else f"Re-import {len(stale_accounts)} stale broker accounts"
+            )
+            _action_item(
+                items,
+                "data",
+                "warning",
+                title,
+                "Broker-managed DRIP accounts have not been imported in over a month, "
+                "so tracked share counts are drifting below the broker. A positions "
+                f"snapshot import is required (transactions-only will not fix quantities): {names}.",
+                "/import",
+                cta="Open Import",
+                metric=max(acct["days_since_import"] for acct in stale_accounts),
+                id="stale-broker-import",
+            )
+
+        expired_legs, upcoming_rolls = _action_center_option_followups(conn, is_agg, pids, today)
+        if expired_legs:
+            tickers = []
+            seen = set()
+            for leg in expired_legs:
+                name = str(leg.get("underlying") or "").upper()
+                if name and name not in seen:
+                    seen.add(name)
+                    tickers.append(name)
+            shown = ", ".join(tickers[:6])
+            if len(tickers) > 6:
+                shown += f", +{len(tickers) - 6} more"
+            _action_item(
+                items,
+                "options",
+                "warning",
+                "Settle expired option trades",
+                f"{len(expired_legs)} open option leg"
+                f"{'' if len(expired_legs) == 1 else 's'} are past expiration "
+                f"with no close recorded ({shown}). Record EXPIRE or a close so rolls and P/L stay honest.",
+                "/option-trades",
+                cta="Open Option Trades",
+                metric=len(expired_legs),
+                id="option-expired-open",
+            )
+        if upcoming_rolls:
+            shown = ", ".join(
+                f"{row['underlying']} {row['expiration']}"
+                for row in upcoming_rolls[:5]
+            )
+            extra = len(upcoming_rolls) - 5
+            if extra > 0:
+                shown += f", +{extra} more"
+            _action_item(
+                items,
+                "options",
+                "info" if not expired_legs else "warning",
+                "Option expirations and rolls due",
+                f"{len(upcoming_rolls)} open trade"
+                f"{'' if len(upcoming_rolls) == 1 else 's'} expire within 21 days: {shown}.",
+                "/option-trades",
+                cta="Open Option Trades",
+                metric=len(upcoming_rolls),
+                id="option-rolls-due",
+            )
+
+        past_estimates = _action_center_unconfirmed_estimates(conn, action_read_pids, today)
+        if past_estimates:
+            total_amt = sum(item["amount"] for item in past_estimates)
+            shown = ", ".join(
+                f"{item['ticker']} {item['payment_date']}"
+                for item in past_estimates[:5]
+            )
+            extra = len(past_estimates) - 5
+            if extra > 0:
+                shown += f", +{extra} more"
+            _action_item(
+                items,
+                "dividend",
+                "warning",
+                "Confirm estimated dividend deposits",
+                f"{len(past_estimates)} refresh estimate"
+                f"{'' if len(past_estimates) == 1 else 's'} are past the pay date "
+                f"({_action_money(total_amt)}) and still not replaced by a broker actual: {shown}.",
+                "/dividend-ledger",
+                cta="Open Dividend Ledger",
+                metric=len(past_estimates),
+                id="estimated-dividends-unconfirmed",
+            )
+
+        closure_rows = _action_center_etf_closure_rows(conn, holdings)
+        if closure_rows:
+            serious = [row for row in closure_rows if row["tier"] in {"high", "elevated"}]
+            watch = [row for row in closure_rows if row["tier"] == "watch"]
+            shown = ", ".join(
+                f"{row['ticker']} ({row['tier']})"
+                for row in (serious or closure_rows)[:6]
+            )
+            extra_n = len(serious or closure_rows) - 6
+            if extra_n > 0:
+                shown += f", +{extra_n} more"
+            detail = (
+                f"{len(closure_rows)} held ETF"
+                f"{'' if len(closure_rows) == 1 else 's'} are small enough to carry closure risk"
+            )
+            if serious:
+                detail += f", including {len(serious)} high/elevated: {shown}."
+            else:
+                detail += f" (watch): {shown}."
+            if watch and serious:
+                detail += f" Watch: {', '.join(row['ticker'] for row in watch[:6])}."
+            _action_item(
+                items,
+                "risk",
+                "warning" if serious else "info",
+                "ETF closure risk",
+                detail + " Confirm on the issuer site. Informational only.",
+                "/",
+                cta="Open Dashboard",
+                metric=len(serious) or len(closure_rows),
+                id="etf-closure-risk",
+            )
+
+        cef_rows = _action_center_cef_discount_rows(holdings)
+        if cef_rows:
+            shown = ", ".join(
+                f"{row['ticker']} {_action_pct(row['premium_discount'])}"
+                for row in cef_rows[:5]
+            )
+            extra = len(cef_rows) - 5
+            if extra > 0:
+                shown += f", +{extra} more"
+            _action_item(
+                items,
+                "nav",
+                "warning" if any(row["premium_discount"] >= 8 for row in cef_rows) else "info",
+                "Review CEF discounts",
+                f"{len(cef_rows)} closed-end fund"
+                f"{'' if len(cef_rows) == 1 else 's'} trade at a wide discount or premium: {shown}.",
+                "/nav-erosion",
+                cta="Open NAV Erosion",
+                metric=max(abs(row["premium_discount"]) for row in cef_rows),
+                id="cef-discount-review",
+            )
+
+        nav_rows = _action_center_nav_erosion_rows(holdings, action_read_pids)
+        if nav_rows:
+            shown = ", ".join(row["ticker"] for row in nav_rows[:6])
+            extra = len(nav_rows) - 6
+            if extra > 0:
+                shown += f", +{extra} more"
+            _action_item(
+                items,
+                "nav",
+                "warning",
+                "High NAV erosion",
+                f"{len(nav_rows)} holding"
+                f"{'' if len(nav_rows) == 1 else 's'} currently score High on NAV erosion: {shown}.",
+                "/nav-erosion-portfolio",
+                cta="Open NAV Erosion Screener",
+                metric=len(nav_rows),
+                id="nav-erosion-high",
             )
 
         # Sales costed against nothing report their whole proceeds as profit.
@@ -14939,7 +15304,6 @@ def action_center():
                     cta="Assign categories",
                     metric=unallocated_value,
                     id="assign-unallocated-holdings",
-                    can_complete=True,
                 )
             for _, drift, category, actual, target, value in sorted(drift_rows, reverse=True)[:4]:
                 direction = "over" if drift > 0 else "under"
@@ -15075,7 +15439,7 @@ def action_center():
                 "portfolio",
                 "success",
                 "No urgent follow-ups",
-                "Current data did not surface stale refreshes, large allocation drift, metadata gaps, or unfinished rebalance work.",
+                "Current data did not surface stale refreshes, import drift, option rolls, NAV issues, allocation holes, or unfinished rebalance work.",
                 "/",
                 metric=0,
                 id="all-clear",

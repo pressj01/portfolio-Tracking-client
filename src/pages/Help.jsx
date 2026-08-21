@@ -180,7 +180,7 @@ function Overview() {
         <li><strong>Import</strong> — Bulk-load brokerage positions and transaction history from your own spreadsheet, a generic template, brokerage exports, or the app's own combined holdings + transactions workbook. Supports Schwab (Positions, All Accounts Positions, &amp; Transactions), E*TRADE (Positions &amp; Transactions), Fidelity (Positions &amp; Transactions), Robinhood (Positions PDF &amp; Transactions), Snowball (Holdings Migration &amp; Transactions), and Portfolio Export (Holdings + Transactions). Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
-        <li><strong>Action Center</strong> — Automatically generated follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Dividend, Income, Rebalance, Tax, etc.).</li>
+        <li><strong>Action Center</strong> — Daily inbox of follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Data, Dividend, Options, NAV / CEF, Risk, Rebalance, Tax, etc.). Refresh Data runs a market refresh in place.</li>
         <li><strong>Options</strong> — Build simulated multi-leg trades, graph risk and moneyness, explore first- and higher-order Greeks, and run modeled historical strategy backtests.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
@@ -599,11 +599,11 @@ function ActionCenterHelp() {
         Each item card shows:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Kind</strong> — the category of the item: Allocation, Data, Dividend, Income, Portfolio, Rebalance, or Tax.</li>
+        <li><strong>Kind</strong> — the category of the item: Allocation, Data, Dividend, Income, NAV / CEF, Options, Portfolio, Rebalance, Risk, or Tax.</li>
         <li><strong>Priority badge</strong> — Needs Review (warning), Watch (info), or Clear (success).</li>
         <li><strong>Title &amp; Detail</strong> — a plain-English description of the issue or observation.</li>
-        <li><strong>Open button</strong> — navigates directly to the relevant page in the app so you can act on the item.</li>
-        <li><strong>Mark complete</strong> — available only for items that can be manually reviewed or finished. It removes the item from the active list while keeping it available in Completed.</li>
+        <li><strong>Open / Refresh button</strong> — most items navigate to the relevant page. Stale market-data items run a price and dividend refresh from Action Center instead of sending you to Holdings.</li>
+        <li><strong>Mark complete</strong> — available only for items that can be manually reviewed or finished. It removes the item from the active list while keeping it available in Completed. Data holes such as unallocated holdings, stale broker imports, and unconfirmed dividend estimates stay until the underlying data changes.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Dashboard Preview</h3>
@@ -616,10 +616,12 @@ function ActionCenterHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>When Action Items Are Generated</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Items are computed from the data already in the app — holdings, dividend history, category weights,
-        and income estimates. They are recalculated each time you open the Action Center or Dashboard; completed
-        reviewable items stay hidden until you restore them.
-        No manual refresh is needed; click <strong>Refresh Data</strong> (links to Holdings) if you want
-        to ensure market data is current before reviewing items.
+        option trades, broker imports, and income estimates. They are recalculated each time you open the
+        Action Center or Dashboard; completed reviewable items stay hidden until you restore them.
+        Click <strong>Refresh Data</strong> to run a market-data refresh in place (prices and dividends),
+        then the inbox reloads. Follow-ups also include option expirations and rolls, NAV erosion / CEF
+        discounts, estimated dividend deposits that still lack a broker actual, stale broker re-imports,
+        and ETF closure risk.
       </p>
     </div>
   )

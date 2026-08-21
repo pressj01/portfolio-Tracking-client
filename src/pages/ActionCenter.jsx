@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
+import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { convertMoneyText, formatMoney } from '../utils/money'
 
@@ -16,8 +17,11 @@ const KIND_LABEL = {
   data: 'Data',
   dividend: 'Dividend',
   income: 'Income',
+  nav: 'NAV / CEF',
+  options: 'Options',
   portfolio: 'Portfolio',
   rebalance: 'Rebalance',
+  risk: 'Risk',
   tax: 'Tax',
 }
 
@@ -31,8 +35,9 @@ function ActionSummaryCard({ label, value, sub, tone }) {
   )
 }
 
-function ActionItem({ item, onComplete, onRestore, busy }) {
+function ActionItem({ item, onComplete, onRestore, onRefresh, busy, refreshing }) {
   const kind = KIND_LABEL[item.kind] || item.kind || 'Portfolio'
+  const isRefresh = item.action === 'refresh'
   return (
     <div className={`ac-item ac-${item.priority || 'info'}${item.completed ? ' ac-completed' : ''}`}>
       <div className="ac-item-main">
@@ -67,9 +72,20 @@ function ActionItem({ item, onComplete, onRestore, busy }) {
             {busy ? 'Saving...' : 'Mark complete'}
           </button>
         ) : null}
-        <NavLink className="btn btn-secondary ac-item-link" to={item.route || '/'}>
-          {item.cta || 'Open'}
-        </NavLink>
+        {isRefresh ? (
+          <button
+            type="button"
+            className="btn btn-primary ac-item-link"
+            onClick={() => onRefresh(item)}
+            disabled={refreshing || busy}
+          >
+            {refreshing ? 'Refreshing...' : (item.cta || 'Refresh')}
+          </button>
+        ) : (
+          <NavLink className="btn btn-secondary ac-item-link" to={item.route || '/'}>
+            {item.cta || 'Open'}
+          </NavLink>
+        )}
       </div>
     </div>
   )
@@ -78,6 +94,7 @@ function ActionItem({ item, onComplete, onRestore, busy }) {
 export default function ActionCenter() {
   const pf = useProfileFetch()
   const { selection, currentProfileName } = useProfile()
+  const { runMarketRefresh, isRefreshing, message: refreshMessage } = useMarketRefresh()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -146,6 +163,16 @@ export default function ActionCenter() {
     }
   }
 
+  const handleRefreshData = async () => {
+    setError(null)
+    try {
+      await runMarketRefresh({ statusMessage: 'Updating prices & dividends...' })
+      setRefreshVersion(version => version + 1)
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   return (
     <div className="page action-center-page">
       <div className="ac-title-row">
@@ -153,11 +180,19 @@ export default function ActionCenter() {
           <h1>Action Center</h1>
           <p>{portfolioName} follow-ups, generated from the data already in the app.</p>
         </div>
-        <NavLink className="btn btn-primary" to="/holdings">Refresh Data</NavLink>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleRefreshData}
+          disabled={isRefreshing}
+        >
+          {isRefreshing ? 'Refreshing...' : 'Refresh Data'}
+        </button>
       </div>
 
       {loading && <div className="ac-loading"><span className="spinner" /> Loading action items...</div>}
       {error && <div className="alert alert-error">{error}</div>}
+      {!error && refreshMessage && <div className="alert alert-info">{refreshMessage}</div>}
 
       {data && !loading && (
         <>
@@ -204,8 +239,10 @@ export default function ActionCenter() {
                   key={item.id}
                   item={item}
                   busy={busyItemId === item.id}
+                  refreshing={isRefreshing}
                   onComplete={action => updateCompletion(action, 'complete')}
                   onRestore={action => updateCompletion(action, 'restore')}
+                  onRefresh={handleRefreshData}
                 />
               ))}
             </div>
