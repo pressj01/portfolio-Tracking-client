@@ -1,7 +1,7 @@
 ﻿import React, { useState } from 'react'
 import GradePeriodHelp from '../components/GradePeriodHelp'
 
-const APP_VERSION = '1.35.0'
+const APP_VERSION = '1.36.0'
 
 const GROUPS = [
   {
