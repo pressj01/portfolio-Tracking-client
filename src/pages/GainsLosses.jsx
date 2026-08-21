@@ -14,6 +14,7 @@ import {
   PERFORMANCE_RANGE_NOTE,
   HOLDINGS_LIFETIME_MATCH_NOTE,
   TRACKER_SCOPE_NOTE,
+  OPEN_LOT_SCOPE_NOTE,
   COST_BASIS_SCOPE_NOTE,
   addCustomRangeParams,
   customRangeError,
@@ -466,6 +467,7 @@ export default function GainsLosses({ embedded = false }) {
 
   const t = data?.totals || {}
   const periodMetrics = chartData?.portfolio_metrics || {}
+  const openPeriodMetrics = chartData?.open_position_metrics || periodMetrics
   const performanceRange = formatPerformanceRange(
     chartData?.actual_start_date || chartData?.requested_start_date,
     chartData?.actual_end_date || chartData?.requested_end_date,
@@ -966,9 +968,10 @@ export default function GainsLosses({ embedded = false }) {
             <ul>
               <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
-              <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
+              <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
+              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Use the lifetime cards below, or choose <strong>Life</strong>, for current value versus cost basis.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
-              <li><strong>Total Return:</strong> Price Return plus Distributions — the dollar version of Tracker Total Return %.</li>
+              <li><strong>Tracker Total Return:</strong> Tracker Price Return plus Distributions, including positions fully closed during the range.</li>
               <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2 after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
             </ul>
             <p className="tracker-help-note">
@@ -1087,16 +1090,36 @@ export default function GainsLosses({ embedded = false }) {
             </MetricCard>
             <AccountValueCard data={periodMetrics.account_reconciliation}
               basisLabel={periodAsOf(chartData?.actual_end_date, periodMetrics.priced_at)} />
-            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Price Return'} range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Tracker Price Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>}>
               <div className="summary-sub">
                 {isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
               </div>
             </MetricCard>
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Tracker Price Return %" range={performanceRange}
+                value={<span style={{ color: glColor(periodMetrics.price_return_pct) }}>{fmtPct(periodMetrics.price_return_pct)}</span>}>
+                <div className="summary-sub">Includes positions fully closed during this range</div>
+                <div className="summary-sub">Same calculation as Total Return, Dashboard, and Growth</div>
+              </MetricCard>
+            )}
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Open Lots Price Return" range={performanceRange}
+                value={<span style={{ color: glColor(openPeriodMetrics.price_return_dollar) }}>{fmtInt(openPeriodMetrics.price_return_dollar)}</span>}>
+                <div className="summary-sub">{OPEN_LOT_SCOPE_NOTE}</div>
+              </MetricCard>
+            )}
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Open Lots Price Return %" range={performanceRange}
+                value={<span style={{ color: glColor(openPeriodMetrics.price_return_pct) }}>{fmtPct(openPeriodMetrics.price_return_pct)}</span>}>
+                <div className="summary-sub">Fully closed positions excluded</div>
+                <div className="summary-sub">Same calculation as Total Return, Dashboard, and Growth</div>
+              </MetricCard>
+            )}
             <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange}>
               <div className="summary-sub">{isLifetimePerformancePeriod(period) ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
-            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Total Return'} range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>}>
               <div className="summary-sub">
                 Price {fmtInt(periodMetrics.price_return_dollar)} + distributions {fmtInt(periodMetrics.distribution_dollar)}
@@ -1104,11 +1127,29 @@ export default function GainsLosses({ embedded = false }) {
                   ? ` + realized trims ${fmtInt(periodMetrics.realized_return_dollar)}`
                   : ''}
               </div>
+              {!isLifetimePerformancePeriod(period) && <div className="summary-sub">Includes positions fully closed during this range</div>}
             </MetricCard>
             <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>}>
+              {!isLifetimePerformancePeriod(period) && <div className="summary-sub">Includes positions fully closed during this range</div>}
               <div className="summary-sub">Same calculation as Total Return &amp; Dashboard</div>
             </MetricCard>
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Open Lots Total Return" range={performanceRange}
+                value={<span style={{ color: glColor(openPeriodMetrics.total_return_dollar) }}>{fmtInt(openPeriodMetrics.total_return_dollar)}</span>}>
+                <div className="summary-sub">
+                  Open-lot price {fmtInt(openPeriodMetrics.price_return_dollar)} + distributions {fmtInt(openPeriodMetrics.distribution_dollar)}
+                </div>
+                <div className="summary-sub">Fully closed positions excluded</div>
+              </MetricCard>
+            )}
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Open Lots Total Return %" range={performanceRange}
+                value={<span style={{ color: glColor(openPeriodMetrics.total_return_pct) }}>{fmtPct(openPeriodMetrics.total_return_pct)}</span>}>
+                <div className="summary-sub">Fully closed positions excluded</div>
+                <div className="summary-sub">Same calculation as Total Return, Dashboard, and Growth</div>
+              </MetricCard>
+            )}
           </div>
         </>
       )}

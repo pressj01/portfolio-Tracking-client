@@ -709,8 +709,8 @@ export default function TotalReturn() {
     { key: 'category_name', label: 'Category' },
     { key: 'start_value', label: 'Start Value', fmt, numeric: true },
     { key: 'end_value', label: 'End Value', fmt, numeric: true },
-    { key: 'price_return_dollar', label: 'Period Price Return', title: 'This ticker\'s current open lot during the selected range. Not the Price Return cards above, which include lots you sold. Not cost-basis G/L.', fmt, numeric: true, gl: true },
-    { key: 'price_return_pct', label: 'Period Price Ret %', title: 'This ticker\'s current open lot during the selected range. The Open Position Total is open lots only. The Price Return cards include lots you sold.', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'price_return_dollar', label: 'Period Price Return', title: 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
+    { key: 'price_return_pct', label: 'Period Price Ret %', title: 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
     { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
     { key: 'total_return_dollar', label: 'Period Total Return', fmt, numeric: true, gl: true },
     { key: 'total_return_pct', label: 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
@@ -996,7 +996,8 @@ export default function TotalReturn() {
             <ul>
               <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
-              <li><strong>Price Return:</strong> the dollar change from market price alone over the range, ignoring dividends.</li>
+              <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
+              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Choose <strong>Life</strong> instead when comparing current value with the cost basis of shares still held.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
               <li><strong>SPY:</strong> the S&amp;P 500's own return over this portfolio's actual market-observation dates, for comparison.</li>
             </ul>
@@ -1004,7 +1005,7 @@ export default function TotalReturn() {
           {/* Full width: this is the one distinction worth getting right, and
               splitting it across two half-width boxes would just re-fragment it. */}
           <section className="tracker-help-wide">
-            <h3>Total Return vs. Tracker Total Return %</h3>
+            <h3>Dollar Total Return vs. Tracker Total Return %</h3>
             <p>
               These are not the same number expressed two ways — they answer different questions, and
               Total Return ÷ Start Value will not equal Tracker Total Return % whenever you bought or
@@ -1012,8 +1013,8 @@ export default function TotalReturn() {
             </p>
             <ul>
               <li>
-                <strong>Total Return ($):</strong> Price Return plus Distributions — the actual dollars
-                your position gained, given the shares you actually held on each day. Buying more
+                <strong>Tracker Total Return ($):</strong> Tracker Price Return plus Distributions — the actual dollars
+                your positions gained, including positions fully closed during the range, given the shares you actually held on each day. Buying more
                 shares partway through the range means more dollars are exposed to whatever the price
                 does afterward, so this is a <em>cash-flow-sensitive dollar result</em>: it reflects how
                 much capital was invested and when, not just how the price moved.
@@ -1126,22 +1127,37 @@ export default function TotalReturn() {
                 ? 'Built on the live End Value above, and the option mark is quoted fresh, so it will not tie to Gains & Losses to the cent until the close.'
                 : undefined}
             />
-            {/* Price Return, Price Return % and Tracker Total Return % appear in
-                this order on Growth & Performance too, so the two screens can be
-                read side by side without hunting for the matching card. */}
-            <MetricCard label={lifetimeView ? 'Life Price G/L' : 'Price Return'} range={dashboardCardRange}
+            {/* The tracker cards retain the full portfolio history so they keep
+                matching Growth & Performance. The open-lot cards surface the
+                already-calculated current-position replay that was previously
+                available only in the table footer. */}
+            <MetricCard label={lifetimeView ? 'Life Price G/L' : 'Tracker Price Return'} range={dashboardCardRange}
               value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>}>
               <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L — current value minus cost basis' : TRACKER_SCOPE_NOTE}</div>
             </MetricCard>
-            <MetricCard label={lifetimeView ? 'Life Price G/L %' : 'Price Return %'} range={dashboardCardRange}
+            <MetricCard label={lifetimeView ? 'Life Price G/L %' : 'Tracker Price Return %'} range={dashboardCardRange}
               value={<span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>}>
               <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L %' : TRACKER_SCOPE_NOTE}</div>
               {!lifetimeView && <div className="summary-sub">Same number as Growth Price Return %</div>}
             </MetricCard>
+            {!lifetimeView && (
+              <MetricCard label="Open Lots Price Return" range={dashboardCardRange}
+                value={<span style={{ color: (openPositionTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.price_return_dollar)}</span>}>
+                <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
+                <div className="summary-sub">Selected-period return; choose Life for cost-basis G/L</div>
+              </MetricCard>
+            )}
+            {!lifetimeView && (
+              <MetricCard label="Open Lots Price Return %" range={dashboardCardRange}
+                value={<span style={{ color: (openPositionTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.price_return_pct)}</span>}>
+                <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
+                <div className="summary-sub">Matches the Open lots only table footer</div>
+              </MetricCard>
+            )}
             <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange}>
               <div className="summary-sub">{lifetimeView ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
-            <MetricCard label={lifetimeView ? 'Life Total Return' : 'Total Return'} range={dashboardCardRange}
+            <MetricCard label={lifetimeView ? 'Life Total Return' : 'Tracker Total Return'} range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>}>
               <div className="summary-sub">
                 Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
@@ -1149,13 +1165,29 @@ export default function TotalReturn() {
                   ? ` + realized trims ${fmtInt(t.realized_return_dollar)}`
                   : ''}
               </div>
-              {!lifetimeView && <div className="summary-sub">Dollar result — reflects your buy/sell timing</div>}
+              {!lifetimeView && <div className="summary-sub">Includes positions fully closed during this range</div>}
             </MetricCard>
             <MetricCard label={lifetimeView ? 'Life Total Return %' : 'Tracker Total Return %'} range={dashboardCardRange}
               value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>}>
               <div className="summary-sub">{lifetimeView ? 'Cost-basis total return, not time-weighted' : 'Time-weighted — timing-neutral performance'}</div>
               <div className="summary-sub">Same calculation as Dashboard, Growth &amp; Gains/Losses{lifetimeView ? '' : '; separately read live quotes can differ until close'}</div>
             </MetricCard>
+            {!lifetimeView && (
+              <MetricCard label="Open Lots Total Return" range={dashboardCardRange}
+                value={<span style={{ color: (openPositionTotals.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.total_return_dollar)}</span>}>
+                <div className="summary-sub">
+                  Open-lot price {fmtInt(openPositionTotals.price_return_dollar)} + distributions {fmtInt(openPositionTotals.distribution_dollar)}
+                </div>
+                <div className="summary-sub">Matches the Open lots only table footer</div>
+              </MetricCard>
+            )}
+            {!lifetimeView && (
+              <MetricCard label="Open Lots Total Return %" range={dashboardCardRange}
+                value={<span style={{ color: (openPositionTotals.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.total_return_pct)}</span>}>
+                <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
+                <div className="summary-sub">Matches the Open lots only table footer</div>
+              </MetricCard>
+            )}
             {chartData?.spy_ret != null && (
               <MetricCard label={`SPY - ${chartData.period_label || '1Y'}`}
                 range={spyRange}
@@ -1363,7 +1395,7 @@ export default function TotalReturn() {
             Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>.{' '}
             {positionView === 'unrealized' && (lifetimeView
               ? 'Lifetime cost-basis G/L for open positions — current value minus what you paid. These rows and the Open Position Total match the Holdings table sums.'
-              : 'Each row and the Open lots only footer are current holdings. Lots you sold during the range are left out. The Price Return cards above include those sold lots — that card is the same Price Return % as Growth. Neither figure is lifetime cost-basis G/L.')}
+              : 'Each row, the Open lots only footer, and the Open Lots Price and Total Return cards are current holdings. Fully closed positions are left out. The Tracker Price and Total Return cards retain positions closed during the range as part of portfolio history. Neither figure is lifetime cost-basis G/L.')}
             {positionView === 'realized' && `Sales that settled inside this range, priced off the recorded buy and sell. Distributions are the dividends those shares earned before the sale.${realizedTotals.sale_count ? ` ${realizedTotals.sale_count} sale${realizedTotals.sale_count === 1 ? '' : 's'}.` : ''}`}
             {positionView === 'combined' && 'Open and closed legs summed per ticker. Net Ret % is money-weighted over basis (period start value plus realized cost), so it will not match the time-weighted Total Ret % in the Unrealized view.'}
             {' '}Click any column header to sort.

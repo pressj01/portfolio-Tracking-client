@@ -78,14 +78,14 @@ export const HOLDINGS_LIFETIME_MATCH_NOTE = (
 // identical on every screen so a mismatch is read as a different question,
 // not as two answers to the same one.
 export const TRACKER_SCOPE_NOTE = (
-  'The portfolio history represented by the tracker, including positions fully closed during the range. '
+  'All positions held at any time in the selected range, including positions fully closed during that range. '
   + 'A ticker sold to zero and later reopened starts with its current lot. '
-  + 'Same Price Return as Growth, Total Return cards, Dashboard PrRtn, and Gains & Losses.'
+  + 'Same Tracker Price Return as Growth, Total Return, Dashboard, and Gains & Losses.'
 )
 export const OPEN_LOT_SCOPE_NOTE = (
-  'Position keys that are still open, including their buys and partial sales during the range. '
-  + 'Fully closed positions are left out. '
-  + 'This is the Total Return Open Position Total, not the Price Return cards.'
+  'Only positions still held now. Their buys and partial sales during the selected range remain included, '
+  + 'but fully closed positions are left out. '
+  + 'Same Open Lots Price Return as Total Return, Dashboard, Growth, and Gains & Losses.'
 )
 export const COST_BASIS_SCOPE_NOTE = (
   'Current value minus what you paid for shares you still hold. Not a selected-period return.'

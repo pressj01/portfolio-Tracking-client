@@ -15,6 +15,9 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
     """Growth, Growth 2, and Total Return must report the same tracker TR%."""
 
     def setUp(self):
+        # The production cache keys include DB mtimes. Temporary files created
+        # within the same clock tick can otherwise reuse a prior test's payload.
+        app_module._TOTAL_RETURN_DASHBOARD_CACHE.clear()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         self.db_path = self.tmp.name
@@ -180,6 +183,42 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         self.assertEqual(
             [row["ticker"] for row in dashboard.get_json()["performance_rows"]],
             ["AAA"],
+        )
+
+    def test_open_position_price_return_matches_across_tracking_pages(self):
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            INSERT INTO transactions
+                VALUES (2, 'BBB', 6, 'BUY', '2024-01-02', 1, 20, 0, 0, '');
+            INSERT INTO transactions
+                VALUES (3, 'BBB', 6, 'SELL', '2024-12-31', 1, 18, 0, -2, '');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        params = "profile_id=6&period=all"
+        growth = self.client.get(f"/api/growth/data?{params}&benchmark=SPY")
+        tracker = self.client.get(f"/api/total-return/charts?{params}")
+
+        self.assertEqual(growth.status_code, 200, growth.get_json())
+        self.assertEqual(tracker.status_code, 200, tracker.get_json())
+        growth_open = growth.get_json()["open_position_metrics"]
+        tracker_open = tracker.get_json()["open_position_metrics"]
+        for key in (
+            "start_value",
+            "end_value",
+            "price_return_dollar",
+            "price_return_pct",
+            "total_return_pct",
+        ):
+            self.assertEqual(growth_open[key], tracker_open[key], key)
+        self.assertEqual(tracker_open["price_return_dollar"], 4.0)
+        self.assertEqual(tracker_open["price_return_pct"], 20.0)
+        self.assertNotEqual(
+            tracker.get_json()["portfolio_metrics"]["price_return_dollar"],
+            tracker_open["price_return_dollar"],
         )
 
     def test_portfolio_tester_actual_history_reuses_tracker_total_return(self):

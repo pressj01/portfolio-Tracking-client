@@ -10,6 +10,7 @@ import {
   HOLDINGS_LIFETIME_MATCH_NOTE,
   GRADE_LIFETIME_CARD_NOTE,
   TRACKER_SCOPE_NOTE,
+  OPEN_LOT_SCOPE_NOTE,
   COST_BASIS_SCOPE_NOTE,
   addCustomRangeParams,
   customRangeError,
@@ -64,7 +65,7 @@ function lastIndexReturn(series) {
 
 // Portfolio return large, benchmark comparison on the sub-line, so neither
 // number needs a trip to the chart.
-function ReturnCard({ label, value, benchLabel, benchValue, range }) {
+function ReturnCard({ label, value, benchLabel, benchValue, range, sub }) {
   const diff = value != null && benchValue != null ? value - benchValue : null
   return (
     <div className="summary-card">
@@ -72,6 +73,7 @@ function ReturnCard({ label, value, benchLabel, benchValue, range }) {
       <div className="summary-value" style={{ color: (value ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
         {fmtPct(value)}
       </div>
+      {sub && <div className="summary-sub">{sub}</div>}
       {benchLabel && (
         <div className="summary-sub">
           {benchValue != null
@@ -627,16 +629,27 @@ export default function Growth({ embedded = false }) {
                 <strong>Tracker Total Return %:</strong> the portfolio&apos;s transaction-aware,
                 dividend-reinvested return. The final portfolio index value minus 100 is this card&apos;s
                 percentage. Buys and sells change the portfolio weights after the transaction; they
-                are cash-flow events, not gains or losses. The smaller comparison text shows the
+                are cash-flow events, not gains or losses. Positions fully closed during the range
+                remain part of this tracker history. The smaller comparison text shows the
                 benchmark return and the portfolio&apos;s difference versus it.
               </li>
               <li>
-                <strong>Price Return %:</strong> the same transaction-aware portfolio measurement
-                using market-price movement only. It includes every lot you held during the range,
-                even lots you already sold — the same figure as the Total Return Price Return cards
-                and the Holdings Totals row. Dividends are excluded.
+                <strong>Tracker Price Return %:</strong> the transaction-aware portfolio measurement
+                using market-price movement only. It includes positions fully closed during the range
+                and matches the Tracker Price Return cards on Total Return and Gains &amp; Losses.
+                Dividends are excluded.
                 Comparing this card with Tracker Total Return % indicates how much reinvested
                 distributions contributed during the window.
+              </li>
+              <li>
+                <strong>Open Lots Price Return:</strong> the same selected-period calculation restricted
+                to positions still held now. It excludes fully closed positions and matches the Open Lots
+                Price Return shown on Total Return, Dashboard, and Gains &amp; Losses. Choose <strong>Life</strong>
+                when comparing current value with the cost basis of shares still held.
+              </li>
+              <li>
+                <strong>Open Lots Total Return %:</strong> the dividend-reinvested return for those same
+                currently held positions. It matches the open-lots card and table footer on Total Return.
               </li>
               <li>
                 <strong>Portfolio Sharpe:</strong> excess return per unit of total volatility,
@@ -792,30 +805,56 @@ export default function Growth({ embedded = false }) {
               ) : null}
               {cardRange && <div className="summary-sub">Range: {cardRange}</div>}
             </div>
-            {/* Price Return, Price Return % and Tracker Total Return % appear in
+            {/* Tracker Price Return, Tracker Price Return % and Tracker Total Return % appear in
                 this order on the Total Return Dashboard too, so the two screens
                 can be read side by side without hunting for the matching card.
                 The dollar figure comes from the same builder over the same
                 series as that screen's, so it can be checked directly rather
                 than by converting a percentage back into money. */}
             <MetricCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Price Return'}
+              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Tracker Price Return'}
               value={<span style={{ color: (data.portfolio_metrics?.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(data.portfolio_metrics?.price_return_dollar)}</span>}
               sub={isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
               range={cardRange}
             />
             <ReturnCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L %' : 'Price Return %'}
+              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L %' : 'Tracker Price Return %'}
               value={data.portfolio_metrics?.price_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_price)}
+              sub={isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : 'Includes positions fully closed during this range'}
               range={cardRange}
             />
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard
+                label="Open Lots Price Return"
+                value={<span style={{ color: (data.open_position_metrics?.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(data.open_position_metrics?.price_return_dollar)}</span>}
+                sub={`${OPEN_LOT_SCOPE_NOTE} Market price only; dividends excluded.`}
+                range={cardRange}
+              />
+            )}
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard
+                label="Open Lots Price Return %"
+                value={<span style={{ color: (data.open_position_metrics?.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(data.open_position_metrics?.price_return_pct)}</span>}
+                sub="Fully closed positions excluded · Same open-position calculation as Total Return, Dashboard, and Gains & Losses"
+                range={cardRange}
+              />
+            )}
+            {!isLifetimePerformancePeriod(period) && (
+              <MetricCard
+                label="Open Lots Total Return %"
+                value={<span style={{ color: (data.open_position_metrics?.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(data.open_position_metrics?.total_return_pct)}</span>}
+                sub="Fully closed positions excluded · Same open-position calculation as Total Return, Dashboard, and Gains & Losses"
+                range={cardRange}
+              />
+            )}
             <ReturnCard
               label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'}
               value={data.portfolio_metrics?.total_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}
+              sub={isLifetimePerformancePeriod(period) ? 'Cost-basis total return for open holdings' : 'Includes positions fully closed during this range'}
               range={cardRange}
             />
             {!isLifetimePerformancePeriod(period) && (

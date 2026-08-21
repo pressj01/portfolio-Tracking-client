@@ -374,12 +374,13 @@ function DismissibleBanner({ storageKey, signature, collapsedContent, initiallyC
   )
 }
 
-function SummaryCard({ label, value, sub, color, className, title, action }) {
+function SummaryCard({ label, value, sub, note, color, className, title, action }) {
   return (
     <div className={`summary-card ${className || ''}`} title={title}>
       <div className="summary-label">{label}</div>
       <div className="summary-value" style={color ? { color } : undefined}>{value}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+      {note && <div className="summary-sub">{note}</div>}
       {action && <div style={{ marginTop: '0.45rem' }}>{action}</div>}
     </div>
   )
@@ -1690,6 +1691,7 @@ export default function Dashboard() {
   }, [portfolioGrade, betaBenchmark, totals.currentValue])
 
   const trackerPortfolioMetrics = trackerPerformance?.portfolio_metrics || {}
+  const trackerOpenPositionMetrics = trackerPerformance?.open_position_metrics || trackerPortfolioMetrics
   const trackerPerformanceRange = formatPerformanceRange(
     trackerPerformance?.actual_start_date || trackerPerformance?.requested_start_date,
     trackerPerformance?.actual_end_date || trackerPerformance?.requested_end_date,
@@ -1921,33 +1923,39 @@ export default function Dashboard() {
     }
   }, [filteredEnrichedHoldings])
   const isHoldingsFiltered = overviewCategoryId != null
-  const scopedTrackerMetrics = useMemo(() => {
+  const scopedOpenPositionMetrics = useMemo(() => {
     if (!isHoldingsFiltered) return null
     if (isLifetimePerformancePeriod(gradePeriod)) {
       return lifetimeTotalReturnPayload(filteredEnrichedHoldings).portfolio_metrics
     }
-    return scopedTrackerCharts.data?.portfolio_metrics || null
+    return scopedTrackerCharts.data?.open_position_metrics || scopedTrackerCharts.data?.portfolio_metrics || null
   }, [filteredEnrichedHoldings, gradePeriod, isHoldingsFiltered, scopedTrackerCharts.data])
   const fullTrackerPriceReturn = trackerPortfolioMetrics.price_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.price_return_pct) / 100
+  const fullOpenLotPriceReturn = trackerOpenPositionMetrics.price_return_pct == null
+    ? null
+    : Number(trackerOpenPositionMetrics.price_return_pct) / 100
+  const fullOpenLotTotalReturn = trackerOpenPositionMetrics.total_return_pct == null
+    ? null
+    : Number(trackerOpenPositionMetrics.total_return_pct) / 100
   const fullTrackerTotalReturn = trackerPortfolioMetrics.total_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.total_return_pct) / 100
   const tableTotals = isHoldingsFiltered
     ? {
         ...calculatedTableTotals,
-        priceReturn: scopedTrackerMetrics?.price_return_pct == null
+        priceReturn: scopedOpenPositionMetrics?.price_return_pct == null
           ? null
-          : Number(scopedTrackerMetrics.price_return_pct) / 100,
-        totalReturn: scopedTrackerMetrics?.total_return_pct == null
+          : Number(scopedOpenPositionMetrics.price_return_pct) / 100,
+        totalReturn: scopedOpenPositionMetrics?.total_return_pct == null
           ? null
-          : Number(scopedTrackerMetrics.total_return_pct) / 100,
+          : Number(scopedOpenPositionMetrics.total_return_pct) / 100,
       }
     : {
         ...totals,
-        priceReturn: fullTrackerPriceReturn,
-        totalReturn: fullTrackerTotalReturn,
+        priceReturn: fullOpenLotPriceReturn,
+        totalReturn: fullOpenLotTotalReturn,
       }
   const tablePctOfAccount = useMemo(
     () => filteredEnrichedHoldings.reduce((total, holding) => total + (Number(holding.pct_of_account) || 0), 0),
@@ -2173,8 +2181,8 @@ export default function Dashboard() {
     { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
     { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },
     { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>, footer: () => pct(tablePctOfAccount) },
-    { id: 'price_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeG/L' : 'PrRtn', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Tracker Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : `${OPEN_LOT_SCOPE_NOTE} The footer is the portfolio Price Return for the range, including sold lots — the same figure as Growth and Total Return cards.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : TRACKER_SCOPE_NOTE}>{pct(totals.priceReturn)}</span> },
-    { id: 'total_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeTR' : 'TrkTR', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? 'Cost-basis total return for open holdings; not a transaction-aware market return.' : 'Transaction-aware Total Return for the Shared Performance Date Range; matches the Total Return page', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }}>{pct(totals.totalReturn)}</span> },
+    { id: 'price_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeG/L' : 'PrRtn', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Open Lots Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : `${OPEN_LOT_SCOPE_NOTE} The footer uses this same open-position scope; the Tracker Price Return headline separately retains fully closed positions.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : OPEN_LOT_SCOPE_NOTE}>{pct(totals.priceReturn)}</span> },
+    { id: 'total_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeTR' : 'OLTR', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Open Lots Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? 'Cost-basis total return for open holdings; not a transaction-aware market return.' : `${OPEN_LOT_SCOPE_NOTE} The footer matches the Open Lots Total Return % headline card.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? undefined : OPEN_LOT_SCOPE_NOTE}>{pct(totals.totalReturn)}</span> },
     { id: 'beta', label: 'Beta', name: 'Benchmark Beta', sortKey: '_beta_sort', group: 'Current', defaultVisible: true, align: 'right', tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ", render: h => {
       const risk = h._risk || {}
       return (
@@ -2482,21 +2490,45 @@ export default function Dashboard() {
         />
         <SummaryCard
           className="dashboard-headline-card"
-          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Price Return'}
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Tracker Price Return %'}
           value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
           color={gradeColor(fullTrackerPriceReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+          note={isLifetimePerformancePeriod(gradePeriod) ? undefined : 'Includes positions fully closed during this range'}
           title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : TRACKER_SCOPE_NOTE}
         />
+        {!isLifetimePerformancePeriod(gradePeriod) && (
+          <SummaryCard
+            className="dashboard-headline-card"
+            label="Open Lots Price Return %"
+            value={trackerPerformanceLoading ? 'Loading...' : pct(fullOpenLotPriceReturn)}
+            color={gradeColor(fullOpenLotPriceReturn)}
+            sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+            note="Fully closed positions excluded"
+            title={OPEN_LOT_SCOPE_NOTE}
+          />
+        )}
+        {!isLifetimePerformancePeriod(gradePeriod) && (
+          <SummaryCard
+            className="dashboard-headline-card"
+            label="Open Lots Total Return %"
+            value={trackerPerformanceLoading ? 'Loading...' : pct(fullOpenLotTotalReturn)}
+            color={gradeColor(fullOpenLotTotalReturn)}
+            sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+            note="Fully closed positions excluded · Matches the open-holdings table footer"
+            title={OPEN_LOT_SCOPE_NOTE}
+          />
+        )}
         <SummaryCard
           className="dashboard-headline-card"
-          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker TR'}
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker Total Return %'}
           value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
           color={gradeColor(fullTrackerTotalReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
+          note={isLifetimePerformancePeriod(gradePeriod) ? undefined : 'Includes positions fully closed during this range'}
           title={isLifetimePerformancePeriod(gradePeriod)
             ? 'Cost-basis total return using the same lifetime components as the other tracking screens.'
-            : 'The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages'}
+            : 'The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages. Includes positions fully closed during this range.'}
         />
       </div>
 

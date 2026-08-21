@@ -29650,14 +29650,29 @@ def growth_data():
         holding["market_symbol"] = ticker
         holding["position_key"] = (holding.get("profile_id"), ticker)
         canonical_holdings.append(holding)
+    canonical_stock_splits = stock_splits.reindex(
+        columns=portfolio_available_tickers,
+    ).fillna(0)
     canonical_result = _build_transaction_aware_portfolio_series(
         close_aligned, adjusted_aligned, divs_aligned, cap_gains_aligned,
         canonical_transactions, canonical_holdings,
-        stock_splits=stock_splits.reindex(
-            columns=portfolio_available_tickers,
-        ).fillna(0),
+        stock_splits=canonical_stock_splits,
     )
     canonical_metrics = _portfolio_period_metrics(canonical_result)
+    # Keep the same two explicit scopes exposed by Total Return. The canonical
+    # result retains transaction-only position keys that were fully closed in
+    # the selected range; the open-position result removes them while keeping
+    # buys and partial sales for positions that are still held.
+    open_position_transactions = _transactions_for_current_positions(
+        canonical_transactions,
+        canonical_holdings,
+    )
+    open_position_result = _build_transaction_aware_portfolio_series(
+        close_aligned, adjusted_aligned, divs_aligned, cap_gains_aligned,
+        open_position_transactions, canonical_holdings,
+        stock_splits=canonical_stock_splits,
+    )
+    open_position_metrics = _portfolio_period_metrics(open_position_result)
     canonical_indexes = [
         index for index, value in enumerate(canonical_result["total"])
         if value is not None
@@ -29823,6 +29838,7 @@ def growth_data():
         actual_start_date=dates_str[0] if dates_str else None,
         actual_end_date=dates_str[-1] if dates_str else None,
         portfolio_metrics=canonical_metrics,
+        open_position_metrics=open_position_metrics,
     )
 
 
