@@ -343,6 +343,10 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         app_module.app.testing = True
         app_module.app._db_initialized = True
         self.client = app_module.app.test_client()
+        # Position imports intentionally reject snapshots whose date is not
+        # today. Keep these routing tests stable instead of letting their fixed
+        # fixture date become "backdated" as soon as the calendar advances.
+        self.nav_date = app_module.datetime.date.today().isoformat()
 
     def tearDown(self):
         app_module.get_connection = self._orig_get_connection
@@ -458,7 +462,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
 
     # ── importing ───────────────────────────────────────────────────────────
     def test_imports_every_account_in_one_pass(self):
-        res = self._post("/api/import/transactions", nav_date="2026-08-18")
+        res = self._post("/api/import/transactions", nav_date=self.nav_date)
         data = res.get_json()
 
         self.assertEqual(res.status_code, 200, data)
@@ -468,7 +472,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         self.assertEqual(self._holdings(4), {"ARCC": 30})
 
     def test_each_account_lands_with_its_own_cash(self):
-        self._post("/api/import/transactions", nav_date="2026-08-18")
+        self._post("/api/import/transactions", nav_date=self.nav_date)
         conn = self._get_connection()
         try:
             rows = conn.execute("SELECT id, cash_value FROM profiles").fetchall()
@@ -491,7 +495,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
 
         res = self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps(account_map),
         )
 
@@ -510,7 +514,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
 
         res = self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps(account_map),
         )
         data = res.get_json()
@@ -530,7 +534,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
 
         res = self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps(account_map),
         )
 
@@ -545,7 +549,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
 
         res = self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps(account_map),
         )
 
@@ -561,7 +565,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         res = self._post(
             "/api/import/transactions",
             content,
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps({key: "new"}),
         )
         data = res.get_json()
@@ -583,7 +587,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         keys = {a["account_label"]: a["account_key"] for a in preview["accounts"]}
         self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             account_map=json.dumps({
                 keys["Roth_IRA ...995"]: "3",
                 keys["Standard_IRA ...426"]: "2",
@@ -607,7 +611,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
     def test_nav_only_records_snapshots_without_touching_holdings(self):
         res = self._post(
             "/api/import/transactions",
-            nav_date="2026-08-18",
+            nav_date=self.nav_date,
             nav_only="true",
         )
         data = res.get_json()
@@ -617,7 +621,8 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         conn = self._get_connection()
         try:
             rows = conn.execute(
-                "SELECT profile_id, total_value FROM portfolio_nav WHERE nav_date = '2026-08-18'"
+                "SELECT profile_id, total_value FROM portfolio_nav WHERE nav_date = ?",
+                (self.nav_date,),
             ).fetchall()
             navs = {row["profile_id"]: row["total_value"] for row in rows}
         finally:
@@ -637,7 +642,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
         finally:
             conn.close()
 
-        self._post("/api/import/transactions", nav_date="2026-08-18")
+        self._post("/api/import/transactions", nav_date=self.nav_date)
 
         self.assertEqual(self._holdings(2), {"SPYI": 10})
         self.assertEqual(self._holdings(3), {"QQQI": 20})
@@ -672,7 +677,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
             data={
                 "file": (__import__("io").BytesIO(self._export()), "All-Accounts-Positions.csv"),
                 "format": "schwab_all_accounts",
-                "nav_date": "2026-08-18",
+                "nav_date": self.nav_date,
             },
             content_type="multipart/form-data",
         )
@@ -694,7 +699,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
             data={
                 "file": (__import__("io").BytesIO(self._export()), "Positions.csv"),
                 "format": "schwab",
-                "nav_date": "2026-08-18",
+                "nav_date": self.nav_date,
             },
             content_type="multipart/form-data",
         )
@@ -709,7 +714,7 @@ class SchwabAllAccountsImportTest(unittest.TestCase):
             data={
                 "file": (__import__("io").BytesIO(self._export()), "All-Accounts-Positions.csv"),
                 "format": "schwab_all_accounts",
-                "nav_date": "2026-08-18",
+                "nav_date": self.nav_date,
             },
             content_type="multipart/form-data",
         )

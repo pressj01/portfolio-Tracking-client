@@ -142,6 +142,14 @@ class ETFComparerPeriodRequestTest(unittest.TestCase):
         with (
             patch("yfinance.Ticker", return_value=FakeTicker()),
             patch("app._cached_yf_info", return_value={}),
+            patch(
+                "app._etf_screen_period_download_kwargs",
+                return_value={
+                    "start": "2026-02-04",
+                    "end": "2026-08-15",
+                    "anchor_on_or_before": "2026-02-14",
+                },
+            ),
         ):
             response = app.test_client().get(
                 "/api/etf-screen/data?ticker=AON&period=6mo&mode=ohlcv"
