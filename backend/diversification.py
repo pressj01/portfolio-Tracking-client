@@ -2032,7 +2032,10 @@ def _portfolio_positions(conn, profile_ids=None):
     profile_ids is the list from app.get_profile_filter(), so an aggregate
     portfolio spans its member accounts exactly like every other screen.
     """
-    sql = "SELECT ticker, SUM(current_value) FROM holdings WHERE current_value > 0 "
+    sql = (
+        "SELECT ticker, SUM(current_value) FROM all_account_info "
+        "WHERE current_value > 0 AND COALESCE(quantity, 0) > 1e-9 "
+    )
     args = []
     if profile_ids:
         sql += f"AND profile_id IN ({','.join('?' * len(profile_ids))}) "

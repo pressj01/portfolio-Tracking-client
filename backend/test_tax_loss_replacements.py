@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from tax_loss import candidate_replacements
+from tax_loss import _source_profile, candidate_replacements
 
 
 class TaxLossReplacementTest(unittest.TestCase):
@@ -21,12 +21,16 @@ class TaxLossReplacementTest(unittest.TestCase):
                 current_value REAL,
                 estim_payment_per_year REAL,
                 current_annual_yield REAL,
-                div_frequency TEXT
+                div_frequency TEXT,
+                quantity REAL DEFAULT 1
             );
             CREATE TABLE holdings (
                 ticker TEXT,
                 profile_id INTEGER,
-                quantity REAL
+                quantity REAL,
+                description TEXT,
+                classification_type TEXT,
+                current_value REAL
             );
             CREATE TABLE dividends (
                 ticker TEXT,
@@ -79,10 +83,13 @@ class TaxLossReplacementTest(unittest.TestCase):
 
     def test_income_replacement_prefers_similar_income_fund(self):
         self.conn.execute(
-            "INSERT INTO all_account_info VALUES (?,?,?,?,?,?,?,?)",
-            ("YMAX", 1, "YieldMax option income ETF", "ETF", 10000, 1800, 0.18, "M"),
+            "INSERT INTO all_account_info VALUES (?,?,?,?,?,?,?,?,?)",
+            ("YMAX", 1, "YieldMax option income ETF", "ETF", 10000, 1800, 0.18, "M", 100),
         )
-        self.conn.execute("INSERT INTO holdings VALUES (?,?,?)", ("YMAX", 1, 100))
+        self.conn.execute(
+            "INSERT INTO holdings (ticker, profile_id, quantity) VALUES (?,?,?)",
+            ("YMAX", 1, 100),
+        )
         rows = [
             ("YMAX", "YieldMax option income ETF", None, None, "ETF", "Derivative Income", "Covered Call", 0.18, None, 1000000000),
             ("GOOD", "NEOS Premium Income ETF", None, None, "ETF", "Derivative Income", "Covered Call", 0.165, None, 900000000),
@@ -106,6 +113,22 @@ class TaxLossReplacementTest(unittest.TestCase):
         self.assertNotIn("BOND", tickers)
         self.assertLess(abs(suggestions[0]["yield_delta"]), 0.03)
         self.assertIn("same ETF category", suggestions[0]["match_reasons"])
+
+    def test_legacy_mirror_fallback_uses_dividend_aliases(self):
+        self.conn.execute(
+            """INSERT INTO holdings
+               (ticker, profile_id, quantity, description, classification_type, current_value)
+               VALUES ('LEGACY', 1, 10, 'Legacy Income ETF', 'ETF', 1000)"""
+        )
+        self.conn.execute(
+            "INSERT INTO dividends VALUES ('LEGACY', 1, 0.12, 'M')"
+        )
+
+        profile = _source_profile(self.conn, "LEGACY", [1])
+
+        self.assertEqual(profile["ticker"], "LEGACY")
+        self.assertEqual(profile["description"], "Legacy Income ETF")
+        self.assertAlmostEqual(profile["yield"], 0.12)
 
 
 if __name__ == "__main__":

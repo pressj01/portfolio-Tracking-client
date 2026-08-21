@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sys
 
@@ -18,14 +19,143 @@ def _seed_db_candidates():
     return candidates
 
 
-def _seed_etf_provider_data(conn):
-    """Load ETF provider reference data into a fresh database."""
-    has_funds = conn.execute("SELECT COUNT(*) FROM etf_provider_funds").fetchone()[0]
-    if has_funds:
-        return
+ETF_PROVIDER_SEED_KEY = "etf_provider_seed_sha256"
 
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _has_unique_columns(conn, table, columns):
+    expected = list(columns)
+    for row in conn.execute(f"PRAGMA index_list({table})").fetchall():
+        if not row[2]:
+            continue
+        index_name = str(row[1]).replace('"', '""')
+        actual = [
+            info[2]
+            for info in conn.execute(f'PRAGMA index_info("{index_name}")').fetchall()
+        ]
+        if actual == expected:
+            return True
+    return False
+
+
+def _create_holdings_table(conn, *, if_not_exists=False):
+    qualifier = "IF NOT EXISTS " if if_not_exists else ""
+    conn.execute(f"""
+        CREATE TABLE {qualifier}holdings (
+            ticker              TEXT NOT NULL,
+            profile_id          INTEGER NOT NULL DEFAULT 1,
+            description         TEXT,
+            classification_type TEXT,
+            quantity            REAL,
+            price_paid          REAL,
+            current_price       REAL,
+            purchase_value      REAL,
+            original_price_paid REAL,
+            original_purchase_value REAL,
+            broker_price_paid   REAL,
+            broker_purchase_value REAL,
+            current_value       REAL,
+            gain_or_loss        REAL,
+            gain_or_loss_percentage REAL,
+            percent_change      REAL,
+            purchase_date       TEXT,
+            UNIQUE (ticker, profile_id)
+        )
+    """)
+
+
+def _create_dividends_table(conn, *, if_not_exists=False):
+    qualifier = "IF NOT EXISTS " if if_not_exists else ""
+    conn.execute(f"""
+        CREATE TABLE {qualifier}dividends (
+            ticker                 TEXT NOT NULL,
+            profile_id             INTEGER NOT NULL DEFAULT 1,
+            div_frequency          TEXT,
+            reinvest               TEXT,
+            ex_div_date            TEXT,
+            div_per_share          REAL,
+            dividend_paid          REAL,
+            estim_payment_per_year REAL,
+            approx_monthly_income  REAL,
+            annual_yield_on_cost   REAL,
+            current_annual_yield   REAL,
+            ytd_divs               REAL,
+            total_divs_received    REAL,
+            paid_for_itself        REAL,
+            UNIQUE (ticker, profile_id)
+        )
+    """)
+
+
+def _migrate_profile_mirror(conn, table, expected_columns, create_table):
+    """Preserve a legacy mirror while replacing its ticker-only key."""
+    info = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    columns = {row[1] for row in info}
+    if "profile_id" in columns and _has_unique_columns(
+        conn, table, ("ticker", "profile_id")
+    ):
+        return False
+
+    legacy = f"_{table}_legacy_profile_migration"
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (legacy,),
+    ).fetchone():
+        raise RuntimeError(f"Cannot migrate {table}: temporary table {legacy} exists")
+
+    conn.execute(f'ALTER TABLE "{table}" RENAME TO "{legacy}"')
+    create_table(conn)
+    legacy_columns = {row[1] for row in info}
+    destination = [name for name in expected_columns if name in legacy_columns]
+    expressions = list(destination)
+    if "profile_id" in legacy_columns:
+        position = destination.index("profile_id")
+        expressions[position] = "COALESCE(profile_id, 1)"
+    else:
+        destination.insert(1, "profile_id")
+        expressions.insert(1, "1")
+    conn.execute(
+        f'''INSERT OR REPLACE INTO "{table}" ({", ".join(destination)})
+            SELECT {", ".join(expressions)} FROM "{legacy}"
+             WHERE ticker IS NOT NULL'''
+    )
+    conn.execute(f'DROP TABLE "{legacy}"')
+    return True
+
+
+def _seed_etf_provider_data(conn):
+    """Load or refresh bundled ETF provider reference data.
+
+    Older builds used INSERT OR IGNORE and bailed out once any fund row existed,
+    so a newer backend/seed/etf_providers.db never applied. Upsert by provider
+    name and (provider, symbol) so seed updates land without wiping user-added
+    providers or funds the seed does not mention.
+    """
     seed_path = next((p for p in _seed_db_candidates() if os.path.exists(p)), None)
     if not seed_path:
+        return
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    fingerprint = _file_sha256(seed_path)
+    applied = conn.execute(
+        "SELECT value FROM settings WHERE key = ?",
+        (ETF_PROVIDER_SEED_KEY,),
+    ).fetchone()
+    applied_fingerprint = applied[0] if applied else None
+    has_funds = conn.execute("SELECT COUNT(*) FROM etf_provider_funds").fetchone()[0]
+    if has_funds and applied_fingerprint == fingerprint:
         return
 
     conn.execute("ATTACH DATABASE ? AS etf_seed", (seed_path,))
@@ -34,19 +164,41 @@ def _seed_etf_provider_data(conn):
         if not seed_funds:
             return
         conn.execute("""
-            INSERT OR IGNORE INTO etf_providers
-                (id, provider, total_assets, num_funds, avg_expense)
-            SELECT id, provider, total_assets, num_funds, avg_expense
-            FROM etf_seed.etf_providers
+            INSERT INTO etf_providers (provider, total_assets, num_funds, avg_expense)
+            SELECT provider, total_assets, num_funds, avg_expense
+              FROM etf_seed.etf_providers
+            WHERE provider IS NOT NULL AND TRIM(provider) != ''
+            ON CONFLICT(provider) DO UPDATE SET
+                total_assets = excluded.total_assets,
+                num_funds = excluded.num_funds,
+                avg_expense = excluded.avg_expense
         """)
         conn.execute("""
-            INSERT OR IGNORE INTO etf_provider_funds
-                (id, provider_id, symbol, fund_name, assets, div_yield, exp_ratio,
+            INSERT INTO etf_provider_funds
+                (provider_id, symbol, fund_name, assets, div_yield, exp_ratio,
                  change_1y, annual_div, ex_div_date, frequency, payout_ratio, div_growth)
-            SELECT id, provider_id, symbol, fund_name, assets, div_yield, exp_ratio,
-                   change_1y, annual_div, ex_div_date, frequency, payout_ratio, div_growth
-            FROM etf_seed.etf_provider_funds
+            SELECT p.id, s.symbol, s.fund_name, s.assets, s.div_yield, s.exp_ratio,
+                   s.change_1y, s.annual_div, s.ex_div_date, s.frequency, s.payout_ratio, s.div_growth
+              FROM etf_seed.etf_provider_funds s
+              JOIN etf_seed.etf_providers sp ON sp.id = s.provider_id
+              JOIN etf_providers p ON p.provider = sp.provider
+             WHERE s.symbol IS NOT NULL AND TRIM(s.symbol) != ''
+            ON CONFLICT(provider_id, symbol) DO UPDATE SET
+                fund_name = excluded.fund_name,
+                assets = excluded.assets,
+                div_yield = excluded.div_yield,
+                exp_ratio = excluded.exp_ratio,
+                change_1y = excluded.change_1y,
+                annual_div = excluded.annual_div,
+                ex_div_date = excluded.ex_div_date,
+                frequency = excluded.frequency,
+                payout_ratio = excluded.payout_ratio,
+                div_growth = excluded.div_growth
         """)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (ETF_PROVIDER_SEED_KEY, fingerprint),
+        )
         conn.commit()
     finally:
         conn.execute("DETACH DATABASE etf_seed")
@@ -392,110 +544,47 @@ def ensure_tables_exist(conn=None):
     cur.execute("UPDATE all_account_info SET current_annual_yield = current_annual_yield / 100.0 WHERE current_annual_yield > 1")
 
     # ── holdings ───────────────────────────────────────────────────────────────
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS holdings (
-            ticker              TEXT NOT NULL,
-            profile_id          INTEGER NOT NULL DEFAULT 1,
-            description         TEXT,
-            classification_type TEXT,
-            quantity            REAL,
-            price_paid          REAL,
-            current_price       REAL,
-            purchase_value      REAL,
-            original_price_paid REAL,
-            original_purchase_value REAL,
-            broker_price_paid   REAL,
-            broker_purchase_value REAL,
-            current_value       REAL,
-            gain_or_loss        REAL,
-            gain_or_loss_percentage REAL,
-            percent_change      REAL,
-            purchase_date       TEXT,
-            UNIQUE (ticker, profile_id)
-        )
-    """)
-    # Migrate: add profile_id if missing
+    _create_holdings_table(conn, if_not_exists=True)
+    _migrate_profile_mirror(
+        conn,
+        "holdings",
+        (
+            "ticker", "profile_id", "description", "classification_type",
+            "quantity", "price_paid", "current_price", "purchase_value",
+            "original_price_paid", "original_purchase_value",
+            "broker_price_paid", "broker_purchase_value", "current_value",
+            "gain_or_loss", "gain_or_loss_percentage", "percent_change",
+            "purchase_date",
+        ),
+        _create_holdings_table,
+    )
     _h_cols = {r[1] for r in cur.execute("PRAGMA table_info(holdings)").fetchall()}
-    if "profile_id" not in _h_cols:
-        cur.execute("DROP TABLE holdings")
-        cur.execute("""
-            CREATE TABLE holdings (
-                ticker              TEXT NOT NULL,
-                profile_id          INTEGER NOT NULL DEFAULT 1,
-                description         TEXT,
-                classification_type TEXT,
-                quantity            REAL,
-                price_paid          REAL,
-                current_price       REAL,
-                purchase_value      REAL,
-                original_price_paid REAL,
-                original_purchase_value REAL,
-                broker_price_paid   REAL,
-                broker_purchase_value REAL,
-                current_value       REAL,
-                gain_or_loss        REAL,
-                gain_or_loss_percentage REAL,
-                percent_change      REAL,
-                purchase_date       TEXT,
-                UNIQUE (ticker, profile_id)
-            )
-        """)
-    else:
-        for _col in (
-            ("original_price_paid", "REAL"),
-            ("original_purchase_value", "REAL"),
-            ("broker_price_paid", "REAL"),
-            ("broker_purchase_value", "REAL"),
-        ):
-            if _col[0] not in _h_cols:
-                try:
-                    cur.execute(f"ALTER TABLE holdings ADD COLUMN {_col[0]} {_col[1]}")
-                except Exception:
-                    pass
+    for _col in (
+        ("original_price_paid", "REAL"),
+        ("original_purchase_value", "REAL"),
+        ("broker_price_paid", "REAL"),
+        ("broker_purchase_value", "REAL"),
+    ):
+        if _col[0] not in _h_cols:
+            try:
+                cur.execute(f"ALTER TABLE holdings ADD COLUMN {_col[0]} {_col[1]}")
+            except Exception:
+                pass
 
     # ── dividends ──────────────────────────────────────────────────────────────
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS dividends (
-            ticker                 TEXT NOT NULL,
-            profile_id             INTEGER NOT NULL DEFAULT 1,
-            div_frequency          TEXT,
-            reinvest               TEXT,
-            ex_div_date            TEXT,
-            div_per_share          REAL,
-            dividend_paid          REAL,
-            estim_payment_per_year REAL,
-            approx_monthly_income  REAL,
-            annual_yield_on_cost   REAL,
-            current_annual_yield   REAL,
-            ytd_divs               REAL,
-            total_divs_received    REAL,
-            paid_for_itself        REAL,
-            UNIQUE (ticker, profile_id)
-        )
-    """)
-    # Migrate: add profile_id if missing
-    _d_cols = {r[1] for r in cur.execute("PRAGMA table_info(dividends)").fetchall()}
-    if "profile_id" not in _d_cols:
-        cur.execute("DROP TABLE dividends")
-        cur.execute("""
-            CREATE TABLE dividends (
-                ticker                 TEXT NOT NULL,
-                profile_id             INTEGER NOT NULL DEFAULT 1,
-                div_frequency          TEXT,
-                reinvest               TEXT,
-                ex_div_date            TEXT,
-                div_per_share          REAL,
-                dividend_paid          REAL,
-                estim_payment_per_year REAL,
-                approx_monthly_income  REAL,
-                annual_yield_on_cost   REAL,
-                current_annual_yield   REAL,
-                ytd_divs               REAL,
-                total_divs_received    REAL,
-                paid_for_itself        REAL,
-                UNIQUE (ticker, profile_id)
-            )
-        """)
+    _create_dividends_table(conn, if_not_exists=True)
+    _migrate_profile_mirror(
+        conn,
+        "dividends",
+        (
+            "ticker", "profile_id", "div_frequency", "reinvest",
+            "ex_div_date", "div_per_share", "dividend_paid",
+            "estim_payment_per_year", "approx_monthly_income",
+            "annual_yield_on_cost", "current_annual_yield", "ytd_divs",
+            "total_divs_received", "paid_for_itself",
+        ),
+        _create_dividends_table,
+    )
 
     # Same YoC percent→ratio repair for the dividends mirror table.
     cur.execute("UPDATE dividends SET annual_yield_on_cost = annual_yield_on_cost / 100.0 WHERE annual_yield_on_cost > 1")

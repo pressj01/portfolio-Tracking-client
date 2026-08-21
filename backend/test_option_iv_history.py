@@ -142,5 +142,128 @@ class IvRankPersistenceTests(unittest.TestCase):
             self.assertGreaterEqual(last["rank"], 90)
 
 
+class IvRankCollectorTests(unittest.TestCase):
+    def test_pick_target_expiration_prefers_near_30_dte(self):
+        day = date(2026, 8, 21)
+        exp, dte = history._pick_target_expiration(
+            ["2026-08-22", "2026-09-18", "2027-01-15"],
+            day,
+        )
+        self.assertEqual(exp, "2026-09-18")
+        self.assertEqual(dte, 28)
+
+    def test_atm_iv_averages_call_and_put_at_nearest_strike(self):
+        import pandas as pd
+        calls = pd.DataFrame({"strike": [99, 100, 101], "impliedVolatility": [0.21, 0.20, 0.22]})
+        puts = pd.DataFrame({"strike": [99, 100, 101], "impliedVolatility": [0.23, 0.24, 0.25]})
+        iv = history._atm_iv_from_chain(calls, puts, 100.2)
+        self.assertAlmostEqual(iv, 0.22)
+
+    def test_collector_records_holdings_and_scanner_names_without_a_40_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "iv-history.db")
+            conn = sqlite3.connect(path)
+            conn.executescript(
+                """
+                CREATE TABLE all_account_info (
+                    ticker TEXT, profile_id INTEGER, quantity REAL
+                );
+                CREATE TABLE option_trades (underlying TEXT, status TEXT);
+                CREATE TABLE general_scanner_universe (ticker TEXT);
+                CREATE TABLE watchlist_watching (ticker TEXT);
+                """
+            )
+            for i in range(45):
+                conn.execute(
+                    "INSERT INTO all_account_info VALUES (?, 1, 10)",
+                    (f"T{i:02d}",),
+                )
+            conn.execute("INSERT INTO general_scanner_universe VALUES ('SCAN1')")
+            conn.execute("INSERT INTO watchlist_watching VALUES ('WATCH1')")
+            conn.commit()
+            conn.close()
+
+            def connection():
+                c = sqlite3.connect(path)
+                c.row_factory = sqlite3.Row
+                return c
+
+            def fake_atm(ticker, observed_on=None):
+                return {
+                    "ticker": ticker,
+                    "atm_iv": 0.20,
+                    "expiration": "2026-09-18",
+                    "dte": 30,
+                }
+
+            with patch.object(history, "get_connection", side_effect=connection):
+                universe = history.collector_universe()
+                first = history.collect_daily_iv_rank(
+                    observed_on=date(2026, 8, 21),
+                    limit=25,
+                    fetch_atm_iv=fake_atm,
+                )
+                second = history.collect_daily_iv_rank(
+                    observed_on=date(2026, 8, 21),
+                    limit=25,
+                    fetch_atm_iv=fake_atm,
+                )
+                third = history.collect_daily_iv_rank(
+                    observed_on=date(2026, 8, 21),
+                    limit=25,
+                    fetch_atm_iv=fake_atm,
+                )
+
+            self.assertGreaterEqual(len(universe), 47)
+            self.assertIn("SCAN1", universe)
+            self.assertIn("WATCH1", universe)
+            self.assertEqual(len(first["collected"]), 25)
+            self.assertFalse(first["done"])
+            self.assertTrue(third["done"] or not third["remaining"])
+            self.assertGreaterEqual(
+                len(first["collected"]) + len(second["collected"]) + len(third["collected"]),
+                47,
+            )
+
+    def test_failed_batch_does_not_starve_later_tickers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "iv-history.db")
+
+            def connection():
+                conn = sqlite3.connect(path)
+                conn.row_factory = sqlite3.Row
+                return conn
+
+            tickers = [f"BAD{i:02d}" for i in range(25)] + [f"GOOD{i:02d}" for i in range(5)]
+
+            def fake_atm(ticker, observed_on=None):
+                if ticker.startswith("BAD"):
+                    return None
+                return {
+                    "ticker": ticker,
+                    "atm_iv": 0.20,
+                    "expiration": "2026-09-18",
+                    "dte": 28,
+                }
+
+            with patch.object(history, "get_connection", side_effect=connection):
+                first = history.collect_daily_iv_rank(
+                    tickers,
+                    observed_on=date(2026, 8, 21),
+                    fetch_atm_iv=fake_atm,
+                )
+                second = history.collect_daily_iv_rank(
+                    first["remaining"],
+                    observed_on=date(2026, 8, 21),
+                    fetch_atm_iv=fake_atm,
+                )
+
+            self.assertEqual(len(first["failed"]), 25)
+            self.assertEqual(first["remaining"], [f"GOOD{i:02d}" for i in range(5)])
+            self.assertFalse(first["done"])
+            self.assertEqual(len(second["collected"]), 5)
+            self.assertTrue(second["done"])
+
+
 if __name__ == "__main__":
     unittest.main()

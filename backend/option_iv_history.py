@@ -12,6 +12,10 @@ not mix tenors, and one-day IV spikes are removed before ranking.
 
 The small module is scanner-agnostic so every option scanner can share the same
 history as the compact Samurai-style filters are rolled out.
+
+A daily collector records ATM IV for held names, open option underlyings, the
+saved scanner universe, and the watchlist — independent of any scan and not
+capped at 40 symbols — so rank can warm up without waiting for a scan.
 """
 
 from __future__ import annotations
@@ -335,3 +339,241 @@ def fetch_iv_observations(
             continue
         observations.append({"observed_on": observed, "atm_iv": atm_iv})
     return observations
+
+
+COLLECTOR_BATCH_SIZE = 25
+
+
+def _pick_target_expiration(expirations, observed_on: date):
+    """Return (expiration, dte) closest to 30 DTE inside the preferred tenor."""
+    best = None
+    fallback = None
+    for raw in expirations or []:
+        exp = _parse_day(raw)
+        if exp is None:
+            continue
+        dte = (exp - observed_on).days
+        if dte <= 0:
+            continue
+        gap = abs(dte - TARGET_IV_DTE)
+        iso = exp.isoformat()
+        if PREFERRED_IV_DTE_MIN <= dte <= PREFERRED_IV_DTE_MAX:
+            if best is None or gap < best[0]:
+                best = (gap, iso, dte)
+        elif fallback is None or gap < fallback[0]:
+            fallback = (gap, iso, dte)
+    chosen = best or fallback
+    if not chosen:
+        return None, None
+    return chosen[1], chosen[2]
+
+
+def _atm_iv_from_chain(calls, puts, spot):
+    """Average call/put implied vol at the strike nearest to spot."""
+    try:
+        spot_px = float(spot)
+    except (TypeError, ValueError):
+        return None
+    if spot_px <= 0 or not math.isfinite(spot_px):
+        return None
+
+    def _frame_iv(frame):
+        if frame is None or getattr(frame, "empty", True):
+            return {}
+        by_strike = {}
+        for _, row in frame.iterrows():
+            try:
+                strike = float(row.get("strike") or 0)
+                iv = _valid_iv(row.get("impliedVolatility"))
+            except Exception:
+                continue
+            if strike <= 0 or not math.isfinite(strike) or iv is None:
+                continue
+            by_strike[strike] = iv
+        return by_strike
+
+    call_iv = _frame_iv(calls)
+    put_iv = _frame_iv(puts)
+    common = set(call_iv).intersection(put_iv) or set(call_iv) or set(put_iv)
+    if not common:
+        return None
+    strike = min(common, key=lambda value: abs(value - spot_px))
+    samples = [iv for iv in (call_iv.get(strike), put_iv.get(strike)) if iv is not None]
+    if not samples:
+        return None
+    return sum(samples) / len(samples)
+
+
+def fetch_yahoo_atm_iv(ticker, observed_on=None):
+    """Pull one Yahoo ATM IV print near 30 DTE. Returns dict or None."""
+    import yfinance as yf
+
+    symbol = str(ticker or "").strip().upper()
+    day = observed_on or date.today()
+    if not symbol:
+        return None
+    try:
+        instrument = yf.Ticker(symbol)
+        expirations = list(instrument.options or [])
+    except Exception:
+        return None
+    expiration, dte = _pick_target_expiration(expirations, day)
+    if not expiration:
+        return None
+    try:
+        chain = instrument.option_chain(expiration)
+    except Exception:
+        return None
+    spot = None
+    try:
+        spot = float(getattr(instrument, "fast_info", {}).get("lastPrice") or 0)
+    except Exception:
+        spot = None
+    if not spot:
+        try:
+            hist = instrument.history(period="5d", auto_adjust=False)
+            if hist is not None and not hist.empty and "Close" in hist.columns:
+                spot = float(hist["Close"].dropna().iloc[-1])
+        except Exception:
+            spot = None
+    atm_iv = _atm_iv_from_chain(
+        getattr(chain, "calls", None),
+        getattr(chain, "puts", None),
+        spot,
+    )
+    if atm_iv is None:
+        return None
+    return {
+        "ticker": symbol,
+        "atm_iv": atm_iv,
+        "expiration": expiration,
+        "dte": dte,
+        "spot": spot,
+    }
+
+
+def collector_universe(conn=None):
+    """Tickers that should receive a daily ATM IV print, with no 40-name cap."""
+    close = False
+    if conn is None:
+        conn = get_connection()
+        close = True
+    tickers = []
+    seen = set()
+
+    def _add(symbol):
+        name = str(symbol or "").strip().upper()
+        if name and name not in seen:
+            seen.add(name)
+            tickers.append(name)
+
+    queries = [
+        "SELECT DISTINCT ticker FROM all_account_info WHERE COALESCE(quantity, 0) > 1e-9",
+        "SELECT DISTINCT underlying FROM option_trades WHERE status = 'OPEN'",
+        "SELECT DISTINCT ticker FROM general_scanner_universe",
+        "SELECT DISTINCT ticker FROM watchlist_watching",
+    ]
+    try:
+        for sql in queries:
+            try:
+                for row in conn.execute(sql).fetchall():
+                    _add(row[0])
+            except Exception:
+                continue
+    finally:
+        if close:
+            conn.close()
+    return tickers
+
+
+def pending_iv_collector_tickers(observed_on=None, source="yahoo"):
+    """Universe members that do not yet have a snapshot for observed_on."""
+    day = observed_on or date.today()
+    conn = get_connection()
+    try:
+        _ensure_table(conn)
+        universe = collector_universe(conn)
+        existing = {
+            str(row[0]).upper()
+            for row in conn.execute(
+                """
+                SELECT ticker FROM option_iv_history
+                WHERE observed_on = ? AND source = ?
+                """,
+                (day.isoformat(), source),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    return [ticker for ticker in universe if ticker not in existing]
+
+
+def collect_daily_iv_rank(
+    tickers=None,
+    *,
+    observed_on=None,
+    limit=COLLECTOR_BATCH_SIZE,
+    source="yahoo",
+    fetch_atm_iv=None,
+):
+    """Record today's ATM IV for up to ``limit`` tickers that still need a print.
+
+    ``fetch_atm_iv`` is injectable so tests do not hit Yahoo. Returns a progress
+    dict the frontend can poll until ``remaining`` is 0.
+    """
+    day = observed_on or date.today()
+    fetch = fetch_atm_iv or fetch_yahoo_atm_iv
+    if tickers is None:
+        pending = pending_iv_collector_tickers(observed_on=day, source=source)
+    else:
+        pending = []
+        seen = set()
+        for raw in tickers:
+            symbol = str(raw or "").strip().upper()
+            if symbol and symbol not in seen:
+                seen.add(symbol)
+                pending.append(symbol)
+    try:
+        batch_limit = max(0, int(limit))
+    except (TypeError, ValueError):
+        batch_limit = COLLECTOR_BATCH_SIZE
+    batch = pending[:batch_limit]
+    recorded = []
+    failed = []
+    for ticker in batch:
+        try:
+            snapshot = fetch(ticker, observed_on=day)
+        except Exception:
+            snapshot = None
+        atm_iv = _valid_iv(snapshot.get("atm_iv")) if snapshot else None
+        if atm_iv is None:
+            failed.append(ticker)
+            continue
+        try:
+            meta = record_iv_snapshot(
+                ticker,
+                atm_iv,
+                snapshot.get("expiration"),
+                observed_on=day,
+                source=source,
+                dte=snapshot.get("dte"),
+            )
+        except Exception:
+            failed.append(ticker)
+            continue
+        recorded.append({
+            "ticker": ticker,
+            "atm_iv": atm_iv,
+            "expiration": snapshot.get("expiration"),
+            "observations": meta.get("observations"),
+            "ready": bool(meta.get("ready")),
+        })
+    remaining = pending[len(batch):]
+    return {
+        "observed_on": day.isoformat(),
+        "collected": recorded,
+        "failed": failed,
+        "remaining": remaining,
+        "pending_before": len(pending),
+        "done": not remaining,
+    }

@@ -83,6 +83,46 @@ export default function MarketRefreshProvider({ children }) {
     return () => { cancelled = true; clearInterval(id) }
   }, [pf])
 
+  // Daily IV Rank collector. Scans only record ATM IV for the names they
+  // price, and generic scans used to hard-cap at 40 symbols, so rank never
+  // warmed up. Poll until today's universe is collected.
+  useEffect(() => {
+    let cancelled = false
+    let running = false
+    const controller = new AbortController()
+    const collect = async () => {
+      if (cancelled || running) return
+      running = true
+      let remaining = null
+      try {
+        while (!cancelled) {
+          const options = { method: 'POST', signal: controller.signal }
+          if (remaining) {
+            options.headers = { 'Content-Type': 'application/json' }
+            options.body = JSON.stringify({ tickers: remaining })
+          }
+          const res = await pf('/api/iv-rank/collect', options)
+          const data = res.ok ? await res.json() : null
+          if (cancelled || !data || data.skipped || data.done) return
+          remaining = Array.isArray(data.remaining) ? data.remaining : []
+          if (remaining.length === 0) return
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      } catch {
+        // A later interval retries transient Yahoo/backend failures.
+      } finally {
+        running = false
+      }
+    }
+    collect()
+    const id = setInterval(collect, 10 * 60 * 1000)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(id)
+    }
+  }, [pf])
+
   const waitForMarketRefresh = useCallback(async () => {
     const pending = refreshRef.current?.promise
     if (!pending) return null

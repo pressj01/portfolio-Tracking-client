@@ -284,8 +284,8 @@ class DripScoreRunApiTest(_DripApiBase):
         conn = config.get_connection()
         try:
             conn.execute(
-                "INSERT INTO holdings (ticker, profile_id, description) "
-                "VALUES ('ZHLD', 1, 'BROKER ALL CAPS NAME')")
+                "INSERT INTO all_account_info (ticker, profile_id, description, quantity) "
+                "VALUES ('ZHLD', 1, 'BROKER ALL CAPS NAME', 1)")
             conn.commit()
         finally:
             conn.close()

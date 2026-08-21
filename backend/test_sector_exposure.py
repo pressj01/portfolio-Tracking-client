@@ -16,7 +16,7 @@ def _memory_db():
 
 def _add_position(conn, ticker, value, profile_id=1):
     conn.execute(
-        "INSERT INTO holdings (profile_id, ticker, quantity, current_value) VALUES (?,?,?,?)",
+        "INSERT INTO all_account_info (profile_id, ticker, quantity, current_value) VALUES (?,?,?,?)",
         (profile_id, ticker, 1, value),
     )
     conn.commit()

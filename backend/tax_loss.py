@@ -127,10 +127,11 @@ def _current_prices(conn, profile_ids: list[int]) -> dict[str, float]:
     rows = conn.execute(
         f"""SELECT ticker,
                    AVG(current_price) AS price
-            FROM holdings
+            FROM all_account_info
             WHERE profile_id IN ({placeholders})
               AND current_price IS NOT NULL
               AND current_price > 0
+              AND COALESCE(quantity, 0) > 1e-9
             GROUP BY ticker""",
         profile_ids,
     ).fetchall()
@@ -431,6 +432,7 @@ def _source_profile(conn, ticker: str, profile_ids: list[int]) -> dict:
         FROM all_account_info
         WHERE UPPER(ticker) = ?
           AND profile_id IN ({placeholders})
+          AND COALESCE(quantity, 0) > 1e-9
         GROUP BY UPPER(ticker)
     """, [ticker, *profile_ids])
 
@@ -449,6 +451,7 @@ def _source_profile(conn, ticker: str, profile_ids: list[int]) -> dict:
              AND d.profile_id = h.profile_id
             WHERE UPPER(h.ticker) = ?
               AND h.profile_id IN ({placeholders})
+              AND COALESCE(h.quantity, 0) > 1e-9
             GROUP BY UPPER(h.ticker)
         """, [ticker, *profile_ids])
 
@@ -610,8 +613,9 @@ def _candidate_universe(conn, source: dict, profile_ids: list[int], blocked: set
     for t, profile in list(universe.items()):
         div = _fetchone_dict(conn, """
             SELECT current_annual_yield, div_frequency
-            FROM dividends
+            FROM all_account_info
             WHERE UPPER(ticker) = ?
+              AND COALESCE(quantity, 0) > 1e-9
             LIMIT 1
         """, [t])
         if div:
@@ -727,7 +731,7 @@ def candidate_replacements(conn, ticker: str, scope: dict, limit: int = 5) -> li
     held_tickers = {
         (r["ticker"] or "").upper()
         for r in conn.execute(
-            f"""SELECT DISTINCT ticker FROM holdings
+            f"""SELECT DISTINCT ticker FROM all_account_info
                 WHERE profile_id IN ({placeholders})
                   AND COALESCE(quantity, 0) > 1e-9""",
             pids,

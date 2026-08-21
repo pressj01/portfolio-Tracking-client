@@ -104,6 +104,19 @@ class DividendCalendarScopeTest(unittest.TestCase):
         self.assertNotIn("CCC", rows)
         self.assertEqual(rows["DDD"]["payment_history"], [self.actual_date])
 
+    def test_analytics_income_calendar_sums_aggregate_accounts(self):
+        with patch.object(app_module, "get_connection", self._connect), \
+             patch.object(app_module, "get_profile_filter", return_value=(True, [6, 7])):
+            response = app_module.app.test_client().post(
+                "/api/analytics/income-calendar",
+                json={"tickers": ["AAA"]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload["tickers"][0]["amounts"], [15.0] * 12)
+        self.assertEqual(payload["monthly_totals"], [15.0] * 12)
+
     def _pin(self, profile_id, ticker, ex_div_date=None):
         conn = self._connect()
         conn.execute(

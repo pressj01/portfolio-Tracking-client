@@ -102,6 +102,7 @@ from diversification import (
     register_routes as register_diversification_routes,
 )
 from sector_exposure import register_routes as register_sector_exposure_routes
+from option_iv_history import collect_daily_iv_rank, pending_iv_collector_tickers
 from option_trade_tracker import (
     expired_open_legs,
     open_option_liquidating_value,
@@ -8353,6 +8354,43 @@ def _refresh_payload_complete_for_close(payload):
     if payload.get("price_complete") is not True:
         return False
     return True
+
+
+@app.route("/api/iv-rank/collect", methods=["POST"])
+def api_iv_rank_collect():
+    """Record today's ATM IV for held/watchlist/scanner names, in batches.
+
+    Independent of option scans and not capped at 40 symbols. The frontend
+    polls until remaining is empty so a large universe can warm IV Rank
+    without blocking a scan.
+    """
+    from market_calendar import eastern_now, is_nyse_trading_day
+
+    data = request.get_json(silent=True) or {}
+    tickers = data.get("tickers")
+    if tickers is not None and not isinstance(tickers, list):
+        return jsonify({"error": "tickers must be a list"}), 400
+
+    now_et = eastern_now()
+    market_date = now_et.date()
+    if not is_nyse_trading_day(market_date):
+        pending = (
+            pending_iv_collector_tickers(observed_on=market_date)
+            if tickers is None else tickers
+        )
+        return jsonify({
+            "collected": [],
+            "failed": [],
+            "remaining": [],
+            "pending_before": len(pending),
+            "done": True,
+            "skipped": True,
+            "reason": f"{market_date.isoformat()} is not a trading day.",
+            "observed_on": market_date.isoformat(),
+        })
+    payload = collect_daily_iv_rank(tickers=tickers, observed_on=market_date)
+    payload["skipped"] = False
+    return jsonify(payload)
 
 
 @app.route("/api/nav/auto-capture", methods=["POST"])
@@ -18312,7 +18350,15 @@ def list_dividends():
     conn = get_connection()
     placeholders = ",".join("?" * len(pids))
     rows = conn.execute(
-        f"SELECT * FROM dividends WHERE profile_id IN ({placeholders}) ORDER BY ticker", pids
+        f"""SELECT ticker, profile_id, div_frequency, reinvest, ex_div_date,
+                   div AS div_per_share, dividend_paid, estim_payment_per_year,
+                   approx_monthly_income, annual_yield_on_cost, current_annual_yield,
+                   ytd_divs, total_divs_received, paid_for_itself
+              FROM all_account_info
+             WHERE profile_id IN ({placeholders})
+               AND COALESCE(quantity, 0) > 1e-9
+             ORDER BY ticker""",
+        pids,
     ).fetchall()
     conn.close()
     return jsonify(rows_to_dicts(rows))
@@ -18346,11 +18392,24 @@ def update_dividend(ticker):
         upd_pid = _resolve_aggregate_profile(ticker, pids)
     else:
         upd_pid = pids[0]
-    vals.append(ticker)
-    vals.append(upd_pid)
-    conn.execute(f"UPDATE dividends SET {', '.join(updates)} WHERE ticker = ? AND profile_id = ?", vals)
+    mapped = []
+    mapped_vals = []
+    for clause, value in zip(updates, vals):
+        field = clause.split(" = ")[0]
+        if field == "div_per_share":
+            mapped.append("div = ?")
+        else:
+            mapped.append(clause)
+        mapped_vals.append(value)
+    mapped_vals.append(ticker)
+    mapped_vals.append(upd_pid)
+    conn.execute(
+        f"UPDATE all_account_info SET {', '.join(mapped)} WHERE ticker = ? AND profile_id = ?",
+        mapped_vals,
+    )
     conn.commit()
     conn.close()
+    populate_dividends(upd_pid)
     return jsonify({"ticker": ticker, "message": f"{ticker} dividend info updated"})
 
 
@@ -22938,7 +22997,10 @@ def data_stats():
         f"SELECT COUNT(DISTINCT ticker) as c FROM all_account_info WHERE profile_id IN ({placeholders})", pids
     ).fetchone()["c"]
     dividends = conn.execute(
-        f"SELECT COUNT(*) as c FROM dividends WHERE profile_id IN ({placeholders})", pids
+        f"""SELECT COUNT(*) as c FROM all_account_info
+             WHERE profile_id IN ({placeholders})
+               AND COALESCE(quantity, 0) > 1e-9""",
+        pids,
     ).fetchone()["c"]
     income = conn.execute(
         f"SELECT COUNT(*) as c FROM income_tracking WHERE profile_id IN ({placeholders})", pids
@@ -37832,7 +37894,12 @@ def analytics_income_calendar():
         # Get pay months from monthly_payout_tickers
         row = conn.execute("SELECT pay_month FROM monthly_payout_tickers WHERE ticker = ?", (t,)).fetchone()
         div_row = conn.execute(
-            f"SELECT estim_payment_per_year, div_frequency FROM dividends WHERE ticker = ? AND profile_id IN ({cal_ph})",
+            f"""SELECT SUM(COALESCE(estim_payment_per_year, 0)) AS estim_payment_per_year,
+                       MAX(div_frequency) AS div_frequency
+                 FROM all_account_info
+                 WHERE ticker = ? AND profile_id IN ({cal_ph})
+                   AND COALESCE(quantity, 0) > 1e-9
+                HAVING COUNT(*) > 0""",
             [t] + cal_pids
         ).fetchone()
         if not div_row:
@@ -38849,8 +38916,10 @@ def _drip_fund_names(conn, tickers):
     if missing:
         placeholders = ",".join("?" * len(missing))
         for row in conn.execute(
-                f"SELECT UPPER(ticker), description FROM holdings "
-                f"WHERE UPPER(ticker) IN ({placeholders}) AND description IS NOT NULL",
+                f"""SELECT UPPER(ticker), description FROM all_account_info
+                     WHERE UPPER(ticker) IN ({placeholders})
+                       AND description IS NOT NULL
+                       AND COALESCE(quantity, 0) > 1e-9""",
                 missing).fetchall():
             names.setdefault(row[0], row[1])
     return names
@@ -40441,7 +40510,12 @@ def builder_all_weather():
     conn = get_connection()
     h_ph = ",".join("?" * len(h_pids))
     existing = conn.execute(
-        f"SELECT ticker, SUM(current_value) as current_value FROM holdings WHERE profile_id IN ({h_ph}) GROUP BY ticker", h_pids
+        f"""SELECT ticker, SUM(current_value) as current_value
+              FROM all_account_info
+             WHERE profile_id IN ({h_ph})
+               AND COALESCE(quantity, 0) > 1e-9
+             GROUP BY ticker""",
+        h_pids,
     ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}
@@ -40842,7 +40916,12 @@ def builder_rebalance(pid):
     _, r_pids = get_profile_filter()
     r_ph = ",".join("?" * len(r_pids))
     existing = conn.execute(
-        f"SELECT ticker, SUM(current_value) as current_value FROM holdings WHERE profile_id IN ({r_ph}) GROUP BY ticker", r_pids
+        f"""SELECT ticker, SUM(current_value) as current_value
+              FROM all_account_info
+             WHERE profile_id IN ({r_ph})
+               AND COALESCE(quantity, 0) > 1e-9
+             GROUP BY ticker""",
+        r_pids,
     ).fetchall()
     conn.close()
     existing_map = {r["ticker"].upper(): float(r["current_value"] or 0) for r in existing}

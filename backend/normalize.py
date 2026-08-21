@@ -70,11 +70,19 @@ def populate_holdings(profile_id=1):
     """, (profile_id,))
     row_count = cur.rowcount
 
-    # Remove stale holdings rows that no longer exist in all_account_info
+    # Remove closed and stale rows. all_account_info is canonical; leftover
+    # quantity ≈ 0 mirrors still leak into reports that read `holdings`.
     cur.execute("""
         DELETE FROM holdings
         WHERE profile_id = ?
-          AND ticker NOT IN (SELECT ticker FROM all_account_info WHERE profile_id = ?)
+          AND (
+            COALESCE(quantity, 0) <= 1e-9
+            OR ticker NOT IN (
+                SELECT ticker FROM all_account_info
+                 WHERE profile_id = ?
+                   AND COALESCE(quantity, 0) > 1e-9
+            )
+          )
     """, (profile_id, profile_id))
     stale_removed = cur.rowcount
 
@@ -104,11 +112,14 @@ def populate_dividends(profile_id=1):
     """, (profile_id,))
     row_count = cur.rowcount
 
-    # Remove stale dividends rows that no longer exist in all_account_info
     cur.execute("""
         DELETE FROM dividends
         WHERE profile_id = ?
-          AND ticker NOT IN (SELECT ticker FROM all_account_info WHERE profile_id = ?)
+          AND ticker NOT IN (
+              SELECT ticker FROM all_account_info
+               WHERE profile_id = ?
+                 AND COALESCE(quantity, 0) > 1e-9
+          )
     """, (profile_id, profile_id))
 
     conn.commit()

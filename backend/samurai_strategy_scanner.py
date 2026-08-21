@@ -47,7 +47,7 @@ def _tickers(raw) -> list[str]:
         if ticker and ticker not in seen:
             seen.add(ticker)
             result.append(ticker)
-    return result[:40]
+    return result[:200]
 
 
 def _dte(expiration: str) -> int:

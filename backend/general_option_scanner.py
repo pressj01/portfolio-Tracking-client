@@ -164,7 +164,7 @@ def _symbols(raw) -> list[str]:
         if symbol and symbol not in seen:
             seen.add(symbol)
             result.append(symbol)
-    return result[:40]
+    return result[:200]
 
 
 def _nested(row: dict, *paths):

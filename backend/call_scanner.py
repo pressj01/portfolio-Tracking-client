@@ -1060,8 +1060,8 @@ def held_positions(profile_id=None, aggregate_id=None, basis_mode="original") ->
                    SUM(quantity) AS shares,
                    SUM(CASE WHEN {price} IS NOT NULL THEN quantity * {price} END) AS basis_total,
                    SUM(CASE WHEN {price} IS NOT NULL THEN quantity END) AS basis_qty
-            FROM holdings
-            WHERE profile_id IN ({placeholders}) AND quantity > 0
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders}) AND COALESCE(quantity, 0) > 1e-9
             GROUP BY ticker
             """,
             ids,

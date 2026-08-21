@@ -1505,8 +1505,8 @@ def _profile_scope(profile_id, aggregate_id):
             ids = [profile_id or 1]
         placeholders = ",".join("?" for _ in ids)
         rows = conn.execute(
-            f"SELECT DISTINCT ticker FROM holdings WHERE profile_id IN ({placeholders}) "
-            "AND quantity > 0 ORDER BY ticker",
+            f"SELECT DISTINCT ticker FROM all_account_info WHERE profile_id IN ({placeholders}) "
+            "AND COALESCE(quantity, 0) > 1e-9 ORDER BY ticker",
             ids,
         ).fetchall()
         return [r[0] for r in rows]
