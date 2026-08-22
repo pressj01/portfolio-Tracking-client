@@ -3,6 +3,13 @@ import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
+import { useColumnLayout } from '../utils/useColumnLayout'
+import ColumnCustomizer from '../components/ColumnCustomizer'
+
+// Each view keeps its own column order and hidden set — the views curate
+// different columns, so one shared layout would fight itself.
+const COLUMN_LAYOUT_KEY = view => `common_info_columns_${view}_v1`
+const LOCKED_COLUMNS = ['holding']
 
 const VIEW_COLUMNS = {
   common: [
@@ -732,6 +739,123 @@ async function readJson(responsePromise) {
   return data
 }
 
+// Whichever column the user drags into the first slot is the frozen one, so the
+// pin follows the layout instead of staying nailed to Holding.
+function cellClass(column, index) {
+  return [
+    column.className,
+    index === 0 ? 'ci-frozen-col' : null,
+    column.align === 'right' ? 'ci-number' : null,
+  ].filter(Boolean).join(' ') || undefined
+}
+
+// The footer only totals the columns that have a total. 'Totals' labels the
+// first column, unless that column carries a figure of its own.
+function footerValue(key, index, totals, filteredRows) {
+  switch (key) {
+    case 'shares': return shares(filteredRows.reduce((sum, row) => sum + row.quantity, 0))
+    case 'costBasis': return money(totals.costBasis)
+    case 'currentValue': return money(totals.currentValue)
+    case 'dividends': return money(totals.annualIncome)
+    case 'dividendYield':
+    case 'estimatedYield': return pct(totals.passiveYield)
+    case 'totalProfit': return signedMoney(totals.visibleTotalProfit)
+    case 'paidForItself': return pct(totals.paidForItself)
+    case 'divsReceived': return money(filteredRows.reduce((sum, row) => sum + row.totalDivs, 0))
+    default: return index === 0 ? 'Totals' : ''
+  }
+}
+
+/**
+ * One view's table, with its own draggable column order.
+ *
+ * Rendered with key={view} so switching views remounts it: the layout hook
+ * reads its saved order once, on mount, and a live component would otherwise
+ * carry the previous view's order into the new view's storage key.
+ */
+function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sortKey, sortDir, onSort }) {
+  const layout = useColumnLayout({
+    storageKey: COLUMN_LAYOUT_KEY(view),
+    columns,
+    lockedKeys: LOCKED_COLUMNS,
+  })
+  const activeColumns = layout.activeColumns
+
+  return (
+    <>
+      <div className="holdings-column-bar">
+        <span className="column-bar-hint">
+          Drag any header to move that column, or use <strong>Columns</strong> to reorder and
+          hide them. Each view remembers its own layout.
+        </span>
+        <ColumnCustomizer
+          layout={layout}
+          detailOf={col => (COLUMN_HELP[col.key] || '').replace('Column: ', '')}
+          buttonLabel="Columns"
+          hint="Drag a row to reorder, or drag a header on the table itself. Uncheck a column to hide it."
+        />
+      </div>
+      <div className="sticky-table-wrap ci-table-wrap">
+        <table className="ci-table">
+          <thead>
+            <tr>
+              {activeColumns.map((column, index) => {
+                const key = column.key
+                const active = sortKey === key
+                const help = COLUMN_HELP[key] || `Column: ${column.label}`
+                return (
+                  <th
+                    key={key}
+                    className={layout.dragClass(key, cellClass(column, index))}
+                    onClick={() => onSort(key)}
+                    title={`${help}\nClick to sort by ${column.label}.\nDrag this header to move the column.`}
+                    {...layout.dragHandlers(key)}
+                  >
+                    <span>{column.label}</span>
+                    <small>{active ? (sortDir === 'asc' ? '^' : 'v') : ''}</small>
+                  </th>
+                )
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr
+                key={row.id}
+                className={`${row.sold ? 'ci-row-sold' : ''}${row.navMeta?.nav_erosion_severity === 'High' ? ' ci-row-nav-high' : ''}`}
+              >
+                {activeColumns.map((column, index) => (
+                  <td key={column.key} className={cellClass(column, index)}>
+                    {column.render(row)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot>
+              <tr>
+                {activeColumns.map((column, index) => (
+                  <td key={column.key} className={cellClass(column, index)}>
+                    <strong className={
+                      column.key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
+                        : column.key === 'paidForItself' ? pfiTone(totals.paidForItself)
+                          : ''
+                    }>{footerValue(column.key, index, totals, filteredRows)}</strong>
+                  </td>
+                ))}
+              </tr>
+            </tfoot>
+          )}
+        </table>
+        {rows.length === 0 && (
+          <div className="ci-empty">No holdings match the current filters.</div>
+        )}
+      </div>
+    </>
+  )
+}
+
 export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, tickerGrades = {} }) {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
@@ -917,13 +1041,16 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
     })
   }, [allRows, categoryId, subcategoryId, search])
 
-  const visibleColumns = useMemo(() => {
+  // Every column this view can show, in the order the view defines it. Each one
+  // carries its own key so the layout hook and the cells do not have to look it
+  // back up out of COLUMN_DEFS. The user's saved order is applied downstream.
+  const viewColumns = useMemo(() => {
     const hasCategory = filteredRows.some(hasDefinedCategory)
     const hasSubcategory = filteredRows.some(hasDefinedSubcategory)
     return VIEW_COLUMNS[view]
       .filter(key => key !== 'category' || hasCategory)
       .filter(key => key !== 'subcategory' || hasSubcategory)
-      .map(key => COLUMN_DEFS[key])
+      .map(key => ({ key, ...COLUMN_DEFS[key] }))
   }, [filteredRows, view])
 
   const sortedRows = useMemo(() => {
@@ -1086,81 +1213,17 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
       {loading ? (
         <div className="ci-loading"><span className="spinner" /> Loading holdings overview...</div>
       ) : (
-        <div className="sticky-table-wrap ci-table-wrap">
-          <table className="ci-table">
-            <thead>
-              <tr>
-                {visibleColumns.map(column => {
-                  const key = Object.entries(COLUMN_DEFS).find(([, value]) => value === column)?.[0]
-                  const active = sortKey === key
-                  const help = COLUMN_HELP[key] || `Column: ${column.label}`
-                  return (
-                    <th
-                      key={key}
-                      className={`${column.className || ''} ${column.align === 'right' ? 'ci-number' : ''}`}
-                      onClick={() => handleSort(key)}
-                      title={`${help}\nClick to sort by ${column.label}.`}
-                    >
-                      <span>{column.label}</span>
-                      <small>{active ? (sortDir === 'asc' ? '^' : 'v') : ''}</small>
-                    </th>
-                  )
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.map(row => (
-                <tr
-                  key={row.id}
-                  className={`${row.sold ? 'ci-row-sold' : ''}${row.navMeta?.nav_erosion_severity === 'High' ? ' ci-row-nav-high' : ''}`}
-                >
-                  {visibleColumns.map(column => {
-                    const key = Object.entries(COLUMN_DEFS).find(([, value]) => value === column)?.[0]
-                    return (
-                      <td
-                        key={key}
-                        className={`${column.className || ''} ${column.align === 'right' ? 'ci-number' : ''}`}
-                      >
-                        {column.render(row)}
-                      </td>
-                    )
-                  })}
-                </tr>
-              ))}
-            </tbody>
-            {sortedRows.length > 0 && (
-              <tfoot>
-                <tr>
-                  {visibleColumns.map((column, index) => {
-                    const key = Object.entries(COLUMN_DEFS).find(([, value]) => value === column)?.[0]
-                    let value = ''
-                    if (index === 0) value = 'Totals'
-                    if (key === 'shares') value = shares(filteredRows.reduce((sum, row) => sum + row.quantity, 0))
-                    if (key === 'costBasis') value = money(totals.costBasis)
-                    if (key === 'currentValue') value = money(totals.currentValue)
-                    if (key === 'dividends') value = money(totals.annualIncome)
-                    if (key === 'dividendYield' || key === 'estimatedYield') value = pct(totals.passiveYield)
-                    if (key === 'totalProfit') value = signedMoney(totals.visibleTotalProfit)
-                    if (key === 'paidForItself') value = pct(totals.paidForItself)
-                    if (key === 'divsReceived') value = money(filteredRows.reduce((sum, row) => sum + row.totalDivs, 0))
-                    return (
-                      <td key={key} className={column.align === 'right' ? 'ci-number' : ''}>
-                        <strong className={
-                          key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
-                            : key === 'paidForItself' ? pfiTone(totals.paidForItself)
-                              : ''
-                        }>{value}</strong>
-                      </td>
-                    )
-                  })}
-                </tr>
-              </tfoot>
-            )}
-          </table>
-          {sortedRows.length === 0 && (
-            <div className="ci-empty">No holdings match the current filters.</div>
-          )}
-        </div>
+        <HoldingsOverviewTable
+          key={view}
+          view={view}
+          columns={viewColumns}
+          rows={sortedRows}
+          filteredRows={filteredRows}
+          totals={totals}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onSort={handleSort}
+        />
       )}
     </div>
   )
