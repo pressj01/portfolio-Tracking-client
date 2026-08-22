@@ -7,7 +7,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
-from app import _nav_erosion_numerator, _nav_monthly_frame
+from app import (
+    _nav_erosion_numerator,
+    _nav_monthly_frame,
+    _nav_split_adjust_close_and_divs,
+)
 
 
 class NavErosionBacktesterTest(unittest.TestCase):
@@ -165,6 +169,57 @@ class NavErosionBacktesterTest(unittest.TestCase):
         self.assertAlmostEqual(
             no_div_row["total_return_pct"], no_div_row["price_delta_pct"], places=2
         )
+
+    def test_split_adjust_restates_pre_reverse_split_close(self):
+        index = pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-12-20", "2024-12-23"])
+        close = pd.Series([400.0, 400.0, 1.0, 1.0], index=index)
+        splits = pd.Series([0.0, 0.0, 0.0025, 0.0], index=index)
+        adj, _divs = _nav_split_adjust_close_and_divs(close, None, splits)
+        self.assertAlmostEqual(float(adj.iloc[0]), 1.0, places=4)
+        self.assertAlmostEqual(float(adj.iloc[-1]), 1.0, places=4)
+
+    def test_portfolio_row_can_override_benchmark(self):
+        index = pd.DatetimeIndex(
+            ["2026-01-02", "2026-01-30", "2026-02-27", "2026-03-31"],
+            tz="UTC",
+        )
+        columns = pd.MultiIndex.from_product(
+            [["BTCI", "BTC-USD", "SPY"], ["Close", "Dividends"]]
+        )
+        raw = pd.DataFrame(
+            [
+                [100.0, 0.0, 1000.0, 0.0, 50.0, 0.0],
+                [100.0, 1.0, 1000.0, 0.0, 50.0, 0.0],
+                [90.0, 2.0, 1100.0, 0.0, 55.0, 0.0],
+                [80.0, 2.0, 1000.0, 0.0, 60.0, 0.0],
+            ],
+            index=index,
+            columns=columns,
+        )
+
+        with patch.object(app_module, "_chunked_yf_download", return_value=raw):
+            with patch.object(app_module, "_merge_nav_benchmark_overrides"):
+                with app_module.app.test_client() as client:
+                    response = client.post(
+                        "/api/nav-erosion-portfolio/data",
+                        json={
+                            "start": "2026-01-02",
+                            "end": "2026-03-31",
+                            "rows": [
+                                {
+                                    "ticker": "BTCI",
+                                    "amount": 10000,
+                                    "reinvest_pct": 0,
+                                    "benchmark": "SPY",
+                                }
+                            ],
+                        },
+                    )
+
+        self.assertEqual(response.status_code, 200)
+        row = response.get_json()["results"][0]
+        self.assertEqual(row["benchmark"], "SPY")
+        self.assertAlmostEqual(row["benchmark_return_pct"], 20.0, places=2)
 
 
 if __name__ == "__main__":

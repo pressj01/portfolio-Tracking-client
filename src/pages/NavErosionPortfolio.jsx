@@ -4,6 +4,14 @@ import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 
 const MAX_ROWS = 80
+const NAV_BENCHMARK_CHOICES = [
+  'SPY', 'QQQ', 'IWM', 'DIA', 'EFA', 'EEM',
+  'BTC-USD', 'ETH-USD', 'SOL-USD', 'BTC-USD+GLD', 'SPY+BTC-USD',
+  'GLD', 'SLV', 'CPER', 'AMLP', 'PFF',
+  'BIL', 'BND', 'TLT', 'NLR', 'ITA',
+  'XLE', 'SOXX', 'XLF', 'XLV', 'XLU', 'VNQ',
+  'BIZD', 'TSLA', 'NVDA',
+]
 
 function fmt$(v) {
   return formatMoney(v, { zeroIfInvalid: true })
@@ -54,7 +62,7 @@ export default function NavErosionPortfolio() {
   const dialog = useDialog()
   const [startDate, setStartDate] = useState('2015-01-01')
   const [endDate, setEndDate] = useState('2025-12-31')
-  const [gridRows, setGridRows] = useState([{ ticker: '', amount: '', reinvest_pct: '' }])
+  const [gridRows, setGridRows] = useState([{ ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
   const [savedList, setSavedList] = useState([])
   const [selectedSaved, setSelectedSaved] = useState('')
   const [loading, setLoading] = useState(false)
@@ -84,7 +92,10 @@ export default function NavErosionPortfolio() {
       .then(d => {
         if (d.rows && d.rows.length > 0) {
           const rows = d.rows.map(r => ({
-            ticker: r.ticker, amount: String(r.amount), reinvest_pct: String(r.reinvest_pct)
+            ticker: r.ticker,
+            amount: String(r.amount),
+            reinvest_pct: String(r.reinvest_pct),
+            benchmark: r.benchmark || '',
           }))
           setGridRows(rows)
           return rows
@@ -106,11 +117,11 @@ export default function NavErosionPortfolio() {
 
   const addRow = () => {
     if (gridRows.length >= MAX_ROWS) return
-    setGridRows(prev => [...prev, { ticker: '', amount: '', reinvest_pct: '' }])
+    setGridRows(prev => [...prev, { ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
   }
 
   const clearGrid = () => {
-    setGridRows([{ ticker: '', amount: '', reinvest_pct: '' }])
+    setGridRows([{ ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
     // Also clear the persisted list
     pf('/api/nav-erosion-portfolio/list', {
       method: 'POST',
@@ -121,7 +132,12 @@ export default function NavErosionPortfolio() {
 
   // Filter out empty rows (no ticker entered)
   const collectRows = (src) => src
-    .map(r => ({ ticker: r.ticker.trim().toUpperCase(), amount: parseFloat(r.amount) || 0, reinvest_pct: parseFloat(r.reinvest_pct) || 0 }))
+    .map(r => ({
+      ticker: r.ticker.trim().toUpperCase(),
+      amount: parseFloat(r.amount) || 0,
+      reinvest_pct: parseFloat(r.reinvest_pct) || 0,
+      benchmark: String(r.benchmark || '').trim().toUpperCase(),
+    }))
     .filter(r => r.ticker)
 
   const saveList = useCallback(() => {
@@ -149,9 +165,12 @@ export default function NavErosionPortfolio() {
       if (d.start) setStartDate(d.start)
       if (d.end) setEndDate(d.end)
       const rows = (d.rows || []).map(r => ({
-        ticker: r.ticker || '', amount: String(r.amount || ''), reinvest_pct: String(r.reinvest_pct || '')
+        ticker: r.ticker || '',
+        amount: String(r.amount || ''),
+        reinvest_pct: String(r.reinvest_pct || ''),
+        benchmark: r.benchmark || '',
       }))
-      setGridRows(rows.length > 0 ? rows : [{ ticker: '', amount: '', reinvest_pct: '' }])
+      setGridRows(rows.length > 0 ? rows : [{ ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
       setResults(null)
     } catch (err) {
       await dialog.alert('Load failed: ' + err.message)
@@ -264,6 +283,7 @@ export default function NavErosionPortfolio() {
           ticker: r.ticker || '',
           amount: String(r.amount || ''),
           reinvest_pct: String(r.reinvest_pct || ''),
+          benchmark: r.benchmark || '',
         }))
 
         if (currentRows.length > 0) {
@@ -276,7 +296,7 @@ export default function NavErosionPortfolio() {
 
         const savedRows = await loadSavedEtfList()
         if (cancelled || !savedRows || savedRows.length === 0) {
-          setGridRows([{ ticker: '', amount: '', reinvest_pct: '' }])
+          setGridRows([{ ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
         }
       } catch (err) {
         if (!cancelled) {
@@ -381,6 +401,7 @@ export default function NavErosionPortfolio() {
         <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
         The benchmark and benchmark return are shown in the results so the comparison is auditable.
+        Change a ticker&apos;s benchmark in the input grid (or in the results table) and run the backtest again.
       </p>
 
       {/* Collapsed-by-default help: how the numbers are computed */}
@@ -391,8 +412,9 @@ export default function NavErosionPortfolio() {
             <h4>Confirmed price erosion (Yes / No)</h4>
             <p>
               The screener maps each ETF to an underlying benchmark (for example, BTCI → BTC-USD and QQQI → QQQ).
-              The mapping is displayed in the Benchmark column. Each month is tested independently: erosion is
-              counted only when the fund price is down and the benchmark is flat or up over the same interval.
+              The mapping is displayed in the Benchmark column and can be changed per ticker before you run.
+              Each month is tested independently: erosion is counted only when the fund price is down and the
+              benchmark is flat or up over the same interval.
             </p>
             <p>
               <strong style={{ color: 'var(--neg-3)' }}>Confirmed Erosion = Yes</strong> when at least one such
@@ -447,9 +469,10 @@ export default function NavErosionPortfolio() {
           </section>
 
           <p className="nep-help-note">
-            Prices come from unadjusted historical data with distributions applied explicitly, and the
-            backtest steps month by month. If a fund has no data back to your start date, results begin from
-            its earliest available month (flagged in the Note column).
+            Prices are split-adjusted (so a reverse-split penny stock is not compared against a million-dollar
+            pre-split print) with distributions applied explicitly, and the backtest steps month by month.
+            If a fund has no data back to your start date, results begin from its earliest available month
+            (flagged in the Note column). Names Yahoo drops in a batch download are retried one at a time.
           </p>
         </div>
       </details>
@@ -485,15 +508,16 @@ export default function NavErosionPortfolio() {
       {/* ETF input grid */}
       <div className="nep-grid-panel">
         <div style={{ color: 'var(--p-aaa)', fontSize: '0.78rem', marginBottom: '0.55rem', lineHeight: 1.5 }}>
-          Each row is one ETF. The two number boxes are the starting dollars assigned to that ETF and the
-          percent of its distributions to reinvest during the backtest.
+          Each row is one ETF. Starting dollars, the percent of distributions to reinvest, and the
+          benchmark that ticker is compared with. Leave Benchmark blank to use the mapped default.
         </div>
         <div style={{ overflowX: 'auto' }}>
-          <table className="nep-grid-tbl" style={{ width: 'auto', minWidth: 640 }}>
+          <table className="nep-grid-tbl" style={{ width: 'auto', minWidth: 820 }}>
             <colgroup>
               <col style={{ width: 140 }} />
-              <col style={{ width: 210 }} />
-              <col style={{ width: 250 }} />
+              <col style={{ width: 180 }} />
+              <col style={{ width: 180 }} />
+              <col style={{ width: 220 }} />
               <col style={{ width: 40 }} />
             </colgroup>
             <thead>
@@ -501,6 +525,7 @@ export default function NavErosionPortfolio() {
                 <th style={{ textAlign: 'left' }}>ETF Ticker</th>
                 <th style={{ textAlign: 'left' }}>Starting Value</th>
                 <th style={{ textAlign: 'left' }}>Dividends Reinvested (%)</th>
+                <th style={{ textAlign: 'left' }}>Benchmark</th>
                 <th style={{ width: 40 }}></th>
               </tr>
             </thead>
@@ -548,6 +573,19 @@ export default function NavErosionPortfolio() {
                       onChange={e => updateRow(i, 'reinvest_pct', e.target.value)}
                     />
                   </td>
+                  <td style={{ padding: '0.3rem 0.4rem' }}>
+                    <input
+                      className="ne-input"
+                      style={{ width: 140, textTransform: 'uppercase' }}
+                      maxLength={24}
+                      placeholder="Auto"
+                      list="nep-benchmark-choices"
+                      title="Benchmark this ticker is compared with. Leave blank to use the mapped default (SPY, QQQ, BTC-USD, …)."
+                      aria-label={`Benchmark for ${r.ticker || 'this ticker'}`}
+                      value={r.benchmark || ''}
+                      onChange={e => updateRow(i, 'benchmark', e.target.value.toUpperCase())}
+                    />
+                  </td>
                   <td style={{ padding: '0.3rem 0.4rem', textAlign: 'center' }}>
                     <button className="nep-row-del" title="Remove" onClick={() => removeRow(i)}>&times;</button>
                   </td>
@@ -555,6 +593,9 @@ export default function NavErosionPortfolio() {
               ))}
             </tbody>
           </table>
+          <datalist id="nep-benchmark-choices">
+            {NAV_BENCHMARK_CHOICES.map(b => <option key={b} value={b} />)}
+          </datalist>
         </div>
 
         {/* Action buttons */}
@@ -735,7 +776,40 @@ export default function NavErosionPortfolio() {
                     return (
                       <tr key={idx}>
                         <td><strong>{r.ticker}</strong></td>
-                        <td>{r.benchmark || '\u2014'}</td>
+                        <td>
+                          <input
+                            className="ne-input"
+                            style={{ width: 110, textTransform: 'uppercase' }}
+                            maxLength={24}
+                            list="nep-benchmark-choices"
+                            title="Change the benchmark, then Run Backtest"
+                            aria-label={`Benchmark for ${r.ticker}`}
+                            value={
+                              (gridRows.find(row => row.ticker.trim().toUpperCase() === r.ticker) || {}).benchmark
+                              || r.benchmark
+                              || ''
+                            }
+                            onChange={e => {
+                              const next = e.target.value.toUpperCase()
+                              setGridRows(prev => {
+                                const has = prev.some(row => row.ticker.trim().toUpperCase() === r.ticker)
+                                if (!has) {
+                                  return [...prev, {
+                                    ticker: r.ticker,
+                                    amount: String(r.amount || ''),
+                                    reinvest_pct: String(r.reinvest_pct || ''),
+                                    benchmark: next,
+                                  }]
+                                }
+                                return prev.map(row => (
+                                  row.ticker.trim().toUpperCase() === r.ticker
+                                    ? { ...row, benchmark: next }
+                                    : row
+                                ))
+                              })
+                            }}
+                          />
+                        </td>
                         <td>{fmt$(r.amount || 0)}</td>
                         <td>{(r.reinvest_pct || 0)}%</td>
                         <td colSpan={headers.length - 4} style={{ textAlign: 'left', color: 'var(--neg-3)' }}>{r.error}</td>
@@ -755,7 +829,29 @@ export default function NavErosionPortfolio() {
                   return (
                     <tr key={idx}>
                       <td><strong>{r.ticker}</strong></td>
-                      <td>{r.benchmark || '\u2014'}</td>
+                      <td>
+                        <input
+                          className="ne-input"
+                          style={{ width: 110, textTransform: 'uppercase' }}
+                          maxLength={24}
+                          list="nep-benchmark-choices"
+                          title="Change the benchmark, then Run Backtest"
+                          aria-label={`Benchmark for ${r.ticker}`}
+                          value={
+                            (gridRows.find(row => row.ticker.trim().toUpperCase() === r.ticker) || {}).benchmark
+                            || r.benchmark
+                            || ''
+                          }
+                          onChange={e => {
+                            const next = e.target.value.toUpperCase()
+                            setGridRows(prev => prev.map(row => (
+                              row.ticker.trim().toUpperCase() === r.ticker
+                                ? { ...row, benchmark: next }
+                                : row
+                            )))
+                          }}
+                        />
+                      </td>
                       <td>{fmt$(r.amount)}</td>
                       <td>{r.reinvest_pct}%</td>
                       <td>{fmt$(r.start_price)}</td>

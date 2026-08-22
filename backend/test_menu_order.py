@@ -40,7 +40,8 @@ class MenuOrderApiTest(unittest.TestCase):
         return conn
 
     def test_menu_order_round_trip_and_reset(self):
-        self.assertEqual(self.client.get("/api/menu-order").get_json(), {"order": {}})
+        empty = {"order": {}, "hidden": [], "preset": None}
+        self.assertEqual(self.client.get("/api/menu-order").get_json(), empty)
 
         order = {
             "top-level": ["admin", "dashboard"],
@@ -49,11 +50,12 @@ class MenuOrderApiTest(unittest.TestCase):
         saved = self.client.put("/api/menu-order", json={"order": order})
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(saved.get_json()["order"], order)
+        self.assertEqual(saved.get_json()["hidden"], [])
         self.assertEqual(self.client.get("/api/menu-order").get_json()["order"], order)
 
         reset = self.client.delete("/api/menu-order")
         self.assertEqual(reset.status_code, 200)
-        self.assertEqual(self.client.get("/api/menu-order").get_json(), {"order": {}})
+        self.assertEqual(self.client.get("/api/menu-order").get_json(), empty)
 
     def test_menu_order_rejects_duplicate_or_malformed_ids(self):
         duplicate = self.client.put(
@@ -67,6 +69,54 @@ class MenuOrderApiTest(unittest.TestCase):
             "/api/menu-order", json={"order": {"options": "option-greeks"}}
         )
         self.assertEqual(malformed.status_code, 400)
+
+    def test_hidden_pages_and_preset_round_trip(self):
+        saved = self.client.put(
+            "/api/menu-order",
+            json={
+                "hidden": ["options", "dashboard", "dividend-compare"],
+                "preset": "income-tracker",
+            },
+        )
+        self.assertEqual(saved.status_code, 200)
+        body = saved.get_json()
+        self.assertEqual(body["hidden"], ["options", "dividend-compare"])
+        self.assertEqual(body["preset"], "income-tracker")
+        loaded = self.client.get("/api/menu-order").get_json()
+        self.assertEqual(loaded["hidden"], ["options", "dividend-compare"])
+        self.assertEqual(loaded["preset"], "income-tracker")
+
+    def test_put_order_preserves_hidden_pages(self):
+        self.client.put(
+            "/api/menu-order",
+            json={"hidden": ["dividend-compare"], "preset": "cef-analyst"},
+        )
+        saved = self.client.put(
+            "/api/menu-order",
+            json={"order": {"options": ["option-dashboard"]}},
+        )
+        self.assertEqual(saved.status_code, 200)
+        body = saved.get_json()
+        self.assertEqual(body["order"], {"options": ["option-dashboard"]})
+        self.assertEqual(body["hidden"], ["dividend-compare"])
+        self.assertEqual(body["preset"], "cef-analyst")
+
+    def test_legacy_order_document_still_loads(self):
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            ("menu_order", '{"options":["option-greeks"]}'),
+        )
+        conn.commit()
+        conn.close()
+        body = self.client.get("/api/menu-order").get_json()
+        self.assertEqual(body["order"], {"options": ["option-greeks"]})
+        self.assertEqual(body["hidden"], [])
+        self.assertIsNone(body["preset"])
+
+    def test_invalid_preset_is_rejected(self):
+        bad = self.client.put("/api/menu-order", json={"preset": "day-trader"})
+        self.assertEqual(bad.status_code, 400)
 
 
 if __name__ == "__main__":

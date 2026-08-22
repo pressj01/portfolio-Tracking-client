@@ -23146,6 +23146,182 @@ def _nav_benchmark_parts(benchmark):
     return parts or ["SPY"]
 
 
+def _nav_split_adjust_close_and_divs(close, dividends=None, splits=None):
+    """Restate Close and Dividends in current-share units.
+
+    Yahoo's unadjusted Close keeps pre-reverse-split prints (AITX can show a
+    start price in the millions against a penny end price). NAV erosion needs
+    split-adjusted levels so the share count and percent change are real.
+    Dividends are scaled by the same factor so cash still matches that count.
+    Adj Close is not used here because it also rolls distributions into price.
+    """
+    close = pd.to_numeric(pd.Series(close), errors="coerce")
+    close = close[close.notna() & (close > 0)]
+    if close.empty:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+    idx = close.index
+    if dividends is None:
+        dividends = pd.Series(0.0, index=idx)
+    else:
+        dividends = pd.to_numeric(pd.Series(dividends).reindex(idx), errors="coerce").fillna(0.0)
+    if splits is None:
+        splits = pd.Series(0.0, index=idx)
+    else:
+        splits = pd.to_numeric(pd.Series(splits).reindex(idx), errors="coerce").fillna(0.0)
+        splits = splits.where(splits > 0, 0.0)
+    factor = splits.replace(0.0, 1.0)
+    # A split on date T is already in that day's Close. Older closes still
+    # need every later split multiplied through.
+    subsequent = factor.shift(-1).fillna(1.0).iloc[::-1].cumprod().iloc[::-1]
+    return close * subsequent, dividends * subsequent
+
+
+def _nav_repair_reverse_split_prices(close, adj_close, dividends):
+    """If split events never arrived, Adj Close is the last way to un-explode a penny name."""
+    close = pd.Series(close).dropna()
+    if close.empty:
+        return close, dividends
+    first = float(close.iloc[0])
+    last = float(close.iloc[-1])
+    if first <= 0 or last <= 0:
+        return close, dividends
+    ratio = first / last
+    if ratio < 50 or last >= 5:
+        return close, dividends
+    if adj_close is None:
+        return close, dividends
+    adj = pd.to_numeric(pd.Series(adj_close).reindex(close.index), errors="coerce").dropna()
+    if len(adj) < 2:
+        return close, dividends
+    adj_first = float(adj.iloc[0])
+    adj_last = float(adj.iloc[-1])
+    if adj_last <= 0:
+        return close, dividends
+    adj_ratio = adj_first / adj_last
+    if adj_ratio >= ratio / 5:
+        return close, dividends
+    scale = (adj / close.replace(0, pd.NA)).fillna(1.0)
+    divs = pd.Series(dividends).reindex(close.index).fillna(0.0) * scale
+    return adj, divs
+
+
+def _nav_pick_frame_column(raw, sym, field):
+    if raw is None or getattr(raw, "empty", True):
+        return None
+    cols = raw.columns
+    if isinstance(cols, pd.MultiIndex):
+        for key in ((sym, field), (field, sym)):
+            try:
+                if key in cols:
+                    series = raw[key]
+                    if isinstance(series, pd.DataFrame):
+                        series = series.iloc[:, 0]
+                    return series
+            except Exception:
+                continue
+        try:
+            if sym in cols.get_level_values(0) and field in raw[sym].columns:
+                return raw[sym][field]
+        except Exception:
+            pass
+        try:
+            if field in cols.get_level_values(0) and sym in raw[field].columns:
+                return raw[field][sym]
+        except Exception:
+            pass
+        return None
+    if field in cols:
+        return raw[field]
+    return None
+
+
+def _nav_ohlc_from_frame(raw, sym):
+    close = _nav_pick_frame_column(raw, sym, "Close")
+    if close is None:
+        close = _nav_pick_frame_column(raw, sym, "Adj Close")
+    if close is None:
+        return None, None
+    divs = _nav_pick_frame_column(raw, sym, "Dividends")
+    splits = _nav_pick_frame_column(raw, sym, "Stock Splits")
+    adj = _nav_pick_frame_column(raw, sym, "Adj Close")
+    close, divs = _nav_split_adjust_close_and_divs(close, divs, splits)
+    close, divs = _nav_repair_reverse_split_prices(close, adj, divs)
+    close = close.dropna()
+    if close.empty:
+        return None, None
+    return close, pd.Series(divs).reindex(close.index).fillna(0.0)
+
+
+def _nav_ohlc_from_yahoo_ticker(sym, start_date, fetch_end):
+    """Single-name fallback when a batch download silently drops a ticker."""
+    import yfinance as yf
+
+    hist = pd.DataFrame()
+    try:
+        hist = yf.Ticker(sym).history(
+            start=start_date, end=fetch_end, interval="1d", auto_adjust=False, actions=True,
+        )
+    except Exception:
+        hist = pd.DataFrame()
+    if hist is None or hist.empty:
+        try:
+            hist = yf.Ticker(sym).history(period="max", interval="1d", auto_adjust=False, actions=True)
+        except Exception:
+            return None, None
+    if hist is None or hist.empty:
+        return None, None
+    try:
+        start = pd.Timestamp(start_date)
+        end = pd.Timestamp(fetch_end)
+        idx = pd.to_datetime(hist.index)
+        try:
+            start = start.tz_localize(idx.tz) if idx.tz is not None else start
+            end = end.tz_localize(idx.tz) if idx.tz is not None else end
+        except Exception:
+            pass
+        hist = hist.loc[(idx >= start) & (idx <= end)] if len(hist) else hist
+    except Exception:
+        pass
+    return _nav_ohlc_from_frame(hist, sym)
+
+
+def _nav_resolve_ohlc(raw, sym, start_date, fetch_end):
+    close, divs = _nav_ohlc_from_frame(raw, sym)
+    if close is not None and not close.empty:
+        return close, divs
+    return _nav_ohlc_from_yahoo_ticker(sym, start_date, fetch_end)
+
+
+def _merge_nav_benchmark_overrides(pairs):
+    """Persist explicit screener benchmark picks so Settings and Dashboard agree."""
+    incoming = {
+        str(ticker).strip().upper(): str(benchmark).strip().upper()
+        for ticker, benchmark in (pairs or {}).items()
+        if str(ticker).strip() and str(benchmark).strip()
+    }
+    if not incoming:
+        return
+    current = dict(_nav_benchmark_overrides())
+    changed = False
+    for ticker, benchmark in incoming.items():
+        if current.get(ticker) != benchmark:
+            current[ticker] = benchmark
+            changed = True
+    if not changed:
+        return
+    import json as _json
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        ("nav_benchmark_overrides", _json.dumps(current, separators=(",", ":"), sort_keys=True)),
+    )
+    conn.commit()
+    conn.close()
+    _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": 0, "data": {}})
+    _PORTFOLIO_COVERAGE_CACHE.clear()
+
+
 def _nav_date_indexed_series(series):
     try:
         s = series.dropna()
@@ -34842,9 +35018,12 @@ def nav_erosion_data():
         if hist.empty:
             return jsonify(error=f"No data found for ticker {sym}. Check the symbol and date range.")
 
-        fund_close = hist["Close"].dropna()
-        if len(fund_close) < 2:
+        fund_close, _hist_divs = _nav_ohlc_from_frame(hist, sym)
+        if fund_close is None or len(fund_close.dropna()) < 2:
             return jsonify(error=f"Not enough price history for {sym} in that date range.")
+        if _hist_divs is not None:
+            hist = hist.copy()
+            hist["Dividends"] = _hist_divs.reindex(hist.index).fillna(0.0)
 
         if len(bench_series) == 1:
             benchmark_close = bench_series[0]
@@ -35122,7 +35301,8 @@ def _nav_erosion_current_rows(conn):
         f"""SELECT ticker,
                    SUM({value_expr}) AS amount,
                    SUM(CASE WHEN UPPER(COALESCE(reinvest, '')) = 'Y'
-                            THEN {value_expr} ELSE 0 END) AS reinvest_amount
+                            THEN {value_expr} ELSE 0 END) AS reinvest_amount,
+                   MAX(NULLIF(TRIM(COALESCE(nav_benchmark_override, '')), '')) AS nav_benchmark_override
               FROM all_account_info
              WHERE profile_id IN ({placeholders})
                AND COALESCE(quantity, 0) > 0
@@ -35139,10 +35319,14 @@ def _nav_erosion_current_rows(conn):
     for r in rows[:80]:
         amount = float(r["amount"] or 0)
         reinvest_amount = float(r["reinvest_amount"] or 0)
+        ticker = str(r["ticker"] or "").strip().upper()
+        override = str(r["nav_benchmark_override"] or "").strip().upper()
         out.append({
-            "ticker": str(r["ticker"] or "").strip().upper(),
+            "ticker": ticker,
             "amount": round(amount, 2),
             "reinvest_pct": round((reinvest_amount / amount * 100.0) if amount > 0 else 0.0, 1),
+            "benchmark": override or _nav_benchmark_for_ticker(ticker),
+            "benchmark_default": _nav_benchmark_for_ticker(ticker),
         })
     return out, scope, total_count
 
@@ -35228,10 +35412,22 @@ def nav_erosion_portfolio_list():
     cur = conn.cursor()
 
     if request.method == "GET":
-        cur.execute(
-            "SELECT ticker, amount, reinvest_pct FROM nav_erosion_portfolio_list ORDER BY sort_order"
-        )
-        rows = [{"ticker": r[0], "amount": r[1], "reinvest_pct": r[2]} for r in cur.fetchall()]
+        try:
+            cur.execute(
+                "SELECT ticker, amount, reinvest_pct, benchmark FROM nav_erosion_portfolio_list ORDER BY sort_order"
+            )
+            rows = [
+                {"ticker": r[0], "amount": r[1], "reinvest_pct": r[2], "benchmark": r[3] or ""}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            cur.execute(
+                "SELECT ticker, amount, reinvest_pct FROM nav_erosion_portfolio_list ORDER BY sort_order"
+            )
+            rows = [
+                {"ticker": r[0], "amount": r[1], "reinvest_pct": r[2], "benchmark": ""}
+                for r in cur.fetchall()
+            ]
         conn.close()
         return jsonify(rows=rows)
 
@@ -35265,15 +35461,25 @@ def nav_erosion_portfolio_list():
         if reinvest_pct < 0 or reinvest_pct > 100:
             conn.close()
             return jsonify(error=f"Row {i+1}: reinvest % must be 0–100.")
-        validated.append((ticker, amount, reinvest_pct, i))
+        benchmark = str(r.get("benchmark", "") or "").strip().upper()
+        validated.append((ticker, amount, reinvest_pct, benchmark, i))
 
     cur.execute("DELETE FROM nav_erosion_portfolio_list")
-    for ticker, amount, reinvest_pct, sort_order in validated:
-        cur.execute(
-            "INSERT INTO nav_erosion_portfolio_list (ticker, amount, reinvest_pct, sort_order) "
-            "VALUES (?, ?, ?, ?)",
-            (ticker, amount, reinvest_pct, sort_order),
-        )
+    cols = {row[1] for row in cur.execute("PRAGMA table_info(nav_erosion_portfolio_list)").fetchall()}
+    has_benchmark = "benchmark" in cols
+    for ticker, amount, reinvest_pct, benchmark, sort_order in validated:
+        if has_benchmark:
+            cur.execute(
+                "INSERT INTO nav_erosion_portfolio_list (ticker, amount, reinvest_pct, benchmark, sort_order) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (ticker, amount, reinvest_pct, benchmark, sort_order),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO nav_erosion_portfolio_list (ticker, amount, reinvest_pct, sort_order) "
+                "VALUES (?, ?, ?, ?)",
+                (ticker, amount, reinvest_pct, sort_order),
+            )
     conn.commit()
     conn.close()
     return jsonify(ok=True)
@@ -35413,11 +35619,23 @@ def nav_erosion_portfolio_data():
             return jsonify(error=f"Row {i+1}: invalid reinvest %.")
         if reinvest_pct < 0 or reinvest_pct > 100:
             return jsonify(error=f"Row {i+1}: reinvest % must be 0–100.")
-        validated.append({"ticker": ticker, "amount": amount, "reinvest_pct": reinvest_pct})
+        benchmark = str(r.get("benchmark", "") or "").strip().upper()
+        validated.append({
+            "ticker": ticker,
+            "amount": amount,
+            "reinvest_pct": reinvest_pct,
+            "benchmark": benchmark,
+        })
 
     unique_tickers = list(dict.fromkeys(r["ticker"] for r in validated))
+    explicit_benchmarks = {
+        r["ticker"]: r["benchmark"]
+        for r in validated
+        if r.get("benchmark")
+    }
+    _merge_nav_benchmark_overrides(explicit_benchmarks)
     benchmark_by_ticker = {
-        t: _nav_benchmark_for_ticker(t)
+        t: (explicit_benchmarks.get(t) or _nav_benchmark_for_ticker(t))
         for t in unique_tickers
     }
     benchmark_tickers = list(dict.fromkeys(
@@ -35445,30 +35663,13 @@ def nav_erosion_portfolio_data():
     except Exception as e:
         return jsonify(error=f"Failed to fetch data: {str(e)}")
 
+    ohlc_cache = {}
+
     def get_ticker_df(sym):
-        try:
-            if isinstance(raw.columns, pd.MultiIndex):
-                top_keys = raw.columns.get_level_values(0).unique()
-                if sym in top_keys:
-                    sub = raw[sym]
-                    close = sub["Close"] if "Close" in sub.columns else None
-                    divs = sub["Dividends"] if "Dividends" in sub.columns else pd.Series(0.0, index=raw.index)
-                elif "Close" in top_keys:
-                    close = raw["Close"][sym] if sym in raw["Close"].columns else raw["Close"].iloc[:, 0]
-                    divs_df = raw["Dividends"] if "Dividends" in top_keys else None
-                    if divs_df is not None:
-                        divs = divs_df[sym] if sym in divs_df.columns else pd.Series(0.0, index=raw.index)
-                    else:
-                        divs = pd.Series(0.0, index=raw.index)
-                else:
-                    return None, None
-            else:
-                close = raw["Close"] if "Close" in raw.columns else None
-                divs = raw["Dividends"] if "Dividends" in raw.columns else pd.Series(0.0, index=raw.index)
-        except Exception:
-            return None, None
-        if close is None:
-            return None, None
+        if sym in ohlc_cache:
+            return ohlc_cache[sym]
+        close, divs = _nav_resolve_ohlc(raw, sym, start_date, (requested_end + _td(days=1)).isoformat())
+        ohlc_cache[sym] = (close, divs)
         return close, divs
 
     results = []
@@ -40582,6 +40783,12 @@ def builder_all_weather():
 # ── Settings API ──────────────────────────────────────────────────────────────
 
 _MENU_ORDER_SETTING_KEY = "menu_order"
+_PROTECTED_MENU_IDS = frozenset({"dashboard", "admin", "menu-control", "settings", "help"})
+_KNOWN_MENU_PRESETS = frozenset({"income-tracker", "cef-analyst", "options-overlay"})
+
+
+def _empty_menu_preferences():
+    return {"order": {}, "hidden": [], "preset": None}
 
 
 def _menu_order_validation_error(order):
@@ -40610,39 +40817,120 @@ def _menu_order_validation_error(order):
     return None
 
 
-@app.route("/api/menu-order", methods=["GET", "PUT", "DELETE"])
-def menu_order():
-    """Load or save the global navigation order used by the desktop app."""
-    if request.method == "GET":
+def _hidden_validation_error(hidden):
+    if not isinstance(hidden, list):
+        return "hidden must be an array of item IDs"
+    if len(hidden) > 200:
+        return "hidden contains too many items"
+    if any(not isinstance(item_id, str) or not item_id or len(item_id) > 100 for item_id in hidden):
+        return "hidden IDs must be non-empty strings of at most 100 characters"
+    if len(set(hidden)) != len(hidden):
+        return "hidden contains duplicate item IDs"
+    return None
+
+
+def _normalize_hidden_ids(hidden):
+    if not isinstance(hidden, list):
+        return []
+    seen = set()
+    normalized = []
+    for item_id in hidden:
+        if not isinstance(item_id, str) or not item_id or item_id in _PROTECTED_MENU_IDS or item_id in seen:
+            continue
+        seen.add(item_id)
+        normalized.append(item_id)
+    return normalized
+
+
+def _normalize_preset(value):
+    if value in (None, "", "none"):
+        return None
+    if not isinstance(value, str) or value not in _KNOWN_MENU_PRESETS:
+        return None
+    return value
+
+
+def _parse_stored_menu_preferences(raw):
+    prefs = _empty_menu_preferences()
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return prefs
+    if not isinstance(data, dict):
+        return prefs
+
+    if isinstance(data.get("order"), dict):
+        order = data.get("order") or {}
+        hidden = data.get("hidden", [])
+        preset = data.get("preset")
+    else:
+        order = data
+        hidden = []
+        preset = None
+
+    if _menu_order_validation_error(order):
+        order = {}
+    if _hidden_validation_error(hidden):
+        hidden = []
+    else:
+        hidden = _normalize_hidden_ids(hidden)
+    prefs["order"] = order
+    prefs["hidden"] = hidden
+    prefs["preset"] = _normalize_preset(preset)
+    return prefs
+
+
+def _load_menu_preferences(conn=None):
+    owns_connection = conn is None
+    if owns_connection:
         conn = get_connection()
+    try:
         row = conn.execute(
             "SELECT value FROM settings WHERE key = ?", (_MENU_ORDER_SETTING_KEY,)
         ).fetchone()
-        conn.close()
-        try:
-            order = json.loads(row["value"]) if row and row["value"] else {}
-        except (TypeError, ValueError, json.JSONDecodeError):
-            order = {}
-        if _menu_order_validation_error(order):
-            order = {}
-        return jsonify({"order": order})
+        raw = row["value"] if row and row["value"] else None
+        return _parse_stored_menu_preferences(raw)
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+@app.route("/api/menu-order", methods=["GET", "PUT", "DELETE"])
+def menu_order():
+    """Load or save the global navigation order, hidden pages, and role preset."""
+    if request.method == "GET":
+        return jsonify(_load_menu_preferences())
 
     if request.method == "DELETE":
         conn = get_connection()
         conn.execute("DELETE FROM settings WHERE key = ?", (_MENU_ORDER_SETTING_KEY,))
         conn.commit()
         conn.close()
-        return jsonify({"ok": True, "order": {}})
+        empty = _empty_menu_preferences()
+        empty["ok"] = True
+        return jsonify(empty)
 
     data = request.get_json(silent=True)
-    if not isinstance(data, dict) or "order" not in data:
-        return jsonify({"error": "A menu order is required."}), 400
-    order = data["order"]
-    error = _menu_order_validation_error(order)
-    if error:
-        return jsonify({"error": error}), 400
+    if not isinstance(data, dict) or not any(key in data for key in ("order", "hidden", "preset")):
+        return jsonify({"error": "A menu order, hidden list, or preset is required."}), 400
 
-    serialized = json.dumps(order, separators=(",", ":"), sort_keys=True)
+    prefs = _load_menu_preferences()
+    if "order" in data:
+        error = _menu_order_validation_error(data["order"])
+        if error:
+            return jsonify({"error": error}), 400
+        prefs["order"] = data["order"]
+    if "hidden" in data:
+        error = _hidden_validation_error(data["hidden"])
+        if error:
+            return jsonify({"error": error}), 400
+        prefs["hidden"] = _normalize_hidden_ids(data["hidden"])
+    if "preset" in data:
+        if data["preset"] not in (None, "", "none") and data["preset"] not in _KNOWN_MENU_PRESETS:
+            return jsonify({"error": "preset must be income-tracker, cef-analyst, options-overlay, or empty."}), 400
+        prefs["preset"] = _normalize_preset(data["preset"])
+
+    serialized = json.dumps(prefs, separators=(",", ":"), sort_keys=True)
     conn = get_connection()
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
@@ -40650,7 +40938,7 @@ def menu_order():
     )
     conn.commit()
     conn.close()
-    return jsonify({"ok": True, "order": order})
+    return jsonify({"ok": True, **prefs})
 
 @app.route("/api/single-stock-etfs", methods=["GET"])
 def get_single_stock_etfs():

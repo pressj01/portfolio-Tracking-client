@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
@@ -756,6 +757,7 @@ const cellStyle = {
 
 export default function SecurityResearch() {
   const pf = useProfileFetch()
+  const [searchParams] = useSearchParams()
   const [mode, setMode] = useState('lookup')
   const [kind, setKind] = useState('etf')
   const [ticker, setTicker] = useState('')
@@ -780,21 +782,42 @@ export default function SecurityResearch() {
       .catch(() => {})
   }, [data?.ticker, pf])
 
-  const runLookup = () => {
-    if (!normalizedTicker) return
+  const runLookupFor = (rawTicker, preferredKind = kind) => {
+    const lookupTicker = String(rawTicker || '').trim().toUpperCase()
+    if (!lookupTicker) return
+    setTicker(lookupTicker)
+    setMode('lookup')
     setLoading(true)
     setError('')
     setData(null)
     setChartTicker('')
-    pf(`/api/security-research/${kind}/${encodeURIComponent(normalizedTicker)}?_=${Date.now()}`, { cache: 'no-store' })
+    const tryKind = (nextKind) => pf(`/api/security-research/${nextKind}/${encodeURIComponent(lookupTicker)}?_=${Date.now()}`, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
+        return { kind: nextKind, data: d }
+      })
+    const first = preferredKind === 'stock' ? 'stock' : 'etf'
+    const second = first === 'etf' ? 'stock' : 'etf'
+    tryKind(first)
+      .catch(() => tryKind(second))
+      .then(({ kind: nextKind, data: d }) => {
+        setKind(nextKind)
         setData(d)
       })
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }
+
+  const runLookup = () => runLookupFor(normalizedTicker, kind)
+
+  const requestedTicker = (searchParams.get('ticker') || '').trim().toUpperCase()
+  const lastUrlTicker = useRef('')
+  useEffect(() => {
+    if (!requestedTicker || requestedTicker === lastUrlTicker.current) return
+    lastUrlTicker.current = requestedTicker
+    runLookupFor(requestedTicker)
+  }, [requestedTicker])
 
   const openChart = () => {
     setChartTicker(data?.ticker || normalizedTicker)

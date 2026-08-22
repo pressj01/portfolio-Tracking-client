@@ -44,6 +44,7 @@ const GROUPS = [
       { id: 'etf-provider-update', label: 'ETF Provider Update' },
       { id: 'portfolios', label: 'Portfolios' },
       { id: 'menu-control', label: 'Menu Control' },
+      { id: 'command-palette', label: 'Command Palette' },
       { id: 'settings', label: 'Settings' },
       { id: 'general-option-scanner', label: 'Option Scanner Help' },
     ],
@@ -188,6 +189,7 @@ function Overview() {
         <li><strong>Checklists</strong> — Stock, ETF, and option-income ETF evaluators for structured pre-buy reviews.</li>
         <li><strong>Analysis</strong> — Organized into Research &amp; Compare, Screeners &amp; Signals, Income &amp; NAV Risk, Portfolio Diagnostics, and Planning &amp; Optimization. These groups cover security research, comparison tools, scanners, NAV erosion checks, income simulations, portfolio analytics, consolidation, macro regime context, portfolio testing, and rebalancing.</li>
         <li><strong>Taxes</strong> — Annual Tax Report with realized gains/losses and dividend income summaries.</li>
+        <li><strong>Command palette</strong> — Press Ctrl+K (⌘K on a Mac) or use Search in the top bar to jump to a page, ticker, or action, including pages you hid from the menu.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
         <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
       </ul>
@@ -5570,8 +5572,10 @@ function MenuControlHelp() {
         Menu Control lets you change the <strong>order</strong> of items in the top navigation bar —
         the top-level menus (Dashboard, Portfolio, Options, Admin, and so on), the pages listed inside
         each dropdown, and the section headings inside dropdowns that have grouped sections (currently
-        just Analysis). It only reorders things. It cannot move a page into a different menu, hide a
-        page, or rename anything.
+        just Analysis). You can also <strong>hide</strong> pages you do not use, or apply a role preset
+        (Income tracker, CEF analyst, Options overlay). Hidden pages are removed from the menu and from
+        Split View&apos;s page picker; they are not deleted. Open them from the command palette
+        (Ctrl+K / ⌘K) or unhide them here. Dashboard, Admin, Menu Control, Settings, and Help always stay visible.
       </p>
 
       <HelpScreenshot
@@ -5623,13 +5627,43 @@ function MenuControlHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
         <li><strong>Save Changes</strong> writes the current draft and immediately updates the navigation bar — no restart needed. It stays disabled until you've actually changed something.</li>
         <li><strong>Discard Changes</strong> throws away every unsaved edit — across all menus, not just the one you're viewing — and reloads the last saved order.</li>
-        <li><strong>Restore Defaults</strong> resets the draft for every menu back to the app's built-in order, not just the one currently selected. It only changes the draft — click Save Changes afterward to actually apply it, or Discard Changes to back out.</li>
+        <li><strong>Restore Defaults</strong> resets the draft for every menu back to the app's built-in order and shows every page again, not just the one currently selected. It only changes the draft — click Save Changes afterward to actually apply it, or Discard Changes to back out.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Hiding Pages and Role Presets</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Each row has a <strong>Hide</strong> / <strong>Show</strong> button. Hide removes that page (or a whole
+        dropdown, if you hide it from Top navigation) from the menu after you save. A role preset writes a
+        starting hide list for Income tracker, CEF analyst, or Options overlay. You can still show individual
+        pages afterward. If you open a hidden page, a banner at the top lets you put it back in the menu immediately.
+      </p>
 
       <div className="alert alert-info" style={{ marginTop: '1rem' }}>
         <strong>Note:</strong> Menu Control is a single, app-wide setting — it isn't tied to a portfolio
         or profile. Saving here changes the navigation bar for the whole app immediately.
       </div>
+    </div>
+  )
+}
+
+function CommandPaletteHelp() {
+  return (
+    <div>
+      <h2>Command Palette</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The command palette jumps to a page, ticker, or action without walking the menus.
+        Press <strong>Ctrl+K</strong> (⌘K on a Mac) from anywhere, or click <strong>Search</strong> in the top bar.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '1rem' }}>
+        <li><strong>Pages</strong> — every screen in the app, including ones you hid from the menu. Hidden pages are labeled Hidden.</li>
+        <li><strong>Tickers</strong> — holdings and watchlist symbols. Choosing one opens Security Research for that ticker.</li>
+        <li><strong>Actions</strong> — refresh prices, open Import or Help, switch portfolio, or switch cost basis.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Type any part of the name. Arrow keys move the highlight; Enter opens it; Esc closes the palette.
+        Hiding a page in Menu Control only removes it from the navigation bar and Split View picker —
+        the palette is how you get back to it without unhiding.
+      </p>
     </div>
   )
 }
@@ -11922,6 +11956,7 @@ const CONTENT_MAP = {
   'etf-provider-update': ETFProviderUpdateHelp,
   portfolios: PortfoliosHelp,
   'menu-control': MenuControlHelp,
+  'command-palette': CommandPaletteHelp,
   settings: SettingsHelp,
   'tax-report': AnnualTaxReportHelp,
   'tax-loss': TaxLossHarvestHelp,

@@ -8,14 +8,11 @@ import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import MenuOrderProvider, { useMenuOrder } from './context/MenuOrderContext'
+import CommandPalette from './components/CommandPalette'
+import HiddenPageBanner from './components/HiddenPageBanner'
 import AppRoutes from './pageCatalog'
-import {
-  groupItemsScopeId,
-  groupOrderScopeId,
-  NAVIGATION_ITEMS,
-  orderMenuItems,
-  TOP_LEVEL_SCOPE_ID,
-} from './navigation/menuConfig'
+import { visibleNavigation } from './navigation/menuConfig'
+import { openCommandPalette, paletteShortcutLabel } from './utils/commandPalette'
 
 function PlotlyThemeBridge() {
   const { isDark } = useTheme()
@@ -108,6 +105,8 @@ function AppFrame() {
   return (
     <>
       <Nav />
+      <HiddenPageBanner />
+      <CommandPalette />
       <AppRoutes />
     </>
   )
@@ -183,7 +182,9 @@ function BasisModeSelector() {
 }
 
 function Nav() {
-  const { menuOrder } = useMenuOrder()
+  const { menuOrder, hiddenIds } = useMenuOrder()
+  const shortcut = paletteShortcutLabel()
+  const menus = visibleNavigation(menuOrder, hiddenIds)
 
   const renderLink = (item) => (
     <NavLink key={item.id} to={item.path} title={item.title} end={item.end}>
@@ -197,17 +198,16 @@ function Nav() {
     if (menu.kind === 'dropdown') {
       return (
         <NavDropdown key={menu.id} label={menu.label}>
-          {orderMenuItems(menu.items, menu.id, menuOrder).map(renderLink)}
+          {menu.items.map(renderLink)}
         </NavDropdown>
       )
     }
 
-    const groups = orderMenuItems(menu.groups, groupOrderScopeId(menu.id), menuOrder)
     return (
       <NavDropdown key={menu.id} label={menu.label}>
-        {groups.map(group => (
+        {menu.groups.map(group => (
           <NavMenuGroup key={group.id} title={group.label}>
-            {orderMenuItems(group.items, groupItemsScopeId(menu.id, group.id), menuOrder).map(renderLink)}
+            {group.items.map(renderLink)}
           </NavMenuGroup>
         ))}
       </NavDropdown>
@@ -216,9 +216,20 @@ function Nav() {
 
   return (
     <nav className="nav-bar">
-      {orderMenuItems(NAVIGATION_ITEMS, TOP_LEVEL_SCOPE_ID, menuOrder).map(renderMenu)}
-      <BasisModeSelector />
-      <ProfileSelector />
+      <button
+        type="button"
+        className="nav-search-btn"
+        onClick={openCommandPalette}
+        title={`Search pages, tickers, and actions (${shortcut})`}
+      >
+        <span className="nav-search-placeholder">Search…</span>
+        <kbd>{shortcut}</kbd>
+      </button>
+      {menus.map(renderMenu)}
+      <div className="nav-end">
+        <BasisModeSelector />
+        <ProfileSelector />
+      </div>
     </nav>
   )
 }

@@ -13,7 +13,9 @@
  * anywhere else.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { PAGE_GROUPS, isKnownPagePath, pageElement, pathnameOf } from '../pageCatalog'
+import { useMenuOrder } from '../context/MenuOrderContext'
+import { hiddenPathSet } from '../navigation/menuConfig'
+import { PAGE_GROUPS, isKnownPagePath, pageElement, pageLabel, pathnameOf } from '../pageCatalog'
 
 const SPLIT_STATE_KEY = 'portfolio_split_view_v1'
 const DEFAULT_LEFT = '/'
@@ -60,21 +62,36 @@ const remeasureCharts = () => {
   window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
 }
 
-function PagePicker({ value, onChange, side }) {
+function PagePicker({ value, onChange, side, hiddenIds }) {
+  const current = pathnameOf(value)
+  const hiddenPaths = hiddenPathSet(hiddenIds)
+  const groups = PAGE_GROUPS
+    .map(section => ({
+      ...section,
+      pages: section.pages.filter(page => !hiddenPaths.has(page.path) || page.path === current),
+    }))
+    .filter(section => section.pages.length)
+  const currentIsHidden = hiddenPaths.has(current)
+
   return (
     <select
       className="split-picker"
-      value={pathnameOf(value)}
+      value={current}
       onChange={(e) => onChange(side, e.target.value)}
       aria-label={`${side === 'left' ? 'First' : 'Second'} page`}
     >
-      {PAGE_GROUPS.map(section => (
+      {groups.map(section => (
         <optgroup key={section.group} label={section.group}>
           {section.pages.map(page => (
-            <option key={page.path} value={page.path}>{page.label}</option>
+            <option key={page.path} value={page.path}>
+              {page.label}{page.path === current && currentIsHidden ? ' (hidden)' : ''}
+            </option>
           ))}
         </optgroup>
       ))}
+      {current && !groups.some(section => section.pages.some(page => page.path === current)) && (
+        <option value={current}>{pageLabel(current) || current}</option>
+      )}
     </select>
   )
 }
@@ -92,6 +109,7 @@ function PaneFallback() {
 }
 
 export default function SplitScreen() {
+  const { hiddenIds } = useMenuOrder()
   const [state, setState] = useState(readSplitState)
   const shellRef = useRef(null)
   const [dragging, setDragging] = useState(false)
@@ -176,7 +194,7 @@ export default function SplitScreen() {
       >
         <section className="split-pane">
           <header className="split-pane-head">
-            <PagePicker value={state.left} onChange={setPane} side="left" />
+            <PagePicker value={state.left} onChange={setPane} side="left" hiddenIds={hiddenIds} />
           </header>
           <div className="split-pane-body">
             {pageElement(state.left) || <PaneFallback />}
@@ -194,7 +212,7 @@ export default function SplitScreen() {
 
         <section className="split-pane">
           <header className="split-pane-head">
-            <PagePicker value={state.right} onChange={setPane} side="right" />
+            <PagePicker value={state.right} onChange={setPane} side="right" hiddenIds={hiddenIds} />
           </header>
           <div className="split-pane-body">
             {pageElement(state.right) || <PaneFallback />}

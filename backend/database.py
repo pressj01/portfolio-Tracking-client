@@ -745,6 +745,10 @@ def ensure_tables_exist(conn=None):
             sort_order   INTEGER NOT NULL DEFAULT 0
         )
     """)
+    try:
+        cur.execute("SELECT benchmark FROM nav_erosion_portfolio_list LIMIT 1")
+    except Exception:
+        cur.execute("ALTER TABLE nav_erosion_portfolio_list ADD COLUMN benchmark TEXT")
 
     # ── nav_erosion_saved_backtests ────────────────────────────────────────────
     cur.execute("""
