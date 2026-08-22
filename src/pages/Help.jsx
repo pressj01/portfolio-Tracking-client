@@ -659,24 +659,30 @@ function DashboardHelp() {
       </p>
 
       <div style={{ marginBottom: '1rem' }}>
-        <img src="./help-screenshots/dashboard/Dashboard_top.jpg" alt="Top of the Dashboard showing the Basis and portfolio selectors, Action Center preview, the full summary cards strip with estimated and actual reinvestment cards, the Portfolio Value Over Time chart, and Upcoming Dividends This Week" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dashboard/Dashboard_top.jpg" alt="Top of the updated Dashboard showing the Basis and portfolio selectors, headline return cards, flagged-items bar, shared performance date range, NAV erosion score, risk grades, and income summary cards" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
       <p style={{ marginBottom: '1.25rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         <strong>Top of the page</strong> (above): the <strong>Basis</strong> and <strong>portfolio</strong> selectors in the
-        header; the <strong>Action Center</strong> preview panel with follow-up items; the full <strong>summary cards
-        strip</strong> covering portfolio grade, risk ratios, income totals, the estimated vs. actual reinvestment cards,
-        NAV erosion, returns, and the S&amp;P 500 benchmark; the <strong>Portfolio Value Over Time</strong> equity-curve
-        chart with the Record NAV / Backfill History / Repair Chart buttons; and the <strong>Upcoming Dividends This
-        Week</strong> section.
+        header; headline cards for portfolio value, account change, and selected-period returns; the flagged-items bar;
+        the <strong>Shared Performance Date Range</strong>; and the NAV erosion, portfolio grade, risk-ratio, income,
+        reinvestment, yield, IRR, and S&amp;P 500 cards.
       </p>
       <div style={{ marginBottom: '1rem' }}>
-        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower Dashboard showing the category allocation donut chart with value, gain, and allocation per category, and the full holdings table with per-holding columns including the NAV testing controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dashboard/dashboard_middle.jpg" alt="Middle of the updated Dashboard showing the Portfolio Value Over Time chart, Grade and Exposure Guide, and Upcoming Dividends This Week calendar" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+      <p style={{ marginBottom: '1.25rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
+        <strong>Performance and income schedule</strong> (above): the <strong>Portfolio Value Over Time</strong> chart with
+        Daily / Weekly / Monthly and Price Return / Total Return controls, followed by the collapsible
+        <strong> Grade &amp; Exposure Guide</strong> and the current week&apos;s dividend-payment calendar.
+      </p>
+      <div style={{ marginBottom: '1rem' }}>
+        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower updated Dashboard showing the category allocation donut and table plus the Holdings overview summary, filters, view tabs, and per-holding NAV controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
       <p style={{ marginBottom: '0.75rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         <strong>Lower on the page</strong> (above): the <strong>category allocation</strong> donut chart — each slice is a
-        category (Anchors, Boosters, Gold &amp; Silver, Growth, BDC, Hedged Anchor, Juicers, Energy, …) with its value
-        invested, gain, and percent allocation — followed by the <strong>Holdings overview</strong> table (the former
-        CommonInfo views) with Common / General / Dividends / Returns tabs and inline NAV benchmark assignment.
+        category with its current value, invested value, gain, target, allocation, and difference — followed by the
+        <strong> Holdings overview</strong> summary cards, filters, Common / General / Dividends / Returns tabs, searchable
+        table, and inline NAV benchmark assignment.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
