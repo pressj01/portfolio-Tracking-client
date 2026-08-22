@@ -6,6 +6,7 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import MarkovPanel from '../components/MarkovPanel'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
+import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   comparerActualCloses,
   comparerEndLabelAxisY,
@@ -2056,6 +2057,13 @@ export default function ETFScreen() {
   const [error, setError] = useState('')
   const [portfolioTickers, setPortfolioTickers] = useState([])
   const [ivData, setIvData] = useState(null) // { atm_iv, call_iv, put_iv, expiration }
+  const requestedTickerLoadedRef = useRef('')
+
+  const prefillRequestedTicker = useCallback((nextTicker) => {
+    setTicker(nextTicker)
+    setTab('technical')
+  }, [])
+  const requestedTicker = useTickerQueryParam(prefillRequestedTicker)
 
   // Drawing tools state
   const [drawMode, setDrawMode] = useState(null) // 'trendline', 'hline', 'rect', 'path', 'fib', null
@@ -2367,6 +2375,13 @@ export default function ETFScreen() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [ticker, period, interval])
+
+  useEffect(() => {
+    if (!requestedTicker || ticker.trim().toUpperCase() !== requestedTicker) return
+    if (requestedTickerLoadedRef.current === requestedTicker) return
+    requestedTickerLoadedRef.current = requestedTicker
+    loadTechnical()
+  }, [loadTechnical, requestedTicker, ticker])
 
   // Load return data — cancel any in-flight request to prevent stale data
   const loadReturns = useCallback(() => {

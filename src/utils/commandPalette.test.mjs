@@ -39,7 +39,8 @@ test('searchCatalog finds hidden pages and tickers', () => {
   assert.ok(hiddenHits.some(item => item.id === 'page:dividend-compare'))
   const tickerHits = searchCatalog('schd', { pages, actions, tickers })
   assert.equal(tickerHits.filter(item => item.type === 'ticker').length, 1)
-  assert.equal(tickerHits.find(item => item.type === 'ticker').path, '/security-research?ticker=SCHD')
+  assert.equal(tickerHits.find(item => item.type === 'ticker').action, 'research')
+  assert.equal(tickerHits.find(item => item.type === 'ticker').ticker, 'SCHD')
 })
 
 test('empty query shows a short list of actions and home pages', () => {

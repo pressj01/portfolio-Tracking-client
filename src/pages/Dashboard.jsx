@@ -39,6 +39,7 @@ import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
 import GradePeriodHelp from '../components/GradePeriodHelp'
 import { CommonInfoPanel } from './CommonInfo'
+import { useTickerResearch } from '../context/TickerResearchContext'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { layoutFromVisibleKeys } from '../utils/columnLayout'
 import {
@@ -856,238 +857,6 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
   )
 }
 
-function TickerModal({
-  ticker,
-  onClose,
-  period,
-  customStart,
-  customEnd,
-  onPeriodChange,
-  onCustomStartChange,
-  onCustomEndChange,
-  maxDate,
-}) {
-  const pf = useProfileFetch()
-  const { isDark } = useTheme()
-  const { selection } = useProfile()
-  const [data, setData] = useState(null)
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  const rangeError = customRangeError(period, customStart, customEnd)
-
-  useEffect(() => {
-    if (!ticker) return undefined
-    if (isLifetimePerformancePeriod(period)) {
-      setData(null)
-      setLoading(false)
-      setError(null)
-      return undefined
-    }
-    if (rangeError) {
-      setData(null)
-      setLoading(false)
-      setError(rangeError)
-      return undefined
-    }
-    let active = true
-    setLoading(true)
-    setError(null)
-    setData(null)
-    const params = new URLSearchParams({ period })
-    addCustomRangeParams(params, period, customStart, customEnd)
-    pf(`/api/ticker-return/${encodeURIComponent(ticker)}?${params}`)
-      .then(async r => {
-        const payload = await r.json().catch(() => null)
-        if (!r.ok) throw new Error(payload?.error || `Could not load return data for ${ticker}`)
-        return payload
-      })
-      .then(d => {
-        if (!active) return
-        if (!d) throw new Error(`Could not load return data for ${ticker}`)
-        if (d.error) throw new Error(d.error)
-        setData(d)
-      })
-      .catch(e => { if (active) setError(e.message) })
-      .finally(() => { if (active) setLoading(false) })
-    return () => { active = false }
-  }, [ticker, pf, selection, period, customStart, customEnd, rangeError])
-
-  useEffect(() => {
-    const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', handleEsc)
-    return () => window.removeEventListener('keydown', handleEsc)
-  }, [onClose])
-
-  useEffect(() => {
-    if (!data || !window.Plotly) return
-    const el = document.getElementById('ticker-chart')
-    if (!el) return
-
-    const hasTotalReturn = data.total_return_available !== false && Array.isArray(data.total_return)
-    const traces = hasTotalReturn
-      ? [
-          {
-            x: data.dates, y: data.price_return,
-            mode: 'lines', name: 'Price Return %',
-            line: { color: '#7ecfff', width: 2 },
-            hovertemplate: '%{y:.2f}%<extra>Price</extra>',
-          },
-          {
-            x: data.dates, y: data.total_return,
-            mode: 'lines', name: 'Total Return %',
-            line: { color: isDark ? '#4dff91' : '#15803d', width: 2 },
-            fill: 'tonexty', fillcolor: isDark ? 'rgba(77,255,145,0.08)' : 'rgba(21,128,61,0.10)',
-            hovertemplate: '%{y:.2f}%<extra>Total</extra>',
-          },
-        ]
-      : [
-          {
-            x: data.dates, y: data.prices,
-            mode: 'lines', name: 'Price',
-            line: { color: '#7ecfff', width: 2 },
-            hovertemplate: '$%{y:.2f}<extra>Price</extra>',
-          },
-        ]
-    const ct = chartTheme(isDark)
-    const chartRange = formatPerformanceChartRange(
-      data.requested_start_date,
-      data.requested_end_date,
-      data.effective_start_date || data.dates?.[0],
-      data.effective_end_date || data.dates?.[data.dates.length - 1],
-    )
-    const layout = {
-      template: ct.template,
-      paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
-      title: { text: `${data.ticker} — ${hasTotalReturn ? `${data.period_label || 'Selected Period'} Return` : 'Recent Price History'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`, font: { size: 16, color: ct.title } },
-      xaxis: { title: '', gridcolor: ct.grid },
-      yaxis: hasTotalReturn
-        ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
-        : { title: 'Price', gridcolor: ct.grid, tickprefix: '$' },
-      legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
-      margin: { l: 50, r: 20, t: 80, b: 40 },
-      hovermode: 'x unified',
-      shapes: hasTotalReturn
-        ? [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }]
-        : [],
-    }
-    window.Plotly.newPlot(el, traces, layout, { responsive: true })
-    return () => { if (el) window.Plotly.purge(el) }
-  }, [data, isDark])
-
-  if (!ticker) return null
-
-  const lastNumber = values => {
-    for (let index = (values || []).length - 1; index >= 0; index -= 1) {
-      const value = Number(values[index])
-      if (Number.isFinite(value)) return value
-    }
-    return null
-  }
-  const endingTotalReturn = lastNumber(data?.total_return)
-  const endingPriceReturn = lastNumber(data?.price_return)
-  const effectiveRange = formatPerformanceRange(
-    data?.effective_start_date,
-    data?.effective_end_date,
-  )
-  const requestedRange = formatPerformanceRange(
-    data?.requested_start_date,
-    data?.requested_end_date,
-  )
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose}>&times;</button>
-        <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>
-          {data ? `${data.ticker} — ${data.description}` : ticker}
-        </h2>
-        {data && (
-          <p style={{ color: 'var(--text-dim)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-            Purchased {localDateString(data.purchase_date) || '—'} at {fmt(data.price_paid)}
-          </p>
-        )}
-        <div className="growth-filter-group" style={{ marginBottom: '0.75rem', paddingRight: '2rem' }}>
-          <label>Shared Performance Date Range</label>
-          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
-            {PERFORMANCE_PERIODS.map(option => (
-              <button
-                type="button"
-                key={option.key}
-                className={`tr-pbtn${period === option.key ? ' tr-pbtn-active' : ''}`}
-                style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                title={option.hint}
-                onClick={() => onPeriodChange(option.key)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
-          {isLifetimePerformancePeriod(period) && (
-            <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
-            </div>
-          )}
-        </div>
-        {period === 'custom' && (
-          <div className="g2-custom-range" role="group" aria-label="Custom holding return date range" style={{ marginBottom: '0.75rem' }}>
-            <label>
-              <span>Start date</span>
-              <input
-                type="date"
-                value={customStart}
-                min={MIN_PERFORMANCE_DATE}
-                max={customEnd || maxDate}
-                onChange={event => onCustomStartChange(event.target.value)}
-              />
-            </label>
-            <label>
-              <span>End date</span>
-              <input
-                type="date"
-                value={customEnd}
-                min={customStart || MIN_PERFORMANCE_DATE}
-                max={maxDate}
-                onChange={event => onCustomEndChange(event.target.value)}
-              />
-            </label>
-          </div>
-        )}
-        {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
-        {error && <div className="alert alert-error">{error}</div>}
-        {isLifetimePerformancePeriod(period) && !loading && (
-          <p className="tr-note">{HOLDINGS_LIFETIME_MATCH_NOTE}</p>
-        )}
-        {data && (
-          <>
-            {data.calculation_method && (
-              <p style={{ color: 'var(--text-dim)', margin: '-0.5rem 0 1rem', fontSize: '0.82rem', lineHeight: 1.45 }}>
-                <strong>Uses the Total Return method for {data.period_label || 'the selected period'}:</strong>{' '}
-                {data.calculation_method} Separately read live quotes can differ intraday.
-              </p>
-            )}
-            <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-              <strong>{data.period_label || 'Selected period'}:</strong>{' '}
-              {effectiveRange || requestedRange || 'Dates unavailable'}
-              {requestedRange && effectiveRange && requestedRange !== effectiveRange
-                ? ` (requested ${requestedRange})`
-                : ''}
-              {endingTotalReturn != null && (
-                <> — <strong>Total Return {endingTotalReturn.toFixed(2)}%</strong></>
-              )}
-              {endingPriceReturn != null && `; Price Return ${endingPriceReturn.toFixed(2)}%`}
-            </div>
-            {data.note && (
-              <p style={{ color: 'var(--p-ffcc80)', margin: '-0.5rem 0 1rem', fontSize: '0.85rem' }}>{data.note}</p>
-            )}
-            <div id="ticker-chart" style={{ height: '400px' }} />
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
 
 /** Parse JSON from a fetch response, throwing on non-OK status. */
 function safeJson(r) {
@@ -1136,7 +905,7 @@ export default function Dashboard() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [rvyMode, setRvyMode] = useState('cur')
-  const [modalTicker, setModalTicker] = useState(null)
+  const { openTickerResearch } = useTickerResearch()
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
@@ -2198,7 +1967,20 @@ export default function Dashboard() {
     return [
     { id: 'ticker', label: 'Ticker', name: 'Ticker', sortKey: 'ticker', group: 'Current', defaultVisible: true, render: h => (
       <td>
-        <a href="#" onClick={(e) => { e.preventDefault(); setModalTicker(h.ticker) }} style={{ color: 'var(--accent-bright)', fontWeight: 600 }}>
+        <a
+          href="#"
+          onClick={(e) => {
+            e.preventDefault()
+            openTickerResearch(h.ticker, {
+              holding: h,
+              coverage: h._coverage,
+              coverageMeta: h._coverage_meta,
+              closure: tickerClosureRisk[h.ticker],
+            })
+          }}
+          style={{ color: 'var(--accent-bright)', fontWeight: 600 }}
+          title="Open ticker research sheet"
+        >
           {h.ticker}
         </a>
       </td>
@@ -3274,25 +3056,12 @@ export default function Dashboard() {
 
       <CommonInfoPanel
         embedded
-        onTickerClick={setModalTicker}
+        onTickerClick={ticker => openTickerResearch(ticker)}
         onNavChange={refreshPortfolioCoverage}
         tickerGrades={activeTickerGrades}
       />
 
-      {/* Ticker Modal */}
-      {modalTicker && (
-        <TickerModal
-          ticker={modalTicker}
-          onClose={() => setModalTicker(null)}
-          period={gradePeriod}
-          customStart={gradeCustomStart}
-          customEnd={gradeCustomEnd}
-          onPeriodChange={setGradePeriod}
-          onCustomStartChange={setGradeCustomStart}
-          onCustomEndChange={setGradeCustomEnd}
-          maxDate={initialGradeCustomDates.end}
-        />
-      )}
+
     </div>
   )
 }

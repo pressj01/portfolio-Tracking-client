@@ -31,6 +31,7 @@ import {
   sharesIfReinvested,
 } from '../utils/holdingsTableTotals'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
+import { useTickerResearch } from '../context/TickerResearchContext'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1683,6 +1684,7 @@ export default function ManageHoldings() {
   const { runMarketRefresh } = useMarketRefresh()
   const { profileId, isAggregate, selection, basisMode, profileQueryString } = useProfile()
   const dialog = useDialog()
+  const { openTickerResearch } = useTickerResearch()
   const holdingsRequestRef = useRef(0)
   const [holdings, setHoldings] = useState([])
   const [loading, setLoading] = useState(true)
@@ -2311,8 +2313,9 @@ export default function ManageHoldings() {
               </span>
               <a
                 href="#"
-                onClick={(e) => { e.preventDefault(); handleEdit(h) }}
+                onClick={(e) => { e.preventDefault(); openTickerResearch(h.ticker, { holding: h, closure: tickerClosureRisk[h.ticker] }) }}
                 style={{ color: 'var(--accent)', textDecoration: 'none', cursor: 'pointer' }}
+                title="Open ticker research sheet"
                 onMouseEnter={(e) => e.target.style.textDecoration = 'underline'}
                 onMouseLeave={(e) => e.target.style.textDecoration = 'none'}
               >

@@ -1,9 +1,11 @@
-import React, { useState, useMemo } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import { todayInputValue } from '../utils/performancePeriods'
 
 function fmt$(v) {
   return formatMoney(v)
@@ -55,11 +57,13 @@ export default function NavErosion() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
-  const [ticker, setTicker] = useState('')
-  const [benchmark, setBenchmark] = useState('')
-  const [amount, setAmount] = useState('10000')
-  const [startDate, setStartDate] = useState('2015-01-01')
-  const [endDate, setEndDate] = useState('2025-12-31')
+  const [searchParams] = useSearchParams()
+  const requestedTicker = (searchParams.get('ticker') || '').trim().toUpperCase()
+  const [ticker, setTicker] = useState(requestedTicker)
+  const [benchmark, setBenchmark] = useState(() => (searchParams.get('benchmark') || '').trim().toUpperCase())
+  const [amount, setAmount] = useState(() => searchParams.get('amount') || '10000')
+  const [startDate, setStartDate] = useState(() => searchParams.get('start') || '2015-01-01')
+  const [endDate, setEndDate] = useState(() => searchParams.get('end') || todayInputValue())
   const [reinvest, setReinvest] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -70,8 +74,9 @@ export default function NavErosion() {
   const [figLayout, setFigLayout] = useState(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
+  const autoRunTickerRef = useRef('')
 
-  const runBacktest = () => {
+  const runBacktest = useCallback(() => {
     const sym = ticker.trim().toUpperCase()
     if (!sym) return
     setLoading(true)
@@ -107,7 +112,13 @@ export default function NavErosion() {
         setLoading(false)
         setError('Request failed: ' + err.message)
       })
-  }
+  }, [amount, benchmark, endDate, pf, reinvest, startDate, ticker])
+
+  useEffect(() => {
+    if (!requestedTicker || autoRunTickerRef.current === requestedTicker) return
+    autoRunTickerRef.current = requestedTicker
+    runBacktest()
+  }, [requestedTicker, runBacktest])
 
   // Sorting
   const colKeys = ['date', 'price', 'price_delta_pct', 'benchmark_price', 'benchmark_delta_pct', 'div_per_share', 'total_dist',

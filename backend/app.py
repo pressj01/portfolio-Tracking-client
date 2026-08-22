@@ -1629,6 +1629,9 @@ _YF_INFO_CACHE = {}
 _YF_INFO_TTL_SEC = 30 * 60
 _XFUNDS_RESEARCH_CACHE = {}
 _XFUNDS_RESEARCH_TTL_SEC = 15 * 60
+_TAPPALPHA_PUBLIC_CACHE = {}
+_TAPPALPHA_RESEARCH_CACHE = {}
+_TAPPALPHA_RESEARCH_TTL_SEC = 15 * 60
 _YF_DIVIDENDS_CACHE = {}
 _YF_DIVIDENDS_TTL_SEC = 30 * 60
 _OFFICIAL_DISTRIBUTION_CACHE = {}
@@ -1743,6 +1746,8 @@ def _clear_market_data_memory_caches():
     _YF_INFO_CACHE.clear()
     _YF_DIVIDENDS_CACHE.clear()
     _XFUNDS_RESEARCH_CACHE.clear()
+    _TAPPALPHA_PUBLIC_CACHE.clear()
+    _TAPPALPHA_RESEARCH_CACHE.clear()
     _OFFICIAL_DISTRIBUTION_CACHE.clear()
 
 
@@ -3897,6 +3902,16 @@ def _get_owner_source_profile_ids(conn):
         "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
     ).fetchall()
     return [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _position_history_profile_ids(conn, is_aggregate, profile_ids):
+    """Resolve the accounts that contain lot history for the selected position view."""
+    ids = list(dict.fromkeys(int(profile_id) for profile_id in (profile_ids or [1])))
+    if not is_aggregate and ids == [1]:
+        source_ids = _get_owner_source_profile_ids(conn)
+        if source_ids:
+            return source_ids
+    return ids
 
 
 def _get_aggregate_member_profile_ids(conn, aggregate_id=None):
@@ -6809,7 +6824,11 @@ def _combined_export_clean_date(value):
             return parsed.strftime("%Y-%m-%d")
     except Exception:
         pass
-    return str(value).strip()
+    # Never pass an unparseable date through to the transaction table.  Older
+    # exports could preserve a typo such as ``20226-04-10`` here; because dates
+    # are stored as text, that malformed value could then sort ahead of every
+    # valid 2025/2026 lot and break aggregate performance charts.
+    return ""
 
 
 def _combined_export_has_columns(df, required):
@@ -6865,6 +6884,9 @@ def _parse_portfolio_export_workbook(path, filename=None):
                 txn_type = str(row.get(colmap["type"], "") or "BUY").strip().upper()
                 if not ticker or txn_type not in {"BUY", "SELL", "DIVIDEND"}:
                     continue
+                transaction_date = _combined_export_clean_date(row.get(colmap["date"]))
+                if not transaction_date:
+                    continue
                 if txn_type == "DIVIDEND":
                     amount = _combined_export_clean_float(
                         row.get(colmap.get("dividend amount"))
@@ -6881,7 +6903,7 @@ def _parse_portfolio_export_workbook(path, filename=None):
                         "profile": str(row.get(colmap.get("profile"), "") or "").strip(),
                         "ticker": ticker,
                         "type": "DIVIDEND",
-                        "date": _combined_export_clean_date(row.get(colmap["date"])),
+                        "date": transaction_date,
                         "shares": None,
                         "price_per_share": None,
                         "fees": 0,
@@ -6899,7 +6921,7 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     "profile": str(row.get(colmap.get("profile"), "") or "").strip(),
                     "ticker": ticker,
                     "type": txn_type,
-                    "date": _combined_export_clean_date(row.get(colmap["date"])),
+                    "date": transaction_date,
                     "shares": abs(shares),
                     "price_per_share": _combined_export_clean_float(row.get(colmap.get("price/share"))),
                     "fees": _combined_export_clean_float(row.get(colmap.get("fees"))) or 0,
@@ -11270,55 +11292,69 @@ def _fetch_neos_distribution_snapshot(ticker):
     }
 
 
-def _fetch_tappalpha_distribution_snapshot(ticker):
-    """Fetch recent official distribution history from TappAlpha when available."""
+_TAPPALPHA_PUBLIC_API = (
+    "https://jdkfnvgkfwotjlyovbrk.supabase.co/functions/v1/fund-public-api"
+)
+
+
+def _fetch_tappalpha_public_payload(ticker, use_cache=True):
+    """Return the same official JSON payload that powers TappAlpha fund pages."""
     import requests
 
     ticker = (ticker or "").strip().upper()
-    if not ticker:
+    if not ticker or not _is_tappalpha_fund(ticker):
         return None
 
-    url = f"https://www.tappalphafunds.com/etfs/{ticker.lower()}"
+    if use_cache:
+        cached = _cache_get(
+            _TAPPALPHA_PUBLIC_CACHE, ticker, _TAPPALPHA_RESEARCH_TTL_SEC
+        )
+        if cached is not None:
+            return cached
+
     try:
-        resp = requests.get(
-            url,
+        response = requests.get(
+            _TAPPALPHA_PUBLIC_API,
+            params={"ticker": ticker, "view": "all"},
             timeout=10,
             headers={"User-Agent": "PortfolioTrackingClient/1.0"},
         )
-        resp.raise_for_status()
+        response.raise_for_status()
+        payload = response.json()
     except Exception:
         return None
 
-    html = resp.text or ""
-    if "data-amount=" not in html or "dist-row w-dyn-item" not in html:
+    fund = payload.get("fund") if isinstance(payload, dict) else None
+    official_ticker = str((fund or {}).get("ticker") or "").strip().upper()
+    if official_ticker != ticker or payload.get("mode") == "placeholder":
+        return None
+    _cache_set(_TAPPALPHA_PUBLIC_CACHE, ticker, payload)
+    return payload
+
+
+def _fetch_tappalpha_distribution_snapshot(ticker):
+    """Fetch official TappAlpha distribution data from its public fund API."""
+    payload = _fetch_tappalpha_public_payload(ticker)
+    if not payload:
         return None
 
-    rows = re.findall(
-        r'data-amount="([0-9.]*)"\s+role="listitem"\s+class="dist-row w-dyn-item".*?'
-        r'text-weight-medium">([^<]+)</div>.*?'
-        r'aria-describedby="record-date"[^>]*>.*?>([^<]+)</div>.*?'
-        r'aria-describedby="ex-date"[^>]*>.*?>([^<]+)</div>.*?'
-        r'aria-describedby="pay-date"[^>]*>.*?>([^<]+)</div>',
-        html,
-        flags=re.IGNORECASE | re.S,
-    )
+    rows = payload.get("distributions") or []
     if not rows:
         return None
 
     entries = []
-    future_pay_map = {}
-    for amount, _declared, _record_date, ex_date, pay_date in rows:
-        ex_ts = pd.to_datetime(ex_date, errors="coerce")
-        pay_ts = pd.to_datetime(pay_date, errors="coerce")
+    scheduled = []
+    for row in rows:
+        ex_ts = pd.to_datetime(row.get("ex_date"), errors="coerce")
+        pay_ts = pd.to_datetime(row.get("pay_date"), errors="coerce")
         if pd.isna(ex_ts):
             continue
         ex_ts = ex_ts.normalize()
         pay_ts = pay_ts.normalize() if not pd.isna(pay_ts) else None
-        amount = (amount or "").strip()
-        if amount:
-            entries.append((ex_ts, float(amount), pay_ts))
-        elif pay_ts is not None:
-            future_pay_map[ex_ts] = pay_ts
+        amount = _json_float(row.get("amount"))
+        scheduled.append((ex_ts, pay_ts))
+        if amount is not None and amount > 0:
+            entries.append((ex_ts, amount, pay_ts))
 
     if not entries:
         return None
@@ -11330,16 +11366,32 @@ def _fetch_tappalpha_distribution_snapshot(ticker):
 
     pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
     latest_ex = history.index[-1]
-    latest_pay = future_pay_map.get(latest_ex) or pay_map.get(latest_ex)
+    chosen_ex = latest_ex
+    chosen_pay = pay_map.get(latest_ex)
+    today = pd.Timestamp.now().normalize()
+    upcoming = sorted(
+        (ex_ts, pay_ts) for ex_ts, pay_ts in scheduled if ex_ts >= today
+    )
+    if upcoming:
+        chosen_ex, chosen_pay = upcoming[0]
+
+    latest = payload.get("latest") or payload.get("data") or {}
+    frequency = str(latest.get("distribution_frequency") or "").strip().lower()
+    frequency_code = {
+        "weekly": "W", "monthly": "M", "quarterly": "Q",
+        "semiannual": "SA", "semi-annual": "SA", "annual": "A",
+    }.get(frequency) or _infer_dividend_frequency_from_history(history)
 
     return {
         "known": True,
         "has_dividend": True,
         "div": float(history.iloc[-1]),
-        "ex_div_date": latest_ex.strftime("%m/%d/%y"),
-        "div_pay_date": latest_pay.strftime("%m/%d/%y") if latest_pay is not None else None,
-        "freq": _infer_dividend_frequency_from_history(history),
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": frequency_code,
         "history": history,
+        "distribution_rate_pct": _json_float(latest.get("distribution_rate")),
+        "source": "TappAlpha",
     }
 
 
@@ -12531,7 +12583,7 @@ def _is_tappalpha_fund(ticker, description=""):
     description_l = (description or "").lower()
     if "tappalpha" in description_l or "tapalpha" in description_l or "tapp alpha" in description_l:
         return True
-    return ticker in {"TSPY", "TDAQ", "TDAX", "TSYX"}
+    return ticker in {"TSPY", "TDAQ", "TMGN", "TDAX", "TSYX"}
 
 
 _XFUNDS_CURRENT_TICKERS = {
@@ -18035,6 +18087,19 @@ def holding_basis_gap(ticker):
     })
 
 
+def _transaction_date_error(value):
+    """Return a user-facing error for a malformed transaction date."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.date.fromisoformat(str(value).strip())
+    except (TypeError, ValueError):
+        return "Invalid date format — use YYYY-MM-DD"
+    if parsed.year < 1900 or parsed.year > 2099:
+        return f"Invalid year {parsed.year} — must be between 1900 and 2099"
+    return None
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])
 def add_transaction(ticker):
     """Add a new transaction for a ticker. Auto-seeds if first transaction."""
@@ -18059,17 +18124,12 @@ def add_transaction(ticker):
         conn.close()
         return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
 
-    # Validate date year if provided before creating or seeding any rows.
+    # Validate the full date before creating or seeding any rows.
     txn_date = data.get("transaction_date")
-    if txn_date:
-        try:
-            year = int(str(txn_date).split("-")[0])
-            if year < 1900 or year > 2099:
-                conn.close()
-                return jsonify({"error": f"Invalid year {year} - must be between 1900 and 2099"}), 400
-        except (ValueError, IndexError):
-            conn.close()
-            return jsonify({"error": "Invalid date format"}), 400
+    date_error = _transaction_date_error(txn_date)
+    if date_error:
+        conn.close()
+        return jsonify({"error": date_error}), 400
 
     # Check if the holding exists; if not, create it (new ticker via transaction flow)
     existing = conn.execute(
@@ -18174,15 +18234,11 @@ def update_transaction(ticker, txn_id):
 
     data = request.get_json()
 
-    # Validate date year if provided
+    # Validate the full date before updating the stored transaction.
     txn_date = data.get("transaction_date")
-    if txn_date:
-        try:
-            year = int(str(txn_date).split("-")[0])
-            if year < 1900 or year > 2099:
-                return jsonify({"error": f"Invalid year {year} — must be between 1900 and 2099"}), 400
-        except (ValueError, IndexError):
-            return jsonify({"error": "Invalid date format"}), 400
+    date_error = _transaction_date_error(txn_date)
+    if date_error:
+        return jsonify({"error": date_error}), 400
 
     conn = get_connection()
 
@@ -19894,6 +19950,328 @@ def portfolio_coverage():
     return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
 
 
+_TICKER_RESEARCH_CHECKLIST = {
+    "cef": "/cef-buying-checklist-evaluator",
+    "option_income": "/option-income-etf-evaluator",
+    "etf": "/etf-buying-checklist-evaluator",
+    "stock": "/stock-buying-checklist",
+}
+
+
+def _json_float(value):
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
+def _ticker_research_holding(symbol):
+    """Aggregate the selected portfolio's open lots for one ticker."""
+    is_aggregate, profile_ids = get_profile_filter()
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        rows = conn.execute(
+            f"""SELECT ticker, description, classification_type, quantity, price_paid,
+                       current_price, purchase_value, current_value, purchase_date, import_date,
+                       div_frequency, reinvest, estim_payment_per_year,
+                       current_annual_yield, annual_yield_on_cost, paid_for_itself,
+                       nav_erosion_scope, nav_benchmark_override, total_divs_received
+                FROM all_account_info
+                WHERE profile_id IN ({placeholders})
+                  AND UPPER(ticker) = ?
+                  AND COALESCE(quantity, 0) > 0""",
+            (*profile_ids, symbol),
+        ).fetchall()
+        history_profile_ids = _position_history_profile_ids(conn, is_aggregate, profile_ids)
+        history_placeholders = ",".join("?" * len(history_profile_ids))
+        date_rows = rows
+        if history_profile_ids != list(profile_ids):
+            date_rows = conn.execute(
+                f"""SELECT purchase_date, import_date
+                    FROM all_account_info
+                    WHERE profile_id IN ({history_placeholders})
+                      AND UPPER(ticker) = ?
+                      AND COALESCE(quantity, 0) > 0""",
+                (*history_profile_ids, symbol),
+            ).fetchall()
+        valid_transaction = conn.execute(
+            f"""SELECT transaction_date
+                FROM transactions
+                WHERE profile_id IN ({history_placeholders})
+                  AND UPPER(ticker) = ?
+                  AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
+                  AND date(transaction_date) IS NOT NULL
+                ORDER BY date(transaction_date), id
+                LIMIT 1""",
+            (*history_profile_ids, symbol),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not rows:
+        return None, []
+
+    first = rows[0]
+    quantity = 0.0
+    purchase_value = 0.0
+    current_value = 0.0
+    annual_income = 0.0
+    total_divs = 0.0
+    paid_weight = 0.0
+    paid_qty = 0.0
+    current_price = _json_float(first["current_price"] if "current_price" in first.keys() else None)
+    valid_purchase_dates = [
+        parsed
+        for parsed in (_portfolio_event_date(row["purchase_date"]) for row in date_rows)
+        if parsed is not None
+    ]
+    purchase_date = min(valid_purchase_dates) if valid_purchase_dates else None
+    if purchase_date is None and valid_transaction:
+        purchase_date = _portfolio_event_date(valid_transaction["transaction_date"])
+    if purchase_date is None:
+        valid_import_dates = [
+            parsed
+            for parsed in (_portfolio_event_date(row["import_date"]) for row in date_rows)
+            if parsed is not None
+        ]
+        purchase_date = min(valid_import_dates) if valid_import_dates else None
+    for row in rows:
+        qty = _json_float(row["quantity"] if "quantity" in row.keys() else None) or 0.0
+        quantity += qty
+        purchase_value += _json_float(row["purchase_value"] if "purchase_value" in row.keys() else None) or 0.0
+        current_value += _json_float(row["current_value"] if "current_value" in row.keys() else None) or 0.0
+        annual_income += _json_float(
+            row["estim_payment_per_year"] if "estim_payment_per_year" in row.keys() else None
+        ) or 0.0
+        total_divs += _json_float(
+            row["total_divs_received"] if "total_divs_received" in row.keys() else None
+        ) or 0.0
+        price_paid = _json_float(row["price_paid"] if "price_paid" in row.keys() else None)
+        if price_paid is not None and qty > 0:
+            paid_weight += price_paid * qty
+            paid_qty += qty
+        live_price = _json_float(row["current_price"] if "current_price" in row.keys() else None)
+        if live_price:
+            current_price = live_price
+
+    holding = {
+        "ticker": symbol,
+        "description": first["description"] if "description" in first.keys() else "",
+        "classification_type": first["classification_type"] if "classification_type" in first.keys() else "",
+        "quantity": round(quantity, 6),
+        "price_paid": round(paid_weight / paid_qty, 6) if paid_qty else _json_float(
+            first["price_paid"] if "price_paid" in first.keys() else None
+        ),
+        "current_price": current_price,
+        "purchase_value": round(purchase_value, 2),
+        "current_value": round(current_value, 2),
+        "purchase_date": purchase_date.isoformat() if purchase_date else None,
+        "div_frequency": first["div_frequency"] if "div_frequency" in first.keys() else None,
+        "reinvest": first["reinvest"] if "reinvest" in first.keys() else None,
+        "estim_payment_per_year": round(annual_income, 2),
+        "current_annual_yield": _json_float(
+            first["current_annual_yield"] if "current_annual_yield" in first.keys() else None
+        ),
+        "annual_yield_on_cost": _json_float(
+            first["annual_yield_on_cost"] if "annual_yield_on_cost" in first.keys() else None
+        ),
+        "paid_for_itself": _json_float(
+            first["paid_for_itself"] if "paid_for_itself" in first.keys() else None
+        ),
+        "total_divs_received": round(total_divs, 2),
+        "nav_erosion_scope": first["nav_erosion_scope"] if "nav_erosion_scope" in first.keys() else "auto",
+        "nav_benchmark_override": first["nav_benchmark_override"] if "nav_benchmark_override" in first.keys() else None,
+    }
+    return holding, rows
+
+
+def _ticker_research_kind(symbol, cef_row, holding=None, cef_universe=None):
+    """Bucket a ticker for the research sheet without requiring a full scan."""
+    if cef_row:
+        return "cef"
+    classification = str((holding or {}).get("classification_type") or "").strip().upper()
+    description = str((holding or {}).get("description") or symbol).strip()
+    description_upper = description.upper()
+    if "CLOSED" in classification and "FUND" in classification:
+        return "cef"
+    if (
+        "ETF" in classification
+        or "EXCHANGE TRADED" in classification
+        or " ETF" in f" {description_upper}"
+        or description_upper.endswith("ETF")
+    ):
+        local_info = {"quoteType": "ETF"}
+        kind = _classify_fund_kind(
+            symbol,
+            local_info,
+            description,
+            cef_universe=cef_universe or {},
+        )
+        return kind if kind not in (None, "other") else "etf"
+    if classification in {"EQUITY", "STOCK", "COMMON STOCK"}:
+        return "stock"
+    try:
+        import yfinance as yf
+        info = yf.Ticker(symbol).info or {}
+        name = info.get("longName") or info.get("shortName") or symbol
+        kind = _classify_fund_kind(symbol, info, name, cef_universe=cef_universe or {})
+        if kind in (None, "other"):
+            return "stock"
+        return kind
+    except Exception:
+        return "stock"
+
+
+def _ticker_research_explicit_etf(holding):
+    classification = str((holding or {}).get("classification_type") or "").strip().upper()
+    description = str((holding or {}).get("description") or "").strip().upper()
+    return (
+        "ETF" in classification
+        or "EXCHANGE TRADED" in classification
+        or " ETF" in f" {description}"
+        or description.endswith("ETF")
+    )
+
+
+def _ticker_research_cached_nav(symbol, holding):
+    """Reuse the Dashboard NAV result without making a sheet-open request wait on Yahoo."""
+    _, profile_ids = get_profile_filter()
+    if len(profile_ids) != 1:
+        return None
+    profile_id = profile_ids[0]
+    wanted_scope = str((holding or {}).get("nav_erosion_scope") or "auto")
+    wanted_benchmark = str((holding or {}).get("nav_benchmark_override") or "").strip().upper()
+    newest = None
+    for cache_key, cached in list(_PORTFOLIO_COVERAGE_CACHE.items()):
+        if not isinstance(cache_key, tuple) or not cache_key or cache_key[0] != profile_id:
+            continue
+        try:
+            cached_at, payload = cached
+        except (TypeError, ValueError):
+            continue
+        if (time.time() - cached_at) >= _PORTFOLIO_SUMMARY_TTL_SEC:
+            continue
+        row = next((item for item in payload.get("results") or [] if item.get("ticker") == symbol), None)
+        if not row:
+            continue
+        row_scope = str(row.get("nav_erosion_scope") or "auto")
+        row_benchmark = str(row.get("nav_benchmark_override") or "").strip().upper()
+        if row_scope != wanted_scope or row_benchmark != wanted_benchmark:
+            continue
+        if newest is None or cached_at > newest[0]:
+            newest = (cached_at, dict(row))
+    return newest[1] if newest else None
+
+
+def _ticker_research_nav_payload(symbol, holding):
+    """Compute NAV coverage for one held ticker when no portfolio cache exists."""
+    cached = _ticker_research_cached_nav(symbol, holding)
+    if cached is not None:
+        return cached
+
+    ticker_info = {
+        symbol: {
+            "current_price": _json_float(holding.get("current_price")) or 0.0,
+            "quantity": _json_float(holding.get("quantity")) or 0.0,
+            "description": holding.get("description") or "",
+            "classification_type": holding.get("classification_type") or "",
+            "annual_income": _json_float(holding.get("estim_payment_per_year")) or 0.0,
+            "current_value": _json_float(holding.get("current_value")) or 0.0,
+            "nav_erosion_scope": holding.get("nav_erosion_scope") or "auto",
+            "nav_benchmark_override": holding.get("nav_benchmark_override"),
+        }
+    }
+    _, profile_ids = get_profile_filter()
+    cache_key = None
+    if len(profile_ids) == 1:
+        cache_key = (
+            profile_ids[0],
+            "ticker-research-nav-v1",
+            symbol,
+            ticker_info[symbol]["nav_erosion_scope"],
+            ticker_info[symbol]["nav_benchmark_override"] or "",
+        )
+    payload = _build_nav_coverage_payload(ticker_info, cache_key=cache_key)
+    return next(
+        (dict(row) for row in payload.get("results") or [] if row.get("ticker") == symbol),
+        None,
+    )
+
+
+def _ticker_research_links(symbol, kind, holding):
+    encoded = urllib.parse.quote(symbol)
+    amount = None
+    if holding and holding.get("current_value"):
+        try:
+            amount = max(1, int(round(float(holding["current_value"]))))
+        except (TypeError, ValueError):
+            amount = None
+    nav_params = [f"ticker={encoded}"]
+    if amount:
+        nav_params.append(f"amount={amount}")
+    if holding and holding.get("purchase_date"):
+        nav_params.append(f"start={urllib.parse.quote(str(holding['purchase_date']))}")
+    benchmark = (holding or {}).get("nav_benchmark_override")
+    if benchmark:
+        nav_params.append(f"benchmark={urllib.parse.quote(str(benchmark).upper())}")
+    checklist = _TICKER_RESEARCH_CHECKLIST.get(kind) or _TICKER_RESEARCH_CHECKLIST["stock"]
+    return {
+        "research": f"/security-research?ticker={encoded}",
+        "closed_cef": f"/closed-cef-info/{encoded}",
+        "nav_erosion": f"/nav-erosion?{'&'.join(nav_params)}",
+        "etf_screen": f"/etf-screen?ticker={encoded}",
+        "checklist": f"{checklist}?ticker={encoded}",
+    }
+
+
+@app.route("/api/ticker-research/<ticker>", methods=["GET"])
+def ticker_research(ticker):
+    """One-ticker research snapshot: position, CEF quote, NAV coverage, and deep-link paths."""
+    symbol = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()
+    if not symbol:
+        return jsonify({"error": "Ticker is required."}), 400
+
+    holding, _ = _ticker_research_holding(symbol)
+    cef_universe = {} if _ticker_research_explicit_etf(holding) else _cef_row_map()
+    cef = cef_universe.get(symbol)
+    kind = _ticker_research_kind(symbol, cef, holding, cef_universe)
+    nav = _ticker_research_cached_nav(symbol, holding) if holding else None
+
+    kind_label = {
+        "cef": "Closed-End Fund",
+        "option_income": "Option-Income ETF",
+        "etf": "ETF",
+        "stock": "Stock",
+    }.get(kind, "Security")
+
+    return jsonify({
+        "ticker": symbol,
+        "kind": kind,
+        "kind_label": kind_label,
+        "holding": holding,
+        "cef": cef,
+        "nav": nav,
+        "links": _ticker_research_links(symbol, kind, holding),
+    })
+
+
+@app.route("/api/ticker-research/<ticker>/nav", methods=["GET"])
+def ticker_research_nav(ticker):
+    """Return cached or on-demand NAV coverage for one current position."""
+    symbol = re.sub(r"[^A-Za-z0-9.\-]", "", ticker or "").upper()
+    if not symbol:
+        return jsonify({"error": "Ticker is required."}), 400
+    holding, _ = _ticker_research_holding(symbol)
+    if not holding:
+        return jsonify({"ticker": symbol, "nav": None})
+    return jsonify({"ticker": symbol, "nav": _ticker_research_nav_payload(symbol, holding)})
+
+
 def _closure_risk_money(v):
     """Compact money label for closure-risk reason strings ($18.2M, $1.2B, $63k)."""
     if v is None:
@@ -20035,25 +20413,34 @@ def _assess_etf_closure_risk_with_fallback(info, response):
     provider profile (e.g. NEOS Net Assets) when the market feed didn't supply
     them, so a fund with a blank Yahoo AUM can still be rated.
 
-    Only engages for funds the market feed already classifies as an ETF, so a
-    stock or CEF is never coerced into an ETF rating. Otherwise defers to
-    _assess_etf_closure_risk unchanged.
+    Engages when either the market feed or an official issuer profile classifies
+    the security as an ETF. Stocks and CEFs are never coerced into ETF ratings.
     """
     risk = _assess_etf_closure_risk(info)
     quote_type = (info.get("quoteType") or "").upper() if isinstance(info, dict) else ""
     total_assets = response.get("total_assets") if isinstance(response, dict) else None
-    # Only step in when Yahoo classified it as an ETF but couldn't size it.
-    if quote_type != "ETF" or not total_assets:
+    official_etf = (
+        str(response.get("fund_type") or "").strip().upper() == "ETF"
+        or str(response.get("legal_type") or "").strip().upper() == "EXCHANGE TRADED FUND"
+    ) if isinstance(response, dict) else False
+    official_provider = (
+        bool(response.get("data_source"))
+        and response.get("data_source") != "Yahoo Finance"
+    ) if isinstance(response, dict) else False
+    if (quote_type != "ETF" and not official_etf) or not total_assets:
         return risk
-    if risk is not None and risk.get("tier") != "unknown":
+    if risk is not None and risk.get("tier") != "unknown" and not official_provider:
         return risk
 
     synthetic = dict(info)
+    synthetic["quoteType"] = "ETF"
     synthetic["totalAssets"] = total_assets
     if response.get("expense_ratio_pct") is not None:
         # response ER is a percent (0.99); the assessor de-scales values >0.05.
         synthetic["annualReportExpenseRatio"] = response["expense_ratio_pct"]
-    if not synthetic.get("fundInceptionDate") and response.get("inception_date"):
+    if response.get("inception_date") and (
+        official_provider or not synthetic.get("fundInceptionDate")
+    ):
         try:
             synthetic["fundInceptionDate"] = pd.Timestamp(response["inception_date"]).timestamp()
         except Exception:
@@ -20547,6 +20934,7 @@ def _ticker_return_holding_context(conn, ticker):
         row = conn.execute(
             f"""SELECT
                     MIN(NULLIF(a.purchase_date, '')) AS purchase_date,
+                    MIN(NULLIF(a.import_date, '')) AS import_date,
                     CASE
                         WHEN SUM(COALESCE(a.quantity, 0)) > 0
                         THEN SUM({basis_total}) / SUM(COALESCE(a.quantity, 0))
@@ -20563,6 +20951,7 @@ def _ticker_return_holding_context(conn, ticker):
     else:
         row = conn.execute(
             f"""SELECT purchase_date, price_paid, description, quantity,
+                      import_date,
                       purchase_value, original_price_paid, original_purchase_value,
                       broker_price_paid, broker_purchase_value
                FROM all_account_info
@@ -20579,17 +20968,20 @@ def _ticker_return_holding_context(conn, ticker):
                 holding["price_paid"] = _basis_fallback_price(holding)
                 row = holding
 
+    history_profile_ids = _position_history_profile_ids(conn, is_aggregate, profile_ids)
+    history_placeholders = ",".join("?" * len(history_profile_ids))
     txn_row = conn.execute(
         f"""SELECT transaction_date, price_per_share
             FROM transactions
             WHERE ticker IN ({ticker_placeholders})
-              AND profile_id IN ({placeholders})
+              AND profile_id IN ({history_placeholders})
               AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
               AND shares > 0
               AND price_per_share > 0
-            ORDER BY transaction_date ASC
+              AND date(transaction_date) IS NOT NULL
+            ORDER BY date(transaction_date), id
             LIMIT 1""",
-        list(ticker_aliases) + profile_ids,
+        list(ticker_aliases) + history_profile_ids,
     ).fetchone()
     return row, txn_row
 
@@ -20615,7 +21007,8 @@ def ticker_return_chart(ticker):
     conn = get_connection()
     try:
         row, txn_row = _ticker_return_holding_context(conn, ticker)
-        _, profile_ids = get_profile_filter()
+        is_aggregate, profile_ids = get_profile_filter()
+        profile_ids = _position_history_profile_ids(conn, is_aggregate, profile_ids)
         placeholders = ",".join("?" * len(profile_ids))
         ticker_aliases = _accounting_aliases_for_ticker(ticker)
         ticker_placeholders = ",".join("?" * len(ticker_aliases))
@@ -20650,6 +21043,9 @@ def ticker_return_chart(ticker):
     if pd.isna(purchase_date) and txn_row:
         purchase_date = pd.to_datetime(txn_row["transaction_date"], errors="coerce")
         price_paid = float(txn_row["price_per_share"] or 0)
+    if pd.isna(purchase_date):
+        import_date = row["import_date"] if "import_date" in row.keys() else None
+        purchase_date = pd.to_datetime(import_date, errors="coerce")
     if price_paid <= 0 and txn_row:
         price_paid = float(txn_row["price_per_share"] or 0)
 
@@ -22446,6 +22842,97 @@ def _fetch_neos_etf_profile(ticker):
     }
 
 
+def _fetch_tappalpha_etf_profile(ticker, use_cache=True):
+    """Official TappAlpha research facts, with stale last-success fallback."""
+    ticker = (ticker or "").strip().upper()
+    if not ticker or not _is_tappalpha_fund(ticker):
+        return None
+
+    if use_cache:
+        cached = _cache_get(
+            _TAPPALPHA_RESEARCH_CACHE, ticker, _TAPPALPHA_RESEARCH_TTL_SEC
+        )
+        if cached is not None:
+            return dict(cached)
+        persisted = _load_persisted_market_payload(
+            "tappalpha", ticker, "research", ttl=_TAPPALPHA_RESEARCH_TTL_SEC
+        )
+        if persisted is not None:
+            _cache_set(_TAPPALPHA_RESEARCH_CACHE, ticker, dict(persisted))
+            return dict(persisted)
+
+    payload = _fetch_tappalpha_public_payload(ticker, use_cache=use_cache)
+    if not payload:
+        stale = _load_persisted_market_payload("tappalpha", ticker, "research")
+        return dict(stale) if stale is not None else None
+
+    fund = payload.get("fund") or {}
+    latest = payload.get("latest") or payload.get("data") or {}
+    holdings = []
+    holdings_as_of = None
+    for row in payload.get("holdings") or []:
+        weight = _json_float(row.get("weight"))
+        name = str(row.get("security_name") or "").strip()
+        symbol = str(row.get("security_ticker") or row.get("security_id") or "").strip()
+        if not name or weight is None:
+            continue
+        holdings.append({
+            "symbol": symbol or name,
+            "name": name,
+            "weight_pct": round(weight, 2),
+        })
+        holdings_as_of = holdings_as_of or row.get("as_of_date")
+        if len(holdings) >= 25:
+            break
+
+    distribution_rate = _json_float(latest.get("distribution_rate"))
+    sec_yield = _json_float(latest.get("sec_yield_30day"))
+    trailing_yield = _json_float(latest.get("trailing_12mo_yield"))
+    frequency = str(latest.get("distribution_frequency") or "").strip()
+    source_url = f"https://www.tappalphafunds.com/etfs/{ticker.lower()}"
+    profile = {
+        "name": fund.get("name") or latest.get("fund_name"),
+        "fund_type": "ETF",
+        "description": fund.get("investment_objective") or latest.get("investment_objective"),
+        "objective": fund.get("investment_objective") or latest.get("investment_objective"),
+        "issuer": "TappAlpha",
+        "category": "Derivative Income",
+        "legal_type": "Exchange Traded Fund",
+        "expense_ratio_pct": _research_expense_pct(
+            fund.get("net_expense_ratio"),
+            fund.get("gross_expense_ratio"),
+            latest.get("gross_expense_ratio"),
+        ),
+        "total_assets": _research_money(latest.get("net_assets")),
+        "total_assets_label": "Net Assets",
+        "price": _research_money(latest.get("market_price")),
+        "nav_price": _research_money(latest.get("nav")),
+        "nav_label": "NAV",
+        "inception_date": fund.get("inception_date") or latest.get("inception_date"),
+        "dividend_frequency": frequency.title() if frequency else None,
+        "estimated_yield_pct": distribution_rate or trailing_yield,
+        "distribution_rate_pct": distribution_rate,
+        "sec_30_day_yield_pct": sec_yield,
+        "trailing_12mo_yield_pct": trailing_yield,
+        "target_yield_label": "Distribution Rate" if distribution_rate is not None else "Trailing 12-Month Yield",
+        "top_holdings": holdings,
+        "holdings_as_of": holdings_as_of,
+        "as_of_date": latest.get("as_of_date"),
+        "source_url": source_url,
+        "data_source": "TappAlpha",
+        "yield_source": "TappAlpha",
+    }
+    useful = (
+        "name", "description", "expense_ratio_pct", "total_assets",
+        "nav_price", "inception_date", "top_holdings",
+    )
+    if not any(_research_has_value(profile.get(field)) for field in useful):
+        return None
+    _cache_set(_TAPPALPHA_RESEARCH_CACHE, ticker, dict(profile))
+    _persist_market_payload("tappalpha", ticker, "research", dict(profile))
+    return profile
+
+
 def _research_has_value(value):
     return value not in (None, "", [])
 
@@ -22470,6 +22957,8 @@ def _fetch_provider_etf_profile(ticker, response):
         fetchers.append(_fetch_xfunds_etf_profile)
     if _is_neos_fund(ticker, provider_hints):
         fetchers.append(_fetch_neos_etf_profile)
+    if _is_tappalpha_fund(ticker, provider_hints):
+        fetchers.append(_fetch_tappalpha_etf_profile)
     if _is_tuttle_capital_fund(ticker, provider_hints):
         fetchers.append(_fetch_income_blast_etf_profile)
     if "vistashares" in provider_hints.lower():
@@ -22502,14 +22991,22 @@ def security_research(kind, ticker):
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
 
-    # X Funds ETFs are issuer-first. Fetch the official profile before touching
-    # Yahoo so a complete Yahoo response can never prevent the provider data
-    # from winning. Yahoo still fills any fields the official site omits, and
-    # remains the full fallback when Nicholas X is unavailable.
+    # Supported issuer sites are authoritative for fund facts. Fetch them before
+    # Yahoo so a complete or rate-limited Yahoo response can never prevent the
+    # provider data from winning; Yahoo still fills any omitted market fields.
     preferred_official_profile = None
-    if kind == "etf" and _is_xfunds_fund(ticker):
+    if kind == "etf" and (
+        _is_xfunds_fund(ticker)
+        or _is_neos_fund(ticker)
+        or _is_tappalpha_fund(ticker)
+    ):
         try:
-            preferred_official_profile = _fetch_xfunds_etf_profile(ticker)
+            if _is_xfunds_fund(ticker):
+                preferred_official_profile = _fetch_xfunds_etf_profile(ticker)
+            elif _is_neos_fund(ticker):
+                preferred_official_profile = _fetch_neos_etf_profile(ticker)
+            else:
+                preferred_official_profile = _fetch_tappalpha_etf_profile(ticker)
         except Exception:
             preferred_official_profile = None
 
@@ -22526,8 +23023,8 @@ def security_research(kind, ticker):
     except Exception as exc:
         if not preferred_official_profile:
             return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
-        # Continue with official X Funds facts even when Yahoo is temporarily
-        # unavailable. The guarded Yahoo calls below will simply return gaps.
+        # Continue with official issuer facts when Yahoo is unavailable. The
+        # guarded Yahoo calls below will simply return gaps.
         yf_ticker = yf.Ticker(lookup_symbol)
         info = {}
 
@@ -48311,10 +48808,53 @@ def etf_evaluate(ticker):
     if not ticker:
         return jsonify(error="Ticker is required."), 400
 
+    official_profile = None
+    if _is_neos_fund(ticker) or _is_tappalpha_fund(ticker):
+        try:
+            official_profile = (
+                _fetch_neos_etf_profile(ticker)
+                if _is_neos_fund(ticker)
+                else _fetch_tappalpha_etf_profile(ticker)
+            )
+        except Exception:
+            official_profile = None
+
+    info_error = None
     try:
-        info = yf.Ticker(ticker).info or {}
+        info = _cached_yf_info(yf.Ticker(ticker), ticker) or {}
+        if not info:
+            info_error = RuntimeError("market data is temporarily unavailable")
     except Exception as exc:
-        return jsonify(error=f"yfinance lookup failed for {ticker}: {exc}"), 502
+        info = {}
+        info_error = exc
+
+    # Supported issuer sites publish the facts needed by the checklist. Treat
+    # those values as authoritative and let Yahoo fill live market fields only.
+    if official_profile:
+        info = dict(info)
+        info["quoteType"] = "ETF"
+        info["shortName"] = official_profile.get("name") or info.get("shortName") or ticker
+        info["longBusinessSummary"] = official_profile.get("description") or info.get("longBusinessSummary")
+        info["fundFamily"] = official_profile.get("issuer") or info.get("fundFamily")
+        info["category"] = official_profile.get("category") or info.get("category")
+        if official_profile.get("total_assets") is not None:
+            info["totalAssets"] = official_profile["total_assets"]
+        if official_profile.get("expense_ratio_pct") is not None:
+            info["netExpenseRatio"] = official_profile["expense_ratio_pct"]
+        if official_profile.get("estimated_yield_pct") is not None:
+            info["yield"] = float(official_profile["estimated_yield_pct"]) / 100.0
+        if official_profile.get("nav_price") is not None:
+            info["navPrice"] = official_profile["nav_price"]
+        if official_profile.get("price") is not None:
+            info["regularMarketPrice"] = official_profile["price"]
+        if official_profile.get("inception_date"):
+            try:
+                info["fundInceptionDate"] = pd.Timestamp(official_profile["inception_date"]).timestamp()
+            except Exception:
+                pass
+
+    if not info and info_error is not None:
+        return jsonify(error=f"yfinance lookup failed for {ticker}: {info_error}"), 502
 
     if not info.get("shortName") and not info.get("longName"):
         return jsonify(error=f"Ticker {ticker} not found in yfinance."), 404
@@ -48460,6 +49000,13 @@ def etf_evaluate(ticker):
     except Exception:
         pass
 
+    history_price = None
+    if fund_close is not None and not fund_close.empty:
+        try:
+            history_price = round(float(fund_close.iloc[-1]), 4)
+        except (TypeError, ValueError):
+            history_price = None
+
     fund = {
         "ticker": ticker,
         "name": info.get("shortName") or info.get("longName", ""),
@@ -48468,7 +49015,7 @@ def etf_evaluate(ticker):
         "etf_strategy": etf_strategy,
         "etf_cap_size": etf_cap_size,
         "fund_family": info.get("fundFamily", ""),
-        "price": info.get("regularMarketPrice") or info.get("previousClose"),
+        "price": info.get("regularMarketPrice") or info.get("previousClose") or history_price,
         "nav": info.get("navPrice"),
         "yield_pct": _safe_pct("yield"),
         "dividend_yield": round(float(info["dividendYield"]), 4) if info.get("dividendYield") is not None else None,
@@ -48488,6 +49035,8 @@ def etf_evaluate(ticker):
         "history_years": history_years,
         "risk_ratios": risk_ratios,
         "price_history_suspect": price_history_suspect,
+        "data_source": official_profile.get("data_source") if official_profile else "Yahoo Finance",
+        "source_url": official_profile.get("source_url") if official_profile else None,
     }
 
     # ── Fetch peers from scanner cache ───────────────────────────────────────

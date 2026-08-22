@@ -8,6 +8,7 @@ import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import MenuOrderProvider, { useMenuOrder } from './context/MenuOrderContext'
+import TickerResearchProvider from './context/TickerResearchContext'
 import CommandPalette from './components/CommandPalette'
 import HiddenPageBanner from './components/HiddenPageBanner'
 import AppRoutes from './pageCatalog'
@@ -103,12 +104,12 @@ function NavMenuGroup({ title, children }) {
 
 function AppFrame() {
   return (
-    <>
+    <TickerResearchProvider>
       <Nav />
       <HiddenPageBanner />
       <CommandPalette />
       <AppRoutes />
-    </>
+    </TickerResearchProvider>
   )
 }
 

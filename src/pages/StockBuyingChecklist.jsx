@@ -1,6 +1,7 @@
 import React, { useCallback, useMemo, useState } from 'react'
 import { API_BASE } from '../config'
 import { useProfile } from '../context/ProfileContext'
+import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   gradeStock,
   computeSectorStats,
@@ -187,6 +188,12 @@ function DeepDive() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const evaluateRequestedTicker = useCallback((ticker) => {
+    setInputTicker(ticker)
+    evaluate(ticker)
+  }, [evaluate])
+  useTickerQueryParam(evaluateRequestedTicker)
 
   const submit = (e) => {
     e?.preventDefault?.()

@@ -166,7 +166,8 @@ export function tickerCatalogItems(tickers = []) {
       type: 'ticker',
       label: ticker,
       hint: entry.source === 'watchlist' ? 'Watchlist' : 'Holding',
-      path: `/security-research?ticker=${encodeURIComponent(ticker)}`,
+      action: 'research',
+      ticker,
       keywords: [entry.name, entry.source].filter(Boolean),
     })
   })
@@ -211,7 +212,7 @@ export function searchCatalog(query, { pages = [], actions = [], tickers = [] } 
 
   actions.forEach(item => consider(item, 6))
   pages.forEach(item => consider(item, item.hidden ? 2 : 8))
-  tickers.forEach(item => consider(item, /^[A-Z0-9.\-]{1,8}$/i.test(q) ? 14 : 4))
+  tickers.forEach(item => consider(item, /^[A-Z0-9.-]{1,8}$/i.test(q) ? 14 : 4))
 
   scored.sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
   return scored.slice(0, 30)

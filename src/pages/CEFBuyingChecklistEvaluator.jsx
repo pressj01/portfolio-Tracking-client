@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import FundScanTab from '../components/FundScanTab'
 import { formatMoney } from '../utils/money'
+import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   DEFAULT_THRESHOLDS,
   BEST_PRACTICE,
@@ -340,6 +341,13 @@ export default function CEFBuyingChecklistEvaluator() {
   useEffect(() => { loadPricing() }, [loadPricing])
 
   useEffect(() => { saveThresholds(thresholds) }, [thresholds])
+
+  const evaluateRequestedTicker = useCallback((ticker) => {
+    setInputTicker(ticker)
+    setActiveTicker(ticker)
+    setTab('deep')
+  }, [])
+  useTickerQueryParam(evaluateRequestedTicker)
 
   const submit = (e) => {
     e?.preventDefault?.()

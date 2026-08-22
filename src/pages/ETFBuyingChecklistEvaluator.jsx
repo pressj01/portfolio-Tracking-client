@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import FundScanTab from '../components/FundScanTab'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   ETF_DEFAULT_THRESHOLDS,
   OPTION_DEFAULT_THRESHOLDS,
@@ -218,6 +219,7 @@ function HeaderCard({ fund }) {
         <span><span style={{ color: 'var(--text-dim-2)' }}>NAV: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fund.nav != null ? formatMoney(fund.nav) : '-'}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>AUM: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtMoney(fund.aum)}</strong></span>
         <span><span style={{ color: 'var(--text-dim-2)' }}>Yield: </span><strong style={{ color: 'var(--p-e6edf7)' }}>{fmtPct(fund.yield_pct || fund.dividend_yield)}</strong></span>
+        {fund.data_source && <span><span style={{ color: 'var(--text-dim-2)' }}>Source: </span><strong>{fund.source_url ? <a href={fund.source_url} target="_blank" rel="noreferrer">{fund.data_source}</a> : fund.data_source}</strong></span>}
       </div>
     </div>
   )
@@ -306,6 +308,13 @@ export default function ETFBuyingChecklistEvaluator() {
       .catch(e => setError(e.message))
       .finally(() => setLoading(false))
   }, [])
+
+  const evaluateRequestedTicker = useCallback((ticker) => {
+    setInputTicker(ticker)
+    setTab('deep')
+    evaluate(ticker)
+  }, [evaluate])
+  useTickerQueryParam(evaluateRequestedTicker)
 
   const submit = (e) => {
     e?.preventDefault?.()
@@ -420,7 +429,7 @@ export default function ETFBuyingChecklistEvaluator() {
         <button type="submit" className="btn btn-primary" disabled={loading}>Evaluate</button>
       </form>
 
-      {loading && <div className="cef-loading"><span className="spinner" /> Fetching ETF data from yfinance...</div>}
+      {loading && <div className="cef-loading"><span className="spinner" /> Fetching issuer and market data...</div>}
       {error && <div className="alert alert-error">{error}</div>}
 
       {isOptionIncome && fund && (
@@ -502,7 +511,7 @@ export default function ETFBuyingChecklistEvaluator() {
             background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
             color: 'var(--text-dim-2)', fontSize: '0.84rem', lineHeight: 1.55,
           }}>
-            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Data is fetched live from yfinance.
+            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Supported issuers supply official fund facts; Yahoo Finance fills market data and any remaining gaps.
             Peers are drawn from the scanner cache matching this ETF's strategy group.
             Custom thresholds persist in this browser via localStorage.
           </div>

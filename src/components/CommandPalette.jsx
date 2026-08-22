@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { useMenuOrder } from '../context/MenuOrderContext'
+import { useTickerResearch } from '../context/TickerResearchContext'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import {
   PALETTE_EVENT,
@@ -20,6 +21,7 @@ export default function CommandPalette() {
   const { profiles, aggregates, basisMode, setProfileId, setBasisMode } = useProfile()
   const { isRefreshing, runMarketRefresh } = useMarketRefresh()
   const { hiddenIds } = useMenuOrder()
+  const { openTickerResearch } = useTickerResearch()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -108,12 +110,13 @@ export default function CommandPalette() {
 
   const runItem = useCallback((item) => {
     if (!item) return
-    if (item.type === 'page' || item.path) navigate(item.path)
+    if (item.action === 'research' && item.ticker) openTickerResearch(item.ticker)
+    else if (item.type === 'page' || item.path) navigate(item.path)
     if (item.action === 'refresh') runMarketRefresh()
     if (item.action === 'basis') setBasisMode(item.basisMode)
     if (item.action === 'profile') setProfileId(item.selection)
     close()
-  }, [close, navigate, runMarketRefresh, setBasisMode, setProfileId])
+  }, [close, navigate, openTickerResearch, runMarketRefresh, setBasisMode, setProfileId])
 
   const onInputKeyDown = (event) => {
     if (event.key === 'ArrowDown') {
