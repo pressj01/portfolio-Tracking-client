@@ -1741,6 +1741,12 @@ export default function Dashboard() {
   const fullTrackerPriceReturn = trackerPortfolioMetrics.price_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.price_return_pct) / 100
+  const fullTrackerPriceReturnDollar = trackerPortfolioMetrics.price_return_dollar == null
+    ? null
+    : Number(trackerPortfolioMetrics.price_return_dollar)
+  const trackerPriceReturnValue = fullTrackerPriceReturnDollar == null
+    ? pct(fullTrackerPriceReturn)
+    : `${fmt(fullTrackerPriceReturnDollar)} (${pct(fullTrackerPriceReturn)})`
   const fullOpenLotPriceReturn = trackerOpenPositionMetrics.price_return_pct == null
     ? null
     : Number(trackerOpenPositionMetrics.price_return_pct) / 100
@@ -2316,9 +2322,9 @@ export default function Dashboard() {
           title={dailyChangeTitle}
         />
         <SummaryCard
-          className="dashboard-headline-card"
-          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Tracker Price Return %'}
-          value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerPriceReturn)}
+          className="dashboard-headline-card price-gl-card"
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Price and Percent' : 'Tracker Price Return %'}
+          value={trackerPerformanceLoading ? 'Loading...' : trackerPriceReturnValue}
           color={gradeColor(fullTrackerPriceReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
           note={isLifetimePerformancePeriod(gradePeriod) ? undefined : 'Includes positions fully closed during this range'}
