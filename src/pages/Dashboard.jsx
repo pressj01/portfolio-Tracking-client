@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { API_BASE } from '../config'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -40,8 +40,6 @@ import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
 import GradePeriodHelp from '../components/GradePeriodHelp'
 import { CommonInfoPanel } from './CommonInfo'
 import { useTickerResearch } from '../context/TickerResearchContext'
-import { useColumnLayout } from '../utils/useColumnLayout'
-import { layoutFromVisibleKeys } from '../utils/columnLayout'
 import {
   NAV_HISTORY_INTERVALS,
   isNavHistoryInterval,
@@ -50,14 +48,6 @@ import {
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
-// Holds an {order, hidden} layout so a switched-off column keeps its place
-// for when it comes back. The key is unchanged: the old bare list of visible
-// ids is migrated in place on first read (migrateLegacyHoldingColumns).
-const HOLDINGS_COLUMN_PREF_KEY = 'dashboard_holdings_visible_columns_v1'
-// Freeze the first N visible holdings columns horizontally (Excel-style freeze
-// panes). By default the 5th column is "Purchased", so freezing 5 keeps
-// Ticker → Purchased pinned while the rest scroll under them.
-const FROZEN_HOLDING_COLS = 5
 const CLOSURE_DISMISS_KEY = 'dashboard_closure_warning_dismissed_v1'
 // Mirrors grading.ABSOLUTE_MIN_RATIO_OBSERVATIONS — the shortest window the
 // backend will annualize a risk ratio over. Only used to explain the 7D tab.
@@ -101,85 +91,6 @@ const portfolioValuePath = (selection, tickers = readIrrExclusions(selection)) =
   const params = new URLSearchParams({ irr_exclude: exclusions.join(',') })
   return `/api/portfolio-value?${params}`
 }
-
-const DEFAULT_HOLDINGS_COLUMN_IDS = [
-  'ticker',
-  'description',
-  'category',
-  'div_frequency',
-  'purchase_date',
-  'ex_div_date',
-  'div_pay_date',
-  'quantity',
-  'price_paid',
-  'current_price',
-  'pct_of_account',
-  'price_return_pct',
-  'total_return_pct',
-  'beta',
-  'delta_up',
-  'delta_down',
-  'ret_vs_yld',
-  'div',
-  'current_annual_yield',
-  'annual_yield_on_cost',
-  'ytd_divs',
-  'current_month_income',
-  'approx_monthly_income',
-  'drip_shares_monthly',
-  'monthly_income_reinvested',
-  'monthly_income_not_reinvested',
-  'estim_payment_per_year',
-  'drip_shares_yearly',
-  'paid_for_itself',
-  'nav',
-  'closure_risk',
-  'grade',
-]
-
-const SPREADSHEET_DELTA_COLUMN_IDS = [
-  'percent_change',
-  'purchase_value',
-  'current_value',
-  'gain_or_loss',
-  'reinvest',
-  'dividend_paid',
-  'withdraw_8pct_cost_annually',
-  'withdraw_8pct_per_month',
-  'cash_not_reinvested',
-  'total_cash_reinvested',
-  'shares_bought_from_dividend',
-  'shares_bought_in_year',
-  'shares_in_month',
-  'total_divs_received',
-  'current_month_income_delta',
-]
-
-// v1 saved a bare list of the visible ids. That list is already an order, so it
-// converts to the {order, hidden} layout without the user losing a thing.
-const migrateLegacyHoldingColumns = (parsed) => {
-  if (!Array.isArray(parsed) || !parsed.length) return null
-  const ids = [...parsed]
-  // One-time migration: surface the Closure Risk column for users whose saved
-  // column set predates it (insert next to NAV/Grade, not at the end).
-  if (!ids.includes('closure_risk')) {
-    const anchor = ids.indexOf('grade')
-    const at = anchor >= 0 ? anchor : (ids.indexOf('nav') >= 0 ? ids.indexOf('nav') + 1 : ids.length)
-    ids.splice(at, 0, 'closure_risk')
-  }
-  return layoutFromVisibleKeys(ids, [...new Set([...ids, ...ALL_HOLDING_COLUMN_IDS])])
-}
-
-const HOLDINGS_LOCKED_COLS = ['ticker']
-const HOLDINGS_COLUMN_PRESETS = [
-  { label: 'Current View', keys: DEFAULT_HOLDINGS_COLUMN_IDS, tip: 'The columns the dashboard ships with' },
-  {
-    label: 'All Calculated',
-    keys: [...DEFAULT_HOLDINGS_COLUMN_IDS, ...SPREADSHEET_DELTA_COLUMN_IDS],
-    tip: 'Everything, including the calculated spreadsheet additions',
-  },
-]
-const ALL_HOLDING_COLUMN_IDS = [...DEFAULT_HOLDINGS_COLUMN_IDS, ...SPREADSHEET_DELTA_COLUMN_IDS]
 
 const readOverviewReturnMode = () => {
   if (typeof window === 'undefined') return 'price'
@@ -232,7 +143,6 @@ const persistNavHistoryInterval = (interval) => {
 
 
 const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
-const fmtShares = (v) => Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
 const dripSharePrice = (h) => {
   const currentPrice = Number(h?.current_price || 0)
   if (currentPrice > 0) return currentPrice
@@ -256,15 +166,6 @@ const shortDate = (value) => {
 }
 // Date-only strings (YYYY-MM-DD) parse as UTC midnight, which can render a day
 // early in negative-UTC timezones. Pin to local midnight so dates match the editor.
-const localDateString = (value) => {
-  if (!value) return ''
-  const iso = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T00:00:00` : value
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString()
-}
-// Ex-div / pay dates arrive from the backend as MM/DD/YY strings (some null).
-const exPayDisplay = (value) => value || '—'
-// Sortable key from a MM/DD/YY string → YYYYMMDD integer (missing sorts last).
 const exPaySortKey = (value) => {
   if (!value) return -1
   const m = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/)
@@ -292,32 +193,6 @@ const CLOSURE_TIER = {
 }
 const closureRank = (info) => CLOSURE_TIER[info?.tier]?.rank ?? -2
 const isAtClosureRisk = (info) => ['watch', 'elevated', 'high'].includes(info?.tier)
-
-function ClosureRiskBadge({ info }) {
-  if (!info) return <span style={{ color: 'var(--text-dim)' }} title="Not an ETF — individual stocks aren't rated for closure risk.">—</span>
-  const tier = CLOSURE_TIER[info.tier] || CLOSURE_TIER.unknown
-  if (info.tier === 'ok' || info.tier === 'unknown') {
-    return <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }} title={info.reason || ''}>{tier.label}</span>
-  }
-  return (
-    <span
-      title={info.reason || ''}
-      style={{
-        display: 'inline-block',
-        padding: '1px 7px',
-        borderRadius: 10,
-        fontSize: '0.68rem',
-        fontWeight: 700,
-        color: tier.color,
-        background: `color-mix(in srgb, ${tier.color} 16%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${tier.color} 45%, transparent)`,
-        whiteSpace: 'nowrap',
-      }}
-    >
-      {tier.label}
-    </span>
-  )
-}
 
 // A warning banner the user can hide and re-open. `signature` identifies the
 // current situation (e.g. the set of at-risk tickers or stale accounts). Most
@@ -902,9 +777,9 @@ export default function Dashboard() {
   const [irrExclusionOpen, setIrrExclusionOpen] = useState(false)
   const [irrExclusionLoading, setIrrExclusionLoading] = useState(false)
   const [brokerImportStatus, setBrokerImportStatus] = useState(null)
-  const [sortCol, setSortCol] = useState(null)
-  const [sortAsc, setSortAsc] = useState(true)
-  const [rvyMode, setRvyMode] = useState('cur')
+  // The toggle that flipped this was removed along with the old holdings table;
+  // fixed at 'cur' is the behavior that toggle was already stuck at.
+  const rvyMode = 'cur'
   const { openTickerResearch } = useTickerResearch()
   const [portfolioCoverage, setPortfolioCoverage] = useState(null)
   const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
@@ -924,14 +799,6 @@ export default function Dashboard() {
   const [navBackfilling, setNavBackfilling] = useState(false)
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
-  // Left offsets (px) for each frozen holdings column, measured from the
-  // rendered header widths so freezing works with the auto-sized table.
-  const [frozenColLefts, setFrozenColLefts] = useState([])
-  // Total width of the pinned block, used as the horizontal scroll padding so
-  // columns settle flush against the freeze edge instead of half-hidden under it.
-  const [frozenPaneWidth, setFrozenPaneWidth] = useState(0)
-  const holdingsTableRef = useRef(null)
-  const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => buildDashboardCacheKey(selection, basisMode), [selection, basisMode])
   const selectedGradeDataKey = gradeDataKey(
@@ -989,24 +856,6 @@ export default function Dashboard() {
     start: gradeCustomStart,
     end: gradeCustomEnd,
     enabled: trackerChartsEnabled,
-  })
-  const overviewTrackerCategories = useMemo(
-    () => overviewCategoryId != null && overviewSubcategoryId == null ? [String(overviewCategoryId)] : [],
-    [overviewCategoryId, overviewSubcategoryId],
-  )
-  const overviewTrackerSubcategories = useMemo(
-    () => overviewSubcategoryId != null ? [String(overviewSubcategoryId)] : [],
-    [overviewSubcategoryId],
-  )
-  const scopedTrackerCharts = useSharedTrackerCharts({
-    pf,
-    profileQueryString,
-    period: gradePeriod,
-    start: gradeCustomStart,
-    end: gradeCustomEnd,
-    categories: overviewTrackerCategories,
-    subcategories: overviewTrackerSubcategories,
-    enabled: trackerChartsEnabled && overviewCategoryId != null,
   })
   const trackerPerformance = isLifetimePerformancePeriod(gradePeriod) && holdings.length
     ? lifetimeTotalReturnPayload(holdings)
@@ -1426,15 +1275,6 @@ export default function Dashboard() {
     }
   }, [overviewCategories, overviewCategoryId, overviewSubcategoryId])
 
-  const filteredTickerSet = useMemo(() => {
-    if (overviewCategoryId == null || !overviewCategories) return null
-    const category = overviewCategories.find(item => String(item.id) === String(overviewCategoryId))
-    if (!category) return null
-    return new Set((category.tickers || [])
-      .filter(item => overviewSubcategoryId == null || String(item.subcategory_id ?? '') === String(overviewSubcategoryId))
-      .map(item => String(item.ticker || '').toUpperCase()))
-  }, [overviewCategories, overviewCategoryId, overviewSubcategoryId])
-
   // Derived totals
   const totals = useMemo(() => {
     if (!holdings.length) return {}
@@ -1667,77 +1507,6 @@ export default function Dashboard() {
       .finally(() => setIrrExclusionLoading(false))
   }, [irrExclusionDraft, pf, selection])
 
-  const filteredEnrichedHoldings = useMemo(() => {
-    if (!filteredTickerSet) return enrichedHoldings
-    return enrichedHoldings.filter(holding => filteredTickerSet.has(String(holding.ticker || '').toUpperCase()))
-  }, [enrichedHoldings, filteredTickerSet])
-
-  // Sorting
-  const sorted = useMemo(() => {
-    if (!sortCol) return filteredEnrichedHoldings
-    return [...filteredEnrichedHoldings].sort((a, b) => {
-      let av = a[sortCol], bv = b[sortCol]
-      if (typeof av === 'string') {
-        av = (av || '').toLowerCase()
-        bv = (bv || '').toLowerCase()
-        return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av)
-      }
-      av = av || 0
-      bv = bv || 0
-      return sortAsc ? av - bv : bv - av
-    })
-  }, [filteredEnrichedHoldings, sortCol, sortAsc])
-
-  const calculatedTableTotals = useMemo(() => {
-    const rows = filteredEnrichedHoldings
-    const sum = key => rows.reduce((total, holding) => total + (Number(holding[key]) || 0), 0)
-    const purchaseValue = sum('purchase_value')
-    const currentValue = sum('current_value')
-    const gainLoss = sum('gain_or_loss')
-    const lifetimeIncome = sum('total_divs_received')
-    const annualIncome = sum('estim_payment_per_year')
-    const yieldRows = rows.filter(holding => Number(holding.purchase_value) > 0 && holding.annual_yield_on_cost != null)
-    const yieldBasis = yieldRows.reduce((total, holding) => total + Number(holding.purchase_value || 0), 0)
-    const avgYoc = yieldBasis
-      ? yieldRows.reduce((total, holding) => total + Number(holding.annual_yield_on_cost || 0) * Number(holding.purchase_value || 0), 0) / yieldBasis
-      : 0
-
-    return {
-      priceReturn: null,
-      totalReturn: null,
-      currentYield: currentValue ? annualIncome / currentValue : 0,
-      avgYoc,
-      ytdDivs: sum('ytd_divs'),
-      currentMonthIncome: sum('current_month_income'),
-      monthlyIncome: sum('approx_monthly_income'),
-      dripSharesMonthly: sum('drip_shares_monthly'),
-      monthlyReinvested: sum('monthly_income_reinvested'),
-      monthlyNotReinvested: sum('monthly_income_not_reinvested'),
-      annualIncome,
-      dripSharesYearly: sum('drip_shares_yearly'),
-      purchaseValue,
-      currentValue,
-      gainLoss,
-      dividendPaid: sum('dividend_paid'),
-      withdraw8Annual: sum('withdraw_8pct_cost_annually'),
-      withdraw8Monthly: sum('withdraw_8pct_per_month'),
-      cashNotReinvested: sum('cash_not_reinvested'),
-      totalCashReinvested: sum('total_cash_reinvested'),
-      sharesBoughtFromDividend: sum('shares_bought_from_dividend'),
-      sharesBoughtInYear: sum('shares_bought_in_year'),
-      sharesInMonth: sum('shares_in_month'),
-      lifetimeIncome,
-      currentMonthIncomeDelta: sum('current_month_income_delta'),
-    }
-  }, [filteredEnrichedHoldings])
-  const isHoldingsFiltered = overviewCategoryId != null
-  const scopedOpenPositionMetrics = useMemo(() => {
-    if (!isHoldingsFiltered) return null
-    if (isLifetimePerformancePeriod(gradePeriod)) {
-      return lifetimeTotalReturnPayload(filteredEnrichedHoldings).portfolio_metrics
-    }
-    return scopedTrackerCharts.data?.open_position_metrics || scopedTrackerCharts.data?.portfolio_metrics || null
-  }, [filteredEnrichedHoldings, gradePeriod, isHoldingsFiltered, scopedTrackerCharts.data])
   const fullTrackerPriceReturn = trackerPortfolioMetrics.price_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.price_return_pct) / 100
@@ -1756,31 +1525,6 @@ export default function Dashboard() {
   const fullTrackerTotalReturn = trackerPortfolioMetrics.total_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.total_return_pct) / 100
-  const tableTotals = isHoldingsFiltered
-    ? {
-        ...calculatedTableTotals,
-        priceReturn: scopedOpenPositionMetrics?.price_return_pct == null
-          ? null
-          : Number(scopedOpenPositionMetrics.price_return_pct) / 100,
-        totalReturn: scopedOpenPositionMetrics?.total_return_pct == null
-          ? null
-          : Number(scopedOpenPositionMetrics.total_return_pct) / 100,
-      }
-    : {
-        ...totals,
-        priceReturn: fullOpenLotPriceReturn,
-        totalReturn: fullOpenLotTotalReturn,
-      }
-  const tablePctOfAccount = useMemo(
-    () => filteredEnrichedHoldings.reduce((total, holding) => total + (Number(holding.pct_of_account) || 0), 0),
-    [filteredEnrichedHoldings],
-  )
-
-  const handleSort = useCallback((col) => {
-    setSortAsc(prev => sortCol === col ? !prev : (typeof filteredEnrichedHoldings[0]?.[col] === 'string'))
-    setSortCol(col)
-  }, [sortCol, filteredEnrichedHoldings])
-
   const refreshPortfolioCoverage = useCallback(() => {
     return pf('/api/portfolio-coverage')
       .then(safeJson)
@@ -1813,324 +1557,8 @@ export default function Dashboard() {
       .catch(() => {})
   }, [pf])
 
-  const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
-    const navBenchmark = String(benchmark || '').trim().toUpperCase()
-    setHoldings(prev => prev.map(h => (
-      h.ticker === ticker ? { ...h, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark } : h
-    )))
-    setTickerCoverageMeta(prev => ({
-      ...prev,
-      [ticker]: {
-        ...(prev[ticker] || {}),
-        nav_erosion_scope: scope,
-        nav_benchmark_override: navBenchmark,
-      },
-    }))
-    pf(`/api/holdings/${ticker}/nav-erosion-scope`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nav_erosion_scope: scope,
-        nav_benchmark_override: navBenchmark,
-      }),
-    })
-      .then(safeJson)
-      .then(() => refreshPortfolioCoverage())
-      .catch(() => {
-        setRefreshStatus(`Could not update ${ticker} NAV test setting.`)
-        setTimeout(() => setRefreshStatus(null), 3000)
-      })
-  }, [pf, refreshPortfolioCoverage])
-
-  const SortHeader = ({ col, children, align, tip, style, className, ...rest }) => (
-    <th
-      {...rest}
-      onClick={() => handleSort(col)}
-      className={className}
-      style={{ cursor: 'pointer', textAlign: align || 'left', userSelect: 'none', ...style }}
-      title={tip || ''}
-    >
-      {children}{tip ? ' \u24D8' : ''} {sortCol === col ? (sortAsc ? '↑' : '↓') : ''}
-    </th>
-  )
-
   const gradeColor = (v) => v >= 0 ? 'var(--pos)' : 'var(--neg)'
-  const riskNum = (v, loading = false) => {
-    if (v == null || !Number.isFinite(Number(v))) return loading ? '...' : '—'
-    return Number(v).toFixed(2)
-  }
-  const pfiVal = (v) => v == null ? 0 : v * 100
-  const pfiColor = (v) => { const p = pfiVal(v); return p >= 100 ? 'var(--pos)' : p >= 50 ? '#ffd700' : undefined }
-
   const currentMonth = new Date().toLocaleString('default', { month: 'long' })
-  const moneyOrDash = (value, digits = 2) => (
-    value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : fmt(value, digits)
-  )
-  const numberOrDash = (value, digits = 2) => (
-    value == null || value === '' || !Number.isFinite(Number(value)) ? '—' : Number(value).toLocaleString(undefined, { maximumFractionDigits: digits })
-  )
-  const textOrDash = (value) => (value == null || value === '' ? '—' : value)
-  const dateOrDash = (value) => {
-    if (!value) return '—'
-    return localDateString(value) || textOrDash(value)
-  }
-  const quantityOrDash = (value) => {
-    if (value == null || !Number.isFinite(Number(value))) return '—'
-    return Number.isInteger(value) ? value : parseFloat(Number(value).toFixed(3))
-  }
-  const holdingCellStyle = (column, extra) => ({
-    textAlign: column.align || 'left',
-    ...(extra || {}),
-  })
-  const renderNavCell = (h) => {
-    const cov = h._coverage
-    const navMeta = h._coverage_meta || {}
-    const navSeverity = navMeta.nav_erosion_severity || navSeverityFromRatio(cov)
-    const navColor = navSeverityColor(navSeverity)
-    const navScope = h.nav_erosion_scope || navMeta.nav_erosion_scope || 'auto'
-    const navBenchmark = h.nav_benchmark_override || navMeta.nav_benchmark_override || ''
-    const navBenchmarkInput = h.nav_benchmark_override || ''
-    const navLabel = navScope === 'test' ? 'Test' : navScope === 'skip' ? 'Skip' : 'Auto'
-    const navBenchmarkInvalid = navBenchmark && navMeta.benchmark_valid === false
-    const navTitle = navScope === 'skip'
-      ? 'Skipped by user override'
-      : navBenchmarkInvalid
-        ? `${navBenchmark} is not returning benchmark price history`
-        : navScope === 'test'
-          ? `Forced NAV test${navBenchmark || navMeta.benchmark ? ` vs ${navBenchmark || navMeta.benchmark}` : ''}`
-          : navMeta.nav_tested
-            ? `Auto-tested${navBenchmark || navMeta.benchmark ? ` vs ${navBenchmark || navMeta.benchmark}` : ''}`
-            : 'Auto: not tested by current NAV erosion rules'
-
-    return (
-      <td
-        style={{
-          textAlign: 'right',
-          color: cov == null ? 'var(--p-6f7890)' : navColor,
-          fontWeight: cov != null ? 600 : 400,
-          minWidth: 92,
-        }}
-        title={navTitle}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4 }}>
-          <span>{cov != null ? cov.toFixed(2) : '—'}</span>
-          <select
-            aria-label={`${h.ticker} NAV erosion testing`}
-            value={navScope}
-            onClick={e => e.stopPropagation()}
-            onChange={e => updateNavScope(h.ticker, e.target.value, navBenchmark)}
-            title={navTitle}
-            style={{
-              width: 46,
-              height: 20,
-              border: '1px solid var(--p-294b73)',
-              borderRadius: 4,
-              background: 'var(--p-0f1c36)',
-              color: navScope === 'test' ? 'var(--accent-bright)' : navScope === 'skip' ? 'var(--warning-money)' : 'var(--p-9aa8bd)',
-              fontSize: '0.62rem',
-              padding: '0 2px',
-            }}
-          >
-            <option value="auto">Auto</option>
-            <option value="test">Test</option>
-            <option value="skip">Skip</option>
-          </select>
-        </div>
-        <input
-          aria-label={`${h.ticker} NAV benchmark override`}
-          value={navBenchmarkInput}
-          placeholder={navMeta.benchmark || 'bench'}
-          onClick={e => e.stopPropagation()}
-          onChange={e => {
-            const value = e.target.value.toUpperCase()
-            setHoldings(prev => prev.map(row => (
-              row.ticker === h.ticker ? { ...row, nav_benchmark_override: value } : row
-            )))
-          }}
-          onBlur={e => updateNavScope(h.ticker, navScope, e.target.value)}
-          onKeyDown={e => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-          }}
-          title="Optional benchmark override, e.g. QQQ, GLD, BTC-USD, or BTC-USD+GLD"
-          style={{
-            width: 74,
-            marginTop: 2,
-            border: navBenchmarkInvalid ? '1px solid var(--neg)' : '1px solid var(--p-203a5f)',
-            borderRadius: 4,
-            background: 'var(--p-0d1830)',
-            color: navBenchmarkInvalid ? 'var(--p-ffb3b3)' : navBenchmark ? 'var(--p-d7e8ff)' : 'var(--p-7d8799)',
-            fontSize: '0.58rem',
-            padding: '1px 3px',
-            textAlign: 'right',
-          }}
-        />
-        <div style={{ fontSize: '0.58rem', color: 'var(--p-7d8799)', lineHeight: 1.1 }}>{navLabel}</div>
-      </td>
-    )
-  }
-  const holdingsColumns = (() => {
-    const totals = tableTotals
-    return [
-    { id: 'ticker', label: 'Ticker', name: 'Ticker', sortKey: 'ticker', group: 'Current', defaultVisible: true, render: h => (
-      <td>
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault()
-            openTickerResearch(h.ticker, {
-              holding: h,
-              coverage: h._coverage,
-              coverageMeta: h._coverage_meta,
-              closure: tickerClosureRisk[h.ticker],
-            })
-          }}
-          style={{ color: 'var(--accent-bright)', fontWeight: 600 }}
-          title="Open ticker research sheet"
-        >
-          {h.ticker}
-        </a>
-      </td>
-    ) },
-    { id: 'description', label: 'Desc', name: 'Description', sortKey: 'description', group: 'Current', defaultVisible: true, tip: 'Security description / name', render: h => <td style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.description || undefined}>{textOrDash(h.description)}</td> },
-    { id: 'category', label: 'Cat', name: 'Category', sortKey: 'category', group: 'Current', defaultVisible: true, tip: 'Investment category', render: h => <td>{textOrDash(h.category)}</td> },
-    { id: 'div_frequency', label: 'Freq', name: 'Dividend Frequency', sortKey: 'div_frequency', group: 'Current', defaultVisible: true, align: 'center', tip: 'Dividend payment frequency (M=Monthly, Q=Quarterly, W=Weekly)', render: h => <td style={{ textAlign: 'center' }}>{textOrDash(h.div_frequency)}</td> },
-    { id: 'purchase_date', label: 'Purchased', name: 'Date Purchased', sortKey: 'purchase_date', group: 'Current', defaultVisible: true, render: h => <td>{dateOrDash(h.purchase_date)}</td> },
-    { id: 'ex_div_date', label: 'Ex-Div', name: 'Ex-Dividend Date', sortKey: '_ex_div_sort', group: 'Current', defaultVisible: true, tip: 'Ex-dividend date — own the shares before this date to receive the dividend', render: h => <td style={{ whiteSpace: 'nowrap' }}>{exPayDisplay(h.ex_div_date)}</td> },
-    { id: 'div_pay_date', label: 'Pay Date', name: 'Dividend Pay Date', sortKey: '_pay_date_sort', group: 'Current', defaultVisible: true, tip: 'Dividend payment (pay) date resolved from confirmed schedules, imported transaction patterns, or the saved schedule fallback', render: h => (
-      <td
-        style={{ whiteSpace: 'nowrap' }}
-        title={h.div_pay_date_estimated ? 'Estimated from dividend schedule and payment history' : 'Confirmed pay date'}
-      >
-        {h.div_pay_date_estimated ? '~' : ''}{exPayDisplay(h.div_pay_date)}
-      </td>
-    ) },
-    { id: 'quantity', label: 'Qty', name: 'Quantity', sortKey: 'quantity', group: 'Current', defaultVisible: true, align: 'right', tip: 'Number of shares held', render: h => <td style={{ textAlign: 'right' }}>{quantityOrDash(h.quantity)}</td> },
-    { id: 'price_paid', label: 'Paid', name: 'Price Paid', sortKey: 'price_paid', group: 'Current', defaultVisible: true, align: 'right', tip: 'Price paid per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.price_paid, 4)}</td> },
-    { id: 'current_price', label: 'Price', name: 'Current Price', sortKey: 'current_price', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current market price per share', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_price)}</td> },
-    { id: 'pct_of_account', label: '%Acct', name: 'Percent of Account', sortKey: 'pct_of_account', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percent of total account value', render: h => <td style={{ textAlign: 'right' }}>{pct(h.pct_of_account)}</td>, footer: () => pct(tablePctOfAccount) },
-    { id: 'price_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeG/L' : 'PrRtn', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Price G/L' : 'Open Lots Price Return', sortKey: 'price_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : `${OPEN_LOT_SCOPE_NOTE} The footer uses this same open-position scope; the Tracker Price Return headline separately retains fully closed positions.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.price_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.price_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.priceReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? COST_BASIS_SCOPE_NOTE : OPEN_LOT_SCOPE_NOTE}>{pct(totals.priceReturn)}</span> },
-    { id: 'total_return_pct', label: isLifetimePerformancePeriod(gradePeriod) ? 'LifeTR' : 'OLTR', name: isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Open Lots Total Return', sortKey: 'total_return_pct', group: 'Current', defaultVisible: true, align: 'right', tip: isLifetimePerformancePeriod(gradePeriod) ? 'Cost-basis total return for open holdings; not a transaction-aware market return.' : `${OPEN_LOT_SCOPE_NOTE} The footer matches the Open Lots Total Return % headline card.`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.total_return_pct) }} title={formatPerformanceRange(h.tracker_actual_start_date, h.tracker_actual_end_date)}>{pct(h.total_return_pct)}</td>, footer: () => <span style={{ color: gradeColor(totals.totalReturn) }} title={isLifetimePerformancePeriod(gradePeriod) ? undefined : OPEN_LOT_SCOPE_NOTE}>{pct(totals.totalReturn)}</span> },
-    { id: 'beta', label: 'Beta', name: 'Benchmark Beta', sortKey: '_beta_sort', group: 'Current', defaultVisible: true, align: 'right', tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ", render: h => {
-      const risk = h._risk || {}
-      return (
-        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} title={risk.beta_benchmark ? `Beta regressed against ${risk.beta_benchmark}, the best-fitting benchmark for this ticker.` : 'Beta unavailable'}>
-          {riskNum(risk.beta, tickerRiskLoading)}
-          {risk.beta_benchmark && risk.beta != null && <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 3 }}>vs {risk.beta_benchmark}</span>}
-        </td>
-      )
-    } },
-    { id: 'delta_up', label: 'Delta Up', name: 'Benchmark Up Delta', sortKey: '_delta_up_sort', group: 'Current', defaultVisible: true, align: 'right', tip: 'Approximate effective delta on benchmark up-days from return regression; lower than down delta can indicate capped upside', render: h => <td style={{ textAlign: 'right', color: 'var(--p-2f9d55)' }} title={h._risk?.beta_benchmark ? `Approximate effective delta on ${h._risk.beta_benchmark} up-days. This is a price-regression proxy, not true option delta.` : 'Approximate up-delta unavailable'}>{riskNum(h._risk?.delta_up, tickerRiskLoading)}</td> },
-    { id: 'delta_down', label: 'Delta Down', name: 'Benchmark Down Delta', sortKey: '_delta_down_sort', group: 'Current', defaultVisible: true, align: 'right', tip: 'Approximate effective delta on benchmark down-days from return regression; higher than up delta can indicate fuller downside participation', render: h => <td style={{ textAlign: 'right', color: 'var(--p-d94b4b)' }} title={h._risk?.beta_benchmark ? `Approximate effective delta on ${h._risk.beta_benchmark} down-days. This is a price-regression proxy, not true option delta.` : 'Approximate down-delta unavailable'}>{riskNum(h._risk?.delta_down, tickerRiskLoading)}</td> },
-    { id: 'ret_vs_yld', label: 'RvY', name: 'Return vs Yield', sortKey: 'ret_vs_yld_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Total return vs yield, both over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)', renderHeader: () => (
-      <th key="ret_vs_yld" style={{ textAlign: 'center', whiteSpace: 'nowrap', cursor: 'default', userSelect: 'none' }} title="Total return vs yield, both over the selected range — the annual yield is scaled to that window so short periods stay comparable. Good means total return exceeds yield, Poor means yield exceeds total return (price erosion)">
-        <span style={{ cursor: 'pointer' }} onClick={() => handleSort('ret_vs_yld_sort')}>RvY</span>{' '}
-        <span
-          onClick={() => setRvyMode(m => m === 'yoc' ? 'cur' : 'yoc')}
-          title={rvyMode === 'yoc' ? 'Using Yield on Cost — click to switch to Current Yield' : 'Using Current Yield — click to switch to Yield on Cost'}
-          style={{ fontSize: '0.65rem', background: rvyMode === 'yoc' ? 'var(--p-1a3a5c)' : 'var(--p-1a3a2a)', color: rvyMode === 'yoc' ? 'var(--accent-bright)' : 'var(--pos)', border: `1px solid ${rvyMode === 'yoc' ? 'var(--p-294b73)' : 'var(--p-2a5c3a)'}`, borderRadius: 3, padding: '1px 4px', cursor: 'pointer', fontWeight: 600 }}
-        >
-          {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
-        </span>
-      </th>
-    ), render: h => <td style={{ textAlign: 'center', color: h.ret_vs_yld?.color || 'var(--p-6f7890)', fontWeight: 600 }} title={h.ret_vs_yld ? `Total Return ${h.ret_vs_yld.totalReturnPct?.toFixed(2)}% vs Yield ${h.ret_vs_yld.yieldOnCost?.toFixed(2)}% over this range${h.rvy_annual_yield_pct != null ? ` (${Number(h.rvy_annual_yield_pct).toFixed(2)}% annual)` : ''} · spread ${h.ret_vs_yld.spread?.toFixed(2)}%` : 'N/A'}>{h.ret_vs_yld?.label || '—'}</td> },
-    { id: 'div', label: 'Div$', name: 'Dividend per Share', sortKey: 'div', group: 'Current', defaultVisible: true, align: 'right', tip: 'Last dividend paid per share', render: h => <td style={{ textAlign: 'right' }}>{h.div != null && h.div > 0 ? formatMoney(h.div, { digits: 4 }) : '—'}</td> },
-    { id: 'current_annual_yield', label: 'CurYld', name: 'Current Annual Yield', sortKey: 'current_annual_yield', group: 'Current', defaultVisible: true, align: 'right', tip: 'Current annual dividend yield based on market price', render: h => <td style={{ textAlign: 'right' }}>{pct(h.current_annual_yield)}</td>, footer: () => pct(totals.currentYield) },
-    { id: 'annual_yield_on_cost', label: 'YOC', name: 'Yield on Cost', sortKey: 'annual_yield_on_cost', group: 'Current', defaultVisible: true, align: 'right', tip: 'Annual dividend yield based on your cost basis', render: h => <td style={{ textAlign: 'right' }}>{pct(h.annual_yield_on_cost)}</td>, footer: () => pct(totals.avgYoc) },
-    { id: 'ytd_divs', label: 'YTD', name: 'YTD Dividends', sortKey: 'ytd_divs', group: 'Current', defaultVisible: true, align: 'right', tip: 'Year-to-date dividends received', render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.ytd_divs)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{fmt(totals.ytdDivs)}</span> },
-    { id: 'current_month_income', label: currentMonth, name: `${currentMonth} Income`, sortKey: 'current_month_income', group: 'Current', defaultVisible: true, align: 'right', tip: `Dividend income received in ${currentMonth}`, render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.current_month_income)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{fmt(totals.currentMonthIncome)}</span> },
-    { id: 'approx_monthly_income', label: 'Mo$', name: 'Estimated Monthly Income', sortKey: 'approx_monthly_income', group: 'Current', defaultVisible: true, align: 'right', tip: 'Estimated monthly dividend income', render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.approx_monthly_income)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{fmt(totals.monthlyIncome)}</span> },
-    { id: 'drip_shares_monthly', label: 'MoShr', name: 'Estimated Monthly DRIP Shares', sortKey: 'drip_shares_monthly', group: 'Current', defaultVisible: true, align: 'right', tip: 'Estimated shares bought per month if 100% of monthly dividend income is reinvested at the current price', render: h => <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(h.drip_shares_monthly)}</td>, footer: () => <span style={{ color: 'var(--accent-soft)' }}>{fmtShares(totals.dripSharesMonthly)}</span> },
-    { id: 'monthly_income_reinvested', label: 'DRIP$', name: 'Estimated Monthly Income Reinvested', sortKey: 'monthly_income_reinvested', group: 'Current', defaultVisible: true, align: 'right', tip: 'Monthly income being reinvested (DRIP)', render: h => <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{fmt(h.monthly_income_reinvested)}</td>, footer: () => <span style={{ color: 'var(--accent-bright)' }}>{fmt(totals.monthlyReinvested)}</span> },
-    { id: 'monthly_income_not_reinvested', label: 'Cash$', name: 'Estimated Monthly Income Not Reinvested', sortKey: 'monthly_income_not_reinvested', group: 'Current', defaultVisible: true, align: 'right', tip: 'Monthly income NOT being reinvested (cash)', render: h => <td style={{ textAlign: 'right', color: 'var(--warning-money)' }}>{fmt(h.monthly_income_not_reinvested)}</td>, footer: () => <span style={{ color: 'var(--warning-money)' }}>{fmt(totals.monthlyNotReinvested)}</span> },
-    { id: 'estim_payment_per_year', label: 'Yr$', name: 'Estimated Annual Payment', sortKey: 'estim_payment_per_year', group: 'Current', defaultVisible: true, align: 'right', tip: 'Estimated annual dividend income', render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmt(h.estim_payment_per_year)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{fmt(totals.annualIncome)}</span> },
-    { id: 'drip_shares_yearly', label: 'YrShr', name: 'Estimated Yearly DRIP Shares', sortKey: 'drip_shares_yearly', group: 'Current', defaultVisible: true, align: 'right', tip: 'Estimated shares bought per year if 100% of annual dividend income is reinvested at the current price', render: h => <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{fmtShares(h.drip_shares_yearly)}</td>, footer: () => <span style={{ color: 'var(--accent-soft)' }}>{fmtShares(totals.dripSharesYearly)}</span> },
-    { id: 'paid_for_itself', label: 'PFI%', name: 'Paid For Itself', sortKey: 'paid_for_itself', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percentage of original cost recovered through dividends', render: h => <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>{h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}</td> },
-    { id: 'nav', label: 'NAV', name: 'NAV Erosion', sortKey: '_coverage', group: 'Current', defaultVisible: true, align: 'right', tip: 'NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.', render: renderNavCell },
-    { id: 'closure_risk', label: 'Close?', name: 'Closure Risk', sortKey: '_closure_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Risk the ETF issuer shuts the fund down for being too small to be profitable. Estimated from AUM × expense ratio (annual fee revenue) with AUM floors and a grace period for newly launched funds. Individual stocks are not rated.', render: h => <td style={{ textAlign: 'center' }}><ClosureRiskBadge info={h._closure} /></td> },
-    { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade for the selected market window. Blank on Life — Life is cost-basis G/L and does not produce a grade.', render: h => <td style={{ textAlign: 'center' }}>{activeTickerGrades[h.ticker] ? <GradeBadge grade={activeTickerGrades[h.ticker].grade} /> : '—'}</td> },
-    { id: 'percent_change', label: '% Chg', name: 'Daily Percent Change', sortKey: 'percent_change', group: 'Calculated Additions', align: 'right', tip: 'Daily percent change calculated from the current holding data', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.percent_change || 0) }}>{pct(h.percent_change)}</td> },
-    { id: 'purchase_value', label: 'Invested', name: 'Purchase Value', sortKey: 'purchase_value', group: 'Calculated Additions', align: 'right', tip: 'Cost basis / purchase value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.purchase_value)}</td>, footer: () => moneyOrDash(totals.purchaseValue) },
-    { id: 'current_value', label: 'Value', name: 'Current Value', sortKey: 'current_value', group: 'Calculated Additions', align: 'right', tip: 'Current market value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_value)}</td>, footer: () => moneyOrDash(totals.currentValue) },
-    { id: 'gain_or_loss', label: 'Gain$', name: 'Gain/Loss Dollars', sortKey: 'gain_or_loss', group: 'Calculated Additions', align: 'right', tip: COST_BASIS_SCOPE_NOTE, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.gain_or_loss || 0) }}>{moneyOrDash(h.gain_or_loss)}</td>, footer: () => <span style={{ color: gradeColor(totals.gainLoss || 0) }} title={COST_BASIS_SCOPE_NOTE}>{moneyOrDash(totals.gainLoss)}</span> },
-    { id: 'reinvest', label: 'DRIP', name: 'DRIP Flag', sortKey: 'reinvest', group: 'Calculated Additions', align: 'center', tip: 'Whether dividends are reinvested for this holding', render: h => <td style={{ textAlign: 'center' }}>{textOrDash(h.reinvest)}</td> },
-    { id: 'dividend_paid', label: 'Div Paid', name: 'Dividend Paid', sortKey: 'dividend_paid', group: 'Calculated Additions', align: 'right', tip: 'Dividend paid amount calculated from the current holding data', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.dividend_paid)}</td>, footer: () => moneyOrDash(totals.dividendPaid) },
-    { id: 'withdraw_8pct_cost_annually', label: '8% Yr Wd', name: '8% Annual Withdrawal', sortKey: 'withdraw_8pct_cost_annually', group: 'Calculated Additions', align: 'right', tip: '8% annual withdrawal based on cost', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.withdraw_8pct_cost_annually)}</td>, footer: () => moneyOrDash(totals.withdraw8Annual) },
-    { id: 'withdraw_8pct_per_month', label: '8% Mo Wd', name: '8% Monthly Withdrawal', sortKey: 'withdraw_8pct_per_month', group: 'Calculated Additions', align: 'right', tip: '8% monthly withdrawal based on cost', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.withdraw_8pct_per_month)}</td>, footer: () => moneyOrDash(totals.withdraw8Monthly) },
-    { id: 'cash_not_reinvested', label: 'Cash Not', name: 'Cash Not Reinvested', sortKey: 'cash_not_reinvested', group: 'Calculated Additions', align: 'right', tip: 'Cash not reinvested from current holding data', render: h => <td style={{ textAlign: 'right', color: 'var(--warning-money)' }}>{moneyOrDash(h.cash_not_reinvested)}</td>, footer: () => <span style={{ color: 'var(--warning-money)' }}>{moneyOrDash(totals.cashNotReinvested)}</span> },
-    { id: 'total_cash_reinvested', label: 'Cash Reinv', name: 'Cash Reinvested', sortKey: 'total_cash_reinvested', group: 'Calculated Additions', align: 'right', tip: 'Cash reinvested from current holding data', render: h => <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{moneyOrDash(h.total_cash_reinvested)}</td>, footer: () => <span style={{ color: 'var(--accent-bright)' }}>{moneyOrDash(totals.totalCashReinvested)}</span> },
-    { id: 'shares_bought_from_dividend', label: 'Div Shares', name: 'Shares From Dividends', sortKey: 'shares_bought_from_dividend', group: 'Calculated Additions', align: 'right', tip: 'Shares bought from dividend reinvestment', render: h => <td style={{ textAlign: 'right' }}>{numberOrDash(h.shares_bought_from_dividend, 3)}</td>, footer: () => numberOrDash(totals.sharesBoughtFromDividend, 3) },
-    { id: 'shares_bought_in_year', label: 'Calc YrShr', name: 'Calculated Shares/Year', sortKey: 'shares_bought_in_year', group: 'Calculated Additions', align: 'right', tip: 'Calculated annual shares from dividend reinvestment', render: h => <td style={{ textAlign: 'right' }}>{numberOrDash(h.shares_bought_in_year, 3)}</td>, footer: () => numberOrDash(totals.sharesBoughtInYear, 3) },
-    { id: 'shares_in_month', label: 'Calc MoShr', name: 'Calculated Shares/Month', sortKey: 'shares_in_month', group: 'Calculated Additions', align: 'right', tip: 'Calculated monthly shares from dividend reinvestment', render: h => <td style={{ textAlign: 'right' }}>{numberOrDash(h.shares_in_month, 3)}</td>, footer: () => numberOrDash(totals.sharesInMonth, 3) },
-    { id: 'total_divs_received', label: 'Tot Divs', name: 'Total Dividends Received', sortKey: 'total_divs_received', group: 'Calculated Additions', align: 'right', tip: 'Lifetime dividends received', render: h => <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{moneyOrDash(h.total_divs_received)}</td>, footer: () => <span style={{ color: 'var(--pos)' }}>{moneyOrDash(totals.lifetimeIncome)}</span> },
-    { id: 'current_month_income_delta', label: `${currentMonth} Δ`, name: `${currentMonth} Income Difference`, sortKey: 'current_month_income_delta', group: 'Calculated Additions', align: 'right', tip: `${currentMonth} income minus estimated monthly income`, render: h => <td style={{ textAlign: 'right', color: gradeColor(h.current_month_income_delta || 0) }}>{moneyOrDash(h.current_month_income_delta)}</td>, footer: () => <span style={{ color: gradeColor(totals.currentMonthIncomeDelta || 0) }}>{moneyOrDash(totals.currentMonthIncomeDelta)}</span> },
-    ]
-  })()
-  // Column visibility AND order, shared with Manage Holdings and Gains & Losses.
-  // Declared here rather than with the other hooks because it needs the built
-  // column list, and it still sits above every early return.
-  const holdingsLayout = useColumnLayout({
-    storageKey: HOLDINGS_COLUMN_PREF_KEY,
-    columns: holdingsColumns,
-    keyField: 'id',
-    lockedKeys: HOLDINGS_LOCKED_COLS,
-    defaultLayout: allKeys => layoutFromVisibleKeys(DEFAULT_HOLDINGS_COLUMN_IDS, allKeys),
-    migrate: migrateLegacyHoldingColumns,
-  })
-  const effectiveVisibleHoldingColumns = holdingsLayout.activeColumns
-  const visibleColumnCount = effectiveVisibleHoldingColumns.length
-  const frozenColCount = Math.min(FROZEN_HOLDING_COLS, visibleColumnCount)
-  const visibleHoldingColumnSignature = effectiveVisibleHoldingColumns.map(column => column.id).join('|')
-  // Sticky style for a frozen holdings cell (header/body/footer). Background,
-  // z-index and hover live in CSS (.holdings-table .frozen-col).
-  const frozenColStyle = (index) => (
-    index < frozenColCount ? { position: 'sticky', left: frozenColLefts[index] ?? 0 } : null
-  )
-  // Class names for a frozen cell. The last frozen column also gets
-  // .frozen-col-edge, which draws the single Excel-style freeze divider.
-  const frozenColClass = (index, base) => {
-    if (index >= frozenColCount) return base || undefined
-    const parts = [base, 'frozen-col']
-    if (index === frozenColCount - 1) parts.push('frozen-col-edge')
-    return parts.filter(Boolean).join(' ')
-  }
-
-
-  // Measure the rendered widths of the frozen header cells and turn them into
-  // cumulative left offsets so the pinned columns line up with an auto-sized
-  // table. Re-runs when the visible columns change; a ResizeObserver + resize
-  // listener keep offsets correct as content or the window changes width.
-  useLayoutEffect(() => {
-    const headRow = holdingsHeadRowRef.current
-    if (!headRow) return undefined
-    const measure = () => {
-      const cells = Array.from(headRow.children)
-      const count = Math.min(FROZEN_HOLDING_COLS, cells.length)
-      const lefts = []
-      let acc = 0
-      for (let i = 0; i < count; i++) {
-        lefts.push(acc)
-        acc += cells[i].getBoundingClientRect().width
-      }
-      setFrozenColLefts(prev => (
-        prev.length === lefts.length && prev.every((v, i) => Math.abs(v - lefts[i]) < 0.5)
-      ) ? prev : lefts)
-      setFrozenPaneWidth(prev => Math.abs(prev - acc) < 0.5 ? prev : acc)
-    }
-    measure()
-    const table = holdingsTableRef.current
-    let observer
-    if (typeof ResizeObserver !== 'undefined' && table) {
-      observer = new ResizeObserver(measure)
-      observer.observe(table)
-    }
-    window.addEventListener('resize', measure)
-    return () => {
-      if (observer) observer.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-    // `loading` is included so we re-measure once the table mounts (the
-    // component renders a spinner and no table while loading).
-  }, [visibleHoldingColumnSignature, loading])
 
   const currentMonthSub = useMemo(() => {
     if (!incomeSummary) return null
