@@ -1095,6 +1095,13 @@ function safeJson(r) {
   return r.json()
 }
 
+function gradeDataKey(cacheKey, period, customStart, customEnd) {
+  const rangeKey = period === 'custom'
+    ? `${period}:${customStart || ''}:${customEnd || ''}`
+    : period
+  return `${cacheKey}|${rangeKey}`
+}
+
 export default function Dashboard() {
   const pf = useProfileFetch()
   const { isDark } = useTheme()
@@ -1109,6 +1116,7 @@ export default function Dashboard() {
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
+  const [gradeResultKey, setGradeResultKey] = useState(null)
   const [initialGradeCustomDates] = useState(() => readSharedPerformanceRange())
   const [gradePeriod, setGradePeriod] = useState(initialGradeCustomDates.period)
   const [gradeCustomStart, setGradeCustomStart] = useState(initialGradeCustomDates.start)
@@ -1157,6 +1165,29 @@ export default function Dashboard() {
   const holdingsHeadRowRef = useRef(null)
   const navChartRef = useRef(null)
   const dashboardCacheKey = useMemo(() => buildDashboardCacheKey(selection, basisMode), [selection, basisMode])
+  const selectedGradeDataKey = gradeDataKey(
+    dashboardCacheKey,
+    gradePeriod,
+    gradeCustomStart,
+    gradeCustomEnd,
+  )
+  const gradeResultsAreCurrent = gradeResultKey === selectedGradeDataKey
+  const activeTickerGrades = useMemo(
+    () => gradeResultsAreCurrent ? tickerGrades : {},
+    [gradeResultsAreCurrent, tickerGrades],
+  )
+  const activeTickerRisk = useMemo(
+    () => gradeResultsAreCurrent ? tickerRisk : {},
+    [gradeResultsAreCurrent, tickerRisk],
+  )
+  const activeTickerClosureRisk = useMemo(
+    () => gradeResultsAreCurrent ? tickerClosureRisk : {},
+    [gradeResultsAreCurrent, tickerClosureRisk],
+  )
+  const activePortfolioGrade = useMemo(
+    () => gradeResultsAreCurrent ? portfolioGrade : {},
+    [gradeResultsAreCurrent, portfolioGrade],
+  )
   const currentProfile = useMemo(
     () => profiles.find(p => p.id === profileId) || null,
     [profiles, profileId],
@@ -1272,6 +1303,7 @@ export default function Dashboard() {
       setTickerClosureRisk(cached.tickerClosureRisk || {})
       setTickerRiskLoading(false)
       setPortfolioGrade(cached.portfolioGrade || {})
+      setGradeResultKey(gradeDataKey(dashboardCacheKey, '1y', '', ''))
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
       setPortfolioCoverageSeverity(cached.portfolioCoverageSeverity ?? null)
       setTickerCoverage(cached.tickerCoverage || {})
@@ -1292,6 +1324,7 @@ export default function Dashboard() {
       setTickerClosureRisk({})
       setTickerRiskLoading(false)
       setPortfolioGrade({})
+      setGradeResultKey(null)
       setPortfolioCoverage(null)
       setPortfolioCoverageSeverity(null)
       setTickerCoverage({})
@@ -1484,7 +1517,9 @@ export default function Dashboard() {
     // It re-fetches without reloading any unrelated Dashboard data source.
     if (!hasHoldings) return undefined
     if (gradeRangeError) {
+      setTickerRiskLoading(false)
       setGradeStatus(gradeRangeError)
+      setGradeResultKey(null)
       return undefined
     }
     // Life is cost-basis G/L, not a market window. Skip the request and blank
@@ -1495,6 +1530,8 @@ export default function Dashboard() {
       setPortfolioGrade({})
       setTickerGrades({})
       setTickerRisk({})
+      setTickerClosureRisk({})
+      setGradeResultKey(null)
       return undefined
     }
 
@@ -1526,12 +1563,13 @@ export default function Dashboard() {
       })
       .then(g => {
         if (!active || !g) return
-        if (g.ticker_grades) setTickerGrades(g.ticker_grades)
-        if (g.ticker_risk) setTickerRisk(g.ticker_risk)
-        if (g.ticker_closure_risk) setTickerClosureRisk(g.ticker_closure_risk)
+        setTickerGrades(g.ticker_grades || {})
+        setTickerRisk(g.ticker_risk || {})
+        setTickerClosureRisk(g.ticker_closure_risk || {})
         if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) {
           setPortfolioGrade(g.portfolio_grade)
         }
+        setGradeResultKey(selectedGradeDataKey)
         setGradeStatus('Grades loaded.')
         setTimeout(() => { if (active) setGradeStatus(null) }, 3000)
       })
@@ -1557,6 +1595,7 @@ export default function Dashboard() {
     hasHoldings,
     selection,
     pf,
+    selectedGradeDataKey,
   ])
 
   useEffect(() => {
@@ -1566,10 +1605,10 @@ export default function Dashboard() {
       portfolioValue,
       weekPayments,
       weekToday,
-      tickerGrades: gradePeriod === '1y' ? tickerGrades : {},
-      tickerRisk: gradePeriod === '1y' ? tickerRisk : {},
-      tickerClosureRisk: gradePeriod === '1y' ? tickerClosureRisk : {},
-      portfolioGrade: gradePeriod === '1y' ? portfolioGrade : {},
+      tickerGrades: gradePeriod === '1y' ? activeTickerGrades : {},
+      tickerRisk: gradePeriod === '1y' ? activeTickerRisk : {},
+      tickerClosureRisk: gradePeriod === '1y' ? activeTickerClosureRisk : {},
+      portfolioGrade: gradePeriod === '1y' ? activePortfolioGrade : {},
       portfolioCoverage,
       portfolioCoverageSeverity,
       tickerCoverage,
@@ -1586,10 +1625,10 @@ export default function Dashboard() {
     portfolioValue,
     weekPayments,
     weekToday,
-    tickerGrades,
-    tickerRisk,
-    tickerClosureRisk,
-    portfolioGrade,
+    activeTickerGrades,
+    activeTickerRisk,
+    activeTickerClosureRisk,
+    activePortfolioGrade,
     gradePeriod,
     portfolioCoverage,
     portfolioCoverageSeverity,
@@ -1680,15 +1719,15 @@ export default function Dashboard() {
   }, [holdings, incomeSummary, portfolioValue])
 
   const marketExposure = useMemo(() => {
-    const betas = portfolioGrade?.benchmark_betas || {}
+    const betas = activePortfolioGrade?.benchmark_betas || {}
     const selectedBeta = betaBenchmark === 'nasdaq'
-      ? (betas.nasdaq ?? portfolioGrade?.beta_nasdaq)
-      : (betas.sp500 ?? portfolioGrade?.beta_sp500 ?? portfolioGrade?.beta)
+      ? (betas.nasdaq ?? activePortfolioGrade?.beta_nasdaq)
+      : (betas.sp500 ?? activePortfolioGrade?.beta_sp500 ?? activePortfolioGrade?.beta)
     const betaNumber = selectedBeta == null ? null : Number(selectedBeta)
     const currentValue = Number(totals.currentValue || 0)
     const betaAdjustedExposure = Number.isFinite(betaNumber) ? currentValue * betaNumber : null
     return { beta: betaNumber, betaAdjustedExposure }
-  }, [portfolioGrade, betaBenchmark, totals.currentValue])
+  }, [activePortfolioGrade, betaBenchmark, totals.currentValue])
 
   const trackerPortfolioMetrics = trackerPerformance?.portfolio_metrics || {}
   const trackerOpenPositionMetrics = trackerPerformance?.open_position_metrics || trackerPortfolioMetrics
@@ -1761,18 +1800,18 @@ export default function Dashboard() {
           ret_vs_yld_sort: rvy ? rvy.spread : -999,
           _coverage: tickerCoverage[h.ticker] ?? null,
           _coverage_meta: tickerCoverageMeta[h.ticker] || null,
-          _risk: tickerRisk[h.ticker] || null,
-          _closure: tickerClosureRisk[h.ticker] || null,
-          _closure_sort: closureRank(tickerClosureRisk[h.ticker]),
-          _beta_sort: tickerRisk[h.ticker]?.beta ?? -999,
-          _delta_up_sort: tickerRisk[h.ticker]?.delta_up ?? -999,
-          _delta_down_sort: tickerRisk[h.ticker]?.delta_down ?? -999,
+          _risk: activeTickerRisk[h.ticker] || null,
+          _closure: activeTickerClosureRisk[h.ticker] || null,
+          _closure_sort: closureRank(activeTickerClosureRisk[h.ticker]),
+          _beta_sort: activeTickerRisk[h.ticker]?.beta ?? -999,
+          _delta_up_sort: activeTickerRisk[h.ticker]?.delta_up ?? -999,
+          _delta_down_sort: activeTickerRisk[h.ticker]?.delta_down ?? -999,
           _ex_div_sort: exPaySortKey(h.ex_div_date),
           _pay_date_sort: exPaySortKey(h.div_pay_date),
-          _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[tickerGrades[h.ticker]?.grade] || 0,
+          _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[activeTickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, trackerPerformanceByTicker, tickerCoverage, tickerCoverageMeta, tickerGrades, tickerRisk, tickerClosureRisk, rvyMode])
+  }, [holdings, totals, trackerPerformanceByTicker, tickerCoverage, tickerCoverageMeta, activeTickerGrades, activeTickerRisk, activeTickerClosureRisk, rvyMode])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
   const dailyChangeAmount = Number(dailyChange?.amount)
@@ -2220,7 +2259,7 @@ export default function Dashboard() {
     { id: 'paid_for_itself', label: 'PFI%', name: 'Paid For Itself', sortKey: 'paid_for_itself', group: 'Current', defaultVisible: true, align: 'right', tip: 'Percentage of original cost recovered through dividends', render: h => <td style={{ textAlign: 'right', color: pfiColor(h.paid_for_itself), fontWeight: pfiVal(h.paid_for_itself) >= 100 ? 700 : 400 }}>{h.paid_for_itself == null ? '—' : (h.paid_for_itself * 100).toFixed(2) + '%'}</td> },
     { id: 'nav', label: 'NAV', name: 'NAV Erosion', sortKey: '_coverage', group: 'Current', defaultVisible: true, align: 'right', tip: 'NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.', render: renderNavCell },
     { id: 'closure_risk', label: 'Close?', name: 'Closure Risk', sortKey: '_closure_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Risk the ETF issuer shuts the fund down for being too small to be profitable. Estimated from AUM × expense ratio (annual fee revenue) with AUM floors and a grace period for newly launched funds. Individual stocks are not rated.', render: h => <td style={{ textAlign: 'center' }}><ClosureRiskBadge info={h._closure} /></td> },
-    { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade for the selected market window. Blank on Life — Life is cost-basis G/L and does not produce a grade.', render: h => <td style={{ textAlign: 'center' }}>{tickerGrades[h.ticker] ? <GradeBadge grade={tickerGrades[h.ticker].grade} /> : '—'}</td> },
+    { id: 'grade', label: 'Grd', name: 'Composite Grade', sortKey: '_grade_sort', group: 'Current', defaultVisible: true, align: 'center', tip: 'Composite grade for the selected market window. Blank on Life — Life is cost-basis G/L and does not produce a grade.', render: h => <td style={{ textAlign: 'center' }}>{activeTickerGrades[h.ticker] ? <GradeBadge grade={activeTickerGrades[h.ticker].grade} /> : '—'}</td> },
     { id: 'percent_change', label: '% Chg', name: 'Daily Percent Change', sortKey: 'percent_change', group: 'Calculated Additions', align: 'right', tip: 'Daily percent change calculated from the current holding data', render: h => <td style={{ textAlign: 'right', color: gradeColor(h.percent_change || 0) }}>{pct(h.percent_change)}</td> },
     { id: 'purchase_value', label: 'Invested', name: 'Purchase Value', sortKey: 'purchase_value', group: 'Calculated Additions', align: 'right', tip: 'Cost basis / purchase value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.purchase_value)}</td>, footer: () => moneyOrDash(totals.purchaseValue) },
     { id: 'current_value', label: 'Value', name: 'Current Value', sortKey: 'current_value', group: 'Calculated Additions', align: 'right', tip: 'Current market value', render: h => <td style={{ textAlign: 'right' }}>{moneyOrDash(h.current_value)}</td>, footer: () => moneyOrDash(totals.currentValue) },
@@ -2823,27 +2862,27 @@ export default function Dashboard() {
         </div>
       ) : (
       <p className="tr-note" style={{ marginTop: 0 }}>
-        <strong>{portfolioGrade.period_label || 'Grade period'}:</strong>{' '}
+        <strong>{activePortfolioGrade.period_label || 'Grade period'}:</strong>{' '}
         {formatPerformanceRange(
-          portfolioGrade.actual_start_date,
-          portfolioGrade.actual_end_date,
+          activePortfolioGrade.actual_start_date,
+          activePortfolioGrade.actual_end_date,
         ) || (tickerRiskLoading ? 'Loading dates...' : 'Dates unavailable')}
-        {portfolioGrade.requested_start_date
-          && portfolioGrade.actual_start_date !== portfolioGrade.requested_start_date
+        {activePortfolioGrade.requested_start_date
+          && activePortfolioGrade.actual_start_date !== activePortfolioGrade.requested_start_date
           ? ` (requested from ${formatPerformanceRange(
-            portfolioGrade.requested_start_date,
-            portfolioGrade.requested_end_date,
+            activePortfolioGrade.requested_start_date,
+            activePortfolioGrade.requested_end_date,
           )})`
           : ''}
         . These dates apply to the Portfolio Grade, beta, and risk-ratio cards below.
         {/* A window this short can't carry the ratios — say so, rather than
             leaving a strip of dashes that reads like a failed load. */}
-        {portfolioGrade.window_too_short && (
+        {activePortfolioGrade.window_too_short && (
           <>
             {' '}
             <strong style={{ color: 'var(--warning-money)' }}>
-              Only {portfolioGrade.window_observations ?? 0} trading{' '}
-              {portfolioGrade.window_observations === 1 ? 'day' : 'days'} in this window.
+              Only {activePortfolioGrade.window_observations ?? 0} trading{' '}
+              {activePortfolioGrade.window_observations === 1 ? 'day' : 'days'} in this window.
             </strong>{' '}
             The risk ratios annualize daily returns, so they need at least{' '}
             {SHORT_WINDOW_MIN_TRADING_DAYS} trading days before they mean anything — pick a
@@ -2858,11 +2897,11 @@ export default function Dashboard() {
         <SummaryCard
           className="summary-card-grade"
           label="Portfolio Grade"
-          value={portfolioGrade.overall ? <GradeBadge grade={portfolioGrade.overall} large /> : '—'}
+          value={activePortfolioGrade.overall ? <GradeBadge grade={activePortfolioGrade.overall} large /> : '—'}
           sub={
             isLifetimePerformancePeriod(gradePeriod)
               ? GRADE_LIFETIME_CARD_NOTE
-              : (portfolioGrade.score != null ? `Score: ${portfolioGrade.score}` : null)
+              : (activePortfolioGrade.score != null ? `Score: ${activePortfolioGrade.score}` : null)
           }
         />
         <BenchmarkBetaCard
@@ -2871,11 +2910,11 @@ export default function Dashboard() {
           beta={marketExposure.beta}
           exposure={marketExposure.betaAdjustedExposure}
         />
-        <SummaryCard label="Ulcer Index" value={portfolioGrade.ulcer_index ?? '—'} />
-        <SummaryCard label="Calmar Ratio" value={portfolioGrade.calmar ?? '—'} />
-        <SummaryCard label="Omega Ratio" value={portfolioGrade.omega ?? '—'} />
-        <SummaryCard label="Sortino Ratio" value={portfolioGrade.sortino ?? '—'} />
-        <SummaryCard label="Sharpe Ratio" value={portfolioGrade.sharpe ?? '—'} />
+        <SummaryCard label="Ulcer Index" value={activePortfolioGrade.ulcer_index ?? '—'} />
+        <SummaryCard label="Calmar Ratio" value={activePortfolioGrade.calmar ?? '—'} />
+        <SummaryCard label="Omega Ratio" value={activePortfolioGrade.omega ?? '—'} />
+        <SummaryCard label="Sortino Ratio" value={activePortfolioGrade.sortino ?? '—'} />
+        <SummaryCard label="Sharpe Ratio" value={activePortfolioGrade.sharpe ?? '—'} />
         <SummaryCard label="Lifetime Income" value={fmt(totals.lifetimeIncome)} color="var(--pos)" />
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="var(--pos)" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="var(--pos)" sub={currentMonthSub} />
@@ -3237,6 +3276,7 @@ export default function Dashboard() {
         embedded
         onTickerClick={setModalTicker}
         onNavChange={refreshPortfolioCoverage}
+        tickerGrades={activeTickerGrades}
       />
 
       {/* Ticker Modal */}

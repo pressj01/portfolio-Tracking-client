@@ -676,13 +676,13 @@ function DashboardHelp() {
         <strong> Grade &amp; Exposure Guide</strong> and the current week&apos;s dividend-payment calendar.
       </p>
       <div style={{ marginBottom: '1rem' }}>
-        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Lower updated Dashboard showing the category allocation donut and table plus the Holdings overview summary, filters, view tabs, and per-holding NAV controls" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dashboard/dashboard_bottom.jpg" alt="Updated Dashboard Holdings overview showing summary cards, filters, view tabs, ticker grade badges in the Common table, and per-holding data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
       <p style={{ marginBottom: '0.75rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
-        <strong>Lower on the page</strong> (above): the <strong>category allocation</strong> donut chart — each slice is a
-        category with its current value, invested value, gain, target, allocation, and difference — followed by the
-        <strong> Holdings overview</strong> summary cards, filters, Common / General / Dividends / Returns tabs, searchable
-        table, and inline NAV benchmark assignment.
+        <strong>Holdings overview</strong> (above): summary cards, category filters, Common / General / Dividends / Returns
+        tabs, and the searchable holdings table. The Common view keeps each ticker&apos;s selected-period
+        <strong> Grade</strong> beside its name; scroll horizontally for the remaining income, return, allocation, and NAV
+        fields. The category allocation chart sits immediately above this section on the Dashboard.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
@@ -835,7 +835,7 @@ function DashboardHelp() {
         <li><strong>Value</strong> — current market value of the open holdings in the table after filters. Cash is excluded; that lives on the Dashboard <strong>Portfolio Value</strong> card. The lower line is cost basis.</li>
         <li><strong>Total profit</strong> — remaining-lot price G/L plus guarded lifetime dividends plus realized G/L on trimmed shares of still-open tickers. The percent is versus invested/profit basis, not current value. Cash and fully sold tickers are excluded. Same number as Gains &amp; Losses <strong>Total Profit</strong>.</li>
         <li><strong>Passive income</strong> — estimated next-12-month dividends as a yield on open holdings value. It is a forward estimate, not income already received, and cash is not in the denominator. The lower line is the dollar estimate.</li>
-        <li><strong>Common</strong> — shares, cost, value, forward dividends, yields, paid for itself, total profit, and NAV.</li>
+        <li><strong>Common</strong> — ticker grade for the Shared Performance Date Range, shares, cost, value, forward dividends, yields, paid for itself, total profit, and NAV. A dash or N/A appears when the selected period cannot produce a grade.</li>
         <li><strong>General</strong> — open/sold status, category, prices, and NAV.</li>
         <li><strong>Dividends</strong> — next pay date, ex-div, frequency, estimated income, and paid for itself.</li>
         <li><strong>Returns</strong> — dividends received, paid for itself, capital gain, realized P&amp;L, and total profit.</li>

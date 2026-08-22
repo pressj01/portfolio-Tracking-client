@@ -6,7 +6,7 @@ import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 
 const VIEW_COLUMNS = {
   common: [
-    'holding', 'shares', 'avgCost', 'currentPrice', 'category', 'subcategory', 'costBasis', 'currentValue', 'dividends',
+    'holding', 'grade', 'shares', 'avgCost', 'currentPrice', 'category', 'subcategory', 'costBasis', 'currentValue', 'dividends',
     'dividendYield', 'estimatedYield', 'dividendGrowth', 'paidForItself', 'totalProfit', 'shareOfPortfolio', 'nav',
   ],
   general: [
@@ -38,6 +38,22 @@ const FREQ_LABELS = {
   A: 'Annual',
 }
 
+const GRADE_RANK = {
+  'A+': 13,
+  A: 12,
+  'A-': 11,
+  'B+': 10,
+  B: 9,
+  'B-': 8,
+  'C+': 7,
+  C: 6,
+  'C-': 5,
+  'D+': 4,
+  D: 3,
+  'D-': 2,
+  F: 1,
+}
+
 const SUMMARY_HELP = {
   value: 'Summary card: current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.',
   totalProfit: 'Summary card: remaining-lot price gain or loss plus guarded lifetime dividends plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.',
@@ -46,6 +62,7 @@ const SUMMARY_HELP = {
 
 const COLUMN_HELP = {
   holding: 'Column: security name and ticker. Sold rows are marked Sold and shown with a line through the name.',
+  grade: 'Column: composite grade for this ticker over the Dashboard Shared Performance Date Range. Shows a dash or N/A when the selected period cannot produce a grade.',
   status: 'Column: Open means currently held. Sold means fully sold.',
   shares: 'Column: current shares held. Sold rows show 0 because there is no open position.',
   category: 'Column: portfolio category assignment from the Categories page.',
@@ -75,6 +92,7 @@ const HELP_ITEMS = [
   { kind: 'Summary card', label: 'Total profit', body: SUMMARY_HELP.totalProfit.replace('Summary card: ', '') },
   { kind: 'Summary card', label: 'Passive income', body: SUMMARY_HELP.passiveIncome.replace('Summary card: ', '') },
   { kind: 'Table column', label: 'Holding', body: COLUMN_HELP.holding.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Grade', body: COLUMN_HELP.grade.replace('Column: ', '') },
   { kind: 'Table column', label: 'Status', body: COLUMN_HELP.status.replace('Column: ', '') },
   { kind: 'Table column', label: 'Shares', body: COLUMN_HELP.shares.replace('Column: ', '') },
   { kind: 'Table column', label: 'Average price paid', body: COLUMN_HELP.avgCost.replace('Column: ', '') },
@@ -275,6 +293,13 @@ function HoldingCell({ row }) {
       </div>
     </div>
   )
+}
+
+function GradeBadge({ grade }) {
+  if (!grade || grade === 'N/A') return <span className="grade-badge grade-na">N/A</span>
+  const letter = grade[0]
+  const cls = letter === 'A' ? 'grade-a' : letter === 'B' ? 'grade-b' : letter === 'C' ? 'grade-c' : letter === 'D' ? 'grade-d' : 'grade-f'
+  return <span className={`grade-badge ${cls}`}>{grade}</span>
 }
 
 function NavCell({ row }) {
@@ -519,6 +544,11 @@ const COLUMN_DEFS = {
     sortValue: row => row.ticker,
     render: row => <HoldingCell row={row} />,
   },
+  grade: {
+    label: 'Grade',
+    sortValue: row => GRADE_RANK[row.grade] || 0,
+    render: row => row.grade ? <GradeBadge grade={row.grade} /> : <span className="ci-muted">--</span>,
+  },
   status: {
     label: 'Status',
     sortValue: row => row.status,
@@ -702,7 +732,7 @@ async function readJson(responsePromise) {
   return data
 }
 
-export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange }) {
+export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, tickerGrades = {} }) {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
@@ -854,6 +884,7 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange }
       return {
         ...row,
         onTickerClick,
+        grade: tickerGrades[ticker]?.grade || null,
         navScope: row.sold ? 'skip' : (row.nav_erosion_scope || meta.nav_erosion_scope || 'auto'),
         navBenchmark: row.nav_benchmark_override || meta.nav_benchmark_override || '',
         navBenchmarkInput: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
@@ -865,7 +896,7 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange }
     }
     const rows = showSold ? [...openRows, ...closedRows] : openRows
     return rows.map(withNav)
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, updateNavScope, draftNavBenchmark])
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, tickerGrades, updateNavScope, draftNavBenchmark])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null
