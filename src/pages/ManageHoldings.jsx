@@ -30,6 +30,7 @@ import {
   computeHoldingsTableTotals,
   sharesIfReinvested,
 } from '../utils/holdingsTableTotals'
+import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1190,39 +1191,111 @@ const HOLDINGS_LOCKED_COLS = ['ticker']
 // Truncation the frozen cells used to hard-code; now it follows its column.
 const TRUNCATED_CELL = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }
 
+const CURRENT_MONTH_SHORT = new Date().toLocaleString('en-US', { month: 'short' })
+
+const dripSharePrice = (h) => {
+  const currentPrice = Number(h?.current_price || 0)
+  if (currentPrice > 0) return currentPrice
+  const currentValue = Number(h?.current_value || 0)
+  const quantity = Number(h?.quantity || 0)
+  return currentValue > 0 && quantity > 0 ? currentValue / quantity : 0
+}
+
+const sharesFromDrip = (income, h) => {
+  const price = dripSharePrice(h)
+  return price > 0 ? Number(income || 0) / price : 0
+}
+
+const GRADE_RANK = {
+  'A+': 13, A: 12, 'A-': 11, 'B+': 10, B: 9, 'B-': 8,
+  'C+': 7, C: 6, 'C-': 5, 'D+': 4, D: 3, 'D-': 2, F: 1,
+}
+
+function GradeBadge({ grade }) {
+  if (!grade || grade === 'N/A') return <span className="grade-badge grade-na">N/A</span>
+  const letter = grade[0]
+  const cls = letter === 'A' ? 'grade-a' : letter === 'B' ? 'grade-b' : letter === 'C' ? 'grade-c' : letter === 'D' ? 'grade-d' : 'grade-f'
+  return <span className={`grade-badge ${cls}`}>{grade}</span>
+}
+
+const CLOSURE_TIER = {
+  high: { label: 'High', color: 'var(--neg)' },
+  elevated: { label: 'Elevated', color: 'var(--warning-money)' },
+  watch: { label: 'Watch', color: 'var(--warning-text)' },
+  ok: { label: 'OK', color: 'var(--pos)' },
+  unknown: { label: '?', color: 'var(--text-dim)' },
+}
+
+function ClosureRiskBadge({ info }) {
+  if (!info) return <span style={{ color: 'var(--text-dim)' }} title="Not an ETF — individual stocks aren't rated for closure risk.">—</span>
+  const tier = CLOSURE_TIER[info.tier] || CLOSURE_TIER.unknown
+  if (info.tier === 'ok' || info.tier === 'unknown') {
+    return <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }} title={info.reason || ''}>{tier.label}</span>
+  }
+  return (
+    <span
+      title={info.reason || ''}
+      style={{
+        display: 'inline-block',
+        padding: '1px 7px',
+        borderRadius: 10,
+        fontSize: '0.68rem',
+        fontWeight: 700,
+        color: tier.color,
+        background: `color-mix(in srgb, ${tier.color} 16%, transparent)`,
+        border: `1px solid color-mix(in srgb, ${tier.color} 45%, transparent)`,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {tier.label}
+    </span>
+  )
+}
+
 const COLUMNS = [
   { key: 'ticker', label: 'Ticker', width: 80, type: 'string', tip: 'Security ticker symbol' },
   { key: 'description', label: 'Description', width: 180, truncate: true, type: 'string', tip: 'Security name / description' },
   { key: 'category', label: 'Category', width: 96, truncate: true, type: 'string', tip: 'Investment category assigned to this holding' },
   { key: 'percent_of_account', label: '% Acct', width: 76, truncate: true, type: 'number', compact: true, tip: 'Percent of total account value held in this security' },
   { key: 'quantity', label: 'Shares', width: 76, truncate: true, type: 'number', tip: 'Total shares currently held (base + DRIP shares)' },
-  { key: 'purchase_date', label: 'Purchase Date', type: 'string', width: 120, tip: 'Date of original purchase (or earliest lot date)' },
-  { key: 'base_quantity', label: 'Base Shares', type: 'number', width: 105, tip: 'Original shares purchased, excluding DRIP-acquired shares' },
-  { key: 'shares_bought_from_dividend', label: 'DRIP Shares', type: 'number', width: 110, tip: 'Shares acquired through dividend reinvestment (DRIP)' },
-  { key: 'total_cash_reinvested', label: 'Cash Reinvested', type: 'number', width: 130, tip: 'Total cash dividend income that has been reinvested via DRIP' },
-  { key: 'price_paid', label: 'Price Paid', type: 'number', width: 115, tip: 'Average price paid per share (cost basis per share)' },
-  { key: 'current_price', label: 'Current', type: 'number', width: 95, tip: 'Current market price per share' },
-  { key: 'purchase_value', label: 'Cost Basis', type: 'number', width: 115, tip: 'Total original cost basis (price paid × shares)' },
-  { key: 'current_value', label: 'Value', type: 'number', width: 105, tip: 'Current market value (current price × shares)' },
-  { key: 'gain_or_loss', label: 'Gain/Loss', type: 'number', width: 115, tip: 'Each row is this ticker\'s current lot during the selected range. The Totals row is the portfolio tracker Price Return for the range, including lots you sold — the same figure as Growth and Total Return cards. Not lifetime cost-basis G/L.' },
-  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 90, tip: 'Each row is this ticker\'s current-lot price return for the range. The Totals row is the portfolio tracker Price Return %, including lots you sold — the same figure as Growth. Life G/L % is cost basis instead.' },
-  { key: 'lifetime_gain_or_loss', label: 'Life G/L', type: 'number', width: 110, tip: 'Current value minus what you paid for shares you still hold. Does not follow the date range and does not include sold lots.' },
-  { key: 'lifetime_gain_or_loss_percentage', label: 'Life G/L %', type: 'number', width: 100, tip: 'Lifetime cost-basis G/L as a percent of what you paid for shares you still hold. Does not follow the date range.' },
-  { key: 'div', label: 'Div/Share', type: 'number', width: 95, tip: 'Most recent dividend paid per share' },
-  { key: 'div_frequency', label: 'Freq', type: 'string', width: 70, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
-  { key: 'ex_div_date', label: 'Ex-Div Date', type: 'string', width: 110, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
-  { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 95, tip: 'Date the dividend is actually paid to shareholders' },
-  { key: 'reinvest', label: 'DRIP', type: 'string', width: 70, tip: 'Whether dividends are being reinvested (Y = reinvesting, N = taking as cash)' },
-  { key: 'estim_payment_per_year', label: 'Est. Annual', type: 'number', width: 110, tip: 'Estimated total annual dividend income from this holding' },
-  { key: 'approx_monthly_income', label: 'Monthly', type: 'number', width: 100, tip: 'Estimated monthly dividend income from this holding' },
+  { key: 'purchase_date', label: 'Purchased', type: 'string', width: 92, tip: 'Date of original purchase (or earliest lot date)' },
+  { key: 'base_quantity', label: 'Base', type: 'number', width: 80, tip: 'Original shares purchased, excluding DRIP-acquired shares' },
+  { key: 'shares_bought_from_dividend', label: 'DRIP Sh', type: 'number', width: 80, tip: 'Shares acquired through dividend reinvestment (DRIP)' },
+  { key: 'total_cash_reinvested', label: 'Cash Reinv', type: 'number', width: 92, tip: 'Total cash dividend income that has been reinvested via DRIP' },
+  { key: 'price_paid', label: 'Paid', type: 'number', width: 84, tip: 'Average price paid per share (cost basis per share)' },
+  { key: 'current_price', label: 'Current', type: 'number', width: 84, tip: 'Current market price per share' },
+  { key: 'purchase_value', label: 'Cost', type: 'number', width: 92, tip: 'Total original cost basis (price paid × shares)' },
+  { key: 'current_value', label: 'Value', type: 'number', width: 92, tip: 'Current market value (current price × shares)' },
+  { key: 'gain_or_loss', label: 'G/L $', type: 'number', width: 92, tip: 'Each row is this ticker\'s current lot during the selected range. The Totals row is the portfolio tracker Price Return for the range, including lots you sold — the same figure as Growth and Total Return cards. Not lifetime cost-basis G/L.' },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 84, tip: 'Each row is this ticker\'s current-lot price return for the range. The Totals row is the portfolio tracker Price Return %, including lots you sold — the same figure as Growth. Life G/L % is cost basis instead.' },
+  { key: 'lifetime_gain_or_loss', label: 'Life G/L', type: 'number', width: 88, tip: 'Current value minus what you paid for shares you still hold. Does not follow the date range and does not include sold lots.' },
+  { key: 'lifetime_gain_or_loss_percentage', label: 'Life G/L %', type: 'number', width: 88, tip: 'Lifetime cost-basis G/L as a percent of what you paid for shares you still hold. Does not follow the date range.' },
+  { key: 'div', label: 'Div$', type: 'number', width: 76, tip: 'Most recent dividend paid per share' },
+  { key: 'div_frequency', label: 'Freq', type: 'string', width: 56, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
+  { key: 'ex_div_date', label: 'Ex-Div', type: 'string', width: 80, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
+  { key: 'div_pay_date', label: 'Pay Date', type: 'string', width: 80, tip: 'Date the dividend is actually paid to shareholders' },
+  { key: 'reinvest', label: 'DRIP', type: 'string', width: 56, tip: 'Whether dividends are being reinvested (Y = reinvesting, N = taking as cash)' },
+  { key: 'estim_payment_per_year', label: 'Yr$', type: 'number', width: 84, tip: 'Estimated total annual dividend income from this holding' },
+  { key: 'approx_monthly_income', label: 'Mo$', type: 'number', width: 80, tip: 'Estimated monthly dividend income from this holding' },
+  { key: 'monthly_income_reinvested', label: 'DRIP$', type: 'number', width: 80, tip: 'Estimated monthly income being reinvested (DRIP)' },
+  { key: 'monthly_income_not_reinvested', label: 'Cash$', type: 'number', width: 80, tip: 'Estimated monthly income taken as cash (not reinvested)' },
+  { key: 'drip_shares_monthly', label: 'MoShr', type: 'number', width: 76, tip: 'Estimated shares bought per month if monthly dividends are fully reinvested at the current price' },
+  { key: 'drip_shares_yearly', label: 'YrShr', type: 'number', width: 76, tip: 'Estimated shares bought per year if annual dividends are fully reinvested at the current price' },
+  { key: 'current_month_income', label: `${CURRENT_MONTH_SHORT}$`, type: 'number', width: 80, tip: `Dividend income received in ${CURRENT_MONTH_SHORT}` },
+  { key: 'beta', label: 'Beta', type: 'number', width: 92, tip: "Price-return beta versus the ticker's best-fitting benchmark, usually SPY or QQQ" },
+  { key: 'delta_up', label: 'Δ Up', type: 'number', width: 72, tip: 'Approximate effective delta on benchmark up-days from return regression' },
+  { key: 'delta_down', label: 'Δ Down', type: 'number', width: 80, tip: 'Approximate effective delta on benchmark down-days from return regression' },
+  { key: 'ret_vs_yld', label: 'RvY', type: 'string', width: 88, tip: 'Return vs yield over the selected range. Good means total return exceeds yield; Poor means yield exceeds total return.' },
+  { key: 'closure_risk', label: 'Close?', type: 'string', width: 76, tip: 'Risk the ETF issuer shuts the fund down for being too small. Stocks are not rated.' },
+  { key: 'grade', label: 'Grd', type: 'string', width: 56, tip: 'Composite grade for the selected market window. Blank on Life.' },
   { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80, tip: 'Yield on Cost — annual dividend income as a percentage of your original cost basis' },
   { key: 'current_annual_yield', label: 'Yield', type: 'number', width: 80, tip: 'Current annual dividend yield based on the current market price' },
   { key: 'dividend_paid', label: 'Div Paid', type: 'number', width: 100, tip: 'Last dividend amount actually paid per share' },
   { key: 'ytd_divs', label: 'YTD Divs', type: 'number', width: 100, tip: 'Total dividend income received year-to-date for this holding' },
   { key: 'total_divs_received', label: 'Total Divs', type: 'number', width: 105, tip: 'Cumulative total dividend income received since purchase' },
-  { key: 'paid_for_itself', label: 'Paid For Itself', type: 'number', width: 125, tip: 'Percentage of original cost basis recovered through dividends received' },
-  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string', width: 85, tip: 'Source of dividend actuals data (e.g. Schwab, Fidelity, Yahoo, Snapshot)' },
-  { key: '_shares_if_reinvested', label: 'Shares if Reinvested', type: 'number', width: 155, tip: 'Hypothetical total shares if all dividends ever received had been reinvested at current price' },
+  { key: 'paid_for_itself', label: 'PFI%', type: 'number', width: 72, tip: 'Percentage of original cost basis recovered through dividends received' },
+  { key: 'dividend_actuals_source', label: 'Div Src', type: 'string', width: 76, tip: 'Source of dividend actuals data (e.g. Schwab, Fidelity, Yahoo, Snapshot)' },
+  { key: '_shares_if_reinvested', label: 'If DRIP', type: 'number', width: 80, tip: 'Hypothetical total shares if all dividends ever received had been reinvested at current price' },
   { key: 'realized_gains', label: 'Realized G/L', type: 'number', width: 120, tip: 'Realized gain or loss from shares already sold' },
 ]
 
@@ -1632,6 +1705,10 @@ export default function ManageHoldings() {
   const [applyingRepair, setApplyingRepair] = useState(false)
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
+  const [tickerRisk, setTickerRisk] = useState({})
+  const [tickerGrades, setTickerGrades] = useState({})
+  const [tickerClosureRisk, setTickerClosureRisk] = useState({})
+  const [rvyMode, setRvyMode] = useState('cur')
 
   // ?txn=TICKER opens the transaction modal directly. Positions needing a cost
   // basis are usually closed, so they have no holdings row to click — without
@@ -1673,6 +1750,37 @@ export default function ManageHoldings() {
   const trackerPerformanceLoading = trackerChartsEnabled && sharedTrackerCharts.loading
   const trackerPerformanceError = trackerChartsEnabled ? sharedTrackerCharts.error : null
 
+  useEffect(() => {
+    if (isLifetimeRange || performanceRangeError || holdings.length === 0) {
+      setTickerRisk({})
+      setTickerGrades({})
+      setTickerClosureRisk({})
+      return undefined
+    }
+    const controller = new AbortController()
+    const params = new URLSearchParams({ period: performancePeriod })
+    addCustomRangeParams(params, performancePeriod, customStart, customEnd)
+    pf(`/api/portfolio-summary/data?${params}`, { signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`)
+        return payload
+      })
+      .then(data => {
+        if (controller.signal.aborted || !data) return
+        setTickerGrades(data.ticker_grades || {})
+        setTickerRisk(data.ticker_risk || {})
+        setTickerClosureRisk(data.ticker_closure_risk || {})
+      })
+      .catch(error => {
+        if (error?.name === 'AbortError' || controller.signal.aborted) return
+        setTickerRisk({})
+        setTickerGrades({})
+        setTickerClosureRisk({})
+      })
+    return () => controller.abort()
+  }, [pf, selection, performancePeriod, customStart, customEnd, isLifetimeRange, performanceRangeError, holdings.length])
+
   const holdingsLayout = useColumnLayout({
     storageKey: 'manage-holdings-columns-v1',
     columns: COLUMNS,
@@ -1680,6 +1788,17 @@ export default function ManageHoldings() {
     adoptNewKeys: layout => insertMissingKeysAfter(layout, [
       { key: 'lifetime_gain_or_loss', after: 'gain_or_loss_percentage' },
       { key: 'lifetime_gain_or_loss_percentage', after: 'lifetime_gain_or_loss' },
+      { key: 'monthly_income_reinvested', after: 'approx_monthly_income' },
+      { key: 'monthly_income_not_reinvested', after: 'monthly_income_reinvested' },
+      { key: 'drip_shares_monthly', after: 'monthly_income_not_reinvested' },
+      { key: 'drip_shares_yearly', after: 'drip_shares_monthly' },
+      { key: 'current_month_income', after: 'drip_shares_yearly' },
+      { key: 'beta', after: 'current_month_income' },
+      { key: 'delta_up', after: 'beta' },
+      { key: 'delta_down', after: 'delta_up' },
+      { key: 'ret_vs_yld', after: 'delta_down' },
+      { key: 'closure_risk', after: 'ret_vs_yld' },
+      { key: 'grade', after: 'closure_risk' },
     ]),
   })
 
@@ -1747,6 +1866,14 @@ export default function ManageHoldings() {
   const getSortValue = (h, key) => {
     if (key === '_shares_if_reinvested') return sharesIfReinvested(h)
     if (key === 'percent_of_account') return accountPercent(h, totalCurrentValue)
+    if (key === 'drip_shares_monthly') return h.drip_shares_monthly
+    if (key === 'drip_shares_yearly') return h.drip_shares_yearly
+    if (key === 'beta') return h._risk?.beta ?? null
+    if (key === 'delta_up') return h._risk?.delta_up ?? null
+    if (key === 'delta_down') return h._risk?.delta_down ?? null
+    if (key === 'ret_vs_yld') return h.ret_vs_yld_sort
+    if (key === 'closure_risk') return h._closure_sort
+    if (key === 'grade') return h._grade_sort
     return h[key]
   }
 
@@ -1773,6 +1900,19 @@ export default function ManageHoldings() {
         String(holding.ticker || '').trim().toUpperCase(),
       )
       const periodPct = trackerRow?.price_return_pct
+      const periodTotalReturn = trackerRow?.total_return_pct
+      const rvyYield = rvyMode === 'yoc' ? holding.annual_yield_on_cost : holding.current_annual_yield
+      const rvyWindowYieldPct = prorateAnnualYield(
+        (rvyYield || 0) * 100,
+        trackerRow?.actual_start_date,
+        trackerRow?.actual_end_date,
+      )
+      const rvy = periodTotalReturn != null && rvyWindowYieldPct != null
+        ? returnVsYield(periodTotalReturn, rvyWindowYieldPct)
+        : null
+      const risk = tickerRisk[holding.ticker] || null
+      const closure = tickerClosureRisk[holding.ticker] || null
+      const grade = tickerGrades[holding.ticker]?.grade
       return {
         ...holding,
         percent_of_account: accountPercent(holding, totalCurrentValue),
@@ -1787,9 +1927,18 @@ export default function ManageHoldings() {
         tracker_start_value: trackerRow?.start_value,
         tracker_actual_start_date: trackerRow?.actual_start_date,
         tracker_actual_end_date: trackerRow?.actual_end_date,
+        drip_shares_monthly: sharesFromDrip(holding.approx_monthly_income, holding),
+        drip_shares_yearly: sharesFromDrip(holding.estim_payment_per_year, holding),
+        ret_vs_yld: rvy,
+        ret_vs_yld_sort: rvy ? rvy.spread : -999,
+        _risk: risk,
+        _closure: closure,
+        _closure_sort: CLOSURE_TIER[closure?.tier] ? { high: 3, elevated: 2, watch: 1, ok: 0, unknown: -1 }[closure.tier] : -2,
+        _grade_sort: GRADE_RANK[grade] || 0,
+        grade,
       }
     })
-  ), [filteredHoldings, trackerPerformanceByTicker, totalCurrentValue, isLifetimeRange])
+  ), [filteredHoldings, trackerPerformanceByTicker, totalCurrentValue, isLifetimeRange, tickerRisk, tickerGrades, tickerClosureRisk, rvyMode])
 
   // Same series Growth, Total Return cards, Dashboard PrRtn, and Gains & Losses
   // use: the portfolio replay for the shared range, including lots that closed
@@ -2043,6 +2192,12 @@ export default function ManageHoldings() {
     return col.label
   }
 
+  const columnAlign = (col) => col.align || (col.type === 'number' ? 'right' : 'left')
+
+  const riskNum = (value) => (
+    value == null || !Number.isFinite(Number(value)) ? '—' : Number(value).toFixed(2)
+  )
+
   const fmtCurrency = (v) => formatMoney(v, { zeroIfInvalid: true })
 
   const fmtDateLabel = (v) => {
@@ -2277,7 +2432,52 @@ export default function ManageHoldings() {
       case 'estim_payment_per_year':
         return <td>{fmtM(h.estim_payment_per_year, 3)}</td>
       case 'approx_monthly_income':
-        return <td>{fmtM(h.approx_monthly_income, 3)}</td>
+        return <td style={{ textAlign: 'right' }}>{fmtM(h.approx_monthly_income, 3)}</td>
+      case 'monthly_income_reinvested':
+        return <td style={{ textAlign: 'right', color: 'var(--accent-bright)' }}>{fmtM(h.monthly_income_reinvested, 3)}</td>
+      case 'monthly_income_not_reinvested':
+        return <td style={{ textAlign: 'right', color: 'var(--warning-money)' }}>{fmtM(h.monthly_income_not_reinvested, 3)}</td>
+      case 'drip_shares_monthly':
+        return <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{Number(h.drip_shares_monthly || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
+      case 'drip_shares_yearly':
+        return <td style={{ textAlign: 'right', color: 'var(--accent-soft)' }}>{Number(h.drip_shares_yearly || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })}</td>
+      case 'current_month_income':
+        return <td style={{ textAlign: 'right', color: 'var(--pos)' }}>{fmtM(h.current_month_income, 3)}</td>
+      case 'beta': {
+        const risk = h._risk || {}
+        return (
+          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} title={risk.beta_benchmark ? `Beta vs ${risk.beta_benchmark}` : 'Beta unavailable'}>
+            {riskNum(risk.beta)}
+            {risk.beta_benchmark && risk.beta != null && (
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8em', marginLeft: 3 }}>vs {risk.beta_benchmark}</span>
+            )}
+          </td>
+        )
+      }
+      case 'delta_up':
+        return (
+          <td style={{ textAlign: 'right', color: 'var(--p-2f9d55)' }} title={h._risk?.beta_benchmark ? `Up-day delta vs ${h._risk.beta_benchmark}` : 'Up-delta unavailable'}>
+            {riskNum(h._risk?.delta_up)}
+          </td>
+        )
+      case 'delta_down':
+        return (
+          <td style={{ textAlign: 'right', color: 'var(--p-d94b4b)' }} title={h._risk?.beta_benchmark ? `Down-day delta vs ${h._risk.beta_benchmark}` : 'Down-delta unavailable'}>
+            {riskNum(h._risk?.delta_down)}
+          </td>
+        )
+      case 'ret_vs_yld': {
+        const rvy = h.ret_vs_yld
+        return (
+          <td style={{ textAlign: 'center', color: rvy?.color || 'var(--text-dim)', fontWeight: 600 }} title={rvy ? `Total return ${rvy.totalReturnPct?.toFixed(2)}% vs yield ${rvy.yieldOnCost?.toFixed(2)}%` : 'N/A'}>
+            {rvy?.label || '—'}
+          </td>
+        )
+      }
+      case 'closure_risk':
+        return <td style={{ textAlign: 'center' }}><ClosureRiskBadge info={h._closure} /></td>
+      case 'grade':
+        return <td style={{ textAlign: 'center' }}>{h.grade ? <GradeBadge grade={h.grade} /> : '—'}</td>
       case 'annual_yield_on_cost':
         return <td>{fmtPct(h.annual_yield_on_cost)}</td>
       case 'current_annual_yield':
@@ -2335,12 +2535,20 @@ export default function ManageHoldings() {
       case 'current_value':
       case 'estim_payment_per_year':
       case 'approx_monthly_income':
+      case 'monthly_income_reinvested':
+      case 'monthly_income_not_reinvested':
+      case 'current_month_income':
       case 'dividend_paid':
       case 'ytd_divs':
       case 'total_divs_received':
         return col.key === 'estim_payment_per_year' || col.key === 'approx_monthly_income'
+          || col.key === 'monthly_income_reinvested' || col.key === 'monthly_income_not_reinvested'
+          || col.key === 'current_month_income'
           ? fmtM(value, 3)
           : fmtM(value)
+      case 'drip_shares_monthly':
+      case 'drip_shares_yearly':
+        return Number(value || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })
       default:
         return ''
     }
@@ -2352,6 +2560,9 @@ export default function ManageHoldings() {
       || col.key === 'realized_gains') {
       return glColor(tableTotals[col.key])
     }
+    if (col.key === 'monthly_income_reinvested') return 'var(--accent-bright)'
+    if (col.key === 'monthly_income_not_reinvested') return 'var(--warning-money)'
+    if (col.key === 'current_month_income') return 'var(--pos)'
     return undefined
   }
 
@@ -2725,7 +2936,7 @@ export default function ManageHoldings() {
                       title={`${col.tip || col.label}\u000a\u000aDrag this header to reorder the columns.`}
                       style={{
                         cursor: 'grab', whiteSpace: 'nowrap', userSelect: 'none',
-                        textAlign: col.align || 'left',
+                        textAlign: columnAlign(col),
                         width, minWidth: width, boxSizing: 'border-box',
                         ...(frozen ? {
                           position: 'sticky',
@@ -2738,7 +2949,23 @@ export default function ManageHoldings() {
                       }}
                       {...holdingsLayout.dragHandlers(col.key)}
                     >
-                      {holdingsColumnLabel(col)}{col.tip && !col.compact ? ' \u24d8' : ''}<span style={{ fontSize: '0.65rem', opacity: 0.7 }}>{sortArrow(col.key)}</span>
+                      <span className="mh-th">
+                        <span className="mh-th-label">{holdingsColumnLabel(col)}</span>
+                        {col.key === 'ret_vs_yld' && (
+                          <button
+                            type="button"
+                            className="mh-rvy-toggle"
+                            onClick={event => {
+                              event.stopPropagation()
+                              setRvyMode(mode => mode === 'yoc' ? 'cur' : 'yoc')
+                            }}
+                            title={rvyMode === 'yoc' ? 'Using Yield on Cost — click for Current Yield' : 'Using Current Yield — click for Yield on Cost'}
+                          >
+                            {rvyMode === 'yoc' ? 'YOC' : 'CYld'}
+                          </button>
+                        )}
+                        <span className="mh-th-sort">{sortArrow(col.key)}</span>
+                      </span>
                     </th>
                   )
                 })}

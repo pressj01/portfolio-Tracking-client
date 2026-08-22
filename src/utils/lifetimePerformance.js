@@ -32,26 +32,38 @@ function openHoldings(holdings) {
   return (Array.isArray(holdings) ? holdings : []).filter(row => Number(row.quantity) > 0)
 }
 
+// Open-holding lifetime total profit: remaining-lot price G/L + guarded
+// lifetime dividends + lot-scoped realized trims. Do not fall back to the
+// all-history realized_gains column — that can include closed-out lots and
+// tagged transfer-outs.
+export function holdingLifetimeReturnParts(row) {
+  const purchase = asNumber(row?.purchase_value)
+  const current = asNumber(row?.current_value)
+  const storedGain = optionalNumber(row?.gain_or_loss)
+  const gainLoss = storedGain ?? (current - purchase)
+  const distributions = optionalNumber(row?.total_return_divs_component)
+    ?? asNumber(row?.total_divs_received)
+  const realized = asNumber(row?.total_return_realized_component)
+  const storedBasis = optionalNumber(row?.total_return_basis)
+  const totalReturnBasis = storedBasis > 0 ? storedBasis : purchase
+  const totalReturnDollar = gainLoss + distributions + realized
+  return {
+    purchase,
+    current,
+    gainLoss,
+    distributions,
+    realized,
+    totalReturnBasis,
+    totalReturnDollar,
+    totalReturnRatio: totalReturnBasis > 0 ? totalReturnDollar / totalReturnBasis : null,
+  }
+}
+
 export function lifetimeMetricsFromHoldings(holdings) {
   const rows = openHoldings(holdings)
   const normalized = rows.map(row => {
-    const purchase = asNumber(row.purchase_value)
-    const current = asNumber(row.current_value)
-    const storedGain = optionalNumber(row.gain_or_loss)
-    const gainLoss = storedGain ?? (current - purchase)
-    const distributions = optionalNumber(row.total_return_divs_component)
-      ?? asNumber(row.total_divs_received)
-    const realized = asNumber(row.total_return_realized_component)
-    const totalReturnBasis = optionalNumber(row.total_return_basis)
-    return {
-      row,
-      purchase,
-      current,
-      gainLoss,
-      distributions,
-      realized,
-      totalReturnBasis: totalReturnBasis > 0 ? totalReturnBasis : purchase,
-    }
+    const parts = holdingLifetimeReturnParts(row)
+    return { row, ...parts }
   })
   const sum = key => normalized.reduce((total, item) => total + asNumber(item[key]), 0)
   const purchase = sum('purchase')

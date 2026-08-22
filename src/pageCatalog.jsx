@@ -22,7 +22,6 @@ import { Navigate, Routes, Route } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Import from './pages/Import'
 import ManageHoldings from './pages/ManageHoldings'
-import CommonInfo from './pages/CommonInfo'
 import Settings from './pages/Settings'
 import Categories from './pages/Categories'
 import GrowthWorkspace from './pages/GrowthWorkspace'
@@ -121,7 +120,6 @@ export const PAGE_GROUPS = [
     group: 'Portfolio',
     pages: [
       { path: '/holdings', label: 'Holdings', element: <ManageHoldings /> },
-      { path: '/common-info', label: 'CommonInfo', element: <CommonInfo /> },
       { path: '/categories', label: 'Categories', element: <Categories /> },
       { path: '/holding-targets', label: 'Holding Targets', element: <HoldingTargets /> },
       { path: '/growth', label: 'Growth', element: <GrowthWorkspace /> },
@@ -236,6 +234,7 @@ const EXTRA_ROUTES = [
   // pane: a pane showing the split page would nest panes inside panes.
   { path: '/split-screen', element: <SplitScreen /> },
   { path: '/growth-2', element: <Navigate to="/growth?tab=dollars" replace /> },
+  { path: '/common-info', element: <Navigate to="/" replace /> },
 ]
 
 const ALL_PAGES = PAGE_GROUPS.flatMap(section => section.pages)
@@ -257,7 +256,7 @@ export const isKnownPagePath = (path) => {
   // then render as `undefined`, which falls back to the address bar's page.
   if (typeof path !== 'string' || !path.startsWith('/')) return false
   const pathname = pathnameOf(path)
-  if (pathname === '/growth-2') return true
+  if (pathname === '/growth-2' || pathname === '/common-info') return true
   if (PAGE_BY_PATH.has(pathname)) return true
   // Detail routes (/closed-cef-info/AGD) are known by their parent.
   return ALL_PAGES.some(page => page.path !== '/' && pathname.startsWith(`${page.path}/`))
@@ -267,6 +266,7 @@ export const isKnownPagePath = (path) => {
 export const pageElement = (path) => {
   const pathname = pathnameOf(path)
   if (pathname === '/growth-2') return PAGE_BY_PATH.get('/growth')?.element || null
+  if (pathname === '/common-info') return PAGE_BY_PATH.get('/')?.element || null
   return PAGE_BY_PATH.get(pathname)?.element || null
 }
 

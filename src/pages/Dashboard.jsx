@@ -37,8 +37,8 @@ import {
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
-import ColumnCustomizer from '../components/ColumnCustomizer'
 import GradePeriodHelp from '../components/GradePeriodHelp'
+import { CommonInfoPanel } from './CommonInfo'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { layoutFromVisibleKeys } from '../utils/columnLayout'
 import {
@@ -2482,7 +2482,9 @@ export default function Dashboard() {
           label="Portfolio Value"
           value={fmt(totals.accountValue)}
           color="var(--accent-bright)"
-          sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : null}
+          sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : 'No cash balance'}
+          note="Full account: open holdings + cash"
+          title="Full account value: open holdings plus idle cash. The Holdings overview Value card is holdings only and excludes cash."
         />
         <SummaryCard
           className="dashboard-headline-card daily-change-card"
@@ -3231,107 +3233,11 @@ export default function Dashboard() {
         />
       )}
 
-      {/* Holdings Table */}
-      <div className="holdings-toolbar">
-        <div>
-          <div className="holdings-toolbar-title">Holdings Columns</div>
-          <div className="holdings-toolbar-sub">
-            {visibleColumnCount} of {holdingsColumns.length} columns · {sorted.length} of {enrichedHoldings.length} holdings
-          </div>
-          <div className="holdings-toolbar-sub">
-            Customizable &mdash; use <strong>Columns</strong> to choose which ones show, and drag a
-            header to reorder them.
-          </div>
-        </div>
-        <ColumnCustomizer
-          layout={holdingsLayout}
-          labelOf={column => column.name}
-          detailOf={column => column.label}
-          groupOf={column => column.group}
-          presets={HOLDINGS_COLUMN_PRESETS}
-        />
-      </div>
-
-      <div
-        className="holdings-table-wrap frozen-pane"
-        style={{ '--frozen-pane-width': `${frozenPaneWidth}px` }}
-      >
-        <table className="holdings-table" ref={holdingsTableRef}>
-          <thead>
-            <tr ref={holdingsHeadRowRef}>
-              {effectiveVisibleHoldingColumns.map((column, index) => {
-                const frozen = index < frozenColCount
-                const frozenStyle = frozenColStyle(index)
-                const dragProps = holdingsLayout.dragHandlers(column.id)
-                const dragTitle = `${column.tip || column.name}\u000a\u000aDrag this header to reorder the columns.`
-                if (column.renderHeader) {
-                  const header = column.renderHeader()
-                  return React.cloneElement(header, {
-                    key: column.id,
-                    ...dragProps,
-                    title: dragTitle,
-                    className: holdingsLayout.dragClass(
-                      column.id,
-                      frozen ? frozenColClass(index, header.props.className) : header.props.className,
-                    ),
-                    style: { ...header.props.style, cursor: 'grab', ...(frozen ? frozenStyle : null) },
-                  })
-                }
-                return (
-                  <SortHeader
-                    key={column.id}
-                    col={column.sortKey || column.id}
-                    align={column.align}
-                    tip={column.tip || column.name}
-                    className={holdingsLayout.dragClass(column.id, frozen ? frozenColClass(index) : undefined)}
-                    style={{ cursor: 'grab', ...(frozenStyle || {}) }}
-                    {...dragProps}
-                  >
-                    {column.label}
-                  </SortHeader>
-                )
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.map(h => {
-              const navSeverity = h._coverage_meta?.nav_erosion_severity || navSeverityFromRatio(h._coverage)
-              const covBad = navSeverity === 'High'
-              return (
-                <tr key={h.ticker} className={covBad ? 'cov-bad' : undefined} style={covBad ? { background: 'rgba(255,107,107,0.1)' } : undefined}>
-                  {effectiveVisibleHoldingColumns.map((column, index) => {
-                    const cell = column.render(h)
-                    if (index < frozenColCount) {
-                      return React.cloneElement(cell, {
-                        key: column.id,
-                        className: frozenColClass(index, cell.props.className),
-                        style: { ...cell.props.style, ...frozenColStyle(index) },
-                      })
-                    }
-                    return React.cloneElement(cell, { key: column.id })
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
-          <tfoot>
-            <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border)' }}>
-              {effectiveVisibleHoldingColumns.map((column, index) => {
-                const frozen = index < frozenColCount
-                return (
-                  <td
-                    key={column.id}
-                    className={frozen ? frozenColClass(index) : undefined}
-                    style={holdingCellStyle(column, frozen ? frozenColStyle(index) : undefined)}
-                  >
-                    {index === 0 ? (isHoldingsFiltered ? 'Filtered Totals' : 'Totals') : column.footer ? column.footer() : ''}
-                  </td>
-                )
-              })}
-            </tr>
-          </tfoot>
-        </table>
-      </div>
+      <CommonInfoPanel
+        embedded
+        onTickerClick={setModalTicker}
+        onNavChange={refreshPortfolioCoverage}
+      />
 
       {/* Ticker Modal */}
       {modalTicker && (

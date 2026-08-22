@@ -31,7 +31,6 @@ export const NAVIGATION_ITEMS = [
   dropdown('portfolio', 'Portfolio', [
     link('split-view', 'Split View', '/split-screen', { title: 'Show two pages side by side, sharing one date range' }),
     link('holdings', 'Holdings', '/holdings'),
-    link('common-info', 'CommonInfo', '/common-info'),
     link('categories', 'Categories', '/categories'),
     link('holding-targets', 'Holding Targets', '/holding-targets'),
     link('growth', 'Growth', '/growth'),

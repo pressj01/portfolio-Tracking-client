@@ -1,23 +1,25 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
+import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 
 const VIEW_COLUMNS = {
   common: [
     'holding', 'shares', 'avgCost', 'currentPrice', 'category', 'subcategory', 'costBasis', 'currentValue', 'dividends',
-    'dividendYield', 'estimatedYield', 'dividendGrowth', 'totalProfit', 'shareOfPortfolio',
+    'dividendYield', 'estimatedYield', 'dividendGrowth', 'paidForItself', 'totalProfit', 'shareOfPortfolio', 'nav',
   ],
   general: [
     'holding', 'status', 'shares', 'category', 'subcategory',
-    'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'shareOfPortfolio',
+    'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'shareOfPortfolio', 'nav',
   ],
   dividends: [
     'holding', 'shares', 'category', 'subcategory', 'currentValue', 'dividends', 'dividendYield',
-    'estimatedYield', 'dividendGrowth', 'nextPayment', 'exDividend', 'frequency',
+    'estimatedYield', 'dividendGrowth', 'paidForItself', 'nextPayment', 'exDividend', 'frequency', 'nav',
   ],
   returns: [
-    'holding', 'category', 'subcategory', 'costBasis', 'currentValue', 'divsReceived',
-    'capitalGain', 'realizedProfit', 'totalProfit', 'shareOfPortfolio',
+    'holding', 'category', 'subcategory', 'costBasis', 'currentValue', 'divsReceived', 'paidForItself',
+    'capitalGain', 'realizedProfit', 'totalProfit', 'shareOfPortfolio', 'nav',
   ],
 }
 
@@ -37,9 +39,9 @@ const FREQ_LABELS = {
 }
 
 const SUMMARY_HELP = {
-  value: 'Summary card: current market value of the open holdings shown after filters. The lower line is their active cost basis.',
-  totalProfit: 'Summary card: price gain or loss plus dividends received plus realized profit or loss from sold shares. The lower line is the return percentage against the available profit basis.',
-  passiveIncome: 'Summary card: estimated forward annual dividends divided by current value. The lower line is the next-12-month dividend estimate.',
+  value: 'Summary card: current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.',
+  totalProfit: 'Summary card: remaining-lot price gain or loss plus guarded lifetime dividends plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.',
+  passiveIncome: 'Summary card: estimated next-12-month dividends divided by current holdings value. This is a forward yield on open holdings, not income already received and not yield on cash. The lower line is the dollar estimate.',
 }
 
 const COLUMN_HELP = {
@@ -58,6 +60,8 @@ const COLUMN_HELP = {
   dividendGrowth: 'Column: five-year dividend growth when available from the source data.',
   totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
+  paidForItself: 'Column: lifetime distributions received as a percent of original cost. 100% means dividends have paid back the amount invested.',
+  nav: 'Column: benchmark-adjusted NAV erosion. Auto/Test/Skip chooses whether to test this ticker. The box assigns a benchmark such as QQQ or BTC-USD.',
   nextPayment: 'Column: next listed dividend payment date.',
   exDividend: 'Column: the listed ex-dividend date.',
   frequency: 'Column: dividend payment frequency.',
@@ -85,12 +89,14 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Dividend growth (5Y)', body: COLUMN_HELP.dividendGrowth.replace('Column: ', '') },
   { kind: 'Table column', label: 'Total profit', body: COLUMN_HELP.totalProfit.replace('Column: ', '') },
   { kind: 'Table column', label: 'Share in portfolio', body: COLUMN_HELP.shareOfPortfolio.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Paid for itself', body: COLUMN_HELP.paidForItself.replace('Column: ', '') },
   { kind: 'Table column', label: 'Next payment', body: COLUMN_HELP.nextPayment.replace('Column: ', '') },
   { kind: 'Table column', label: 'Ex-dividend date', body: COLUMN_HELP.exDividend.replace('Column: ', '') },
   { kind: 'Table column', label: 'Frequency', body: COLUMN_HELP.frequency.replace('Column: ', '') },
   { kind: 'Table column', label: 'Div. received', body: COLUMN_HELP.divsReceived.replace('Column: ', '') },
   { kind: 'Table column', label: 'Capital gain', body: COLUMN_HELP.capitalGain.replace('Column: ', '') },
   { kind: 'Table column', label: 'Realized P&L', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
+  { kind: 'Table column', label: 'NAV', body: COLUMN_HELP.nav.replace('Column: ', '') },
 ]
 
 function finite(value) {
@@ -156,6 +162,24 @@ function valueTone(value) {
   return n > 0 ? 'ci-positive' : 'ci-negative'
 }
 
+function paidForItselfRatio(source, totalDivs, cost) {
+  if (source && Object.prototype.hasOwnProperty.call(source, 'paid_for_itself') && source.paid_for_itself == null) {
+    return null
+  }
+  const fromApi = finite(source?.paid_for_itself)
+  if (fromApi !== null) return fromApi
+  if (cost > 0) return totalDivs / cost
+  return null
+}
+
+function pfiTone(value) {
+  const n = finite(value)
+  if (n === null) return ''
+  if (n >= 1) return 'ci-positive'
+  if (n >= 0.5) return 'ci-pfi-mid'
+  return ''
+}
+
 function hasDefinedCategory(row) {
   const name = String(row.categoryName || '').trim()
   if (row.categoryId !== null && row.categoryId !== undefined && row.categoryId !== '') return true
@@ -177,21 +201,22 @@ function StackValue({ primary, secondary, tone, title }) {
   )
 }
 
-function MetricCard({ label, value, sub, tone, help }) {
+function MetricCard({ label, value, sub, note, tone, help }) {
   return (
     <div className="summary-card ci-metric-card" title={help}>
       <div className="summary-label">{label}</div>
       <div className={`summary-value ${tone || ''}`}>{value}</div>
       {sub && <div className="summary-sub">{sub}</div>}
+      {note && <div className="summary-sub">{note}</div>}
     </div>
   )
 }
 
 function FieldHelp() {
   const fields = [
-    ['Value', 'Current market value of the open holdings shown after filters. The lower line is their active cost basis.'],
-    ['Total profit', 'Price gain or loss plus dividends received plus realized profit or loss from sold shares. The lower line is the return percentage against the available profit basis.'],
-    ['Passive income', 'Estimated forward annual dividends divided by current value. The lower line is the next-12-month dividend estimate.'],
+    ['Value', 'Current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.'],
+    ['Total profit', 'Remaining-lot price gain or loss plus guarded lifetime dividends plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.'],
+    ['Passive income', 'Estimated next-12-month dividends divided by current holdings value. This is a forward yield on open holdings, not income already received and not yield on cash. The lower line is the dollar estimate.'],
     ['Holding', 'Security name and ticker. Sold rows are marked Sold and shown with a line through the name.'],
     ['Status', 'Open means currently held. Sold means fully sold.'],
     ['Shares', 'Current shares held. Sold rows show 0 because there is no open position.'],
@@ -204,12 +229,14 @@ function FieldHelp() {
     ['Dividend growth (5Y)', 'Five-year dividend growth when available from the source data.'],
     ['Total profit', 'For each row, current price gain or loss plus dividends received plus realized profit from sold shares.'],
     ['Share in portfolio', 'The holding’s current value as a percentage of the visible open portfolio value. Sold rows are 0%.'],
+    ['Paid for itself', 'Lifetime distributions received divided by original cost. 100% means dividends have paid back the amount invested. Blank when there is not enough purchase history to trust the percentage.'],
     ['Next payment', 'Next listed dividend payment date.'],
     ['Ex-dividend date', 'The listed ex-dividend date.'],
     ['Frequency', 'Dividend payment frequency.'],
     ['Div. received', 'Lifetime dividends recorded for the holding or sold transaction group.'],
     ['Capital gain', 'Current value minus cost basis for open holdings; proceeds minus cost for sold rows.'],
     ['Realized P&L', 'Profit or loss already locked in from shares that were sold.'],
+    ['NAV', 'Benchmark-adjusted NAV erosion. Auto/Test/Skip chooses whether this ticker is tested. Type a benchmark such as QQQ, SPY, GLD, or BTC-USD to override the default.'],
   ]
 
   return (
@@ -238,10 +265,66 @@ function HoldingCell({ row }) {
           {row.description || row.ticker}
         </strong>
         <span>
-          {row.ticker}
+          {row.onTickerClick && !row.sold ? (
+            <button type="button" className="ci-ticker-link" onClick={() => row.onTickerClick(row.ticker)}>
+              {row.ticker}
+            </button>
+          ) : row.ticker}
           {row.sold && <em>Sold</em>}
         </span>
       </div>
+    </div>
+  )
+}
+
+function NavCell({ row }) {
+  if (row.sold) return <span className="ci-muted">--</span>
+  const meta = row.navMeta || {}
+  const scope = row.navScope || 'auto'
+  const coverage = row.navCoverage
+  const invalid = Boolean(row.navBenchmark && meta.benchmark_valid === false)
+  const severity = meta.nav_erosion_severity
+  const title = scope === 'skip'
+    ? 'Skipped by user override'
+    : invalid
+      ? `${row.navBenchmark} is not returning benchmark price history`
+      : scope === 'test'
+        ? `Forced NAV test${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
+        : meta.nav_tested
+          ? `Auto-tested${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
+          : 'Auto: not tested by current NAV erosion rules'
+  const color = severity === 'High'
+    ? 'var(--neg)'
+    : severity === 'Medium'
+      ? 'var(--warning-money)'
+      : coverage == null
+        ? 'var(--text-dim)'
+        : 'var(--pos)'
+  return (
+    <div className="ci-nav-cell" title={title}>
+      <div className="ci-nav-row">
+        <strong style={{ color }}>{coverage == null ? '--' : Number(coverage).toFixed(2)}</strong>
+        <select
+          aria-label={`${row.ticker} NAV erosion testing`}
+          value={scope}
+          onChange={event => row.onNavScope?.(row.ticker, event.target.value, row.navBenchmark)}
+        >
+          <option value="auto">Auto</option>
+          <option value="test">Test</option>
+          <option value="skip">Skip</option>
+        </select>
+      </div>
+      <input
+        aria-label={`${row.ticker} NAV benchmark override`}
+        value={row.navBenchmarkInput ?? ''}
+        placeholder={meta.benchmark || 'bench'}
+        onChange={event => row.onNavBenchmarkDraft?.(row.ticker, event.target.value)}
+        onBlur={event => row.onNavScope?.(row.ticker, scope, event.target.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter') event.currentTarget.blur()
+        }}
+        style={{ borderColor: invalid ? 'var(--neg)' : undefined }}
+      />
     </div>
   )
 }
@@ -297,13 +380,14 @@ function activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth) {
   const dividendPerShare = quantity > 0 ? annualDividends / quantity : num(holding.div)
   const currentYield = currentValue > 0 ? annualDividends / currentValue : num(holding.current_annual_yield)
   const yieldOnCost = costBasis > 0 ? annualDividends / costBasis : num(holding.annual_yield_on_cost)
-  const totalDivs = num(holding.total_return_divs_component ?? holding.total_divs_received)
-  const realizedProfit = num(holding.total_return_realized_component ?? holding.realized_gains)
-  const capitalGain = num(holding.gain_or_loss)
+  const parts = holdingLifetimeReturnParts(holding)
+  const totalDivs = parts.distributions
+  const realizedProfit = parts.realized
+  const capitalGain = parts.gainLoss
   const capitalGainPct = costBasis > 0 ? capitalGain / costBasis : null
-  const totalProfit = capitalGain + totalDivs + realizedProfit
-  const profitBasis = num(holding.total_return_basis) || costBasis
-  const totalProfitPct = profitBasis > 0 ? totalProfit / profitBasis : null
+  const totalProfit = parts.totalReturnDollar
+  const profitBasis = parts.totalReturnBasis || costBasis
+  const totalProfitPct = parts.totalReturnRatio
   const shareOfPortfolio = totalActiveValue > 0 ? currentValue / totalActiveValue : 0
 
   return {
@@ -335,10 +419,13 @@ function activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth) {
     totalProfitPct,
     profitBasis,
     shareOfPortfolio,
+    paidForItself: paidForItselfRatio(holding, totalDivs, costBasis),
     nextPayment: holding.div_pay_date || '',
     nextPaymentEstimated: !!holding.div_pay_date_estimated,
     exDividend: holding.ex_div_date || '',
     frequency: FREQ_LABELS[String(holding.div_frequency || '').toUpperCase()] || holding.div_frequency || '--',
+    nav_erosion_scope: holding.nav_erosion_scope || 'auto',
+    nav_benchmark_override: holding.nav_benchmark_override || '',
   }
 }
 
@@ -420,6 +507,7 @@ function soldRows(realizedRows, openTickers, categoryLookup, dividendGrowth = {}
       dividendGrowth5y: growth.div_growth_5y ?? row.dividendGrowth5y,
       capitalGainPct: row.profitBasis > 0 ? row.capitalGain / row.profitBasis : null,
       totalProfitPct: row.profitBasis > 0 ? row.totalProfit / row.profitBasis : null,
+      paidForItself: paidForItselfRatio(null, row.totalDivs, row.profitBasis),
     }
   })
 }
@@ -544,6 +632,20 @@ const COLUMN_DEFS = {
     sortValue: row => row.shareOfPortfolio,
     render: row => pct(row.shareOfPortfolio),
   },
+  paidForItself: {
+    label: 'Paid for itself',
+    align: 'right',
+    sortValue: row => row.paidForItself ?? -1,
+    render: row => (
+      <span
+        className={pfiTone(row.paidForItself)}
+        style={{ fontWeight: finite(row.paidForItself) >= 1 ? 700 : 400 }}
+        title="Lifetime distributions received as a percent of original cost"
+      >
+        {pct(row.paidForItself)}
+      </span>
+    ),
+  },
   nextPayment: {
     label: 'Next payment',
     sortValue: row => row.nextPayment,
@@ -583,6 +685,12 @@ const COLUMN_DEFS = {
     sortValue: row => row.realizedProfit,
     render: row => <span className={valueTone(row.realizedProfit)}>{signedMoney(row.realizedProfit)}</span>,
   },
+  nav: {
+    label: 'NAV',
+    align: 'right',
+    sortValue: row => row.navCoverage ?? -1,
+    render: row => <NavCell row={row} />,
+  },
 }
 
 async function readJson(responsePromise) {
@@ -594,13 +702,15 @@ async function readJson(responsePromise) {
   return data
 }
 
-export default function CommonInfo() {
+export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange }) {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
   const [gainsLosses, setGainsLosses] = useState(null)
   const [categoryData, setCategoryData] = useState({ categories: [], unallocated: [] })
   const [dividendGrowth, setDividendGrowth] = useState({})
+  const [coverage, setCoverage] = useState({})
+  const [coverageMeta, setCoverageMeta] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [view, setView] = useState('common')
@@ -629,7 +739,7 @@ export default function CommonInfo() {
       })
       .catch(err => {
         if (!alive) return
-        setError(err.message || 'Failed to load CommonInfo')
+        setError(err.message || 'Failed to load holdings overview')
       })
       .finally(() => {
         if (alive) setLoading(false)
@@ -666,6 +776,71 @@ export default function CommonInfo() {
     return () => { alive = false }
   }, [pf, growthTickers])
 
+  const refreshCoverage = useCallback(() => {
+    return readJson(pf('/api/portfolio-coverage'))
+      .then(data => {
+        const map = {}
+        const meta = {}
+        ;(data.results || []).forEach(row => {
+          if (row.coverage_ratio != null) map[row.ticker] = row.coverage_ratio
+          meta[row.ticker] = {
+            nav_tested: !!row.nav_tested,
+            benchmark: row.benchmark || null,
+            benchmark_valid: row.benchmark_valid !== false,
+            nav_erosion_scope: row.nav_erosion_scope || 'auto',
+            nav_benchmark_override: row.nav_benchmark_override || '',
+            nav_erosion_severity: row.nav_erosion_severity || null,
+          }
+        })
+        setCoverage(map)
+        setCoverageMeta(meta)
+      })
+      .catch(() => {})
+  }, [pf])
+
+  useEffect(() => {
+    refreshCoverage()
+  }, [refreshCoverage, selection])
+
+  const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
+    const navBenchmark = String(benchmark || '').trim().toUpperCase()
+    setHoldings(prev => prev.map(row => (
+      row.ticker === ticker
+        ? { ...row, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark }
+        : row
+    )))
+    setCoverageMeta(prev => ({
+      ...prev,
+      [ticker]: {
+        ...(prev[ticker] || {}),
+        nav_erosion_scope: scope,
+        nav_benchmark_override: navBenchmark,
+      },
+    }))
+    pf(`/api/holdings/${ticker}/nav-erosion-scope`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        nav_erosion_scope: scope,
+        nav_benchmark_override: navBenchmark,
+      }),
+    })
+      .then(() => {
+        refreshCoverage()
+        onNavChange?.()
+      })
+      .catch(() => {
+        setError(`Could not update ${ticker} NAV test setting.`)
+      })
+  }, [pf, onNavChange, refreshCoverage])
+
+  const draftNavBenchmark = useCallback((ticker, value) => {
+    const next = String(value || '').toUpperCase()
+    setHoldings(prev => prev.map(row => (
+      row.ticker === ticker ? { ...row, nav_benchmark_override: next } : row
+    )))
+  }, [])
+
   const categoryLookup = useMemo(() => buildCategoryLookup(categoryData), [categoryData])
 
   const allRows = useMemo(() => {
@@ -673,8 +848,24 @@ export default function CommonInfo() {
     const openRows = holdings.map(holding => activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth))
     const openTickers = new Set(openRows.map(row => row.ticker))
     const closedRows = soldRows(gainsLosses?.realized, openTickers, categoryLookup, dividendGrowth)
-    return showSold ? [...openRows, ...closedRows] : openRows
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold])
+    const withNav = (row) => {
+      const ticker = row.ticker
+      const meta = coverageMeta[ticker] || {}
+      return {
+        ...row,
+        onTickerClick,
+        navScope: row.sold ? 'skip' : (row.nav_erosion_scope || meta.nav_erosion_scope || 'auto'),
+        navBenchmark: row.nav_benchmark_override || meta.nav_benchmark_override || '',
+        navBenchmarkInput: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
+        navCoverage: coverage[ticker],
+        navMeta: meta,
+        onNavScope: updateNavScope,
+        onNavBenchmarkDraft: draftNavBenchmark,
+      }
+    }
+    const rows = showSold ? [...openRows, ...closedRows] : openRows
+    return rows.map(withNav)
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, updateNavScope, draftNavBenchmark])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null
@@ -722,11 +913,16 @@ export default function CommonInfo() {
     const currentValue = activeRows.reduce((sum, row) => sum + row.currentValue, 0)
     const costBasis = activeRows.reduce((sum, row) => sum + row.costBasis, 0)
     const annualIncome = activeRows.reduce((sum, row) => sum + row.annualDividends, 0)
-    const totalProfit = filteredRows.reduce((sum, row) => sum + row.totalProfit, 0)
-    const profitBasis = filteredRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
+    const totalProfit = activeRows.reduce((sum, row) => sum + row.totalProfit, 0)
+    const profitBasis = activeRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
+    const visibleTotalProfit = filteredRows.reduce((sum, row) => sum + row.totalProfit, 0)
     const passiveYield = currentValue > 0 ? annualIncome / currentValue : null
     const profitPct = profitBasis > 0 ? totalProfit / profitBasis : null
-    return { currentValue, costBasis, annualIncome, totalProfit, profitBasis, passiveYield, profitPct }
+    const pfiRows = filteredRows.filter(row => row.paidForItself != null && (row.profitBasis || row.costBasis) > 0)
+    const pfiDivs = pfiRows.reduce((sum, row) => sum + row.totalDivs, 0)
+    const pfiCost = pfiRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
+    const paidForItself = pfiCost > 0 ? pfiDivs / pfiCost : null
+    return { currentValue, costBasis, annualIncome, totalProfit, visibleTotalProfit, profitBasis, passiveYield, profitPct, paidForItself }
   }, [filteredRows])
 
   const handleSort = (key) => {
@@ -746,13 +942,17 @@ export default function CommonInfo() {
   }
 
   return (
-    <div className="page dashboard common-info-page">
+    <div className={embedded ? 'card common-info-embed' : 'page dashboard common-info-page'} id="holdings-overview">
       <div className="ci-header">
         <div>
-          <h1>CommonInfo</h1>
-          <p>Portfolio holdings with forward income, yields, total profit, and sold positions.</p>
+          <h2 className={embedded ? 'ci-embed-title' : undefined}>{embedded ? 'Holdings overview' : 'Holdings overview'}</h2>
+          <p>
+            {embedded
+              ? 'Snowball-style views of this account. Assign a NAV benchmark on each row. Edit lots and DRIP on Holdings.'
+              : 'Portfolio holdings with forward income, yields, total profit, sold positions, and NAV benchmark assignment.'}
+          </p>
         </div>
-        <div className="ci-view-tabs" aria-label="CommonInfo views">
+        <div className="ci-view-tabs" aria-label="Holdings overview views">
           {VIEW_LABELS.map(item => (
             <button
               key={item.key}
@@ -763,6 +963,11 @@ export default function CommonInfo() {
               {item.label}
             </button>
           ))}
+          {embedded && (
+            <NavLink to="/holdings" className="btn btn-secondary" style={{ fontSize: '0.78rem', padding: '0.28rem 0.65rem' }}>
+              Edit on Holdings
+            </NavLink>
+          )}
         </div>
       </div>
 
@@ -773,12 +978,14 @@ export default function CommonInfo() {
           label="Value"
           value={formatMoneyWhole(totals.currentValue, { fallback: '--' })}
           sub={`${formatMoneyWhole(totals.costBasis, { fallback: '--' })} cost basis`}
+          note="Open holdings only — cash not included"
           help={SUMMARY_HELP.value}
         />
         <MetricCard
           label="Total profit"
           value={signedMoney(totals.totalProfit, { digits: 0 })}
-          sub={`${pct(totals.profitPct, { signed: true })} total`}
+          sub={`${pct(totals.profitPct, { signed: true })} vs cost basis`}
+          note="Open holdings: price G/L + dividends + realized trims"
           tone={valueTone(totals.totalProfit)}
           help={SUMMARY_HELP.totalProfit}
         />
@@ -786,6 +993,7 @@ export default function CommonInfo() {
           label="Passive income"
           value={pct(totals.passiveYield)}
           sub={`${formatMoneyWhole(totals.annualIncome, { fallback: '--' })} annually`}
+          note="Forward yield on holdings — cash not included"
           tone="ci-positive"
           help={SUMMARY_HELP.passiveIncome}
         />
@@ -845,7 +1053,7 @@ export default function CommonInfo() {
       <FieldHelp />
 
       {loading ? (
-        <div className="ci-loading"><span className="spinner" /> Loading CommonInfo...</div>
+        <div className="ci-loading"><span className="spinner" /> Loading holdings overview...</div>
       ) : (
         <div className="sticky-table-wrap ci-table-wrap">
           <table className="ci-table">
@@ -871,7 +1079,10 @@ export default function CommonInfo() {
             </thead>
             <tbody>
               {sortedRows.map(row => (
-                <tr key={row.id} className={row.sold ? 'ci-row-sold' : ''}>
+                <tr
+                  key={row.id}
+                  className={`${row.sold ? 'ci-row-sold' : ''}${row.navMeta?.nav_erosion_severity === 'High' ? ' ci-row-nav-high' : ''}`}
+                >
                   {visibleColumns.map(column => {
                     const key = Object.entries(COLUMN_DEFS).find(([, value]) => value === column)?.[0]
                     return (
@@ -898,10 +1109,16 @@ export default function CommonInfo() {
                     if (key === 'currentValue') value = money(totals.currentValue)
                     if (key === 'dividends') value = money(totals.annualIncome)
                     if (key === 'dividendYield' || key === 'estimatedYield') value = pct(totals.passiveYield)
-                    if (key === 'totalProfit') value = signedMoney(totals.totalProfit)
+                    if (key === 'totalProfit') value = signedMoney(totals.visibleTotalProfit)
+                    if (key === 'paidForItself') value = pct(totals.paidForItself)
+                    if (key === 'divsReceived') value = money(filteredRows.reduce((sum, row) => sum + row.totalDivs, 0))
                     return (
                       <td key={key} className={column.align === 'right' ? 'ci-number' : ''}>
-                        <strong className={key === 'totalProfit' ? valueTone(totals.totalProfit) : ''}>{value}</strong>
+                        <strong className={
+                          key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
+                            : key === 'paidForItself' ? pfiTone(totals.paidForItself)
+                              : ''
+                        }>{value}</strong>
                       </td>
                     )
                   })}
@@ -916,4 +1133,8 @@ export default function CommonInfo() {
       )}
     </div>
   )
+}
+
+export default function CommonInfo() {
+  return <CommonInfoPanel />
 }

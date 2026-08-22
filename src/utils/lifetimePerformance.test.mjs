@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   fetchHoldingsJson,
+  holdingLifetimeReturnParts,
   lifetimeGrowth2Payload,
   lifetimeMetricsFromHoldings,
   lifetimeTotalReturnPayload,
@@ -93,6 +94,27 @@ test('lifetime total return uses the guarded Holdings components and basis', () 
   assert.equal(metrics.total_return_pct, 45)
   assert.equal(performance_rows[0].price_return_pct, 20)
   assert.equal(performance_rows[0].total_return_pct, 45)
+})
+
+test('lifetime total profit ignores the stale realized_gains column', () => {
+  const parts = holdingLifetimeReturnParts({
+    ticker: 'TRIM',
+    quantity: 1,
+    purchase_value: 10,
+    current_value: 12,
+    gain_or_loss: 2,
+    total_divs_received: 100,
+    total_return_divs_component: 3,
+    total_return_realized_component: 0,
+    total_return_basis: 20,
+    realized_gains: -25,
+  })
+
+  assert.equal(parts.gainLoss, 2)
+  assert.equal(parts.distributions, 3)
+  assert.equal(parts.realized, 0)
+  assert.equal(parts.totalReturnDollar, 5)
+  assert.equal(parts.totalReturnRatio, 0.25)
 })
 
 test('lifetime Growth 2 applies the ticker scope but keeps every ticker selectable', () => {

@@ -580,6 +580,12 @@ function ActionCenterHelp() {
         It is accessible from the top navigation bar and also shows a preview panel on the Dashboard.
       </p>
 
+      <HelpScreenshot
+        src="./help-screenshots/action-center/action-center-top.jpg"
+        alt="Action Center page showing the Items, Needs Review, Watch, Portfolio Value, and Monthly Income summary cards, the priority filter row, and a list of action item cards covering NAV/CEF, dividend, tax, allocation, risk, and options follow-ups"
+        caption="The default All view: summary cards up top, priority filters below them, then every open item as its own card with a Kind tag, priority badge, and an Open / Refresh / Mark complete action."
+      />
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         At the top of the page, five cards give a quick status snapshot:
@@ -603,6 +609,12 @@ function ActionCenterHelp() {
         <li><strong>Clear</strong> — shows success-priority items that are in good shape.</li>
         <li><strong>Completed</strong> — shows reviewable items you marked complete; use Restore to return one to the active list.</li>
       </ul>
+
+      <HelpScreenshot
+        src="./help-screenshots/action-center/action-center-completed.jpg"
+        alt="Action Center Completed filter showing one completed item with a green Completed label and a Restore button next to its Review holdings button"
+        caption="The Completed filter. A completed item keeps its original Kind and priority tags but adds a green Completed label and swaps in a Restore button."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Action Items</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -663,8 +675,8 @@ function DashboardHelp() {
       <p style={{ marginBottom: '0.75rem', color: 'var(--text-dim-2)', fontSize: '0.9rem' }}>
         <strong>Lower on the page</strong> (above): the <strong>category allocation</strong> donut chart — each slice is a
         category (Anchors, Boosters, Gold &amp; Silver, Growth, BDC, Hedged Anchor, Juicers, Energy, …) with its value
-        invested, gain, and percent allocation — followed by the full <strong>holdings table</strong> with all per-holding
-        columns and the inline NAV testing controls described below.
+        invested, gain, and percent allocation — followed by the <strong>Holdings overview</strong> table (the former
+        CommonInfo views) with Common / General / Dividends / Returns tabs and inline NAV benchmark assignment.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
@@ -737,7 +749,7 @@ function DashboardHelp() {
 
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Est. Annual Income</strong> — estimated annual dividend income.</li>
-        <li><strong>Portfolio Value</strong> — total current market value.</li>
+        <li><strong>Portfolio Value</strong> — full account value: open holdings plus idle cash. The subtitle shows how much of that total is cash. This is larger than Holdings overview <strong>Value</strong>, which is holdings only.</li>
         <li><strong>Portfolio IRR / Filtered IRR</strong> — annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value; idle account cash is excluded. The card shows <strong>Unavailable</strong> instead of estimating when transaction shares, transfers, or dividend payment history do not fully reconcile. <strong>Manage exclusions</strong> lists the blocking tickers and lets you omit selected ones. Any resulting number is labeled <strong>Filtered IRR</strong> and discloses the percentage of current portfolio value excluded, because it measures only the documented subset—not the whole account.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Tracker Total Return</strong> — transaction-aware selected-period returns excluding and including dividends. The Shared Performance Date Range above the cards controls both; 1D measures from the previous trading close.</li>
@@ -806,27 +818,33 @@ function DashboardHelp() {
         share count — they never add to it.
       </div>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings overview</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The main table lists all holdings with sortable columns. Click any column header to sort.
-        Key columns include:
+        The Dashboard no longer duplicates the Holdings editor. After the equity curve, donut, and this week&apos;s
+        pay, it shows the Snowball-style <strong>Holdings overview</strong> that used to live on CommonInfo.
+        Edit lots, DRIP, and purchase details on <strong>Holdings</strong>. The overview is for reading the
+        book and assigning a NAV benchmark per ticker.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Ticker</strong> — click to open a detailed ticker modal. Its Shared Performance Date Range is the same saved range used by Growth &amp; Performance, Portfolio Growth 2, Total Return, and Gains &amp; Losses. The chart title prints its From and To dates, and the modal also shows the effective dates and ending Price Return and Total Return so the holding can be reconciled directly.</li>
-        <li><strong>Freq</strong> — dividend payment frequency (W=Weekly, M=Monthly, Q=Quarterly, SA=Semi-Annual, A=Annual).</li>
-        <li><strong>%Acct</strong> — percentage of total portfolio value.</li>
-        <li><strong>G/L%</strong> — unrealized gain/loss percentage.</li>
-        <li><strong>PrRtn / TrkTR</strong> — transaction-aware price-only and total return for the Shared Performance Date Range. Hover a cell for that holding's effective market dates.</li>
-        <li><strong>YTD</strong> — year-to-date dividends received.</li>
-        <li><strong>Mo$ / Yr$</strong> — estimated monthly and annual dividend income.</li>
-        <li><strong>MoShr</strong> — estimated fractional shares acquired per month if the monthly dividend is fully reinvested at the current price (DRIP simulation).</li>
-        <li><strong>DRIP$</strong> — monthly income being reinvested (blue). Only present for shares in DRIP-enabled accounts.</li>
-        <li><strong>YrShr</strong> — estimated fractional shares acquired per year if the annual dividend is fully reinvested at the current price.</li>
-        <li><strong>PFI%</strong> — "Paid For Itself" — percentage of original cost recovered through dividends.</li>
-        <li><strong>RvY</strong> — Return vs. Yield. Compares each holding's selected-period Tracker Total Return to its dividend yield. <strong>Good</strong> (green) means total return exceeds yield; <strong>Poor</strong> (red) means yield exceeds total return. A toggle in the column header switches between <strong>CYld</strong> (current yield, the default) and <strong>YOC</strong> (yield on cost).</li>
-        <li><strong>NAV</strong> — benchmark-adjusted NAV erosion ratio plus controls for whether the holding should be tested and what benchmark it should use.</li>
-        <li><strong>Grd</strong> — composite grade for the holding over the selected market window. Blank when <strong>Life</strong> is selected, because Life is cost-basis G/L and does not produce a grade.</li>
+        <li><strong>Value</strong> — current market value of the open holdings in the table after filters. Cash is excluded; that lives on the Dashboard <strong>Portfolio Value</strong> card. The lower line is cost basis.</li>
+        <li><strong>Total profit</strong> — remaining-lot price G/L plus guarded lifetime dividends plus realized G/L on trimmed shares of still-open tickers. The percent is versus invested/profit basis, not current value. Cash and fully sold tickers are excluded. Same number as Gains &amp; Losses <strong>Total Profit</strong>.</li>
+        <li><strong>Passive income</strong> — estimated next-12-month dividends as a yield on open holdings value. It is a forward estimate, not income already received, and cash is not in the denominator. The lower line is the dollar estimate.</li>
+        <li><strong>Common</strong> — shares, cost, value, forward dividends, yields, paid for itself, total profit, and NAV.</li>
+        <li><strong>General</strong> — open/sold status, category, prices, and NAV.</li>
+        <li><strong>Dividends</strong> — next pay date, ex-div, frequency, estimated income, and paid for itself.</li>
+        <li><strong>Returns</strong> — dividends received, paid for itself, capital gain, realized P&amp;L, and total profit.</li>
+        <li><strong>Paid for itself</strong> — lifetime distributions as a percent of original cost. 100% means dividends have paid back what you invested.</li>
+        <li><strong>NAV</strong> — on every view. Auto / Test / Skip plus an optional benchmark box (QQQ, SPY, GLD, BTC-USD, or a composite). This is the Dashboard control that decides whether a ticker is NAV-tested and against what.</li>
+        <li><strong>Ticker</strong> — click to open the holding modal. Edit the position on Holdings.</li>
       </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Old bookmarks to CommonInfo now open the Dashboard holdings overview.
+      </p>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        Per-holding grades, beta, Return vs Yield, DRIP dollars, and the rest of the old 40-column Dashboard
+        spreadsheet now live on <strong>Holdings</strong>, which remains the editor.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Return vs. Yield (RvY)</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -871,7 +889,7 @@ function DashboardHelp() {
         data, or has an invalid benchmark override. Hover the NAV cell for more context.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        These controls affect the Dashboard's per-holding NAV value and portfolio-level NAV Erosion Ratio.
+        These controls live on the Dashboard holdings overview NAV column and also update the portfolio-level NAV Erosion Ratio.
         The standalone NAV Erosion backtest and NAV Erosion Screener still use their own ticker inputs and
         automatic benchmark rules.
       </p>
@@ -3422,19 +3440,22 @@ function GainsLossesHelp() {
       {/* ── Summary Cards ───────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Summary Cards</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The first row is selected-period performance: Start Value, End Value, Account Value when
-        reconciliation data is available, Price Return, Distributions, Total Return dollars, and Tracker
-        Total Return %. Start Value and End Value are holdings-only figures; Account Value adds cash and
-        open option marks for comparison with broker net liquidating value. They use the same calculation
-        as Total Return; separately read live quotes can differ intraday.
-        The next two rows are explicitly labeled <strong>Lifetime Cost-Basis G/L</strong>:
+        The first strip is labeled with the active date filter (<strong>YTD</strong>, <strong>1Y</strong>,
+        <strong>1M</strong>, and so on). Those cards are selected-period tracker performance: Start Value,
+        End Value, Account Value when reconciliation data is available, Price Return, Distributions,
+        Total Return dollars, and Tracker Total Return %. Start Value and End Value are holdings-only
+        figures; Account Value adds cash and open option marks for comparison with broker net liquidating
+        value. They use the same calculation as Total Return; separately read live quotes can differ
+        intraday. Changing the Shared Performance Date Range retitles this strip and recomputes the cards.
+        The next two rows sit under a fixed <strong>Lifetime</strong> heading and do not follow that filter:
       </p>
       <h4 style={{ marginBottom: '0.4rem' }}>Top Row — Unrealized (Open Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Total Invested</strong> — Sum of all purchase values for positions you still hold.</li>
         <li><strong>Current Value</strong> — Today's market value of those positions.</li>
         <li><strong>Unrealized Price G/L</strong> — Capital gain or loss only (Current Value minus Total Invested). Does not include dividends. Red if negative, green if positive.</li>
-        <li><strong>Unrealized Total G/L</strong> — Price G/L plus all dividends received on open positions. This is your true unrealized profit. A position can be red on price but green on total if dividends more than offset the price decline.</li>
+        <li><strong>Unrealized Total G/L</strong> — Price G/L plus all dividends received on open positions. A position can be red on price but green on total if dividends more than offset the price decline.</li>
+        <li><strong>Total Profit</strong> — next step on those same open holdings: remaining-lot price G/L + guarded lifetime dividends + realized G/L on shares trimmed from those tickers. Cash and fully sold names are excluded. The percent is versus invested/profit basis. Same number as Dashboard Holdings overview <strong>Total profit</strong>. It differs from Combined Total G/L, which includes fully sold tickers.</li>
       </ul>
       <h4 style={{ marginBottom: '0.4rem' }}>Bottom Row — Realized & Combined</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>

@@ -31,6 +31,7 @@ import {
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 import {
   fetchHoldingsJson,
+  lifetimeMetricsFromHoldings,
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
@@ -117,6 +118,7 @@ export default function GainsLosses({ embedded = false }) {
   const catRef = useRef(null)
 
   const [data, setData] = useState(null)
+  const [lifetimeProfit, setLifetimeProfit] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -165,14 +167,21 @@ export default function GainsLosses({ embedded = false }) {
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
-    pf(`/api/gains-losses/summary?${params}`)
-      .then(r => r.json())
-      .then(d => {
+    Promise.all([
+      pf(`/api/gains-losses/summary?${params}`).then(r => r.json()),
+      fetchHoldingsJson(pf, { categories, subcategories }).catch(() => []),
+    ])
+      .then(([d, holdings]) => {
         if (!active) return
         if (d.error) throw new Error(d.error)
         setData(d)
+        setLifetimeProfit(lifetimeMetricsFromHoldings(Array.isArray(holdings) ? holdings : []).metrics)
       })
-      .catch(e => { if (active) setError(e.message) })
+      .catch(e => {
+        if (!active) return
+        setError(e.message)
+        setLifetimeProfit(null)
+      })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [categories, subcategories, selection, basisMode, pf])
@@ -466,6 +475,9 @@ export default function GainsLosses({ embedded = false }) {
   })
 
   const t = data?.totals || {}
+  const periodFilterLabel = PERFORMANCE_PERIODS.find(option => option.key === period)?.label
+    || chartData?.period_label
+    || 'Selected period'
   const periodMetrics = chartData?.portfolio_metrics || {}
   const openPeriodMetrics = chartData?.open_position_metrics || periodMetrics
   const performanceRange = formatPerformanceRange(
@@ -1037,23 +1049,25 @@ export default function GainsLosses({ embedded = false }) {
 
       {rangeError && <div className="alert alert-error">{rangeError}</div>}
 
-      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading shared-period performance...</div>}
+      <h2 className="gl-section-heading">{periodFilterLabel}</h2>
+      {chartLoading && <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', color: 'var(--text-dim)', padding: '0.6rem 0' }}><span className="spinner" /> Loading {periodFilterLabel} performance...</div>}
       {chartError && <div className="alert alert-error">{chartError}</div>}
       {chartData && !chartLoading && (
         <>
           <p className="tr-note">
             {isLifetimePerformancePeriod(period) ? (
               <>
-                <strong>Lifetime cost-basis result:</strong>{' '}
+                <strong>Life filter:</strong>{' '}
                 {performanceRange || 'effective dates unavailable'}. Price G/L is current value minus
                 the selected cost basis for open holdings; it is not a transaction-aware market replay.
+                The Lifetime cards below stay on cost-basis accounting either way.
               </>
             ) : (
               <>
-                <strong>{chartData.period_label} performance:</strong>{' '}
-                {performanceRange || 'effective dates unavailable'}. The figures below come from the same
-                transaction-aware calculation as Total Return; purchases and sales change portfolio weights
-                without being counted as returns.
+                <strong>{chartData.period_label} tracker return</strong>
+                {performanceRange ? ` · ${performanceRange}` : ''}.
+                These cards follow the date filter. The Lifetime cards below do not.
+                Purchases and sales change portfolio weights without being counted as returns.
                 {formatAccountingCoverage(periodMetrics)
                   ? ` ${formatAccountingCoverage(periodMetrics)}`
                   : ''}
@@ -1155,24 +1169,23 @@ export default function GainsLosses({ embedded = false }) {
       )}
 
       {/* Lifetime cost-basis accounting */}
+      <h2 className="gl-section-heading">Lifetime</h2>
+      <p className="tr-note">
+        Cost-basis G/L since purchase. These cards do not follow the {periodFilterLabel} filter;
+        use the {periodFilterLabel} tracker cards above for a period return.
+        {t.account_reconciliation && (
+          <>
+            {' '}Current Value counts holdings only. <strong>Account Value</strong> beside it adds
+            your cash balance and any open option contracts, which are tracked in their own
+            ledger — that is the figure to compare with a broker's net liquidating value, which
+            already includes your cash.
+          </>
+        )}
+      </p>
       {loading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
       {error && <div className="alert alert-error">{error}</div>}
       {data && !loading && (
         <>
-          <h2 style={{ marginBottom: '0.25rem' }}>Lifetime Cost-Basis G/L</h2>
-          <p className="tr-note">
-            These invested, current-value, realized, and combined figures are lifetime accounting totals.
-            They are intentionally not changed by the performance date range; use Tracker TR % above and
-            in the Unrealized table for a period-to-period return comparison.
-            {t.account_reconciliation && (
-              <>
-                {' '}Current Value counts holdings only. <strong>Account Value</strong> beside it adds
-                your cash balance and any open option contracts, which are tracked in their own
-                ledger — that is the figure to compare with a broker's net liquidating value, which
-                already includes your cash.
-              </>
-            )}
-          </p>
           <div className="summary-strip" style={{ marginBottom: '0.5rem' }}>
             <MetricCard label="Total Invested" value={fmtInt(t.unrealized_invested)}>
               <div className="summary-sub">What you paid for shares you still hold</div>
@@ -1212,6 +1225,25 @@ export default function GainsLosses({ embedded = false }) {
             </MetricCard>
             <MetricCard label="Unrealized G/L (Price + Divs)" value={<span style={{ color: glColor(t.unrealized_total_gl) }}>{fmtInt(t.unrealized_total_gl)}</span>}>
               <div className="summary-sub">Same, plus dividends received while held</div>
+            </MetricCard>
+            <MetricCard
+              label="Total Profit"
+              value={<span style={{ color: glColor(lifetimeProfit?.total_return_dollar) }}>{fmtInt(lifetimeProfit?.total_return_dollar)}</span>}
+            >
+              <div className="summary-sub">
+                {lifetimeProfit?.total_return_pct != null
+                  ? `${lifetimeProfit.total_return_pct >= 0 ? '+' : ''}${Number(lifetimeProfit.total_return_pct).toFixed(2)}% vs cost basis`
+                  : '— vs cost basis'}
+              </div>
+              <div className="summary-sub">
+                Price {fmt(lifetimeProfit?.price_return_dollar)}
+                {' + dividends '}
+                {fmt(lifetimeProfit?.distribution_dollar)}
+                {Number(lifetimeProfit?.realized_return_dollar || 0) !== 0
+                  ? ` + realized trims ${fmt(lifetimeProfit.realized_return_dollar)}`
+                  : ''}
+              </div>
+              <div className="summary-sub">Open holdings after realized trims — same as Dashboard</div>
             </MetricCard>
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
@@ -1276,13 +1308,13 @@ export default function GainsLosses({ embedded = false }) {
       )}
 
       {/* Charts section */}
-      <h2 style={{ marginTop: '2rem', marginBottom: '0.25rem' }}>
-        {isLifetimePerformancePeriod(period) ? 'Lifetime Cost-Basis Charts' : 'Selected-Period Performance Charts'}
+      <h2 className="gl-section-heading" style={{ marginTop: '2rem' }}>
+        {isLifetimePerformancePeriod(period) ? 'Lifetime Charts' : `${periodFilterLabel} Charts`}
       </h2>
       <p className="tr-note">
         {isLifetimePerformancePeriod(period)
           ? 'These ticker charts show open-holding cost-basis results. They do not plot a market-return timeline.'
-          : 'These charts use the Shared Performance Date Range above and the same transaction-aware return series as Total Return. The realized timeline includes only sales inside that range.'}
+          : `These charts follow the ${periodFilterLabel} filter and use the same transaction-aware return series as Total Return. The realized timeline includes only sales inside that range.`}
       </p>
       {!isLifetimePerformancePeriod(period) && extremePerformanceRows.length > 0 && (
         <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
