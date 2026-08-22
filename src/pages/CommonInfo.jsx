@@ -4,12 +4,23 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 import { useColumnLayout } from '../utils/useColumnLayout'
+import { insertMissingKeysAfter } from '../utils/columnLayout'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 
 // Each view keeps its own column order and hidden set — the views curate
 // different columns, so one shared layout would fight itself.
 const COLUMN_LAYOUT_KEY = view => `common_info_columns_${view}_v1`
 const LOCKED_COLUMNS = ['holding']
+
+// Where a column added after a user saved their order should land. Without
+// this a new column joins the end of that saved order, far from the column it
+// belongs beside. Only applied to layouts the user actually saved.
+const ADOPTED_COLUMNS = {
+  general: [
+    { key: 'unrealizedGain', after: 'currentValue' },
+    { key: 'unrealizedPct', after: 'unrealizedGain' },
+  ],
+}
 
 const VIEW_COLUMNS = {
   common: [
@@ -18,7 +29,8 @@ const VIEW_COLUMNS = {
   ],
   general: [
     'holding', 'status', 'shares', 'category', 'subcategory',
-    'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'shareOfPortfolio', 'nav',
+    'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'unrealizedGain', 'unrealizedPct',
+    'shareOfPortfolio', 'nav',
   ],
   dividends: [
     'holding', 'shares', 'category', 'subcategory', 'currentValue', 'dividends', 'dividendYield',
@@ -90,6 +102,8 @@ const COLUMN_HELP = {
   exDividend: 'Column: the listed ex-dividend date.',
   frequency: 'Column: dividend payment frequency.',
   divsReceived: 'Column: lifetime dividends recorded for the holding or sold transaction group.',
+  unrealizedGain: 'Column: price gain or loss on the shares still held — current value minus cost basis. Dividends and realized trims are not included. Sold rows show a dash because there is no open position.',
+  unrealizedPct: 'Column: unrealized gain as a percent of cost basis. Sold rows show a dash because there is no open position.',
   capitalGain: 'Column: current value minus cost basis for open holdings; proceeds minus cost for sold rows.',
   realizedProfit: 'Column: profit or loss already locked in from shares that were sold.',
 }
@@ -119,6 +133,8 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Ex-dividend date', body: COLUMN_HELP.exDividend.replace('Column: ', '') },
   { kind: 'Table column', label: 'Frequency', body: COLUMN_HELP.frequency.replace('Column: ', '') },
   { kind: 'Table column', label: 'Div. received', body: COLUMN_HELP.divsReceived.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Unrealized gain', body: COLUMN_HELP.unrealizedGain.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Unrealized %', body: COLUMN_HELP.unrealizedPct.replace('Column: ', '') },
   { kind: 'Table column', label: 'Capital gain', body: COLUMN_HELP.capitalGain.replace('Column: ', '') },
   { kind: 'Table column', label: 'Realized P&L', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
   { kind: 'Table column', label: 'NAV', body: COLUMN_HELP.nav.replace('Column: ', '') },
@@ -704,6 +720,24 @@ const COLUMN_DEFS = {
     sortValue: row => row.totalDivs,
     render: row => money(row.totalDivs),
   },
+  // Price gain on the shares still held. A sold row has no open position, so it
+  // shows a dash rather than its realized gain under an "unrealized" heading.
+  unrealizedGain: {
+    label: 'Unrealized gain',
+    align: 'right',
+    sortValue: row => (row.sold ? 0 : row.capitalGain),
+    render: row => (row.sold
+      ? <span className="ci-muted">--</span>
+      : <span className={valueTone(row.capitalGain)}>{signedMoney(row.capitalGain)}</span>),
+  },
+  unrealizedPct: {
+    label: 'Unrealized %',
+    align: 'right',
+    sortValue: row => (row.sold ? 0 : (row.capitalGainPct ?? 0)),
+    render: row => (row.sold
+      ? <span className="ci-muted">--</span>
+      : <span className={valueTone(row.capitalGain)}>{pct(row.capitalGainPct, { signed: true })}</span>),
+  },
   capitalGain: {
     label: 'Capital gain',
     align: 'right',
@@ -759,6 +793,8 @@ function footerValue(key, index, totals, filteredRows) {
     case 'dividends': return money(totals.annualIncome)
     case 'dividendYield':
     case 'estimatedYield': return pct(totals.passiveYield)
+    case 'unrealizedGain': return signedMoney(totals.unrealizedGain)
+    case 'unrealizedPct': return pct(totals.unrealizedPct, { signed: true })
     case 'totalProfit': return signedMoney(totals.visibleTotalProfit)
     case 'paidForItself': return pct(totals.paidForItself)
     case 'divsReceived': return money(filteredRows.reduce((sum, row) => sum + row.totalDivs, 0))
@@ -778,6 +814,7 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
     storageKey: COLUMN_LAYOUT_KEY(view),
     columns,
     lockedKeys: LOCKED_COLUMNS,
+    adoptNewKeys: saved => insertMissingKeysAfter(saved, ADOPTED_COLUMNS[view] || []),
   })
   const activeColumns = layout.activeColumns
 
@@ -840,7 +877,9 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
                     <strong className={
                       column.key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
                         : column.key === 'paidForItself' ? pfiTone(totals.paidForItself)
-                          : ''
+                          : column.key === 'unrealizedGain' || column.key === 'unrealizedPct'
+                            ? valueTone(totals.unrealizedGain)
+                            : ''
                     }>{footerValue(column.key, index, totals, filteredRows)}</strong>
                   </td>
                 ))}
@@ -1071,6 +1110,7 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
     const currentValue = activeRows.reduce((sum, row) => sum + row.currentValue, 0)
     const costBasis = activeRows.reduce((sum, row) => sum + row.costBasis, 0)
     const annualIncome = activeRows.reduce((sum, row) => sum + row.annualDividends, 0)
+    const unrealizedGain = activeRows.reduce((sum, row) => sum + row.capitalGain, 0)
     const totalProfit = activeRows.reduce((sum, row) => sum + row.totalProfit, 0)
     const profitBasis = activeRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
     const visibleTotalProfit = filteredRows.reduce((sum, row) => sum + row.totalProfit, 0)
@@ -1080,7 +1120,19 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
     const pfiDivs = pfiRows.reduce((sum, row) => sum + row.totalDivs, 0)
     const pfiCost = pfiRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
     const paidForItself = pfiCost > 0 ? pfiDivs / pfiCost : null
-    return { currentValue, costBasis, annualIncome, totalProfit, visibleTotalProfit, profitBasis, passiveYield, profitPct, paidForItself }
+    return {
+      currentValue,
+      costBasis,
+      annualIncome,
+      unrealizedGain,
+      unrealizedPct: costBasis > 0 ? unrealizedGain / costBasis : null,
+      totalProfit,
+      visibleTotalProfit,
+      profitBasis,
+      passiveYield,
+      profitPct,
+      paidForItself,
+    }
   }, [filteredRows])
 
   const handleSort = (key) => {
