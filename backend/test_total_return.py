@@ -957,6 +957,113 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
             "opening_price": 100.0,
         }])
 
+    def test_open_lot_clip_is_not_flagged_when_the_full_ledger_reconciles(self):
+        """A sold-and-rebought ticker must not look like a missing opening lot.
+
+        Purchase-date clipping drops the closed cycle, so the replay invents
+        those shares to land on the saved quantity. The full ledger already
+        nets to that quantity. Recording an opening lot would double-count,
+        so Start Value is not flagged — the same test the holdings button uses.
+        """
+        dates = pd.to_datetime(["2025-06-27", "2025-06-30", "2025-09-30"])
+        close = pd.DataFrame({"SCHG": [30.0, 31.0, 32.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "BUY",
+                "transaction_date": "2025-02-13",
+                "shares": 30,
+            },
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "BUY",
+                "transaction_date": "2025-04-02",
+                "shares": 15,
+            },
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "SELL",
+                "transaction_date": "2025-04-04",
+                "shares": 20,
+            },
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "SELL",
+                "transaction_date": "2025-06-30",
+                "shares": 25.0335,
+            },
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "BUY",
+                "transaction_date": "2025-06-30",
+                "shares": 0.024,
+            },
+            {
+                "ticker": "SCHG",
+                "market_symbol": "SCHG",
+                "position_key": (6, "SCHG"),
+                "transaction_type": "BUY",
+                "transaction_date": "2025-09-30",
+                "shares": 50,
+            },
+        ]
+        holdings = [{
+            "ticker": "SCHG",
+            "market_symbol": "SCHG",
+            "position_key": (6, "SCHG"),
+            # 30+15-20-25.0335+0.024+50 — the full ledger already balances.
+            "quantity": 49.9905,
+            "purchase_date": "2025-06-30",
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, holdings,
+        )
+        self.assertEqual(result["inferred_opening_detail"], [])
+        self.assertEqual(result["inferred_opening_positions"], 0)
+        # Replay still seeds the clipped gap so the open lot ends on 49.9905.
+        self.assertAlmostEqual(result["market_value"][-1], 49.9905 * 32.0, places=4)
+
+    def test_true_missing_opening_lot_is_still_flagged_after_open_lot_clip(self):
+        """A clipped open lot must still flag a shortfall recording would fix."""
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"AAA": [100.0, 110.0, 121.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [{
+            "ticker": "AAA",
+            "market_symbol": "AAA",
+            "position_key": (1, "AAA"),
+            "transaction_type": "BUY",
+            "transaction_date": "2026-01-05",
+            "shares": 1,
+        }]
+        holdings = [{
+            "ticker": "AAA",
+            "market_symbol": "AAA",
+            "position_key": (1, "AAA"),
+            "quantity": 11,
+            "purchase_date": "2026-01-05",
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, holdings,
+        )
+        self.assertEqual(result["inferred_opening_positions"], 1)
+        self.assertEqual(result["inferred_opening_detail"][0]["shares"], 10.0)
+        self.assertEqual(result["inferred_opening_detail"][0]["ledger_net_shares"], 1.0)
+        self.assertEqual(result["inferred_opening_detail"][0]["snapshot_quantity"], 11.0)
+
     def test_short_window_applies_inferred_lot_before_historical_sales(self):
         """A short period must not add an inferred lot after replaying history."""
         dates = pd.to_datetime(["2026-01-02", "2026-01-05"])

@@ -1151,10 +1151,11 @@ function HoldingsHelp() {
 
       <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
         <strong>When the button does not appear:</strong> if the buys and sells already account for
-        every share, there is nothing to record. There is also a case where the ledger reconciles
-        but the position still shows a gap, because the open-lot cut-off falls after purchases you
-        still hold. Recording a lot there would add shares that already exist, so the panel stays
-        hidden rather than offering a fix that would double count.
+        every share, there is nothing to record. There is also a case where the open-lot cut-off
+        hides purchases from a prior cycle, so the performance replay invents shares even though
+        the full ledger already balances. Recording a lot there would add shares that already
+        exist, so the panel stays hidden and Total Return does not flag Start Value — the warning
+        is only shown when recording the lot would actually close the gap.
       </div>
 
       {/* ── Maintenance Actions in Detail ───────────────────── */}

@@ -836,13 +836,10 @@ export default function TotalReturn() {
       : positionView === 'combined' && (row.net_basis || 0) < MIN_BASIS
   )
 
-  // Start Value is replayed from the transaction ledger, so when the ledger
-  // does not account for every share the snapshot says is held, the replay
-  // invents the difference as an opening lot. That is right for a broker export
-  // that begins after the first purchase and wrong for a ledger with a
-  // duplicate sale or a missing buy, and the two cannot be told apart from
-  // share counts. Show which shares were invented rather than pricing them
-  // silently, and point at the screen where the ledger can be corrected.
+  // Start Value is replayed from the open lot, which can invent shares either
+  // because the export never contained the opening purchase or because a prior
+  // cycle was clipped away. Flag only the first: recording an opening lot
+  // fixes a true ledger shortfall, and would double-count a clip-only gap.
   const inferredLot = (row) => (
     positionView === 'unrealized'
       ? (row.inferred_opening_detail || []).find(lot => Number(lot?.shares || 0) > 0) || null

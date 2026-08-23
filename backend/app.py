@@ -755,8 +755,14 @@ def _build_transaction_aware_portfolio_series(
     if close is None or close.empty:
         return empty
 
+    # Replay the open lot (clipped to purchase_date) so a sold-and-rebought
+    # ticker does not keep compounding the closed cycle. The Start Value flag
+    # must not use that clipped gap: recording an opening lot only fixes a
+    # shortfall in the full ledger, and offering it for a clip-only gap would
+    # double-count shares that are already on record.
+    raw_transactions = list(transactions or [])
     transactions = _transactions_aligned_to_current_lots(
-        transactions, current_holdings,
+        raw_transactions, current_holdings,
     )
 
     requested_market_symbols = sorted({
@@ -868,7 +874,9 @@ def _build_transaction_aware_portfolio_series(
         split_factor_cache[cache_key] = factor
         return factor
 
-    for txn in transactions or []:
+    def signed_share_delta(txn):
+        if not isinstance(txn, dict):
+            return None
         symbol = str(txn.get("market_symbol") or txn.get("ticker") or "").strip().upper()
         event_date = _portfolio_event_date(txn.get("transaction_date"))
         try:
@@ -880,15 +888,47 @@ def _build_transaction_aware_portfolio_series(
             txn.get("profile_id"),
             str(txn.get("ticker") or "").strip().upper(),
         )
-        transaction_positions.add(position_key)
         if event_date is None or shares <= 0 or txn_type not in {"BUY", "SELL"}:
-            continue
+            return None
         split_factor = split_factor_after(symbol, event_date)
-        if not math.isclose(split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12):
+        split_adjusted = not math.isclose(
+            split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12,
+        )
+        if split_adjusted:
             shares *= split_factor
+        signed_shares = shares if txn_type == "BUY" else -shares
+        return position_key, symbol, event_date, signed_shares, split_adjusted
+
+    unclipped_deltas = {}
+    unclipped_first_dates = {}
+    for txn in raw_transactions:
+        parsed = signed_share_delta(txn)
+        if parsed is None:
+            continue
+        position_key, _, event_date, signed_shares, _ = parsed
+        unclipped_deltas[position_key] = (
+            unclipped_deltas.get(position_key, 0.0) + signed_shares
+        )
+        unclipped_first_dates[position_key] = min(
+            event_date,
+            unclipped_first_dates.get(position_key, event_date),
+        )
+
+    for txn in transactions or []:
+        if not isinstance(txn, dict):
+            continue
+        position_key = txn.get("position_key") or (
+            txn.get("profile_id"),
+            str(txn.get("ticker") or "").strip().upper(),
+        )
+        transaction_positions.add(position_key)
+        parsed = signed_share_delta(txn)
+        if parsed is None:
+            continue
+        position_key, symbol, event_date, signed_shares, split_adjusted = parsed
+        if split_adjusted:
             split_adjusted_transactions += 1
             split_adjusted_positions.add(position_key)
-        signed_shares = shares if txn_type == "BUY" else -shares
         transaction_deltas[position_key] = (
             transaction_deltas.get(position_key, 0.0) + signed_shares
         )
@@ -927,19 +967,19 @@ def _build_transaction_aware_portfolio_series(
     # the earliest defensible ownership boundary.
     inferred_opening_positions = 0
     inferred_closing_positions = 0
-    # Every inferred lot is a guess standing in for shares no transaction
-    # accounts for. It is correct when a broker export simply starts after the
-    # opening purchase, and wrong when the ledger itself is off -- a sale
-    # recorded twice, a missing buy -- and the two are indistinguishable from
-    # share counts alone. Report the arithmetic behind each one so the screen
-    # can flag the affected position instead of presenting the invented shares
-    # as fact, and so the reader can see which side needs correcting.
+    # Replay still invents shares so the clipped open-lot arithmetic lands on
+    # the saved quantity. The Start Value flag is only for a shortfall the
+    # Record-opening-lot action would actually close: buys and sells across
+    # the whole ledger, not a gap created by hiding the closed cycle. Those
+    # two look the same in the clipped replay and only the full net tells
+    # them apart.
     inferred_opening_detail = []
     for position_key, net_delta in transaction_deltas.items():
         symbol = transaction_symbols.get(position_key)
         if symbol not in prices.columns:
             continue
-        opening_quantity = current_quantities.get(position_key, 0.0) - net_delta
+        snapshot_quantity = current_quantities.get(position_key, 0.0)
+        opening_quantity = snapshot_quantity - net_delta
         if opening_quantity > 1e-8:
             first_activity = first_transaction_dates.get(position_key)
             if first_activity is None:
@@ -955,7 +995,13 @@ def _build_transaction_aware_portfolio_series(
             if seed_date > last_market_date:
                 continue
             events.append((seed_date, symbol, opening_quantity))
+            full_net = unclipped_deltas.get(position_key, 0.0)
+            true_gap = snapshot_quantity - full_net
+            if true_gap <= 1e-8:
+                continue
             inferred_opening_positions += 1
+            first_recorded = unclipped_first_dates.get(position_key, first_activity)
+            flag_seed = first_recorded - datetime.timedelta(days=1)
             inferred_opening_detail.append({
                 "market_symbol": symbol,
                 "ticker": (
@@ -968,12 +1014,10 @@ def _build_transaction_aware_portfolio_series(
                     if isinstance(position_key, (tuple, list)) and position_key
                     else None
                 ),
-                "shares": round(opening_quantity, 6),
-                "seed_date": seed_date.isoformat(),
-                "ledger_net_shares": round(net_delta, 6),
-                "snapshot_quantity": round(
-                    current_quantities.get(position_key, 0.0), 6,
-                ),
+                "shares": round(true_gap, 6),
+                "seed_date": flag_seed.isoformat(),
+                "ledger_net_shares": round(full_net, 6),
+                "snapshot_quantity": round(snapshot_quantity, 6),
             })
         elif opening_quantity < -1e-8:
             # The transaction export contains more net purchases than the
