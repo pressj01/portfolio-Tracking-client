@@ -5507,10 +5507,67 @@ function PortfoliosHelp() {
         <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
         <li><strong>↑ / ↓ arrows</strong> (Actions column) — move a portfolio up or down. This sets the order portfolios appear in the navbar selector.</li>
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
-        <li><strong>Clear</strong> — removes all holdings and data from the portfolio but keeps the portfolio itself. Useful before a clean reimport.</li>
-        <li><strong>Delete</strong> — permanently deletes the portfolio and all its data. The Owner/default portfolio (ID 1) cannot be deleted, so its row does not show a Delete button.</li>
+        <li><strong>Clear</strong>, <strong>Reset</strong>, and <strong>Delete</strong> — the three actions that remove data. See the comparison below.</li>
         <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in Owner and shown in the selector.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear vs Reset vs Delete</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Three buttons in the Actions column remove data, and they differ in how much they take.
+        The short version: <strong>Clear</strong> empties the holdings, <strong>Reset</strong> also
+        empties the transaction history, and <strong>Delete</strong> removes the portfolio itself.
+      </p>
+      <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
+        <table className="holdings-table" style={{ minWidth: '640px' }}>
+          <thead>
+            <tr>
+              <th>What it removes</th>
+              <th style={{ textAlign: 'center' }}>Clear</th>
+              <th style={{ textAlign: 'center' }}>Reset</th>
+              <th style={{ textAlign: 'center' }}>Delete</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Holdings, dividends, income tracking, DRIP config</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+            </tr>
+            <tr>
+              <td>Transactions, dividend payments, option trades</td>
+              <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+            </tr>
+            <tr>
+              <td>NAV history, category definitions, manual overrides, saved plans</td>
+              <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
+              <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+            </tr>
+            <tr>
+              <td>The portfolio itself (name, broker source, aggregate membership)</td>
+              <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
+              <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Clear</strong> — use when you want to reload positions from a fresh broker export. Your purchase history survives, so cost basis and realized gains stay intact.</li>
+        <li><strong>Reset</strong> — use when an import went wrong and you want to start that portfolio's import over from scratch. This is the one that also wipes the transaction ledger, which Clear leaves behind.</li>
+        <li><strong>Delete</strong> — use when you no longer want the portfolio at all. It disappears from the navbar selector and from any aggregates it belonged to. The Owner/default portfolio (ID 1) cannot be deleted, so its row shows no Delete button — Clear or Reset it instead.</li>
+      </ul>
+
+      <div className="alert alert-warning" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
+        <strong>Nothing is removed without warning.</strong> All three buttons first read the
+        portfolio and show you the exact record counts they are about to remove, list what they
+        will keep, and then require you to type the portfolio name before anything happens. A
+        database backup is saved first in every case — restore it from the Import page if you
+        change your mind. Other portfolios are never affected.
+      </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
         <strong>Owner and broker imports:</strong> Owner is a permanent portfolio, but it is not locked to one broker.

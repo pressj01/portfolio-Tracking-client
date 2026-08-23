@@ -692,11 +692,21 @@ export default function Settings() {
       {/* Clear Data */}
       <div className="card">
         <h2>Clear All Data</h2>
-        <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-          This will permanently delete all holdings, dividends, income tracking, and payout data
-          for <strong>{isAggregate ? 'the active aggregate view' : (currentProfileName || 'the current portfolio')}</strong> only.
-          Other portfolios are not touched. A database backup is created automatically — you can restore it from the Import page.
-        </p>
+        {isAggregate ? (
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            Clearing works on one portfolio at a time, so it is unavailable while an aggregate is
+            selected. Pick a specific portfolio from the navbar dropdown, or use the Reset button on
+            the <strong>Portfolios</strong> page to empty one account.
+          </p>
+        ) : (
+          <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem', fontSize: '0.9rem' }}>
+            This will permanently delete all holdings, dividends, income tracking, and payout data
+            for <strong>{currentProfileName || 'the current portfolio'}</strong> only.
+            Other portfolios are not touched. Transaction history is kept — to remove that too, use
+            Reset on the <strong>Portfolios</strong> page. A database backup is created automatically —
+            you can restore it from the Import page.
+          </p>
+        )}
 
         {status && (
           <div className={`alert alert-${status.type}`}>{status.msg}</div>
@@ -706,7 +716,8 @@ export default function Settings() {
           <button
             className="btn btn-danger"
             onClick={() => setConfirming(true)}
-            disabled={loading || (stats && stats.holdings === 0)}
+            disabled={loading || isAggregate || (stats && stats.holdings === 0)}
+            title={isAggregate ? 'Select a specific portfolio to clear its data' : undefined}
           >
             Clear All Data
           </button>

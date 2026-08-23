@@ -39,6 +39,47 @@ export const defaultSchwabDestSelection = (destinations) => {
   return Object.fromEntries(list.map(profile => [profileId(profile), picked.has(profileId(profile))]))
 }
 
+// Settings key holding the user's saved All-Accounts destination picks, as a
+// JSON array of profile ids.
+export const SCHWAB_DEFAULT_DESTINATIONS_KEY = 'schwab_import_default_destinations'
+
+export const parseSavedDestinationIds = (raw) => {
+  if (raw == null || raw === '') return null
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!Array.isArray(parsed)) return null
+    return parsed.map(String)
+  } catch {
+    // A hand-edited or corrupted value falls back to the built-in default
+    // rather than blocking the import.
+    return null
+  }
+}
+
+export const serializeDestinationIds = (destSelected) => JSON.stringify(
+  Object.entries(destSelected || {})
+    .filter(([, on]) => on)
+    .map(([id]) => String(id))
+    .sort((a, b) => Number(a) - Number(b)),
+)
+
+// Saved picks win over the broker-source default, but only for portfolios that
+// still exist — a deleted portfolio's id must not resurrect as a checked row.
+export const savedSchwabDestSelection = (destinations, savedIds) => {
+  const list = destinations || []
+  if (!savedIds || !list.length) return null
+  const saved = new Set(savedIds.map(String))
+  const anyStillPresent = list.some(profile => saved.has(profileId(profile)))
+  if (!anyStillPresent) return null
+  return Object.fromEntries(list.map(profile => [profileId(profile), saved.has(profileId(profile))]))
+}
+
+export const destSelectionMatchesSaved = (destSelected, savedIds) => (
+  savedIds != null && serializeDestinationIds(destSelected) === JSON.stringify(
+    savedIds.map(String).sort((a, b) => Number(a) - Number(b)),
+  )
+)
+
 export const mergeSchwabDestSelection = (current, destinations) => {
   const next = { ...(current || {}) }
   const list = destinations || []

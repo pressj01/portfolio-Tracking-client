@@ -46,7 +46,7 @@ export default function ImportWorkflowPicker({
   completedSteps,
   hasPositions,
   currentProfileName,
-  isAggregate,
+  isRollupTarget,
   txnOrderAck,
   onTxnOrderAckChange,
   onSelectStep,
@@ -91,7 +91,7 @@ export default function ImportWorkflowPicker({
                 type="button"
                 className={`btn ${workflow.brokerId === item.id ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => onSelectBroker(item.id)}
-                disabled={isAggregate && item.id !== 'schwab'}
+                disabled={isRollupTarget && item.id !== 'schwab'}
                 aria-pressed={workflow.brokerId === item.id}
               >
                 {item.label}
@@ -109,7 +109,7 @@ export default function ImportWorkflowPicker({
               type="button"
               className={`btn ${!workflow.schwabAllAccounts ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => onSelectSchwabScope(false)}
-              disabled={isAggregate}
+              disabled={isRollupTarget}
               aria-pressed={!workflow.schwabAllAccounts}
             >
               This account
@@ -189,7 +189,7 @@ export default function ImportWorkflowPicker({
             type="button"
             className={`btn ${format === APP_EXPORT.value ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => onSelectOtherFormat(APP_EXPORT.value)}
-            disabled={isAggregate}
+            disabled={isRollupTarget}
           >
             {APP_EXPORT.label}
           </button>

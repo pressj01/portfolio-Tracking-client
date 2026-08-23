@@ -23,12 +23,17 @@ import {
   applySchwabDestSelection,
   assignFileAccountToProfile,
   defaultSchwabDestSelection,
+  destSelectionMatchesSaved,
   fileAccountForProfile,
   isSchwabBrokerSource,
   leftoverFileAccounts,
   mergeSchwabDestSelection,
+  parseSavedDestinationIds,
+  savedSchwabDestSelection,
+  serializeDestinationIds,
   shouldAutodetectSchwabAllAccounts,
   schwabImportDestinations,
+  SCHWAB_DEFAULT_DESTINATIONS_KEY,
 } from '../utils/schwabAllAccountsImport'
 
 const dateInputToday = () => {
@@ -106,8 +111,13 @@ function SchwabDestinationPicker({
   accountMap,
   onAssignAccount,
   previewed,
+  savedDestIds,
+  onSaveDefaults,
+  onClearDefaults,
+  savingDefaults,
 }) {
   const selectedCount = destinations.filter(profile => destSelected[String(profile.id)]).length
+  const isSavedDefault = destSelectionMatchesSaved(destSelected, savedDestIds)
 
   if (!destinations.length) {
     return (
@@ -142,9 +152,37 @@ function SchwabDestinationPicker({
         <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
           {selectedCount} selected
         </span>
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={onSaveDefaults}
+          disabled={savingDefaults || isSavedDefault}
+          title={isSavedDefault
+            ? 'These accounts are already your saved default'
+            : 'Remember these accounts and pre-check them next time'}
+          style={{ padding: '0.2rem 0.65rem', fontSize: '0.8rem' }}
+        >
+          {savingDefaults ? 'Saving…' : isSavedDefault ? '✓ Saved as default' : 'Save as default'}
+        </button>
+        {savedDestIds != null && (
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClearDefaults}
+            disabled={savingDefaults}
+            title="Go back to checking every Schwab-tagged portfolio"
+            style={{ padding: '0.2rem 0.65rem', fontSize: '0.8rem' }}
+          >
+            Clear default
+          </button>
+        )}
       </div>
       <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginBottom: '0.75rem' }}>
         Choose which of your Schwab portfolios this file should update. Unchecked accounts are left alone.
+        {savedDestIds != null
+          ? ' Your saved default is pre-checked each time you open this page.'
+          : ' Use Save as default to have these same accounts pre-checked next time.'}
       </p>
       <div style={{ border: '1px solid var(--p-333)', borderRadius: '6px', overflow: 'hidden' }}>
         {destinations.map((profile, index) => {
@@ -357,6 +395,9 @@ export default function Import() {
   const [txnAccountMap, setTxnAccountMap] = useState({})
   // Portfolio id -> whether this All-Accounts import should write to it
   const [txnDestSelected, setTxnDestSelected] = useState({})
+  const [savedDestIds, setSavedDestIds] = useState(null)
+  const [savedDestLoaded, setSavedDestLoaded] = useState(false)
+  const [savingDestDefaults, setSavingDestDefaults] = useState(false)
   const [workflowStep, setWorkflowStep] = useState(() => workflowStepForFormat(readDefaultBrokerFormat(), 'positions'))
   const [txnOrderAck, setTxnOrderAck] = useState(false)
   const [completedSteps, setCompletedSteps] = useState({})
@@ -471,6 +512,17 @@ export default function Import() {
     return () => { cancelled = true }
   }, [selection, loadBackups, loadDataStats])
 
+  // A positions file describes one brokerage account, so it needs a single
+  // account as its destination. Two selections fail that: an aggregate, and
+  // Owner once Owner is fed by more than one account. Only the All-Accounts
+  // format is exempt — it names its own target per account block.
+  const ownerSourceCount = useMemo(
+    () => profiles.filter(p => p.id !== 1 && p.include_in_owner).length,
+    [profiles],
+  )
+  const isOwnerRollup = !isAggregate && profileId === 1 && ownerSourceCount > 1
+  const isRollupTarget = isAggregate || isOwnerRollup
+
   const txnIsMultiAccount = txnPreview?.format_type === 'positions_multi'
   const schwabDestinations = useMemo(
     () => schwabImportDestinations(
@@ -486,8 +538,24 @@ export default function Import() {
     ? leftoverFileAccounts(txnPreview.accounts, txnAccountMap)
     : []
 
+  // Saved destination default. Loaded once; the seeding effect below waits for
+  // it, otherwise it would seed the broker-source default first and the saved
+  // picks would never get a chance to apply.
   useEffect(() => {
-    if (txnFormat !== 'schwab_all_accounts') return undefined
+    let cancelled = false
+    fetch(`${API_BASE}/api/settings`)
+      .then(r => r.json())
+      .then((all) => {
+        if (cancelled) return
+        setSavedDestIds(parseSavedDestinationIds(all?.[SCHWAB_DEFAULT_DESTINATIONS_KEY]))
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setSavedDestLoaded(true) })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    if (txnFormat !== 'schwab_all_accounts' || !savedDestLoaded) return undefined
     let cancelled = false
     const destinations = schwabImportDestinations(profiles)
     queueMicrotask(() => {
@@ -495,11 +563,41 @@ export default function Import() {
       setTxnDestSelected((prev) => (
         Object.keys(prev).length
           ? mergeSchwabDestSelection(prev, destinations)
-          : defaultSchwabDestSelection(destinations)
+          : (savedSchwabDestSelection(destinations, savedDestIds)
+            || defaultSchwabDestSelection(destinations))
       ))
     })
     return () => { cancelled = true }
-  }, [txnFormat, profiles])
+  }, [txnFormat, profiles, savedDestLoaded, savedDestIds])
+
+  const saveDestDefaults = async () => {
+    const payload = serializeDestinationIds(txnDestSelected)
+    setSavingDestDefaults(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [SCHWAB_DEFAULT_DESTINATIONS_KEY]: payload }),
+      })
+      if (res.ok) setSavedDestIds(parseSavedDestinationIds(payload))
+    } finally {
+      setSavingDestDefaults(false)
+    }
+  }
+
+  const clearDestDefaults = async () => {
+    setSavingDestDefaults(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/settings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [SCHWAB_DEFAULT_DESTINATIONS_KEY]: '' }),
+      })
+      if (res.ok) setSavedDestIds(null)
+    } finally {
+      setSavingDestDefaults(false)
+    }
+  }
 
   const txnHasRows = txnPreview
     ? (txnPreview.format_type === 'positions_multi'
@@ -543,7 +641,7 @@ export default function Import() {
   }, [])
 
   useEffect(() => {
-    if (txnFormat || isAggregate) return
+    if (txnFormat || isRollupTarget) return
     const brokerId = brokerIdFromSource(currentProfile?.broker_source)
     if (!brokerId) return
     let cancelled = false
@@ -553,7 +651,7 @@ export default function Import() {
       }
     })
     return () => { cancelled = true }
-  }, [applyTxnFormat, currentProfile, isAggregate, txnFormat])
+  }, [applyTxnFormat, currentProfile, isRollupTarget, txnFormat])
 
   const handleTabChange = (tab) => {
     setActiveTab(tab)
@@ -869,22 +967,25 @@ export default function Import() {
     }
   }
 
-  const schwabAllAccountsFromAggregate = (
-    isAggregate && activeTab === 'txnHistory' && txnFormat === 'schwab_all_accounts'
+  const allAccountsFromRollup = (
+    isRollupTarget && activeTab === 'txnHistory' && txnFormat === 'schwab_all_accounts'
   )
 
-  if (isAggregate && !schwabAllAccountsFromAggregate) {
+  if (isRollupTarget && !allAccountsFromRollup) {
     return (
       <div className="page">
         <h1>Import Portfolio Data</h1>
         <div className="alert alert-info">
-          Cannot import while viewing the Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.
+          {isAggregate
+            ? 'Cannot import while viewing an Aggregate portfolio. Please select a specific portfolio from the navbar dropdown.'
+            : `Cannot import into ${currentProfileName}, which is a rollup of ${ownerSourceCount} accounts. Please select one of those accounts from the navbar dropdown.`}
         </div>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
-          Positions, transactions, and Snowball files import into the selected account.
-          The exception is a Schwab All-Accounts Positions export: that one file can update
-          several Schwab portfolios because you map accounts after preview. There is no
-          All-Accounts importer for transactions or for other brokers.
+          Positions, transactions, and Snowball files describe one brokerage account, so they
+          import into the single selected account. The exception is a Schwab All-Accounts
+          Positions export: that one file can update several Schwab portfolios because you map
+          accounts after preview. There is no All-Accounts importer for transactions or for
+          other brokers.
         </p>
         <button className="btn btn-primary" style={{ marginTop: '0.75rem' }} onClick={selectSchwabAllAccounts}>
           Import Charles Schwab (All Accounts Positions)
@@ -913,10 +1014,12 @@ export default function Import() {
           ? 'Each selected Schwab account is imported from the All-Accounts file into its own portfolio.'
           : <>Importing into: <strong>{currentProfileName}</strong></>}
       </p>
-      {isAggregate && (
+      {isRollupTarget && (
         <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-          Viewing an aggregate. Other import types need a specific portfolio selected.
-          This All-Accounts import still works because each Schwab account is routed on its own.
+          {isAggregate
+            ? 'Viewing an aggregate. Other import types need a single account selected.'
+            : `${currentProfileName} is a rollup of ${ownerSourceCount} accounts. Other import types need a single account selected.`}
+          {' '}This All-Accounts import still works because each Schwab account is routed on its own.
         </div>
       )}
       {(marketRefreshing || waitingForRefresh) && (
@@ -935,24 +1038,24 @@ export default function Import() {
         <button
           className={`tab ${activeTab === 'generic' ? 'active' : ''}`}
           onClick={() => handleTabChange('generic')}
-          disabled={isAggregate}
-          title={isAggregate ? 'Select a specific portfolio to use Generic Positions' : undefined}
+          disabled={isRollupTarget}
+          title={isRollupTarget ? 'Select a single account to use Generic Positions' : undefined}
         >
           Generic Positions
         </button>
         <button
           className={`tab ${activeTab === 'txnHistory' && txnFormat === 'generic_transactions' ? 'active' : ''}`}
           onClick={handleGenericTransactionsTab}
-          disabled={isAggregate}
-          title={isAggregate ? 'Select a specific portfolio to use Generic Transactions' : undefined}
+          disabled={isRollupTarget}
+          title={isRollupTarget ? 'Select a single account to use Generic Transactions' : undefined}
         >
           Generic Transactions
         </button>
         <button
           className={`tab ${activeTab === 'txnHistory' && isSnowballFormat(txnFormat) ? 'active' : ''}`}
           onClick={handleSnowballTab}
-          disabled={isAggregate}
-          title={isAggregate ? 'Select a specific portfolio to import Snowball data' : undefined}
+          disabled={isRollupTarget}
+          title={isRollupTarget ? 'Select a single account to import Snowball data' : undefined}
         >
           Snowball
         </button>
@@ -1203,7 +1306,7 @@ export default function Import() {
               completedSteps={completedSteps}
               hasPositions={hasPositions}
               currentProfileName={currentProfileName}
-              isAggregate={isAggregate}
+              isRollupTarget={isRollupTarget}
               txnOrderAck={txnOrderAck}
               onTxnOrderAckChange={setTxnOrderAck}
               onSelectStep={selectWorkflowStep}
@@ -1433,11 +1536,11 @@ export default function Import() {
                   value={txnFormat}
                   onChange={(e) => applyTxnFormat(e.target.value)}
                   style={{ width: '250px' }}
-                  disabled={isAggregate}
+                  disabled={isRollupTarget}
                 >
                   <option value={NO_FORMAT} disabled>Select a format...</option>
                   {TXN_FORMATS.filter(f => (
-                    (!isAggregate || f.value === 'schwab_all_accounts')
+                    (!isRollupTarget || f.value === 'schwab_all_accounts')
                     && (workflowStep === 'migration' || !isSnowballFormat(f.value))
                   )).map(f => (
                     <option key={f.value} value={f.value}>{f.label}</option>
@@ -1473,6 +1576,10 @@ export default function Import() {
               accountMap={txnAccountMap}
               onAssignAccount={handleAssignSchwabAccount}
               previewed={txnIsMultiAccount}
+              savedDestIds={savedDestIds}
+              onSaveDefaults={saveDestDefaults}
+              onClearDefaults={clearDestDefaults}
+              savingDefaults={savingDestDefaults}
             />
           )}
 

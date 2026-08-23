@@ -1820,7 +1820,13 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def get_profile_id():
-    """Return a single profile_id (for write operations)."""
+    """Return a single profile_id (for write operations).
+
+    An aggregate selection sends only `aggregate_id`, so this falls back to
+    profile 1. Callers that write must pair this with
+    `_reject_aggregate_single_profile_write()` or they will silently write to
+    Owner while the user believes they are acting on the aggregate.
+    """
     return int(request.args.get("profile_id", session.get("profile_id", 1)))
 
 
@@ -1840,6 +1846,55 @@ def _reject_aggregate_category_write():
         return None
     return jsonify({
         "error": "Categories can only be edited on an individual account, not an aggregate portfolio."
+    }), 400
+
+
+def _reject_aggregate_single_profile_write(action):
+    """Block a single-profile write that was issued from an aggregate view.
+
+    An aggregate is a view over several portfolios, so there is no single
+    target for an import or a clear. Without this guard `get_profile_id()`
+    quietly resolves to Owner and the write lands on the wrong portfolio.
+    """
+    if _request_aggregate_id() is None:
+        return None
+    return jsonify({
+        "error": (
+            f"{action} works on one portfolio at a time and cannot run from an "
+            "Aggregate view. Select a specific portfolio from the navbar dropdown first."
+        )
+    }), 400
+
+
+def _reject_rollup_import_target(action):
+    """Block an import whose destination is a rollup rather than one account.
+
+    Covers both rollup shapes: an explicit aggregate selection, and Owner when
+    Owner is fed by more than one account. A positions file describes a single
+    brokerage account, so writing it to a rollup would load one account's
+    holdings over the combined view. The exception is a multi-account format
+    (`schwab_all_accounts`), which names its own target per account block —
+    those callers must not use this guard.
+    """
+    blocked = _reject_aggregate_single_profile_write(action)
+    if blocked:
+        return blocked
+    if get_profile_id() != 1:
+        return None
+    conn = get_connection()
+    try:
+        owner_sources = _get_owner_source_profile_ids(conn)
+    finally:
+        conn.close()
+    if len(owner_sources) <= 1:
+        return None
+    return jsonify({
+        "error": (
+            f"{action} needs a single account, but Owner is a rollup of "
+            f"{len(owner_sources)} accounts. Import into the underlying source "
+            "portfolio instead, or use a Schwab All-Accounts file, which routes "
+            "each account to its own portfolio."
+        )
     }), 400
 
 
@@ -5668,7 +5723,7 @@ def list_profiles():
     conn = get_connection()
     rows = conn.execute("""
         SELECT id, name, created_at, display_order, hidden_from_selector,
-               broker_source, is_user_owned
+               broker_source, is_user_owned, include_in_owner
         FROM profiles
         ORDER BY display_order, id
     """).fetchall()
@@ -5801,12 +5856,38 @@ def delete_profile(pid):
     if pid == 1:
         return jsonify({"error": "Cannot delete the default profile"}), 400
     conn = get_connection()
-    _clear_profile_data(conn, pid)
-    conn.execute("DELETE FROM aggregate_config WHERE member_profile_id = ?", (pid,))
-    conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
-    conn.commit()
-    conn.close()
-    return jsonify({"deleted": pid})
+    try:
+        name = _profile_name_or_none(conn, pid)
+    finally:
+        conn.close()
+    if name is None:
+        return jsonify({"error": f"Portfolio {pid} not found"}), 404
+    refused = _require_destructive_confirmation(name)
+    if refused:
+        return refused
+
+    _create_import_backup(pid)
+    conn = get_connection()
+    try:
+        # The profile row is going away, so sweep every table that stores data
+        # against it. Clearing only the holdings tables (the old behaviour) left
+        # the ledger, NAV history, and saved plans behind as unreachable rows.
+        deleted = {}
+        for table in _profile_scoped_tables(conn):
+            result = conn.execute(f'DELETE FROM "{table}" WHERE profile_id = ?', (pid,))
+            deleted[table] = result.rowcount or 0
+        conn.execute("DELETE FROM aggregate_config WHERE member_profile_id = ?", (pid,))
+        conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({
+        "deleted": pid,
+        "profile_name": name,
+        "removed": deleted,
+        "total": sum(deleted.values()),
+        "message": f'Deleted "{name}" and all {sum(deleted.values())} of its records.',
+    })
 
 
 def _clear_profile_data(conn, pid):
@@ -5999,12 +6080,240 @@ def _rename_holding_ticker_records(conn, old_ticker, new_ticker):
 
 @app.route("/api/profiles/<int:pid>/clear", methods=["POST"])
 def clear_profile_data(pid):
-    """Clear all data for a profile without deleting the profile itself."""
+    """Clear a profile's holdings data, keeping the profile and its ledger."""
     conn = get_connection()
-    _clear_profile_data(conn, pid)
-    conn.commit()
-    conn.close()
-    return jsonify({"cleared": pid, "message": f"All data cleared for profile {pid}"})
+    try:
+        name = _profile_name_or_none(conn, pid)
+    finally:
+        conn.close()
+    if name is None:
+        return jsonify({"error": f"Portfolio {pid} not found"}), 404
+    refused = _require_destructive_confirmation(name)
+    if refused:
+        return refused
+
+    # Clear used to be the one destructive path with no snapshot behind it.
+    _create_import_backup(pid)
+    conn = get_connection()
+    try:
+        _clear_profile_data(conn, pid)
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({
+        "cleared": pid,
+        "profile_name": name,
+        "message": f'Holdings data cleared for "{name}". Transaction history was kept.',
+    })
+
+
+# Tables emptied by a full "start the import over" reset: the position and
+# transaction record plus everything derived from it. Deliberately excluded are
+# things no import rebuilds — NAV history, saved rebalance/tax-loss/builder
+# plans, and the category definitions themselves (only the per-ticker
+# assignments in ticker_categories go).
+_PROFILE_RESET_TABLES = (
+    # Current positions and their derived mirrors.
+    "all_account_info", "holdings", "dividends", "income_tracking",
+    # Position history.
+    "transactions", "dividend_payments", "dividend_schedule_history", "option_trades",
+    # Payout tracking rebuilt from positions.
+    "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
+    # Per-holding configuration pointing at tickers the reset removes.
+    "drip_settings", "drip_contribution_targets", "drip_redirects",
+    "drip_monthly_contribution", "swap_candidates", "ticker_categories",
+)
+
+# Tables emptied by Clear — holdings and the tracking derived from them. Matches
+# _clear_profile_data, which deliberately keeps the transaction ledger.
+_PROFILE_CLEAR_TABLES = (
+    "all_account_info", "holdings", "dividends", "income_tracking",
+    "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
+    "drip_settings", "drip_contribution_targets", "drip_redirects",
+    "swap_candidates", "ticker_categories",
+)
+
+# What each action leaves behind, echoed to the UI so every warning can say so.
+_PROFILE_SCOPE_PRESERVED = {
+    "clear": (
+        "Transaction history, dividend payments, and option trades",
+        "NAV / portfolio value history",
+        "Category and sub-category definitions, and manual overrides",
+        "Saved rebalance, tax-loss, builder, and simulator plans",
+        "Portfolio name, broker source, and aggregate membership",
+    ),
+    "reset": (
+        "NAV / portfolio value history",
+        "Category and sub-category definitions",
+        "Manual dividend, income, and tax overrides",
+        "Saved rebalance, tax-loss, builder, and simulator plans",
+        "Portfolio name, broker source, and aggregate membership",
+    ),
+    "delete": (),
+}
+
+_PROFILE_SCOPES = ("clear", "reset", "delete")
+
+
+def _profile_scoped_tables(conn):
+    """Every table carrying a profile_id, discovered from the live schema.
+
+    Delete removes the profile row itself, so it must sweep whatever the
+    current schema stores per profile — a hard-coded list would silently
+    orphan rows each time a new profile-scoped table is added.
+    """
+    names = [
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+        ).fetchall()
+    ]
+    scoped = []
+    for name in names:
+        cols = {row[1] for row in conn.execute(f'PRAGMA table_info("{name}")').fetchall()}
+        if "profile_id" in cols:
+            scoped.append(name)
+    return scoped
+
+
+def _profile_tables_for_scope(conn, scope):
+    """Tables a given action empties, filtered to those this database has."""
+    if scope == "delete":
+        return _profile_scoped_tables(conn)
+    existing = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    wanted = _PROFILE_CLEAR_TABLES if scope == "clear" else _PROFILE_RESET_TABLES
+    return [table for table in wanted if table in existing]
+
+
+def _profile_reset_counts(conn, pid, scope="reset"):
+    """Row counts per table for the given action's scope."""
+    counts = {}
+    for table in _profile_tables_for_scope(conn, scope):
+        row = conn.execute(
+            f'SELECT COUNT(*) AS c FROM "{table}" WHERE profile_id = ?', (pid,)
+        ).fetchone()
+        counts[table] = int(row["c"] if isinstance(row, dict) else row[0])
+    return counts
+
+
+def _profile_reset_summary(counts):
+    """Group raw table counts into the buckets the warning dialog shows."""
+    grouped = {
+        "positions": counts.get("all_account_info", 0),
+        "transactions": counts.get("transactions", 0),
+        "option_trades": counts.get("option_trades", 0),
+        "dividend_payments": counts.get("dividend_payments", 0),
+    }
+    accounted = {"all_account_info", "transactions", "option_trades", "dividend_payments"}
+    grouped["other_records"] = sum(v for k, v in counts.items() if k not in accounted)
+    return grouped
+
+
+def _profile_name_or_none(conn, pid):
+    row = conn.execute("SELECT name FROM profiles WHERE id = ?", (pid,)).fetchone()
+    if not row:
+        return None
+    return row["name"] if isinstance(row, dict) else row[0]
+
+
+def _require_destructive_confirmation(name):
+    """Refuse a destructive call whose body does not echo the portfolio name.
+
+    Server-side backstop for the UI warning: no Clear, Reset, or Delete can
+    fire from a stray request, a replayed URL, or a stale portfolio id — only
+    from a caller that read the right name back first.
+    """
+    data = request.get_json(silent=True) or {}
+    if str(data.get("confirm_name") or "").strip() == str(name).strip():
+        return None
+    return jsonify({
+        "error": (
+            f'Not performed — confirmation missing. Send the exact portfolio name "{name}" '
+            "as confirm_name."
+        )
+    }), 400
+
+
+@app.route("/api/profiles/<int:pid>/data-preview", methods=["GET"])
+def profile_data_preview(pid):
+    """Report exactly what Clear, Reset, or Delete would remove.
+
+    Every destructive button reads this first so its warning states real
+    numbers instead of a generic "are you sure".
+    """
+    scope = (request.args.get("scope") or "reset").strip().lower()
+    if scope not in _PROFILE_SCOPES:
+        return jsonify({"error": f"Unknown scope: {scope}"}), 400
+    conn = get_connection()
+    try:
+        name = _profile_name_or_none(conn, pid)
+        if name is None:
+            return jsonify({"error": f"Portfolio {pid} not found"}), 404
+        counts = _profile_reset_counts(conn, pid, scope)
+    finally:
+        conn.close()
+    return jsonify({
+        "profile_id": pid,
+        "profile_name": name,
+        "scope": scope,
+        "counts": counts,
+        "summary": _profile_reset_summary(counts),
+        "total": sum(counts.values()),
+        "preserved": list(_PROFILE_SCOPE_PRESERVED[scope]),
+        "removes_portfolio": scope == "delete",
+    })
+
+
+@app.route("/api/profiles/<int:pid>/reset", methods=["POST"])
+def reset_profile_for_reimport(pid):
+    """Delete every position and transaction for one portfolio.
+
+    The caller must echo the portfolio's exact name in `confirm_name`. That is
+    a backstop for the UI warning: a reset cannot fire from a stray request or
+    a stale portfolio id, only from a caller that read back the right name.
+    """
+    conn = get_connection()
+    try:
+        name = _profile_name_or_none(conn, pid)
+        if name is None:
+            return jsonify({"error": f"Portfolio {pid} not found"}), 404
+        refused = _require_destructive_confirmation(name)
+        if refused:
+            return refused
+        counts_before = _profile_reset_counts(conn, pid)
+    finally:
+        conn.close()
+
+    # Snapshot before the delete so a mistaken reset is recoverable from the
+    # Import page's backup list.
+    backup_path = _create_import_backup(pid)
+
+    conn = get_connection()
+    try:
+        deleted = {}
+        for table, count in counts_before.items():
+            result = conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
+            deleted[table] = result.rowcount if result.rowcount is not None else count
+        _set_profile_cash_value(conn, pid, 0, source="profile_reset")
+        conn.commit()
+    finally:
+        conn.close()
+
+    total = sum(deleted.values())
+    return jsonify({
+        "reset": pid,
+        "profile_name": name,
+        "deleted": deleted,
+        "summary": _profile_reset_summary(deleted),
+        "total": total,
+        "backup": os.path.basename(backup_path) if backup_path else None,
+        "message": (
+            f'Deleted {total} record(s) from "{name}". The portfolio is empty and ready to re-import.'
+        ),
+    })
 
 
 @app.route("/api/profiles/<int:pid>/include-in-owner", methods=["PUT"])
@@ -6335,6 +6644,9 @@ def reconcile_owner():
 @app.route("/api/import/excel", methods=["POST"])
 def api_import_excel():
     """Import the owner's Excel spreadsheet (All Accounts sheet)."""
+    blocked = _reject_rollup_import_target("Importing an Excel workbook")
+    if blocked:
+        return blocked
     profile_id = get_profile_id()
     multi = request.form.get("multi_sheet", "false").lower() == "true"
     # Multi-sheet imports affect multiple profiles, so leave those backups untagged.
@@ -6419,6 +6731,9 @@ def api_import_excel():
 @app.route("/api/import/generic", methods=["POST"])
 def api_import_generic():
     """Import a generic user spreadsheet (Ticker + Shares minimum)."""
+    blocked = _reject_rollup_import_target("A generic positions import")
+    if blocked:
+        return blocked
     profile_id = get_profile_id()
     _create_import_backup(profile_id)
     nav_date = _request_nav_date()
@@ -23467,6 +23782,9 @@ def security_research_average_returns(kind):
 @app.route("/api/data/clear-all", methods=["POST"])
 def clear_all_data():
     """Delete all holdings, dividends, and related data for the current profile."""
+    blocked = _reject_aggregate_single_profile_write("Clearing portfolio data")
+    if blocked:
+        return blocked
     profile_id = get_profile_id()
     # Snapshot the database before a destructive operation so the user can roll back.
     _create_import_backup(profile_id)

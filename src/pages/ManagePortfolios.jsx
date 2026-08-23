@@ -38,6 +38,7 @@ export default function ManagePortfolios() {
   const [editAggName, setEditAggName] = useState('')
   const [reconcileAggId, setReconcileAggId] = useState('owner') // 'owner' = use include_in_owner; else aggregate id
   const [reconciling, setReconciling] = useState(false)
+  const [busyAction, setBusyAction] = useState(null)
   const [selectorPreferenceError, setSelectorPreferenceError] = useState('')
 
   const loadSummary = useCallback(() => {
@@ -100,30 +101,110 @@ export default function ManagePortfolios() {
     }
   }
 
-  const deletePortfolio = async (p) => {
-    if (p.id === 1) {
-      await dialog.alert('Cannot delete the default portfolio.')
+  // Clear, Reset, and Delete all run through one warned flow: read back exactly
+  // what the action would remove, show it, then require the name typed. The
+  // server re-checks the name, so nothing here can fire on a stray click.
+  const ACTIONS = {
+    clear: {
+      verb: 'Clear',
+      headline: (name, n) => `CLEAR ${n} holdings record(s) for "${name}"?`,
+      empty: (name) => `"${name}" has no holdings data to clear.`,
+      request: (p) => ({ url: `${API_BASE}/api/profiles/${p.id}/clear`, method: 'POST' }),
+    },
+    reset: {
+      verb: 'Reset',
+      headline: (name, n) => `PERMANENTLY DELETE all ${n} position and transaction record(s) for "${name}"?`,
+      empty: (name) => `"${name}" has no positions or transactions to delete. It is already ready to import.`,
+      request: (p) => ({ url: `${API_BASE}/api/profiles/${p.id}/reset`, method: 'POST' }),
+    },
+    delete: {
+      verb: 'Delete',
+      headline: (name, n) => `PERMANENTLY DELETE the portfolio "${name}" and all ${n} of its record(s)?`,
+      empty: (name) => `Delete the empty portfolio "${name}"?`,
+      request: (p) => ({ url: `${API_BASE}/api/profiles/${p.id}`, method: 'DELETE' }),
+    },
+  }
+
+  const runDestructiveAction = async (p, scope) => {
+    const action = ACTIONS[scope]
+    if (scope === 'delete' && p.id === 1) {
+      await dialog.alert('Cannot delete the default portfolio. Use Clear or Reset to empty it instead.')
       return
     }
-    const ok = await dialog.confirm(`Delete portfolio "${p.name}" and all its data? This cannot be undone.`)
-    if (!ok) return
-    const res = await fetch(`${API_BASE}/api/profiles/${p.id}`, { method: 'DELETE' })
-    if (res.ok) {
-      await refreshProfiles()
-      await refreshAggregates()
+    setBusyAction(`${p.id}:${scope}`)
+    try {
+      const previewRes = await fetch(`${API_BASE}/api/profiles/${p.id}/data-preview?scope=${scope}`)
+      const preview = await previewRes.json()
+      if (!previewRes.ok) {
+        await dialog.alert(preview.error || `Could not read "${p.name}" before running ${action.verb}.`)
+        return
+      }
+      // Nothing to remove: Clear/Reset are pointless, but an empty portfolio is
+      // still worth deleting, so only that one carries on to the warning.
+      if (!preview.total && scope !== 'delete') {
+        await dialog.alert(action.empty(p.name))
+        return
+      }
+
+      const s = preview.summary || {}
+      const lines = [
+        ['Positions', s.positions],
+        ['Transactions', s.transactions],
+        ['Option trades', s.option_trades],
+        ['Dividend payments', s.dividend_payments],
+        ['Other linked records', s.other_records],
+      ].filter(([, n]) => n > 0).map(([label, n]) => `  • ${label}: ${n}`)
+
+      const kept = preview.preserved || []
+      const warning = [
+        action.headline(p.name, preview.total),
+        '',
+        ...(lines.length ? ['This removes:', ...lines, ''] : []),
+        ...(kept.length ? ['Kept: ' + kept.join('; ') + '.', ''] : []),
+        ...(preview.removes_portfolio
+          ? ['The portfolio itself is removed from the selector and from any aggregates.', '']
+          : []),
+        'A database backup is saved first — you can restore it from the Import page.',
+        'Other portfolios are not touched.',
+      ].join('\n')
+
+      if (!(await dialog.confirm(warning))) return
+
+      const typed = await dialog.prompt(`Last check. Type the portfolio name exactly to ${action.verb.toLowerCase()} it: ${p.name}`)
+      if (typed === null) return
+      if (String(typed).trim() !== p.name.trim()) {
+        await dialog.alert('Name did not match. Nothing was changed.')
+        return
+      }
+
+      const { url, method } = action.request(p)
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_name: p.name }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        await dialog.alert(data.error || `${action.verb} failed.`)
+        return
+      }
+      clearDashboardCacheForSelection(`p:${p.id}`)
       loadSummary()
+      await refreshProfiles()
+      if (scope === 'delete') await refreshAggregates()
+      await dialog.alert(
+        `${data.message}${data.backup ? `\n\nBackup saved: ${data.backup}` : ''}`
+      )
+    } catch (e) {
+      await dialog.alert(`${action.verb} failed: ${e.message}`)
+    } finally {
+      setBusyAction(null)
     }
   }
 
-  const clearPortfolioData = async (p) => {
-    const ok = await dialog.confirm(`Clear all data for "${p.name}"? The portfolio will remain but all holdings, dividends, and tracking data will be removed. This cannot be undone.`)
-    if (!ok) return
-    const res = await fetch(`${API_BASE}/api/profiles/${p.id}/clear`, { method: 'POST' })
-    if (res.ok) {
-      loadSummary()
-      await dialog.alert(`All data cleared for "${p.name}". You can now reimport.`)
-    }
-  }
+  const clearPortfolioData = (p) => runDestructiveAction(p, 'clear')
+  const resetPortfolio = (p) => runDestructiveAction(p, 'reset')
+  const deletePortfolio = (p) => runDestructiveAction(p, 'delete')
 
   const toggleIncludeInOwner = async (p) => {
     const newVal = !p.include_in_owner
@@ -333,6 +414,37 @@ export default function ManagePortfolios() {
       <p style={{ color: 'var(--p-aaa)', marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
         Use <strong>Account Type</strong> to identify test or non-user-owned data. Optimization stays scoped to the active account; test/non-owned accounts are also kept out of Owner.
       </p>
+
+      <div
+        style={{
+          border: '1px solid var(--p-333)', borderRadius: '6px', padding: '0.75rem 1rem',
+          marginBottom: '1.25rem', fontSize: '0.9rem', color: 'var(--p-aaa)',
+        }}
+      >
+        <strong style={{ color: 'var(--text)' }}>The three Actions that remove data</strong>
+        <ul style={{ margin: '0.5rem 0 0.5rem 1.1rem', padding: 0, lineHeight: 1.6 }}>
+          <li>
+            <strong style={{ color: 'var(--p-f0ad4e)' }}>Clear</strong> — empties the holdings
+            and the tracking derived from them. <em>Keeps</em> the portfolio and its transaction
+            history. Use it to reload positions from a fresh broker export.
+          </li>
+          <li>
+            <strong style={{ color: 'var(--p-f0ad4e)' }}>Reset</strong> — empties the holdings
+            <em> and</em> the transaction history, dividend payments, and option trades.
+            <em> Keeps</em> the portfolio, its NAV history, categories, and saved plans. Use it to
+            start an import over from scratch.
+          </li>
+          <li>
+            <strong style={{ color: 'var(--p-ef9a9a)' }}>Delete</strong> — removes the portfolio
+            itself along with everything it holds. It disappears from the portfolio selector and
+            from any aggregates. Owner cannot be deleted.
+          </li>
+        </ul>
+        All three take a database backup first (restore it from the Import page), warn you with
+        the exact record counts, and require you to type the portfolio name before anything is
+        removed. Other portfolios are never touched.
+      </div>
+
       {selectorPreferenceError && <div className="alert alert-error">{selectorPreferenceError}</div>}
 
       <table className="holdings-table" style={{ marginBottom: '2rem' }}>
@@ -439,10 +551,35 @@ export default function ManagePortfolios() {
                 <button className="btn btn-sm" style={{ marginLeft: '0.3rem' }} onClick={() => moveProfile(p.id, 1)} disabled={index === summary.length - 1} title="Move portfolio down" aria-label={`Move ${p.name} down`}>↓</button>
                 <button className="btn btn-sm" onClick={() => setProfileId(String(p.id))} title="Switch to this portfolio">Select</button>
                 {p.holdings_count > 0 && (
-                  <button className="btn btn-sm" style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }} onClick={() => clearPortfolioData(p)} title="Clear all data (keep portfolio)">Clear</button>
+                  <button
+                    className="btn btn-sm"
+                    style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
+                    onClick={() => clearPortfolioData(p)}
+                    disabled={busyAction === `${p.id}:clear`}
+                    title="Empty the holdings but keep the portfolio and its transaction history"
+                  >
+                    {busyAction === `${p.id}:clear` ? 'Clearing…' : 'Clear'}
+                  </button>
                 )}
+                <button
+                  className="btn btn-sm"
+                  style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
+                  onClick={() => resetPortfolio(p)}
+                  disabled={busyAction === `${p.id}:reset`}
+                  title="Empty the holdings AND the transaction history, keeping the portfolio, so you can import it again from scratch"
+                >
+                  {busyAction === `${p.id}:reset` ? 'Resetting…' : 'Reset'}
+                </button>
                 {p.id !== 1 && (
-                  <button className="btn btn-sm btn-danger" style={{ marginLeft: '0.5rem' }} onClick={() => deletePortfolio(p)}>Delete</button>
+                  <button
+                    className="btn btn-sm btn-danger"
+                    style={{ marginLeft: '0.5rem' }}
+                    onClick={() => deletePortfolio(p)}
+                    disabled={busyAction === `${p.id}:delete`}
+                    title="Remove the portfolio itself along with all of its data — it disappears from the selector and from any aggregates"
+                  >
+                    {busyAction === `${p.id}:delete` ? 'Deleting…' : 'Delete'}
+                  </button>
                 )}
               </td>
             </tr>
