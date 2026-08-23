@@ -57,6 +57,52 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertEqual(payload["custom_tickers"], ["SPY", "AAPL"])
         self.assertFalse(payload["exclude_earnings_before_expiry"])
         self.assertEqual(payload["min_dte"], 14)
+        self.assertEqual(payload["min_market_cap"], 0)
+        self.assertEqual(payload["min_avg_dollar_volume"], 0)
+
+    def test_standard_strategy_forwards_quality_gates_to_the_runner(self):
+        payload = _runner_payload("cash-secured-put", {
+            "exclude_earnings_before_expiry": True,
+            "min_market_cap": 5e9,
+            "fund_min_aum": 500e6,
+            "min_avg_dollar_volume": 25e6,
+            "min_open_interest": 100,
+        })
+        self.assertTrue(payload["exclude_earnings_before_expiry"])
+        self.assertEqual(payload["min_market_cap"], 5e9)
+        self.assertEqual(payload["fund_min_aum"], 500e6)
+        self.assertEqual(payload["min_avg_dollar_volume"], 25e6)
+        self.assertEqual(payload["min_open_interest"], 100)
+
+    def test_quality_filters_reject_known_failures_and_ignore_missing_metrics(self):
+        stock = {
+            "ticker": "AAPL", "is_etf": False, "market_cap": 1e9,
+            "avg_dollar_volume": 5e6, "earnings_before_expiry": True,
+            "skew_rank": 20, "min_leg_open_interest": 40,
+        }
+        tight = {
+            "exclude_earnings_before_expiry": True,
+            "min_market_cap": 5e9,
+            "min_avg_dollar_volume": 25e6,
+            "min_open_interest": 100,
+            "min_skew_rank": 40,
+        }
+        reasons = _filter_reasons(stock, tight)
+        self.assertIn("Earnings before expiry", reasons)
+        self.assertIn("Market cap", reasons)
+        self.assertIn("Share dollar volume", reasons)
+        self.assertIn("Open interest", reasons)
+        self.assertIn("Skew Rank", reasons)
+
+        unknown = _filter_reasons({"ticker": "AAPL", "is_etf": False}, tight)
+        self.assertEqual(unknown, [])
+
+        fund = _filter_reasons(
+            {"ticker": "SPY", "is_etf": True, "fund_aum": 100e6, "earnings_before_expiry": True},
+            {"exclude_earnings_before_expiry": True, "fund_min_aum": 500e6},
+        )
+        self.assertIn("Fund AUM", fund)
+        self.assertNotIn("Earnings before expiry", fund)
 
     def test_iron_condor_is_the_only_legacy_runner_given_general_mode(self):
         self.assertTrue(_runner_payload("iron-condor", {})["general_scanner_mode"])

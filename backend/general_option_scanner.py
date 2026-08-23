@@ -146,6 +146,34 @@ STANDARD_BROAD_OVERRIDES = {
     "chain_limit": 60,
 }
 
+# Size, earnings, and open-interest gates the dedicated scanners already
+# understand. Open Filters leave them at these zeros; a quality preset
+# overwrites them from the General scanner payload.
+_QUALITY_RUNNER_KEYS = (
+    "min_market_cap",
+    "small_cap_min_market_cap",
+    "fund_min_aum",
+    "min_avg_dollar_volume",
+    "exclude_earnings_before_expiry",
+    "min_open_interest",
+)
+
+
+def _quality_from_payload(payload: dict) -> dict:
+    """Copy the General scanner's quality gates onto a dedicated runner."""
+    result = {}
+    for key in _QUALITY_RUNNER_KEYS:
+        if key not in payload or payload.get(key) is None:
+            continue
+        if key == "exclude_earnings_before_expiry":
+            result[key] = bool(payload.get(key))
+            continue
+        number = _num(payload.get(key))
+        if number is None:
+            continue
+        result[key] = max(0, int(number)) if key == "min_open_interest" else max(0.0, number)
+    return result
+
 
 def _num(value):
     try:
@@ -310,6 +338,7 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
                 "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
             })
         result["tickers"] = ",".join(selected)
+    result.update(_quality_from_payload(payload))
     return result
 
 
@@ -410,6 +439,9 @@ def _position_leg(
         "iv": _first_num(source.get("iv"), source.get("implied_volatility")),
         "delta": _num(source.get("delta")),
         "volume": _num(source.get("volume")),
+        "open_interest": _first_num(
+            source.get("open_interest"), source.get("openInterest")
+        ),
     }
 
 
@@ -853,6 +885,13 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
     if prob_touch is None and prob_itm is not None:
         prob_touch = min(100.0, 2.0 * prob_itm)
     legs = position_legs or _option_legs(row)
+    open_interest_values = [
+        oi
+        for leg in legs
+        if str(leg.get("option_type") or "").lower() != "stock"
+        and (oi := _first_num(leg.get("open_interest"), leg.get("openInterest"))) is not None
+    ]
+    min_leg_open_interest = min(open_interest_values) if open_interest_values else None
     reference_deltas = _reference_deltas(legs, reference_mode)
     leg_spreads = [
         (_num(leg.get("ask")) or 0) - (_num(leg.get("bid")) or 0)
@@ -982,6 +1021,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         )) or 0),
         "total_option_volume": total_option_volume,
         "total_option_volume_source": total_option_volume_source,
+        "min_leg_open_interest": min_leg_open_interest,
         "delta": round(position_delta, 4) if position_delta is not None else None,
         "reference_delta": round(sum(reference_deltas) / len(reference_deltas), 2) if reference_deltas else None,
         "reference_deltas": [round(value, 2) for value in reference_deltas],
@@ -1080,6 +1120,20 @@ def _score_rows(rows: list[dict]) -> None:
                 is_fund=bool(row.get("is_etf") or ticker in fund_symbols),
             )
         meta["stock_scores"] = scores
+        fund = fundamentals.get(ticker) or {}
+        meta["market_cap"] = _num(row.get("market_cap")) or _num(fund.get("market_cap"))
+        meta["fund_aum"] = _num(row.get("total_assets")) or _num(fund.get("total_assets"))
+        meta["avg_dollar_volume"] = (
+            _num(technicals.get("avg_dollar_volume"))
+            or _num(row.get("avg_dollar_volume"))
+        )
+        earnings_day = _as_day(row.get("next_earnings") or fund.get("next_earnings"))
+        expiry_day = _as_day(meta.get("expiration"))
+        meta["next_earnings"] = earnings_day.isoformat() if earnings_day else None
+        if earnings_day is not None and expiry_day is not None:
+            meta["earnings_before_expiry"] = earnings_day <= expiry_day
+        else:
+            meta["earnings_before_expiry"] = None
 
 
 def _technical_context(technicals: dict, history_frame) -> dict:
@@ -1224,6 +1278,10 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         ("bid_ask_spread", "max_bid_ask_spread", "Bid/ask spread", "max"),
         ("return_pct", "min_return_pct", "Return", "min"),
         ("annualized_return_pct", "min_annualized_return_pct", "Annualized return", "min"),
+        ("skew_rank", "min_skew_rank", "Skew Rank", "min"),
+        ("skew_rank", "max_skew_rank", "Skew Rank", "max"),
+        ("min_leg_open_interest", "min_open_interest", "Open interest", "min"),
+        ("avg_dollar_volume", "min_avg_dollar_volume", "Share dollar volume", "min"),
     )
     for field, filter_key, label, direction in checks:
         actual, limit = _num(meta.get(field)), _num(payload.get(filter_key))
@@ -1326,6 +1384,19 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         expected = _num(meta.get("expected_value"))
         if expected is not None and expected <= 0:
             reasons.append("Expected value")
+    min_cap = _num(payload.get("min_market_cap")) or 0.0
+    if min_cap > 0 and not is_fund:
+        cap = _num(meta.get("market_cap"))
+        if cap is not None and cap < min_cap:
+            reasons.append("Market cap")
+    min_aum = _num(payload.get("fund_min_aum")) or 0.0
+    if min_aum > 0 and is_fund:
+        aum = _num(meta.get("fund_aum"))
+        if aum is not None and aum < min_aum:
+            reasons.append("Fund AUM")
+    if bool(payload.get("exclude_earnings_before_expiry")) and not is_fund:
+        if meta.get("earnings_before_expiry") is True:
+            reasons.append("Earnings before expiry")
     return reasons
 
 

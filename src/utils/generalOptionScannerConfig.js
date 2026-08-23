@@ -66,6 +66,13 @@ const COMMON = {
   target_dte: 30,
   max_results: 100,
   include_near_matches: true,
+  exclude_earnings_before_expiry: false,
+  min_market_cap: 0,
+  fund_min_aum: 0,
+  min_avg_dollar_volume: 0,
+  min_open_interest: 0,
+  min_skew_rank: 0,
+  max_skew_rank: 100,
 }
 
 // The supplied Samurai examples remain available as the per-strategy preset,
@@ -107,6 +114,13 @@ const OPEN_FILTERS = {
   max_abs_position_delta: 100,
   iron_condor_shape: 'any',
   butterfly_shape: 'any',
+  exclude_earnings_before_expiry: false,
+  min_market_cap: 0,
+  fund_min_aum: 0,
+  min_avg_dollar_volume: 0,
+  min_open_interest: 0,
+  min_skew_rank: 0,
+  max_skew_rank: 100,
 }
 
 export const GENERAL_RISK_PROFILES = {
@@ -147,6 +161,83 @@ const BULLISH_PULLBACK_STRATEGIES = new Set([
 const BEARISH_RALLY_STRATEGIES = new Set([
   'naked-call', 'bear-call-spread', 'bear-put-spread', 'long-put', 'married-call',
 ])
+
+const PREMIUM_SELLING_STRATEGIES = new Set([
+  'covered-call', 'cash-secured-put', 'naked-call', 'bull-put-spread',
+  'bear-call-spread', 'short-strangle', 'short-straddle', 'collar',
+  'call-ratio-spread', 'put-ratio-spread', 'iron-condor', 'iron-butterfly',
+  'put-call-condor', 'call-butterfly', 'put-butterfly',
+])
+
+const PREMIUM_BUYING_STRATEGIES = new Set([
+  'long-call', 'long-put', 'married-put', 'married-call',
+  'bull-call-spread', 'bear-put-spread', 'long-straddle', 'long-strangle',
+  'long-call-calendar', 'long-put-calendar', 'long-call-diagonal', 'long-put-diagonal',
+])
+
+const CALENDAR_OR_DIAGONAL = new Set([
+  'long-call-calendar', 'long-put-calendar', 'long-call-diagonal', 'long-put-diagonal',
+])
+
+export const CORE_INDEX_TICKERS = 'SPY,QQQ,IWM'
+
+export const GENERAL_SETUP_PRESETS = [
+  {
+    key: 'pullback_uptrend',
+    label: 'Pullback uptrend',
+    title: 'Uptrend with a short-term pullback. For cash-secured puts, bull put spreads, covered calls, and other bullish structures.',
+  },
+  {
+    key: 'rally_downtrend',
+    label: 'Rally downtrend',
+    title: 'Downtrend with a short-term bounce. For bear call spreads, naked calls, long puts, and other bearish structures.',
+  },
+  {
+    key: 'high_iv',
+    label: 'High IV',
+    title: 'Sell expensive options: higher IV Rank, skip earnings, tighter spreads. For credit and short-premium trades.',
+  },
+  {
+    key: 'cheap_iv',
+    label: 'Cheap IV',
+    title: 'Buy cheaper options: cap IV Rank and Volatility score. For debit and long-premium trades.',
+  },
+  {
+    key: 'weeklies',
+    label: 'Weeklies',
+    title: 'Target 5–14 DTE listed expirations. Hidden for long-dated and calendar structures whose construction needs more time.',
+  },
+  {
+    key: 'monthlies',
+    label: 'Monthlies',
+    title: 'Target 21–45 DTE, the conventional monthly window. Hidden for long-dated index structures.',
+  },
+  {
+    key: 'core_indexes',
+    label: 'Core indexes',
+    title: 'Scan only SPY, QQQ, and IWM.',
+  },
+]
+
+export function setupAppliesToStrategy(setupKey, strategy) {
+  if (!strategy) return false
+  if (setupKey === 'pullback_uptrend') return BULLISH_PULLBACK_STRATEGIES.has(strategy)
+  if (setupKey === 'rally_downtrend') return BEARISH_RALLY_STRATEGIES.has(strategy)
+  if (setupKey === 'high_iv') return PREMIUM_SELLING_STRATEGIES.has(strategy)
+  if (setupKey === 'cheap_iv') return PREMIUM_BUYING_STRATEGIES.has(strategy)
+  if (setupKey === 'weeklies') {
+    return !INDEX_ONLY_STRATEGIES.has(strategy)
+      && !CALENDAR_OR_DIAGONAL.has(strategy)
+      && strategy !== 'put-call-condor'
+  }
+  if (setupKey === 'monthlies') return !INDEX_ONLY_STRATEGIES.has(strategy)
+  if (setupKey === 'core_indexes') return strategy !== 'put-call-condor'
+  return false
+}
+
+export function setupsForGeneralStrategy(strategy) {
+  return GENERAL_SETUP_PRESETS.filter(preset => setupAppliesToStrategy(preset.key, strategy))
+}
 
 const field = (key, label, options = {}) => ({ key, label, type: 'number', ...options })
 
@@ -594,7 +685,30 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     stock_score_growth_max: 10,
     stock_score_technical_min: quality.technical,
     stock_score_technical_max: 10,
+    min_market_cap: [10e9, 5e9, 2e9][intensity],
+    fund_min_aum: [2e9, 500e6, 200e6][intensity],
+    min_avg_dollar_volume: [50e6, 25e6, 10e6][intensity],
+    min_open_interest: [250, 100, 0][intensity],
+    min_skew_rank: 0,
+    max_skew_rank: 100,
   })
+
+  if (PREMIUM_SELLING_STRATEGIES.has(strategy)) {
+    result.min_iv_rank = [40, 25, 15][intensity]
+    result.max_iv_rank = 100
+    result.min_volatility_score = [50, 35, 0][intensity]
+    result.max_volatility_score = 100
+    result.exclude_earnings_before_expiry = true
+    if (intensity === 0) result.bid_ask_level = 'Conservative (use bid/ask values)'
+  } else if (PREMIUM_BUYING_STRATEGIES.has(strategy)) {
+    result.min_iv_rank = 0
+    result.max_iv_rank = [50, 75, 100][intensity]
+    result.min_volatility_score = 0
+    result.max_volatility_score = [50, 70, 100][intensity]
+    result.exclude_earnings_before_expiry = intensity === 0
+  } else {
+    result.exclude_earnings_before_expiry = intensity === 0
+  }
 
   if (BULLISH_PULLBACK_STRATEGIES.has(strategy)) {
     Object.assign(result, intensity === 0
@@ -613,7 +727,6 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
   }
 
   if (fieldKeys.has('max_bid_ask_spread')) result.max_bid_ask_spread = [0.35, 0.5, 0.75][intensity]
-  if (fieldKeys.has('min_open_interest')) result.min_open_interest = [250, 100, 0][intensity]
   if (fieldKeys.has('max_max_loss_dollars') && result.max_max_loss_dollars != null) {
     result.max_max_loss_dollars = [500, 1000, 2500][intensity]
   }
@@ -647,6 +760,67 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     if (strategy === 'road-trip-butterfly' && fieldKeys.has('upper_offset_pct')) {
       result.upper_offset_pct = [2, 1.25, 0.75][intensity]
     }
+  }
+  return result
+}
+
+export function setupDefaultsForGeneralStrategy(strategy, setupKey) {
+  if (!setupAppliesToStrategy(setupKey, strategy)) {
+    return defaultsForGeneralStrategy(strategy)
+  }
+  const result = riskProfileDefaultsForGeneralStrategy(strategy, 'moderate')
+  result.risk_profile = setupKey
+  const config = GENERAL_STRATEGY_CONFIG[strategy] || GENERAL_STRATEGY_CONFIG['iron-condor']
+  const fieldKeys = new Set(config.fields.map(item => item.key))
+
+  if (setupKey === 'pullback_uptrend') {
+    Object.assign(result, {
+      market_trend: 'uptrend',
+      underlying_trend: 'uptrend',
+      recent_move_direction: 'down',
+      recent_move_lookback: 5,
+      min_abs_recent_move_pct: 1,
+      technical_rsi_min: 30,
+      technical_rsi_max: 55,
+    })
+  } else if (setupKey === 'rally_downtrend') {
+    Object.assign(result, {
+      market_trend: 'downtrend',
+      underlying_trend: 'downtrend',
+      recent_move_direction: 'up',
+      recent_move_lookback: 5,
+      min_abs_recent_move_pct: 1,
+      technical_rsi_min: 45,
+      technical_rsi_max: 70,
+    })
+  } else if (setupKey === 'high_iv') {
+    result.min_iv_rank = 40
+    result.max_iv_rank = 100
+    result.min_volatility_score = 50
+    result.max_volatility_score = 100
+    result.exclude_earnings_before_expiry = true
+    if (fieldKeys.has('max_bid_ask_spread')) result.max_bid_ask_spread = 0.35
+    result.min_total_option_volume = Math.max(Number(result.min_total_option_volume) || 0, 2500)
+  } else if (setupKey === 'cheap_iv') {
+    result.min_iv_rank = 0
+    result.max_iv_rank = 50
+    result.min_volatility_score = 0
+    result.max_volatility_score = 50
+  } else if (setupKey === 'weeklies') {
+    result.min_dte = 5
+    result.target_dte = 10
+    result.max_dte = 14
+  } else if (setupKey === 'monthlies') {
+    result.min_dte = 21
+    result.target_dte = 35
+    result.max_dte = 45
+  } else if (setupKey === 'core_indexes') {
+    result.symbols = ''
+    result.include_stocks = false
+    result.include_index_etfs = true
+    result.include_sector_etfs = false
+    result.include_commodity_etfs = false
+    result.index_tickers = CORE_INDEX_TICKERS
   }
   return result
 }

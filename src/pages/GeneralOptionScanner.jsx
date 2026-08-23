@@ -5,6 +5,7 @@ import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
 import { useProfileFetch } from '../context/ProfileContext'
 import { OPTION_SCANNER_GROUPS, OPTION_SCANNERS } from '../utils/optionScannerCatalog'
 import {
+  CORE_INDEX_TICKERS,
   defaultsForGeneralStrategy,
   fieldsForGeneralStrategy,
   GENERAL_STRATEGY_CONFIG,
@@ -13,6 +14,8 @@ import {
   MAX_OPTION_DTE,
   MIN_OPTION_DTE,
   riskProfileDefaultsForGeneralStrategy,
+  setupDefaultsForGeneralStrategy,
+  setupsForGeneralStrategy,
   updateDteFilters,
 } from '../utils/generalOptionScannerConfig'
 import { buildScannerTrade, hasScannerTrade } from '../utils/optionTradeHandoff'
@@ -100,8 +103,6 @@ function symbolScopeText(filters) {
   return groups.join(' + ') || 'None selected'
 }
 
-const CORE_INDEX_TICKERS = 'SPY,QQQ,IWM'
-
 const SCAN_UNIVERSE_OPTIONS = [
   ['stocks_large_cap', 'Stocks only — Large caps', { universe: 'large_cap', include_stocks: true }],
   ['stocks_large_mid', 'Stocks only — Large + mid caps', { universe: 'large_mid', include_stocks: true }],
@@ -168,9 +169,17 @@ function fieldText(field, value) {
   if (field.type === 'select') {
     return field.options.find(([candidate]) => String(candidate) === String(value))?.[1] || String(value ?? 'Any')
   }
+  if (field.type === 'checkbox') return value ? 'Yes' : 'No'
   if (field.type === 'text') return value == null || value === '' ? 'Any' : String(value)
-  if (value == null || value === '') return 'Any'
-  return `${field.prefix || ''}${Number(value).toLocaleString()}${field.suffix ? ` ${field.suffix}` : ''}`
+  if (value == null || value === '' || (field.zeroIsAny && !Number(value))) return 'Any'
+  const amount = field.scale ? Number(value) / field.scale : Number(value)
+  const digits = field.scale ? 1 : undefined
+  return `${field.prefix || ''}${amount.toLocaleString(undefined, digits != null ? { maximumFractionDigits: digits } : undefined)}${field.suffix ? ` ${field.suffix}` : ''}`
+}
+
+function sizeText(value, scale, suffix) {
+  if (!Number(value)) return 'Any'
+  return `Above $${(Number(value) / scale).toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`
 }
 
 function ScoreRange({ label, name, filters, setFilter }) {
@@ -195,10 +204,15 @@ function DynamicField({ field, value, onChange }) {
       onChange(next === 'true' ? true : next === 'false' ? false : next)
     }}>{field.options.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
   }
+  if (field.type === 'checkbox') {
+    return <label className="gos-check"><input type="checkbox" checked={!!value} onChange={event => onChange(event.target.checked)} /> {field.label}</label>
+  }
   if (field.type === 'text') {
     return <label className="gos-input"><span>{field.label}</span><input type="text" value={value ?? ''} placeholder={field.placeholder} onChange={event => onChange(event.target.value.toUpperCase())} /></label>
   }
-  return <label className="gos-input"><span>{field.label}</span><div>{field.prefix && <b>{field.prefix}</b>}<input type="number" value={value ?? ''} step={field.step ?? 1} min={field.min} max={field.max} onChange={event => onChange(event.target.value === '' ? null : Number(event.target.value))} />{field.suffix && <b>{field.suffix}</b>}</div></label>
+  const scale = field.scale || 1
+  const display = value == null || value === '' ? '' : Number(value) / scale
+  return <label className="gos-input"><span>{field.label}</span><div>{field.prefix && <b>{field.prefix}</b>}<input type="number" value={display} step={field.step ?? 1} min={field.min} max={field.max} onChange={event => onChange(event.target.value === '' ? (field.zeroIsAny ? 0 : null) : Number(event.target.value) * scale)} />{field.suffix && <b>{field.suffix}</b>}</div></label>
 }
 
 function ExpirationScenarioEditor({ scenario, enabled, onChange, onToggle }) {
@@ -338,7 +352,9 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
 
   const scanner = SCANNER_BY_KEY[strategy]
   const config = GENERAL_STRATEGY_CONFIG[strategy]
-  const strategyFields = strategy ? fieldsForGeneralStrategy(strategy) : []
+  const strategyFields = strategy
+    ? fieldsForGeneralStrategy(strategy).filter(field => field.key !== 'min_open_interest')
+    : []
   const expirationScenarioSupported = EXPIRATION_SCENARIO_STRATEGIES.has(strategy)
   const setFilter = (key, value) => setFilters(current => ({ ...current, risk_profile: 'custom', [key]: value }))
   const setDteFilter = (key, value) => setFilters(current => ({
@@ -417,6 +433,13 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       { label: 'DTE filter', value: `${filters.min_dte}–${filters.max_dte} DTE · target ${filters.target_dte}`, help: 'Minimum and maximum DTE are hard filters. Target DTE picks the preferred listed expiration inside that range. Set all three values to the same number to request one exact DTE; the scanner uses a contract only when that DTE is listed.', editor: <div className="gos-dte-fields"><DynamicField field={{ key: 'min_dte', label: 'Minimum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.min_dte} onChange={value => setDteFilter('min_dte', value)} /><DynamicField field={{ key: 'target_dte', label: 'Target DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.target_dte} onChange={value => setDteFilter('target_dte', value)} /><DynamicField field={{ key: 'max_dte', label: 'Maximum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.max_dte} onChange={value => setDteFilter('max_dte', value)} /></div> },
     ] },
     { title: 'Descriptive data', help: 'Select the stock and ETF symbols to scan. An exact symbol list takes precedence over the universe selections.', items: [{ label: 'Include symbols', value: restrictedCondor ? (filters.symbols || 'SPY') : indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: openingCashflowText(filters.entry_credit_mode), help: 'Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.', editor: null }] : [])] },
+    { title: 'Quality and liquidity', help: 'Drops names that are too small, too thinly traded, or that report earnings inside the option\'s life. Open Filters leave these off; Risk Averse and Moderate turn them on.', items: [
+      { label: 'Skip earnings inside the trade', value: filters.exclude_earnings_before_expiry ? 'Yes' : 'No', help: 'Rejects stocks whose next earnings report falls on or before the selected expiration. Funds are not filtered. Short-premium presets turn this on because an earnings gap can overwhelm the collected credit.', editor: <DynamicField field={{ key: 'exclude_earnings_before_expiry', label: 'Skip names with earnings before expiry', type: 'checkbox' }} value={filters.exclude_earnings_before_expiry} onChange={value => setFilter('exclude_earnings_before_expiry', value)} /> },
+      { label: 'Min market cap', value: sizeText(filters.min_market_cap, 1e9, 'B'), help: 'Minimum equity market capitalization for individual stocks. Zero means any size. ETFs are sized by AUM instead of market cap.', editor: <DynamicField field={{ key: 'min_market_cap', label: 'Minimum market cap', prefix: '$', suffix: 'B', scale: 1e9, step: 0.5, min: 0, zeroIsAny: true }} value={filters.min_market_cap} onChange={value => setFilter('min_market_cap', value)} /> },
+      { label: 'ETF min AUM', value: sizeText(filters.fund_min_aum, 1e9, 'B'), help: 'Minimum fund assets under management. Zero means any size. This applies to index, sector, and commodity ETFs, not to individual stocks.', editor: <DynamicField field={{ key: 'fund_min_aum', label: 'Minimum ETF AUM', prefix: '$', suffix: 'B', scale: 1e9, step: 0.1, min: 0, zeroIsAny: true }} value={filters.fund_min_aum} onChange={value => setFilter('fund_min_aum', value)} /> },
+      { label: 'Min $ volume', value: sizeText(filters.min_avg_dollar_volume, 1e6, 'M'), help: 'Minimum average daily share-price × share-volume over the recent month. Higher values usually lead to more liquid option chains.', editor: <DynamicField field={{ key: 'min_avg_dollar_volume', label: 'Minimum dollar volume', prefix: '$', suffix: 'M', scale: 1e6, step: 5, min: 0, zeroIsAny: true }} value={filters.min_avg_dollar_volume} onChange={value => setFilter('min_avg_dollar_volume', value)} /> },
+      { label: 'Min open interest', value: Number(filters.min_open_interest) > 0 ? `Above ${Number(filters.min_open_interest).toLocaleString()}` : 'Any', help: 'Requires each relevant option leg to have at least this many open contracts. Zero leaves the chain unfiltered.', editor: <DynamicField field={{ key: 'min_open_interest', label: 'Minimum open interest', step: 10, min: 0, zeroIsAny: true }} value={filters.min_open_interest} onChange={value => setFilter('min_open_interest', value)} /> },
+    ] },
     { title: 'Fundamental data', help: 'Filters individual stocks using the app\'s Fundamental and Growth scores. ETFs do not require these company-level scores.', items: [
       { label: 'Stock Score Fundamental', value: scoreText(filters, 'fundamental'), help: 'A transparent 1–10 app score for company quality and value. It averages valuation (forward or trailing P/E), profit margin, return on equity, current ratio, and lower debt-to-equity. Higher is better; missing inputs are excluded. It applies only to individual stocks; index, sector, and commodity ETFs such as SPY, QQQ, IWM, and XLK skip this filter.', editor: <ScoreRange label="Quality and value" name="fundamental" filters={filters} setFilter={setFilter} /> },
       { label: 'Stock Score Growth', value: scoreText(filters, 'growth'), help: 'A transparent 1–10 app score based on Yahoo revenue growth, earnings growth, and whether trailing EPS is positive. Higher is better; missing inputs are excluded. It applies only to individual stocks; index, sector, and commodity ETFs skip this filter.', editor: <ScoreRange label="Revenue and earnings growth" name="growth" filters={filters} setFilter={setFilter} /> },
@@ -430,13 +453,14 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       { label: 'Minimum move', value: `${filters.min_abs_recent_move_pct || 0}%`, help: 'Requires the recent rise or decline to be at least this large. Zero requires only the selected direction; increasing it finds more substantial pullbacks or rallies.', editor: <DynamicField field={{ key: 'min_abs_recent_move_pct', label: 'Minimum absolute move', suffix: '%', step: 0.25, min: 0 }} value={filters.min_abs_recent_move_pct} onChange={value => setFilter('min_abs_recent_move_pct', value)} /> },
       { label: 'RSI range', value: `${filters.technical_rsi_min}–${filters.technical_rsi_max}`, help: 'Limits the 14-day Relative Strength Index. RSI near 30 is commonly considered oversold and near 70 overbought, but the range is fully user-controlled.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'technical_rsi_min', label: 'Minimum RSI', step: 1, min: 0, max: 100 }} value={filters.technical_rsi_min} onChange={value => setFilter('technical_rsi_min', Math.min(value, filters.technical_rsi_max))} /><DynamicField field={{ key: 'technical_rsi_max', label: 'Maximum RSI', step: 1, min: 0, max: 100 }} value={filters.technical_rsi_max} onChange={value => setFilter('technical_rsi_max', Math.max(value, filters.technical_rsi_min))} /></div> },
     ] },
-    { title: 'Consolidated options data', help: 'Filters the option chain by total trading volume, IV Rank, IV−RV, RV Rank, and Volatility score.', items: [
+    { title: 'Consolidated options data', help: 'Filters the option chain by total trading volume, IV Rank, IV−RV, RV Rank, Volatility score, and skew rank.', items: [
       { label: 'Total Option Volume', value: filters.min_total_option_volume > 0 ? `Above ${Number(filters.min_total_option_volume).toLocaleString()}` : 'Any', help: 'Requires at least this much option-contract volume in the chain or expiration evaluated by the underlying strategy scanner. Higher thresholds favor liquid names but may remove otherwise valid trades.', editor: <DynamicField field={{ key: 'min_total_option_volume', label: 'Minimum volume', step: 500, min: 0 }} value={filters.min_total_option_volume} onChange={value => setFilter('min_total_option_volume', value)} /> },
       { label: 'IV Rank', value: rangeText(filters.min_iv_rank, filters.max_iv_rank), help: 'IV Rank is labelled like Option Samurai’s column, but the calculation is a percentile: the share of prior daily ATM IV prints in the past year that were below today. Front-month (about 21–60 DTE) prints are preferred, one-day spikes are ignored, and it begins populating after 20 observations. High readings (for example above 80) have historically been followed by lower IV, and low readings by higher IV.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_iv_rank', label: 'Minimum IV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_iv_rank} onChange={value => setFilter('min_iv_rank', Math.min(value, filters.max_iv_rank))} /><DynamicField field={{ key: 'max_iv_rank', label: 'Maximum IV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_iv_rank} onChange={value => setFilter('max_iv_rank', Math.max(value, filters.min_iv_rank))} /></div> },
       { label: 'IV − RV', value: rangeText(filters.min_iv_rv, filters.max_iv_rv, { floor: -100, ceil: 100 }), help: 'Today’s at-the-money implied volatility minus the past month’s realized volatility, in volatility points. A positive value means IV is higher than recent realized vol (options look expensive versus the past). A negative value means options look cheaper than the past month’s realized vol.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_iv_rv', label: 'Minimum IV − RV', step: 1, min: -100, max: 100 }} value={filters.min_iv_rv} onChange={value => setFilter('min_iv_rv', Math.min(value, filters.max_iv_rv))} /><DynamicField field={{ key: 'max_iv_rv', label: 'Maximum IV − RV', step: 1, min: -100, max: 100 }} value={filters.max_iv_rv} onChange={value => setFilter('max_iv_rv', Math.max(value, filters.min_iv_rv))} /></div> },
       { label: 'IV − RV Rank', value: rangeText(filters.min_iv_rv_rank, filters.max_iv_rv_rank), help: 'A 0–100 percentile of today’s IV − RV versus the same spread over the past year. It is mean-reverting: a high reading has typically been followed by a lower one, and the reverse.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_iv_rv_rank', label: 'Minimum IV − RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_iv_rv_rank} onChange={value => setFilter('min_iv_rv_rank', Math.min(value, filters.max_iv_rv_rank))} /><DynamicField field={{ key: 'max_iv_rv_rank', label: 'Maximum IV − RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_iv_rv_rank} onChange={value => setFilter('max_iv_rv_rank', Math.max(value, filters.min_iv_rv_rank))} /></div> },
       { label: 'RV Rank', value: rangeText(filters.min_rv_rank, filters.max_rv_rank), help: 'A 0–100 percentile of the past month’s realized (historical) volatility versus the previous year. It shows whether recent actual movement is high or low for this name and is also mean-reverting.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_rv_rank', label: 'Minimum RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_rv_rank} onChange={value => setFilter('min_rv_rank', Math.min(value, filters.max_rv_rank))} /><DynamicField field={{ key: 'max_rv_rank', label: 'Maximum RV Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_rv_rank} onChange={value => setFilter('max_rv_rank', Math.max(value, filters.min_rv_rank))} /></div> },
       { label: 'Volatility score', value: rangeText(filters.min_volatility_score, filters.max_volatility_score), help: 'The average of IV Rank and IV − RV Rank. It is a smoother way to find options that look overpriced (high score) or underpriced (low score).', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_volatility_score', label: 'Minimum Volatility score', step: 5, min: 0, max: 100 }} value={filters.min_volatility_score} onChange={value => setFilter('min_volatility_score', Math.min(value, filters.max_volatility_score))} /><DynamicField field={{ key: 'max_volatility_score', label: 'Maximum Volatility score', step: 5, min: 0, max: 100 }} value={filters.max_volatility_score} onChange={value => setFilter('max_volatility_score', Math.max(value, filters.min_volatility_score))} /></div> },
+      { label: 'Skew Rank', value: rangeText(filters.min_skew_rank, filters.max_skew_rank), help: 'Ranks the roughly 30-DTE 25-delta put-IV minus 25-delta call-IV gap against this ticker’s own trailing year. High values mean puts are unusually expensive versus calls; low values mean calls are unusually expensive. Missing history does not hide a trade.', editor: <div className="gos-quick-pair"><DynamicField field={{ key: 'min_skew_rank', label: 'Minimum Skew Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.min_skew_rank} onChange={value => setFilter('min_skew_rank', Math.min(value, filters.max_skew_rank))} /><DynamicField field={{ key: 'max_skew_rank', label: 'Maximum Skew Rank', suffix: '%', step: 5, min: 0, max: 100 }} value={filters.max_skew_rank} onChange={value => setFilter('max_skew_rank', Math.max(value, filters.min_skew_rank))} /></div> },
     ] },
     { title: 'Option data', help: 'Sets the price-fill assumption and primary option-leg delta used to construct each trade.', items: [
       { label: 'Bid/Ask level', value: filters.bid_ask_level || config?.bidAsk || 'Mid', help: 'Controls the quote assumption used to estimate entry price. Conservative uses sell-at-bid and buy-at-ask values; Mid uses midpoint prices; 25% improvement assumes a fill one quarter of the way from the conservative price toward mid.', editor: <DynamicField field={{ key: 'bid_ask_level', label: 'Pricing assumption', type: 'select', options: [['Conservative (use bid/ask values)', 'Conservative (bid/ask)'], ['25% price improvement', '25% price improvement'], ['Mid', 'Mid']] }} value={filters.bid_ask_level} onChange={value => setFilter('bid_ask_level', value)} /> },
@@ -550,7 +574,31 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     </header>
 
     <div className="scanner-filter-workspace">
-      <CompactScannerFilterPanel title={scanner?.label || 'Choose a scan'} strategyControl={strategyPicker} groups={summaryGroups} onRun={runScan} loading={loading} disabled={!strategy} toolbar={strategy && <div className="gos-preset-bar"><span>Starting point</span><button type="button" className={filters.risk_profile === 'open' ? 'active' : ''} onClick={() => replaceFilters(defaultsForGeneralStrategy(strategy))} title="Use broad discovery filters while retaining this trade's construction rules">Open Filters</button><button type="button" className={filters.risk_profile === 'risk_averse' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'risk_averse'))} title="Higher-quality, tighter-liquidity setup. Short-premium trades target 5–15 delta.">Risk Averse</button><button type="button" className={filters.risk_profile === 'moderate' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'moderate'))} title="Balanced setup. Short-premium trades target 15–20 delta.">Moderate</button><button type="button" className={filters.risk_profile === 'aggressive' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'aggressive'))} title="Broader, higher-risk setup. Short-premium trades target 30–50 delta.">Aggressive</button></div>}>
+      <CompactScannerFilterPanel title={scanner?.label || 'Choose a scan'} strategyControl={strategyPicker} groups={summaryGroups} onRun={runScan} loading={loading} disabled={!strategy} toolbar={strategy && (
+        <div className="gos-preset-bar">
+          <span>Starting point</span>
+          <button type="button" className={filters.risk_profile === 'open' ? 'active' : ''} onClick={() => replaceFilters(defaultsForGeneralStrategy(strategy))} title="Use broad discovery filters while retaining this trade's construction rules">Open Filters</button>
+          <button type="button" className={filters.risk_profile === 'risk_averse' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'risk_averse'))} title="Higher-quality, tighter-liquidity setup. Short-premium trades target 5–15 delta.">Risk Averse</button>
+          <button type="button" className={filters.risk_profile === 'moderate' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'moderate'))} title="Balanced setup. Short-premium trades target 15–20 delta.">Moderate</button>
+          <button type="button" className={filters.risk_profile === 'aggressive' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'aggressive'))} title="Broader, higher-risk setup. Short-premium trades target 30–50 delta.">Aggressive</button>
+          {setupsForGeneralStrategy(strategy).length > 0 && (
+            <>
+              <span>Setup</span>
+              {setupsForGeneralStrategy(strategy).map(preset => (
+                <button
+                  key={preset.key}
+                  type="button"
+                  className={filters.risk_profile === preset.key ? 'active' : ''}
+                  title={preset.title}
+                  onClick={() => replaceFilters(setupDefaultsForGeneralStrategy(strategy, preset.key))}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}>
         <p className="csf-single-source-note">{strategy ? 'Changing strategy replaces these values with that trade’s construction rules and defaults. Click any green value to edit it; there is no second set of conflicting inputs.' : 'Choose a strategy above. Its construction rules, filters, probability analysis, and payoff graph will load here.'}</p>
       </CompactScannerFilterPanel>
 

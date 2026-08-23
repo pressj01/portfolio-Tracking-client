@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  CORE_INDEX_TICKERS,
   defaultsForGeneralStrategy,
   fieldsForGeneralStrategy,
   GENERAL_STRATEGY_CONFIG,
@@ -8,6 +9,9 @@ import {
   MAX_OPTION_DTE,
   MIN_OPTION_DTE,
   riskProfileDefaultsForGeneralStrategy,
+  setupAppliesToStrategy,
+  setupDefaultsForGeneralStrategy,
+  setupsForGeneralStrategy,
   strategyDefaultsForGeneralStrategy,
   updateDteFilters,
 } from './generalOptionScannerConfig.js'
@@ -119,6 +123,11 @@ test('new scans start open while keeping construction defaults', () => {
   assert.equal(open.min_prob_max_profit, 0)
   assert.equal(open.max_prob_max_loss, 100)
   assert.equal(open.max_max_loss_dollars, null)
+  assert.equal(open.exclude_earnings_before_expiry, false)
+  assert.equal(open.min_market_cap, 0)
+  assert.equal(open.min_open_interest, 0)
+  assert.equal(open.min_skew_rank, 0)
+  assert.equal(open.max_skew_rank, 100)
 })
 
 test('short-premium risk profiles use the requested delta bands', () => {
@@ -132,6 +141,27 @@ test('short-premium risk profiles use the requested delta bands', () => {
   assert.equal(cautious.market_trend, 'uptrend')
   assert.equal(cautious.underlying_trend, 'uptrend')
   assert.equal(cautious.recent_move_direction, 'down')
+  assert.equal(cautious.min_iv_rank, 40)
+  assert.equal(moderate.min_iv_rank, 25)
+  assert.equal(aggressive.min_iv_rank, 15)
+  assert.equal(cautious.exclude_earnings_before_expiry, true)
+  assert.equal(moderate.exclude_earnings_before_expiry, true)
+  assert.equal(cautious.min_market_cap, 10e9)
+  assert.equal(moderate.min_avg_dollar_volume, 25e6)
+  assert.equal(cautious.min_open_interest, 250)
+  assert.equal(cautious.bid_ask_level, 'Conservative (use bid/ask values)')
+})
+
+test('long-premium risk profiles cap IV Rank instead of requiring rich IV', () => {
+  const cautious = riskProfileDefaultsForGeneralStrategy('long-call', 'risk_averse')
+  const moderate = riskProfileDefaultsForGeneralStrategy('long-put', 'moderate')
+  const aggressive = riskProfileDefaultsForGeneralStrategy('bull-call-spread', 'aggressive')
+  assert.equal(cautious.max_iv_rank, 50)
+  assert.equal(moderate.max_iv_rank, 75)
+  assert.equal(aggressive.max_iv_rank, 100)
+  assert.equal(cautious.min_iv_rank, 0)
+  assert.equal(cautious.exclude_earnings_before_expiry, true)
+  assert.equal(aggressive.exclude_earnings_before_expiry, false)
 })
 
 test('long debit profiles invert delta sensibly while replacing every setting', () => {
@@ -142,6 +172,68 @@ test('long debit profiles invert delta sensibly while replacing every setting', 
   assert.deepEqual([aggressive.min_reference_delta, aggressive.max_reference_delta], [25, 45])
   assert.equal(cautious.stock_score_fundamental_min, 6)
   assert.equal(aggressive.stock_score_fundamental_min, 3)
+})
+
+test('setup presets only apply to matching trade types', () => {
+  assert.equal(setupAppliesToStrategy('pullback_uptrend', 'cash-secured-put'), true)
+  assert.equal(setupAppliesToStrategy('pullback_uptrend', 'bear-call-spread'), false)
+  assert.equal(setupAppliesToStrategy('rally_downtrend', 'bear-call-spread'), true)
+  assert.equal(setupAppliesToStrategy('rally_downtrend', 'cash-secured-put'), false)
+  assert.equal(setupAppliesToStrategy('high_iv', 'iron-condor'), true)
+  assert.equal(setupAppliesToStrategy('high_iv', 'long-call'), false)
+  assert.equal(setupAppliesToStrategy('cheap_iv', 'long-call'), true)
+  assert.equal(setupAppliesToStrategy('cheap_iv', 'cash-secured-put'), false)
+  assert.equal(setupAppliesToStrategy('weeklies', 'covered-call'), true)
+  assert.equal(setupAppliesToStrategy('weeklies', 'unbalanced-butterfly'), false)
+  assert.equal(setupAppliesToStrategy('weeklies', 'long-call-calendar'), false)
+  assert.equal(setupAppliesToStrategy('weeklies', 'put-call-condor'), false)
+  assert.equal(setupAppliesToStrategy('monthlies', 'bull-put-spread'), true)
+  assert.equal(setupAppliesToStrategy('monthlies', 'road-trip-butterfly'), false)
+  assert.equal(setupAppliesToStrategy('core_indexes', 'iron-condor'), true)
+  assert.equal(setupAppliesToStrategy('core_indexes', 'put-call-condor'), false)
+  assert.deepEqual(
+    setupsForGeneralStrategy('unbalanced-butterfly').map(preset => preset.key),
+    ['core_indexes'],
+  )
+})
+
+test('setup presets start from Moderate and overlay the named setup', () => {
+  const pullback = setupDefaultsForGeneralStrategy('cash-secured-put', 'pullback_uptrend')
+  assert.equal(pullback.risk_profile, 'pullback_uptrend')
+  assert.equal(pullback.market_trend, 'uptrend')
+  assert.equal(pullback.underlying_trend, 'uptrend')
+  assert.equal(pullback.recent_move_direction, 'down')
+  assert.equal(pullback.min_reference_delta, 15)
+  assert.equal(pullback.exclude_earnings_before_expiry, true)
+
+  const rally = setupDefaultsForGeneralStrategy('bear-call-spread', 'rally_downtrend')
+  assert.equal(rally.market_trend, 'downtrend')
+  assert.equal(rally.recent_move_direction, 'up')
+
+  const rich = setupDefaultsForGeneralStrategy('iron-condor', 'high_iv')
+  assert.equal(rich.min_iv_rank, 40)
+  assert.equal(rich.min_volatility_score, 50)
+  assert.equal(rich.exclude_earnings_before_expiry, true)
+
+  const cheap = setupDefaultsForGeneralStrategy('long-put', 'cheap_iv')
+  assert.equal(cheap.max_iv_rank, 50)
+  assert.equal(cheap.max_volatility_score, 50)
+  assert.equal(cheap.min_iv_rank, 0)
+
+  const weeklies = setupDefaultsForGeneralStrategy('covered-call', 'weeklies')
+  assert.deepEqual([weeklies.min_dte, weeklies.target_dte, weeklies.max_dte], [5, 10, 14])
+
+  const monthlies = setupDefaultsForGeneralStrategy('bull-put-spread', 'monthlies')
+  assert.deepEqual([monthlies.min_dte, monthlies.target_dte, monthlies.max_dte], [21, 35, 45])
+
+  const indexes = setupDefaultsForGeneralStrategy('iron-condor', 'core_indexes')
+  assert.equal(indexes.include_stocks, false)
+  assert.equal(indexes.include_index_etfs, true)
+  assert.equal(indexes.index_tickers, CORE_INDEX_TICKERS)
+  assert.equal(indexes.symbols, '')
+
+  const fallback = setupDefaultsForGeneralStrategy('long-call', 'high_iv')
+  assert.equal(fallback.risk_profile, 'open')
 })
 
 test('long-dated unbalanced profiles use index universes and opening-cash bands', () => {

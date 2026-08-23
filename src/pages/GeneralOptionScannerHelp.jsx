@@ -14,9 +14,10 @@ const universeRows = [
 
 const filterRows = [
   ['Descriptive data', 'Chooses the underlyings: stocks, core or broad index ETFs, sector ETFs, commodity ETFs, or exact symbols.'],
+  ['Quality and liquidity', 'Drops names that are too small, too thinly traded, or that report earnings inside the option’s life. It also requires a minimum open interest on the legs.'],
   ['Fundamental data', 'Applies the app’s 1–10 Fundamental, Growth, and Technical scores. Fundamental and Growth are not required for ETFs because those company measures do not apply cleanly to funds.'],
   ['Technical market conditions', 'Filters by the SPY trend, the underlying trend, recent price direction, lookback, minimum move, and RSI.'],
-  ['Consolidated options data', 'Filters the option chain by total contract volume, locally collected IV Rank (a percentile), IV − RV, IV − RV Rank, RV Rank, and Volatility score.'],
+  ['Consolidated options data', 'Filters the option chain by total contract volume, locally collected IV Rank (a percentile), IV − RV, IV − RV Rank, RV Rank, Volatility score, and Skew Rank.'],
   ['Option data', 'Controls expiration/DTE, the assumed bid/ask fill, and the reference-leg delta when the construction uses one.'],
   ['Strategy specific', 'Changes with the selected trade. It contains payoff, risk, probability, moneyness, and construction rules.'],
 ]
@@ -47,7 +48,7 @@ export default function GeneralOptionScannerHelp() {
       <ol className="gos-help-steps">
         <li><b>Choose a strategy.</b><span>The strategy changes the available construction rules and defaults.</span></li>
         <li><b>Choose what to scan.</b><span>Open Include symbols and select a stock/ETF universe or enter exact tickers.</span></li>
-        <li><b>Choose a starting point.</b><span>Open Filters is broad. Risk Averse, Moderate, and Aggressive replace the filter values with progressively different presets.</span></li>
+        <li><b>Choose a starting point.</b><span>Open Filters is broad. Risk Averse, Moderate, and Aggressive change how strict the scan is. Setup buttons under that row pick a market condition or universe and only appear when they fit the selected strategy.</span></li>
         <li><b>Edit green values.</b><span>Click any value to change that rule. The small ? explains the field; “What does this mean?” opens the longer description.</span></li>
         <li><b>Run Scan.</b><span>The existing strategy module prices current chains and builds real candidate structures.</span></li>
         <li><b>Select a result.</b><span>Review its legs, probabilities, expected value, maximum risk, and interactive P/L graph.</span></li>
@@ -67,9 +68,15 @@ export default function GeneralOptionScannerHelp() {
       <DefinitionList rows={filterRows} />
       <div className="gos-help-preset-grid">
         <article><b>Open Filters</b><p>Broad discovery. It keeps the strategy’s construction defaults while minimizing screening restrictions.</p></article>
-        <article><b>Risk Averse</b><p>Favors tighter risk, quality, liquidity, and lower-delta short-premium entries.</p></article>
-        <article><b>Moderate</b><p>Uses a middle range for risk and reference delta.</p></article>
-        <article><b>Aggressive</b><p>Allows broader or higher-delta constructions and correspondingly more risk.</p></article>
+        <article><b>Risk Averse</b><p>Favors tighter risk, quality, liquidity, and lower-delta short-premium entries. Short-premium scans skip earnings inside the trade, require higher IV Rank, and use conservative fills.</p></article>
+        <article><b>Moderate</b><p>Uses a middle range for risk and reference delta, plus size, dollar-volume, and earnings gates for short-premium trades.</p></article>
+        <article><b>Aggressive</b><p>Allows broader or higher-delta constructions and correspondingly more risk, with lighter size and volume floors.</p></article>
+        <article><b>Pullback uptrend</b><p>Shown for bullish structures. Requires an SPY uptrend, an underlying uptrend, and a short-term decline.</p></article>
+        <article><b>Rally downtrend</b><p>Shown for bearish structures. Requires an SPY downtrend, an underlying downtrend, and a short-term bounce.</p></article>
+        <article><b>High IV</b><p>Shown for credit / short-premium trades. Raises IV Rank and Volatility score, skips earnings, and tightens spreads.</p></article>
+        <article><b>Cheap IV</b><p>Shown for debit / long-premium trades. Caps IV Rank and Volatility score so the scan is not buying rich options.</p></article>
+        <article><b>Weeklies / Monthlies</b><p>Sets 5–14 DTE or 21–45 DTE. Weeklies stay hidden on calendars, the specialized condor, and long-dated index flies.</p></article>
+        <article><b>Core indexes</b><p>Scans only SPY, QQQ, and IWM. Hidden for the SPY / Mini-SPX condor, which already names its underlyings.</p></article>
       </div>
       <p className="gos-help-note">A preset is a starting point, not a promise that today’s market has a qualifying trade. Editing one green value changes the profile to Custom.</p>
     </HelpSection>

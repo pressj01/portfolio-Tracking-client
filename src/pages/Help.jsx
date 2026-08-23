@@ -6885,6 +6885,8 @@ function GeneralOptionScannerHelpEntry() {
       <p style={{ marginBottom: '1rem' }}>
         Every supported option strategy now uses the General Option Scanner. Choose a strategy, select the stock or ETF
         universe, apply a starting preset, and edit the green values to control that strategy&apos;s construction and filters.
+        Open Filters is a wide discovery scan. Risk Averse and Moderate add earnings, size, liquidity, and IV Rank gates.
+        Setup buttons such as Pullback uptrend, High IV, Weeklies, and Core indexes appear only when they fit the selected strategy.
       </p>
       <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
         <strong>One scanner, strategy-specific rules:</strong> changing the strategy loads its own trade construction,
