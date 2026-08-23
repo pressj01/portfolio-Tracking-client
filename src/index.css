@@ -12275,6 +12275,12 @@ body:has(.split-page) #root *:has(> .split-page) {
 .gos-help-warning { background: color-mix(in srgb, var(--warning) 10%, var(--surface-inset)); border-color: color-mix(in srgb, var(--warning) 48%, var(--border)); }
 .gos-help-warning b { color: var(--warning); }
 .gos-help-preset-grid, .gos-help-term-grid { display: grid; gap: 0.6rem; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 0.8rem; }
+.gos-help-subhead { color: var(--text-strong); font-size: 0.82rem; margin: 1.15rem 0 0.45rem; }
+.gos-help-setup-grid { display: grid; gap: 0.6rem; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 0.45rem; }
+.gos-help-setup-grid article { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
+.gos-help-setup-grid b { color: var(--text-strong); font-size: 0.74rem; display: block; margin-bottom: 0.25rem; }
+.gos-help-setup-grid p { color: var(--text-muted); font-size: 0.64rem; line-height: 1.55; margin: 0; }
+.gos-help-pop { color: var(--accent-bright) !important; font-weight: 750; margin-bottom: 0.4rem !important; }
 .gos-help-preset-grid article, .gos-help-term-grid article, .gos-help-two-column article { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
 .gos-help-preset-grid b, .gos-help-term-grid h3, .gos-help-two-column h3 { color: var(--text-strong); font-size: 0.72rem; margin: 0 0 0.35rem; }
 .gos-help-preset-grid p, .gos-help-term-grid p, .gos-help-two-column p { color: var(--text-muted); font-size: 0.64rem; line-height: 1.55; margin: 0; }
@@ -12305,7 +12311,7 @@ body:has(.split-page) #root *:has(> .split-page) {
   .gos-help-hero { align-items: flex-start; flex-direction: column; }
   .gos-help-hero-actions { align-items: flex-start; flex-direction: row; }
   .gos-help-steps, .gos-help-preset-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .gos-help-definitions, .gos-help-term-grid, .gos-help-two-column { grid-template-columns: 1fr; }
+  .gos-help-definitions, .gos-help-term-grid, .gos-help-two-column, .gos-help-setup-grid { grid-template-columns: 1fr; }
   .gos-help-archetype { grid-template-columns: 1fr; }
 }
 @media (max-width: 560px) {

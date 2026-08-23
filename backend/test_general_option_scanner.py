@@ -74,6 +74,22 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertEqual(payload["min_avg_dollar_volume"], 25e6)
         self.assertEqual(payload["min_open_interest"], 100)
 
+    def test_covered_call_holdings_setup_reaches_the_call_scanner(self):
+        payload = _runner_payload("covered-call", {
+            "universe": "holdings",
+            "include_stocks": True,
+            "include_index_etfs": False,
+            "require_shares_held": True,
+            "respect_cost_basis": True,
+            "profile_id": 6,
+        })
+        self.assertEqual(payload["universe"], "holdings")
+        self.assertTrue(payload["include_stocks"])
+        self.assertFalse(payload["include_index_etfs"])
+        self.assertTrue(payload["require_shares_held"])
+        self.assertTrue(payload["respect_cost_basis"])
+        self.assertEqual(payload["profile_id"], 6)
+
     def test_quality_filters_reject_known_failures_and_ignore_missing_metrics(self):
         stock = {
             "ticker": "AAPL", "is_etf": False, "market_cap": 1e9,

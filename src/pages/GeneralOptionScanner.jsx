@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
 import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
-import { useProfileFetch } from '../context/ProfileContext'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { OPTION_SCANNER_GROUPS, OPTION_SCANNERS } from '../utils/optionScannerCatalog'
 import {
   CORE_INDEX_TICKERS,
@@ -325,6 +325,7 @@ function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelec
 
 function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const pf = useProfileFetch()
+  const { profileId, aggregateId, isAggregate } = useProfile()
   const [, setSearchParams] = useSearchParams()
   const restored = useMemo(() => restoredScannerSession(initialStrategy), [initialStrategy])
   const restoredRows = restored?.rows || []
@@ -352,6 +353,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
 
   const scanner = SCANNER_BY_KEY[strategy]
   const config = GENERAL_STRATEGY_CONFIG[strategy]
+  const setupPresets = useMemo(() => setupsForGeneralStrategy(strategy), [strategy])
   const strategyFields = strategy
     ? fieldsForGeneralStrategy(strategy).filter(field => field.key !== 'min_open_interest')
     : []
@@ -502,7 +504,14 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       const response = await pf('/api/options/general-scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
-        body: JSON.stringify({ strategy, ...requestFilters, strategy_filters: strategyFilters }),
+        body: JSON.stringify({
+          strategy,
+          ...requestFilters,
+          strategy_filters: strategyFilters,
+          ...(isAggregate
+            ? { aggregate_id: Number(aggregateId) }
+            : { profile_id: Number(profileId) }),
+        }),
       })
       const body = await response.text()
       if (!body) throw new Error(`The scanner returned no data (${response.status}). Please run it again.`)
@@ -581,13 +590,14 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
           <button type="button" className={filters.risk_profile === 'risk_averse' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'risk_averse'))} title="Higher-quality, tighter-liquidity setup. Short-premium trades target 5–15 delta.">Risk Averse</button>
           <button type="button" className={filters.risk_profile === 'moderate' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'moderate'))} title="Balanced setup. Short-premium trades target 15–20 delta.">Moderate</button>
           <button type="button" className={filters.risk_profile === 'aggressive' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'aggressive'))} title="Broader, higher-risk setup. Short-premium trades target 30–50 delta.">Aggressive</button>
-          {setupsForGeneralStrategy(strategy).length > 0 && (
+          {setupPresets.length > 0 && (
             <>
               <span>Setup</span>
-              {setupsForGeneralStrategy(strategy).map(preset => (
+              {setupPresets.map(preset => (
                 <button
                   key={preset.key}
                   type="button"
+                  data-setup={preset.key}
                   className={filters.risk_profile === preset.key ? 'active' : ''}
                   title={preset.title}
                   onClick={() => replaceFilters(setupDefaultsForGeneralStrategy(strategy, preset.key))}

@@ -191,6 +191,15 @@ test('setup presets only apply to matching trade types', () => {
   assert.equal(setupAppliesToStrategy('monthlies', 'road-trip-butterfly'), false)
   assert.equal(setupAppliesToStrategy('core_indexes', 'iron-condor'), true)
   assert.equal(setupAppliesToStrategy('core_indexes', 'put-call-condor'), false)
+  assert.equal(setupAppliesToStrategy('my_holdings', 'covered-call'), true)
+  assert.equal(setupAppliesToStrategy('my_holdings', 'collar'), true)
+  assert.equal(setupAppliesToStrategy('my_holdings', 'married-put'), true)
+  assert.equal(setupAppliesToStrategy('my_holdings', 'cash-secured-put'), false)
+  assert.equal(setupAppliesToStrategy('my_holdings', 'iron-condor'), false)
+  assert.deepEqual(
+    setupsForGeneralStrategy('covered-call').map(preset => preset.key),
+    ['my_holdings', 'pullback_uptrend', 'high_iv', 'weeklies', 'monthlies', 'core_indexes'],
+  )
   assert.deepEqual(
     setupsForGeneralStrategy('unbalanced-butterfly').map(preset => preset.key),
     ['core_indexes'],
@@ -234,6 +243,19 @@ test('setup presets start from Moderate and overlay the named setup', () => {
 
   const fallback = setupDefaultsForGeneralStrategy('long-call', 'high_iv')
   assert.equal(fallback.risk_profile, 'open')
+
+  const holdings = setupDefaultsForGeneralStrategy('covered-call', 'my_holdings')
+  assert.equal(holdings.risk_profile, 'my_holdings')
+  assert.equal(holdings.universe, 'holdings')
+  assert.equal(holdings.include_stocks, true)
+  assert.equal(holdings.include_index_etfs, false)
+  assert.equal(holdings.require_shares_held, true)
+  assert.equal(holdings.respect_cost_basis, true)
+  assert.equal(holdings.symbols, '')
+
+  const collarHoldings = setupDefaultsForGeneralStrategy('collar', 'my_holdings')
+  assert.equal(collarHoldings.universe, 'holdings')
+  assert.equal(collarHoldings.require_shares_held, false)
 })
 
 test('long-dated unbalanced profiles use index universes and opening-cash bands', () => {

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { DefinitionList, HelpSection, helpImage } from '../components/GosHelpKit'
 
-const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['probabilities', 'Probabilities'], ['strategies', 'Every strategy'], ['example', 'Example']]
+const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['starting-points', 'Starting points'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['probabilities', 'Probabilities'], ['strategies', 'Every strategy'], ['example', 'Example']]
 
 const universeRows = [
   ['Core index ETFs', 'SPY, QQQ, and IWM only. Choose this when those are the underlyings you expect.'],
@@ -9,6 +9,7 @@ const universeRows = [
   ['Sector ETFs', 'Sector and industry funds such as XLK, XLE, SMH, KRE, and GDX.'],
   ['Commodity ETFs', 'Commodity funds such as GLD, SLV, DBC, USO, and DBA.'],
   ['Stocks', 'The selected large-cap, mid-cap, holdings, or watchlist stock universe.'],
+  ['My holdings', 'Names in the currently selected portfolio. The My holdings setup uses this for covered calls, collars, and married puts.'],
   ['Exact symbols', 'A comma-separated list overrides every universe choice until the list is cleared.'],
 ]
 
@@ -64,24 +65,101 @@ export default function GeneralOptionScannerHelp() {
       <aside className="gos-help-callout"><b>Technical exceptions are shown explicitly</b><span>The specialized Put / Call Condor module supports SPY and Mini-SPX (^XSP) only and prices one underlying per run. Long-dated unbalanced structures are limited to index ETFs. Those scans replace the broad universe selector with their supported choices.</span></aside>
     </HelpSection>
 
-    <HelpSection id="filters" eyebrow="3 · FILTERS" title="What each filter group does">
-      <DefinitionList rows={filterRows} />
-      <div className="gos-help-preset-grid">
-        <article><b>Open Filters</b><p>Broad discovery. It keeps the strategy’s construction defaults while minimizing screening restrictions.</p></article>
-        <article><b>Risk Averse</b><p>Favors tighter risk, quality, liquidity, and lower-delta short-premium entries. Short-premium scans skip earnings inside the trade, require higher IV Rank, and use conservative fills.</p></article>
-        <article><b>Moderate</b><p>Uses a middle range for risk and reference delta, plus size, dollar-volume, and earnings gates for short-premium trades.</p></article>
-        <article><b>Aggressive</b><p>Allows broader or higher-delta constructions and correspondingly more risk, with lighter size and volume floors.</p></article>
-        <article><b>Pullback uptrend</b><p>Shown for bullish structures. Requires an SPY uptrend, an underlying uptrend, and a short-term decline.</p></article>
-        <article><b>Rally downtrend</b><p>Shown for bearish structures. Requires an SPY downtrend, an underlying downtrend, and a short-term bounce.</p></article>
-        <article><b>High IV</b><p>Shown for credit / short-premium trades. Raises IV Rank and Volatility score, skips earnings, and tightens spreads.</p></article>
-        <article><b>Cheap IV</b><p>Shown for debit / long-premium trades. Caps IV Rank and Volatility score so the scan is not buying rich options.</p></article>
-        <article><b>Weeklies / Monthlies</b><p>Sets 5–14 DTE or 21–45 DTE. Weeklies stay hidden on calendars, the specialized condor, and long-dated index flies.</p></article>
-        <article><b>Core indexes</b><p>Scans only SPY, QQQ, and IWM. Hidden for the SPY / Mini-SPX condor, which already names its underlyings.</p></article>
+    <HelpSection id="starting-points" eyebrow="3 · STARTING POINTS" title="What each scan is for, and the typical success odds">
+      <p className="gos-help-lead">
+        <strong>Starting point</strong> buttons change how strict the scan is. <strong>Setup</strong> buttons pick a market condition, expiration window, or universe — and only appear when they fit the selected strategy.
+        Setup scans start from Moderate quality (size, volume, open interest), then overlay that setup.
+      </p>
+      <figure className="gos-help-figure">
+        <img src={helpImage('general-scanner-setups-bar.png')} alt="Scanner starting-point buttons Open Filters, Risk Averse, Moderate, Aggressive, and the Setup row with Pullback uptrend, High IV, Weeklies, Monthlies, and Core indexes" />
+        <figcaption>Covered Call shows bullish and short-premium setups. A long call replaces High IV with Cheap IV; a bear call spread shows Rally downtrend instead of Pullback uptrend; covered call, collar, and married put also get My holdings.</figcaption>
+      </figure>
+
+      <aside className="gos-help-warning">
+        <b>These are modeled expiration probabilities, not historical win rates</b>
+        <span>
+          Credit-trade “typical success” is the usual chance a 15–20 delta short option expires out of the money (~80–85%), which is also why Moderate requires at least 55% probability of max profit on defined-risk structures.
+          Debit trades are the opposite: Moderate uses 45–60 delta longs and only requires 25% probability of max profit, so a winning long call is expected less often than a winning short put.
+          Changing DTE, IV Rank, or the universe does not by itself raise those odds — it changes which names you scan and how much you are paid for the same probability.
+        </span>
+      </aside>
+
+      <h3 className="gos-help-subhead">How strict is the scan?</h3>
+      <div className="gos-help-setup-grid">
+        <article>
+          <b>Open Filters</b>
+          <p className="gos-help-pop">Typical success: unconstrained</p>
+          <p>Discovery only. It keeps the strategy’s strikes and DTE construction but turns off quality, trend, and probability floors. Use it to see what exists, then tighten.</p>
+        </article>
+        <article>
+          <b>Risk Averse</b>
+          <p className="gos-help-pop">Credit: ~85–95% · floor 65% · 5–15Δ short</p>
+          <p>Highest-probability short-premium entries: further OTM, skip earnings, conservative fills, larger names. Debit trades use 60–75 delta longs and a 35% max-profit floor — still a directional bet, not a 90% income trade.</p>
+        </article>
+        <article>
+          <b>Moderate</b>
+          <p className="gos-help-pop">Credit: ~80–85% · floor 55% · 15–20Δ short</p>
+          <p>The default “tradable” pack. Setup buttons start here. Debit trades use 45–60 delta and a 25% max-profit floor.</p>
+        </article>
+        <article>
+          <b>Aggressive</b>
+          <p className="gos-help-pop">Credit: ~50–70% · floor 40% · 30–50Δ short</p>
+          <p>Closer strikes, fatter credit, more assignment/ITM risk. Debit floor drops to 15%. Use when you want premium or leverage, not when you want a high win rate.</p>
+        </article>
       </div>
-      <p className="gos-help-note">A preset is a starting point, not a promise that today’s market has a qualifying trade. Editing one green value changes the profile to Custom.</p>
+
+      <h3 className="gos-help-subhead">Setup scans — when to use each one</h3>
+      <div className="gos-help-setup-grid">
+        <article>
+          <b>My holdings</b>
+          <p className="gos-help-pop">Typical success: same as Moderate for that strategy (~80–85% on a covered-call short)</p>
+          <p><strong>Good for:</strong> writing calls, collars, or married puts on shares you already own. Covered calls also require 100+ shares and keep the strike above cost basis. Hidden on cash-secured puts and condors — those are not “sell premium on what I hold” workflows.</p>
+        </article>
+        <article>
+          <b>Pullback uptrend</b>
+          <p className="gos-help-pop">Credit (CSP / bull put / covered call): ~80–85% · Debit (long call): ~25–40% to max profit</p>
+          <p><strong>Good for:</strong> selling put premium or calls after a dip that is still in a 50/200 uptrend. The filter is timing, not a higher win rate — the delta band is still Moderate’s 15–20 short / 45–60 long.</p>
+        </article>
+        <article>
+          <b>Rally downtrend</b>
+          <p className="gos-help-pop">Credit (bear call / naked call): ~80–85% · Debit (long put / bear put): ~25–40% to max profit</p>
+          <p><strong>Good for:</strong> fading a bounce in a confirmed downtrend. Same Moderate probability as Pullback, opposite direction. Hidden on bullish put-selling structures.</p>
+        </article>
+        <article>
+          <b>High IV</b>
+          <p className="gos-help-pop">Typical success: ~80–85% (same 15–20Δ as Moderate)</p>
+          <p><strong>Good for:</strong> credit trades when you want to be paid more for that probability — IV Rank ≥ 40, Volatility score ≥ 50, skip earnings, tighter bid/ask. It does not push strikes further OTM, so do not expect 90% winners from this button alone.</p>
+        </article>
+        <article>
+          <b>Cheap IV</b>
+          <p className="gos-help-pop">Typical success: ~25–40% to max profit (debit / long premium)</p>
+          <p><strong>Good for:</strong> long calls, long puts, and debit verticals when you do not want to buy rich options (IV Rank cap 50). Success is lower because you need the underlying to move. Hidden on credit trades.</p>
+        </article>
+        <article>
+          <b>Weeklies</b>
+          <p className="gos-help-pop">Typical success: ~80–85% credit / ~25–40% debit — same deltas, 5–14 DTE</p>
+          <p><strong>Good for:</strong> harvesting theta on liquid names this week or next. The win-rate math is similar to monthlies at the same delta; gap and gamma risk are higher. Hidden on calendars, the SPY/Mini-SPX condor, and 70–200 DTE index flies.</p>
+        </article>
+        <article>
+          <b>Monthlies</b>
+          <p className="gos-help-pop">Typical success: ~80–85% credit / ~25–40% debit · 21–45 DTE</p>
+          <p><strong>Good for:</strong> the conventional monthly expiration window. Same Moderate probability as the starting-point default, with DTE tightened so you are not mixing weeklies and 60-day options.</p>
+        </article>
+        <article>
+          <b>Core indexes</b>
+          <p className="gos-help-pop">Typical success: ~80–85% credit / ~25–40% debit on SPY, QQQ, IWM</p>
+          <p><strong>Good for:</strong> liquid index chains only — no stock-score noise, no EMB/TLT-style “all index ETFs” surprises. Hidden on the specialized SPY/Mini-SPX condor, which already names its underlyings.</p>
+        </article>
+      </div>
+      <p className="gos-help-note">A preset is a starting point, not a promise that today’s market has a qualifying trade. Editing one green value changes the profile to Custom. Read the selected row’s Probability of success card before placing anything — that number is the trade’s own model, not the preset’s typical band.</p>
     </HelpSection>
 
-    <HelpSection id="terms" eyebrow="4 · DEFINITIONS" title="The terms that most affect a scan">
+    <HelpSection id="filters" eyebrow="4 · FILTERS" title="What each filter group does">
+      <DefinitionList rows={filterRows} />
+      <p className="gos-help-note">The Starting point and Setup buttons load a coordinated set of these fields. The Starting points section above explains when to use each scan and the typical success odds.</p>
+    </HelpSection>
+
+    <HelpSection id="terms" eyebrow="5 · DEFINITIONS" title="The terms that most affect a scan">
       <div className="gos-help-term-grid">
         <article><h3>Moneyness</h3><p>The strike’s percentage distance from the underlying price:</p><code>(strike − price) ÷ price × 100</code><p>Negative is below the current price; positive is above it. The effect depends on whether the leg is a put or call and whether it is bought or sold.</p></article>
         <article><h3>DTE</h3><p>Days to expiration. A 7–45 DTE rule lets the strategy evaluate listed expirations in that window and prefer its target DTE where supported.</p></article>
@@ -101,14 +179,14 @@ export default function GeneralOptionScannerHelp() {
       </div>
     </HelpSection>
 
-    <HelpSection id="condors" eyebrow="5 · IRON CONDOR" title="Balanced, Weirdor, Jeep, and the other constructions">
+    <HelpSection id="condors" eyebrow="6 · IRON CONDOR" title="Balanced, Weirdor, Jeep, and the other constructions">
       <p className="gos-help-lead">Open the green <strong>Structure</strong> value in Strategy specific. Weirdor is a construction choice inside Iron Condor; it is not a separate scanner page.</p>
       <figure className="gos-help-figure"><img src={helpImage('general-scanner-condor-structures.png')} alt="Iron Condor controls showing Structure, Market view, Variant tickers, Variant width, Tilt strength, Ratio contracts, and Core index variants only" /><figcaption>Non-standard variants default to SPY, QQQ, and IWM because ratio and hedged structures need deep, reliable index-option chains.</figcaption></figure>
       <DefinitionList rows={condorStructures} />
       <aside className="gos-help-callout"><b>Shape and Structure are different</b><span><strong>Iron Condor shape</strong> tests the completed payoff geometry (Any, Balanced, Riskless Up, Riskless Down). <strong>Structure</strong> chooses which construction algorithm builds the legs.</span></aside>
     </HelpSection>
 
-    <HelpSection id="results" eyebrow="6 · RESULTS" title="Exact matches versus constructible near matches">
+    <HelpSection id="results" eyebrow="7 · RESULTS" title="Exact matches versus constructible near matches">
       <figure className="gos-help-figure"><img src={helpImage('general-scanner-results.png')} alt="General Option Scanner results with a near-match warning, rows, missed-rule badges, and the selected trade analysis" /><figcaption>Exact matches pass every active rule. A yellow near-match row is a real, priced structure that missed one or more rules.</figcaption></figure>
       <div className="gos-help-two-column">
         <article><h3>Exact match</h3><p>The row passed every active filter. The table shows the best-ranked structure for each ticker; click the ⊕ ticker control to drill into more candidates for that ticker.</p></article>
@@ -120,7 +198,7 @@ export default function GeneralOptionScannerHelp() {
     </HelpSection>
 
 
-    <HelpSection id="probabilities" eyebrow="7 · PROBABILITIES" title="Reading the success cards and the profit-capture table">
+    <HelpSection id="probabilities" eyebrow="8 · PROBABILITIES" title="Reading the success cards and the profit-capture table">
       <p className="gos-help-lead">A selected trade carries two probability blocks, and they answer different questions. Mixing them up is the most common way to misread the analysis, so it is worth being precise about what each one measures.</p>
 
       <div className="gos-help-two-column">
@@ -152,20 +230,19 @@ export default function GeneralOptionScannerHelp() {
       <p className="gos-help-note">All of these are option-implied, risk-neutral estimates that hold each leg&rsquo;s implied volatility constant and exclude commissions and slippage. They are risk gauges, not forecasts.</p>
     </HelpSection>
 
-    <HelpSection id="strategies" eyebrow="8 · EVERY STRATEGY" title="What the Strategy specific inputs do, trade by trade">
+    <HelpSection id="strategies" eyebrow="9 · EVERY STRATEGY" title="What the Strategy specific inputs do, trade by trade">
       <p className="gos-help-lead">This guide covers the six filter groups that work the same way for every trade. The <strong>Strategy specific</strong> group is the one that changes — it holds that trade's own construction, payoff, and risk rules. The full field-by-field reference for all 30 supported strategies lives on its own page.</p>
       <div className="gos-help-footer-actions"><Link className="btn btn-primary" to="/general-option-scanner/strategies">Open the strategy field reference</Link></div>
     </HelpSection>
 
-    <HelpSection id="example" eyebrow="9 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
+    <HelpSection id="example" eyebrow="10 · EXAMPLE" title="Scan only SPY, QQQ, and IWM for an Iron Condor">
       <ol className="gos-help-example">
         <li>Select <strong>Iron Condor</strong>.</li>
-        <li>Open <strong>Include symbols</strong>.</li>
-        <li>Choose <strong>Core index ETFs — SPY, QQQ, IWM</strong>.</li>
-        <li>Choose Open Filters, Risk Averse, Moderate, or Aggressive.</li>
+        <li>Click the <strong>Core indexes</strong> setup (or open Include symbols and choose Core index ETFs — SPY, QQQ, IWM).</li>
+        <li>Optionally click <strong>High IV</strong> if you want expensive options, or <strong>Monthlies</strong> for the 21–45 DTE window.</li>
         <li>Under Strategy specific, set <strong>Structure</strong> to Balanced, Weirdor, Jeep, or All variations.</li>
         <li>Click <strong>Run Scan</strong>.</li>
-        <li>Confirm the banner says exact matches or near matches, then select a row and read any missed rules before evaluating the payoff.</li>
+        <li>Read the selected row’s Probability of success card — that is this trade’s model, not the preset’s typical band.</li>
       </ol>
       <div className="gos-help-footer-actions"><Link className="btn btn-primary" to="/general-option-scanner?strategy=iron-condor">Try the Iron Condor example</Link><Link className="btn btn-outline" to="/help">Open general app help</Link></div>
     </HelpSection>

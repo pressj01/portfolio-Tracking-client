@@ -179,9 +179,18 @@ const CALENDAR_OR_DIAGONAL = new Set([
   'long-call-calendar', 'long-put-calendar', 'long-call-diagonal', 'long-put-diagonal',
 ])
 
+const HOLDINGS_SETUP_STRATEGIES = new Set([
+  'covered-call', 'collar', 'married-put',
+])
+
 export const CORE_INDEX_TICKERS = 'SPY,QQQ,IWM'
 
 export const GENERAL_SETUP_PRESETS = [
+  {
+    key: 'my_holdings',
+    label: 'My holdings',
+    title: 'Scan only names you already own. For covered calls, collars, and married puts.',
+  },
   {
     key: 'pullback_uptrend',
     label: 'Pullback uptrend',
@@ -220,7 +229,9 @@ export const GENERAL_SETUP_PRESETS = [
 ]
 
 export function setupAppliesToStrategy(setupKey, strategy) {
+  strategy = String(strategy || '').trim()
   if (!strategy) return false
+  if (setupKey === 'my_holdings') return HOLDINGS_SETUP_STRATEGIES.has(strategy)
   if (setupKey === 'pullback_uptrend') return BULLISH_PULLBACK_STRATEGIES.has(strategy)
   if (setupKey === 'rally_downtrend') return BEARISH_RALLY_STRATEGIES.has(strategy)
   if (setupKey === 'high_iv') return PREMIUM_SELLING_STRATEGIES.has(strategy)
@@ -821,6 +832,15 @@ export function setupDefaultsForGeneralStrategy(strategy, setupKey) {
     result.include_sector_etfs = false
     result.include_commodity_etfs = false
     result.index_tickers = CORE_INDEX_TICKERS
+  } else if (setupKey === 'my_holdings') {
+    result.symbols = ''
+    result.universe = 'holdings'
+    result.include_stocks = true
+    result.include_index_etfs = false
+    result.include_sector_etfs = false
+    result.include_commodity_etfs = false
+    result.require_shares_held = strategy === 'covered-call'
+    result.respect_cost_basis = strategy === 'covered-call'
   }
   return result
 }

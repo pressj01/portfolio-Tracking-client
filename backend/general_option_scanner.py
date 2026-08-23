@@ -159,6 +159,31 @@ _QUALITY_RUNNER_KEYS = (
 )
 
 
+def _scan_scope(payload: dict) -> dict:
+    """Profile or aggregate the holdings universe should read."""
+    scope = {}
+    for key in ("profile_id", "aggregate_id"):
+        raw = payload.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            scope[key] = int(raw)
+        except (TypeError, ValueError):
+            pass
+    if scope:
+        return scope
+    try:
+        from flask import has_request_context
+        if has_request_context():
+            if request.args.get("profile_id"):
+                scope["profile_id"] = int(request.args["profile_id"])
+            if request.args.get("aggregate_id"):
+                scope["aggregate_id"] = int(request.args["aggregate_id"])
+    except (TypeError, ValueError, RuntimeError):
+        pass
+    return scope
+
+
 def _quality_from_payload(payload: dict) -> dict:
     """Copy the General scanner's quality gates onto a dedicated runner."""
     result = {}
@@ -219,6 +244,7 @@ def _first_num(*values):
 def _runner_payload(strategy: str, payload: dict) -> dict:
     spec = STRATEGIES[strategy]
     symbols = _symbols(payload.get("symbols"))
+    scope = _scan_scope(payload)
     specific = dict(payload.get("strategy_filters") or {})
     reference_mode = str(payload.get("reference_delta_mode") or "none").strip().lower()
     reference_low = _num(payload.get("min_reference_delta"))
@@ -282,6 +308,11 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
                 "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
                 "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
             })
+        if strategy == "covered-call":
+            if payload.get("require_shares_held") is not None:
+                result["require_shares_held"] = bool(payload.get("require_shares_held"))
+            if payload.get("respect_cost_basis") is not None:
+                result["respect_cost_basis"] = bool(payload.get("respect_cost_basis"))
         if strategy == "iron-condor":
             result["general_scanner_mode"] = True
             # Shape is evaluated from the completed four-leg payoff below.  Do
@@ -317,6 +348,7 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
             "index_tickers": payload.get("index_tickers"),
             "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
             "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
+            **scope,
         })
         result.update({
             "generic_strategy": strategy,
@@ -336,9 +368,11 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
                 "index_tickers": payload.get("index_tickers"),
                 "include_sector_etfs": bool(payload.get("include_sector_etfs", False)),
                 "include_commodity_etfs": bool(payload.get("include_commodity_etfs", False)),
+                **scope,
             })
         result["tickers"] = ",".join(selected)
     result.update(_quality_from_payload(payload))
+    result.update(scope)
     return result
 
 
