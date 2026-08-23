@@ -390,7 +390,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
   return (
     <div className="page dashboard">
-      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Portfolio Growth 2</h1>}
+      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Growth — Dollars</h1>}
 
       {/* ── Shared filters ── */}
       <div className="growth-filters">
@@ -461,7 +461,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
           ) : (
             <>
               <strong>One tracker return across the app:</strong> Tracker Total Return % uses the same
-              transaction-aware, dividend-reinvested index as Growth &amp; Performance and Total Return when
+              transaction-aware, dividend-reinvested index as the Vs market tab and Total Return when
               the account, date range, and holdings scope match. Separately read live quotes can differ
               intraday. The dollar card and return chart use
               the same cash-flow-adjusted ledger, so purchases and sales never appear as gains or losses.
@@ -573,11 +573,11 @@ export default function PortfolioGrowth2({ embedded = false }) {
             ) : (
               <>
                 <strong>Reconcile this page:</strong> use <strong>Tracker Total Return %</strong> to compare
-                this portfolio with Growth &amp; Performance and Total Return. It is the shared return measure;
+                this portfolio with the Vs market tab and Total Return. It is the shared return measure;
                 separately read live quotes can differ intraday.
                 <strong> Tracker Total Return $</strong> is the matching cash-flow-adjusted dollar result:
                 price return plus distributions, without treating deposits, purchases, or sales as performance.
-                {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+                {' '}The selected range is remembered across Dashboard, Growth, Total Return, Gains &amp; Losses, and Holdings.
               </>
             )}
           </div>

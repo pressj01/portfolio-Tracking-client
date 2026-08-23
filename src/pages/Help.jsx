@@ -58,7 +58,6 @@ const GROUPS = [
       { id: 'categories', label: 'Categories' },
       { id: 'holding-targets', label: 'Holding Targets' },
       { id: 'growth', label: 'Growth' },
-      { id: 'growth-2', label: 'Portfolio Growth 2' },
       { id: 'retirement-readiness', label: 'Retirement Readiness' },
       { id: 'dividends', label: 'Dividends' },
       { id: 'div-calendar', label: 'Div Calendar' },
@@ -704,7 +703,7 @@ function DashboardHelp() {
         </li>
         <li>
           <strong>Portfolio Grade</strong> — a composite risk-adjusted performance grade for the
-          selected market window. Dashboard and Growth &amp; Performance use the same calculation, holdings,
+          selected market window. Dashboard and Growth use the same calculation, holdings,
           and current-value weights, so their grades match when the same period and holdings are selected.
           Blank on <strong>Life</strong> — that filter is cost-basis G/L, not a daily price series.
         </li>
@@ -1075,6 +1074,87 @@ function HoldingsHelp() {
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/holdings/add-transaction.jpg" alt="Add Transaction form" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
         <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>The Add Transaction form records a BUY transaction, establishing cost basis and creating a transaction lot that can later be sold (SELL) for capital gains tracking. This method provides full transaction history and lot-level cost tracking.</p>
+      </div>
+
+      {/* ── Record the opening lot ──────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        &quot;Record the opening lot&quot; — shares your history does not account for
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Open a ticker&apos;s <strong>Transactions</strong> and you may see an amber panel saying a
+        number of shares here are not accounted for by any transaction, with a
+        <strong> Record the opening lot</strong> button. This is what it means and what the button
+        does.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Why the gap exists</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Two records describe the same position and they can disagree. A <strong>Positions</strong>
+        import sets the share count your broker reports. A <strong>Transactions</strong> import
+        supplies the buys and sells. Broker exports are usually bounded — two years, or since you
+        opened online access — so the purchase that started a long-held position often is not in
+        the file. Replay those transactions from zero and you end up owning fewer shares than the
+        broker says, sometimes a negative number.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The performance screens already cope with this. They work backward from the saved share
+        count and assume an opening lot big enough to make the arithmetic land on it, dated the day
+        before the first transaction on record. That assumption is invisible, carries no purchase
+        price, and is why a Start Value on Total Return can be flagged as overstated: the assumed
+        shares are priced as though you owned them for the whole period.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>What the button does</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        It writes that assumption into your ledger as an ordinary <strong>BUY</strong>, so the thing
+        the app was quietly assuming becomes a row you can see, sort, edit, and delete. Specifically:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Shares</strong> — exactly the shortfall: your saved quantity minus what the buys
+          and sells net to. Afterwards the ledger arrives at the share count your broker reports.
+        </li>
+        <li>
+          <strong>Date</strong> — the day before the earliest transaction on record, the same date
+          the performance replay was already assuming. It does not claim to be the real purchase
+          date; it is the latest date the shares must already have existed.
+        </li>
+        <li>
+          <strong>Price</strong> — that day&apos;s closing price, looked up from market history.
+          <strong> This is an estimate, not a broker figure.</strong> The panel says so before you
+          click, and the note on the created row repeats it.
+        </li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>What changes, and what does not</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Your share count does not move.</strong> The lot is sized to match the quantity
+          already on record, so the position is unchanged after the rollup.</li>
+        <li><strong>Your broker cost basis is left alone.</strong> The basis the Positions import
+          supplied is preserved rather than replaced by one derived from the estimated price.</li>
+        <li><strong>Realized gains can change, and that is the point.</strong> Sales that had no
+          purchase to draw from were reporting no gain, or their whole proceeds as profit. Once the
+          opening lot exists they have lots to consume and recalculate correctly.</li>
+        <li><strong>The warning clears.</strong> Nothing is being inferred any more, so the amber ⚠
+          on Total Return&apos;s Start Value disappears for that ticker.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Correcting it later</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The created row is a normal transaction with <strong>Edit</strong> and <strong>Del</strong>
+        beside it. If you find the real confirmation — an old statement, a different export — edit
+        the date, share count, and price to match and everything downstream recalculates. If you
+        decide you did not want it, delete it and you are back where you started. The row&apos;s note
+        begins <em>[Estimated opening lot]</em> so it is always identifiable as the app&apos;s figure
+        rather than your broker&apos;s.
+      </p>
+
+      <div className="alert alert-info" style={{ marginBottom: '1.25rem' }}>
+        <strong>When the button does not appear:</strong> if the buys and sells already account for
+        every share, there is nothing to record. There is also a case where the ledger reconciles
+        but the position still shows a gap, because the open-lot cut-off falls after purchases you
+        still hold. Recording a lot there would add shares that already exist, so the panel stays
+        hidden rather than offering a fix that would double count.
       </div>
 
       {/* ── Maintenance Actions in Detail ───────────────────── */}
@@ -2201,9 +2281,64 @@ function CategoriesHelp() {
 function GrowthHelp() {
   return (
     <div>
-      <h2>Growth & Performance</h2>
+      <h2>Growth</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Growth page shows how your portfolio has performed over time compared to a benchmark.
+        Growth is one page with three tabs. They share the account selector, the Shared
+        Performance Date Range, and the same transaction-aware return calculation — what
+        changes between them is the question being asked, and therefore the units the answer
+        comes back in. Switching tabs never re-asks for a date range or a portfolio.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>
+          <strong>Dollars</strong> — What is the account worth, and does it match the broker?
+          Portfolio value, cost basis, cash, open option marks, and the return expressed in
+          dollars. This is the tab to reconcile against a broker statement.
+        </li>
+        <li>
+          <strong>Vs market</strong> — Did these holdings beat the benchmark? Both return
+          indexes start at 100, so the ending value is a percentage rather than a balance,
+          and everything is measured against a benchmark ticker you choose.
+        </li>
+        <li>
+          <strong>Lots</strong> — Where did the dollars come from after buys, sells, and a
+          full sale plus rebuy? This tab is the Gains &amp; Losses page; it is documented in
+          its own <strong>Gains &amp; Losses</strong> section.
+        </li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>Tracker Total Return %</strong> is the figure that crosses tab boundaries. It is
+        the same transaction-aware, dividend-reinvested percentage on every tab and on Total
+        Return, Dashboard, and Gains &amp; Losses, so with the same account, holdings scope, and
+        date range the four should agree after the close. Separately read live quotes can differ
+        intraday. Purchases and sales change what is being measured; they are never counted as
+        gain or loss.
+      </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/growth/growth-tabs-current.png" alt="The Growth page showing its Dollars, Vs market, and Lots tabs" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+      </div>
+
+      <GrowthDollarsHelp />
+      <GrowthVsMarketHelp />
+
+      <h2 style={{ color: 'var(--accent)', marginTop: '2.5rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border)' }}>Lots tab</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Lots tab is the Gains &amp; Losses page rendered inside Growth, so the two always show
+        the same numbers. Open it from the <strong>Gains &amp; Losses</strong> section of this help
+        for the full walkthrough of realized and unrealized lots, wash sales, and the cost-basis
+        reconciliation. Note that Broker Positions Gain/Loss (Schwab and Fidelity) is a
+        cost-to-current figure that lives on this tab — it is not Tracker Total Return %.
+      </p>
+    </div>
+  )
+}
+
+function GrowthVsMarketHelp() {
+  return (
+    <div>
+      <h2 style={{ color: 'var(--accent)', marginTop: '2.5rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border)' }}>Vs market tab</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        The Growth page's Vs market tab shows how your portfolio has performed over time compared to a benchmark.
         It tracks both <strong>price-only returns</strong> (capital gains) and <strong>total returns</strong>
         (capital gains + dividends), so you can see the full picture of your investment performance.
         The page also grades your portfolio's risk-adjusted returns using industry-standard metrics
@@ -2212,17 +2347,17 @@ function GrowthHelp() {
       <p style={{ marginBottom: '1rem' }}>
         <strong>How this ties to the other tracking pages:</strong> the <strong>Tracker Total Return %</strong>
         here uses the same transaction-aware return calculation as Total Return and the Tracker Total Return %
-        card on Portfolio Growth 2. With the same portfolio, holdings filter, and effective date range, the
+        card on the Dollars tab. With the same portfolio, holdings filter, and effective date range, the
         percentage should match after the close; separately read live quotes can differ intraday. Purchases
         and sales change the amount invested; they are not counted as gain
         or loss. The Dashboard holding chart uses this same calculation for that individual holding. The
-        Shared Performance Date Range is remembered across all five screens; only a later purchase date or
+        Shared Performance Date Range is remembered across every tracking screen; only a later purchase date or
         unavailable market day can make a holding&apos;s effective start later than the requested start. Every
         summary card shows the effective date range used for its metric.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/growth/growth-performance-current.png" alt="Current Growth and Performance page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/growth/vs-market-tab-current.png" alt="The Vs market tab of the Growth page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       {/* ── Filters ────────────────────────────────────────────── */}
@@ -2276,7 +2411,7 @@ function GrowthHelp() {
         <li>
           <strong>Tracker Total Return %</strong> — The portfolio&apos;s transaction-aware, dividend-reinvested
           return over the selected period. The exact effective start and end dates appear on the card and
-          directly in every chart title. This is the percentage to compare with Total Return and Portfolio Growth 2.
+          directly in every chart title. This is the percentage to compare with Total Return and the Dollars tab.
         </li>
         <li>
           <strong>Portfolio Sharpe</strong> — The Sharpe ratio measures excess return per unit of total risk
@@ -2356,12 +2491,12 @@ function GrowthHelp() {
   )
 }
 
-function PortfolioGrowth2Help() {
+function GrowthDollarsHelp() {
   return (
     <div>
-      <h2>Portfolio Growth 2</h2>
+      <h2 style={{ color: 'var(--accent)', marginTop: '2.5rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border)' }}>Dollars tab</h2>
       <p style={{ marginBottom: '1rem' }}>
-        Portfolio Growth 2 gives you a dollar-value view of your portfolio over time: how much it is worth,
+        The Dollars tab gives you a dollar-value view of your portfolio over time: how much it is worth,
         how much you have invested, and how its transaction-aware return is composed. Unlike the Growth page,
         which indexes everything to 100 for comparison, this page shows actual dollar amounts in the value
         chart and lets you switch the return chart between a percentage index and return dollars.
@@ -2386,16 +2521,16 @@ function PortfolioGrowth2Help() {
       </p>
       <p style={{ marginBottom: '1rem' }}>
         <strong>How this ties to the other tracking pages:</strong> <strong>Tracker Total Return %</strong>
-        is the common transaction-aware, dividend-reinvested percentage used by Growth &amp; Performance and
+        is the common transaction-aware, dividend-reinvested percentage used by the Vs market tab and
         Total Return. It should match after the close when the portfolio, ticker scope, and effective date
         range match; separately read live quotes can differ intraday.
         The dollar charts below intentionally answer a different question: how portfolio value and dollar
         profit/loss changed, including the effect of cash invested or withdrawn. The Shared Performance Date
-        Range is remembered across Dashboard, Growth &amp; Performance, this page, Total Return, and Gains &amp; Losses.
+        Range is remembered across Dashboard, Growth, Total Return, Gains &amp; Losses, and Holdings.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/growth-2/portfolio-growth-2-current.png" alt="Current Portfolio Growth 2 page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/growth/dollars-tab-current.png" alt="The Dollars tab of the Growth page" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Controls</h3>
@@ -2472,7 +2607,7 @@ function PortfolioGrowth2Help() {
       <h4 style={{ marginBottom: '0.4rem' }}>Performance Controls</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Tracker return, %</strong> - Shows the return as a percentage, matching the
-          Tracker Total Return % cards on Growth &amp; Performance and Total Return.</li>
+          Tracker Total Return % cards on Growth and Total Return.</li>
         <li><strong>Tracker return, amount</strong> - Shows the cash-flow-adjusted dollar result and
           separates price return from distributions when source grouping is enabled.</li>
         <li><strong>Show cost basis</strong> - This is a control for Chart 1, not a second return
@@ -3155,12 +3290,12 @@ function TotalReturnHelp() {
       </p>
       <p style={{ marginBottom: '1rem' }}>
         <strong>This is the tracker-return reference:</strong> its transaction-aware Total Return % is the
-        same percentage used by Dashboard, Growth &amp; Performance, Portfolio Growth 2, and Gains &amp; Losses.
+        same percentage used by Dashboard, Growth, and Gains &amp; Losses.
         Match the portfolio, holdings filter, and effective dates to reconcile the figure. Every performance
         chart title prints its From and To dates. Dollar P&amp;L views
         elsewhere can differ because
         deposits, withdrawals, and position size are meaningful in dollars but are excluded from return. The
-        Shared Performance Date Range is remembered across all five tracking screens, including Gains &amp; Losses.
+        Shared Performance Date Range is remembered across Dashboard, Growth, Total Return, Gains &amp; Losses, and Holdings.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3433,7 +3568,7 @@ function GainsLossesHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Performance Date Range</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The 1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom buttons use the same saved range as
-        Dashboard, Growth &amp; Performance, Portfolio Growth 2, and Total Return. The selected-period
+        Dashboard, Growth, and Total Return. The selected-period
         cards, the <strong>Tracker TR %</strong> holding column, and the performance charts all come from
         the exact same transaction-aware endpoint as Total Return. With the same account, holdings
         filter, and effective dates, <strong>Tracker Total Return %</strong> should match after the close.
@@ -12034,7 +12169,9 @@ const CONTENT_MAP = {
   categories: CategoriesHelp,
   'holding-targets': HoldingTargetsHelp,
   growth: GrowthHelp,
-  'growth-2': PortfolioGrowth2Help,
+  // Growth 2 was folded into Growth as its Dollars tab. Keep the retired id
+  // resolving so an existing deep link still lands on the documentation.
+  'growth-2': GrowthHelp,
   dividends: DividendsHelp,
   'div-calendar': DivCalendarHelp,
   'earnings-calendar': EarningsCalendarHelp,

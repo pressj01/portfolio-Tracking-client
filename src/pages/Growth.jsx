@@ -387,7 +387,7 @@ export default function Growth({ embedded = false }) {
 
   return (
     <div className="page dashboard">
-      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Growth & Performance</h1>}
+      {!embedded && <h1 style={{ marginBottom: '1rem' }}>Growth — Vs market</h1>}
 
       {/* Filters */}
       <div className="growth-filters">
@@ -536,7 +536,7 @@ export default function Growth({ embedded = false }) {
       <details className="growth-help">
         <summary>How to read the charts, metric bubbles, and filters</summary>
         <div className="growth-help-intro">
-          <strong>What this page measures:</strong> Growth &amp; Performance compares the selected
+          <strong>What this tab measures:</strong> Vs market compares the selected
           holdings with one benchmark over one effective market-data window. The two index charts
           start at 100, so their ending value is a percentage return rather than a dollar balance.
           The cards, ticker bars, and growth map are recalculated from the same selected scope and date
@@ -783,11 +783,11 @@ export default function Growth({ embedded = false }) {
                 <strong>Tracker performance standard:</strong> the portfolio cards, both return indexes, and
                 ticker bars use the same transaction-aware calculation as the Total Return Dashboard. With
                 the same account, date range, and holdings scope, <strong>Total Return %</strong> here matches
-                Total Return and Portfolio Growth 2&apos;s <strong>Tracker Total Return %</strong> after the close.
+                Total Return and the Dollars tab&apos;s <strong>Tracker Total Return %</strong> after the close.
                 Separately read live quotes can differ intraday. Buys and sells
                 change portfolio weights; they are not counted as gains or losses. The index starts at 100,
                 so its final value minus 100 is the displayed return percentage.
-                {' '}The selected range is remembered across all five tracking screens, including Gains &amp; Losses.
+                {' '}The selected range is remembered across Dashboard, Growth, Total Return, Gains &amp; Losses, and Holdings.
               </>
             )}
           </div>

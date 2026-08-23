@@ -894,6 +894,69 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(result["market_value"], [None, 1210.0, 1331.0])
         self.assertEqual(result["inferred_opening_positions"], 1)
 
+    def test_inferred_lot_reports_the_ledger_gap_it_invented(self):
+        """A duplicated sale is indistinguishable from a partial export.
+
+        Both leave the ledger short of the saved quantity, and the replay closes
+        the gap by inventing an opening lot. Since the numbers cannot say which
+        happened, report the arithmetic so the screen can flag the position
+        rather than pricing the invented shares as fact.
+        """
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"AAA": [100.0, 110.0, 121.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+
+        def txn(kind, date, shares):
+            return {
+                "ticker": "AAA",
+                "market_symbol": "AAA",
+                "position_key": (1, "AAA"),
+                "transaction_type": kind,
+                "transaction_date": date,
+                "shares": shares,
+            }
+
+        holdings = [{
+            "ticker": "AAA",
+            "market_symbol": "AAA",
+            "position_key": (1, "AAA"),
+            "quantity": 10,
+            "purchase_date": "2026-01-02",
+            "import_date": "2026-01-06",
+        }]
+
+        clean = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros,
+            [txn("BUY", "2026-01-02", 30), txn("SELL", "2026-01-05", 20)],
+            holdings,
+        )
+        self.assertEqual(clean["inferred_opening_detail"], [])
+        self.assertEqual(clean["market_value"][0], 3000.0)
+
+        duplicated = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros,
+            [
+                txn("BUY", "2026-01-02", 30),
+                txn("SELL", "2026-01-05", 20),
+                txn("SELL", "2026-01-05", 20),
+            ],
+            holdings,
+        )
+        # The duplicate leaves the ledger 20 shares short, so the replay holds
+        # 50 on day one instead of the 30 that were actually bought.
+        self.assertEqual(duplicated["market_value"][0], 5000.0)
+        self.assertEqual(duplicated["inferred_opening_detail"], [{
+            "ticker": "AAA",
+            "profile_id": 1,
+            "shares": 20.0,
+            "seed_date": "2026-01-01",
+            "ledger_net_shares": -10.0,
+            "snapshot_quantity": 10.0,
+            # 20 invented shares priced at the first plotted observation (100.0).
+            "start_value_overstatement": 2000.0,
+            "opening_price": 100.0,
+        }])
+
     def test_short_window_applies_inferred_lot_before_historical_sales(self):
         """A short period must not add an inferred lot after replaying history."""
         dates = pd.to_datetime(["2026-01-02", "2026-01-05"])

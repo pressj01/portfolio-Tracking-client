@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import sys
 import tempfile
@@ -363,3 +364,100 @@ class ClosedFundDescriptionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DividendAllocationWindowTest(unittest.TestCase):
+    """A period view must not report lifetime income.
+
+    Realized rows are chosen by sell date inside the range, so their dollars
+    have to obey the range too. Reporting the lifetime allocation put dividends
+    paid years earlier inside a YTD figure, and -- because the open-lot row
+    already carries the ticker's whole period total -- made a ticker that was
+    both held and partly sold report the same cash twice.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        database.ensure_tables_exist(conn)
+        conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, purchase_date, "
+            "total_divs_received) VALUES ('AAA', 1, 50, '2024-01-02', 0)"
+        )
+        for txn_id, kind, date, shares in [
+            (1, "BUY", "2024-01-02", 100),
+            (2, "SELL", "2026-05-04", 50),
+        ]:
+            conn.execute(
+                "INSERT INTO transactions (id, ticker, profile_id, transaction_type, "
+                "transaction_date, shares, price_per_share) VALUES (?,?,?,?,?,?,?)",
+                (txn_id, "AAA", 1, kind, date, shares, 10),
+            )
+        # $40 paid before the window, $60 inside it.
+        for date, amount in [
+            ("2024-06-28", 20.0), ("2025-06-27", 20.0),
+            ("2026-03-31", 30.0), ("2026-06-30", 30.0),
+        ]:
+            conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) "
+                "VALUES (?,?,?,?,?)",
+                ("AAA", 1, date, amount, "broker"),
+            )
+        conn.commit()
+        conn.close()
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+
+    def tearDown(self):
+        self.conn.close()
+        os.unlink(self.db_path)
+
+    def test_window_restricts_allocation_to_the_period(self):
+        lifetime = app_module._gains_losses_dividend_allocation(self.conn, [1])
+        lifetime_total = (
+            sum(lifetime["sell_dividends"].values())
+            + sum(lifetime["open_dividends"].values())
+        )
+        self.assertAlmostEqual(lifetime_total, 100.0, places=6)
+
+        windowed = app_module._gains_losses_dividend_allocation(
+            self.conn, [1], window=("2026-01-01", "2026-12-31"),
+        )
+        sold = sum(windowed["sell_dividends"].values())
+        still_open = sum(windowed["open_dividends"].values())
+
+        # Only the two in-window payments are allocated, and they are split
+        # once between the shares sold and the shares still held.
+        self.assertAlmostEqual(sold + still_open, 60.0, places=6)
+        self.assertLess(sold, lifetime["sell_dividends"].get(2, 0.0))
+        # Nothing paid before the window survives anywhere in the result.
+        self.assertLessEqual(sold, 60.0)
+        self.assertLessEqual(still_open, 60.0)
+
+    def test_snapshot_lifetime_total_is_not_dated_into_a_window(self):
+        """A holdings snapshot total carries no payment dates.
+
+        Letting it through would drop an undatable lifetime number into a
+        period figure, which is exactly the overstatement the window exists to
+        prevent.
+        """
+        self.conn.execute(
+            "UPDATE all_account_info SET total_divs_received = 500 WHERE ticker = 'AAA'"
+        )
+        self.conn.commit()
+
+        lifetime = app_module._gains_losses_dividend_allocation(self.conn, [1])
+        self.assertGreater(sum(lifetime["open_dividends"].values()), 100.0)
+
+        windowed = app_module._gains_losses_dividend_allocation(
+            self.conn, [1], window=("2026-01-01", "2026-12-31"),
+        )
+        total = (
+            sum(windowed["sell_dividends"].values())
+            + sum(windowed["open_dividends"].values())
+        )
+        self.assertAlmostEqual(total, 60.0, places=6)

@@ -568,6 +568,23 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
   const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
   const [basisGap, setBasisGap] = useState(null)
+  // The shares the tracker invents when the ledger cannot account for the
+  // position. Offering to record them turns a silent assumption into a row.
+  const [openingLot, setOpeningLot] = useState(null)
+  const [recordingLot, setRecordingLot] = useState(false)
+  const recordOpeningLot = async () => {
+    setRecordingLot(true)
+    try {
+      const res = await pf(`/api/holdings/${ticker}/opening-lot`, { method: 'POST' })
+      const data = await res.json()
+      if (data.error) setOpeningLot({ ...openingLot, error: data.error })
+      else await fetchTxns()
+    } catch (err) {
+      setOpeningLot({ ...openingLot, error: String(err?.message || err) })
+    } finally {
+      setRecordingLot(false)
+    }
+  }
   const lotTotal = Object.values(lotAlloc).reduce((sum, value) => sum + (parseFloat(value) || 0), 0)
   const openLotTotal = openLots.reduce((sum, lot) => sum + (parseFloat(lot.shares_remaining) || 0), 0)
 
@@ -591,6 +608,10 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       const res = await pf(`/api/holdings/${ticker}/basis-gap`)
       setBasisGap(await res.json())
     } catch { /* the gap panel is advisory; failing to load it is not an error */ }
+    try {
+      const res = await pf(`/api/holdings/${ticker}/opening-lot`)
+      setOpeningLot(await res.json())
+    } catch { /* advisory as well */ }
   }
   useEffect(() => { if (ticker) fetchTxns() }, [ticker])
 
@@ -876,6 +897,48 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
           </div>
         )}
         {!isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
+
+        {/* Shares the tracker is assuming: offer to make them a real row. */}
+        {!isNew && openingLot?.needed && (
+          <div style={{
+            marginBottom: '1rem', padding: '0.75rem 1rem', borderRadius: 4,
+            background: 'rgba(255,184,108,0.10)', border: '1px solid rgba(255,184,108,0.35)',
+            fontSize: '0.85rem', lineHeight: 1.5,
+          }}>
+            <strong style={{ color: 'var(--p-ffb86c)' }}>
+              {Number(openingLot.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares
+              here are not accounted for by any transaction
+            </strong>{' '}
+            — {openingLot.account} holds {Number(openingLot.saved_quantity).toLocaleString(undefined, { maximumFractionDigits: 4 })},
+            but these buys and sells net to {Number(openingLot.ledger_net).toLocaleString(undefined, { maximumFractionDigits: 4 })}.
+            The history starts on {openingLot.first_transaction_date}, so the original purchase is
+            not in it. Performance screens already price those shares as if you owned them; recording
+            the lot makes that assumption a row you can see, edit, and delete.
+            {openingLot.price_per_share != null && (
+              <div style={{ marginTop: '0.5rem' }}>
+                Would record a <strong>BUY of {Number(openingLot.shares).toLocaleString(undefined, { maximumFractionDigits: 4 })} shares
+                on {openingLot.date}</strong> at {fmtM(openingLot.price_per_share)} per share
+                ({fmtM(openingLot.cost)} total). {openingLot.price_source} — <strong>not a broker
+                figure</strong>. Edit the row afterwards if you have the real purchase price; your
+                broker cost basis for the position is left untouched either way.
+              </div>
+            )}
+            {openingLot.error && (
+              <div style={{ marginTop: '0.5rem', color: 'var(--neg)' }}>{openingLot.error}</div>
+            )}
+            <div style={{ marginTop: '0.6rem' }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={recordingLot || openingLot.price_per_share == null}
+                style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                onClick={recordOpeningLot}
+              >
+                {recordingLot ? 'Recording…' : 'Record the opening lot'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Cost basis gap: why sells here report no gain, and what fixes it */}
         {!isNew && basisGap?.unpriced_sells > 0 && (

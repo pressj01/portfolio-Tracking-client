@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
@@ -88,6 +89,7 @@ function MetricCard({ label, value, range, className, children }) {
 }
 
 export default function TotalReturn() {
+  const navigate = useNavigate()
   const pf = useProfileFetch()
   const { selection, basisMode, profileQueryString } = useProfile()
   const { isDark } = useTheme()
@@ -107,6 +109,20 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [positionView, setPositionView] = useState('unrealized')
+  // A Distributions figure nobody can take apart is one nobody can check.
+  const [distDetail, setDistDetail] = useState(null)
+  const openDistributions = async (ticker) => {
+    setDistDetail({ ticker, loading: true })
+    try {
+      const params = new URLSearchParams({ period: dashboardPeriod })
+      addCustomRangeParams(params, dashboardPeriod, customStart, customEnd)
+      const res = await pf(`/api/total-return/distributions/${encodeURIComponent(ticker)}?${params}`)
+      const data = await res.json()
+      setDistDetail({ ticker, ...(data.error ? { error: data.error } : { data }) })
+    } catch (err) {
+      setDistDetail({ ticker, error: String(err?.message || err) })
+    }
+  }
   const [rvyMode, setRvyMode] = useState('cur')
   const [scatterReturnMode, setScatterReturnMode] = useState('pct')
   const [initialCustomDates] = useState(() => readSharedPerformanceRange())
@@ -668,6 +684,8 @@ export default function TotalReturn() {
           net_basis: 0,
           unrealized_total_dollar: 0,
           realized_total_dollar: 0,
+          open_distribution_dollar: 0,
+          realized_distribution_dollar: 0,
           net_distribution_dollar: 0,
           isOpen: false,
           isClosed: false,
@@ -682,19 +700,28 @@ export default function TotalReturn() {
       entry.isOpen = true
       entry.net_basis += row.start_value || 0
       entry.unrealized_total_dollar += row.total_return_dollar || 0
-      entry.net_distribution_dollar += row.distribution_dollar || 0
+      entry.open_distribution_dollar += row.distribution_dollar || 0
     })
     realizedRows.forEach(row => {
       const entry = entryFor(row)
       entry.isClosed = true
       entry.net_basis += row.start_value || 0
       entry.realized_total_dollar += row.total_return_dollar || 0
-      entry.net_distribution_dollar += row.distribution_dollar || 0
+      entry.realized_distribution_dollar += row.distribution_dollar || 0
     })
     return [...byTicker.values()].map(entry => {
       const net = entry.unrealized_total_dollar + entry.realized_total_dollar
+      // Adding both legs counted the same cash twice. An open row already
+      // carries every distribution the ticker paid inside the range, including
+      // the ones earned by shares sold during it; the realized leg is that same
+      // money apportioned to the lots it left with. Take the open figure when
+      // there is one, and the realized figure only for a ticker with no shares
+      // left. Either way the range's cash is counted exactly once.
       return {
         ...entry,
+        net_distribution_dollar: entry.isOpen
+          ? entry.open_distribution_dollar
+          : entry.realized_distribution_dollar,
         status: entry.isOpen && entry.isClosed ? 'Open + Closed' : entry.isOpen ? 'Open' : 'Closed',
         net_total_dollar: net,
         // Withheld rather than printed when the basis is missing — see the
@@ -711,7 +738,7 @@ export default function TotalReturn() {
     { key: 'end_value', label: 'End Value', fmt, numeric: true },
     { key: 'price_return_dollar', label: 'Period Price Return', title: 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
     { key: 'price_return_pct', label: 'Period Price Ret %', title: 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'distribution_dollar', label: 'Distributions', title: 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. Click a figure to see every payment behind it.', fmt, numeric: true },
     { key: 'total_return_dollar', label: 'Period Total Return', fmt, numeric: true, gl: true },
     { key: 'total_return_pct', label: 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
     { key: 'period_range', label: 'Effective Range' },
@@ -726,7 +753,7 @@ export default function TotalReturn() {
     { key: 'end_value', label: 'Proceeds', fmt, numeric: true },
     { key: 'price_return_dollar', label: 'Price Return', fmt, numeric: true, gl: true },
     { key: 'price_return_pct', label: 'Price Ret %', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'distribution_dollar', label: 'Distributions', title: 'Cash the sold shares earned inside the selected range only. It is not their lifetime income — a position sold this year keeps its earlier dividends in the years they were paid. Click a figure to see every payment behind it.', fmt, numeric: true },
     { key: 'total_return_dollar', label: 'Total Return', fmt, numeric: true, gl: true },
     { key: 'total_return_pct', label: 'Total Ret %', fmt: fmtPct, numeric: true, gl: true },
   ]
@@ -737,7 +764,7 @@ export default function TotalReturn() {
     { key: 'net_basis', label: 'Basis', fmt, numeric: true },
     { key: 'unrealized_total_dollar', label: 'Unreal. Total Return', fmt, numeric: true, gl: true },
     { key: 'realized_total_dollar', label: 'Real. Total Return', fmt, numeric: true, gl: true },
-    { key: 'net_distribution_dollar', label: 'Distributions', fmt, numeric: true },
+    { key: 'net_distribution_dollar', label: 'Distributions', title: 'Cash the ticker paid inside the selected range, counted once. A ticker both held and partly sold in the range is not the open figure plus the closed one — that would count the same payment twice. Click a figure to see every payment behind it.', fmt, numeric: true },
     { key: 'net_total_dollar', label: 'Net Total Return', fmt, numeric: true, gl: true },
     { key: 'net_total_pct', label: 'Net Ret %', fmt: fmtPct, numeric: true, gl: true },
   ]
@@ -809,6 +836,45 @@ export default function TotalReturn() {
       : positionView === 'combined' && (row.net_basis || 0) < MIN_BASIS
   )
 
+  // Start Value is replayed from the transaction ledger, so when the ledger
+  // does not account for every share the snapshot says is held, the replay
+  // invents the difference as an opening lot. That is right for a broker export
+  // that begins after the first purchase and wrong for a ledger with a
+  // duplicate sale or a missing buy, and the two cannot be told apart from
+  // share counts. Show which shares were invented rather than pricing them
+  // silently, and point at the screen where the ledger can be corrected.
+  const inferredLot = (row) => (
+    positionView === 'unrealized'
+      ? (row.inferred_opening_detail || []).find(lot => Number(lot?.shares || 0) > 0) || null
+      : null
+  )
+
+  const inferredLotNote = (lot, ticker) => {
+    const shares = Number(lot.shares || 0)
+    const sharesText = shares.toLocaleString(undefined, { maximumFractionDigits: 4 })
+    const ledger = Number(lot.ledger_net_shares || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
+    const saved = Number(lot.snapshot_quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
+    const overstated = lot.start_value_overstatement
+    // The dollar figure is the actionable half: shares alone do not say how far
+    // off the number on screen is.
+    const byHowMuch = overstated == null
+      ? ''
+      : ` Start Value is overstated by about ${fmt(overstated)}`
+        + (lot.opening_price ? ` (${sharesText} × ${fmt(lot.opening_price)})` : '')
+        + '.'
+    return (
+      `Start Value includes ${sharesText} shares no transaction accounts for.`
+      + byHowMuch
+      + ` ${ticker}'s buys and sells net to ${ledger} shares, but the saved holding is ${saved},`
+      + ` so the ${sharesText}-share difference was added back as an opening lot dated`
+      + ` ${formatPerformanceDate(lot.seed_date) || lot.seed_date} — before this range starts.`
+      + ' That is correct if your transaction history begins after you first bought'
+      + ` ${ticker}. If the history is complete, the ledger is wrong instead: usually a sale`
+      + ' recorded twice or a missing purchase.'
+      + ` Click to open ${ticker}'s transactions and correct it.`
+    )
+  }
+
   const lifetimeView = isLifetimePerformancePeriod(dashboardPeriod)
   const lifetimeReady = lifetimeView && !!chartData && !chartLoading
   const trackerReady = !!summary && !!chartData && !summaryLoading && !chartLoading
@@ -845,11 +911,25 @@ export default function TotalReturn() {
       net_basis: basis,
       unrealized_total_dollar: openPositionTotals.total_return_dollar || 0,
       realized_total_dollar: realizedTotals.total_return_dollar || 0,
-      net_distribution_dollar: (openPositionTotals.distribution_dollar || 0) + (realizedTotals.distribution_dollar || 0),
+      // Summed from the rows for the same reason the rows no longer add both
+      // legs: a ticker held and partly sold in the range would be counted twice.
+      net_distribution_dollar: combinedRows.reduce(
+        (sum, row) => sum + (row.net_distribution_dollar || 0), 0,
+      ),
       net_total_dollar: net,
       net_total_pct: basis >= MIN_BASIS ? (net / basis) * 100 : null,
     }
   })()
+
+  // The footer replays the same positions the rows do, so it carries the same
+  // invented shares and has to admit to them in the same place.
+  const footerInferredLots = (openPositionTotals.inferred_opening_detail || [])
+    .filter(lot => Number(lot?.shares || 0) > 0)
+  const footerInferredShares = footerInferredLots
+    .reduce((sum, lot) => sum + Number(lot.shares || 0), 0)
+  const footerInferredValue = footerInferredLots
+    .reduce((sum, lot) => sum + Number(lot.start_value_overstatement || 0), 0)
+  const footerInferredTickers = [...new Set(footerInferredLots.map(lot => lot.ticker))]
 
   const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
   const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
@@ -1021,7 +1101,7 @@ export default function TotalReturn() {
               </li>
               <li>
                 <strong>Tracker Total Return %:</strong> a daily-compounded, dividend-reinvested index —
-                the same one drawn on the Growth &amp; Performance chart. Each trade re-bases the index
+                the same one drawn on the chart in Growth's Vs market tab. Each trade re-bases the index
                 to the value just before the trade, so a purchase or sale never creates a jump in the
                 return itself. This is <em>time-weighted</em>: it measures how the investment performed,
                 independent of when money moved in or out.
@@ -1029,8 +1109,8 @@ export default function TotalReturn() {
             </ul>
             <p className="tracker-help-note">
               Use Tracker Total Return % to judge performance or compare against a benchmark like SPY —
-              it is the figure that should match Dashboard, Growth &amp; Performance, Portfolio Growth 2,
-              and Gains &amp; Losses after the close when the account, date range, and holdings scope match.
+              it is the figure that should match Dashboard, Growth, and Gains &amp; Losses
+              after the close when the account, date range, and holdings scope match.
               Each screen reads live quotes separately, so values can differ intraday. Use Total
               Return ($) to see the actual dollar result of your specific buy and sell timing, which a
               pure percentage cannot show.
@@ -1079,12 +1159,12 @@ export default function TotalReturn() {
           </p>
           {!lifetimeView && <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> this page is the reference calculation for
-            transaction-aware Total Return. Dashboard, Growth &amp; Performance, Portfolio Growth 2,
-            and Gains &amp; Losses use this same calculation for <strong>Tracker Total Return %</strong> when the
+            transaction-aware Total Return. Dashboard, Growth (its Dollars, Vs market, and Lots
+            tabs), and Gains &amp; Losses use this same calculation for <strong>Tracker Total Return %</strong> when the
             account, date range, and holdings scope match. They should agree after the close; separately
             read live quotes can differ intraday. Lifetime cost-basis G/L and dollar P/L
             answer a different question: where the accounting profit or loss came from.
-            {' '}The selected range is remembered across all five tracking screens.
+            {' '}The selected range is remembered across Dashboard, Growth, Total Return, Gains &amp; Losses, and Holdings.
             {t.account_reconciliation && (
               <>
                 {' '}<strong>Against your broker:</strong> End Value is the charted positions alone,
@@ -1128,7 +1208,7 @@ export default function TotalReturn() {
                 : undefined}
             />
             {/* The tracker cards retain the full portfolio history so they keep
-                matching Growth & Performance. The open-lot cards surface the
+                matching Growth's Vs market tab. The open-lot cards surface the
                 already-calculated current-position replay that was previously
                 available only in the table footer. */}
             <MetricCard label={lifetimeView ? 'Life Price G/L' : 'Tracker Price Return'} range={dashboardCardRange}
@@ -1461,6 +1541,48 @@ export default function TotalReturn() {
                       if (missingBasis(row) && (col.key === 'start_value' || col.key === 'net_basis')) {
                         display = <span title="No cost basis on record for these shares, so the return percentage cannot be computed. Usually an unmatched transfer that drained the lot history." style={{ color: 'var(--warn, #ffb86c)' }}>{display} ⚠</span>
                       }
+                      if (col.key === 'start_value') {
+                        const lot = inferredLot(row)
+                        if (lot) {
+                          display = (
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              title={inferredLotNote(lot, row.ticker)}
+                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault()
+                                  navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)
+                                }
+                              }}
+                              style={{ color: 'var(--warn, #ffb86c)', cursor: 'pointer' }}
+                            >
+                              {display} ⚠
+                            </span>
+                          )
+                        }
+                      }
+                      if ((col.key === 'distribution_dollar' || col.key === 'net_distribution_dollar')
+                          && row.ticker) {
+                        display = (
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            title={`Show the individual payments behind ${row.ticker}'s ${fmt(val)}`}
+                            onClick={() => openDistributions(row.ticker)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault()
+                                openDistributions(row.ticker)
+                              }
+                            }}
+                            style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
+                          >
+                            {display}
+                          </span>
+                        )
+                      }
                       if (col.key === 'ret_vs_yld') {
                         const rvy = row.ret_vs_yld
                         display = rvy ? rvy.label : '—'
@@ -1476,7 +1598,24 @@ export default function TotalReturn() {
                   {positionView === 'unrealized' && (
                     <>
                       <td colSpan={2} title={OPEN_LOT_SCOPE_NOTE}><strong>Open lots only</strong></td>
-                      <td style={{ textAlign: 'right' }}><strong>{fmt(openPositionTotals.start_value)}</strong></td>
+                      <td style={{ textAlign: 'right' }}>
+                        {footerInferredShares > 0
+                          ? (
+                            <strong
+                              title={
+                                `This total includes ${footerInferredShares.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares`
+                                + ` across ${footerInferredTickers.length} position${footerInferredTickers.length === 1 ? '' : 's'}`
+                                + ` (${footerInferredTickers.join(', ')}) that no transaction accounts for,`
+                                + ` overstating this total by about ${fmt(footerInferredValue)}.`
+                                + ' See the flagged Start Value cells above.'
+                              }
+                              style={{ color: 'var(--warn, #ffb86c)' }}
+                            >
+                              {fmt(openPositionTotals.start_value)} ⚠
+                            </strong>
+                          )
+                          : <strong>{fmt(openPositionTotals.start_value)}</strong>}
+                      </td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(openPositionTotals.end_value)}</strong></td>
                       <td style={{ textAlign: 'right', color: (openPositionTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(openPositionTotals.price_return_dollar)}</strong></td>
                       <td style={{ textAlign: 'right', color: (openPositionTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmtPct(openPositionTotals.price_return_pct)}</strong></td>
@@ -1516,6 +1655,71 @@ export default function TotalReturn() {
           </div>
           )}
         </>
+      )}
+      {distDetail && (
+        <div className="modal-overlay" onClick={() => setDistDetail(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setDistDetail(null)}>&times;</button>
+            <h3 style={{ marginTop: 0 }}>{distDetail.ticker} — Distributions</h3>
+            {distDetail.loading && <p>Loading…</p>}
+            {distDetail.error && <p style={{ color: 'var(--neg)' }}>{distDetail.error}</p>}
+            {distDetail.data && (() => {
+              const d = distDetail.data
+              const counted = d.payments.filter(p => p.counted)
+              const excluded = d.payments.filter(p => !p.counted)
+              return (
+                <>
+                  <p style={{ color: 'var(--text-dim)', marginTop: 0 }}>
+                    {d.period_label}: {formatPerformanceDate(d.start_date) || d.start_date}
+                    {' – '}{formatPerformanceDate(d.end_date) || d.end_date}.
+                    {' '}Every payment recorded for {d.ticker}, and why each one is in or out.
+                  </p>
+                  <table className="data-table" style={{ width: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: 'left' }}>Pay date</th>
+                        <th style={{ textAlign: 'right' }}>Amount</th>
+                        <th style={{ textAlign: 'left' }}>Source</th>
+                        <th style={{ textAlign: 'left' }}>Counted?</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {counted.map((p, i) => (
+                        <tr key={`c${i}`}>
+                          <td>{p.payment_date}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(p.amount)}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>{p.source || '—'}</td>
+                          <td style={{ color: 'var(--pos)' }}>counted</td>
+                        </tr>
+                      ))}
+                      <tr style={{ borderTop: '2px solid var(--border)' }}>
+                        <td><strong>Total shown on the row</strong></td>
+                        <td style={{ textAlign: 'right' }}><strong>{fmt(d.counted_total)}</strong></td>
+                        <td colSpan={2} />
+                      </tr>
+                      {excluded.map((p, i) => (
+                        <tr key={`x${i}`} style={{ opacity: 0.7 }}>
+                          <td>{p.payment_date}</td>
+                          <td style={{ textAlign: 'right' }}>{fmt(p.amount)}</td>
+                          <td style={{ color: 'var(--text-dim)' }}>{p.source || '—'}</td>
+                          <td style={{ color: 'var(--warn, #ffb86c)' }}>{p.excluded_reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {excluded.length > 0 && (
+                    <p style={{ color: 'var(--text-dim)' }}>
+                      {fmt(d.excluded_total)} across {excluded.length} payment
+                      {excluded.length === 1 ? '' : 's'} is deliberately not in this figure.
+                      A ledger export lists those rows too, which is why a hand-added
+                      total can be larger than what this column shows.
+                    </p>
+                  )}
+                </>
+              )
+            })()}
+          </div>
+        </div>
       )}
     </div>
   )

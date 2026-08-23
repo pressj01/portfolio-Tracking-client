@@ -741,6 +741,7 @@ def _build_transaction_aware_portfolio_series(
         "transaction_count": 0,
         "fallback_positions": 0,
         "inferred_opening_positions": 0,
+        "inferred_opening_detail": [],
         "inferred_closing_positions": 0,
         "split_adjusted_transactions": 0,
         "split_adjusted_positions": 0,
@@ -926,6 +927,14 @@ def _build_transaction_aware_portfolio_series(
     # the earliest defensible ownership boundary.
     inferred_opening_positions = 0
     inferred_closing_positions = 0
+    # Every inferred lot is a guess standing in for shares no transaction
+    # accounts for. It is correct when a broker export simply starts after the
+    # opening purchase, and wrong when the ledger itself is off -- a sale
+    # recorded twice, a missing buy -- and the two are indistinguishable from
+    # share counts alone. Report the arithmetic behind each one so the screen
+    # can flag the affected position instead of presenting the invented shares
+    # as fact, and so the reader can see which side needs correcting.
+    inferred_opening_detail = []
     for position_key, net_delta in transaction_deltas.items():
         symbol = transaction_symbols.get(position_key)
         if symbol not in prices.columns:
@@ -947,6 +956,25 @@ def _build_transaction_aware_portfolio_series(
                 continue
             events.append((seed_date, symbol, opening_quantity))
             inferred_opening_positions += 1
+            inferred_opening_detail.append({
+                "market_symbol": symbol,
+                "ticker": (
+                    position_key[1]
+                    if isinstance(position_key, (tuple, list)) and len(position_key) > 1
+                    else symbol
+                ),
+                "profile_id": (
+                    position_key[0]
+                    if isinstance(position_key, (tuple, list)) and position_key
+                    else None
+                ),
+                "shares": round(opening_quantity, 6),
+                "seed_date": seed_date.isoformat(),
+                "ledger_net_shares": round(net_delta, 6),
+                "snapshot_quantity": round(
+                    current_quantities.get(position_key, 0.0), 6,
+                ),
+            })
         elif opening_quantity < -1e-8:
             # The transaction export contains more net purchases than the
             # authoritative current snapshot. The missing close/transfer must
@@ -1134,6 +1162,27 @@ def _build_transaction_aware_portfolio_series(
         if value is not None
     ]
 
+    # Price each invented lot at the row's own opening observation, so the flag
+    # can say what the Start Value is overstated by in dollars rather than only
+    # in shares. End Value needs no such figure: the replay is reconciled to the
+    # saved quantity by construction, so it lands on the right number either way
+    # -- the whole error sits at the start and bleeds through the return dollars.
+    first_plotted_index = next(
+        (index for index, value in enumerate(price_values) if value is not None),
+        None,
+    )
+    for detail in inferred_opening_detail:
+        symbol_index = symbol_indexes.get(detail.pop("market_symbol", None))
+        detail["start_value_overstatement"] = None
+        if first_plotted_index is None or symbol_index is None:
+            continue
+        opening_price = price_matrix[first_plotted_index][symbol_index]
+        if np.isfinite(opening_price) and opening_price > 0:
+            detail["start_value_overstatement"] = round(
+                float(detail["shares"]) * float(opening_price), 2,
+            )
+            detail["opening_price"] = round(float(opening_price), 4)
+
     return {
         "price": price_values,
         "pricediv": pricediv_values,
@@ -1150,6 +1199,7 @@ def _build_transaction_aware_portfolio_series(
         "transaction_count": valid_transaction_events,
         "fallback_positions": fallback_positions,
         "inferred_opening_positions": inferred_opening_positions,
+        "inferred_opening_detail": inferred_opening_detail,
         "inferred_closing_positions": inferred_closing_positions,
         "split_adjusted_transactions": split_adjusted_transactions,
         "split_adjusted_positions": len(split_adjusted_positions),
@@ -1199,6 +1249,7 @@ def _portfolio_period_metrics(series_result):
         "transaction_count": int(series_result.get("transaction_count") or 0),
         "fallback_positions": int(series_result.get("fallback_positions") or 0),
         "inferred_opening_positions": int(series_result.get("inferred_opening_positions") or 0),
+        "inferred_opening_detail": list(series_result.get("inferred_opening_detail") or []),
         "inferred_closing_positions": int(series_result.get("inferred_closing_positions") or 0),
         "split_adjusted_transactions": int(series_result.get("split_adjusted_transactions") or 0),
         "split_adjusted_positions": int(series_result.get("split_adjusted_positions") or 0),
@@ -1740,6 +1791,20 @@ def _clear_dividend_event_caches():
     _UPCOMING_DIVIDENDS_CACHE.clear()
     _DIVIDEND_CALENDAR_CACHE.clear()
     _MONEY_MARKET_YIELD_CACHE.clear()
+
+
+def _clear_total_return_caches():
+    """Drop cached Total Return dashboard/comparison responses.
+
+    Both caches already key on a (DB_PATH, DB_PATH-wal) mtime pair meant to
+    invalidate on any write, but a write immediately followed by a read of the
+    same page can still land inside that pair's timestamp resolution -- the
+    opening-lot repair is exactly that shape, since its own success path sends
+    the user straight back to the page it just changed. Clearing outright is
+    cheap (a small in-process dict) and removes the ambiguity entirely.
+    """
+    _TOTAL_RETURN_DASHBOARD_CACHE.clear()
+    _TOTAL_RETURN_COMPARISON_CACHE.clear()
 
 
 def _clear_market_data_memory_caches():
@@ -18409,6 +18474,177 @@ def _transaction_date_error(value):
     return None
 
 
+def _opening_lot_plan(conn, ticker, profile_id):
+    """Work out whether a position needs its opening purchase recorded.
+
+    The tracker already reconciles a short ledger backward from the saved
+    quantity and prices the difference as if it were owned -- silently, and with
+    no cost basis. This turns that inference into something a person can see and
+    edit. Two gaps look identical on screen and must not share a remedy:
+
+    * the ledger nets to less than the saved quantity, so the opening purchase
+      genuinely is not in the file -- recording it is correct, and makes the
+      ledger arrive at the quantity the broker reports;
+    * the ledger already reconciles and only the open-lot clip creates a gap.
+      Writing a lot there would add shares that are already recorded, so this
+      refuses and says so.
+    """
+    holding = conn.execute(
+        "SELECT SUM(COALESCE(quantity, 0)) AS qty, MIN(NULLIF(purchase_date, '')) AS lot_start "
+        "FROM all_account_info WHERE UPPER(ticker) = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    quantity = float((holding["qty"] if holding else 0) or 0)
+    if quantity <= 1e-9:
+        return {"needed": False, "reason": "no_position"}
+
+    def ledger_net(clipped):
+        sql = ("SELECT COALESCE(SUM(CASE WHEN UPPER(COALESCE(transaction_type,'BUY'))='BUY' "
+               "THEN ABS(shares) ELSE -ABS(shares) END), 0) AS net, COUNT(*) AS n "
+               "FROM transactions WHERE UPPER(ticker) = ? AND profile_id = ? "
+               "AND UPPER(COALESCE(transaction_type,'BUY')) IN ('BUY','SELL')")
+        args = [ticker, profile_id]
+        if clipped and holding["lot_start"]:
+            sql += " AND transaction_date >= ?"
+            args.append(holding["lot_start"])
+        row = conn.execute(sql, args).fetchone()
+        return float(row["net"] or 0), int(row["n"] or 0)
+
+    full_net, txn_count = ledger_net(False)
+    clipped_net, _ = ledger_net(True)
+    if not txn_count:
+        return {"needed": False, "reason": "no_transactions"}
+
+    clipped_gap = quantity - clipped_net
+    full_gap = quantity - full_net
+    if clipped_gap <= 1e-6:
+        return {"needed": False, "reason": "reconciles"}
+    if full_gap <= 1e-6:
+        # Every share is already on record; only the open-lot clip hides them.
+        return {
+            "needed": False,
+            "reason": "clip_only",
+            "shares": round(clipped_gap, 6),
+            "lot_start": holding["lot_start"],
+        }
+
+    first_txn = conn.execute(
+        "SELECT MIN(transaction_date) AS d FROM transactions "
+        "WHERE UPPER(ticker) = ? AND profile_id = ? "
+        "AND UPPER(COALESCE(transaction_type,'BUY')) IN ('BUY','SELL')",
+        (ticker, profile_id),
+    ).fetchone()["d"]
+    try:
+        seed_date = (
+            datetime.date.fromisoformat(str(first_txn)[:10])
+            - datetime.timedelta(days=1)
+        ).isoformat()
+    except (TypeError, ValueError):
+        return {"needed": False, "reason": "no_first_date"}
+
+    return {
+        "needed": True,
+        "reason": "missing_opening_lot",
+        "shares": round(full_gap, 6),
+        "date": seed_date,
+        "first_transaction_date": str(first_txn)[:10],
+        "ledger_net": round(full_net, 6),
+        "saved_quantity": round(quantity, 6),
+    }
+
+
+def _close_on_or_before(ticker, day):
+    """Closing price on `day`, or the last session before it."""
+    try:
+        start = (datetime.date.fromisoformat(day) - datetime.timedelta(days=10)).isoformat()
+        end = (datetime.date.fromisoformat(day) + datetime.timedelta(days=1)).isoformat()
+        frame = _chunked_yf_download(
+            ticker, start=start, end=end, progress=False, auto_adjust=False,
+        )
+        if frame is None or frame.empty:
+            return None
+        closes = frame["Close"]
+        if hasattr(closes, "columns"):
+            closes = closes[closes.columns[0]]
+        closes = pd.to_numeric(closes, errors="coerce").dropna()
+        if closes.empty:
+            return None
+        return round(float(closes.iloc[-1]), 4)
+    except Exception:
+        return None
+
+
+@app.route("/api/holdings/<ticker>/opening-lot", methods=["GET", "POST"])
+def holding_opening_lot(ticker):
+    """Preview, then record, the purchase a truncated export never contained.
+
+    GET previews; POST writes. The written row is an ordinary BUY, so it can be
+    edited or deleted like any other -- which matters, because its price is this
+    app's estimate of that day's close, not a figure from a broker.
+    """
+    ticker = _accounting_symbol_for_ticker(ticker)
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        profile_id = (
+            _resolve_aggregate_profile(ticker, pids) if is_agg else pids[0]
+        )
+        plan = _opening_lot_plan(conn, ticker, profile_id)
+        account = conn.execute(
+            "SELECT name FROM profiles WHERE id = ?", (profile_id,),
+        ).fetchone()
+        plan["ticker"] = ticker
+        plan["profile_id"] = profile_id
+        plan["account"] = account["name"] if account else None
+        if not plan.get("needed"):
+            return jsonify(plan)
+
+        price = _close_on_or_before(ticker, plan["date"])
+        plan["price_per_share"] = price
+        plan["cost"] = round(plan["shares"] * price, 2) if price else None
+        plan["price_source"] = (
+            f"Estimated from the {plan['date']} close"
+            if price else "No market price available for that date"
+        )
+        if request.method == "GET":
+            return jsonify(plan)
+
+        if price is None:
+            return jsonify({
+                "error": "No market price is available for "
+                         f"{plan['date']}, so the lot cannot be priced. "
+                         "Add the purchase manually with the price you paid.",
+            }), 422
+
+        new_id = insert_equity_transaction(
+            conn, ticker, profile_id,
+            transaction_type="BUY",
+            transaction_date=plan["date"],
+            shares=plan["shares"],
+            price_per_share=price,
+            fees=0,
+            notes=(
+                "[Estimated opening lot] Recorded by Portfolio Tracker to cover "
+                f"{plan['shares']:g} shares the transaction history does not "
+                f"account for. Price is the {plan['date']} close, not a broker "
+                "figure — edit it if you have the real purchase price."
+            ),
+        )
+        if new_id is None:
+            return jsonify({"error": "That opening lot is already recorded."}), 409
+        conn.commit()
+        _rollup_transactions(ticker, profile_id, conn)
+        conn.commit()
+        _clear_total_return_caches()
+        plan["transaction_id"] = new_id
+        plan["message"] = (
+            f"Recorded {plan['shares']:g} shares of {ticker} on {plan['date']}."
+        )
+        return jsonify(plan), 201
+    finally:
+        conn.close()
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])
 def add_transaction(ticker):
     """Add a new transaction for a ticker. Auto-seeds if first transaction."""
@@ -27679,9 +27915,18 @@ def _total_return_realized_rows(
     holding_profile_ids = scope["holding_profile_ids"]
     txn_placeholders = ",".join("?" * len(transaction_profile_ids))
 
+    # Rows are chosen by sell date inside the window, so their dollars have to
+    # obey the same window. Reporting the lifetime allocation here put
+    # pre-period dividends inside a YTD figure and -- for a ticker still partly
+    # held -- counted the period's dividends a second time on top of the
+    # open-lot row, because that row carries the ticker's whole period total.
     dividend_allocation = _gains_losses_dividend_allocation(
         conn,
         set(holding_profile_ids) | set(transaction_profile_ids),
+        window=(
+            (period_range.get("start_date"), period_range.get("end_date"))
+            if period_range else None
+        ),
     )
 
     raw_sales = []
@@ -28052,6 +28297,100 @@ def total_return_summary():
         rows=table_rows, totals=totals, scatter=scatter_json, categories=categories,
         realized=realized_rows, realized_totals=realized_totals,
     )
+
+
+@app.route("/api/total-return/distributions/<ticker>", methods=["GET"])
+def total_return_distributions(ticker):
+    """Itemize the payments behind one Distributions figure.
+
+    A total nobody can take apart is a total nobody can check, and this column
+    has been wrong in two directions that a single number hides: payments from
+    outside the range, and the same cash counted on both an open and a closed
+    leg. Return every payment the range contains for this ticker, including the
+    ones deliberately left out and why, so the screen can show its work.
+    """
+    ticker = _accounting_symbol_for_ticker(ticker)
+    is_agg, profile_ids = get_profile_filter()
+    try:
+        period_range = _resolve_total_return_period(
+            request.args.get("period", "ytd"),
+            start_date=request.args.get("start_date", "").strip(),
+            end_date=request.args.get("end_date", "").strip(),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    start_date = period_range["start_date"]
+    end_date = period_range["end_date"]
+    # Estimates are projections the refresh job writes ahead of the real
+    # payment. Total Return drops them on purpose; the export does not, which
+    # is its own reason a hand-checked ledger total can disagree.
+    non_actual = {"refresh_estimate", "projection", "estimate", "estimated"}
+
+    conn = get_connection()
+    try:
+        payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+        if not payment_profile_ids:
+            return jsonify({
+                "ticker": ticker, "payments": [], "counted_total": 0,
+                "excluded_total": 0, "start_date": start_date, "end_date": end_date,
+                "period_label": period_range["label"],
+            })
+        placeholders = ",".join("?" * len(payment_profile_ids))
+        names = _load_profile_name_map(conn, payment_profile_ids)
+        rows = conn.execute(
+            f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id
+                FROM dividend_payments d
+                WHERE d.profile_id IN ({placeholders})
+                  AND UPPER(d.ticker) = ?
+                ORDER BY d.payment_date, d.id""",
+            [*payment_profile_ids, ticker],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    payments = []
+    counted_total = 0.0
+    excluded_total = 0.0
+    for raw in rows:
+        row = dict(raw)
+        day = str(row.get("payment_date") or "")[:10]
+        source = str(row.get("source") or "").strip()
+        try:
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        if start_date and day < start_date:
+            reason = f"paid before {start_date}"
+        elif end_date and day > end_date:
+            reason = f"paid after {end_date}"
+        elif source.lower() in non_actual:
+            reason = f"estimated payment ({source}), not a recorded one"
+        else:
+            reason = None
+        if reason is None:
+            counted_total += amount
+        else:
+            excluded_total += amount
+        payments.append({
+            "payment_date": day,
+            "amount": round(amount, 4),
+            "source": source,
+            "account": names.get(int(row.get("profile_id") or 0)),
+            "notes": row.get("notes") or "",
+            "counted": reason is None,
+            "excluded_reason": reason,
+        })
+
+    return jsonify({
+        "ticker": ticker,
+        "payments": payments,
+        "counted_total": round(counted_total, 4),
+        "excluded_total": round(excluded_total, 4),
+        "start_date": start_date,
+        "end_date": end_date,
+        "period_label": period_range["label"],
+    })
 
 
 @app.route("/api/total-return/charts", methods=["GET"])
@@ -28953,8 +29292,16 @@ def total_return_compare():
 
 # ── Gains & Losses ─────────────────────────────────────────────────────────────
 
-def _gains_losses_dividend_allocation(conn, profile_ids):
+def _gains_losses_dividend_allocation(conn, profile_ids, window=None):
     """Allocate imported dividends once between sold lots and open shares.
+
+    ``window`` optionally narrows the result to a ``(start_date, end_date)``
+    pair of ISO strings. The lot replay still walks the whole transaction
+    history, because a period figure still has to know which lots each payment
+    landed on, but only payments inside the window earn credit. A holdings
+    snapshot's lifetime ``total_divs_received`` is dropped entirely when a
+    window is given: it carries no payment dates, so it cannot honestly be
+    attributed to one period.
 
     Broker transaction imports all write cash distributions to
     ``dividend_payments``. The older G&L implementation instead read the
@@ -28979,6 +29326,20 @@ def _gains_losses_dividend_allocation(conn, profile_ids):
     }
     if not profile_ids:
         return empty
+
+    window_start = str(window[0])[:10] if window and window[0] else None
+    window_end = str(window[1])[:10] if window and window[1] else None
+    windowed = bool(window_start or window_end)
+
+    def in_window(payment_date):
+        if not windowed:
+            return True
+        day = str(payment_date or "")[:10]
+        if window_start and day < window_start:
+            return False
+        if window_end and day > window_end:
+            return False
+        return True
 
     placeholders = ",".join("?" * len(profile_ids))
     transaction_rows = [
@@ -29085,8 +29446,14 @@ def _gains_losses_dividend_allocation(conn, profile_ids):
         payments = grouped_payments.get(key, [])
         holding = holdings.get(key, {})
         current_shares = float(holding.get("quantity") or 0)
-        snapshot_total = float(holding.get("total_divs_received") or 0)
-        payment_total = sum(max(0.0, float(row.get("amount") or 0)) for row in payments)
+        snapshot_total = (
+            0.0 if windowed else float(holding.get("total_divs_received") or 0)
+        )
+        payment_total = sum(
+            max(0.0, float(row.get("amount") or 0))
+            for row in payments
+            if in_window(row.get("payment_date"))
+        )
         effective_total = max(payment_total, snapshot_total)
         if effective_total > 1e-9:
             effective_totals[key] = effective_total
@@ -29111,6 +29478,8 @@ def _gains_losses_dividend_allocation(conn, profile_ids):
         share_deficit = 0.0
         for _, _, _, event_type, row in events:
             if event_type == "PAYMENT":
+                if not in_window(row.get("payment_date")):
+                    continue
                 amount = max(0.0, float(row.get("amount") or 0))
                 open_shares = sum(float(lot["shares"] or 0) for lot in lots)
                 if amount > 0 and open_shares > 1e-9:

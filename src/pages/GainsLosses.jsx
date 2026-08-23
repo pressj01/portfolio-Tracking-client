@@ -984,7 +984,7 @@ export default function GainsLosses({ embedded = false }) {
               <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Use the lifetime cards below, or choose <strong>Life</strong>, for current value versus cost basis.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
               <li><strong>Tracker Total Return:</strong> Tracker Price Return plus Distributions, including positions fully closed during the range.</li>
-              <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2 after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
+              <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, and Growth after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
             </ul>
             <p className="tracker-help-note">
               Buys and sells during the range change what is being measured, not the return itself — a
@@ -1084,7 +1084,7 @@ export default function GainsLosses({ embedded = false }) {
             ) : (
               <>
                 <strong>Reconciliation figure:</strong> <strong>Tracker Total Return %</strong> is the value
-                that should match Total Return, Dashboard, Growth &amp; Performance, and Portfolio Growth 2
+                that should match Total Return, Dashboard, and Growth
                 after the close when the account, holdings filter, and shared date range match. Separately
                 read live quotes can differ intraday. Lifetime G/L below answers
                 a different cost-basis accounting question.
