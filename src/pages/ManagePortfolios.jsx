@@ -107,8 +107,8 @@ export default function ManagePortfolios() {
   const ACTIONS = {
     clear: {
       verb: 'Clear',
-      headline: (name, n) => `CLEAR ${n} holdings record(s) for "${name}"?`,
-      empty: (name) => `"${name}" has no holdings data to clear.`,
+      headline: (name, n) => `CLEAR ${n} holdings and transaction record(s) for "${name}"?`,
+      empty: (name) => `"${name}" has no holdings or transaction data to clear.`,
       request: (p) => ({ url: `${API_BASE}/api/profiles/${p.id}/clear`, method: 'POST' }),
     },
     reset: {
@@ -425,14 +425,14 @@ export default function ManagePortfolios() {
         <ul style={{ margin: '0.5rem 0 0.5rem 1.1rem', padding: 0, lineHeight: 1.6 }}>
           <li>
             <strong style={{ color: 'var(--p-f0ad4e)' }}>Clear</strong> — empties the holdings
-            and the tracking derived from them. <em>Keeps</em> the portfolio and its transaction
-            history. Use it to reload positions from a fresh broker export.
+            and the transaction ledger behind them. <em>Keeps</em> the portfolio, option trades,
+            the DRIP contribution schedule, NAV history, categories, and saved plans. Use it to
+            reload from a fresh export.
           </li>
           <li>
-            <strong style={{ color: 'var(--p-f0ad4e)' }}>Reset</strong> — empties the holdings
-            <em> and</em> the transaction history, dividend payments, and option trades.
-            <em> Keeps</em> the portfolio, its NAV history, categories, and saved plans. Use it to
-            start an import over from scratch.
+            <strong style={{ color: 'var(--p-f0ad4e)' }}>Reset</strong> — also empties option
+            trades and the DRIP contribution schedule. <em>Keeps</em> the portfolio, NAV history,
+            categories, and saved plans. Use it to start an import over from scratch.
           </li>
           <li>
             <strong style={{ color: 'var(--p-ef9a9a)' }}>Delete</strong> — removes the portfolio
@@ -550,23 +550,21 @@ export default function ManagePortfolios() {
                 <button className="btn btn-sm" onClick={() => moveProfile(p.id, -1)} disabled={index === 0} title="Move portfolio up" aria-label={`Move ${p.name} up`}>↑</button>
                 <button className="btn btn-sm" style={{ marginLeft: '0.3rem' }} onClick={() => moveProfile(p.id, 1)} disabled={index === summary.length - 1} title="Move portfolio down" aria-label={`Move ${p.name} down`}>↓</button>
                 <button className="btn btn-sm" onClick={() => setProfileId(String(p.id))} title="Switch to this portfolio">Select</button>
-                {p.holdings_count > 0 && (
-                  <button
-                    className="btn btn-sm"
-                    style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
-                    onClick={() => clearPortfolioData(p)}
-                    disabled={busyAction === `${p.id}:clear`}
-                    title="Empty the holdings but keep the portfolio and its transaction history"
-                  >
-                    {busyAction === `${p.id}:clear` ? 'Clearing…' : 'Clear'}
-                  </button>
-                )}
+                <button
+                  className="btn btn-sm"
+                  style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
+                  onClick={() => clearPortfolioData(p)}
+                  disabled={busyAction === `${p.id}:clear`}
+                  title="Empty the holdings and transaction ledger, keeping the portfolio, option trades, and the DRIP contribution schedule"
+                >
+                  {busyAction === `${p.id}:clear` ? 'Clearing…' : 'Clear'}
+                </button>
                 <button
                   className="btn btn-sm"
                   style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
                   onClick={() => resetPortfolio(p)}
                   disabled={busyAction === `${p.id}:reset`}
-                  title="Empty the holdings AND the transaction history, keeping the portfolio, so you can import it again from scratch"
+                  title="Empty holdings, the transaction ledger, option trades, and the DRIP contribution schedule, keeping the portfolio so you can import it again from scratch"
                 >
                   {busyAction === `${p.id}:reset` ? 'Resetting…' : 'Reset'}
                 </button>

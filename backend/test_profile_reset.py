@@ -105,6 +105,29 @@ class _ProfileFixture:
         finally:
             conn.close()
 
+    def _positions_managed(self, pid):
+        conn = self._get_connection()
+        try:
+            return conn.execute(
+                "SELECT positions_managed FROM profiles WHERE id = ?", (pid,)
+            ).fetchone()["positions_managed"]
+        finally:
+            conn.close()
+
+    def _import_buy(self, pid, ticker="ZZZ"):
+        content = (
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
+            f"2026-01-15,BUY,{ticker},10,20.00,0,,Fresh purchase after reset\n"
+        )
+        return self.client.post(
+            f"/api/import/transactions?profile_id={pid}",
+            data={
+                "format": "generic_transactions",
+                "file": (io.BytesIO(content.encode()), "txns.csv"),
+            },
+            content_type="multipart/form-data",
+        )
+
 
 class ProfileResetTest(_ProfileFixture, unittest.TestCase):
     # ── Preview ──────────────────────────────────────────────────────────────
@@ -182,20 +205,54 @@ class ProfileResetTest(_ProfileFixture, unittest.TestCase):
             conn.close()
         self.assertEqual(cash, 0)
 
+    def test_reset_clears_the_stale_positions_managed_flag(self):
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET positions_managed = 1 WHERE id = 2")
+        conn.commit()
+        conn.close()
+
+        self.client.post("/api/profiles/2/reset", json={"confirm_name": "Brokerage"})
+        self.assertEqual(self._positions_managed(2), 0)
+
+    def test_reimporting_after_reset_actually_rebuilds_holdings(self):
+        """Reset -> transactions-only import must produce a visible holding."""
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET positions_managed = 1 WHERE id = 2")
+        conn.commit()
+        conn.close()
+
+        self.client.post("/api/profiles/2/reset", json={"confirm_name": "Brokerage"})
+
+        res = self._import_buy(2)
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        self.assertEqual(res.get_json()["inserted_buys"], 1)
+
+        conn = self._get_connection()
+        try:
+            holding = conn.execute(
+                "SELECT quantity FROM all_account_info WHERE ticker = 'ZZZ' AND profile_id = 2"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(holding, "the BUY must produce a visible holding, not just a ledger row")
+        self.assertAlmostEqual(holding["quantity"], 10.0, places=4)
+
 
 
 class ClearAndDeleteWarningTest(_ProfileFixture, unittest.TestCase):
     """Clear and Delete must be as guarded as Reset: no confirmation, no delete."""
 
-    def test_clear_scope_preview_reports_only_holdings_and_keeps_the_ledger(self):
+    def test_clear_scope_preview_counts_the_ledger_and_keeps_option_trades(self):
         body = self.client.get("/api/profiles/2/data-preview?scope=clear").get_json()
         self.assertEqual(body["scope"], "clear")
         self.assertEqual(body["summary"]["positions"], 1)
-        # The ledger is out of Clear's scope, so it must not be counted.
-        self.assertEqual(body["summary"]["transactions"], 0)
-        self.assertEqual(body["summary"]["option_trades"], 0)
+        # The ledger is in Clear's scope, so the warning has to count it.
+        self.assertEqual(body["summary"]["transactions"], 1)
+        # Option trades are not, so they stay out of the count entirely.
+        self.assertNotIn("option_trades", body["counts"])
         self.assertFalse(body["removes_portfolio"])
-        self.assertTrue(any("Transaction history" in line for line in body["preserved"]))
+        self.assertTrue(any("Option trades" in line for line in body["preserved"]))
+        self.assertFalse(any("Transaction history" in line for line in body["preserved"]))
 
     def test_delete_scope_preview_counts_everything_and_flags_the_portfolio(self):
         body = self.client.get("/api/profiles/2/data-preview?scope=delete").get_json()
@@ -218,12 +275,63 @@ class ClearAndDeleteWarningTest(_ProfileFixture, unittest.TestCase):
         self.assertEqual(self._count("all_account_info", 2), 1)
         self.assertEqual(self.backups, [], "a refused clear must not take a backup")
 
-    def test_clear_with_the_typed_name_empties_holdings_but_keeps_transactions(self):
+    def test_clear_with_the_typed_name_empties_holdings_and_the_ledger(self):
         res = self.client.post("/api/profiles/2/clear", json={"confirm_name": "Brokerage"})
         self.assertEqual(res.status_code, 200)
         self.assertEqual(self._count("all_account_info", 2), 0)
-        self.assertEqual(self._count("transactions", 2), 1, "Clear keeps the ledger")
+        self.assertEqual(self._count("transactions", 2), 0, "Clear empties the ledger")
+        self.assertEqual(self._count("dividend_payments", 2), 0)
+        self.assertEqual(self._count("option_trades", 2), 1, "Clear keeps option trades")
+        self.assertEqual(self._count("portfolio_nav", 2), 1)
         self.assertEqual(self.backups, [2], "Clear now snapshots first")
+
+    def test_clear_leaves_other_portfolios_alone(self):
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET positions_managed = 1 WHERE id IN (1, 2, 3)")
+        conn.commit()
+        conn.close()
+
+        self.client.post("/api/profiles/2/clear", json={"confirm_name": "Brokerage"})
+        for table in ("all_account_info", "holdings", "transactions", "dividend_payments", "option_trades"):
+            self.assertEqual(self._count(table, 1), 1, f"{table} for Owner must be untouched")
+            self.assertEqual(self._count(table, 3), 1, f"{table} for Roth IRA must be untouched")
+        self.assertEqual(self._count("option_trades", 2), 1)
+        self.assertEqual(self._positions_managed(2), 0)
+        self.assertEqual(self._positions_managed(1), 1)
+        self.assertEqual(self._positions_managed(3), 1)
+
+    def test_clear_clears_the_stale_positions_managed_flag(self):
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET positions_managed = 1 WHERE id = 2")
+        conn.commit()
+        conn.close()
+
+        self.client.post("/api/profiles/2/clear", json={"confirm_name": "Brokerage"})
+        self.assertEqual(self._positions_managed(2), 0)
+
+    def test_reimporting_after_clear_actually_rebuilds_holdings(self):
+        """Clear -> transactions-only import must produce a visible holding."""
+        conn = self._get_connection()
+        conn.execute("UPDATE profiles SET positions_managed = 1 WHERE id = 2")
+        conn.commit()
+        conn.close()
+
+        self.client.post("/api/profiles/2/clear", json={"confirm_name": "Brokerage"})
+
+        res = self._import_buy(2)
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        self.assertEqual(res.get_json()["inserted_buys"], 1)
+        self.assertEqual(self._count("option_trades", 2), 1, "Clear must still spare option trades")
+
+        conn = self._get_connection()
+        try:
+            holding = conn.execute(
+                "SELECT quantity FROM all_account_info WHERE ticker = 'ZZZ' AND profile_id = 2"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(holding, "the BUY must produce a visible holding, not just a ledger row")
+        self.assertAlmostEqual(holding["quantity"], 10.0, places=4)
 
     def test_delete_refuses_without_the_typed_name(self):
         for payload in ({}, {"confirm_name": "Roth IRA"}):
@@ -292,7 +400,10 @@ class AggregateWriteGuardTest(_ProfileFixture, unittest.TestCase):
         res = self.client.post("/api/data/clear-all?profile_id=2")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(self._count("all_account_info", 2), 0)
+        self.assertEqual(self._count("transactions", 2), 0, "Settings Clear uses the same ledger wipe as Portfolios Clear")
+        self.assertEqual(self._count("option_trades", 2), 1, "Settings Clear still keeps option trades")
         self.assertEqual(self._count("all_account_info", 1), 1)
+        self.assertEqual(self._count("transactions", 1), 1)
 
     def test_excel_import_refuses_an_aggregate(self):
         res = self.client.post(

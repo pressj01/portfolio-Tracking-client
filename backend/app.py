@@ -5891,15 +5891,18 @@ def delete_profile(pid):
 
 
 def _clear_profile_data(conn, pid):
-    """Remove all data for a profile from every profile-scoped table."""
-    for table in [
-        "all_account_info", "holdings", "dividends", "income_tracking",
-        "weekly_payouts", "monthly_payouts", "weekly_payout_tickers",
-        "monthly_payout_tickers", "drip_settings", "drip_contribution_targets",
-        "drip_redirects", "swap_candidates", "ticker_categories",
-    ]:
+    """Empty a profile's positions and the ledger those positions came from.
+
+    Uses the same table list as the Clear warning so the counts and the
+    deletes cannot drift apart.
+    """
+    for table in _profile_tables_for_scope(conn, "clear"):
         conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
     _set_profile_cash_value(conn, pid, 0, source="profile_cleared")
+    # Flag lives on the profiles row, so the DELETE loop cannot reach it.
+    # Stale positions_managed=1 makes a later transactions-only import skip
+    # rollup, so the ticker never appears.
+    _set_profile_positions_managed(pid, False, conn)
 
 
 def _delete_profile_ticker_records(conn, profile_id, ticker, include_transactions=False):
@@ -6080,7 +6083,7 @@ def _rename_holding_ticker_records(conn, old_ticker, new_ticker):
 
 @app.route("/api/profiles/<int:pid>/clear", methods=["POST"])
 def clear_profile_data(pid):
-    """Clear a profile's holdings data, keeping the profile and its ledger."""
+    """Empty a profile's holdings and transaction ledger, keeping the profile."""
     conn = get_connection()
     try:
         name = _profile_name_or_none(conn, pid)
@@ -6103,7 +6106,10 @@ def clear_profile_data(pid):
     return jsonify({
         "cleared": pid,
         "profile_name": name,
-        "message": f'Holdings data cleared for "{name}". Transaction history was kept.',
+        "message": (
+            f'Holdings and transaction history cleared for "{name}". '
+            "Option trades and NAV history were kept."
+        ),
     })
 
 
@@ -6124,11 +6130,18 @@ _PROFILE_RESET_TABLES = (
     "drip_monthly_contribution", "swap_candidates", "ticker_categories",
 )
 
-# Tables emptied by Clear — holdings and the tracking derived from them. Matches
-# _clear_profile_data, which deliberately keeps the transaction ledger.
+# Tables emptied by Clear. The ledger has to go: a transaction import skips
+# rows already on file, so leftover history would discard the corrected file.
+# Option trades and drip_monthly_contribution stay; no positions/transactions
+# file rebuilds them. Reset drops those too.
 _PROFILE_CLEAR_TABLES = (
+    # Current positions and their derived mirrors.
     "all_account_info", "holdings", "dividends", "income_tracking",
+    # The ledger a Holdings + Transactions import replays.
+    "transactions", "dividend_payments", "dividend_schedule_history",
+    # Payout tracking rebuilt from positions.
     "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
+    # Per-holding configuration pointing at tickers Clear removes.
     "drip_settings", "drip_contribution_targets", "drip_redirects",
     "swap_candidates", "ticker_categories",
 )
@@ -6136,7 +6149,7 @@ _PROFILE_CLEAR_TABLES = (
 # What each action leaves behind, echoed to the UI so every warning can say so.
 _PROFILE_SCOPE_PRESERVED = {
     "clear": (
-        "Transaction history, dividend payments, and option trades",
+        "Option trades and the DRIP contribution schedule",
         "NAV / portfolio value history",
         "Category and sub-category definitions, and manual overrides",
         "Saved rebalance, tax-loss, builder, and simulator plans",
@@ -6298,6 +6311,7 @@ def reset_profile_for_reimport(pid):
             result = conn.execute(f"DELETE FROM {table} WHERE profile_id = ?", (pid,))
             deleted[table] = result.rowcount if result.rowcount is not None else count
         _set_profile_cash_value(conn, pid, 0, source="profile_reset")
+        _set_profile_positions_managed(pid, False, conn)
         conn.commit()
     finally:
         conn.close()
@@ -7377,17 +7391,13 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             ident = equity_identity(profile_id, ticker, txn_type, txn_date, shares, price, fees)
             import_hash_occ[ident] = import_hash_occ.get(ident, 0) + 1
 
-            # Match on date+shares with a sub-cent price tolerance: the same
-            # fill can arrive from two feeds that round the price differently
-            # (e.g. 20.5425 vs 20.54), and an exact price match would let those
-            # re-imports through as duplicates. The 0.01 window is tight enough
-            # that genuinely distinct same-day fills (which differ by far more)
-            # are still preserved.
+            # Same-fill rounding across feeds; see _TXN_PRICE_MATCH_TOLERANCE.
             existing_count = conn.execute(
                 "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
                 "AND transaction_type = ? AND transaction_date = ? "
-                "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < 0.01",
-                (ticker, profile_id, txn_type, txn_date, shares, price),
+                "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
+                (ticker, profile_id, txn_type, txn_date, shares, price,
+                 _TXN_PRICE_MATCH_TOLERANCE),
             ).fetchone()[0]
             import_count = sum(
                 1
@@ -7397,7 +7407,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 and (t.get("date") or None) == txn_date
                 and _normalize_transaction_shares(t.get("shares")) is not None
                 and abs(_normalize_transaction_shares(t.get("shares")) - shares) < 0.0001
-                and abs((t.get("price_per_share") or 0) - price) < 0.01
+                and abs((t.get("price_per_share") or 0) - price) < _TXN_PRICE_MATCH_TOLERANCE
                 and profile_by_name.get(str(t.get("profile") or "").strip().lower(), transaction_profile_fallback) == profile_id
             )
             if existing_count >= import_count:
@@ -7890,6 +7900,9 @@ def _record_positions_nav_only(parsed, profile_id, nav_date):
 # imports don't double-count buys, sells, and dividends.
 _LAYERED_DIV_WINDOW_DAYS = 3
 
+# Wider than any 2-decimal rounding gap, narrower than a real price change.
+_TXN_PRICE_MATCH_TOLERANCE = 0.01
+
 
 # Half-width of the window that identifies "the same distribution" for a payout
 # frequency. Kept under half the payout period so two consecutive real
@@ -8192,40 +8205,21 @@ def api_import_transactions():
             # Count-based duplicate check so legitimate identical transactions
             # (same day/qty/price) are preserved while re-imports are deduped.
             # DB count includes uncommitted inserts from this batch (same conn).
-            # When layering history on top of broker-managed positions, the same
-            # fill can arrive from two feeds with a rounding difference in price,
-            # so match on date/quantity alone there; otherwise require an exact
-            # price match so genuinely distinct same-day trades are preserved.
-            if preserve_positions:
-                existing_count = conn.execute(
-                    "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
-                    "AND transaction_type = ? AND transaction_date = ? "
-                    "AND ABS(shares - ?) < 0.0001",
-                    (ticker, profile_id, txn["type"], txn["date"], txn["shares"]),
-                ).fetchone()[0]
-                import_count = sum(1 for t in non_div_txns
-                                   if t["type"] == txn["type"] and t["ticker"] == ticker
-                                   and t["date"] == txn["date"]
-                                   and t["shares"] is not None
-                                   and abs(t["shares"] - txn["shares"]) < 0.0001)
-            else:
-                # Sub-cent price tolerance so the same fill re-imported from a
-                # feed that rounds price differently is recognised as a duplicate
-                # (an exact match would let rounding-only differences through),
-                # while genuinely distinct same-day fills are still preserved.
-                existing_count = conn.execute(
-                    "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
-                    "AND transaction_type = ? AND transaction_date = ? "
-                    "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < 0.01",
-                    (ticker, profile_id, txn["type"], txn["date"],
-                     txn["shares"], txn["price_per_share"] or 0),
-                ).fetchone()[0]
-                import_count = sum(1 for t in non_div_txns
-                                   if t["type"] == txn["type"] and t["ticker"] == ticker
-                                   and t["date"] == txn["date"]
-                                   and t["shares"] is not None
-                                   and abs(t["shares"] - txn["shares"]) < 0.0001
-                                   and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0)) < 0.01)
+            # See _TXN_PRICE_MATCH_TOLERANCE.
+            existing_count = conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
+                "AND transaction_type = ? AND transaction_date = ? "
+                "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
+                (ticker, profile_id, txn["type"], txn["date"],
+                 txn["shares"], txn["price_per_share"] or 0, _TXN_PRICE_MATCH_TOLERANCE),
+            ).fetchone()[0]
+            import_count = sum(1 for t in non_div_txns
+                               if t["type"] == txn["type"] and t["ticker"] == ticker
+                               and t["date"] == txn["date"]
+                               and t["shares"] is not None
+                               and abs(t["shares"] - txn["shares"]) < 0.0001
+                               and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0))
+                               < _TXN_PRICE_MATCH_TOLERANCE)
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
@@ -23781,7 +23775,7 @@ def security_research_average_returns(kind):
 
 @app.route("/api/data/clear-all", methods=["POST"])
 def clear_all_data():
-    """Delete all holdings, dividends, and related data for the current profile."""
+    """Empty the current profile the same way Portfolios → Clear does."""
     blocked = _reject_aggregate_single_profile_write("Clearing portfolio data")
     if blocked:
         return blocked
@@ -23789,16 +23783,12 @@ def clear_all_data():
     # Snapshot the database before a destructive operation so the user can roll back.
     _create_import_backup(profile_id)
     conn = get_connection()
-    tables = [
-        "all_account_info", "holdings", "dividends", "income_tracking",
-        "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
-    ]
-    counts = {}
-    for t in tables:
-        r = conn.execute(f"DELETE FROM {t} WHERE profile_id = ?", (profile_id,))
-        counts[t] = r.rowcount
-    conn.commit()
-    conn.close()
+    try:
+        counts = _profile_reset_counts(conn, profile_id, "clear")
+        _clear_profile_data(conn, profile_id)
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({"message": "All data cleared for the current portfolio", "deleted": counts})
 
 
@@ -23820,12 +23810,16 @@ def data_stats():
     income = conn.execute(
         f"SELECT COUNT(*) as c FROM income_tracking WHERE profile_id IN ({placeholders})", pids
     ).fetchone()["c"]
+    transactions = conn.execute(
+        f"SELECT COUNT(*) as c FROM transactions WHERE profile_id IN ({placeholders})", pids
+    ).fetchone()["c"]
     conn.close()
     return jsonify({
         "holdings": holdings,
         "active_holdings": dividends,
         "dividends": dividends,
         "income_tracking": income,
+        "transactions": transactions,
     })
 
 

@@ -5514,8 +5514,9 @@ function PortfoliosHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear vs Reset vs Delete</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Three buttons in the Actions column remove data, and they differ in how much they take.
-        The short version: <strong>Clear</strong> empties the holdings, <strong>Reset</strong> also
-        empties the transaction history, and <strong>Delete</strong> removes the portfolio itself.
+        The short version: <strong>Clear</strong> empties the holdings and the transaction ledger
+        behind them, <strong>Reset</strong> also empties option trades and the DRIP contribution
+        schedule, and <strong>Delete</strong> removes the portfolio itself.
       </p>
       <div style={{ overflowX: 'auto', marginBottom: '1rem' }}>
         <table className="holdings-table" style={{ minWidth: '640px' }}>
@@ -5535,7 +5536,13 @@ function PortfoliosHelp() {
               <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
             </tr>
             <tr>
-              <td>Transactions, dividend payments, option trades</td>
+              <td>Transactions and dividend payments</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+              <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
+            </tr>
+            <tr>
+              <td>Option trades, DRIP contribution schedule</td>
               <td style={{ textAlign: 'center', color: 'var(--pos-strong)' }}>Kept</td>
               <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
               <td style={{ textAlign: 'center', color: 'var(--p-ef9a9a)' }}>Removed</td>
@@ -5556,8 +5563,8 @@ function PortfoliosHelp() {
         </table>
       </div>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Clear</strong> — use when you want to reload positions from a fresh broker export. Your purchase history survives, so cost basis and realized gains stay intact.</li>
-        <li><strong>Reset</strong> — use when an import went wrong and you want to start that portfolio's import over from scratch. This is the one that also wipes the transaction ledger, which Clear leaves behind.</li>
+        <li><strong>Clear</strong> — use when you want to reload a portfolio from a fresh export. The transaction ledger goes with the holdings, so whatever you import next is exactly what the portfolio ends up with. That matters because a transaction import skips rows it already has on file: a ledger left in place would treat your corrected rows as duplicates, discard them, and hand back the same bad history you just fixed.</li>
+        <li><strong>Reset</strong> — use when an import went wrong and you want to start that portfolio's import over from scratch. This is the one that also wipes option trades and the DRIP contribution schedule, which Clear leaves behind because no positions or transactions file rebuilds them.</li>
         <li><strong>Delete</strong> — use when you no longer want the portfolio at all. It disappears from the navbar selector and from any aggregates it belonged to. The Owner/default portfolio (ID 1) cannot be deleted, so its row shows no Delete button — Clear or Reset it instead.</li>
       </ul>
 
@@ -5779,9 +5786,10 @@ function SettingsHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear All Data</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Permanently deletes all holdings, dividends, income tracking, and payout data for the
-        currently selected portfolio. The portfolio itself is kept — only its data is removed.
-        Use this to start fresh before a clean reimport.
+        Permanently deletes holdings, the transaction ledger, dividends, income tracking, and payout
+        data for the currently selected portfolio — the same scope as <strong>Clear</strong> on the
+        Portfolios page. Option trades, the DRIP contribution schedule, NAV history, and saved plans
+        are kept. Use this to start fresh before a clean reimport.
       </p>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Click <strong>"Clear All Data"</strong>.</li>

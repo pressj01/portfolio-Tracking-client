@@ -1477,6 +1477,148 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(txn_count, 3)
         self.assertEqual(dividend_count, 1)
 
+    def test_clear_lets_a_corrected_transaction_file_replace_the_bad_ledger(self):
+        """Covers every broker: they all share this one insert/dedupe path.
+
+        The importer skips rows already on file instead of updating them, so
+        re-importing a corrected export over a surviving ledger cannot fix
+        anything — edits stack beside the originals and deletions never take.
+        Clear has to empty the ledger for "fix the export, re-import it" to
+        mean what it says.
+        """
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner) "
+            "VALUES (44, 'Corrections', 'other', 0)"
+        )
+        header = "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
+        bad = header + (
+            "2026-01-15,BUY,ABC,10,20.00,0,,Wrong price\n"
+            "2026-02-01,BUY,ABC,5,22.00,0,,Good row\n"
+            "2026-02-10,BUY,ABC,7,23.00,0,,Row that should not exist\n"
+        )
+        # Price fixed on row 1; the bogus third row deleted.
+        corrected = header + (
+            "2026-01-15,BUY,ABC,10,30.00,0,,Corrected price\n"
+            "2026-02-01,BUY,ABC,5,22.00,0,,Good row\n"
+        )
+
+        def post(content):
+            return self.client.post(
+                "/api/import/transactions?profile_id=44",
+                data={
+                    "format": "generic_transactions",
+                    "file": (io.BytesIO(content.encode()), "txns.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        def ledger():
+            conn = self._get_connection()
+            try:
+                return [
+                    (r["transaction_date"], round(r["price_per_share"], 2))
+                    for r in conn.execute(
+                        "SELECT transaction_date, price_per_share FROM transactions "
+                        "WHERE profile_id = 44 ORDER BY transaction_date, price_per_share"
+                    )
+                ]
+            finally:
+                conn.close()
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        orig_backup = app_module._create_import_backup
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        app_module._create_import_backup = lambda pid: None
+        try:
+            self.assertEqual(post(bad).status_code, 200)
+            self.assertEqual(len(ledger()), 3)
+
+            # Re-importing the corrected file over the old ledger does not fix it.
+            self.assertEqual(post(corrected).status_code, 200)
+            self.assertEqual(
+                ledger(),
+                [("2026-01-15", 20.0), ("2026-01-15", 30.0),
+                 ("2026-02-01", 22.0), ("2026-02-10", 23.0)],
+                "the correction stacks beside the bad row and the deleted row survives",
+            )
+
+            cleared = self.client.post(
+                "/api/profiles/44/clear", json={"confirm_name": "Corrections"}
+            )
+            self.assertEqual(cleared.status_code, 200, cleared.get_data(as_text=True))
+            self.assertEqual(ledger(), [], "Clear must empty the ledger")
+
+            self.assertEqual(post(corrected).status_code, 200)
+            self.assertEqual(
+                ledger(),
+                [("2026-01-15", 30.0), ("2026-02-01", 22.0)],
+                "after Clear the ledger is exactly what the corrected file says",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+            app_module._create_import_backup = orig_backup
+
+    def test_layered_import_dedupes_price_rounding_but_not_a_real_price_change(self):
+        """Both sides of _TXN_PRICE_MATCH_TOLERANCE, on the layered path.
+
+        Layering onto broker-managed positions used to ignore price entirely,
+        which stopped the rounding-difference double-count but also swallowed
+        genuine price differences. The window has to be wide enough for feed
+        rounding and narrow enough that a real price still reads as new.
+        """
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner) "
+            "VALUES (45, 'Layered', 'other', 0)"
+        )
+        # An existing position is what puts this profile on the layered path.
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value) "
+            "VALUES ('ABC', 45, 10, 20, 200)"
+        )
+        header = "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
+
+        def post(price):
+            return self.client.post(
+                "/api/import/transactions?profile_id=45",
+                data={
+                    "format": "generic_transactions",
+                    "file": (
+                        io.BytesIO((header + f"2026-01-15,BUY,ABC,10,{price},0,,Fill\n").encode()),
+                        "txns.csv",
+                    ),
+                },
+                content_type="multipart/form-data",
+            )
+
+        def row_count():
+            return self._scalar("SELECT COUNT(*) FROM transactions WHERE profile_id = 45")
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            self.assertEqual(post("20.5425").status_code, 200)
+            self.assertEqual(row_count(), 1)
+
+            # Same fill, second feed rounds to two decimals — still one fill.
+            self.assertEqual(post("20.54").status_code, 200)
+            self.assertEqual(row_count(), 1, "a rounding difference is the same fill")
+
+            # A real price difference is not a rounding artifact.
+            self.assertEqual(post("30.00").status_code, 200)
+            self.assertEqual(row_count(), 2, "a real price difference is a new row")
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
     def test_generic_transactions_template_download_contains_expected_sheets_and_headers(self):
         import io
         import openpyxl
