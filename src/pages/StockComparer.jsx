@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useProfileFetch } from '../context/ProfileContext'
 import DistributionHistoryChart from '../components/DistributionHistoryChart'
+import YieldOnCostChart from '../components/YieldOnCostChart'
 import { approxYieldFromCurrentDistributions } from '../utils/approxYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
@@ -276,6 +277,7 @@ export default function StockComparer() {
     return DEFAULT_COLUMNS
   })
   const [showDistributionChart, setShowDistributionChart] = useState(true)
+  const [showYieldOnCost, setShowYieldOnCost] = useState(true)
   const [distributionSymbol, setDistributionSymbol] = useState('')
   const [distPctMode, setDistPctMode] = useState(false)
   const [distAnnual, setDistAnnual] = useState(false)
@@ -490,6 +492,14 @@ export default function StockComparer() {
     return `Compare Stocks: ${symbols.join(' vs. ')}`
   }, [symbols])
 
+  // The window the chart is actually showing — typed dates, a range-slider
+  // zoom, or the full data bounds. Shared with the yield-on-cost chart so both
+  // rebase on the same first visible close.
+  const visibleWindow = useMemo(() => {
+    const fallbackRange = dataDateBounds[0] && dataDateBounds[1] ? dataDateBounds : null
+    return visibleDateRange(data, normalizeReturnRange(returnXRange) || fallbackRange, true)
+  }, [data, returnXRange, dataDateBounds])
+
   const chart = useMemo(() => {
     if (!data?.series) return { data: [], layout: {}, logScaleActive: false }
     const traces = []
@@ -504,7 +514,7 @@ export default function StockComparer() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active window (typed
     // dates or slider) so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = visibleDateRange(data, effectiveReturnRange, true)
+    const [visibleStart, visibleEnd] = visibleWindow
     const titleWindow = activeReturnRange || normalizeReturnRange(fetchRange)
     // The blend line is rebuilt locally from the live slider value, so the
     // chart tracks the Reinvest % instantly without another data fetch.
@@ -776,7 +786,20 @@ export default function StockComparer() {
         annotations,
       },
     }
-  }, [data, symbols, period, reinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol])
+  }, [data, symbols, period, reinvest, returnMode, returnPctMode, returnScalePreference, showReturnLabels, returnHoverMode, showRangeSlider, returnXRange, dataDateBounds, fetchRange, highlightedSymbol, visibleWindow])
+
+  const yieldOnCostEntries = useMemo(() => symbols
+    .map((sym, idx) => ({
+      symbol: sym,
+      series: data?.series?.[sym],
+      color: comparerSeriesColor(idx),
+      // Stock research reports cadence as dividend_frequency; the comparison
+      // payload calls the same thing distribution_frequency.
+      frequency: stockData[sym]?.dividend_frequency
+        ?? data?.profiles?.[sym]?.distribution_frequency,
+      dimmed: Boolean(highlightedSymbol && highlightedSymbol !== sym),
+    }))
+    .filter(entry => entry.series), [symbols, data, stockData, highlightedSymbol])
 
   const rows = useMemo(() => {
     const profiles = data?.profiles || {}
@@ -1113,6 +1136,24 @@ export default function StockComparer() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>}
+
+      {symbols.length > 0 && <section className="etfc-section">
+        <div className="etfc-section-head">
+          <h2>Yield on Cost</h2>
+          <button className="btn btn-sm" onClick={() => setShowYieldOnCost(v => !v)}>
+            {showYieldOnCost ? 'Hide Chart' : 'Show Chart'}
+          </button>
+        </div>
+        {showYieldOnCost && (
+          <YieldOnCostChart
+            entries={yieldOnCostEntries}
+            visibleStart={visibleWindow[0]}
+            visibleEnd={visibleWindow[1]}
+            hovermode={returnHoverMode}
+            emphasis="growth"
+          />
         )}
       </section>}
 

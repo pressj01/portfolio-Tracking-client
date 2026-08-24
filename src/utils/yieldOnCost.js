@@ -22,6 +22,33 @@ export function distributionsFromSeries(series = {}) {
   return payments
 }
 
+// A spin-off or special dividend arrives as one enormous entry in the payment
+// history. Annualizing it as though it were the new run rate is nonsense:
+// Altria's 2007-08 Kraft and Philip Morris International spin-offs otherwise
+// print a 28,000% yield on cost and stretch the axis past every real value.
+//
+// Each payment is judged against its immediate neighbours rather than the whole
+// history, because a long-running grower's recent dividend legitimately dwarfs
+// its payment from decades ago — JNJ's has grown a thousandfold since 1962, so
+// a global median would discard the real ones and keep the ancient ones.
+function withoutSpecialDistributions(payments) {
+  // Too short to establish what "typical" means; leave it alone.
+  if (payments.length < 6) return payments
+  const kept = payments.filter((payment, i) => {
+    const neighbours = [
+      ...payments.slice(Math.max(0, i - 8), i),
+      ...payments.slice(i + 1, i + 9),
+    ].map(p => p.amount).sort((a, b) => a - b)
+    if (!neighbours.length) return true
+    const median = neighbours[Math.floor(neighbours.length / 2)]
+    // 10x is deliberately loose: a fund that doubles or triples its payout is
+    // making a real change, while spin-offs run tens to hundreds of times the
+    // regular payment.
+    return !(median > 0 && payment.amount > median * 10)
+  })
+  return kept.length ? kept : payments
+}
+
 /**
  * Yield on cost over the visible window: the fund's annualized distribution
  * rate at each point, measured against the share price at the start of the
@@ -55,7 +82,7 @@ export function buildYieldOnCostSeries(series = {}, {
   if (costIdx < 0) return null
   const cost = Number(closes[costIdx])
 
-  const payments = distributionsFromSeries(series)
+  const payments = withoutSpecialDistributions(distributionsFromSeries(series))
   const steps = []
   payments.forEach((payment, idx) => {
     // A lone payment carries no cadence, and annualDistributionEstimate falls

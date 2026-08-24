@@ -5750,6 +5750,11 @@ th.col-drag-target {
 .yoc-help-body strong {
   color: var(--text);
 }
+.yoc-help-caveat {
+  margin-top: 0.6rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--border);
+}
 .yoc-basis-row {
   display: flex;
   flex-wrap: wrap;

@@ -1056,6 +1056,7 @@ export default function ETFComparer() {
             visibleStart={visibleWindow[0]}
             visibleEnd={visibleWindow[1]}
             hovermode={returnHoverMode}
+            emphasis="income"
           />
         )}
       </section>}
