@@ -1643,7 +1643,8 @@ export default function Import() {
                 <select
                   value={txnFormat}
                   onChange={(e) => applyTxnFormat(e.target.value)}
-                  style={{ width: '250px' }}
+                  title={formatLabel(txnFormat) || 'Select a format'}
+                  style={{ width: '360px', maxWidth: '100%' }}
                   disabled={isRollupTarget}
                 >
                   <option value={NO_FORMAT} disabled>Select a format...</option>
