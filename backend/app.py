@@ -704,6 +704,95 @@ def _transactions_for_current_positions(transactions, current_holdings):
     ]
 
 
+def _should_apply_yahoo_split_adjustment(native_net, split_adjusted_net, snapshot_quantity):
+    """Return True when as-traded shares should be converted into today's units.
+
+    Yahoo Close is already in today's share basis. Schwab/Fidelity history is
+    usually as-traded, so a later reverse split must scale those quantities or
+    Start Value is priced in mixed units. Snowball's importer, though, already
+    rewrites historical lots into today's units. Applying Yahoo's factor on top
+    of that ledger makes the replay miss the saved snapshot, and the engine then
+    invents an opening lot — overstating beginning value while current holdings
+    still look right.
+
+    Prefer the conversion that lands closer to the saved quantity. A tie (a
+    round-trip that nets to zero either way) still converts, because the
+    intra-period share count has to match Yahoo's split-adjusted close.
+    """
+    native_err = abs(float(snapshot_quantity or 0) - float(native_net or 0))
+    split_err = abs(float(snapshot_quantity or 0) - float(split_adjusted_net or 0))
+    return split_err <= native_err + 1e-8
+
+
+def _event_date_key(value):
+    if value is None:
+        return ""
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    return str(value)[:10]
+
+
+def _shares_after_yahoo_splits(ticker, event_date, shares, split_factors):
+    """Multiply `shares` by Yahoo split factors strictly after `event_date`."""
+    adjusted = float(shares or 0)
+    for split_date, factor in split_factors.get(ticker) or ():
+        if _event_date_key(split_date) <= _event_date_key(event_date):
+            continue
+        try:
+            factor = float(factor)
+        except (TypeError, ValueError):
+            continue
+        if factor <= 0 or math.isclose(factor, 1.0, rel_tol=1e-12, abs_tol=1e-12):
+            continue
+        adjusted *= factor
+    return adjusted
+
+
+def _scale_transaction_events_for_yahoo_prices(events, snapshots, split_factors):
+    """Scale as-traded lots into Yahoo's share basis, per ticker.
+
+    `events` is a sequence of `(date, ticker, type, shares)`. Tickers whose
+    stored ledger already matches `snapshots` at least as well as the
+    split-adjusted ledger are left untouched — Snowball import already did
+    this conversion. Closed tickers omitted from `snapshots` compare against 0.
+    """
+    if not events or not split_factors:
+        return list(events or [])
+
+    native_net = {}
+    split_net = {}
+    had_split = {}
+    for event_date, ticker, txn_type, shares in events:
+        quantity = abs(float(shares or 0))
+        signed = quantity if str(txn_type or "BUY").upper() == "BUY" else -quantity
+        native_net[ticker] = native_net.get(ticker, 0.0) + signed
+        adjusted = _shares_after_yahoo_splits(ticker, event_date, quantity, split_factors)
+        split_signed = adjusted if signed >= 0 else -adjusted
+        split_net[ticker] = split_net.get(ticker, 0.0) + split_signed
+        if not math.isclose(adjusted, quantity, rel_tol=1e-12, abs_tol=1e-12):
+            had_split[ticker] = True
+
+    apply_for = {}
+    snapshot_map = snapshots or {}
+    for ticker in native_net:
+        if not had_split.get(ticker):
+            apply_for[ticker] = False
+            continue
+        apply_for[ticker] = _should_apply_yahoo_split_adjustment(
+            native_net[ticker],
+            split_net[ticker],
+            snapshot_map.get(ticker, 0.0),
+        )
+
+    scaled = []
+    for event_date, ticker, txn_type, shares in events:
+        quantity = float(shares or 0)
+        if apply_for.get(ticker):
+            quantity = _shares_after_yahoo_splits(ticker, event_date, quantity, split_factors)
+        scaled.append((event_date, ticker, txn_type, quantity))
+    return scaled
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -815,11 +904,14 @@ def _build_transaction_aware_portfolio_series(
     )
 
     # Yahoo's historical Close is expressed in today's split-adjusted share
-    # units. Broker exports retain the share quantity that actually traded at
-    # the time. Without converting those historical quantities, a reverse
-    # split can turn a $1,000 position into a fictional $100,000+ position.
-    # Keep the action history independent of the plotted price window because
-    # a split after a transaction still changes the units of that transaction.
+    # units. Schwab/Fidelity history is usually the quantity that traded at
+    # the time; Snowball's importer already converts those lots into today's
+    # units. Convert with Yahoo's split series only when that gets the ledger
+    # closer to the saved snapshot — otherwise a reverse split is applied
+    # twice, the replay invents an opening lot, and Start Value jumps while
+    # current holdings still look right. Keep the action history independent
+    # of the plotted price window because a split after a transaction still
+    # changes the units of an as-traded quantity.
     if stock_splits is None or getattr(stock_splits, "empty", True):
         split_history = pd.DataFrame()
     else:
@@ -874,7 +966,7 @@ def _build_transaction_aware_portfolio_series(
         split_factor_cache[cache_key] = factor
         return factor
 
-    def signed_share_delta(txn):
+    def parse_share_event(txn):
         if not isinstance(txn, dict):
             return None
         symbol = str(txn.get("market_symbol") or txn.get("ticker") or "").strip().upper()
@@ -890,29 +982,70 @@ def _build_transaction_aware_portfolio_series(
         )
         if event_date is None or shares <= 0 or txn_type not in {"BUY", "SELL"}:
             return None
+        native_signed = shares if txn_type == "BUY" else -shares
         split_factor = split_factor_after(symbol, event_date)
-        split_adjusted = not math.isclose(
-            split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12,
-        )
-        if split_adjusted:
-            shares *= split_factor
-        signed_shares = shares if txn_type == "BUY" else -shares
-        return position_key, symbol, event_date, signed_shares, split_adjusted
+        return position_key, symbol, event_date, native_signed, split_factor
 
-    unclipped_deltas = {}
+    current_quantities = {}
+    for holding in current_holdings or []:
+        position_key = holding.get("position_key") or (
+            holding.get("profile_id"),
+            str(holding.get("ticker") or "").strip().upper(),
+        )
+        try:
+            current_quantities[position_key] = (
+                current_quantities.get(position_key, 0.0)
+                + float(holding.get("quantity") or 0)
+            )
+        except (TypeError, ValueError):
+            current_quantities.setdefault(position_key, 0.0)
+
+    native_unclipped = {}
+    split_unclipped = {}
+    had_split = {}
     unclipped_first_dates = {}
     for txn in raw_transactions:
-        parsed = signed_share_delta(txn)
+        parsed = parse_share_event(txn)
         if parsed is None:
             continue
-        position_key, _, event_date, signed_shares, _ = parsed
-        unclipped_deltas[position_key] = (
-            unclipped_deltas.get(position_key, 0.0) + signed_shares
+        position_key, _, event_date, native_signed, split_factor = parsed
+        native_unclipped[position_key] = (
+            native_unclipped.get(position_key, 0.0) + native_signed
         )
+        split_unclipped[position_key] = (
+            split_unclipped.get(position_key, 0.0) + native_signed * split_factor
+        )
+        if not math.isclose(split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12):
+            had_split[position_key] = True
         unclipped_first_dates[position_key] = min(
             event_date,
             unclipped_first_dates.get(position_key, event_date),
         )
+
+    apply_split_by_key = {}
+    for position_key in set(native_unclipped) | set(current_quantities):
+        if not had_split.get(position_key):
+            apply_split_by_key[position_key] = False
+            continue
+        apply_split_by_key[position_key] = _should_apply_yahoo_split_adjustment(
+            native_unclipped.get(position_key, 0.0),
+            split_unclipped.get(position_key, 0.0),
+            current_quantities.get(position_key, 0.0),
+        )
+
+    def chosen_signed(position_key, native_signed, split_factor):
+        if apply_split_by_key.get(position_key):
+            return native_signed * split_factor, not math.isclose(
+                split_factor, 1.0, rel_tol=1e-12, abs_tol=1e-12,
+            )
+        return native_signed, False
+
+    unclipped_deltas = {}
+    for position_key, native_net in native_unclipped.items():
+        if apply_split_by_key.get(position_key):
+            unclipped_deltas[position_key] = split_unclipped.get(position_key, native_net)
+        else:
+            unclipped_deltas[position_key] = native_net
 
     for txn in transactions or []:
         if not isinstance(txn, dict):
@@ -922,10 +1055,13 @@ def _build_transaction_aware_portfolio_series(
             str(txn.get("ticker") or "").strip().upper(),
         )
         transaction_positions.add(position_key)
-        parsed = signed_share_delta(txn)
+        parsed = parse_share_event(txn)
         if parsed is None:
             continue
-        position_key, symbol, event_date, signed_shares, split_adjusted = parsed
+        position_key, symbol, event_date, native_signed, split_factor = parsed
+        signed_shares, split_adjusted = chosen_signed(
+            position_key, native_signed, split_factor,
+        )
         if split_adjusted:
             split_adjusted_transactions += 1
             split_adjusted_positions.add(position_key)
@@ -945,20 +1081,6 @@ def _build_transaction_aware_portfolio_series(
             continue
         events.append((event_date, symbol, signed_shares))
         valid_transaction_events += 1
-
-    current_quantities = {}
-    for holding in current_holdings or []:
-        position_key = holding.get("position_key") or (
-            holding.get("profile_id"),
-            str(holding.get("ticker") or "").strip().upper(),
-        )
-        try:
-            current_quantities[position_key] = (
-                current_quantities.get(position_key, 0.0)
-                + float(holding.get("quantity") or 0)
-            )
-        except (TypeError, ValueError):
-            current_quantities.setdefault(position_key, 0.0)
 
     # Broker transaction exports frequently begin with a DRIP or SELL for a
     # position that was already open before the export's first row. Reconcile
@@ -9040,15 +9162,14 @@ def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False
 
     # IMPORTANT: yfinance's `auto_adjust=False` only turns off DIVIDEND adjustment --
     # it still SPLIT-adjusts the Close so the whole series is in today's share basis.
-    # Our transaction `shares` are recorded in the basis that traded on the txn date
-    # (pre-split). Valuing pre-split shares against a split-adjusted close massively
-    # distorts the chart: e.g. ULTY's 1-for-10 reverse split (factor 0.1) on 2025-12-01
-    # makes every earlier ULTY close ~10x higher, so 1787 recorded shares were valued
-    # at ~$55 instead of ~$5.50 -- a phantom ~$90k spike. Fix: normalize each txn's
-    # shares to today's basis by multiplying by the product of split factors that
-    # occurred AFTER the txn (a reverse 1-for-10 has factor 0.1, so 100 pre-split
-    # shares become 10 post-split shares). current_positions are already in today's
-    # basis (they come from live holdings), so only the transaction legs need scaling.
+    # Schwab/Fidelity `shares` are the quantity that traded that day (pre-split).
+    # Valuing those against a split-adjusted close massively distorts the chart:
+    # ULTY's 1-for-10 reverse split (factor 0.1) on 2025-12-01 made every earlier
+    # close ~10x higher, so 1787 recorded shares were valued at ~$55 instead of
+    # ~$5.50 -- a phantom ~$90k spike. Snowball import, however, already rewrites
+    # historical lots into today's units. Scaling those a second time is the
+    # OXLC-style overstatement. Convert per ticker only when that lands closer
+    # to the saved snapshot; current_positions are already in today's basis.
     split_factors = {}  # app_ticker -> sorted list of (date_str, factor)
     try:
         if isinstance(raw.columns, pd.MultiIndex) and "Stock Splits" in raw.columns.get_level_values(0):
@@ -9068,21 +9189,10 @@ def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False
     except Exception:
         split_factors = {}
 
-    def _shares_in_today_basis(ticker, tdate, shares):
-        factors = split_factors.get(ticker)
-        if not factors or not tdate:
-            return shares
-        adj = shares
-        for sdate, fval in factors:
-            if sdate > tdate:
-                adj *= fval
-        return adj
-
     if split_factors:
-        events = [
-            (tdate, ticker, ttype, _shares_in_today_basis(ticker, tdate, shares))
-            for (tdate, ticker, ttype, shares) in events
-        ]
+        events = _scale_transaction_events_for_yahoo_prices(
+            events, current_positions, split_factors,
+        )
 
     sorted_events = sorted(events, key=lambda e: e[0] or "")
 
