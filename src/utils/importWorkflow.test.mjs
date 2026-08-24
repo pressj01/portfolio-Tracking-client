@@ -17,8 +17,8 @@ import {
   isPinnableFormat,
 } from './importWorkflow.js'
 
-test('keeps the 16 brokerage import formats', () => {
-  assert.equal(TXN_FORMATS.length, 16)
+test('keeps the 17 brokerage import formats', () => {
+  assert.equal(TXN_FORMATS.length, 17)
   assert.deepEqual(TXN_FORMATS.map((item) => item.value), [
     'schwab',
     'schwab_all_accounts',
@@ -26,6 +26,7 @@ test('keeps the 16 brokerage import formats', () => {
     'etrade',
     'etrade_transactions',
     'fidelity',
+    'fidelity_all_accounts',
     'fidelity_transactions',
     'robinhood',
     'robinhood_transactions',
@@ -39,9 +40,9 @@ test('keeps the 16 brokerage import formats', () => {
   ])
 })
 
-test('only Schwab has an All-Accounts positions format', () => {
+test('Schwab and Fidelity have All-Accounts positions formats', () => {
   const multi = IMPORT_BROKERS.filter((broker) => broker.positionsMultiFormat)
-  assert.deepEqual(multi.map((broker) => broker.id), ['schwab'])
+  assert.deepEqual(multi.map((broker) => broker.id), ['schwab', 'fidelity'])
   assert.equal(formatForWorkflow({
     brokerId: 'etrade',
     role: 'positions',
@@ -52,6 +53,11 @@ test('only Schwab has an All-Accounts positions format', () => {
     role: 'positions',
     schwabAllAccounts: true,
   }), 'shear_group')
+  assert.equal(formatForWorkflow({
+    brokerId: 'fidelity',
+    role: 'positions',
+    schwabAllAccounts: true,
+  }), 'fidelity_all_accounts')
 })
 
 test('Schwab All-Accounts is a positions format, not transactions', () => {
@@ -68,6 +74,17 @@ test('Schwab All-Accounts is a positions format, not transactions', () => {
     role: 'transactions',
     schwabAllAccounts: true,
   }), 'schwab_transactions')
+})
+
+test('Fidelity All Accounts follows the same positions workflow', () => {
+  assert.deepEqual(describeWorkflow('fidelity_all_accounts'), {
+    brokerId: 'fidelity',
+    role: 'positions',
+    schwabAllAccounts: true,
+    kind: 'positions',
+  })
+  assert.equal(isPositionsFormat('fidelity_all_accounts'), true)
+  assert.equal(needsPositionsSnapshotFirst('fidelity_all_accounts'), false)
 })
 
 test('broker + role resolve to the single-account formats', () => {

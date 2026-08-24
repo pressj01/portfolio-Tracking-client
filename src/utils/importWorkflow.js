@@ -1,6 +1,6 @@
 // Broker Import is a checklist, not a format encyclopedia.
 // Positions snapshot first, then transactions, then refresh.
-// Schwab All-Accounts is an optional multi-account positions file, not a universal first step.
+// Broker All-Accounts is an optional multi-account positions file, not a universal first step.
 // Snowball formats are a migration path only — they are not a workflow step.
 
 export const NO_FORMAT = ''
@@ -26,6 +26,7 @@ export const IMPORT_BROKERS = [
     label: 'Fidelity',
     source: 'fidelity',
     positionsFormat: 'fidelity',
+    positionsMultiFormat: 'fidelity_all_accounts',
     transactionsFormat: 'fidelity_transactions',
   },
   {
@@ -51,6 +52,7 @@ export const TXN_FORMATS = [
   { value: 'etrade', label: 'E*Trade (Positions)' },
   { value: 'etrade_transactions', label: 'E*Trade (Transactions)' },
   { value: 'fidelity', label: 'Fidelity (Positions)' },
+  { value: 'fidelity_all_accounts', label: 'Fidelity (All Accounts Positions)' },
   { value: 'fidelity_transactions', label: 'Fidelity (Transactions)' },
   { value: 'robinhood', label: 'Robinhood (Positions PDF)' },
   { value: 'robinhood_transactions', label: 'Robinhood (Transactions)' },
@@ -68,6 +70,7 @@ export const POSITIONS_FORMATS = new Set([
   'schwab_all_accounts',
   'etrade',
   'fidelity',
+  'fidelity_all_accounts',
   'robinhood',
   'shear_group',
   'snowball_holdings',
@@ -83,7 +86,10 @@ export const TRANSACTION_FORMATS = new Set([
   'shear_group_activity',
 ])
 
-export const MULTI_ACCOUNT_FORMATS = new Set(['schwab_all_accounts'])
+export const MULTI_ACCOUNT_FORMATS = new Set([
+  'schwab_all_accounts',
+  'fidelity_all_accounts',
+])
 
 export const SNOWBALL_FORMATS = new Set([
   'snowball_holdings',

@@ -1186,7 +1186,10 @@ _FIDELITY_POSITION_ALIASES = {
     "Cost basis total": ["Cost Basis Total", "Cost basis", "Cost Basis", "Total Cost", "Purchase Value"],
     "Average cost basis": ["Average Cost Basis", "Average cost", "Cost/Share", "Price Paid $"],
     "Total gain/loss $": ["Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $", "Total Gain $"],
-    "Dist. yield": ["Distribution Yield", "Distribution yield", "Dist yield", "Dividend Yield", "Yield"],
+    "Dist. yield": [
+        "Distribution Yield", "Distribution yield", "Dist yield", "Dividend Yield", "Yield",
+        "Dist. rate", "Dist rate", "Distribution Rate", "Distribution rate",
+    ],
     "Amount per share": ["Amount Per Share", "Dividend Amount", "Dividend Per Share"],
     "Ex-date": ["Ex Date", "Ex-dividend Date", "Ex Dividend Date"],
     "Pay date": ["Pay Date", "Payment Date"],
@@ -1337,38 +1340,13 @@ def parse_generic_transactions(file_path, filename):
     }
 
 
-def parse_fidelity_positions_xlsx(file_path, filename):
-    """Parse a Fidelity positions XLSX/XLS/CSV export."""
-    rows = _fidelity_read_rows(file_path, filename, "Position")
-    if not rows:
-        raise ValueError("The Fidelity positions file is empty.")
-
-    header_idx, header = _find_header_row(
-        rows,
-        _FIDELITY_POSITION_ALIASES,
-        required={"Symbol", "Quantity"},
-    )
-    if header_idx is None:
-        raise ValueError(
-            "Could not find the Fidelity positions columns. "
-            "Make sure this is a Fidelity positions export or a table with Symbol and Quantity columns."
-        )
-
-    position_rows, filtered_count = _fidelity_clean_position_rows(rows, header_idx, header)
+def _fidelity_positions_from_records(records):
+    """Normalize one Fidelity account's already-cleaned position records."""
     positions = []
     cash_value = 0.0
-    account_names = set()
-    account_numbers = set()
+    cash_count = 0
 
-    for row in position_rows:
-        record = _fidelity_row_record(header, row)
-        account_name = (str(record.get("Account Name") or "")).strip()
-        account_number = (str(record.get("Account Number") or "")).strip()
-        if account_name:
-            account_names.add(account_name)
-        if account_number:
-            account_numbers.add(account_number)
-
+    for record in records:
         ticker = (str(record.get("Symbol") or "")).strip().upper()
         description = (str(record.get("Description") or "")).strip()
         holding_type = (str(record.get("Type") or "")).strip()
@@ -1380,7 +1358,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         # a monthly dividend and belongs in the holdings table / calendar.
         if ticker.endswith("**") or (holding_type.lower() == "cash" and not ticker):
             cash_value += current_value or 0.0
-            filtered_count += 1
+            cash_count += 1
             continue
 
         current_price = _safe_float(record.get("Last Price")) or 0.0
@@ -1413,11 +1391,108 @@ def parse_fidelity_positions_xlsx(file_path, filename):
             "asset_type": "Security",
         })
 
-    if len(account_names) > 1 or len(account_numbers) > 1:
+    positions_value = round(sum(p["current_value"] for p in positions), 2)
+    return {
+        "positions": positions,
+        "summary": {
+            "holdings": len(positions),
+            "filtered": cash_count,
+            "options": 0,
+            "cash": round(cash_value, 2),
+            "account_value": round(positions_value + cash_value, 2),
+        },
+    }
+
+
+def _fidelity_position_account_groups(rows, header_idx, header):
+    """Group cleaned Fidelity position rows by the account columns on each row."""
+    position_rows, filtered_count = _fidelity_clean_position_rows(rows, header_idx, header)
+    groups = {}
+
+    for row in position_rows:
+        record = _fidelity_row_record(header, row)
+        account_name = str(record.get("Account Name") or "").strip()
+        account_number = str(record.get("Account Number") or "").strip()
+        number_key = re.sub(r"\W+", "", account_number).casefold()
+        name_key = re.sub(r"[^a-z0-9]+", "", account_name.casefold())
+        # Use both fields while parsing so a redacted sample that repeats the
+        # same placeholder number still cannot merge two named accounts.
+        group_key = (number_key, name_key)
+        if group_key not in groups:
+            groups[group_key] = {
+                "account_name": account_name,
+                "account_number": account_number,
+                "records": [],
+            }
+        groups[group_key]["records"].append(record)
+
+    return list(groups.values()), filtered_count
+
+
+def _fidelity_account_label(account_name, account_number):
+    """Build a readable label without displaying more than the final 4 ID characters."""
+    name = str(account_name or "").strip() or "Fidelity Account"
+    number = re.sub(r"\s+", "", str(account_number or "").strip())
+    if not number:
+        return name
+    return f"{name} ...{number[-4:]}"
+
+
+def _fidelity_all_accounts_as_of(rows):
+    """Read Fidelity's download date footer when it is present."""
+    date_re = re.compile(r"\b([A-Za-z]{3}-\d{1,2}-\d{4})\b")
+    for row in reversed(rows):
+        for value in row:
+            text = str(value or "").strip()
+            if not text.lower().startswith("date downloaded"):
+                continue
+            match = date_re.search(text)
+            if not match:
+                continue
+            try:
+                return datetime.strptime(match.group(1), "%b-%d-%Y").date().isoformat()
+            except ValueError:
+                continue
+    return ""
+
+
+def _read_fidelity_position_groups(file_path, filename):
+    rows = _fidelity_read_rows(file_path, filename, "Position")
+    if not rows:
+        raise ValueError("The Fidelity positions file is empty.")
+
+    header_idx, header = _find_header_row(
+        rows,
+        _FIDELITY_POSITION_ALIASES,
+        required={"Symbol", "Quantity"},
+    )
+    if header_idx is None:
+        raise ValueError(
+            "Could not find the Fidelity positions columns. "
+            "Make sure this is a Fidelity positions export or a table with Symbol and Quantity columns."
+        )
+
+    groups, filtered_count = _fidelity_position_account_groups(rows, header_idx, header)
+    return rows, groups, filtered_count
+
+
+def parse_fidelity_positions_xlsx(file_path, filename):
+    """Parse a single-account Fidelity positions XLSX/XLS/CSV export."""
+    _, groups, filtered_count = _read_fidelity_position_groups(file_path, filename)
+
+    if len(groups) > 1:
         raise ValueError(
             "This appears to include more than one Fidelity account. "
-            "Please export a single account at a time."
+            "Import it with 'Fidelity (All Accounts Positions)' so each account "
+            "can be routed to its own portfolio."
         )
+    if not groups:
+        raise ValueError("No holdings rows were found in the Fidelity positions file.")
+
+    group = groups[0]
+    parsed = _fidelity_positions_from_records(group["records"])
+    positions = parsed["positions"]
+
     if not positions:
         raise ValueError("No holdings rows were found in the Fidelity positions file.")
 
@@ -1428,20 +1503,70 @@ def parse_fidelity_positions_xlsx(file_path, filename):
             "Please use 'Fidelity (Transactions)' for transaction history files."
         )
 
-    account_name = next(iter(account_names), "")
-    positions_value = round(sum(p["current_value"] for p in positions), 2)
+    summary = dict(parsed["summary"])
+    summary["filtered"] += filtered_count
     return {
         "positions": positions,
-        "summary": {
-            "holdings": len(positions),
-            "filtered": filtered_count,
-            "options": 0,
-            "cash": round(cash_value, 2),
-            "account_value": round(positions_value + cash_value, 2),
-        },
+        "summary": summary,
         "format_type": "positions",
         "source_format": "fidelity",
-        "account_name": account_name,
+        "account_name": group["account_name"],
+        "account_number": group["account_number"],
+    }
+
+
+def parse_fidelity_all_accounts_positions(file_path, filename):
+    """Parse a combined Fidelity Positions export and keep every account separate."""
+    rows, groups, filtered_count = _read_fidelity_position_groups(file_path, filename)
+    accounts = []
+
+    for group in groups:
+        parsed = _fidelity_positions_from_records(group["records"])
+        account_name = group["account_name"]
+        account_number = group["account_number"]
+        accounts.append({
+            "account_label": _fidelity_account_label(account_name, account_number),
+            "account_name": account_name,
+            "account_number": account_number,
+            "positions": parsed["positions"],
+            "summary": parsed["summary"],
+        })
+
+    if not accounts:
+        raise ValueError(
+            "No populated Fidelity account rows were found. The All Accounts Positions "
+            "file must include Account number, Account name, Symbol, and Quantity columns."
+        )
+
+    all_positions = [position for account in accounts for position in account["positions"]]
+    total_cash = sum(account["summary"]["cash"] for account in accounts)
+    if not all_positions and not total_cash:
+        raise ValueError("No holdings or cash rows were found in the Fidelity All Accounts file.")
+    if all_positions and all(position["purchase_value"] == 0 for position in all_positions):
+        raise ValueError(
+            "No cost basis data found - every position has a $0 cost. "
+            "This usually means a Transactions file was selected with the "
+            "All Accounts Positions format."
+        )
+
+    return {
+        "accounts": accounts,
+        "summary": {
+            "accounts": len(accounts),
+            "holdings": len(all_positions),
+            "filtered": filtered_count + sum(
+                account["summary"]["filtered"] for account in accounts
+            ),
+            "options": 0,
+            "options_value": 0.0,
+            "cash": round(total_cash, 2),
+            "account_value": round(
+                sum(account["summary"]["account_value"] for account in accounts), 2
+            ),
+        },
+        "as_of": _fidelity_all_accounts_as_of(rows),
+        "format_type": "positions_multi",
+        "source_format": "fidelity_all_accounts",
     }
 
 
@@ -2696,6 +2821,7 @@ PARSERS = {
     "etrade": parse_etrade_csv,
     "etrade_transactions": parse_etrade_transactions_xlsx,
     "fidelity": parse_fidelity_positions_xlsx,
+    "fidelity_all_accounts": parse_fidelity_all_accounts_positions,
     "fidelity_transactions": parse_fidelity_transactions_xlsx,
     "robinhood": parse_robinhood_positions_pdf,
     "robinhood_transactions": parse_robinhood_transactions_csv,
@@ -2715,6 +2841,7 @@ PARSER_LABELS = {
     "etrade": "E*Trade (Positions)",
     "etrade_transactions": "E*Trade (Transactions)",
     "fidelity": "Fidelity (Positions)",
+    "fidelity_all_accounts": "Fidelity (All Accounts Positions)",
     "fidelity_transactions": "Fidelity (Transactions)",
     "robinhood": "Robinhood (Positions PDF)",
     "robinhood_transactions": "Robinhood (Transactions)",

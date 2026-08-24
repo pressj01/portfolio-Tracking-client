@@ -295,12 +295,22 @@ function ImportHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Charles Schwab (All Accounts Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>In Schwab, go to <strong>Accounts &gt; Positions</strong>, switch the account selector to <strong>All Accounts</strong>, then export to CSV or Excel.</li>
-        <li>On Broker Import, choose <strong>Charles Schwab</strong>, stay on the <strong>Positions</strong> step, and click <strong>All Accounts</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this automatically unless you already chose <strong>This account</strong>. Schwab may use the All-Accounts filename even when the export contains only one account. There is no All-Accounts importer for transactions, and other brokers do not have one.</li>
+        <li>On Broker Import, choose <strong>Charles Schwab</strong>, stay on the <strong>Positions</strong> step, and click <strong>All Accounts</strong>. Dropping a file whose name contains <em>All-Accounts</em> selects this automatically unless you already chose <strong>This account</strong>. Schwab may use the All-Accounts filename even when the export contains only one account. Transactions still import one account at a time.</li>
         <li>The import lists every portfolio whose Broker Source is <strong>Charles Schwab</strong> (set on the Manage Portfolios page). Check the accounts you want this file to update. Unchecked portfolios are left alone. Use <strong>Select all</strong> or <strong>Select none</strong> to change the whole list at once.</li>
         <li>Preview splits the file into one block per Schwab account and matches each selected portfolio by name or masked account number. You can re-point a selected portfolio to a different account in the file before importing.</li>
         <li>Accounts in the file that are not mapped to a selected portfolio appear under <strong>Other accounts in this file</strong>. Skip them, point them at a portfolio, or create a new portfolio for them.</li>
         <li>Confirmed routing is remembered, so the next All-Accounts export maps itself. Option positions are shown for reconciliation but are not imported as holdings.</li>
         <li>This import can run from an aggregate view because the selected portfolio is not the import target.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (All Accounts Positions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Export the combined Fidelity <strong>Positions CSV or XLSX</strong> containing the Account number and Account name columns on each holding row.</li>
+        <li>On Broker Import, choose <strong>Fidelity</strong>, stay on the <strong>Positions</strong> step, and click <strong>All Accounts</strong>.</li>
+        <li>The import follows the same workflow as Schwab All Accounts: select Fidelity portfolios, preview account matching, re-point accounts when needed, skip accounts, or create a new Fidelity portfolio.</li>
+        <li>Holdings, cost basis, current value, cash or core money-market balances, and available dividend fields remain separated by Fidelity account.</li>
+        <li>Confirmed routing is remembered for the next combined Positions export. This can also run from an aggregate view because the selected portfolio is not the import target.</li>
+        <li>Fidelity transaction history remains a single-account import and should be loaded after the Positions snapshot.</li>
       </ul>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball tab (migration only)</h4>
@@ -315,7 +325,7 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
-          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab All-Accounts is an optional positions shortcut when one file should update several Schwab portfolios; it does not replace transaction imports, and other brokers do not have an All-Accounts importer.</li>
+          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab and Fidelity All Accounts are optional positions shortcuts when one file should update several matching broker portfolios; they do not replace transaction imports.</li>
           <li>Then import that same account&apos;s <strong>Transaction History</strong> for dividends, DRIP, lots, and realized gains. Do this after the positions snapshot so a partial history file cannot rebuild share counts.</li>
           <li>Run <strong>Refresh Prices &amp; Divs</strong> last to update market data, dividend fields, and pay-date estimates.</li>
         </ol>

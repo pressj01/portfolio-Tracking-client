@@ -51,7 +51,7 @@ export default function ImportWorkflowPicker({
   onTxnOrderAckChange,
   onSelectStep,
   onSelectBroker,
-  onSelectSchwabScope,
+  onSelectBrokerScope,
   onSelectOtherFormat,
   onRefresh,
   refreshing,
@@ -91,7 +91,7 @@ export default function ImportWorkflowPicker({
                 type="button"
                 className={`btn ${workflow.brokerId === item.id ? 'btn-primary' : 'btn-secondary'}`}
                 onClick={() => onSelectBroker(item.id)}
-                disabled={isRollupTarget && item.id !== 'schwab'}
+                disabled={isRollupTarget && !item.positionsMultiFormat}
                 aria-pressed={workflow.brokerId === item.id}
               >
                 {item.label}
@@ -108,7 +108,7 @@ export default function ImportWorkflowPicker({
             <button
               type="button"
               className={`btn ${!workflow.schwabAllAccounts ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => onSelectSchwabScope(false)}
+              onClick={() => onSelectBrokerScope(false)}
               disabled={isRollupTarget}
               aria-pressed={!workflow.schwabAllAccounts}
             >
@@ -117,7 +117,7 @@ export default function ImportWorkflowPicker({
             <button
               type="button"
               className={`btn ${workflow.schwabAllAccounts ? 'btn-primary' : 'btn-secondary'}`}
-              onClick={() => onSelectSchwabScope(true)}
+              onClick={() => onSelectBrokerScope(true)}
               aria-pressed={workflow.schwabAllAccounts}
             >
               All Accounts
@@ -125,8 +125,8 @@ export default function ImportWorkflowPicker({
           </div>
           <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', margin: '-0.35rem 0 0.85rem' }}>
             {workflow.schwabAllAccounts
-              ? 'Optional shortcut: one Schwab All-Accounts Positions export can update several Schwab portfolios. You map accounts after preview. Transactions still import one account at a time. A Schwab import does not use Snowball.'
-              : `Import the current Positions export for ${currentProfileName}. This sets shares and cost basis. All-Accounts is only for Schwab when you want one file to update several portfolios.`}
+              ? `Optional shortcut: one ${broker.label} All Accounts Positions export can update several ${broker.label} portfolios. You map accounts after preview. Transactions still import one account at a time.`
+              : `Import the current Positions export for ${currentProfileName}. This sets shares and cost basis. Choose All Accounts when one ${broker.label} file should update several portfolios.`}
           </p>
         </>
       )}

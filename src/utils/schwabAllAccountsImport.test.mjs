@@ -4,6 +4,8 @@ import assert from 'node:assert/strict'
 import {
   applySchwabDestSelection,
   assignFileAccountToProfile,
+  brokerImportDestinations,
+  defaultBrokerDestSelection,
   defaultSchwabDestSelection,
   fileAccountForProfile,
   leftoverFileAccounts,
@@ -26,11 +28,27 @@ test('does not override the single-account Schwab format for an All-Accounts fil
   assert.equal(shouldAutodetectSchwabAllAccounts(name, 'schwab'), false)
   assert.equal(shouldAutodetectSchwabAllAccounts(name, ''), true)
   assert.equal(shouldAutodetectSchwabAllAccounts(name, 'etrade'), true)
+  assert.equal(shouldAutodetectSchwabAllAccounts(name, 'fidelity'), false)
+  assert.equal(shouldAutodetectSchwabAllAccounts(name, 'fidelity_all_accounts'), false)
 })
 
 test('lists Schwab portfolios, not other brokers, untagged accounts, or Owner rollup', () => {
   const destinations = schwabImportDestinations(profiles)
   assert.deepEqual(destinations.map(p => p.name), ['Roth IRA', 'IRA', 'Individual'])
+})
+
+test('lists Fidelity portfolios for a Fidelity All Accounts import', () => {
+  const destinations = brokerImportDestinations(profiles, 'fidelity')
+  assert.deepEqual(destinations.map(p => p.name), ['Jim Fidelity'])
+  assert.deepEqual(defaultBrokerDestSelection(destinations, 'fidelity'), { 5: true })
+})
+
+test('Fidelity fallback offers only untagged portfolios, never Schwab portfolios', () => {
+  const destinations = brokerImportDestinations([
+    { id: 2, name: 'Schwab Roth', broker_source: 'schwab' },
+    { id: 3, name: 'Ready to tag', broker_source: '' },
+  ], 'fidelity')
+  assert.deepEqual(destinations.map(p => p.name), ['Ready to tag'])
 })
 
 test('falls back to untagged portfolios when none are tagged Schwab', () => {
