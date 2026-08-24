@@ -21174,12 +21174,132 @@ def _assess_etf_closure_risk_with_fallback(info, response):
     return risk
 
 
+def _etf_provider_fund_facts(conn, tickers):
+    """AUM / expense ratio from the local provider catalog (no Yahoo round-trip)."""
+    symbols = [str(t or "").strip().upper() for t in (tickers or []) if str(t or "").strip()]
+    if not symbols:
+        return {}
+    placeholders = ",".join("?" * len(symbols))
+    try:
+        rows = conn.execute(
+            f"""SELECT UPPER(symbol) AS ticker,
+                       MAX(assets) AS assets,
+                       MAX(exp_ratio) AS exp_ratio
+                  FROM etf_provider_funds
+                 WHERE UPPER(symbol) IN ({placeholders})
+                 GROUP BY UPPER(symbol)""",
+            symbols,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    facts = {}
+    for row in rows:
+        ticker = str(row["ticker"] or "").strip().upper()
+        if ticker:
+            facts[ticker] = {"assets": row["assets"], "exp_ratio": row["exp_ratio"]}
+    return facts
+
+
+def _yf_ticker_info_cached_or_fetch(ticker, timeout_sec=4):
+    """Yahoo .info with the 24h cache, timed so a hung quote cannot stall grades.
+
+    A timeout does not cache an empty payload — the next missing-ticker recovery
+    can try again. A successful empty dict is cached so we do not keep hammering
+    Yahoo for a symbol that has no quoteSummary.
+    """
+    ticker = str(ticker or "").strip().upper()
+    if not ticker:
+        return {}
+    now = time.time()
+    cached = _ticker_info_cache.get(ticker)
+    if cached and (now - cached.get("ts", 0)) < 86400:
+        return cached.get("info") or {}
+    info = None
+    try:
+        import yfinance as yf
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(lambda: yf.Ticker(ticker).info or {})
+            try:
+                info = fut.result(timeout=timeout_sec) or {}
+            except FuturesTimeout:
+                return {}
+    except Exception:
+        info = {}
+    _ticker_info_cache[ticker] = {"info": info, "ts": now}
+    return info
+
+
+def _yahoo_listed_symbol(ticker):
+    """Return the Yahoo symbol if it differs from ``ticker``, else None."""
+    info = _yf_ticker_info_cached_or_fetch(ticker)
+    listed = str((info or {}).get("symbol") or "").strip().upper()
+    current = str(ticker or "").strip().upper()
+    if listed and listed != current:
+        return listed, info
+    return None, info
+
+
+def _ticker_closure_risk_from_local_sources(tickers, fund_facts=None):
+    """ETF closure risk from the in-process .info cache and provider catalog.
+
+    The dashboard grade endpoint used to call yf.Ticker(t).info for every
+    holding before downloading prices. Yahoo's quoteSummary is far slower than
+    the history download, so Portfolio Grade / Sharpe / beta sat blank for a
+    long time (or never landed if the .info storm rate-limited the download).
+    """
+    result = {}
+    fund_facts = fund_facts or {}
+    now = time.time()
+    for raw in tickers or []:
+        ticker = str(raw or "").strip().upper()
+        if not ticker:
+            continue
+        info = {}
+        cached = _ticker_info_cache.get(ticker)
+        if cached and (now - cached.get("ts", 0)) < 86400:
+            info = cached.get("info") or {}
+        facts = fund_facts.get(ticker) or {}
+        if facts.get("assets"):
+            risk = _assess_etf_closure_risk_with_fallback(info, {
+                "total_assets": facts.get("assets"),
+                "expense_ratio_pct": facts.get("exp_ratio"),
+                "fund_type": "ETF",
+                "data_source": "ETF provider catalog",
+            })
+        else:
+            risk = _assess_etf_closure_risk(info) if info else None
+        if risk is not None:
+            result[ticker] = risk
+    return result
+
+
+def _yf_close_series(raw, symbol=None):
+    """Extract a numeric Close series from a yfinance frame."""
+    if raw is None or getattr(raw, "empty", True):
+        return None
+    series = None
+    if isinstance(raw.columns, pd.MultiIndex):
+        if "Close" not in raw.columns.get_level_values(0):
+            return None
+        close_block = raw["Close"]
+        if symbol and symbol in close_block.columns:
+            series = close_block[symbol]
+        elif close_block.shape[1]:
+            series = close_block.iloc[:, 0]
+    elif "Close" in raw.columns:
+        series = raw["Close"]
+    if series is None:
+        return None
+    series = pd.to_numeric(series, errors="coerce").dropna()
+    return None if series.empty else series
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute period-aware ticker and portfolio grades via yfinance."""
     import warnings
     import numpy as np
-    import yfinance as yf
     from grading import (
         ticker_score,
         grade_portfolio,
@@ -21216,10 +21336,13 @@ def portfolio_summary_data():
             ORDER BY transaction_date, id""",
         pids,
     ).fetchall()
-    conn.close()
-
     if not rows:
+        conn.close()
         return jsonify({"error": "No data"}), 400
+    # Catalog AUM/expense for closure-risk badges. Read while we already have
+    # the connection so grades never need a live Yahoo .info pass to fill them.
+    ticker_fund_facts = _etf_provider_fund_facts(conn, [r["ticker"] for r in rows])
+    conn.close()
 
     period = request.args.get("period", "1y").strip().lower()
     custom_start = request.args.get("start_date", "").strip()
@@ -21273,7 +21396,7 @@ def portfolio_summary_data():
     # is acceptable for grade/ratio display; a buy/sell changes the ticker set and
     # naturally invalidates.
     cache_key = (
-        "summary-beta-v3-period-aware",
+        "summary-beta-v4-no-blocking-info",
         tuple(pids),
         tuple(sorted(r["ticker"] for r in rows)),
         period_range["key"],
@@ -21289,24 +21412,13 @@ def portfolio_summary_data():
     benchmark_symbols = {"sp500": "SPY", "nasdaq": "QQQ"}
     all_dl = list(set(tickers + list(benchmark_symbols.values())))
 
-    # Detect renamed tickers and include both old and new in download. The same
-    # per-ticker .info fetch also feeds the ETF closure-risk assessment, so it
-    # rides along for free here rather than costing a second network round-trip.
+    # Do NOT call yf.Ticker(t).info for every holding before the history
+    # download. quoteSummary is much slower than history and rate-limits the
+    # subsequent Close download, which is what the grade / Sharpe / beta cards
+    # actually need. Renames are resolved only for symbols the batch omitted.
+    # Closure-risk badges come from the local provider catalog + info cache.
     rename_map = {}
-    ticker_closure_risk = {}
-    for t in tickers:
-        try:
-            _info = yf.Ticker(t).info or {}
-            _new = (_info.get("symbol") or "").upper()
-            if _new and _new != t:
-                rename_map[t] = _new
-                if _new not in all_dl:
-                    all_dl.append(_new)
-            _closure = _assess_etf_closure_risk(_info)
-            if _closure is not None:
-                ticker_closure_risk[t] = _closure
-        except Exception:
-            pass
+    ticker_closure_risk = _ticker_closure_risk_from_local_sources(tickers, ticker_fund_facts)
 
     try:
         raw = _chunked_yf_download(
@@ -21359,16 +21471,8 @@ def portfolio_summary_data():
                 progress=False,
                 threads=False,
             )
-            if r is None or r.empty:
-                continue
-            if isinstance(r.columns, pd.MultiIndex):
-                series = r["Close"].iloc[:, 0] if "Close" in r.columns.get_level_values(0) else None
-            else:
-                series = r["Close"] if "Close" in r.columns else None
+            series = _yf_close_series(r, _bsym)
             if series is None:
-                continue
-            series = pd.to_numeric(series, errors="coerce").dropna()
-            if series.empty:
                 continue
             close[_bsym] = series
         except Exception:
@@ -21463,17 +21567,42 @@ def portfolio_summary_data():
                 progress=False,
                 threads=False,
             )
-            if r is None or r.empty:
-                continue
-            if isinstance(r.columns, pd.MultiIndex):
-                series = r["Close"].iloc[:, 0] if "Close" in r.columns.get_level_values(0) else None
-            else:
-                series = r["Close"] if "Close" in r.columns else None
+            series = _yf_close_series(r, t)
             if series is None:
                 continue
-            series = pd.to_numeric(series, errors="coerce").dropna()
-            if series.empty:
+            close[t] = series
+            if _compute_ticker_metrics(t, close[t].dropna()) and t not in available:
+                available.append(t)
+        except Exception:
+            continue
+
+    # Renames are the remaining miss: history under the old ticker is empty, but
+    # Yahoo's listed symbol still prices. Only those leftover names pay for an
+    # .info lookup — not the whole portfolio.
+    still_missing = [t for t in tickers if t not in close.columns]
+    for t in still_missing:
+        try:
+            new_t, listed_info = _yahoo_listed_symbol(t)
+            if listed_info and t not in ticker_closure_risk:
+                listed_risk = _assess_etf_closure_risk(listed_info)
+                if listed_risk is not None:
+                    ticker_closure_risk[t] = listed_risk
+            if not new_t:
                 continue
+            rename_map[t] = new_t
+            series = close[new_t].dropna() if new_t in close.columns else None
+            if series is None or series.empty:
+                r = _chunked_yf_download(
+                    new_t,
+                    **period_range["yf_kwargs"],
+                    auto_adjust=True,
+                    progress=False,
+                    threads=False,
+                )
+                series = _yf_close_series(r, new_t)
+            if series is None:
+                continue
+            close[new_t] = series
             close[t] = series
             if _compute_ticker_metrics(t, close[t].dropna()) and t not in available:
                 available.append(t)

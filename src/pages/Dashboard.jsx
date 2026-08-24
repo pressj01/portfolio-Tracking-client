@@ -800,6 +800,11 @@ export default function Dashboard() {
   const [navRepairing, setNavRepairing] = useState(false)
   const [actionCenter, setActionCenter] = useState(null)
   const navChartRef = useRef(null)
+  const gradeFetchInFlightRef = useRef(false)
+  const gradeFetchGenRef = useRef(0)
+  const gradeResultKeyRef = useRef(null)
+  const selectedGradeDataKeyRef = useRef(null)
+  const portfolioGradeRef = useRef({})
   const dashboardCacheKey = useMemo(() => buildDashboardCacheKey(selection, basisMode), [selection, basisMode])
   const selectedGradeDataKey = gradeDataKey(
     dashboardCacheKey,
@@ -808,6 +813,9 @@ export default function Dashboard() {
     gradeCustomEnd,
   )
   const gradeResultsAreCurrent = gradeResultKey === selectedGradeDataKey
+  gradeResultKeyRef.current = gradeResultKey
+  selectedGradeDataKeyRef.current = selectedGradeDataKey
+  portfolioGradeRef.current = portfolioGrade
   const activeTickerGrades = useMemo(
     () => gradeResultsAreCurrent ? tickerGrades : {},
     [gradeResultsAreCurrent, tickerGrades],
@@ -920,8 +928,14 @@ export default function Dashboard() {
       setTickerRisk(cached.tickerRisk || {})
       setTickerClosureRisk(cached.tickerClosureRisk || {})
       setTickerRiskLoading(false)
-      setPortfolioGrade(cached.portfolioGrade || {})
-      setGradeResultKey(gradeDataKey(dashboardCacheKey, '1y', '', ''))
+      const cachedGrade = cached.portfolioGrade || {}
+      setPortfolioGrade(cachedGrade)
+      // Only treat the cache as "current" when it actually has a grade. A
+      // metadata-only payload (dates, no overall/ratios) would otherwise lock
+      // the cards on dashes until a slow refetch finished.
+      if (cachedGrade.overall) {
+        setGradeResultKey(gradeDataKey(dashboardCacheKey, '1y', '', ''))
+      }
       setPortfolioCoverage(cached.portfolioCoverage ?? null)
       setPortfolioCoverageSeverity(cached.portfolioCoverageSeverity ?? null)
       setTickerCoverage(cached.tickerCoverage || {})
@@ -1103,11 +1117,20 @@ export default function Dashboard() {
               setHoldings(normalizeDashboardHoldings(updated))
               if (summary) setIncomeSummary(summary)
               if (valueSummary) setPortfolioValue(valueSummary)
-              // Prices just moved, so re-grade — but hand the work to the
-              // grade-period effect rather than issuing a second request here,
-              // whatever period is selected.
-              setGradeStatus('Loading risk grades...')
-              setGradeRefreshToken(token => token + 1)
+              // Grades and ratios come from daily history, not the last tick
+              // this refresh just wrote. Restarting the in-flight request aborts
+              // it in the browser while the backend keeps running, so the next
+              // call waits behind leftover Yahoo work and the cards stay blank
+              // far longer. Retry only when nothing is in flight and this
+              // window still has no overall grade.
+              const haveCurrentGrade = (
+                gradeResultKeyRef.current === selectedGradeDataKeyRef.current
+                && Boolean(portfolioGradeRef.current?.overall)
+              )
+              if (!gradeFetchInFlightRef.current && !haveCurrentGrade) {
+                setGradeStatus('Loading risk grades...')
+                setGradeRefreshToken(token => token + 1)
+              }
             })
             .catch(() => {
               if (!stale) {
@@ -1135,6 +1158,7 @@ export default function Dashboard() {
     // It re-fetches without reloading any unrelated Dashboard data source.
     if (!hasHoldings) return undefined
     if (gradeRangeError) {
+      gradeFetchInFlightRef.current = false
       setTickerRiskLoading(false)
       setGradeStatus(gradeRangeError)
       setGradeResultKey(null)
@@ -1143,6 +1167,7 @@ export default function Dashboard() {
     // Life is cost-basis G/L, not a market window. Skip the request and blank
     // the risk cards instead of showing one period's grade under the Life label.
     if (isLifetimePerformancePeriod(gradePeriod)) {
+      gradeFetchInFlightRef.current = false
       setTickerRiskLoading(false)
       setGradeStatus(null)
       setPortfolioGrade({})
@@ -1153,6 +1178,8 @@ export default function Dashboard() {
       return undefined
     }
 
+    const fetchGen = ++gradeFetchGenRef.current
+    gradeFetchInFlightRef.current = true
     const controller = new AbortController()
     let active = true
     const params = new URLSearchParams({ period: gradePeriod })
@@ -1198,6 +1225,9 @@ export default function Dashboard() {
       })
       .finally(() => {
         if (active) setTickerRiskLoading(false)
+        if (gradeFetchGenRef.current === fetchGen) {
+          gradeFetchInFlightRef.current = false
+        }
       })
 
     return () => {
@@ -1218,15 +1248,25 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (loading || !holdings.length) return
+    const previousCached = readDashboardCache(dashboardCacheKey) || {}
+    // Keep the last good 1Y grade when the user is on another window, or when
+    // this window's result has not landed yet. Writing {} here used to wipe a
+    // finished grade the moment someone clicked 6M, so the next Dashboard
+    // visit showed blank ratio cards until a slow refetch completed.
+    const canStoreGrades = (
+      gradePeriod === '1y'
+      && gradeResultsAreCurrent
+      && Boolean(activePortfolioGrade.overall)
+    )
     writeDashboardCache(dashboardCacheKey, {
       incomeSummary,
       portfolioValue,
       weekPayments,
       weekToday,
-      tickerGrades: gradePeriod === '1y' ? activeTickerGrades : {},
-      tickerRisk: gradePeriod === '1y' ? activeTickerRisk : {},
-      tickerClosureRisk: gradePeriod === '1y' ? activeTickerClosureRisk : {},
-      portfolioGrade: gradePeriod === '1y' ? activePortfolioGrade : {},
+      tickerGrades: canStoreGrades ? activeTickerGrades : (previousCached.tickerGrades || {}),
+      tickerRisk: canStoreGrades ? activeTickerRisk : (previousCached.tickerRisk || {}),
+      tickerClosureRisk: canStoreGrades ? activeTickerClosureRisk : (previousCached.tickerClosureRisk || {}),
+      portfolioGrade: canStoreGrades ? activePortfolioGrade : (previousCached.portfolioGrade || {}),
       portfolioCoverage,
       portfolioCoverageSeverity,
       tickerCoverage,
@@ -1247,6 +1287,7 @@ export default function Dashboard() {
     activeTickerRisk,
     activeTickerClosureRisk,
     activePortfolioGrade,
+    gradeResultsAreCurrent,
     gradePeriod,
     portfolioCoverage,
     portfolioCoverageSeverity,

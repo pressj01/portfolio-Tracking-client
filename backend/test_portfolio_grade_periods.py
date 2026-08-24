@@ -85,6 +85,7 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         app_module.app.testing = True
         app_module.app._db_initialized = True
         app_module._PORTFOLIO_SUMMARY_CACHE.clear()
+        app_module._ticker_info_cache.clear()
         self.client = app_module.app.test_client()
 
     def tearDown(self):
@@ -93,6 +94,7 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         app_module.app.testing = self.orig_testing
         app_module.app._db_initialized = self.orig_initialized
         app_module._PORTFOLIO_SUMMARY_CACHE.clear()
+        app_module._ticker_info_cache.clear()
         Path(self.db_path).unlink(missing_ok=True)
 
     def _get_connection(self):
@@ -161,6 +163,57 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         self.assertIsNone(payload["portfolio_grade"].get("overall"))
         self.assertTrue(payload["portfolio_grade"]["grade_not_applicable"])
         self.assertEqual(payload["ticker_grades"]["AAA"]["grade"], "N/A")
+
+    @patch("yfinance.Ticker")
+    def test_grade_does_not_block_on_live_info_when_history_downloads(self, ticker_mock):
+        ticker_mock.side_effect = AssertionError("live .info must not block grades")
+
+        response = self.client.get("/api/portfolio-summary/data?profile_id=6&period=1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertTrue(payload["portfolio_grade"].get("overall"), payload)
+        self.assertIsNotNone(payload["portfolio_grade"].get("sharpe"), payload)
+        self.assertIsNotNone(payload["portfolio_grade"].get("sortino"), payload)
+        ticker_mock.assert_not_called()
+
+    @patch("yfinance.Ticker")
+    def test_closure_risk_uses_provider_catalog_not_live_info(self, ticker_mock):
+        ticker_mock.side_effect = AssertionError("live .info must not block grades")
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """CREATE TABLE etf_provider_funds (
+                provider_id INTEGER, symbol TEXT, fund_name TEXT,
+                assets REAL, exp_ratio REAL
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO etf_provider_funds VALUES (1, 'AAA', 'Alpha', 8000000, 0.99)"
+        )
+        conn.commit()
+        conn.close()
+
+        response = self.client.get("/api/portfolio-summary/data?profile_id=6&period=1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertTrue(payload["portfolio_grade"].get("overall"), payload)
+        self.assertEqual(payload["ticker_closure_risk"]["AAA"]["tier"], "high")
+        ticker_mock.assert_not_called()
+
+    def test_close_series_keeps_the_requested_ticker_column(self):
+        dates = pd.bdate_range("2024-01-02", periods=3)
+        raw = pd.concat(
+            {
+                "Close": pd.DataFrame(
+                    {"AAA": [1.0, 2.0, 3.0], "BBB": [9.0, 8.0, 7.0]},
+                    index=dates,
+                )
+            },
+            axis=1,
+        )
+        series = app_module._yf_close_series(raw, "BBB")
+        self.assertEqual(list(series.values), [9.0, 8.0, 7.0])
 
 
 if __name__ == "__main__":
