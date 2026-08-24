@@ -10,10 +10,12 @@
  *
  * The panes are for reading. Each renders a real screen, so its own filters and
  * toggles work, but links that navigate leave the split page the way they would
- * anywhere else.
+ * anywhere else. Each pane has its own account picker so two portfolios can sit
+ * side by side; the window's date range and basis mode stay shared.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useMenuOrder } from '../context/MenuOrderContext'
+import { ProfileScope, useProfile } from '../context/ProfileContext'
 import { hiddenPathSet } from '../navigation/menuConfig'
 import { PAGE_GROUPS, isKnownPagePath, pageElement, pageLabel, pathnameOf } from '../pageCatalog'
 
@@ -34,6 +36,8 @@ const readSplitState = () => {
   const fallback = {
     left: DEFAULT_LEFT,
     right: DEFAULT_RIGHT,
+    leftProfile: null,
+    rightProfile: null,
     orientation: 'vertical',
     ratio: 0.5,
   }
@@ -45,6 +49,8 @@ const readSplitState = () => {
       // pane that looks like a page still loading.
       left: isKnownPagePath(saved.left) ? saved.left : fallback.left,
       right: isKnownPagePath(saved.right) ? saved.right : fallback.right,
+      leftProfile: typeof saved.leftProfile === 'string' ? saved.leftProfile : null,
+      rightProfile: typeof saved.rightProfile === 'string' ? saved.rightProfile : null,
       orientation: saved.orientation === 'horizontal' ? 'horizontal' : 'vertical',
       ratio: clampRatio(saved.ratio),
     }
@@ -96,6 +102,42 @@ function PagePicker({ value, onChange, side, hiddenIds }) {
   )
 }
 
+function PaneAccountPicker({ value, onChange, side }) {
+  const { profiles, aggregates, selection, isAggregate, aggregateId } = useProfile()
+  const visibleProfiles = profiles.filter(profile => !profile.hidden_from_selector)
+  const visibleAggregates = aggregates.filter(aggregate => !aggregate.hidden_from_selector)
+  const windowSelection = isAggregate
+    ? `a:${aggregateId}`
+    : (selection.startsWith('p:') || selection.startsWith('a:') ? selection : `p:${selection}`)
+  const selectValue = value || windowSelection
+
+  return (
+    <label className="split-account-label">
+      <span>Account</span>
+      <select
+        className="split-picker split-account-picker"
+        value={selectValue}
+        onChange={(e) => onChange(side, e.target.value)}
+        aria-label={`${side === 'left' ? 'First' : 'Second'} account`}
+        title="Account for this pane. The other pane can show a different portfolio."
+      >
+      {visibleProfiles.map(profile => (
+        <option key={`p-${profile.id}`} value={`p:${profile.id}`}>
+          {profile.name}{profile.is_user_owned ? '' : ' [Test / non-owned]'}
+        </option>
+      ))}
+      {visibleAggregates.length > 0 && (
+        <optgroup label="Aggregates">
+          {visibleAggregates.map(agg => (
+            <option key={`a-${agg.id}`} value={`a:${agg.id}`}>{agg.name}</option>
+          ))}
+        </optgroup>
+      )}
+      </select>
+    </label>
+  )
+}
+
 // Only reachable if a saved page was renamed out from under a stored pane. An
 // empty pane is indistinguishable from one that is still loading, so say so.
 function PaneFallback() {
@@ -128,8 +170,20 @@ export default function SplitScreen() {
     remeasureCharts()
   }, [])
 
+  const setPaneProfile = useCallback((side, profile) => {
+    const key = side === 'left' ? 'leftProfile' : 'rightProfile'
+    setState(prev => (prev[key] === profile ? prev : { ...prev, [key]: profile }))
+    remeasureCharts()
+  }, [])
+
   const swap = useCallback(() => {
-    setState(prev => ({ ...prev, left: prev.right, right: prev.left }))
+    setState(prev => ({
+      ...prev,
+      left: prev.right,
+      right: prev.left,
+      leftProfile: prev.rightProfile,
+      rightProfile: prev.leftProfile,
+    }))
     remeasureCharts()
   }, [])
 
@@ -167,8 +221,9 @@ export default function SplitScreen() {
       <div className="split-toolbar">
         <h1>Split View</h1>
         <p>
-          Pick a page for each side. Both panes share this window&apos;s portfolio, basis mode and
-          performance date range, so changing the range on one side moves the other with it.
+          Pick a page and an account for each side. Basis mode and the performance date range stay
+          shared, so changing the range on one side moves the other with it. The account pickers do
+          not — each pane can show a different portfolio.
         </p>
         <div className="split-toolbar-actions">
           <button type="button" className="btn btn-secondary" onClick={swap} title="Swap the two pages">
@@ -195,9 +250,16 @@ export default function SplitScreen() {
         <section className="split-pane">
           <header className="split-pane-head">
             <PagePicker value={state.left} onChange={setPane} side="left" hiddenIds={hiddenIds} />
+            <PaneAccountPicker value={state.leftProfile} onChange={setPaneProfile} side="left" />
           </header>
           <div className="split-pane-body">
-            {pageElement(state.left) || <PaneFallback />}
+            <ProfileScope
+              key={state.leftProfile || 'window'}
+              selection={state.leftProfile}
+              onSelectionChange={(profile) => setPaneProfile('left', profile)}
+            >
+              {pageElement(state.left) || <PaneFallback />}
+            </ProfileScope>
           </div>
         </section>
 
@@ -213,9 +275,16 @@ export default function SplitScreen() {
         <section className="split-pane">
           <header className="split-pane-head">
             <PagePicker value={state.right} onChange={setPane} side="right" hiddenIds={hiddenIds} />
+            <PaneAccountPicker value={state.rightProfile} onChange={setPaneProfile} side="right" />
           </header>
           <div className="split-pane-body">
-            {pageElement(state.right) || <PaneFallback />}
+            <ProfileScope
+              key={state.rightProfile || 'window'}
+              selection={state.rightProfile}
+              onSelectionChange={(profile) => setPaneProfile('right', profile)}
+            >
+              {pageElement(state.right) || <PaneFallback />}
+            </ProfileScope>
           </div>
         </section>
       </div>

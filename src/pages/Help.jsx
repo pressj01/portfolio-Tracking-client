@@ -184,7 +184,8 @@ function Overview() {
         <li><strong>Options</strong> — Build simulated multi-leg trades, graph risk and moneyness, explore first- and higher-order Greeks, and run modeled historical strategy backtests.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
-        <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data.</li>
+        <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data. Lock leading columns (Ticker by default in Split View) while scrolling sideways.</li>
+        <li><strong>Split View</strong> — Two pages side by side. Each pane has its own account picker, so you can compare two portfolios; the date range and basis mode stay shared.</li>
         <li><strong>Checklists</strong> — Stock, ETF, and option-income ETF evaluators for structured pre-buy reviews.</li>
         <li><strong>Analysis</strong> — Organized into Research &amp; Compare, Screeners &amp; Signals, Income &amp; NAV Risk, Portfolio Diagnostics, and Planning &amp; Optimization. These groups cover security research, comparison tools, scanners, NAV erosion checks, income simulations, portfolio analytics, consolidation, macro regime context, portfolio testing, and rebalancing.</li>
         <li><strong>Taxes</strong> — Annual Tax Report with realized gains/losses and dividend income summaries.</li>
@@ -3491,8 +3492,10 @@ function TotalReturnHelp() {
         footer totals use the corresponding view&apos;s period calculation.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker</strong> — The symbol.</li>
+        <li><strong>Ticker</strong> — The symbol. Stays visible when you scroll the table sideways, including in Split View.</li>
         <li><strong>Category</strong> — Assigned category.</li>
+        <li><strong>Cost/Share</strong> — Average purchase price of the shares still held. This is the figure Schwab labels Cost/Share, not the market price at the start of the range.</li>
+        <li><strong>Price at Start / Current Price</strong> — The ticker&apos;s market close on the first and last day of that holding&apos;s effective range. For YTD the start is the last session on or before Jan 1. A range that ends today uses a live quote when available. These are market prices, not cost basis.</li>
         <li><strong>Start Value / End Value</strong> — The position&apos;s market value at its effective period boundaries.</li>
         <li><strong>Price Return / Price Ret %</strong> — Price movement while the position was held; trade cash flows are excluded.</li>
         <li><strong>Distributions</strong> — Broker-imported cash payments during the held period when available, with Yahoo market history as a fallback.</li>
@@ -4208,6 +4211,14 @@ function WatchlistHelp() {
       <p style={{ marginBottom: '1rem' }}>
         At the top of the table, summary badges show how many tickers have a BUY, SELL, or NEUTRAL
         overall signal — a quick pulse check on your watchlist as a whole.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Locked columns</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Use <strong>Lock columns</strong> above the table to keep leading columns on screen while you
+        scroll sideways. Full-page Watchlist defaults to Ticker through AUM. In Split View it defaults
+        to <strong>Ticker</strong> only, so the frozen block fits the narrower pane. You can lock
+        through Signal, or turn locking off.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Columns</h3>

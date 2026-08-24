@@ -734,6 +734,9 @@ export default function TotalReturn() {
   const unrealizedColumns = [
     { key: 'ticker', label: 'Ticker' },
     { key: 'category_name', label: 'Category' },
+    { key: 'price_paid', label: 'Cost/Share', title: 'Average purchase price of the shares you still hold — the same figure Schwab labels Cost/Share. Not the market price at the start of the range.', fmt, numeric: true },
+    { key: 'start_price', label: 'Price at Start', title: 'Market close on the first day of this holding\'s effective range (for YTD, the last session on or before Jan 1). This is not cost basis.', fmt, numeric: true },
+    { key: 'end_price', label: 'Current Price', title: 'Market price on the last day of this holding\'s effective range. A range that ends today uses a live quote when available.', fmt, numeric: true },
     { key: 'start_value', label: 'Start Value', fmt, numeric: true },
     { key: 'end_value', label: 'End Value', fmt, numeric: true },
     { key: 'price_return_dollar', label: 'Period Price Return', title: 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
@@ -947,7 +950,7 @@ export default function TotalReturn() {
   const cmpActualRange = formatComparisonRange(cmpData?.actual_start_date, cmpData?.actual_end_date)
 
   return (
-    <div className="page dashboard">
+    <div className="page dashboard tr-page">
       <h1 style={{ marginBottom: '0.5rem' }}>Total Return Dashboard</h1>
 
       {/* Page-wide filters */}
@@ -1507,7 +1510,13 @@ export default function TotalReturn() {
                       )
                     }
                     return (
-                      <th key={col.key} title={col.title} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col) }} onClick={() => handleSort(sk)}>
+                      <th
+                        key={col.key}
+                        className={col.key === 'ticker' ? 'tr-frozen-ticker' : undefined}
+                        title={col.title}
+                        style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap', textAlign: columnAlign(col) }}
+                        onClick={() => handleSort(sk)}
+                      >
                         {col.label}
                         <span style={{ fontSize: '0.7em', marginLeft: '4px', color: sortCol === sk ? 'var(--accent-bright)' : 'var(--text-dim)' }}>
                           {sortIcon(sk)}
@@ -1585,7 +1594,16 @@ export default function TotalReturn() {
                         display = rvy ? rvy.label : '—'
                         style = { textAlign: 'center', color: rvy?.color || '#6f7890', fontWeight: 600 }
                       }
-                      return <td key={col.key} style={style} title={col.key === 'ret_vs_yld' ? rvyTitle(row) : undefined}>{display}</td>
+                      return (
+                        <td
+                          key={col.key}
+                          className={col.key === 'ticker' ? 'tr-frozen-ticker' : undefined}
+                          style={style}
+                          title={col.key === 'ret_vs_yld' ? rvyTitle(row) : undefined}
+                        >
+                          {display}
+                        </td>
+                      )
                     })}
                   </tr>
                 ))}
@@ -1594,7 +1612,11 @@ export default function TotalReturn() {
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                   {positionView === 'unrealized' && (
                     <>
-                      <td colSpan={2} title={OPEN_LOT_SCOPE_NOTE}><strong>Open lots only</strong></td>
+                      <td className="tr-frozen-ticker" title={OPEN_LOT_SCOPE_NOTE}><strong>Open lots only</strong></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
                       <td style={{ textAlign: 'right' }}>
                         {footerInferredShares > 0
                           ? (
@@ -1625,7 +1647,10 @@ export default function TotalReturn() {
                   )}
                   {positionView === 'realized' && (
                     <>
-                      <td colSpan={4}><strong>Realized Total</strong></td>
+                      <td className="tr-frozen-ticker"><strong>Realized Total</strong></td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(realizedTotals.start_value)}</strong></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(realizedTotals.end_value)}</strong></td>
                       <td style={{ textAlign: 'right', color: (realizedTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(realizedTotals.price_return_dollar)}</strong></td>
@@ -1637,7 +1662,9 @@ export default function TotalReturn() {
                   )}
                   {positionView === 'combined' && (
                     <>
-                      <td colSpan={3}><strong>Net Total</strong></td>
+                      <td className="tr-frozen-ticker"><strong>Net Total</strong></td>
+                      <td></td>
+                      <td></td>
                       <td style={{ textAlign: 'right' }}><strong>{fmt(combinedTotals.net_basis)}</strong></td>
                       <td style={{ textAlign: 'right', color: (combinedTotals.unrealized_total_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(combinedTotals.unrealized_total_dollar)}</strong></td>
                       <td style={{ textAlign: 'right', color: (combinedTotals.realized_total_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}><strong>{fmt(combinedTotals.realized_total_dollar)}</strong></td>

@@ -36,6 +36,96 @@ function parseSelection(raw) {
   return { kind: 'profile', id: Number.isFinite(id) ? id : 1 }
 }
 
+function encodeSelection(rawSelection) {
+  if (typeof rawSelection === 'string' && (rawSelection.startsWith('p:') || rawSelection.startsWith('a:'))) {
+    return rawSelection
+  }
+  if (rawSelection === 'aggregate') return 'aggregate'
+  return `p:${rawSelection}`
+}
+
+function resolveSelection(parsed, aggregates) {
+  if (parsed.kind === 'aggregate-legacy') {
+    if (aggregates.length > 0) return { kind: 'aggregate', id: aggregates[0].id }
+    return { kind: 'profile', id: 1 }
+  }
+  if (parsed.kind === 'aggregate' && parsed.id != null) {
+    if (!aggregates.some(a => a.id === parsed.id)) {
+      return { kind: 'profile', id: 1 }
+    }
+  }
+  return parsed
+}
+
+function viewFromResolved(resolved, profiles, aggregates, basisMode, selection) {
+  const isAggregate = resolved.kind === 'aggregate'
+  const aggregateId = isAggregate ? resolved.id : null
+  const profileId = isAggregate ? null : resolved.id
+  const basis = `basis_mode=${basisMode}`
+  const profileQueryString = isAggregate
+    ? `aggregate_id=${aggregateId}&${basis}`
+    : `profile_id=${profileId}&${basis}`
+  const activeAggregate = isAggregate
+    ? (aggregates.find(a => a.id === aggregateId) || null)
+    : null
+  const currentProfileName = isAggregate
+    ? (activeAggregate ? activeAggregate.name : 'Aggregate')
+    : (profiles.find(p => p.id === profileId)?.name || 'Portfolio')
+  return {
+    selection,
+    isAggregate,
+    aggregateId,
+    profileId,
+    profileQueryString,
+    activeAggregate,
+    currentProfileName,
+  }
+}
+
+/**
+ * Override the selected portfolio for a subtree without changing the window's
+ * navbar account. Split View uses this so each pane can show a different
+ * account while still sharing basis mode and the performance date range.
+ */
+export function ProfileScope({ selection: scopedSelection, onSelectionChange, children }) {
+  const parent = useProfile()
+  const selection = scopedSelection || parent.selection
+  const parsed = useMemo(() => parseSelection(selection), [selection])
+  const resolved = useMemo(
+    () => resolveSelection(parsed, parent.aggregates),
+    [parsed, parent.aggregates],
+  )
+  const view = useMemo(
+    () => viewFromResolved(
+      resolved, parent.profiles, parent.aggregates, parent.basisMode, selection,
+    ),
+    [resolved, parent.profiles, parent.aggregates, parent.basisMode, selection],
+  )
+
+  const setProfileId = useCallback((rawSelection) => {
+    const val = encodeSelection(rawSelection)
+    if (onSelectionChange) onSelectionChange(val)
+    else parent.setProfileId(val)
+  }, [onSelectionChange, parent])
+
+  const setAggregateSelection = useCallback((aggId) => {
+    setProfileId(`a:${aggId}`)
+  }, [setProfileId])
+
+  const value = useMemo(() => ({
+    ...parent,
+    ...view,
+    setProfileId,
+    setAggregateSelection,
+  }), [parent, view, setProfileId, setAggregateSelection])
+
+  return (
+    <ProfileContext.Provider value={value}>
+      {children}
+    </ProfileContext.Provider>
+  )
+}
+
 export default function ProfileProvider({ children }) {
   const [profiles, setProfiles] = useState([])
   const [aggregates, setAggregates] = useState([]) // [{id, name, member_ids}]
@@ -47,41 +137,21 @@ export default function ProfileProvider({ children }) {
   })
 
   const parsed = useMemo(() => parseSelection(selection), [selection])
-
-  // Resolve legacy 'aggregate' selection once aggregates are loaded
-  const resolvedSelection = useMemo(() => {
-    if (parsed.kind === 'aggregate-legacy') {
-      if (aggregates.length > 0) return { kind: 'aggregate', id: aggregates[0].id }
-      return { kind: 'profile', id: 1 }
-    }
-    if (parsed.kind === 'aggregate' && parsed.id != null) {
-      if (!aggregates.some(a => a.id === parsed.id)) {
-        // Aggregate was deleted — fall back
-        return { kind: 'profile', id: 1 }
-      }
-    }
-    return parsed
-  }, [parsed, aggregates])
-
-  const isAggregate = resolvedSelection.kind === 'aggregate'
-  const aggregateId = isAggregate ? resolvedSelection.id : null
-  const profileId = isAggregate ? null : resolvedSelection.id
-
-  const profileQueryString = useMemo(() => {
-    const basis = `basis_mode=${basisMode}`
-    return isAggregate ? `aggregate_id=${aggregateId}&${basis}` : `profile_id=${profileId}&${basis}`
-  }, [isAggregate, aggregateId, profileId, basisMode])
-
-  const activeAggregate = useMemo(() => {
-    if (!isAggregate) return null
-    return aggregates.find(a => a.id === aggregateId) || null
-  }, [isAggregate, aggregateId, aggregates])
-
-  const currentProfileName = useMemo(() => {
-    if (isAggregate) return activeAggregate ? activeAggregate.name : 'Aggregate'
-    const p = profiles.find(p => p.id === profileId)
-    return p ? p.name : 'Portfolio'
-  }, [isAggregate, activeAggregate, profileId, profiles])
+  const resolvedSelection = useMemo(
+    () => resolveSelection(parsed, aggregates),
+    [parsed, aggregates],
+  )
+  const {
+    isAggregate,
+    aggregateId,
+    profileId,
+    profileQueryString,
+    activeAggregate,
+    currentProfileName,
+  } = useMemo(
+    () => viewFromResolved(resolvedSelection, profiles, aggregates, basisMode, selection),
+    [resolvedSelection, profiles, aggregates, basisMode, selection],
+  )
 
   // Compatibility: components reading legacy `aggregateConfig`/`aggregateName`
   // get the currently-selected aggregate's data, or the first aggregate.
@@ -118,14 +188,7 @@ export default function ProfileProvider({ children }) {
   const refreshAggregateConfig = refreshAggregates
 
   const setProfileId = useCallback((rawSelection) => {
-    let val
-    if (typeof rawSelection === 'string' && (rawSelection.startsWith('p:') || rawSelection.startsWith('a:'))) {
-      val = rawSelection
-    } else if (rawSelection === 'aggregate') {
-      val = 'aggregate' // legacy, will be resolved
-    } else {
-      val = `p:${rawSelection}`
-    }
+    const val = encodeSelection(rawSelection)
     setSelection(val)
     localStorage.setItem('portfolio_selectedProfileId', val)
   }, [])

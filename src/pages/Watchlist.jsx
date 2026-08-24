@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
@@ -324,6 +324,40 @@ function WatchlistTickerModal({ ticker, onClose }) {
   )
 }
 
+const WATCHLIST_HEADERS = [
+  { label: 'Ticker' },
+  { label: 'Description', tip: 'Security or fund name' },
+  { label: 'Price', tip: 'Current market price' },
+  { label: '1D Chg', tip: '1-day price change percentage' },
+  { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
+  { label: 'AUM', tip: 'Assets under management (fund size)' },
+  { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
+  { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
+  { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
+  { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
+  { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
+  { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
+  { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
+  { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
+  { label: '1Y Return', tip: 'Total return over the past 12 months' },
+  { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
+  { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
+  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio. Use Auto/Test/Skip and optional benchmark override to control watchlist NAV testing.' },
+  { label: 'Notes' },
+]
+
+const FREEZE_STORAGE_KEY = 'portfolio_watchlist_freeze_cols'
+const FREEZE_OPTIONS = [
+  { count: 0, label: 'None' },
+  { count: 1, label: 'Ticker' },
+  { count: 2, label: 'Ticker + Description' },
+  { count: 3, label: 'Through Price' },
+  { count: 4, label: 'Through 1D Chg' },
+  { count: 5, label: 'Through Div Yield' },
+  { count: 6, label: 'Through AUM' },
+  { count: 7, label: 'Through Signal' },
+]
+
 export default function Watchlist() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
@@ -337,9 +371,84 @@ export default function Watchlist() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
+  const [freezeCount, setFreezeCount] = useState(6)
+  const [freezeLefts, setFreezeLefts] = useState([])
   const initialLoad = useRef(true)
   const watchingListRef = useRef(watchingList)
   const saveQueueRef = useRef(Promise.resolve())
+  const pageRef = useRef(null)
+  const tableRef = useRef(null)
+
+  useEffect(() => {
+    const inSplit = Boolean(pageRef.current?.closest('.split-pane'))
+    try {
+      const raw = window.localStorage.getItem(FREEZE_STORAGE_KEY)
+      if (raw == null) {
+        setFreezeCount(inSplit ? 1 : 6)
+        return
+      }
+      const next = parseInt(raw, 10)
+      if (Number.isFinite(next) && next >= 0 && next <= FREEZE_OPTIONS[FREEZE_OPTIONS.length - 1].count) {
+        setFreezeCount(next)
+      }
+    } catch {
+      setFreezeCount(inSplit ? 1 : 6)
+    }
+  }, [])
+
+  const changeFreezeCount = (next) => {
+    setFreezeCount(next)
+    try {
+      window.localStorage.setItem(FREEZE_STORAGE_KEY, String(next))
+    } catch {
+      // Persistence is a convenience.
+    }
+  }
+
+  useLayoutEffect(() => {
+    const table = tableRef.current
+    if (!table || freezeCount <= 0) {
+      setFreezeLefts([])
+      return undefined
+    }
+    const apply = () => {
+      const headers = table.querySelectorAll(':scope > thead > tr > th')
+      const next = []
+      let offset = 0
+      for (let index = 0; index < freezeCount; index += 1) {
+        next.push(offset)
+        offset += headers[index]?.getBoundingClientRect().width || 0
+      }
+      setFreezeLefts((prev) => (
+        prev.length === next.length && prev.every((value, index) => Math.abs(value - next[index]) < 0.5)
+          ? prev
+          : next
+      ))
+    }
+    apply()
+    if (typeof ResizeObserver !== 'function') return undefined
+    const observer = new ResizeObserver(apply)
+    observer.observe(table)
+    return () => observer.disconnect()
+  }, [freezeCount, watchingList.length, analysisData])
+
+  const frozenCell = (index) => {
+    if (index >= freezeCount) return {}
+    return {
+      className: `wl-frozen${index === freezeCount - 1 ? ' wl-frozen-edge' : ''}`,
+      style: { left: freezeLefts[index] || 0 },
+    }
+  }
+
+  const bodyCell = (index, extra = {}) => {
+    const frozen = frozenCell(index)
+    const className = [frozen.className, extra.className].filter(Boolean).join(' ') || undefined
+    return {
+      className,
+      style: { ...frozen.style, ...extra.style },
+      title: extra.title,
+    }
+  }
 
   const loadAnalysis = useCallback(() => {
     setLoading(true)
@@ -528,7 +637,7 @@ export default function Watchlist() {
   const counts = analysisData?.counts || null
 
   return (
-    <div className="wl-page">
+    <div className="wl-page" ref={pageRef}>
       <h1 style={{ marginBottom: '0.5rem' }}>Watchlist</h1>
 
       {/* Add form */}
@@ -556,6 +665,20 @@ export default function Watchlist() {
           />
         </div>
         <button className="wl-btn-add" onClick={addWatching}>+ Add</button>
+        <div>
+          <label className="wl-label" htmlFor="wl-freeze-cols">Lock columns</label>
+          <select
+            id="wl-freeze-cols"
+            className="wl-input"
+            value={freezeCount}
+            onChange={(e) => changeFreezeCount(Number(e.target.value))}
+            title="Keep leading columns visible while scrolling sideways. In Split View, Ticker-only is the default so the pane stays usable."
+          >
+            {FREEZE_OPTIONS.map((option) => (
+              <option key={option.count} value={option.count}>{option.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Counts */}
@@ -595,34 +718,23 @@ export default function Watchlist() {
       {/* Table */}
       {watchingList.length > 0 && !loading && (
         <div className="sst-wrap watchlist-wrap">
-          <table className="sst">
+          <table className="sst" ref={tableRef}>
             <thead>
               <tr>
-                {[
-                  { label: 'Ticker' },
-                  { label: 'Description', tip: 'Security or fund name' },
-                  { label: 'Price', tip: 'Current market price' },
-                  { label: '1D Chg', tip: '1-day price change percentage' },
-                  { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
-                  { label: 'AUM', tip: 'Assets under management (fund size)' },
-                  { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
-                  { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
-                  { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
-                  { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
-                  { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
-                  { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
-                  { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
-                  { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
-                  { label: '1Y Return', tip: 'Total return over the past 12 months' },
-                  { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
-                  { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
-                  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio. Use Auto/Test/Skip and optional benchmark override to control watchlist NAV testing.' },
-                  { label: 'Notes' },
-                ].map((h, i) => (
-                  <th key={h.label} onClick={() => handleSort(i)} style={{ cursor: 'pointer' }} title={h.tip || ''}>
-                    {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
-                  </th>
-                ))}
+                {WATCHLIST_HEADERS.map((h, i) => {
+                  const frozen = frozenCell(i)
+                  return (
+                    <th
+                      key={h.label}
+                      className={frozen.className}
+                      onClick={() => handleSort(i)}
+                      style={{ cursor: 'pointer', ...frozen.style }}
+                      title={h.tip || ''}
+                    >
+                      {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
+                    </th>
+                  )
+                })}
                 <th>Actions</th>
               </tr>
             </thead>
@@ -631,7 +743,7 @@ export default function Watchlist() {
                 const a = analysisData ? getAnalysis(r.ticker) : null
                 return (
                   <tr key={r.ticker}>
-                    <td>
+                    <td {...bodyCell(0)}>
                       <a
                         href="#"
                         onClick={(e) => { e.preventDefault(); setModalTicker(r.ticker) }}
@@ -640,12 +752,14 @@ export default function Watchlist() {
                         {r.ticker}
                       </a>
                     </td>
-                    <td className="watchlist-description" title={r.description || ''}>
+                    <td {...bodyCell(1, { className: 'watchlist-description', title: r.description || '' })}>
                       {r.description || '\u2014'}
                     </td>
-                    <td>{formatMoney(a?.price)}</td>
-                    <td className={pctClass(a?.change_1d)}>{a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}</td>
-                    <td>
+                    <td {...bodyCell(2)}>{formatMoney(a?.price)}</td>
+                    <td {...bodyCell(3, { className: pctClass(a?.change_1d) })}>
+                      {a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}
+                    </td>
+                    <td {...bodyCell(4)}>
                       <YieldCell
                         ticker={r.ticker}
                         computed={a?.div_yield}
@@ -655,8 +769,8 @@ export default function Watchlist() {
                         onSave={updateYieldOverride}
                       />
                     </td>
-                    <td>{a?.aum != null ? formatMoneyCompact(a.aum) : '—'}</td>
-                    <td><SignalBadge signal={a?.signal} /></td>
+                    <td {...bodyCell(5)}>{a?.aum != null ? formatMoneyCompact(a.aum) : '—'}</td>
+                    <td {...bodyCell(6)}><SignalBadge signal={a?.signal} /></td>
                     <td><SignalBadge signal={a?.ao_sig} /></td>
                     <td>
                       <SignalBadge signal={a?.rsi_sig} />

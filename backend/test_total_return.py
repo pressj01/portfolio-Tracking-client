@@ -857,8 +857,14 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(result["price"], [None, 100.0, 110.0])
         self.assertEqual(result["total"], [None, 100.0, 110.0])
         self.assertEqual(result["market_value"], [None, 200.0, 220.0])
+        self.assertEqual(result["start_price"], 100.0)
+        self.assertEqual(result["end_price"], 110.0)
         self.assertEqual(result["fallback_positions"], 1)
         self.assertEqual(result["fallback_date_sources"]["import_date"], 1)
+
+        metrics = _portfolio_period_metrics(result)
+        self.assertEqual(metrics["start_price"], 100.0)
+        self.assertEqual(metrics["end_price"], 110.0)
 
     def test_missing_opening_lot_is_inferred_from_current_quantity(self):
         dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])

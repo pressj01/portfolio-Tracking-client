@@ -29,7 +29,7 @@ export const NAVIGATION_ITEMS = [
     link('option-greeks', 'Understanding the Greeks', '/option-greeks'),
   ]),
   dropdown('portfolio', 'Portfolio', [
-    link('split-view', 'Split View', '/split-screen', { title: 'Show two pages side by side, sharing one date range' }),
+    link('split-view', 'Split View', '/split-screen', { title: 'Show two pages side by side. Each pane can use a different account; they still share one date range' }),
     link('holdings', 'Holdings', '/holdings'),
     link('categories', 'Categories', '/categories'),
     link('holding-targets', 'Holding Targets', '/holding-targets'),

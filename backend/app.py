@@ -834,6 +834,8 @@ def _build_transaction_aware_portfolio_series(
         "inferred_closing_positions": 0,
         "split_adjusted_transactions": 0,
         "split_adjusted_positions": 0,
+        "start_price": None,
+        "end_price": None,
         "missing_market_symbols": [],
         "fallback_date_sources": {
             "purchase_date": 0,
@@ -1337,6 +1339,24 @@ def _build_transaction_aware_portfolio_series(
         (index for index, value in enumerate(price_values) if value is not None),
         None,
     )
+    last_plotted_index = next(
+        (
+            index for index in range(len(price_values) - 1, -1, -1)
+            if price_values[index] is not None
+        ),
+        None,
+    )
+
+    def held_price_at(index):
+        if index is None or len(symbols) != 1:
+            return None
+        value = price_matrix[index][0]
+        if np.isfinite(value) and value > 0:
+            return round(float(value), 4)
+        return None
+
+    start_price = held_price_at(first_plotted_index)
+    end_price = held_price_at(last_plotted_index)
     for detail in inferred_opening_detail:
         symbol_index = symbol_indexes.get(detail.pop("market_symbol", None))
         detail["start_value_overstatement"] = None
@@ -1369,6 +1389,8 @@ def _build_transaction_aware_portfolio_series(
         "inferred_closing_positions": inferred_closing_positions,
         "split_adjusted_transactions": split_adjusted_transactions,
         "split_adjusted_positions": len(split_adjusted_positions),
+        "start_price": start_price,
+        "end_price": end_price,
         "missing_market_symbols": missing_market_symbols,
         "fallback_date_sources": fallback_date_sources,
     }
@@ -1406,6 +1428,8 @@ def _portfolio_period_metrics(series_result):
         "actual_end_date": series_result.get("actual_end_date"),
         "start_value": clean_at(market_values, first_index),
         "end_value": clean_at(market_values, last_index),
+        "start_price": series_result.get("start_price"),
+        "end_price": series_result.get("end_price"),
         "price_return_dollar": float(series_result.get("price_gain_dollar") or 0),
         "distribution_dollar": float(series_result.get("distribution_dollar") or 0),
         "total_return_dollar": float(series_result.get("total_gain_dollar") or 0),

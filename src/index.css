@@ -2849,10 +2849,37 @@ th.col-drag-target {
   max-height: 70vh;
   overflow: auto;
 }
+.sticky-table-wrap.tr-total-return-table-wrap table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 1320px;
+}
 .sticky-table-wrap.tr-total-return-table-wrap thead th {
   position: sticky;
   top: 0;
   z-index: 5;
+}
+.sticky-table-wrap.tr-total-return-table-wrap .tr-frozen-ticker {
+  left: 0;
+  position: sticky;
+  z-index: 3;
+  background: var(--surface);
+  box-shadow: 2px 0 0 var(--border), 8px 0 14px rgba(0, 0, 0, 0.18);
+}
+.sticky-table-wrap.tr-total-return-table-wrap thead th.tr-frozen-ticker {
+  z-index: 6;
+  background: var(--border);
+}
+.sticky-table-wrap.tr-total-return-table-wrap tfoot td.tr-frozen-ticker {
+  z-index: 4;
+  background: var(--surface);
+}
+.sticky-table-wrap.tr-total-return-table-wrap tbody tr:hover td.tr-frozen-ticker {
+  background: var(--p-1a2744);
+}
+.split-pane-body .tr-page {
+  min-width: 0;
+  width: 100%;
 }
 .sticky-table-wrap table {
   width: 100%;
@@ -6225,6 +6252,13 @@ th.col-drag-target {
 
 /* ── Watchlist ──────────────────────────────────────────────────────────────── */
 .wl-page { padding: 1.5rem 2rem; display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
+.split-pane-body .wl-page {
+  height: 100%;
+  max-height: 100%;
+  min-width: 0;
+  width: 100%;
+  padding: 1rem 1rem 0.75rem;
+}
 .wl-form-row { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 1rem; flex-wrap: wrap; }
 .wl-label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 2px; }
 .wl-input {
@@ -6307,37 +6341,30 @@ th.col-drag-target {
 .bull-put-watchlist-spread { min-width: 230px; }
 .bull-put-watchlist-warnings { min-width: 300px; white-space: normal !important; }
 
-/* Watchlist freeze pane: keep Ticker through Signal visible while the
-   indicator columns scroll horizontally. */
+/* Watchlist freeze pane: leading columns stay put while the rest scroll.
+   `left` offsets are measured from the header row. Default freeze is Ticker
+   through AUM on a full page, Ticker only in Split View. */
 .watchlist-wrap .sst { min-width: 1790px; }
-.watchlist-wrap .sst th:nth-child(-n + 6),
-.watchlist-wrap .sst td:nth-child(-n + 6) {
+.watchlist-wrap .sst .wl-frozen {
   position: sticky;
   z-index: 2;
   box-sizing: border-box;
+  background: var(--surface);
 }
-.watchlist-wrap .sst thead th:nth-child(-n + 6) {
+.watchlist-wrap .sst thead th.wl-frozen {
   z-index: 6;
   background: var(--surface-sunken);
 }
-.watchlist-wrap .sst th:nth-child(1),
-.watchlist-wrap .sst td:nth-child(1) { left: 0; min-width: 86px; width: 86px; max-width: 86px; }
-.watchlist-wrap .sst th:nth-child(2),
-.watchlist-wrap .sst td:nth-child(2) { left: 86px; min-width: 240px; width: 240px; max-width: 240px; }
-.watchlist-wrap .sst th:nth-child(3),
-.watchlist-wrap .sst td:nth-child(3) { left: 326px; min-width: 94px; width: 94px; max-width: 94px; }
-.watchlist-wrap .sst th:nth-child(4),
-.watchlist-wrap .sst td:nth-child(4) { left: 420px; min-width: 90px; width: 90px; max-width: 90px; }
-.watchlist-wrap .sst th:nth-child(5),
-.watchlist-wrap .sst td:nth-child(5) { left: 510px; min-width: 104px; width: 104px; max-width: 104px; }
-.watchlist-wrap .sst th:nth-child(6),
-.watchlist-wrap .sst td:nth-child(6) {
-  left: 614px;
-  min-width: 96px;
-  width: 96px;
-  max-width: 96px;
+.watchlist-wrap .sst tbody tr:hover td.wl-frozen {
+  background: var(--surface-2);
+}
+.watchlist-wrap .sst .wl-frozen-edge {
   box-shadow: 2px 0 0 var(--border), 8px 0 14px rgba(0, 0, 0, 0.18);
 }
+.watchlist-wrap .sst th:nth-child(1),
+.watchlist-wrap .sst td:nth-child(1) { min-width: 86px; }
+.watchlist-wrap .sst th:nth-child(2),
+.watchlist-wrap .sst td:nth-child(2) { min-width: 240px; max-width: 240px; }
 .watchlist-wrap .watchlist-description {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -12093,6 +12120,7 @@ body:has(.split-page) #root *:has(> .split-page) {
 .split-pane-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.5rem 0.6rem;
   background: var(--bg);
@@ -12115,6 +12143,25 @@ body:has(.split-page) #root *:has(> .split-page) {
 .split-picker:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(100, 181, 246, 0.25);
+}
+.split-account-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 0 1 260px;
+}
+.split-account-label > span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.split-account-picker {
+  flex: 1 1 140px;
+  max-width: 220px;
 }
 
 /* The pane, not the window, is the scroll container: that keeps the pickers and
