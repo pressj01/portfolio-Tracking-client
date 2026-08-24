@@ -6,6 +6,7 @@ import {
   IMPORT_STEPS,
   TXN_FORMATS,
   describeWorkflow,
+  formatForAccountSelection,
   formatForWorkflow,
   formatImportDetail,
   brokerIdFromSource,
@@ -120,6 +121,33 @@ test('broker + role resolve to the single-account formats', () => {
   }), 'schwab_all_accounts')
   assert.equal(formatForWorkflow({ brokerId: 'fidelity', role: 'transactions' }), 'fidelity_transactions')
   assert.equal(formatForWorkflow({ brokerId: 'shear_group', role: 'transactions' }), 'shear_group_activity')
+})
+
+test('switching accounts resets Broker Import to that account broker', () => {
+  assert.equal(formatForAccountSelection({
+    brokerSource: 'schwab',
+    fallbackFormat: 'shear_group_all_accounts',
+  }), 'schwab')
+  assert.equal(formatForAccountSelection({
+    brokerSource: 'shear_group',
+    fallbackFormat: 'schwab_all_accounts',
+  }), 'shear_group')
+  assert.equal(formatForAccountSelection({
+    brokerSource: 'schwab',
+    fallbackFormat: 'shear_group_all_accounts',
+    isRollup: true,
+  }), '')
+})
+
+test('an untagged account never inherits an all-accounts destination', () => {
+  assert.equal(formatForAccountSelection({
+    brokerSource: '',
+    fallbackFormat: 'shear_group_all_accounts',
+  }), 'shear_group')
+  assert.equal(formatForAccountSelection({
+    brokerSource: '',
+    fallbackFormat: 'fidelity_transactions',
+  }), 'fidelity_transactions')
 })
 
 test('transaction formats need a positions snapshot first', () => {

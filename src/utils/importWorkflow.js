@@ -191,6 +191,28 @@ export function formatForWorkflow({ brokerId, role, schwabAllAccounts = false } 
   return NO_FORMAT
 }
 
+export function formatForAccountSelection({
+  brokerSource,
+  fallbackFormat = NO_FORMAT,
+  isRollup = false,
+} = {}) {
+  if (isRollup) return NO_FORMAT
+
+  const brokerId = brokerIdFromSource(brokerSource)
+  if (brokerId) return formatForWorkflow({ brokerId, role: 'positions' })
+
+  if (!isPinnableFormat(fallbackFormat)) return NO_FORMAT
+  const fallbackWorkflow = describeWorkflow(fallbackFormat)
+  if (fallbackWorkflow.schwabAllAccounts && fallbackWorkflow.brokerId) {
+    return formatForWorkflow({
+      brokerId: fallbackWorkflow.brokerId,
+      role: fallbackWorkflow.role,
+      schwabAllAccounts: false,
+    })
+  }
+  return fallbackFormat
+}
+
 export function needsPositionsSnapshotFirst(format) {
   return TRANSACTION_FORMATS.has(String(format || '').trim())
 }

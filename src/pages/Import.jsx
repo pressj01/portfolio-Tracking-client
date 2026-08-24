@@ -11,6 +11,7 @@ import {
   TXN_FORMATS,
   completedWorkflowSteps,
   describeWorkflow,
+  formatForAccountSelection,
   formatForWorkflow,
   formatImportDetail,
   formatLabel,
@@ -695,6 +696,8 @@ export default function Import() {
     () => profiles.find(profile => profile.id === profileId) || null,
     [profiles, profileId],
   )
+  const currentProfileRecordId = currentProfile?.id ?? null
+  const currentProfileBrokerSource = currentProfile?.broker_source || ''
   const txnNeedsPositionsAck = needsPositionsSnapshotFirst(txnFormat) && !hasPositions && !txnIsMultiTransactionFormat
   const txnImportBlocked = txnNeedsPositionsAck && !txnOrderAck
 
@@ -720,17 +723,27 @@ export default function Import() {
   }, [])
 
   useEffect(() => {
-    if (txnFormat || isRollupTarget) return
-    const brokerId = brokerIdFromSource(currentProfile?.broker_source)
-    if (!brokerId) return
+    if (!isRollupTarget && currentProfileRecordId == null) return undefined
     let cancelled = false
+    const nextFormat = formatForAccountSelection({
+      brokerSource: currentProfileBrokerSource,
+      fallbackFormat: defaultTxnFormat,
+      isRollup: isRollupTarget,
+    })
     queueMicrotask(() => {
       if (!cancelled) {
-        applyTxnFormat(formatForWorkflow({ brokerId, role: 'positions' }), 'positions')
+        applyTxnFormat(nextFormat, workflowStepForFormat(nextFormat, 'positions'))
       }
     })
     return () => { cancelled = true }
-  }, [applyTxnFormat, currentProfile, isRollupTarget, txnFormat])
+  }, [
+    applyTxnFormat,
+    currentProfileBrokerSource,
+    currentProfileRecordId,
+    defaultTxnFormat,
+    isRollupTarget,
+    selection,
+  ])
 
   const handleTabChange = (tab) => {
     setActiveTab(tab)
