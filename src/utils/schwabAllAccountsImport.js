@@ -52,11 +52,17 @@ export const defaultSchwabDestSelection = (destinations) => (
 // JSON array of profile ids.
 export const SCHWAB_DEFAULT_DESTINATIONS_KEY = 'schwab_import_default_destinations'
 export const FIDELITY_DEFAULT_DESTINATIONS_KEY = 'fidelity_import_default_destinations'
+export const SHEAR_GROUP_DEFAULT_DESTINATIONS_KEY = 'shear_group_import_default_destinations'
+
+const DEFAULT_DESTINATION_KEYS = {
+  schwab: SCHWAB_DEFAULT_DESTINATIONS_KEY,
+  fidelity: FIDELITY_DEFAULT_DESTINATIONS_KEY,
+  shear_group: SHEAR_GROUP_DEFAULT_DESTINATIONS_KEY,
+}
 
 export const defaultDestinationsKeyForBroker = (brokerSource) => (
-  brokerSource === 'fidelity'
-    ? FIDELITY_DEFAULT_DESTINATIONS_KEY
-    : SCHWAB_DEFAULT_DESTINATIONS_KEY
+  DEFAULT_DESTINATION_KEYS[String(brokerSource || '').trim().toLowerCase()]
+  || SCHWAB_DEFAULT_DESTINATIONS_KEY
 )
 
 export const parseSavedDestinationIds = (raw) => {

@@ -17,8 +17,8 @@ import {
   isPinnableFormat,
 } from './importWorkflow.js'
 
-test('keeps the 17 brokerage import formats', () => {
-  assert.equal(TXN_FORMATS.length, 17)
+test('keeps the 19 brokerage import formats', () => {
+  assert.equal(TXN_FORMATS.length, 19)
   assert.deepEqual(TXN_FORMATS.map((item) => item.value), [
     'schwab',
     'schwab_all_accounts',
@@ -31,7 +31,9 @@ test('keeps the 17 brokerage import formats', () => {
     'robinhood',
     'robinhood_transactions',
     'shear_group',
+    'shear_group_all_accounts',
     'shear_group_activity',
+    'shear_group_all_accounts_activity',
     'portfolio_export',
     'generic_transactions',
     'snowball_holdings',
@@ -40,9 +42,9 @@ test('keeps the 17 brokerage import formats', () => {
   ])
 })
 
-test('Schwab and Fidelity have All-Accounts positions formats', () => {
+test('Schwab, Fidelity, and Shear Group have All-Accounts positions formats', () => {
   const multi = IMPORT_BROKERS.filter((broker) => broker.positionsMultiFormat)
-  assert.deepEqual(multi.map((broker) => broker.id), ['schwab', 'fidelity'])
+  assert.deepEqual(multi.map((broker) => broker.id), ['schwab', 'fidelity', 'shear_group'])
   assert.equal(formatForWorkflow({
     brokerId: 'etrade',
     role: 'positions',
@@ -52,7 +54,7 @@ test('Schwab and Fidelity have All-Accounts positions formats', () => {
     brokerId: 'shear_group',
     role: 'positions',
     schwabAllAccounts: true,
-  }), 'shear_group')
+  }), 'shear_group_all_accounts')
   assert.equal(formatForWorkflow({
     brokerId: 'fidelity',
     role: 'positions',
@@ -85,6 +87,28 @@ test('Fidelity All Accounts follows the same positions workflow', () => {
   })
   assert.equal(isPositionsFormat('fidelity_all_accounts'), true)
   assert.equal(needsPositionsSnapshotFirst('fidelity_all_accounts'), false)
+})
+
+test('Shear Group All Accounts supports positions and activity', () => {
+  assert.deepEqual(describeWorkflow('shear_group_all_accounts'), {
+    brokerId: 'shear_group',
+    role: 'positions',
+    schwabAllAccounts: true,
+    kind: 'positions',
+  })
+  assert.deepEqual(describeWorkflow('shear_group_all_accounts_activity'), {
+    brokerId: 'shear_group',
+    role: 'transactions',
+    schwabAllAccounts: true,
+    kind: 'transactions',
+  })
+  assert.equal(isPositionsFormat('shear_group_all_accounts'), true)
+  assert.equal(needsPositionsSnapshotFirst('shear_group_all_accounts_activity'), true)
+  assert.equal(formatForWorkflow({
+    brokerId: 'shear_group',
+    role: 'transactions',
+    schwabAllAccounts: true,
+  }), 'shear_group_all_accounts_activity')
 })
 
 test('broker + role resolve to the single-account formats', () => {

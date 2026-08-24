@@ -16,6 +16,7 @@ import {
   formatLabel,
   isPinnableFormat,
   isSnowballFormat,
+  brokerById,
   brokerIdFromSource,
   needsPositionsSnapshotFirst,
   workflowStepForFormat,
@@ -52,6 +53,14 @@ const formatMoney = (value, decimals = 2) => (
 const formatShares = (value) => (
   value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(4) : blankValue
 )
+
+const multiAccountSummaryText = (summary = {}) => {
+  if (summary.holdings != null) {
+    const cash = summary.cash > 0 ? ` including ${formatMoney(summary.cash)} cash` : ''
+    return `${summary.holdings || 0} holdings, ${formatMoney(summary.account_value)}${cash}`
+  }
+  return `${summary.transactions || 0} transactions, ${summary.buys || 0} buys, ${summary.sells || 0} sells, ${summary.dividends || 0} dividends`
+}
 
 const BROKER_FORMAT_KEY = 'portfolio_defaultBrokerImportFormat'
 
@@ -238,7 +247,7 @@ function BrokerDestinationPicker({
                         <option key={account.account_key} value={account.account_key}>
                           {account.account_label}
                           {account.summary
-                            ? ` · ${account.summary.holdings} holdings · ${formatMoney(account.summary.account_value)}`
+                            ? ` · ${multiAccountSummaryText(account.summary)}`
                             : ''}
                         </option>
                       ))}
@@ -248,8 +257,7 @@ function BrokerDestinationPicker({
               </div>
               {previewed && checked && matched && (
                 <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginTop: '0.35rem', paddingLeft: '1.6rem' }}>
-                  {summary.holdings} holdings, {formatMoney(summary.account_value)}
-                  {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+                  {multiAccountSummaryText(summary)}
                 </div>
               )}
               {previewed && checked && !matched && (
@@ -268,7 +276,7 @@ function BrokerDestinationPicker({
                   are skipped, so Schwab's account total of {formatMoney(summary.reported_total)} counts them and this does not.
                 </div>
               )}
-              {previewed && checked && matched && (
+              {previewed && checked && matched?.positions?.length > 0 && (
                 <details style={{ marginTop: '0.5rem', paddingLeft: '1.6rem' }}>
                   <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-bright)' }}>
                     Show {summary.holdings} holdings
@@ -297,6 +305,47 @@ function BrokerDestinationPicker({
                             <td style={{ textAlign: 'right' }}>{formatMoney(p.current_value)}</td>
                             <td style={{ textAlign: 'right', color: (p.gain_or_loss || 0) >= 0 ? 'var(--p-4caf50)' : 'var(--p-f44336)' }}>
                               {formatMoney(p.gain_or_loss || 0)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
+              {previewed && checked && matched?.transactions?.length > 0 && (
+                <details style={{ marginTop: '0.5rem', paddingLeft: '1.6rem' }}>
+                  <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--accent-bright)' }}>
+                    Show {summary.transactions || matched.transactions.length} transactions
+                  </summary>
+                  <div style={{ maxHeight: '320px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px', marginTop: '0.5rem' }}>
+                    <table className="data-table" style={{ fontSize: '0.8rem' }}>
+                      <thead>
+                        <tr>
+                          <th>Type</th>
+                          <th>Date</th>
+                          <th>Ticker</th>
+                          <th style={{ textAlign: 'right' }}>Shares</th>
+                          <th style={{ textAlign: 'right' }}>Amount</th>
+                          <th>Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {matched.transactions.slice(0, 100).map((transaction, i) => (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600 }}>{transaction.type}</td>
+                            <td>{transaction.date}</td>
+                            <td style={{ fontWeight: 600 }}>{transaction.ticker}</td>
+                            <td style={{ textAlign: 'right' }}>{formatShares(transaction.shares)}</td>
+                            <td style={{ textAlign: 'right' }}>
+                              {transaction.dividend_amount != null
+                                ? formatMoney(transaction.dividend_amount)
+                                : transaction.shares != null && transaction.price_per_share != null
+                                  ? formatMoney(transaction.shares * transaction.price_per_share)
+                                  : blankValue}
+                            </td>
+                            <td style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {(transaction.notes || '').substring(0, 70)}
                             </td>
                           </tr>
                         ))}
@@ -535,9 +584,13 @@ export default function Import() {
   const isOwnerRollup = !isAggregate && profileId === 1 && ownerSourceCount > 1
   const isRollupTarget = isAggregate || isOwnerRollup
 
-  const txnIsMultiAccount = txnPreview?.format_type === 'positions_multi'
-  const multiAccountBrokerSource = txnFormat === 'fidelity_all_accounts' ? 'fidelity' : 'schwab'
-  const multiAccountBrokerLabel = multiAccountBrokerSource === 'fidelity' ? 'Fidelity' : 'Charles Schwab'
+  const workflow = useMemo(() => describeWorkflow(txnFormat), [txnFormat])
+  const txnIsMultiTransactionFormat = MULTI_ACCOUNT_FORMATS.has(txnFormat) && workflow.role === 'transactions'
+  const txnIsMultiPositions = txnPreview?.format_type === 'positions_multi'
+  const txnIsMultiTransactions = txnPreview?.format_type === 'transactions_multi'
+  const txnIsMultiAccount = txnIsMultiPositions || txnIsMultiTransactions
+  const multiAccountBrokerSource = workflow.brokerId || 'schwab'
+  const multiAccountBrokerLabel = brokerById(multiAccountBrokerSource)?.label || 'Broker'
   const savedDestIds = savedDestIdsByBroker[multiAccountBrokerSource] ?? null
   const brokerDestinations = useMemo(
     () => brokerImportDestinations(
@@ -566,6 +619,7 @@ export default function Import() {
         setSavedDestIdsByBroker({
           schwab: parseSavedDestinationIds(all?.[defaultDestinationsKeyForBroker('schwab')]),
           fidelity: parseSavedDestinationIds(all?.[defaultDestinationsKeyForBroker('fidelity')]),
+          shear_group: parseSavedDestinationIds(all?.[defaultDestinationsKeyForBroker('shear_group')]),
         })
       })
       .catch(() => {})
@@ -626,7 +680,7 @@ export default function Import() {
   }
 
   const txnHasRows = txnPreview
-    ? (txnPreview.format_type === 'positions_multi'
+    ? (txnIsMultiAccount
         ? txnMappedAccounts.length > 0
         : txnPreview.format_type === 'combined_export'
         ? ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0)
@@ -641,8 +695,7 @@ export default function Import() {
     () => profiles.find(profile => profile.id === profileId) || null,
     [profiles, profileId],
   )
-  const workflow = useMemo(() => describeWorkflow(txnFormat), [txnFormat])
-  const txnNeedsPositionsAck = needsPositionsSnapshotFirst(txnFormat) && !hasPositions
+  const txnNeedsPositionsAck = needsPositionsSnapshotFirst(txnFormat) && !hasPositions && !txnIsMultiTransactionFormat
   const txnImportBlocked = txnNeedsPositionsAck && !txnOrderAck
 
   const resetState = () => {
@@ -701,7 +754,7 @@ export default function Import() {
       applyTxnFormat(formatForWorkflow({
         brokerId: workflow.brokerId,
         role: step,
-        schwabAllAccounts: step === 'positions' && workflow.schwabAllAccounts,
+        schwabAllAccounts: workflow.schwabAllAccounts,
       }), step)
       return
     }
@@ -716,16 +769,17 @@ export default function Import() {
     applyTxnFormat(formatForWorkflow({
       brokerId,
       role,
-      schwabAllAccounts: role === 'positions' && (isRollupTarget || workflow.schwabAllAccounts),
+      schwabAllAccounts: isRollupTarget || workflow.schwabAllAccounts,
     }), role)
   }
 
   const selectBrokerScope = (allAccounts) => {
+    const role = workflowStep === 'transactions' ? 'transactions' : 'positions'
     applyTxnFormat(formatForWorkflow({
       brokerId: workflow.brokerId,
-      role: 'positions',
+      role,
       schwabAllAccounts: allAccounts,
-    }), 'positions')
+    }), role)
   }
 
   const selectAllAccounts = (brokerId) => {
@@ -1011,10 +1065,10 @@ export default function Import() {
             : `Cannot import into ${currentProfileName}, which is a rollup of ${ownerSourceCount} accounts. Please select one of those accounts from the navbar dropdown.`}
         </div>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '0.75rem' }}>
-          Positions, transactions, and Snowball files describe one brokerage account, so they
+          Most positions, transactions, and Snowball files describe one brokerage account, so they
           import into the single selected account. Schwab and Fidelity All Accounts Positions
-          exports can update several matching broker portfolios because you map accounts after
-          preview. Transactions still import one account at a time.
+          exports can update several matching broker portfolios. Shear Group All Accounts supports
+          both its combined Positions and Activity files. You map each file account after preview.
         </p>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
           <button className="btn btn-primary" onClick={() => selectAllAccounts('schwab')}>
@@ -1022,6 +1076,9 @@ export default function Import() {
           </button>
           <button className="btn btn-primary" onClick={() => selectAllAccounts('fidelity')}>
             Import Fidelity (All Accounts Positions)
+          </button>
+          <button className="btn btn-primary" onClick={() => selectAllAccounts('shear_group')}>
+            Import Shear Group (All Accounts)
           </button>
         </div>
       </div>
@@ -1341,6 +1398,7 @@ export default function Import() {
               hasPositions={hasPositions}
               currentProfileName={currentProfileName}
               isRollupTarget={isRollupTarget}
+              skipTransactionOrderWarning={txnIsMultiTransactionFormat}
               txnOrderAck={txnOrderAck}
               onTxnOrderAckChange={setTxnOrderAck}
               onSelectStep={selectWorkflowStep}
@@ -1409,14 +1467,18 @@ export default function Import() {
                     ? <>Import transaction history from a Robinhood <strong>Transactions CSV or XLSX</strong> export. This imports buys, sells, cash/manufactured dividends, capital gains, and ACAT share transfers.</>
                   : txnFormat === 'shear_group'
                     ? <>Import current positions from a Shear Group <strong>Positions CSV or Excel</strong> export. This sets holdings, cost basis, current prices, and unrealized gain/loss directly.</>
+                  : txnFormat === 'shear_group_all_accounts'
+                    ? <>Import every Shear Group account from one combined <strong>Positions CSV or Excel</strong> export. Preview maps each account number to its Shear Group portfolio, including the James Presser account.</>
                   : txnFormat === 'shear_group_activity'
                     ? <>Import activity history from a Shear Group <strong>Activity CSV or Excel</strong> export. This imports buys, sells, cash dividends, capital gains, and dividend reinvestments.</>
+                  : txnFormat === 'shear_group_all_accounts_activity'
+                    ? <>Import every Shear Group account from one combined <strong>Activity CSV or Excel</strong> export. Preview uses the same account mapping as the All Accounts Positions import.</>
                  : <>Import BUY/SELL transactions and dividend payments from your broker or tracking app.
                  Each file should be a <strong>single account</strong> export — combined/merged exports will be rejected.</>
             }
           </p>
 
-          {['generic_transactions', 'snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity'].includes(txnFormat) && (
+          {['generic_transactions', 'snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity', 'shear_group_all_accounts_activity'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -1664,7 +1726,7 @@ export default function Import() {
                   if (!res.ok) throw new Error(data.error || 'Preview failed')
                   setTxnPreview(data)
                   if (data.as_of) setNavSnapshotDate(data.as_of)
-                  if (data.format_type === 'positions_multi') {
+                  if (data.format_type === 'positions_multi' || data.format_type === 'transactions_multi') {
                     const destSelected = mergeBrokerDestSelection(
                       txnDestSelected,
                       data.profile_choices || [],
@@ -1699,7 +1761,7 @@ export default function Import() {
                   formData.append('file', txnFile)
                   formData.append('format', txnFormat)
                   formData.append('nav_date', navSnapshotDate)
-                  if (txnNavOnly && (txnPreview?.format_type === 'positions' || txnIsMultiAccount)) formData.append('nav_only', 'true')
+                  if (txnNavOnly && (txnPreview?.format_type === 'positions' || txnIsMultiPositions)) formData.append('nav_only', 'true')
                   if (txnIsMultiAccount) formData.append('account_map', JSON.stringify(txnAccountMap))
                   try {
                     await waitForRefreshBeforeImport()
@@ -1864,32 +1926,47 @@ export default function Import() {
             </div>
           )}
 
-          {/* -- Multi-account positions preview (Schwab All Accounts) -- */}
+          {/* -- Multi-account positions/activity preview -- */}
           {txnIsMultiAccount && (
             <div style={{ marginTop: '1rem' }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
-                <input
-                  type="checkbox"
-                  checked={txnNavOnly}
-                  onChange={(e) => setTxnNavOnly(e.target.checked)}
-                />
-                <strong>Record NAV only</strong>
-                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
-                  (adds a chart snapshot to every mapped portfolio without changing holdings)
-                </span>
-              </label>
+              {txnIsMultiPositions && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={txnNavOnly}
+                    onChange={(e) => setTxnNavOnly(e.target.checked)}
+                  />
+                  <strong>Record NAV only</strong>
+                  <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', marginLeft: '0.5rem' }}>
+                    (adds a chart snapshot to every mapped portfolio without changing holdings)
+                  </span>
+                </label>
+              )}
 
               <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
                 <strong>{txnPreview.summary.accounts}</strong> account{txnPreview.summary.accounts === 1 ? '' : 's'} found
                 {txnPreview.as_of && <> as of <strong>{txnPreview.as_of}</strong></>}:{' '}
-                <strong>{txnPreview.summary.holdings}</strong> holdings,{' '}
-                total <strong>{formatMoney(txnPreview.summary.account_value)}</strong>
-                {txnPreview.summary.cash > 0 && (
-                  <> including <strong>{formatMoney(txnPreview.summary.cash)}</strong> cash</>
-                )}.
-                {txnPreview.summary.options > 0 && (
-                  <> {txnPreview.summary.options} option position{txnPreview.summary.options === 1 ? '' : 's'}{' '}
-                    ({formatMoney(txnPreview.summary.options_value)}) are not imported as holdings.</>
+                {txnIsMultiPositions ? (
+                  <>
+                    <strong>{txnPreview.summary.holdings}</strong> holdings, total{' '}
+                    <strong>{formatMoney(txnPreview.summary.account_value)}</strong>
+                    {txnPreview.summary.cash > 0 && (
+                      <> including <strong>{formatMoney(txnPreview.summary.cash)}</strong> cash</>
+                    )}.
+                    {txnPreview.summary.options > 0 && (
+                      <> {txnPreview.summary.options} option position{txnPreview.summary.options === 1 ? '' : 's'}{' '}
+                        ({formatMoney(txnPreview.summary.options_value)}) are not imported as holdings.</>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <strong>{txnPreview.summary.transactions}</strong> transactions —{' '}
+                    <strong>{txnPreview.summary.buys}</strong> buys,{' '}
+                    <strong>{txnPreview.summary.sells}</strong> sells, and{' '}
+                    <strong>{txnPreview.summary.dividends}</strong> dividends.
+                    {txnPreview.summary.filtered > 0 && <> {txnPreview.summary.filtered} rows filtered out.</>}
+                    {txnPreview.summary.drip_detected > 0 && <> {txnPreview.summary.drip_detected} DRIP reinvestments detected.</>}
+                  </>
                 )}
               </div>
 
@@ -1930,8 +2007,7 @@ export default function Import() {
                           <div style={{ flex: '1 1 260px', minWidth: 0 }}>
                             <div style={{ fontWeight: 600 }}>{account.account_label}</div>
                             <div style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
-                              {summary.holdings} holdings, {formatMoney(summary.account_value)}
-                              {summary.cash > 0 && <> including {formatMoney(summary.cash)} cash</>}
+                              {multiAccountSummaryText(summary)}
                             </div>
                           </div>
                           <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1954,9 +2030,9 @@ export default function Import() {
                             No portfolio matched this account by name - choose one above, or create a new portfolio for it.
                           </div>
                         )}
-                        {account.match_reason === 'no_holdings' && (
+                        {(account.match_reason === 'no_holdings' || account.match_reason === 'no_transactions') && (
                           <div style={{ color: 'var(--p-ffb74d)', fontSize: '0.8rem', marginTop: '0.4rem' }}>
-                            This account has no holdings, so it was not mapped automatically.
+                            This account has no importable {txnIsMultiPositions ? 'holdings' : 'transactions'}, so it was not mapped automatically.
                           </div>
                         )}
                       </div>
@@ -2044,7 +2120,7 @@ export default function Import() {
           )}
 
           {/* ── Transactions preview (Snowball) ── */}
-          {txnPreview && txnPreview.transactions && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'positions_multi' && txnPreview.format_type !== 'combined_export' && txnPreview.format_type !== 'categories' && (
+          {txnPreview && txnPreview.transactions && txnPreview.format_type !== 'positions' && txnPreview.format_type !== 'positions_multi' && txnPreview.format_type !== 'transactions_multi' && txnPreview.format_type !== 'combined_export' && txnPreview.format_type !== 'categories' && (
             <div style={{ marginTop: '1rem' }}>
               {txnPreview.preserve_positions && txnPreview.preserve_positions_message && (
                 <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>

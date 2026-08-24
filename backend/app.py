@@ -4415,6 +4415,8 @@ _SNOWBALL_LAYERED_BROKER_SOURCES = {"schwab", "etrade", "fidelity", "shear_group
 _MULTI_ACCOUNT_IMPORT_FORMATS = {
     "schwab_all_accounts",
     "fidelity_all_accounts",
+    "shear_group_all_accounts",
+    "shear_group_all_accounts_activity",
 }
 
 
@@ -4437,7 +4439,7 @@ def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     fmt = (fmt or "").strip().lower()
     if fmt in {
         "schwab", "schwab_all_accounts", "etrade", "fidelity", "fidelity_all_accounts",
-        "snowball_holdings", "robinhood", "shear_group",
+        "snowball_holdings", "robinhood", "shear_group", "shear_group_all_accounts",
     }:
         return False
 
@@ -4479,6 +4481,8 @@ def _shear_group_account_aliases(account_name, account_number=None):
     account_number = re.sub(r"\D+", "", str(account_number or ""))
     if account_number:
         aliases.add(account_number)
+        if len(account_number) > 4:
+            aliases.add(account_number[-4:])
     return {alias for alias in aliases if alias}
 
 
@@ -4496,12 +4500,13 @@ def _shear_group_account_matches_profile(profile_name, account_name, account_num
     return False
 
 
-# -- Broker All-Accounts positions imports -----------------------------------
-# Schwab and Fidelity can each export one positions file carrying several
-# accounts. Each account is routed to its own portfolio, and confirmed routing
-# is remembered so the next export lands without picking again.
+# -- Broker All-Accounts imports ---------------------------------------------
+# Schwab and Fidelity export combined positions; Shear Group exports combined
+# positions and activity. Each account is routed to its own portfolio, and the
+# confirmed routing is remembered for the next file.
 _SCHWAB_ACCOUNT_MAP_SETTING = "schwab_account_profile_map"
 _FIDELITY_ACCOUNT_MAP_SETTING = "fidelity_account_profile_map"
+_SHEAR_GROUP_ACCOUNT_MAP_SETTING = "shear_group_account_profile_map"
 
 _MULTI_ACCOUNT_BROKER_CONFIG = {
     "schwab": {
@@ -4514,6 +4519,11 @@ _MULTI_ACCOUNT_BROKER_CONFIG = {
         "fallback_account_name": "Fidelity Account",
         "map_setting": _FIDELITY_ACCOUNT_MAP_SETTING,
     },
+    "shear_group": {
+        "label": "Shear Group",
+        "fallback_account_name": "Shear Group Account",
+        "map_setting": _SHEAR_GROUP_ACCOUNT_MAP_SETTING,
+    },
 }
 
 # Below this, a name overlap is too thin to route an account on its own.
@@ -4523,6 +4533,8 @@ _MULTI_ACCOUNT_MATCH_MIN_SCORE = 0.3
 def _multi_account_key(account, broker_source):
     """Stable key for one account, preferring the broker's account number."""
     number = re.sub(r"\W+", "", str(account.get("account_number") or ""))
+    if broker_source == "shear_group" and number:
+        number = number[-4:]
     # Redacted Fidelity samples often replace every number with only x's. That
     # placeholder cannot distinguish accounts, so fall back to the account name.
     if number and not (
@@ -4598,8 +4610,15 @@ def _multi_account_import_target_profiles(conn, broker_source):
     return candidates
 
 
-def _multi_account_match_score(account, profile_name):
+def _multi_account_match_score(account, profile_name, broker_source=None):
     """Score how well one file account block matches a portfolio name."""
+    if broker_source == "shear_group" and _shear_group_account_matches_profile(
+        profile_name,
+        account.get("account_name") or account.get("account_label"),
+        account.get("account_number"),
+    ):
+        return 1.0
+
     account_tokens = {
         tok for tok in _normalize_account_tokens(account.get("account_name"))
         if tok not in _ACCOUNT_MATCH_IGNORED_TOKENS
@@ -4652,7 +4671,7 @@ def _suggest_multi_account_profiles(accounts, conn, broker_source):
         if key in suggestions:
             continue
         for candidate in candidates:
-            score = _multi_account_match_score(account, candidate["name"])
+            score = _multi_account_match_score(account, candidate["name"], broker_source)
             if score >= _MULTI_ACCOUNT_MATCH_MIN_SCORE:
                 scored.append((score, key, candidate["id"]))
 
@@ -4719,12 +4738,12 @@ def _create_multi_account_import_profile(conn, name, broker_source):
     return cur.lastrowid
 
 
-def _annotate_multi_account_positions(parsed):
-    """Attach the suggested portfolio and the pickable portfolios to a preview."""
+def _annotate_multi_account_import(parsed):
+    """Attach suggested portfolios and pickable destinations to a preview."""
     accounts = parsed.get("accounts") or []
     broker_source = _broker_source_for_import(parsed.get("source_format"))
     if broker_source not in _MULTI_ACCOUNT_BROKER_CONFIG:
-        raise ValueError("This multi-account positions format is not supported.")
+        raise ValueError("This multi-account import format is not supported.")
     conn = get_connection()
     try:
         suggestions, candidates = _suggest_multi_account_profiles(
@@ -4738,10 +4757,17 @@ def _annotate_multi_account_positions(parsed):
         key = _multi_account_key(account, broker_source)
         suggestion = suggestions.get(key) or {}
         pid = suggestion.get("profile_id")
-        # A block with no holdings (a bank or cash-only account) would clear
-        # whatever portfolio it landed on, so it is never routed by a guess.
-        if not account.get("positions"):
-            suggestion = {"reason": "no_holdings"}
+        content_field = (
+            "transactions"
+            if parsed.get("format_type") == "transactions_multi"
+            else "positions"
+        )
+        # An empty account block should never be routed by a guess. A positions
+        # block could clear holdings; an activity block would simply do nothing.
+        if not account.get(content_field):
+            suggestion = {
+                "reason": "no_transactions" if content_field == "transactions" else "no_holdings"
+            }
             pid = None
         account["account_key"] = key
         account["suggested_profile_id"] = pid
@@ -4940,6 +4966,168 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
     verb = "Recorded NAV for" if nav_only else "Imported"
     message = (
         f"{verb} {imported} of {len(accounts)} account"
+        f"{'' if len(accounts) == 1 else 's'}."
+    )
+    if created:
+        message += f" Created portfolio{'' if len(created) == 1 else 's'}: {', '.join(created)}."
+    if failures:
+        message += f" {len(failures)} failed: {', '.join(failures)}."
+    if skipped:
+        message += f" Skipped: {', '.join(skipped)}."
+
+    return jsonify({
+        "message": message,
+        "details": details,
+        "imported_accounts": imported,
+        "failed_accounts": failures,
+        "skipped_accounts": skipped,
+        "created_profiles": created,
+    })
+
+
+def _import_transactions_multi(parsed, nav_date=None, account_map=None):
+    """Import one multi-account activity export into independently mapped portfolios."""
+    accounts = parsed.get("accounts") or []
+    if not accounts:
+        return jsonify({"error": "No account activity was found in the file."}), 400
+
+    broker_source = _broker_source_for_import(parsed.get("source_format"))
+    config = _MULTI_ACCOUNT_BROKER_CONFIG.get(broker_source)
+    if not config:
+        return jsonify({"error": "This multi-account activity format is not supported."}), 400
+
+    conn = get_connection()
+    try:
+        suggestions, candidates = _suggest_multi_account_profiles(
+            accounts, conn, broker_source
+        )
+    finally:
+        conn.close()
+
+    valid_ids = {candidate["id"] for candidate in candidates}
+    profile_names = {candidate["id"]: candidate["name"] for candidate in candidates}
+    requested = account_map if account_map is not None else {}
+    targets = []
+    skipped = []
+    created = []
+    claimed = {}
+
+    for account in accounts:
+        key = _multi_account_key(account, broker_source)
+        label = account.get("account_label") or key
+        raw = (
+            requested.get(key)
+            if key in requested
+            else (suggestions.get(key) or {}).get("profile_id")
+        )
+        if raw in (None, "", "skip"):
+            skipped.append(label)
+            continue
+
+        if raw == "new":
+            conn = get_connection()
+            try:
+                taken = [row["name"] for row in conn.execute("SELECT name FROM profiles").fetchall()]
+                taken.extend(profile_names.values())
+                new_name = _multi_account_new_profile_name(account, taken, broker_source)
+                pid = _create_multi_account_import_profile(conn, new_name, broker_source)
+            finally:
+                conn.close()
+            valid_ids.add(pid)
+            profile_names[pid] = new_name
+            created.append(new_name)
+            claimed[pid] = label
+            targets.append((account, pid, label))
+            continue
+
+        try:
+            pid = int(raw)
+        except (TypeError, ValueError):
+            return jsonify({
+                "error": f"'{label}' has an invalid portfolio selection."
+            }), 400
+
+        if pid not in valid_ids:
+            return jsonify({
+                "error": (
+                    f"'{label}' is pointed at a portfolio that cannot accept a {config['label']} "
+                    f"activity import. Choose a portfolio whose Broker Source is {config['label']}."
+                )
+            }), 400
+        if pid in claimed:
+            return jsonify({
+                "error": (
+                    f"'{label}' and '{claimed[pid]}' are both pointed at "
+                    f"'{profile_names.get(pid, 'the same portfolio')}'. Each account needs its "
+                    "own portfolio."
+                )
+            }), 400
+
+        claimed[pid] = label
+        targets.append((account, pid, label))
+
+    if not targets:
+        return jsonify({
+            "error": "No accounts were assigned to a portfolio, so nothing was imported."
+        }), 400
+
+    details = []
+    failures = []
+    confirmed = {}
+    source_format = parsed.get("source_format") or "shear_group_all_accounts_activity"
+    for account, pid, label in targets:
+        single = {
+            "transactions": account.get("transactions") or [],
+            "summary": dict(account.get("summary") or {}),
+            "source_format": source_format,
+        }
+        profile_name = profile_names.get(pid, f"Portfolio {pid}")
+        try:
+            result = api_import_transactions(
+                _parsed=single,
+                _profile_id=pid,
+                _fmt=source_format,
+                _nav_date=nav_date,
+            )
+            payload, status = _flask_result_parts(result)
+        except ValueError as exc:
+            payload, status = {"error": str(exc)}, 400
+        except Exception as exc:  # noqa: BLE001 - one account must not sink the rest
+            payload, status = {"error": str(exc)}, 500
+
+        ok = status < 400
+        if ok:
+            confirmed[_multi_account_key(account, broker_source)] = pid
+        else:
+            failures.append(label)
+        details.append({
+            "account_label": label,
+            "profile_id": pid,
+            "profile_name": profile_name,
+            "ok": ok,
+            "message": payload.get("message") or payload.get("error") or "",
+            "inserted_buys": payload.get("inserted_buys", 0),
+            "inserted_sells": payload.get("inserted_sells", 0),
+            "dividends_applied": payload.get("dividends_applied", 0),
+            "duplicates_skipped": payload.get("duplicates_skipped", 0),
+        })
+
+    conn = get_connection()
+    try:
+        _save_multi_account_map(conn, broker_source, confirmed)
+        conn.commit()
+    finally:
+        conn.close()
+
+    imported = len(targets) - len(failures)
+    if imported == 0:
+        return jsonify({
+            "error": f"No accounts imported. {details[0]['message']}",
+            "details": details,
+        }), 400
+
+    message = (
+        f"Imported activity for {imported} of {len(accounts)} account"
         f"{'' if len(accounts) == 1 else 's'}."
     )
     if created:
@@ -7868,8 +8056,8 @@ def api_import_transactions_preview():
     try:
         result = TXN_PARSERS[fmt](path, f.filename)
         result = _filter_shear_group_result_for_profile(result, profile_id)
-        if result.get("format_type") == "positions_multi":
-            return jsonify(_annotate_multi_account_positions(result))
+        if result.get("format_type") in {"positions_multi", "transactions_multi"}:
+            return jsonify(_annotate_multi_account_import(result))
         if result.get("format_type") == "categories":
             result["target_profile_name"] = _get_profile_name(profile_id)
         elif result.get("format_type") == "combined_export":
@@ -8302,56 +8490,67 @@ def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
 
 
 @app.route("/api/import/transactions", methods=["POST"])
-def api_import_transactions():
+def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date=None):
     """Import transaction history from a CSV into the transactions + dividend_payments tables."""
-    profile_id = get_profile_id()
-    nav_date = _request_nav_date()
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-    f = request.files["file"]
-    fmt = request.form.get("format", "snowball")
-    if fmt not in TXN_PARSERS:
-        return jsonify({"error": f"Unknown format: {fmt}"}), 400
-    conn = get_connection()
-    profile_broker_source = ""
-    try:
-        profile_broker_source = _profile_broker_source(profile_id, conn)
-        blocked_msg = None
-        if fmt == "portfolio_export" and _request_aggregate_id() is not None:
-            blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
-        elif fmt in _MULTI_ACCOUNT_IMPORT_FORMATS:
-            # Every account block names its own portfolio, so the portfolio the
-            # user happens to be viewing is not the import target.
-            blocked_msg = None
-        elif fmt != "portfolio_export":
-            blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
-    finally:
-        conn.close()
-    if blocked_msg:
-        return jsonify({"error": blocked_msg}), 400
-
-    # Create a backup before any import so the user can roll back. Portfolio
-    # export imports touch multiple profiles, so leave those backups untagged.
-    backup_path = _create_import_backup(
-        None if fmt == "portfolio_export" or fmt in _MULTI_ACCOUNT_IMPORT_FORMATS else profile_id
-    )
-
-    import uuid
-    path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
-    f.save(path)
-    try:
-        parsed = TXN_PARSERS[fmt](path, f.filename)
-        parsed = _filter_shear_group_result_for_profile(parsed, profile_id)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        return jsonify({"error": f"Failed to parse file: {e}"}), 400
-    finally:
+    if _parsed is not None:
+        profile_id = int(_profile_id)
+        nav_date = _nav_date
+        fmt = str(_fmt or _parsed.get("source_format") or "snowball")
+        parsed = _parsed
+        conn = get_connection()
         try:
-            if fmt != "portfolio_export" and os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            pass
+            profile_broker_source = _profile_broker_source(profile_id, conn)
+        finally:
+            conn.close()
+    else:
+        profile_id = get_profile_id()
+        nav_date = _request_nav_date()
+        if "file" not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+        f = request.files["file"]
+        fmt = request.form.get("format", "snowball")
+        if fmt not in TXN_PARSERS:
+            return jsonify({"error": f"Unknown format: {fmt}"}), 400
+        conn = get_connection()
+        profile_broker_source = ""
+        try:
+            profile_broker_source = _profile_broker_source(profile_id, conn)
+            blocked_msg = None
+            if fmt == "portfolio_export" and _request_aggregate_id() is not None:
+                blocked_msg = "Portfolio export imports cannot be run from an Aggregate view. Select a specific portfolio first."
+            elif fmt in _MULTI_ACCOUNT_IMPORT_FORMATS:
+                # Every account block names its own portfolio, so the portfolio the
+                # user happens to be viewing is not the import target.
+                blocked_msg = None
+            elif fmt != "portfolio_export":
+                blocked_msg = _broker_import_target_error(profile_id, fmt, conn)
+        finally:
+            conn.close()
+        if blocked_msg:
+            return jsonify({"error": blocked_msg}), 400
+
+        # Create a backup before any import so the user can roll back. Portfolio
+        # export imports touch multiple profiles, so leave those backups untagged.
+        _create_import_backup(
+            None if fmt == "portfolio_export" or fmt in _MULTI_ACCOUNT_IMPORT_FORMATS else profile_id
+        )
+
+        import uuid
+        path = os.path.join(UPLOAD_FOLDER, f"txn_{uuid.uuid4().hex}_{f.filename}")
+        f.save(path)
+        try:
+            parsed = TXN_PARSERS[fmt](path, f.filename)
+            parsed = _filter_shear_group_result_for_profile(parsed, profile_id)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        except Exception as e:
+            return jsonify({"error": f"Failed to parse file: {e}"}), 400
+        finally:
+            try:
+                if fmt != "portfolio_export" and os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
 
     from datetime import date as _date, datetime as _dt
 
@@ -8364,6 +8563,17 @@ def api_import_transactions():
                     os.remove(path)
             except OSError:
                 pass
+
+    if parsed.get("format_type") == "transactions_multi":
+        try:
+            account_map = _requested_multi_account_map()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return _import_transactions_multi(
+            parsed,
+            nav_date=nav_date,
+            account_map=account_map,
+        )
 
     if parsed.get("account_name"):
         profile_name = _get_profile_name(profile_id)

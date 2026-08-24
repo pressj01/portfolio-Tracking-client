@@ -47,6 +47,7 @@ export default function ImportWorkflowPicker({
   hasPositions,
   currentProfileName,
   isRollupTarget,
+  skipTransactionOrderWarning = false,
   txnOrderAck,
   onTxnOrderAckChange,
   onSelectStep,
@@ -58,6 +59,9 @@ export default function ImportWorkflowPicker({
   refreshMessage,
 }) {
   const broker = IMPORT_BROKERS.find((item) => item.id === workflow.brokerId)
+  const brokerMultiFormat = step === 'transactions'
+    ? broker?.transactionsMultiFormat
+    : broker?.positionsMultiFormat
 
   return (
     <div style={{ marginBottom: '1rem' }}>
@@ -85,25 +89,32 @@ export default function ImportWorkflowPicker({
         <>
           <p className="import-workflow-label">Broker</p>
           <div className="import-broker-row">
-            {IMPORT_BROKERS.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className={`btn ${workflow.brokerId === item.id ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => onSelectBroker(item.id)}
-                disabled={isRollupTarget && !item.positionsMultiFormat}
-                aria-pressed={workflow.brokerId === item.id}
-              >
-                {item.label}
-              </button>
-            ))}
+            {IMPORT_BROKERS.map((item) => {
+              const itemMultiFormat = step === 'transactions'
+                ? item.transactionsMultiFormat
+                : item.positionsMultiFormat
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`btn ${workflow.brokerId === item.id ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => onSelectBroker(item.id)}
+                  disabled={isRollupTarget && !itemMultiFormat}
+                  aria-pressed={workflow.brokerId === item.id}
+                >
+                  {item.label}
+                </button>
+              )
+            })}
           </div>
         </>
       )}
 
-      {step === 'positions' && broker?.positionsMultiFormat && (
+      {(step === 'positions' || step === 'transactions') && brokerMultiFormat && (
         <>
-          <p className="import-workflow-label">Positions file</p>
+          <p className="import-workflow-label">
+            {step === 'positions' ? 'Positions file' : 'Activity file'}
+          </p>
           <div className="import-scope-row">
             <button
               type="button"
@@ -125,8 +136,12 @@ export default function ImportWorkflowPicker({
           </div>
           <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', margin: '-0.35rem 0 0.85rem' }}>
             {workflow.schwabAllAccounts
-              ? `Optional shortcut: one ${broker.label} All Accounts Positions export can update several ${broker.label} portfolios. You map accounts after preview. Transactions still import one account at a time.`
-              : `Import the current Positions export for ${currentProfileName}. This sets shares and cost basis. Choose All Accounts when one ${broker.label} file should update several portfolios.`}
+              ? step === 'positions'
+                ? `Optional shortcut: one ${broker.label} All Accounts Positions export can update several ${broker.label} portfolios. You map accounts after preview.${broker.transactionsMultiFormat ? ' The matching All Accounts Activity file can follow in Step 2.' : ' Transactions still import one account at a time.'}`
+                : `One ${broker.label} All Accounts Activity export can update several ${broker.label} portfolios. You map the file accounts after preview.`
+              : step === 'positions'
+                ? `Import the current Positions export for ${currentProfileName}. This sets shares and cost basis. Choose All Accounts when one ${broker.label} file should update several portfolios.`
+                : `Import the Activity export for ${currentProfileName}. Choose All Accounts when one ${broker.label} file contains activity for several portfolios.`}
           </p>
         </>
       )}
@@ -138,7 +153,7 @@ export default function ImportWorkflowPicker({
         </p>
       )}
 
-      {step === 'transactions' && (
+      {step === 'transactions' && !brokerMultiFormat && (
         <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', margin: '0 0 0.85rem' }}>
           Transaction files record dividends, DRIP, buys, and sells for{' '}
           <strong>{currentProfileName}</strong>. They are not a second snapshot of what you own.
@@ -149,8 +164,9 @@ export default function ImportWorkflowPicker({
       {step === 'refresh' && (
         <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
           <p style={{ margin: '0 0 0.75rem' }}>
-            After positions (and any transaction history) are in, refresh market prices and dividend fields.
-            Do this last so a refresh and an import are not writing the same holdings at once.
+            This step is optional. After positions (and any transaction history) are in, use it to
+            refresh market prices and dividend fields. Do it last so a refresh and an import are not
+            writing the same holdings at once.
           </p>
           <button
             type="button"
@@ -168,13 +184,15 @@ export default function ImportWorkflowPicker({
         </div>
       )}
 
-      <TransactionOrderWarning
-        format={format}
-        hasPositions={hasPositions}
-        currentProfileName={currentProfileName}
-        txnOrderAck={txnOrderAck}
-        onTxnOrderAckChange={onTxnOrderAckChange}
-      />
+      {!skipTransactionOrderWarning && (
+        <TransactionOrderWarning
+          format={format}
+          hasPositions={hasPositions}
+          currentProfileName={currentProfileName}
+          txnOrderAck={txnOrderAck}
+          onTxnOrderAckChange={onTxnOrderAckChange}
+        />
+      )}
 
       {APP_EXPORT && step !== 'refresh' && (
         <details style={{ marginBottom: '0.5rem' }} open={format === 'portfolio_export'}>

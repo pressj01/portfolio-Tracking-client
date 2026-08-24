@@ -6,6 +6,7 @@ import {
   assignFileAccountToProfile,
   brokerImportDestinations,
   defaultBrokerDestSelection,
+  defaultDestinationsKeyForBroker,
   defaultSchwabDestSelection,
   fileAccountForProfile,
   leftoverFileAccounts,
@@ -41,6 +42,12 @@ test('lists Fidelity portfolios for a Fidelity All Accounts import', () => {
   const destinations = brokerImportDestinations(profiles, 'fidelity')
   assert.deepEqual(destinations.map(p => p.name), ['Jim Fidelity'])
   assert.deepEqual(defaultBrokerDestSelection(destinations, 'fidelity'), { 5: true })
+})
+
+test('uses an independent saved-destinations setting for each multi-account broker', () => {
+  assert.equal(defaultDestinationsKeyForBroker('schwab'), 'schwab_import_default_destinations')
+  assert.equal(defaultDestinationsKeyForBroker('fidelity'), 'fidelity_import_default_destinations')
+  assert.equal(defaultDestinationsKeyForBroker('shear_group'), 'shear_group_import_default_destinations')
 })
 
 test('Fidelity fallback offers only untagged portfolios, never Schwab portfolios', () => {

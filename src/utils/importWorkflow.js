@@ -1,6 +1,6 @@
 // Broker Import is a checklist, not a format encyclopedia.
 // Positions snapshot first, then transactions, then refresh.
-// Broker All-Accounts is an optional multi-account positions file, not a universal first step.
+// Broker All-Accounts is an optional multi-account file when the export contains account identity.
 // Snowball formats are a migration path only — they are not a workflow step.
 
 export const NO_FORMAT = ''
@@ -41,7 +41,9 @@ export const IMPORT_BROKERS = [
     label: 'Shear Group',
     source: 'shear_group',
     positionsFormat: 'shear_group',
+    positionsMultiFormat: 'shear_group_all_accounts',
     transactionsFormat: 'shear_group_activity',
+    transactionsMultiFormat: 'shear_group_all_accounts_activity',
   },
 ]
 
@@ -57,7 +59,9 @@ export const TXN_FORMATS = [
   { value: 'robinhood', label: 'Robinhood (Positions PDF)' },
   { value: 'robinhood_transactions', label: 'Robinhood (Transactions)' },
   { value: 'shear_group', label: 'Shear Group (Positions)' },
+  { value: 'shear_group_all_accounts', label: 'Shear Group (All Accounts Positions)' },
   { value: 'shear_group_activity', label: 'Shear Group (Activity)' },
+  { value: 'shear_group_all_accounts_activity', label: 'Shear Group (All Accounts Activity)' },
   { value: 'portfolio_export', label: 'Portfolio Export (Holdings + Transactions)' },
   { value: 'generic_transactions', label: 'Generic Transactions' },
   { value: 'snowball_holdings', label: 'Snowball Holdings (Migration)' },
@@ -73,6 +77,7 @@ export const POSITIONS_FORMATS = new Set([
   'fidelity_all_accounts',
   'robinhood',
   'shear_group',
+  'shear_group_all_accounts',
   'snowball_holdings',
 ])
 
@@ -84,11 +89,14 @@ export const TRANSACTION_FORMATS = new Set([
   'fidelity_transactions',
   'robinhood_transactions',
   'shear_group_activity',
+  'shear_group_all_accounts_activity',
 ])
 
 export const MULTI_ACCOUNT_FORMATS = new Set([
   'schwab_all_accounts',
   'fidelity_all_accounts',
+  'shear_group_all_accounts',
+  'shear_group_all_accounts_activity',
 ])
 
 export const SNOWBALL_FORMATS = new Set([
@@ -114,7 +122,7 @@ export const IMPORT_STEPS = [
     id: 'refresh',
     kicker: 'Step 3',
     label: 'Refresh',
-    detail: 'Update prices and dividend fields',
+    detail: 'Optional: update prices and dividend fields',
   },
 ]
 
@@ -143,13 +151,16 @@ export function describeWorkflow(format) {
     value === item.positionsFormat
     || value === item.positionsMultiFormat
     || value === item.transactionsFormat
+    || value === item.transactionsMultiFormat
   ))
   if (broker) {
-    const role = value === broker.transactionsFormat ? 'transactions' : 'positions'
+    const role = value === broker.transactionsFormat || value === broker.transactionsMultiFormat
+      ? 'transactions'
+      : 'positions'
     return {
       brokerId: broker.id,
       role,
-      schwabAllAccounts: value === broker.positionsMultiFormat,
+      schwabAllAccounts: value === broker.positionsMultiFormat || value === broker.transactionsMultiFormat,
       kind: role,
     }
   }
@@ -169,6 +180,9 @@ export function formatForWorkflow({ brokerId, role, schwabAllAccounts = false } 
   if (role === 'refresh' || role === 'other' || role === 'migration') return NO_FORMAT
   const broker = brokerById(brokerId)
   if (!broker) return NO_FORMAT
+  if (role === 'transactions' && schwabAllAccounts && broker.transactionsMultiFormat) {
+    return broker.transactionsMultiFormat
+  }
   if (role === 'transactions') return broker.transactionsFormat
   if (role === 'positions' && schwabAllAccounts && broker.positionsMultiFormat) {
     return broker.positionsMultiFormat

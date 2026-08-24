@@ -2478,6 +2478,93 @@ def parse_shear_group_positions(file_path, filename):
     return result
 
 
+def _shear_group_multi_account_identity(account_name, account_number, account_label=""):
+    """Return a stable, display-safe identity shared by Positions and Activity.
+
+    Shear Positions exports carry the full account number while Activity exports
+    carry only its last four digits. Routing on the last four lets a mapping
+    confirmed for Positions also apply to Activity without returning the full
+    account number to the browser.
+    """
+    name = str(account_name or "").strip()
+    digits = re.sub(r"\D+", "", str(account_number or ""))
+    suffix = digits[-4:] if digits else ""
+    label = name or str(account_label or "").strip()
+    if suffix:
+        label = f"{label}, ending {suffix}" if label else f"Account ending {suffix}"
+    return label, name, suffix
+
+
+def parse_shear_group_all_accounts_positions(file_path, filename):
+    """Group one Shear Positions export into independently routed accounts."""
+    parsed = parse_shear_group_positions(file_path, filename)
+    raw_positions = parsed.pop("_raw_positions", [])
+    cash_by_account = parsed.pop("_cash_by_account", {})
+    grouped = {}
+
+    def ensure_account(account_name, account_number, raw_label):
+        safe_label, safe_name, suffix = _shear_group_multi_account_identity(
+            account_name, account_number, raw_label
+        )
+        key = f"num:{suffix}" if suffix else f"label:{safe_label.casefold()}"
+        account = grouped.setdefault(key, {
+            "account_label": safe_label,
+            "account_name": safe_name,
+            "account_number": suffix,
+            "positions": [],
+            "cash": 0.0,
+        })
+        return account
+
+    for position in raw_positions:
+        account = ensure_account(
+            position.get("_account_name"),
+            position.get("_account_number"),
+            position.get("_account_label"),
+        )
+        clean_position = dict(position)
+        clean_position.pop("_account_label", None)
+        clean_position.pop("_account_name", None)
+        clean_position.pop("_account_number", None)
+        account["positions"].append(clean_position)
+
+    # Include cash-only accounts as well as cash attached to holding accounts.
+    for raw_label, cash in cash_by_account.items():
+        raw_name, _, raw_number = str(raw_label or "").rpartition(",")
+        account = ensure_account(raw_name.strip(), raw_number.strip(), raw_label)
+        account["cash"] += float(cash or 0)
+
+    accounts = []
+    for account in grouped.values():
+        positions = _merge_positions_by_ticker(account.pop("positions"))
+        cash = round(account.pop("cash"), 2)
+        account_value = round(sum(pos.get("current_value") or 0 for pos in positions) + cash, 2)
+        account["positions"] = positions
+        account["summary"] = {
+            "holdings": len(positions),
+            "filtered": 0,
+            "options": 0,
+            "cash": cash,
+            "account_value": account_value,
+        }
+        accounts.append(account)
+
+    accounts.sort(key=lambda account: (account.get("account_name") or "", account.get("account_number") or ""))
+    summary = dict(parsed.get("summary") or {})
+    summary.update({
+        "accounts": len(accounts),
+        "holdings": sum(account["summary"]["holdings"] for account in accounts),
+        "cash": round(sum(account["summary"]["cash"] for account in accounts), 2),
+        "account_value": round(sum(account["summary"]["account_value"] for account in accounts), 2),
+    })
+    return {
+        "accounts": accounts,
+        "summary": summary,
+        "format_type": "positions_multi",
+        "source_format": "shear_group_all_accounts",
+    }
+
+
 def _shear_group_price_from_amount(price, amount, quantity):
     price_val = _safe_float(price)
     amount_val = _safe_float(amount)
@@ -2619,6 +2706,61 @@ def parse_shear_group_activity(file_path, filename):
     if account_names:
         result["summary"]["account_count"] = len(account_names)
     return result
+
+
+def parse_shear_group_all_accounts_activity(file_path, filename):
+    """Group one Shear Activity export into independently routed accounts."""
+    parsed = parse_shear_group_activity(file_path, filename)
+    grouped = {}
+    for transaction in parsed.get("transactions") or []:
+        safe_label, safe_name, suffix = _shear_group_multi_account_identity(
+            transaction.get("_account_name"),
+            transaction.get("_account_number"),
+            transaction.get("_account_label"),
+        )
+        key = f"num:{suffix}" if suffix else f"label:{safe_label.casefold()}"
+        account = grouped.setdefault(key, {
+            "account_label": safe_label,
+            "account_name": safe_name,
+            "account_number": suffix,
+            "transactions": [],
+        })
+        clean_transaction = dict(transaction)
+        clean_transaction.pop("_account_label", None)
+        clean_transaction.pop("_account_name", None)
+        clean_transaction.pop("_account_number", None)
+        account["transactions"].append(clean_transaction)
+
+    accounts = []
+    for account in grouped.values():
+        transactions = account["transactions"]
+        buys = sum(1 for txn in transactions if txn.get("type") == "BUY")
+        sells = sum(1 for txn in transactions if txn.get("type") == "SELL")
+        dividends = sum(1 for txn in transactions if txn.get("type") == "DIVIDEND")
+        account["summary"] = {
+            "transactions": len(transactions),
+            "buys": buys,
+            "sells": sells,
+            "dividends": dividends,
+            "drip_detected": sum(
+                1 for txn in transactions
+                if txn.get("type") == "BUY" and "[DRIP]" in (txn.get("notes") or "")
+            ),
+        }
+        accounts.append(account)
+
+    accounts.sort(key=lambda account: (account.get("account_name") or "", account.get("account_number") or ""))
+    summary = dict(parsed.get("summary") or {})
+    summary.update({
+        "accounts": len(accounts),
+        "transactions": sum(account["summary"]["transactions"] for account in accounts),
+    })
+    return {
+        "accounts": accounts,
+        "summary": summary,
+        "format_type": "transactions_multi",
+        "source_format": "shear_group_all_accounts_activity",
+    }
 
 
 def _parse_date(raw):
@@ -2827,6 +2969,8 @@ PARSERS = {
     "robinhood_transactions": parse_robinhood_transactions_csv,
     "shear_group": parse_shear_group_positions,
     "shear_group_activity": parse_shear_group_activity,
+    "shear_group_all_accounts": parse_shear_group_all_accounts_positions,
+    "shear_group_all_accounts_activity": parse_shear_group_all_accounts_activity,
 }
 
 # Labels shown in the UI format dropdown
@@ -2847,4 +2991,6 @@ PARSER_LABELS = {
     "robinhood_transactions": "Robinhood (Transactions)",
     "shear_group": "Shear Group (Positions)",
     "shear_group_activity": "Shear Group (Activity)",
+    "shear_group_all_accounts": "Shear Group (All Accounts Positions)",
+    "shear_group_all_accounts_activity": "Shear Group (All Accounts Activity)",
 }

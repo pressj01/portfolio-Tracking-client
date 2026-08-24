@@ -177,7 +177,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Starts on Broker Import: positions first, then transactions, then refresh. Supports Schwab (Positions, optional All Accounts Positions, and Transactions), E*TRADE, Fidelity, Robinhood, and Shear Group. Generic Positions/Transactions and Snowball (migration only) have their own tabs. Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Starts on Broker Import: positions first, then transactions, followed by an optional market-data refresh. Supports Schwab (Positions, optional All Accounts Positions, and Transactions), E*TRADE, Fidelity, Robinhood, and Shear Group (including All Accounts Positions and Activity). Generic Positions/Transactions and Snowball (migration only) have their own tabs. Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Daily inbox of follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Data, Dividend, Options, NAV / CEF, Risk, Rebalance, Tax, etc.). Refresh Data runs a market refresh in place.</li>
@@ -208,7 +208,8 @@ function ImportHelp() {
       </p>
       <p style={{ marginBottom: '1rem' }}>
         On Broker Import, pick a broker and follow the checklist: <strong>Positions</strong> first, then
-        <strong> Transactions</strong>, then <strong>Refresh</strong>. Positions set current shares and cost basis.
+        <strong> Transactions</strong>. The final <strong>Refresh</strong> step is optional but recommended when
+        you want the latest market prices and forward-looking dividend fields. Positions set current shares and cost basis.
         Transactions add dividends, DRIP, and lots after that snapshot exists. If this portfolio has no
         positions yet, a transaction import is blocked until you confirm that the file is complete history —
         a partial history file will otherwise rebuild share counts from those rows alone.
@@ -313,6 +314,15 @@ function ImportHelp() {
         <li>Fidelity transaction history remains a single-account import and should be loaded after the Positions snapshot.</li>
       </ul>
 
+      <h4 style={{ marginBottom: '0.4rem' }}>Shear Group (All Accounts Positions and Activity)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>Open Broker Import from <strong>Shear Portfolios</strong> (or another rollup/aggregate), choose <strong>Shear Group</strong>, and click <strong>All Accounts</strong>.</li>
+        <li>On Step 1, preview and import the combined <strong>Positions.xlsx</strong>. The account-number suffix maps the file rows to Cindy_2472_Shear, Cindy_4734_Shear, Cindy_7326_Shear, and Shear_Jpresser.</li>
+        <li>On Step 2, keep <strong>All Accounts</strong> selected and import the combined <strong>Activity.xlsx</strong>. It reuses the same mapping and keeps dividends, DRIP, buys, and sells separated by account.</li>
+        <li>Preview lets you re-point, skip, or create a destination before anything is written. Confirmed routing is remembered for later Positions and Activity files.</li>
+        <li>Refresh is not required to finish either import. Run it afterward only when you want updated quotes and dividend metadata.</li>
+      </ul>
+
       <h4 style={{ marginBottom: '0.4rem' }}>Snowball tab (migration only)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Snowball is the last tab on the Import page, not a step on Broker Import. Open it only when moving an old Snowball export into this app.</li>
@@ -325,9 +335,9 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
-          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab and Fidelity All Accounts are optional positions shortcuts when one file should update several matching broker portfolios; they do not replace transaction imports.</li>
+          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab and Fidelity All Accounts are optional positions shortcuts; Shear Group All Accounts supports both its combined Positions and Activity files.</li>
           <li>Then import that same account&apos;s <strong>Transaction History</strong> for dividends, DRIP, lots, and realized gains. Do this after the positions snapshot so a partial history file cannot rebuild share counts.</li>
-          <li>Run <strong>Refresh Prices &amp; Divs</strong> last to update market data, dividend fields, and pay-date estimates.</li>
+          <li>Optionally run <strong>Refresh Prices &amp; Divs</strong> last to update market data, dividend fields, and pay-date estimates. It is not required for a successful import.</li>
         </ol>
         When a Positions import has been done first, transaction imports store history without overwriting your holdings data. Snowball is on its own tab and is not a step on this path.
       </div>
