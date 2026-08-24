@@ -41,6 +41,18 @@ export function chartTheme(isDark) {
   }
 }
 
+// Plotly writes trace colors straight into SVG stroke/fill attributes, where a
+// `var(--x)` reference does not resolve — Plotly silently falls back to its own
+// default palette (#1f77b4 and friends), so the chart renders in the wrong
+// color with no error. Resolve to a concrete color before handing it to Plotly.
+// `_isDark` is unused but must be passed: the variables are read live, so a
+// memo holding the result has to re-run when the theme flips.
+export function resolveCssColor(color, _isDark) {
+  const match = /^var\((--[^),]+)\)$/.exec(String(color || '').trim())
+  if (!match || typeof window === 'undefined' || !window.getComputedStyle) return color
+  return window.getComputedStyle(document.documentElement).getPropertyValue(match[1]).trim() || color
+}
+
 // Pop the unified hover box open at the right-most point so the latest values
 // are readable without moving the mouse. Charts that use hovermode 'x unified'
 // only need one trace hovered — Plotly gathers every series sharing that x.
@@ -96,15 +108,20 @@ function normalizeThemeColor(color, replacement, isDark, palette = DARK_TEXT_COL
 
 function themedAxis(axis, ct, isDark) {
   if (!axis || typeof axis !== 'object') return axis
-  const axisTitle = axis.title && typeof axis.title === 'object'
+  // Plotly 3 silently drops a bare-string axis title (the Plotly 1 form): the
+  // axis renders with no label and _fullLayout reports the editable
+  // placeholder, so the omission is invisible until you inspect the chart.
+  // Coerce to the object form so the titles charts already declare show up.
+  const rawTitle = typeof axis.title === 'string' ? { text: axis.title } : axis.title
+  const axisTitle = rawTitle && typeof rawTitle === 'object'
     ? {
-        ...axis.title,
+        ...rawTitle,
         font: {
-          ...(axis.title.font || {}),
-          color: normalizeThemeColor(axis.title.font?.color, ct.font, isDark) || ct.font,
+          ...(rawTitle.font || {}),
+          color: normalizeThemeColor(rawTitle.font?.color, ct.font, isDark) || ct.font,
         },
       }
-    : axis.title
+    : rawTitle
   const tickfont = axis.tickfont && typeof axis.tickfont === 'object'
     ? { ...axis.tickfont, color: normalizeThemeColor(axis.tickfont.color, ct.font, isDark) || ct.font }
     : axis.tickfont

@@ -5713,6 +5713,54 @@ th.col-drag-target {
   margin-right: 0.45rem;
   vertical-align: -2px;
 }
+.yoc-help {
+  margin: 0.85rem 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-inset);
+}
+.yoc-help summary {
+  cursor: pointer;
+  user-select: none;
+  padding: 0.5rem 0.85rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.yoc-help summary:hover {
+  color: var(--accent-2);
+}
+.yoc-help-body {
+  padding: 0 0.85rem 0.7rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-width: 82ch;
+}
+.yoc-help-body p {
+  margin: 0 0 0.55rem;
+}
+.yoc-help-body ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+.yoc-help-body li {
+  margin-bottom: 0.4rem;
+}
+.yoc-help-body strong {
+  color: var(--text);
+}
+.yoc-basis-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.25rem;
+  padding: 0 1rem 1rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+.yoc-basis strong {
+  color: var(--text);
+}
 .etfc-holdings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

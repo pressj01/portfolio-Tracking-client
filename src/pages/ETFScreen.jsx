@@ -2,8 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
 import { useTheme } from '../context/ThemeContext'
-import { themedPlotlyLayout } from '../utils/chartTheme'
+import { resolveCssColor, themedPlotlyLayout } from '../utils/chartTheme'
 import MarkovPanel from '../components/MarkovPanel'
+import YieldOnCostChart from '../components/YieldOnCostChart'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
@@ -2245,6 +2246,7 @@ export default function ETFScreen() {
   const [showRangeSlider, setShowRangeSlider] = useState(false)
   const [returnXRange, setReturnXRange] = useState([null, null])
   const [highlightedSymbol, setHighlightedSymbol] = useState('')
+  const [showYieldOnCost, setShowYieldOnCost] = useState(true)
   const [indicatorMenuOpen, setIndicatorMenuOpen] = useState(false)
   const [indicatorSearch, setIndicatorSearch] = useState('')
   const [visibleAnalysisColumns, setVisibleAnalysisColumns] = useState(DEFAULT_ANALYSIS_COLUMNS)
@@ -2764,6 +2766,14 @@ export default function ETFScreen() {
 
   // ── Return chart traces ────────────────────────────────────────────────────
 
+  // The window the return chart is actually showing — typed dates, a
+  // range-slider zoom, or the full data bounds. Shared with the yield-on-cost
+  // chart so both rebase on the same first visible close.
+  const returnVisibleWindow = useMemo(() => {
+    const fallbackRange = returnDataDateBounds[0] && returnDataDateBounds[1] ? returnDataDateBounds : null
+    return getVisibleDateRange(returnData, normalizeReturnRange(returnXRange) || fallbackRange, true)
+  }, [returnData, returnXRange, returnDataDateBounds])
+
   const { data: returnPlotData, layout: returnPlotLayout, logScaleActive: returnLogScaleActive } = useMemo(() => {
     if (!returnData?.series) return { data: [], layout: {}, logScaleActive: false }
     const traces = []
@@ -2786,7 +2796,7 @@ export default function ETFScreen() {
     const effectiveReturnRange = activeReturnRange || fallbackRange
     // Rebasing, end labels and y-scaling always follow the active date window
     // (typed dates or slider), so the chart visually aligns with the date set.
-    const [visibleStart, visibleEnd] = getVisibleDateRange(returnData, effectiveReturnRange, true)
+    const [visibleStart, visibleEnd] = returnVisibleWindow
     const autoLogScale = shouldUseComparerLogScale(
       returnData.series,
       allSymbols,
@@ -2816,7 +2826,7 @@ export default function ETFScreen() {
         const style = TRACE_STYLES.actual
         const color = isDimmed
           ? DIMMED_RETURN_COLOR
-          : ((isPrimary || allSymbols.length === 1) ? style.color : compColors[(si - 1) % compColors.length])
+          : ((isPrimary || allSymbols.length === 1) ? resolveCssColor(style.color, isDark) : compColors[(si - 1) % compColors.length])
         const name = `${sym} (${style.label})`
         const labelIdx = lastVisibleIndex(dates, visibleStart, visibleEnd)
         dates.forEach((date, i) => {
@@ -2852,7 +2862,7 @@ export default function ETFScreen() {
         let color, dash, width, name
         if (isPrimary || allSymbols.length === 1) {
           // Primary ticker: use web-style blue with dash pattern per trace type
-          color = isDimmed ? DIMMED_RETURN_COLOR : style.color
+          color = isDimmed ? DIMMED_RETURN_COLOR : resolveCssColor(style.color, isDark)
           dash = style.dash
           width = style.width
           if (key === 'blend') {
@@ -3056,7 +3066,25 @@ export default function ETFScreen() {
       annotations,
     }
     return { data: traces, layout, logScaleActive }
-  }, [returnData, ticker, period, returnMode, returnScalePreference, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol])
+    // isDark is a dependency because resolveCssColor reads the live CSS variables.
+  }, [returnData, ticker, period, returnMode, returnScalePreference, showReturnLabels, returnHoverMode, returnPctMode, showRangeSlider, returnXRange, returnDataDateBounds, highlightedSymbol, returnVisibleWindow, isDark])
+
+  const yieldOnCostEntries = useMemo(() => {
+    if (!returnData?.series) return []
+    const seriesKeys = Object.keys(returnData.series)
+    const allSymbols = returnData.requested_symbols?.length
+      ? returnData.requested_symbols.filter(sym => seriesKeys.includes(sym))
+      : seriesKeys
+    return allSymbols.map((sym, idx) => ({
+      symbol: sym,
+      series: returnData.series[sym],
+      // Match the return chart: the primary ticker keeps the accent color and
+      // comparison tickers cycle the chip palette.
+      color: idx === 0 ? TRACE_STYLES.total.color : CHIP_COLORS[(idx - 1) % CHIP_COLORS.length],
+      frequency: returnData.profiles?.[sym]?.distribution_frequency,
+      dimmed: Boolean(highlightedSymbol && highlightedSymbol !== sym),
+    }))
+  }, [returnData, highlightedSymbol])
 
   const displayedReturnStats = useMemo(() => {
     if (!returnData?.series) return null
@@ -3708,6 +3736,23 @@ export default function ETFScreen() {
                   </div>
                 )}
                 <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
+                <div className="etfc-section" style={{ marginTop: '1rem' }}>
+                  <div className="etfc-section-head">
+                    <h2 style={{ fontSize: '1.1rem' }}>Yield on Cost</h2>
+                    <button className="btn btn-sm" onClick={() => setShowYieldOnCost(v => !v)}>
+                      {showYieldOnCost ? 'Hide Chart' : 'Show Chart'}
+                    </button>
+                  </div>
+                  {showYieldOnCost && (
+                    <YieldOnCostChart
+                      entries={yieldOnCostEntries}
+                      visibleStart={returnVisibleWindow[0]}
+                      visibleEnd={returnVisibleWindow[1]}
+                      hovermode={returnHoverMode}
+                      height={340}
+                    />
+                  )}
+                </div>
               </>
             ) : (
               !returnLoading && <div className="etf-placeholder">Select a return mode and click Load to compare returns.</div>
