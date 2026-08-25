@@ -1877,6 +1877,14 @@ _YF_DIVIDENDS_CACHE = {}
 _YF_DIVIDENDS_TTL_SEC = 30 * 60
 _OFFICIAL_DISTRIBUTION_CACHE = {}
 _OFFICIAL_DISTRIBUTION_TTL_SEC = 30 * 60
+# Bump when parser semantics change so a previously persisted successful
+# scrape cannot keep serving an obsolete cadence after the code is updated.
+_OFFICIAL_DISTRIBUTION_CACHE_VERSION = "v2"
+# A successful capability probe assigns a ticker to an issuer parser without
+# requiring that ticker to be added to a hard-coded family list. Misses are
+# cached too so ordinary stocks do not fan out across issuer sites repeatedly.
+_FUND_FAMILY_DISCOVERY_CACHE = {}
+_FUND_FAMILY_DISCOVERY_TTL_SEC = 24 * 60 * 60
 _RESEARCH_RETURN_SERIES_CACHE = {}
 _RESEARCH_RETURN_SERIES_TTL_SEC = 30 * 60
 _TOTAL_RETURN_DASHBOARD_CACHE = {}
@@ -2004,6 +2012,7 @@ def _clear_market_data_memory_caches():
     _TAPPALPHA_PUBLIC_CACHE.clear()
     _TAPPALPHA_RESEARCH_CACHE.clear()
     _OFFICIAL_DISTRIBUTION_CACHE.clear()
+    _FUND_FAMILY_DISCOVERY_CACHE.clear()
 
 
 def _persist_market_payload(source, ticker, kind, payload):
@@ -10027,11 +10036,9 @@ def lookup_ticker(ticker):
 
     result["div_frequency"] = freq_code
 
-    # XFUNDS is issuer-first across the application. Its pages often have the
-    # complete fund facts and future distribution schedule before Yahoo has
-    # populated a newly launched ETF. Overlay official values here as well as
-    # on Security Research and refresh; Yahoo remains the fallback for every
-    # field the fund site has not published yet.
+    # XFUNDS also publishes price/profile facts that are not part of the shared
+    # distribution-parser registry. Keep that enrichment here; distribution
+    # data for every supported issuer is overlaid together below.
     if _is_xfunds_fund(ticker, result.get("description")):
         official_profile = None
         try:
@@ -10050,24 +10057,6 @@ def lookup_ticker(ticker):
                 result["current_price"] = official_price
             result["data_source"] = official_profile.get("data_source") or "XFUNDS"
             result["source_url"] = official_profile.get("source_url")
-
-        official_snapshot = None
-        try:
-            official_snapshot = _fetch_xfunds_distribution_snapshot(ticker)
-        except Exception:
-            official_snapshot = None
-        if official_snapshot:
-            if official_snapshot.get("has_dividend") and _positive_number(official_snapshot.get("div")):
-                result["div"] = round(_positive_number(official_snapshot["div"]), 6)
-            if official_snapshot.get("freq"):
-                result["div_frequency"] = official_snapshot["freq"]
-            if official_snapshot.get("ex_div_date"):
-                result["ex_div_date"] = official_snapshot["ex_div_date"]
-            if official_snapshot.get("div_pay_date"):
-                result["div_pay_date"] = official_snapshot["div_pay_date"]
-            if official_snapshot.get("future_schedule"):
-                result["future_distribution_schedule"] = official_snapshot["future_schedule"]
-            result["dividend_source"] = official_snapshot.get("source") or "X Funds"
 
     # If Yahoo is unavailable, an existing portfolio quote is still sufficient
     # to add the ticker to a DRIP comparison.
@@ -10133,6 +10122,43 @@ def lookup_ticker(ticker):
                 description=result.get("description"),
             )
         )
+
+    # New ETFs are capability-probed at lookup time. A parser must either be
+    # selected by issuer metadata or prove that its official page identifies
+    # this ticker and contains usable distribution facts. Missing/changed pages
+    # leave the Yahoo values above untouched.
+    official_ticker = str(result.get("renamed_to") or ticker).upper()
+    official_identity = " ".join(str(value or "") for value in (
+        result.get("description"),
+        (info or {}).get("fundFamily"),
+        (info or {}).get("category"),
+    ))
+    official_snapshot = None
+    try:
+        official_snapshot = _fetch_official_distribution_snapshot(
+            official_ticker,
+            official_identity,
+            discover=str(result.get("classification_type") or "").upper() == "ETF",
+        )
+    except Exception:
+        official_snapshot = None
+    if official_snapshot:
+        official_amount = _positive_number(official_snapshot.get("div"))
+        if official_snapshot.get("has_dividend") and official_amount:
+            result["div"] = round(official_amount, 6)
+        if official_snapshot.get("freq"):
+            result["div_frequency"] = official_snapshot["freq"]
+        if official_snapshot.get("ex_div_date"):
+            result["ex_div_date"] = official_snapshot["ex_div_date"]
+        if official_snapshot.get("div_pay_date"):
+            result["div_pay_date"] = official_snapshot["div_pay_date"]
+        if official_snapshot.get("future_schedule"):
+            result["future_distribution_schedule"] = official_snapshot["future_schedule"]
+        result["dividend_source"] = official_snapshot.get("source") or "Fund Site"
+        if official_snapshot.get("source_url"):
+            result["distribution_source_url"] = official_snapshot["source_url"]
+    elif result["div"] > 0:
+        result["dividend_source"] = "Yahoo Finance"
 
     frequency_multiplier = {
         "W": 52,
@@ -10858,6 +10884,7 @@ def _resolve_refresh_dividend_frequency(
     weekly_tickers,
     fallback_frequency=None,
     history=None,
+    frequency_authoritative=False,
 ):
     """Use fresh distribution cadence unless a curated weekly override applies.
 
@@ -10872,6 +10899,12 @@ def _resolve_refresh_dividend_frequency(
         return "W"
     frequency = (snapshot_frequency or "").strip().upper()
     fallback = (fallback_frequency or "").strip().upper()
+    # Issuer parsers can establish cadence from a published fund fact or a
+    # forward distribution schedule before two completed payments exist.
+    # Treat that result differently from Yahoo's one-payment inference, which
+    # still needs the saved cadence as a stabilizing fallback.
+    if frequency_authoritative and frequency:
+        return frequency
     payment_count = _dividend_history_payment_count(history)
     if payment_count is not None and payment_count < 2:
         return _INITIAL_DIVIDEND_FREQUENCY_CODES.get(ticker) or fallback or frequency or None
@@ -12107,7 +12140,10 @@ def _fetch_tappalpha_public_payload(ticker, use_cache=True):
     import requests
 
     ticker = (ticker or "").strip().upper()
-    if not ticker or not _is_tappalpha_fund(ticker):
+    # Do not gate the official API on the maintained ticker list. The payload
+    # validates its own fund ticker below, which lets a newly launched
+    # TappAlpha fund be discovered safely before the list is updated.
+    if not ticker:
         return None
 
     if use_cache:
@@ -12424,6 +12460,8 @@ def _merge_official_distribution_snapshot(snapshot, official):
     if official.get("has_dividend"):
         merged.update(official)
         merged["known"] = True
+        if official.get("freq"):
+            merged["frequency_authoritative"] = True
         if official.get("div_pay_date"):
             merged["pay_date_confirmed"] = True
         return merged
@@ -12440,6 +12478,8 @@ def _merge_official_distribution_snapshot(snapshot, official):
             merged[key] = value
     if official.get("ex_div_date") or official.get("freq") or official.get("div_pay_date"):
         merged["known"] = True
+    if official.get("freq"):
+        merged["frequency_authoritative"] = True
     if official.get("div_pay_date"):
         merged["pay_date_confirmed"] = True
     return merged
@@ -12653,7 +12693,7 @@ def _fetch_xfunds_distribution_snapshot(ticker, session=None, as_of=None):
     return snapshot
 
 
-def _fetch_kurv_distribution_snapshot(ticker):
+def _fetch_kurv_distribution_snapshot(ticker, as_of=None):
     """Fetch recent official distribution history from Kurv fund pages when available."""
     import html
     import requests
@@ -12743,7 +12783,7 @@ def _fetch_kurv_distribution_snapshot(ticker):
 
     # Kurv publishes future ex/pay rows before the amount is announced.
     # Show the next known date, while retaining the latest actual amount.
-    today = pd.Timestamp.now().normalize()
+    today = pd.Timestamp(as_of or pd.Timestamp.now()).normalize()
     upcoming_rows = [
         (ex_ts, pay_ts)
         for ex_ts, pay_ts in scheduled
@@ -12753,7 +12793,16 @@ def _fetch_kurv_distribution_snapshot(ticker):
         upcoming_rows.sort(key=lambda item: item[0])
         chosen_ex, chosen_pay = upcoming_rows[0]
 
-    freq = "W" if ticker == "KYLD" else "M"
+    # Kurv now has both monthly and weekly funds. Prefer the cadence of the
+    # issuer's dated schedule so new launches such as KEO do not inherit the
+    # older monthly-family default before enough paid history exists.
+    freq = _infer_dividend_frequency_from_dates(
+        [ex_ts for ex_ts, _pay_ts in scheduled]
+    )
+    if not freq and len(history) >= 2:
+        freq = _infer_dividend_frequency_from_history(history)
+    if not freq:
+        freq = "W" if ticker in {"KEO", "KYLD"} else "M"
     return {
         "known": True,
         "has_dividend": True,
@@ -12762,7 +12811,38 @@ def _fetch_kurv_distribution_snapshot(ticker):
         "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
         "freq": freq,
         "history": history,
+        "source": "Kurv",
+        "source_url": url,
     }
+
+
+def _fetch_lsfunds_distribution_snapshot(ticker):
+    """Fetch LS Funds distributions using semantic labels, not page CSS."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None
+    url = f"https://lsfunds.com/etfs/{ticker.lower()}"
+    try:
+        response = requests.get(
+            url,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        response.raise_for_status()
+    except Exception:
+        return None
+    return _generic_distribution_snapshot_from_html(
+        response.text or "", ticker, "LS Funds", url
+    )
 
 
 def _fetch_infracap_distribution_snapshot(ticker):
@@ -13424,6 +13504,15 @@ def _is_kurv_fund(ticker, description=""):
     return ticker in explicit_family
 
 
+def _is_lsfunds_fund(ticker, description=""):
+    """Identify the current LS Funds lineup; discovery handles future launches."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    if any(term in description_l for term in ("ls funds", "leverage shares", "overlay shares")):
+        return True
+    return ticker in {"OVF", "OVL", "OVS"}
+
+
 def _is_infracap_fund(ticker, description=""):
     """Identify InfraCap ETFs that publish a DISTRIBUTION DETAIL table on infracapfund.com."""
     ticker = (ticker or "").strip().upper()
@@ -13714,73 +13803,548 @@ def _is_tuttle_capital_fund(ticker, description=""):
 
 
 _FUND_FAMILY_REGISTRY = [
-    # (keywords_in_description, extra_condition_fn_or_None, fetcher)
-    # Checked in order; first match wins.  Keywords are matched against a
-    # combined lowercased text built from the ticker, fund name, description,
-    # and yfinance issuer/family so that *any* new ticker from a known fund
-    # family is automatically routed to the correct scraper.
+    # Checked in order; first metadata match wins. Keywords are matched against
+    # the fund name, description, and Yahoo issuer/family. ``page_url`` entries
+    # can also be capability-probed when an ETF is first looked up: the page
+    # must identify the requested ticker before its parser is allowed to claim
+    # it. If the issuer changed markup, a semantic table parser gets one chance
+    # before the pipeline falls back to Yahoo.
     {
+        "name": "YieldMax",
         "keywords": ["yieldmax"],
         "fetcher": "_fetch_yieldmax_distribution_snapshot",
         "legacy": _is_yieldmax_fund,
+        "page_url": "https://yieldmaxetfs.com/our-etfs/{ticker_lower}/",
     },
     {
+        "name": "NEOS",
         "keywords": ["neos"],
         "fetcher": "_fetch_neos_distribution_snapshot",
         "legacy": _is_neos_fund,
+        "page_url": "https://neosfunds.com/{ticker_lower}/",
     },
     {
+        "name": "TappAlpha",
         "keywords": ["tappalpha", "tapalpha", "tapp alpha"],
         "fetcher": "_fetch_tappalpha_distribution_snapshot",
         "legacy": _is_tappalpha_fund,
+        "page_url": "https://www.tappalphafunds.com/etfs/{ticker_lower}",
     },
     {
+        "name": "X Funds",
         "keywords": ["nicholas wealth", "xfunds", "nicholasx"],
         "fetcher": "_fetch_xfunds_distribution_snapshot",
         "legacy": _is_xfunds_fund,
+        "page_url": "https://nicholasx.com/{ticker_lower}/",
     },
     {
+        "name": "Kurv",
         "keywords": ["kurv"],
         "fetcher": "_fetch_kurv_distribution_snapshot",
         "legacy": _is_kurv_fund,
+        "page_url": "https://www.kurvinvest.com/etf/{ticker_lower}",
     },
     {
+        "name": "LS Funds",
+        "keywords": ["ls funds", "leverage shares", "overlay shares"],
+        "fetcher": "_fetch_lsfunds_distribution_snapshot",
+        "legacy": _is_lsfunds_fund,
+        "page_url": "https://lsfunds.com/etfs/{ticker_lower}",
+    },
+    {
+        "name": "InfraCap",
         "keywords": ["infracap", "infrastructure capital"],
         "fetcher": "_fetch_infracap_distribution_snapshot",
         "legacy": _is_infracap_fund,
+        "page_url": "https://www.infracapfund.com/{ticker_lower}",
     },
     {
+        "name": "Global X",
         "keywords": ["global x", "globalx"],
         "fetcher": "_fetch_globalx_distribution_snapshot",
         "legacy": _is_globalx_fund,
+        "page_url": "https://www.globalxetfs.com/funds/{ticker_lower}",
     },
     {
+        "name": "Amplify",
         "keywords": ["amplify"],
         "fetcher": "_fetch_amplify_distribution_snapshot",
         "legacy": _is_amplify_fund,
+        "page_url": "https://amplifyetfs.com/{ticker_lower}/",
     },
     {
+        "name": "Quantify Funds",
         "keywords": ["quantify", "incomestkd"],
         "fetcher": "_fetch_quantify_distribution_snapshot",
         "legacy": _is_quantify_fund,
+        "page_url": "https://quantifyfunds.com/optionsbasedincome/{ticker_lower}/",
     },
     {
+        "name": "REX Shares",
         "keywords": ["rex shares", "rexshares"],
         "extra_keywords": ["income", "premium", "covered call", "growth & income", "growth and income"],
         "fetcher": "_fetch_rex_distribution_snapshot",
         "legacy": _is_rex_fund,
+        "page_url": "https://www.rexshares.com/{ticker_lower}/",
     },
     {
+        "name": "Goldman Sachs",
         "keywords": ["goldman sachs", "gsam"],
         "fetcher": "_fetch_goldman_distribution_snapshot",
         "legacy": _is_goldman_sachs_fund,
+        # Its GraphQL fund map validates the ticker, so it is safe to probe
+        # without a predictable public page URL.
+        "trust_fetcher_for_discovery": True,
     },
     {
+        "name": "Income Blast (Tuttle Capital)",
         "keywords": ["tuttle capital", "income blast"],
         "fetcher": "_fetch_income_blast_distribution_snapshot",
         "legacy": _is_tuttle_capital_fund,
+        "page_url": "https://www.incomeblastetfs.com/etf/{ticker_lower}",
     },
 ]
+
+
+class _SemanticDistributionTableParser(HTMLParser):
+    """Collect text cells from HTML tables without depending on CSS classes."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables = []
+        self._table_depth = 0
+        self._table = None
+        self._row = None
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.lower()
+        if tag == "table":
+            self._table_depth += 1
+            if self._table_depth == 1:
+                self._table = []
+        elif self._table_depth and tag == "tr":
+            self._row = []
+        elif self._table_depth and tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+        elif self._cell is not None and tag == "br":
+            self._cell.append(" ")
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in {"td", "th"} and self._cell is not None and self._row is not None:
+            self._row.append(re.sub(r"\s+", " ", "".join(self._cell)).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None and self._table is not None:
+            if any(self._row):
+                self._table.append(self._row)
+            self._row = None
+            self._cell = None
+        elif tag == "table" and self._table_depth:
+            self._table_depth -= 1
+            if self._table_depth == 0:
+                if self._table:
+                    self.tables.append(self._table)
+                self._table = None
+                self._row = None
+                self._cell = None
+
+
+def _distribution_header_kind(label):
+    """Map issuer-specific column labels onto the common distribution schema."""
+    text = re.sub(r"[^a-z0-9$]+", " ", str(label or "").lower()).strip()
+    compact = text.replace(" ", "")
+    if not text:
+        return None
+    if (
+        "ex dividend date" in text
+        or "ex distribution date" in text
+        or compact in {"exdate", "exrecorddate", "exdividenddate"}
+    ):
+        return "ex_date"
+    if (
+        "payable date" in text
+        or "payment date" in text
+        or compact in {"paydate", "payabledate", "paymentdate"}
+    ):
+        return "pay_date"
+    if (
+        "$ per share" in text
+        or "per share" in text and ("distribution" in text or "dividend" in text)
+        or compact in {
+            "amount", "amount$", "fundtotal", "distribution", "distributionamount",
+            "dividendamount", "cashdistribution",
+        }
+    ):
+        return "amount"
+    return None
+
+
+def _distribution_amount_from_text(value):
+    text = str(value or "").strip()
+    if not text or text in {"-", "--", "—", "N/A", "n/a"} or "%" in text:
+        return None
+    match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", text.replace(",", ""))
+    if not match:
+        return None
+    try:
+        amount = float(match.group(0))
+    except (TypeError, ValueError):
+        return None
+    return amount if math.isfinite(amount) and amount > 0 else None
+
+
+def _distribution_frequency_code(value):
+    text = re.sub(r"[^a-z]+", " ", str(value or "").lower()).strip()
+    if "biweekly" in text or "bi weekly" in text:
+        return "BW"
+    if "weekly" in text or text == "week":
+        return "W"
+    if "monthly" in text or text == "month":
+        return "M"
+    if "quarterly" in text or text == "quarter":
+        return "Q"
+    if "semi annual" in text or "semiannual" in text:
+        return "SA"
+    if "annual" in text or "yearly" in text:
+        return "A"
+    return None
+
+
+def _distribution_facts_from_tables(tables):
+    """Read issuer-declared cadence/rate facts independently of history."""
+    frequency = None
+    distribution_rate_pct = None
+    for table in tables:
+        for row in table:
+            if len(row) < 2:
+                continue
+            label = re.sub(r"[^a-z0-9]+", " ", str(row[0] or "").lower()).strip()
+            value = row[1]
+            if frequency is None and "distribution frequency" in label:
+                frequency = _distribution_frequency_code(value)
+            if distribution_rate_pct is None and label.startswith("distribution rate"):
+                match = re.search(r"-?[0-9]+(?:\.[0-9]+)?", str(value or "").replace(",", ""))
+                if match:
+                    try:
+                        distribution_rate_pct = float(match.group(0))
+                    except (TypeError, ValueError):
+                        pass
+    return frequency, distribution_rate_pct
+
+
+def _page_identifies_distribution_ticker(body, ticker):
+    """Reject issuer soft-404/default pages before a parser can claim a ticker."""
+    ticker = (ticker or "").strip().upper()
+    if not body or not ticker:
+        return False
+    return bool(re.search(
+        rf"(?<![A-Z0-9]){re.escape(ticker)}(?![A-Z0-9])",
+        str(body).upper(),
+    ))
+
+
+def _generic_distribution_snapshot_from_html(body, ticker, source, source_url, as_of=None):
+    """Parse a distribution table by column meaning when issuer markup drifts."""
+    if not _page_identifies_distribution_ticker(body, ticker):
+        return None
+    parser = _SemanticDistributionTableParser()
+    try:
+        parser.feed(body or "")
+    except Exception:
+        return None
+    published_freq, distribution_rate_pct = _distribution_facts_from_tables(parser.tables)
+
+    entries = []
+    scheduled = []
+    for table in parser.tables:
+        for header_index, header in enumerate(table):
+            column_map = {}
+            for index, label in enumerate(header):
+                kind = _distribution_header_kind(label)
+                if kind and kind not in column_map:
+                    column_map[kind] = index
+            if "ex_date" not in column_map or "amount" not in column_map:
+                continue
+            for row in table[header_index + 1:]:
+                ex_index = column_map["ex_date"]
+                if ex_index >= len(row):
+                    continue
+                ex_ts = _parse_timestamp_value(row[ex_index])
+                if ex_ts is None:
+                    continue
+                ex_ts = ex_ts.normalize()
+                pay_ts = None
+                pay_index = column_map.get("pay_date")
+                if pay_index is not None and pay_index < len(row):
+                    pay_ts = _parse_timestamp_value(row[pay_index])
+                    pay_ts = pay_ts.normalize() if pay_ts is not None else None
+                scheduled.append((ex_ts, pay_ts))
+                amount_index = column_map["amount"]
+                amount = (
+                    _distribution_amount_from_text(row[amount_index])
+                    if amount_index < len(row)
+                    else None
+                )
+                if amount is not None:
+                    entries.append((ex_ts, amount, pay_ts))
+            break
+
+    if not scheduled:
+        return None
+
+    entries_by_ex = {item[0]: item for item in entries}
+    schedule_by_ex = {item[0]: item for item in scheduled}
+    entries = [entries_by_ex[key] for key in sorted(entries_by_ex)]
+    scheduled = [schedule_by_ex[key] for key in sorted(schedule_by_ex)]
+    history = pd.Series(dtype=float)
+    pay_map = {}
+    if entries:
+        history = pd.Series(
+            [item[1] for item in entries],
+            index=pd.DatetimeIndex([item[0] for item in entries]),
+        ).sort_index()
+        pay_map = {item[0]: item[2] for item in entries if item[2] is not None}
+
+    today = pd.Timestamp(as_of or pd.Timestamp.now()).normalize()
+    chosen_ex = history.index[-1] if not history.empty else scheduled[-1][0]
+    chosen_pay = pay_map.get(chosen_ex)
+    upcoming = [item for item in scheduled if item[0] >= today]
+    if upcoming:
+        chosen_ex, chosen_pay = upcoming[0]
+    elif chosen_pay is None:
+        chosen_pay = dict(scheduled).get(chosen_ex)
+
+    freq = published_freq
+    if not freq and len(scheduled) >= 2:
+        # Recent cadence wins when a fund changed schedules. OVL, OVS, and OVF
+        # have years of quarterly rows followed by a current monthly policy;
+        # using the entire table would keep them mislabeled for years.
+        freq = _infer_dividend_frequency_from_dates(
+            [item[0] for item in scheduled[-8:]]
+        )
+    if not freq and len(history) >= 2:
+        freq = _infer_dividend_frequency_from_history(history)
+    future_schedule = [
+        {
+            "ex_dividend_date": ex_ts.strftime("%Y-%m-%d"),
+            "payable_date": pay_ts.strftime("%Y-%m-%d") if pay_ts is not None else None,
+        }
+        for ex_ts, pay_ts in scheduled
+        if ex_ts >= today
+    ]
+    return {
+        "known": True,
+        "has_dividend": not history.empty,
+        "div": float(history.iloc[-1]) if not history.empty else None,
+        "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
+        "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
+        "freq": freq,
+        "history": history,
+        "future_schedule": future_schedule,
+        "distribution_rate_pct": distribution_rate_pct,
+        "source": source,
+        "source_url": source_url,
+    }
+
+
+def _official_snapshot_has_data(snapshot):
+    """True only when a parser found useful distribution facts, not a soft 404."""
+    if not isinstance(snapshot, dict):
+        return False
+    history = snapshot.get("history")
+    if history is not None:
+        try:
+            if not history.empty:
+                return True
+        except AttributeError:
+            if history:
+                return True
+    try:
+        if float(snapshot.get("div") or 0) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    if snapshot.get("distribution_rate_pct") is not None:
+        return True
+    if snapshot.get("future_schedule"):
+        return True
+    return bool(snapshot.get("ex_div_date") and snapshot.get("freq"))
+
+
+def _fund_family_page_url(entry, ticker):
+    template = entry.get("page_url")
+    if not template:
+        return None
+    ticker = (ticker or "").strip().upper()
+    try:
+        return template.format(ticker=ticker, ticker_lower=ticker.lower())
+    except (KeyError, ValueError):
+        return None
+
+
+def _fetch_fund_family_probe_page(entry, ticker):
+    import requests
+
+    url = _fund_family_page_url(entry, ticker)
+    if not url:
+        return "", None
+    try:
+        response = requests.get(
+            url,
+            timeout=8,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        response.raise_for_status()
+        return response.text or "", url
+    except Exception:
+        return "", url
+
+
+def _normalize_official_snapshot(entry, ticker, snapshot):
+    if not _official_snapshot_has_data(snapshot):
+        return None
+    normalized = dict(snapshot)
+    normalized.setdefault("known", True)
+    if not normalized.get("source"):
+        normalized["source"] = entry.get("name") or "Fund Site"
+    if not normalized.get("source_url"):
+        normalized["source_url"] = _fund_family_page_url(entry, ticker)
+    return normalized
+
+
+def _fetch_fund_family_entry_snapshot(entry, ticker, require_identity=False):
+    """Run one issuer parser, with semantic HTML fallback for changed layouts."""
+    body = ""
+    page_url = _fund_family_page_url(entry, ticker)
+    if require_identity:
+        if page_url:
+            body, page_url = _fetch_fund_family_probe_page(entry, ticker)
+            if not _page_identifies_distribution_ticker(body, ticker):
+                return None
+        elif not entry.get("trust_fetcher_for_discovery"):
+            return None
+
+    fetcher = globals().get(entry.get("fetcher"))
+    snapshot = None
+    if fetcher is not None:
+        try:
+            snapshot = fetcher(ticker)
+        except Exception:
+            snapshot = None
+    normalized = _normalize_official_snapshot(entry, ticker, snapshot)
+    if normalized is not None:
+        return normalized
+
+    if page_url and not body:
+        body, page_url = _fetch_fund_family_probe_page(entry, ticker)
+    if not body:
+        return None
+    return _normalize_official_snapshot(
+        entry,
+        ticker,
+        _generic_distribution_snapshot_from_html(
+            body,
+            ticker,
+            entry.get("name") or "Fund Site",
+            page_url,
+        ),
+    )
+
+
+def _fund_family_entry_for_fetcher(fetcher_name):
+    return next(
+        (entry for entry in _FUND_FAMILY_REGISTRY if entry.get("fetcher") == fetcher_name),
+        None,
+    )
+
+
+def _cached_discovered_fund_family(ticker):
+    ticker = (ticker or "").strip().upper()
+    cached = _cache_get(
+        _FUND_FAMILY_DISCOVERY_CACHE,
+        ticker,
+        _FUND_FAMILY_DISCOVERY_TTL_SEC,
+    )
+    if cached is None:
+        persisted = _load_persisted_market_payload(
+            "official", ticker, "fund-family", ttl=30 * 24 * 60 * 60
+        )
+        if isinstance(persisted, dict) and persisted.get("fetcher"):
+            cached = persisted["fetcher"]
+            _cache_set(_FUND_FAMILY_DISCOVERY_CACHE, ticker, cached)
+    if not cached or cached is False:
+        return None
+    return _fund_family_entry_for_fetcher(cached)
+
+
+def _remember_discovered_fund_family(ticker, entry):
+    ticker = (ticker or "").strip().upper()
+    fetcher_name = entry.get("fetcher")
+    _cache_set(_FUND_FAMILY_DISCOVERY_CACHE, ticker, fetcher_name)
+    _persist_market_payload(
+        "official", ticker, "fund-family", {"fetcher": fetcher_name, "name": entry.get("name")}
+    )
+
+
+def _discover_fund_family_snapshot(ticker):
+    """Capability-probe issuer parsers in parallel and remember a confident match."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        return None, None
+    cached_result = _cache_get(
+        _FUND_FAMILY_DISCOVERY_CACHE,
+        ticker,
+        _FUND_FAMILY_DISCOVERY_TTL_SEC,
+    )
+    if cached_result is False:
+        return None, None
+    cached_entry = _cached_discovered_fund_family(ticker)
+    if cached_entry is not None:
+        snapshot = _fetch_fund_family_entry_snapshot(cached_entry, ticker, require_identity=True)
+        if snapshot is not None:
+            return cached_entry, snapshot
+        _FUND_FAMILY_DISCOVERY_CACHE.pop(ticker, None)
+
+    candidates = [
+        entry for entry in _FUND_FAMILY_REGISTRY
+        if entry.get("page_url") or entry.get("trust_fetcher_for_discovery")
+    ]
+    if not candidates:
+        _cache_set(_FUND_FAMILY_DISCOVERY_CACHE, ticker, False)
+        return None, None
+
+    def probe(index_entry):
+        index, entry = index_entry
+        return index, entry, _fetch_fund_family_entry_snapshot(
+            entry, ticker, require_identity=True
+        )
+
+    matches = []
+    with ThreadPoolExecutor(max_workers=min(6, len(candidates))) as executor:
+        for index, entry, snapshot in executor.map(probe, enumerate(candidates)):
+            if snapshot is not None:
+                matches.append((index, entry, snapshot))
+
+    if not matches:
+        _cache_set(_FUND_FAMILY_DISCOVERY_CACHE, ticker, False)
+        return None, None
+    _, entry, snapshot = min(matches, key=lambda item: item[0])
+    _remember_discovered_fund_family(ticker, entry)
+    return entry, snapshot
 
 
 def _match_fund_family(ticker, description=""):
@@ -13796,19 +14360,25 @@ def _match_fund_family(ticker, description=""):
             if extra and not any(ek in text for ek in extra):
                 continue
             return entry
-    return None
+    return _cached_discovered_fund_family(ticker)
 
 
-def _fetch_official_distribution_snapshot(ticker, description=None):
-    """Fetch issuer-published distribution data for supported fund families."""
+def _fetch_official_distribution_snapshot(ticker, description=None, discover=False):
+    """Fetch issuer data, optionally discovering the parser for a new ETF."""
     ticker = (ticker or "").strip().upper()
     description = description or ""
 
     entry = _match_fund_family(ticker, description)
+    discovered_snapshot = None
+    if entry is None and discover:
+        entry, discovered_snapshot = _discover_fund_family_snapshot(ticker)
     if entry is None:
         return None
     cache_key = (ticker, entry["fetcher"])
-    persist_kind = str(entry["fetcher"] or "distribution")
+    persist_kind = (
+        f"{str(entry['fetcher'] or 'distribution')}"
+        f":{_OFFICIAL_DISTRIBUTION_CACHE_VERSION}"
+    )
     cached = _cache_get(
         _OFFICIAL_DISTRIBUTION_CACHE,
         cache_key,
@@ -13827,10 +14397,7 @@ def _fetch_official_distribution_snapshot(ticker, description=None):
     if persisted is not None:
         _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, persisted)
         return persisted
-    fetcher = globals().get(entry["fetcher"])
-    if fetcher is None:
-        return None
-    result = fetcher(ticker)
+    result = discovered_snapshot or _fetch_fund_family_entry_snapshot(entry, ticker)
     if result is not None:
         _cache_set(_OFFICIAL_DISTRIBUTION_CACHE, cache_key, result)
         _persist_market_payload("official", ticker, persist_kind, result)
@@ -13868,7 +14435,12 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
         info = {}
 
     ticker = getattr(yf_ticker, "ticker", None)
-    description = (info or {}).get("longName") or (info or {}).get("shortName") or ""
+    description = " ".join(str(value or "") for value in (
+        (info or {}).get("longName"),
+        (info or {}).get("shortName"),
+        (info or {}).get("fundFamily"),
+        (info or {}).get("category"),
+    )).strip()
 
     try:
         hist = yf_ticker.dividends
@@ -13908,7 +14480,11 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
                 ex_ts = pd.Timestamp(ex_ts, unit="s", tz=_timezone.utc)
             snapshot["ex_div_date"] = _format_mdy_date(ex_ts)
 
-    official = _fetch_official_distribution_snapshot(ticker, description)
+    official = _fetch_official_distribution_snapshot(
+        ticker,
+        description,
+        discover=str((info or {}).get("quoteType") or "").upper() == "ETF",
+    )
     official_pay_date = None
 
     if official:
@@ -14602,6 +15178,9 @@ def refresh_market_data():
                 weekly_set,
                 fallback_frequency=db_freq_map.get(t),
                 history=snapshot.get("history"),
+                frequency_authoritative=bool(
+                    snapshot.get("frequency_authoritative")
+                ),
             )
         else:
             effective_freq[t] = None

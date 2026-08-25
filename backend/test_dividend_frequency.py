@@ -207,6 +207,21 @@ class DividendFrequencyTest(unittest.TestCase):
             "Q",
         )
 
+    def test_official_weekly_frequency_overrides_saved_monthly_with_one_payment(self):
+        divs = _distributions(["2026-08-26"])
+
+        self.assertEqual(
+            app_module._resolve_refresh_dividend_frequency(
+                "KEO",
+                "W",
+                set(),
+                fallback_frequency="M",
+                history=divs,
+                frequency_authoritative=True,
+            ),
+            "W",
+        )
+
     def test_refresh_uses_wrth_launch_schedule_until_spacing_is_observed(self):
         divs = _distributions(["2026-06-29"])
 

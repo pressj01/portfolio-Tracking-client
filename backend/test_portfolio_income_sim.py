@@ -121,7 +121,8 @@ class _DistributionRateSimulationTicker:
 
 class PortfolioIncomeSimulatorTests(unittest.TestCase):
     def test_lookup_uses_fast_quote_when_info_endpoint_fails(self):
-        with patch("yfinance.Ticker", return_value=_InfoFailureTicker()):
+        with patch("yfinance.Ticker", return_value=_InfoFailureTicker()), \
+             patch.object(app_module, "_fetch_official_distribution_snapshot", return_value=None):
             response = app_module.app.test_client().get("/api/lookup/GPIX")
 
         self.assertEqual(response.status_code, 200)
