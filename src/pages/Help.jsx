@@ -1121,8 +1121,10 @@ function HoldingsHelp() {
         The performance screens already cope with this. They work backward from the saved share
         count and assume an opening lot big enough to make the arithmetic land on it, dated the day
         before the first transaction on record. That assumption is invisible, carries no purchase
-        price, and is why a Start Value on Total Return can be flagged as overstated: the assumed
-        shares are priced as though you owned them for the whole period.
+        price, and is why Total Return places an orange warning on Start Value: part of the value
+        depends on shares inferred from the saved holding rather than a visible transaction. The
+        warning means the ledger is incomplete; it does <strong>not</strong> by itself mean the displayed
+        Start Value is too high or otherwise wrong.
       </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>What the button does</h4>
@@ -1157,8 +1159,28 @@ function HoldingsHelp() {
           purchase to draw from were reporting no gain, or their whole proceeds as profit. Once the
           opening lot exists they have lots to consume and recalculate correctly.</li>
         <li><strong>The warning clears.</strong> Nothing is being inferred any more, so the amber ⚠
-          on Total Return&apos;s Start Value disappears for that ticker.</li>
+          on Total Return&apos;s Start Value disappears for that ticker. The Start Value can remain the
+          same because the replay was already pricing those inferred shares.</li>
       </ul>
+
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>What the repair guarantees — and what it cannot:</strong> it guarantees only that the
+        completed BUY/SELL ledger nets to the saved share count. It cannot prove that the saved count,
+        every transaction, the estimated opening date or purchase price, the range&apos;s Start Price, or
+        the resulting Start Value is correct. <strong>Start Price</strong> is the market observation at
+        the range boundary; the estimated price written on the opening BUY is a separate cost-basis
+        input and does not replace Start Price. A recent Start Value can nevertheless be reconstructed
+        without the entire lifetime history when the current share count and every buy, sell, transfer,
+        and split from the selected start through today are complete. If the gap came from a duplicate
+        sale or another missing transaction, correct that row instead of recording an opening lot.
+      </div>
+
+      <p style={{ marginBottom: '0.75rem' }}>
+        From Owner or an Aggregate, the button identifies the underlying account but will not write.
+        Select that account first. After a successful repair, the confirmation shows the estimated
+        opening-lot price and transaction-derived average cost before and after. A repair opened from
+        Total Return then returns to Total Return.
+      </p>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Correcting it later</h4>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -3524,6 +3546,35 @@ function TotalReturnHelp() {
         <li><strong>RvY</strong> — Return vs. Yield. Compares selected-period Total Ret % to the holding&apos;s current yield or yield on cost. A toggle in the column header switches between <strong>CYld</strong> and <strong>YOC</strong>; the label is <strong>Good</strong> when return exceeds the yield scaled to the same window and <strong>Poor</strong> when it does not.</li>
         <li><strong>Closed / Open + Closed views</strong> — The realized view groups sales by ticker; click the expand arrow to inspect the individual sell lots. The combined view shows open, realized, distribution, and net return columns side by side.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>
+        Orange Start Value Warning and Repair
+      </h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        An orange Start Value means the saved holding contains more shares than the complete recorded
+        BUY/SELL ledger accounts for. Total Return reconciles the difference backward as an inferred
+        opening lot so it can still replay performance. The flag therefore means <strong>the displayed
+        value depends on incomplete transaction history</strong>; it does not automatically mean Start
+        Value is overstated. For example, a broker export that begins with DRIPs and sales may simply
+        omit the original purchase.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Click the warned value to open the ticker&apos;s transactions. Use <strong>Record the opening
+        lot</strong> only after confirming that an original purchase or transfer-in is missing. Owner and
+        Aggregate views identify the account that owns the ledger but require you to select that account
+        before writing. The created BUY uses the day before the first saved transaction and that day&apos;s
+        market close as estimates; it remains editable and deletable.
+      </p>
+      <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+        <strong>The repair guarantees share reconciliation, not a correct Start Price or Start Value.</strong>
+        It makes recorded buys minus sells equal the saved share count. It cannot validate the saved count,
+        detect every duplicate or missing transaction, or prove the estimated opening date and purchase
+        price. Start Price is independent market data at the selected range boundary. Start Value may remain
+        unchanged because the replay was already pricing the same inferred shares; the warning clears because
+        the assumption became a transaction, not because the repair independently verified the value. You do
+        not need the entire lifetime history for a recent Start Value if the current share count and every
+        trade, transfer, and split from that recent start through today are complete.
+      </div>
 
       {/* ── How to Use ──────────────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>How to Use</h3>

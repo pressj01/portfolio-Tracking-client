@@ -549,7 +549,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   )
 }
 
-function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
+function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, isNew }) {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(!isNew)
   const [form, setForm] = useState({
@@ -572,13 +572,38 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
   // position. Offering to record them turns a silent assumption into a row.
   const [openingLot, setOpeningLot] = useState(null)
   const [recordingLot, setRecordingLot] = useState(false)
+  const handleOpeningLotAction = () => {
+    if (openingLot?.requires_account_selection || openingLot?.editable_here === false) {
+      window.alert(
+        openingLot?.repair_message
+        || `You must be in the ${openingLot?.account || 'underlying'} account to use this repair.`,
+      )
+      return
+    }
+    recordOpeningLot()
+  }
   const recordOpeningLot = async () => {
     setRecordingLot(true)
     try {
       const res = await pf(`/api/holdings/${ticker}/opening-lot`, { method: 'POST' })
       const data = await res.json()
       if (data.error) setOpeningLot({ ...openingLot, error: data.error })
-      else await fetchTxns()
+      else {
+        const before = data.holding_before?.average_cost
+        const after = data.holding_after?.average_cost
+        const priceChange = before != null && after != null
+          ? `Transaction-derived average cost: ${formatMoney(before)} before → ${formatMoney(after)} after.`
+          : null
+        window.alert([
+          data.message || 'Opening lot recorded.',
+          `Opening lot price: ${formatMoney(data.price_per_share)} per share.`,
+          priceChange,
+          'Original and broker cost-basis figures were preserved.',
+        ].filter(Boolean).join('\n\n'))
+        onSaved()
+        onClose()
+        onOpeningLotRecorded?.(data)
+      }
     } catch (err) {
       setOpeningLot({ ...openingLot, error: String(err?.message || err) })
     } finally {
@@ -613,7 +638,10 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
       setOpeningLot(await res.json())
     } catch { /* advisory as well */ }
   }
-  useEffect(() => { if (ticker) fetchTxns() }, [ticker])
+  // `pf` changes with the account selector. Keep an Owner-opened repair modal
+  // in sync so selecting the named source account enables the same button
+  // without making the user close and reopen the ticker.
+  useEffect(() => { if (ticker) fetchTxns() }, [ticker, pf])
 
   const lookupTicker = async (t) => {
     t = t.trim().toUpperCase()
@@ -930,9 +958,12 @@ function TransactionModal({ ticker, onClose, onSaved, pf, isNew }) {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={recordingLot || openingLot.price_per_share == null}
+                disabled={recordingLot || (
+                  !openingLot.requires_account_selection
+                  && openingLot.price_per_share == null
+                )}
                 style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                onClick={recordOpeningLot}
+                onClick={handleOpeningLotAction}
               >
                 {recordingLot ? 'Recording…' : 'Record the opening lot'}
               </button>
@@ -1774,6 +1805,13 @@ export default function ManageHoldings() {
   const [tickerGrades, setTickerGrades] = useState({})
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [rvyMode, setRvyMode] = useState('cur')
+  const [transactionReturnPath] = useState(() => {
+    const query = window.location.hash.split('?')[1]
+    if (!query) return null
+    return new URLSearchParams(query).get('return') === 'total-return'
+      ? '/total-return'
+      : null
+  })
 
   // ?txn=TICKER opens the transaction modal directly. Positions needing a cost
   // basis are usually closed, so they have no holdings row to click — without
@@ -3291,6 +3329,9 @@ export default function ManageHoldings() {
           onSaved={() => {
             invalidateDashboardCache()
             fetchHoldings()
+          }}
+          onOpeningLotRecorded={() => {
+            if (transactionReturnPath) navigate(transactionReturnPath)
           }}
           pf={pf}
         />

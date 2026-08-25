@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
@@ -820,6 +821,92 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             return row[0] if row else None
         finally:
             conn.close()
+
+    def _seed_missing_opening_lot(self):
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                "INSERT INTO profiles (id, name, include_in_owner, positions_managed) "
+                "VALUES (?, ?, ?, ?)",
+                [(1, "Owner", 0, 0), (7, "Pressj05", 1, 1)],
+            )
+            # Owner carries the visible rollup row; the actual position and
+            # transaction ledger belong to Pressj05.
+            conn.executemany(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, quantity, price_paid, purchase_value,
+                    purchase_date, current_price, current_value, reinvest,
+                    shares_bought_from_dividend, total_cash_reinvested)
+                   VALUES ('JNJ', ?, 10, 100, 1000, '2026-01-02', 120, 1200,
+                           'N', 0, 0)""",
+                [(1,), (7,)],
+            )
+            conn.execute(
+                """INSERT INTO transactions
+                   (ticker, profile_id, transaction_type, transaction_date,
+                    shares, price_per_share, fees, notes)
+                   VALUES ('JNJ', 7, 'BUY', '2026-01-05', 1, 110, 0, '')"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def test_owner_previews_source_account_opening_lot_but_cannot_write_it(self):
+        self._seed_missing_opening_lot()
+        with patch.object(app_module, "_close_on_or_before", return_value=100):
+            preview = self.client.get(
+                "/api/holdings/JNJ/opening-lot?profile_id=1"
+            )
+
+        self.assertEqual(preview.status_code, 200, preview.get_data(as_text=True))
+        payload = preview.get_json()
+        self.assertTrue(payload["needed"])
+        self.assertEqual(payload["profile_id"], 7)
+        self.assertEqual(payload["account"], "Pressj05")
+        self.assertFalse(payload["editable_here"])
+        self.assertTrue(payload["requires_account_selection"])
+        self.assertIn("must be in the Pressj05 account", payload["repair_message"])
+
+        rejected = self.client.post(
+            "/api/holdings/JNJ/opening-lot?profile_id=1"
+        )
+        self.assertEqual(rejected.status_code, 409)
+        self.assertIn("must be in the Pressj05 account", rejected.get_json()["error"])
+        self.assertEqual(
+            self._scalar("SELECT COUNT(*) FROM transactions WHERE profile_id = 7"),
+            1,
+        )
+
+    def test_selected_source_account_can_record_opening_lot(self):
+        self._seed_missing_opening_lot()
+        with patch.object(app_module, "_close_on_or_before", return_value=100):
+            response = self.client.post(
+                "/api/holdings/JNJ/opening-lot?profile_id=7"
+            )
+
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["profile_id"], 7)
+        self.assertEqual(payload["account"], "Pressj05")
+        self.assertTrue(payload["editable_here"])
+        self.assertFalse(payload["requires_account_selection"])
+        self.assertAlmostEqual(payload["shares"], 9.0, places=6)
+        self.assertAlmostEqual(payload["holding_before"]["average_cost"], 100.0)
+        self.assertAlmostEqual(payload["holding_after"]["average_cost"], 101.0)
+        self.assertAlmostEqual(payload["holding_before"]["quantity"], 10.0)
+        self.assertAlmostEqual(payload["holding_after"]["quantity"], 10.0)
+        self.assertEqual(
+            self._scalar("SELECT COUNT(*) FROM transactions WHERE profile_id = 7"),
+            2,
+        )
+        self.assertAlmostEqual(
+            self._scalar(
+                "SELECT quantity FROM all_account_info "
+                "WHERE ticker = 'JNJ' AND profile_id = 7"
+            ),
+            10.0,
+            places=6,
+        )
 
     def test_portfolio_value_includes_transaction_based_irr(self):
         today = datetime.date.today()

@@ -854,12 +854,13 @@ export default function TotalReturn() {
     const sharesText = shares.toLocaleString(undefined, { maximumFractionDigits: 4 })
     const ledger = Number(lot.ledger_net_shares || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
     const saved = Number(lot.snapshot_quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
-    const overstated = lot.start_value_overstatement
-    // The dollar figure is the actionable half: shares alone do not say how far
-    // off the number on screen is.
-    const byHowMuch = overstated == null
+    const inferredValue = lot.start_value_overstatement
+    // The share gap alone does not show how much of the displayed opening value
+    // depends on the inference. It is not necessarily an overstatement: a
+    // truncated export really can be missing the original purchase.
+    const byHowMuch = inferredValue == null
       ? ''
-      : ` Start Value is overstated by about ${fmt(overstated)}`
+      : ` About ${fmt(inferredValue)} of Start Value comes from this inferred lot`
         + (lot.opening_price ? ` (${sharesText} × ${fmt(lot.opening_price)})` : '')
         + '.'
     return (
@@ -1114,6 +1115,49 @@ export default function TotalReturn() {
               Each screen reads live quotes separately, so values can differ intraday. Use Total
               Return ($) to see the actual dollar result of your specific buy and sell timing, which a
               pure percentage cannot show.
+            </p>
+          </section>
+          <section className="tracker-help-wide">
+            <h3>Orange Start Value warning and opening-lot repair</h3>
+            <p>
+              An orange Start Value means the saved holding has more shares than its complete BUY and
+              SELL ledger accounts for. To keep the performance history usable, the tracker temporarily
+              treats the difference as shares owned before the first recorded transaction. Split history
+              is reconciled first so a broker ledger that is already in today&apos;s share units is not
+              split-adjusted a second time.
+            </p>
+            <ol>
+              <li>
+                <strong>Check the history first.</strong> The repair is appropriate when the export begins
+                after the original purchase. If a sale is duplicated or a later purchase is missing,
+                correct that transaction instead; adding an opening lot would legitimize the wrong ledger.
+              </li>
+              <li>
+                <strong>Open the warned value.</strong> Clicking it opens that ticker&apos;s transactions on
+                Holdings. If you are viewing Owner or an Aggregate, the repair button will tell you which
+                underlying account to select. A transaction repair can only be written inside its actual
+                account.
+              </li>
+              <li>
+                <strong>Record and verify the lot.</strong> In the named account, <em>Record the opening
+                lot</em> adds an ordinary BUY one day before the first saved transaction, using that
+                day&apos;s market close as an estimate. The row can then be edited or deleted. Replace the
+                estimated date and price with the broker&apos;s figures when you have them.
+                After a successful repair, the confirmation shows the transaction-derived average
+                cost before and after, then returns here to Total Return.
+              </li>
+            </ol>
+            <p className="tracker-help-note">
+              The repair makes the inferred shares visible and brings the transaction ledger back to the
+              saved share count; that is the only result it guarantees. It does not prove that the saved
+              share count, transaction history, estimated opening date or purchase price, Start Price, or
+              Start Value is correct. Start Price is separate market data for the range boundary and is not
+              replaced by the repair&apos;s estimated purchase price. A recent Start Value can still be exact
+              without lifetime history when the current share count and every trade, transfer, and split
+              from that range&apos;s start through today are complete. The repair preserves the holding&apos;s
+              original and broker cost-basis fields. The displayed Start Value may stay the same because
+              the performance replay was already pricing those shares; in that case the warning disappears
+              because the assumption is now a recorded lot, not because shares were removed from the calculation.
             </p>
           </section>
         </div>
@@ -1555,11 +1599,11 @@ export default function TotalReturn() {
                               role="button"
                               tabIndex={0}
                               title={inferredLotNote(lot, row.ticker)}
-                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)}
+                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
                               onKeyDown={e => {
                                 if (e.key === 'Enter' || e.key === ' ') {
                                   e.preventDefault()
-                                  navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)
+                                  navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)
                                 }
                               }}
                               style={{ color: 'var(--warn, #ffb86c)', cursor: 'pointer' }}
@@ -1625,7 +1669,7 @@ export default function TotalReturn() {
                                 `This total includes ${footerInferredShares.toLocaleString(undefined, { maximumFractionDigits: 4 })} shares`
                                 + ` across ${footerInferredTickers.length} position${footerInferredTickers.length === 1 ? '' : 's'}`
                                 + ` (${footerInferredTickers.join(', ')}) that no transaction accounts for,`
-                                + ` overstating this total by about ${fmt(footerInferredValue)}.`
+                                + ` with about ${fmt(footerInferredValue)} of Start Value coming from inferred lots.`
                                 + ' See the flagged Start Value cells above.'
                               }
                               style={{ color: 'var(--warn, #ffb86c)' }}

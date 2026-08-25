@@ -18984,6 +18984,44 @@ def _opening_lot_plan(conn, ticker, profile_id):
     }
 
 
+def _opening_lot_view_profiles(conn, ticker, is_aggregate, profile_ids):
+    """Return the real accounts that can own an opening-lot repair.
+
+    Owner is a materialized holdings rollup, but its transaction history lives
+    in the linked source accounts. Total Return already replays those accounts,
+    so looking for the repair on Owner itself makes the warning and Holding
+    screen disagree: the warning is calculated from Pressj05 while the repair
+    endpoint checks profile 1 and reports ``no_transactions``.
+
+    Keep writes account-scoped. A rollup may preview which underlying account
+    needs attention, but the user must select that account before POST can add
+    the transaction.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or [1])))
+    is_owner_rollup = not is_aggregate and ids == [1]
+    if is_owner_rollup:
+        source_ids = _get_owner_source_profile_ids(conn)
+        if source_ids:
+            ids = source_ids
+
+    if not ids:
+        return [1], bool(is_aggregate or is_owner_rollup)
+
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT profile_id, SUM(COALESCE(quantity, 0)) AS quantity
+              FROM all_account_info
+             WHERE UPPER(ticker) = ? AND profile_id IN ({placeholders})
+          GROUP BY profile_id
+            HAVING SUM(COALESCE(quantity, 0)) > 1e-9""",
+        [ticker, *ids],
+    ).fetchall()
+    held_ids = [int(row["profile_id"]) for row in rows]
+    # A missing holding should still return a useful no-position plan instead
+    # of indexing an empty list below.
+    return held_ids or ids[:1], bool(is_aggregate or (is_owner_rollup and ids != [1]))
+
+
 def _close_on_or_before(ticker, day):
     """Closing price on `day`, or the last session before it."""
     try:
@@ -19017,16 +19055,39 @@ def holding_opening_lot(ticker):
     is_agg, pids = get_profile_filter()
     conn = get_connection()
     try:
-        profile_id = (
-            _resolve_aggregate_profile(ticker, pids) if is_agg else pids[0]
+        candidate_ids, requires_account_selection = _opening_lot_view_profiles(
+            conn, ticker, is_agg, pids,
         )
-        plan = _opening_lot_plan(conn, ticker, profile_id)
-        account = conn.execute(
-            "SELECT name FROM profiles WHERE id = ?", (profile_id,),
-        ).fetchone()
+        names = _load_profile_name_map(conn, candidate_ids)
+        candidate_plans = []
+        for candidate_id in candidate_ids:
+            candidate_plan = _opening_lot_plan(conn, ticker, candidate_id)
+            candidate_plan["profile_id"] = candidate_id
+            candidate_plan["account"] = names.get(candidate_id)
+            candidate_plans.append(candidate_plan)
+
+        # Prefer an actionable gap over no-position/reconciled plans. A ticker
+        # can live in more than one rollup member, but a POST is deliberately
+        # unavailable until one real account is selected, removing ambiguity.
+        plan = next(
+            (item for item in candidate_plans if item.get("needed")),
+            candidate_plans[0],
+        )
+        profile_id = int(plan["profile_id"])
         plan["ticker"] = ticker
-        plan["profile_id"] = profile_id
-        plan["account"] = account["name"] if account else None
+        plan["editable_here"] = not requires_account_selection
+        plan["requires_account_selection"] = requires_account_selection
+        if requires_account_selection and plan.get("needed"):
+            account_label = plan.get("account") or "the underlying account"
+            plan["repair_message"] = (
+                f"You must be in the {account_label} account to use this repair. "
+                "Select that account from the portfolio menu, then use the repair button again."
+            )
+            if request.method == "POST":
+                return jsonify({
+                    **plan,
+                    "error": plan["repair_message"],
+                }), 409
         if not plan.get("needed"):
             return jsonify(plan)
 
@@ -19047,6 +19108,11 @@ def holding_opening_lot(ticker):
                          "Add the purchase manually with the price you paid.",
             }), 422
 
+        holding_before = conn.execute(
+            "SELECT quantity, price_paid, purchase_value "
+            "FROM all_account_info WHERE UPPER(ticker) = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchone()
         new_id = insert_equity_transaction(
             conn, ticker, profile_id,
             transaction_type="BUY",
@@ -19066,8 +19132,25 @@ def holding_opening_lot(ticker):
         conn.commit()
         _rollup_transactions(ticker, profile_id, conn)
         conn.commit()
+        holding_after = conn.execute(
+            "SELECT quantity, price_paid, purchase_value "
+            "FROM all_account_info WHERE UPPER(ticker) = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchone()
+
+        def holding_snapshot(row):
+            if not row:
+                return None
+            return {
+                "quantity": round(float(row["quantity"] or 0), 6),
+                "average_cost": round(float(row["price_paid"] or 0), 4),
+                "transaction_cost_basis": round(float(row["purchase_value"] or 0), 2),
+            }
+
         _clear_total_return_caches()
         plan["transaction_id"] = new_id
+        plan["holding_before"] = holding_snapshot(holding_before)
+        plan["holding_after"] = holding_snapshot(holding_after)
         plan["message"] = (
             f"Recorded {plan['shares']:g} shares of {ticker} on {plan['date']}."
         )
