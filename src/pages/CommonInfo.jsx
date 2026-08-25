@@ -28,9 +28,9 @@ const VIEW_COLUMNS = {
     'dividendYield', 'estimatedYield', 'dividendGrowth', 'paidForItself', 'totalProfit', 'shareOfPortfolio', 'nav',
   ],
   general: [
-    'holding', 'status', 'shares', 'category', 'subcategory',
+    'holding', 'status', 'shares', 'category', 'subcategory', 'shareOfPortfolio',
     'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'unrealizedGain', 'unrealizedPct',
-    'shareOfPortfolio', 'nav',
+    'nav',
   ],
   dividends: [
     'holding', 'shares', 'category', 'subcategory', 'currentValue', 'dividends', 'dividendYield',
