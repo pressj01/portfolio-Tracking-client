@@ -1382,7 +1382,7 @@ const COLUMNS = [
   { key: 'delta_down', label: 'Δ Down', type: 'number', width: 80, tip: 'Approximate effective delta on benchmark down-days from return regression' },
   { key: 'ret_vs_yld', label: 'RvY', type: 'string', width: 88, tip: 'Return vs yield over the selected range. Good means total return exceeds yield; Poor means yield exceeds total return.' },
   { key: 'closure_risk', label: 'Close?', type: 'string', width: 76, tip: 'Risk the ETF issuer shuts the fund down for being too small. Stocks are not rated.' },
-  { key: 'grade', label: 'Grd', type: 'string', width: 56, tip: 'Composite grade for the selected market window. Blank on Life.' },
+  { key: 'grade', label: 'Grd', type: 'string', sortFirst: 'desc', width: 56, tip: 'Composite grade for the selected market window. Blank on Life.' },
   { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80, tip: 'Yield on Cost — annual dividend income as a percentage of your original cost basis' },
   { key: 'current_annual_yield', label: 'Yield', type: 'number', width: 80, tip: 'Current annual dividend yield based on the current market price' },
   { key: 'dividend_paid', label: 'Div Paid', type: 'number', width: 100, tip: 'Last dividend amount actually paid per share' },
@@ -1962,7 +1962,7 @@ export default function ManageHoldings() {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     } else {
       setSortKey(key)
-      setSortDir('asc')
+      setSortDir(COLUMNS.find(c => c.key === key)?.sortFirst || 'asc')
     }
   }
 
@@ -2037,7 +2037,7 @@ export default function ManageHoldings() {
         _risk: risk,
         _closure: closure,
         _closure_sort: CLOSURE_TIER[closure?.tier] ? { high: 3, elevated: 2, watch: 1, ok: 0, unknown: -1 }[closure.tier] : -2,
-        _grade_sort: GRADE_RANK[grade] || 0,
+        _grade_sort: GRADE_RANK[grade] ?? null,
         grade,
       }
     })
@@ -2071,7 +2071,11 @@ export default function ManageHoldings() {
     if (av == null) return 1
     if (bv == null) return -1
     let cmp
-    if (col?.type === 'number') {
+    // Grd, Close? and RvY are laid out as string columns but sort on a numeric
+    // rank, so trust the value's own type before falling back to the column's.
+    if (typeof av === 'number' && typeof bv === 'number') {
+      cmp = av - bv
+    } else if (col?.type === 'number') {
       cmp = Number(av) - Number(bv)
     } else {
       cmp = String(av).localeCompare(String(bv))
