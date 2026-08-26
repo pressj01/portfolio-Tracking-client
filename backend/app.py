@@ -6361,17 +6361,16 @@ def delete_profile(pid):
     if refused:
         return refused
 
-    _create_import_backup(pid)
+    backup_path = _create_import_backup(pid)
     conn = get_connection()
     try:
-        # The profile row is going away, so sweep every table that stores data
-        # against it. Clearing only the holdings tables (the old behaviour) left
-        # the ledger, NAV history, and saved plans behind as unreachable rows.
-        deleted = {}
-        for table in _profile_scoped_tables(conn):
-            result = conn.execute(f'DELETE FROM "{table}" WHERE profile_id = ?', (pid,))
-            deleted[table] = result.rowcount or 0
-        conn.execute("DELETE FROM aggregate_config WHERE member_profile_id = ?", (pid,))
+        # Remove child rows before their parents.  Alphabetically sweeping only
+        # tables with profile_id fails on populated databases: builder_holdings,
+        # for example, points at builder_portfolios without carrying profile_id
+        # itself, while ticker_categories points at categories.  The target list
+        # includes those indirect children and orders profile-scoped tables from
+        # child to parent using the live foreign-key graph.
+        deleted = _delete_profile_records(conn, pid)
         conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
         conn.commit()
     finally:
@@ -6381,6 +6380,7 @@ def delete_profile(pid):
         "profile_name": name,
         "removed": deleted,
         "total": sum(deleted.values()),
+        "backup": os.path.basename(backup_path) if backup_path else None,
         "message": f'Deleted "{name}" and all {sum(deleted.values())} of its records.',
     })
 
@@ -6680,7 +6680,125 @@ def _profile_scoped_tables(conn):
         cols = {row[1] for row in conn.execute(f'PRAGMA table_info("{name}")').fetchall()}
         if "profile_id" in cols:
             scoped.append(name)
-    return scoped
+
+    # A deterministic alphabetical sweep is not a safe deletion order.  Several
+    # profile-scoped tables reference one another (ticker_categories ->
+    # categories, subcategories -> categories).  Visit every child before its
+    # parent so DELETE works with PRAGMA foreign_keys=ON, as production does.
+    scoped_set = set(scoped)
+    children_by_parent = {name: set() for name in scoped}
+    for child in scoped:
+        for fk in conn.execute(f'PRAGMA foreign_key_list("{child}")').fetchall():
+            parent = fk[2]
+            if parent in scoped_set and parent != child:
+                children_by_parent[parent].add(child)
+
+    ordered = []
+    state = {}
+
+    def visit(table):
+        if state.get(table) == "done":
+            return
+        if state.get(table) == "visiting":
+            # The current schema has no cycles.  If a future migration adds one,
+            # leave SQLite to enforce it instead of recursing forever.
+            return
+        state[table] = "visiting"
+        for child in sorted(children_by_parent[table]):
+            visit(child)
+        state[table] = "done"
+        ordered.append(table)
+
+    for table in scoped:
+        visit(table)
+    return ordered
+
+
+# Records owned by a profile through a parent id or a logical scope rather than
+# a profile_id column of their own.  These have to be removed explicitly before
+# the profile-scoped parent rows.  Keeping the predicates here also lets Delete's
+# preview count the same records that the action will remove.
+_PROFILE_DELETE_INDIRECT_TARGETS = (
+    (
+        "cash_flow_month_overrides",
+        "item_id IN (SELECT i.id FROM cash_flow_items i JOIN cash_flow_plans p ON p.id = i.plan_id "
+        "WHERE p.scope_type = 'profile' AND p.scope_id = ?)",
+    ),
+    (
+        "cash_flow_item_payments",
+        "item_id IN (SELECT i.id FROM cash_flow_items i JOIN cash_flow_plans p ON p.id = i.plan_id "
+        "WHERE p.scope_type = 'profile' AND p.scope_id = ?)",
+    ),
+    (
+        "cash_flow_settings",
+        "plan_id IN (SELECT id FROM cash_flow_plans WHERE scope_type = 'profile' AND scope_id = ?)",
+    ),
+    (
+        "cash_flow_items",
+        "plan_id IN (SELECT id FROM cash_flow_plans WHERE scope_type = 'profile' AND scope_id = ?)",
+    ),
+    ("cash_flow_plans", "scope_type = 'profile' AND scope_id = ?"),
+    (
+        "builder_holdings",
+        "portfolio_id IN (SELECT id FROM builder_portfolios WHERE profile_id = ?)",
+    ),
+    (
+        "simulator_holdings",
+        "portfolio_id IN (SELECT id FROM simulator_portfolios WHERE profile_id = ?)",
+    ),
+    ("aggregate_config", "member_profile_id = ?"),
+    ("action_center_completions", "scope_key = 'profile:' || CAST(? AS TEXT)"),
+)
+
+
+def _profile_delete_targets(conn):
+    """Return every profile-owned DELETE target in dependency-safe order."""
+    existing = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    targets = [
+        (table, predicate)
+        for table, predicate in _PROFILE_DELETE_INDIRECT_TARGETS
+        if table in existing
+    ]
+    targets.extend(
+        (table, "profile_id = ?") for table in _profile_scoped_tables(conn)
+    )
+    return targets
+
+
+def _delete_profile_records(conn, pid):
+    """Delete all direct and indirect records owned by one profile."""
+    # Another portfolio may borrow this portfolio's cash-flow plan.  Detach the
+    # link before removing the source so the survivor does not retain a dangling
+    # source_plan_id (this column predates formal foreign keys).
+    existing = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if "cash_flow_plans" in existing:
+        plan_cols = {
+            row[1] for row in conn.execute('PRAGMA table_info("cash_flow_plans")').fetchall()
+        }
+        if "source_plan_id" in plan_cols:
+            conn.execute(
+                "UPDATE cash_flow_plans SET source_plan_id = NULL "
+                "WHERE source_plan_id IN ("
+                "SELECT id FROM cash_flow_plans WHERE scope_type = 'profile' AND scope_id = ?)",
+                (pid,),
+            )
+
+    deleted = {}
+    for table, predicate in _profile_delete_targets(conn):
+        result = conn.execute(
+            f'DELETE FROM "{table}" WHERE {predicate}',
+            (pid,),
+        )
+        deleted[table] = max(0, result.rowcount or 0)
+    return deleted
 
 
 def _profile_tables_for_scope(conn, scope):
@@ -6699,9 +6817,14 @@ def _profile_tables_for_scope(conn, scope):
 def _profile_reset_counts(conn, pid, scope="reset"):
     """Row counts per table for the given action's scope."""
     counts = {}
-    for table in _profile_tables_for_scope(conn, scope):
+    targets = (
+        _profile_delete_targets(conn)
+        if scope == "delete"
+        else [(table, "profile_id = ?") for table in _profile_tables_for_scope(conn, scope)]
+    )
+    for table, predicate in targets:
         row = conn.execute(
-            f'SELECT COUNT(*) AS c FROM "{table}" WHERE profile_id = ?', (pid,)
+            f'SELECT COUNT(*) AS c FROM "{table}" WHERE {predicate}', (pid,)
         ).fetchone()
         counts[table] = int(row["c"] if isinstance(row, dict) else row[0])
     return counts

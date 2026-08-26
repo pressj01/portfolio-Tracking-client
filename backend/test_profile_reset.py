@@ -59,6 +59,7 @@ class _ProfileFixture:
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     def _seed_profile(self, conn, pid):
@@ -368,6 +369,112 @@ class ClearAndDeleteWarningTest(_ProfileFixture, unittest.TestCase):
             conn.close()
         self.assertEqual(orphans, {}, f"deleting a portfolio left orphan rows: {orphans}")
         self.assertEqual(self.backups, [2])
+
+    def test_delete_removes_linked_child_records_before_their_parents(self):
+        """A real portfolio can have linked rows that do not carry profile_id."""
+        conn = self._get_connection()
+        try:
+            category_id = conn.execute(
+                "SELECT id FROM categories WHERE profile_id = 2"
+            ).fetchone()["id"]
+            subcategory_id = conn.execute(
+                "INSERT INTO subcategories (category_id, name, profile_id) VALUES (?, 'Monthly', 2)",
+                (category_id,),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO ticker_categories (ticker, category_id, profile_id, subcategory_id) "
+                "VALUES ('AAA2', ?, 2, ?)",
+                (category_id, subcategory_id),
+            )
+
+            builder_id = conn.execute(
+                "INSERT INTO builder_portfolios (profile_id, name) VALUES (2, 'Linked builder')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) "
+                "VALUES (?, 'AAA2', 1000)",
+                (builder_id,),
+            )
+            simulator_id = conn.execute(
+                "INSERT INTO simulator_portfolios (profile_id, name) VALUES (2, 'Linked simulation')"
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO simulator_holdings (portfolio_id, ticker, dollar_amount) "
+                "VALUES (?, 'AAA2', 1000)",
+                (simulator_id,),
+            )
+
+            plan_id = conn.execute(
+                "INSERT INTO cash_flow_plans "
+                "(name, scope_type, scope_id, is_default) VALUES ('User plan', 'profile', 2, 1)"
+            ).lastrowid
+            item_id = conn.execute(
+                "INSERT INTO cash_flow_items "
+                "(plan_id, kind, name, amount_cents, frequency, start_date) "
+                "VALUES (?, 'expense', 'Rent', 100000, 'monthly', '2026-01-01')",
+                (plan_id,),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO cash_flow_month_overrides (item_id, month, amount_cents) "
+                "VALUES (?, '2026-02', 110000)",
+                (item_id,),
+            )
+            conn.execute(
+                "INSERT INTO cash_flow_item_payments (item_id, due_date) "
+                "VALUES (?, '2026-02-01')",
+                (item_id,),
+            )
+            conn.execute(
+                "INSERT INTO cash_flow_settings (plan_id) VALUES (?)",
+                (plan_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        preview = self.client.get("/api/profiles/2/data-preview?scope=delete")
+        self.assertEqual(preview.status_code, 200)
+        preview_counts = preview.get_json()["counts"]
+        self.assertEqual(preview_counts["builder_holdings"], 1)
+        self.assertEqual(preview_counts["simulator_holdings"], 1)
+        self.assertEqual(preview_counts["cash_flow_items"], 1)
+
+        res = self.client.delete("/api/profiles/2", json={"confirm_name": "Brokerage"})
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+
+        conn = self._get_connection()
+        try:
+            for table in (
+                "builder_holdings",
+                "builder_portfolios",
+                "simulator_holdings",
+                "simulator_portfolios",
+                "cash_flow_month_overrides",
+                "cash_flow_item_payments",
+                "cash_flow_settings",
+                "cash_flow_items",
+                "cash_flow_plans",
+            ):
+                self.assertEqual(
+                    conn.execute(f'SELECT COUNT(*) AS c FROM "{table}"').fetchone()["c"],
+                    0,
+                    f"{table} should not retain data owned by the deleted portfolio",
+                )
+            for table in ("ticker_categories", "subcategories", "categories"):
+                self.assertEqual(
+                    conn.execute(
+                        f'SELECT COUNT(*) AS c FROM "{table}" WHERE profile_id = 2'
+                    ).fetchone()["c"],
+                    0,
+                    f"{table} should not retain data owned by the deleted portfolio",
+                )
+            self.assertEqual(
+                conn.execute("PRAGMA foreign_key_check").fetchall(),
+                [],
+                "profile deletion must not leave foreign-key violations",
+            )
+        finally:
+            conn.close()
 
     def test_delete_does_not_touch_other_portfolios(self):
         self.client.delete("/api/profiles/2", json={"confirm_name": "Brokerage"})
