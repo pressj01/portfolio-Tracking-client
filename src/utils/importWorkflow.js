@@ -45,6 +45,13 @@ export const IMPORT_BROKERS = [
     transactionsFormat: 'shear_group_activity',
     transactionsMultiFormat: 'shear_group_all_accounts_activity',
   },
+  {
+    id: 'interactive_brokers',
+    label: 'Interactive Brokers',
+    source: 'interactive_brokers',
+    positionsFormat: 'interactive_brokers',
+    transactionsFormat: 'interactive_brokers_transactions',
+  },
 ]
 
 export const TXN_FORMATS = [
@@ -62,6 +69,8 @@ export const TXN_FORMATS = [
   { value: 'shear_group_all_accounts', label: 'Shear Group (All Accounts Positions)' },
   { value: 'shear_group_activity', label: 'Shear Group (Activity)' },
   { value: 'shear_group_all_accounts_activity', label: 'Shear Group (All Accounts Activity)' },
+  { value: 'interactive_brokers', label: 'Interactive Brokers (Positions)' },
+  { value: 'interactive_brokers_transactions', label: 'Interactive Brokers (Transactions)' },
   { value: 'portfolio_export', label: 'Portfolio Export (Holdings + Transactions)' },
   { value: 'generic_transactions', label: 'Generic Transactions' },
   { value: 'snowball_holdings', label: 'Snowball Holdings (Migration)' },
@@ -78,6 +87,7 @@ export const POSITIONS_FORMATS = new Set([
   'robinhood',
   'shear_group',
   'shear_group_all_accounts',
+  'interactive_brokers',
   'snowball_holdings',
 ])
 
@@ -90,6 +100,7 @@ export const TRANSACTION_FORMATS = new Set([
   'robinhood_transactions',
   'shear_group_activity',
   'shear_group_all_accounts_activity',
+  'interactive_brokers_transactions',
 ])
 
 export const MULTI_ACCOUNT_FORMATS = new Set([

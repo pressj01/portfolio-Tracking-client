@@ -9,6 +9,7 @@ const FORMATS = [
   ['fidelity', 'Fidelity Transactions'],
   ['robinhood', 'Robinhood Transactions'],
   ['shear_group', 'Shear Group Activity'],
+  ['interactive_brokers', 'Interactive Brokers Transactions'],
 ]
 
 const TEMPLATE = [

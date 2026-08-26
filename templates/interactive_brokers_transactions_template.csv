@@ -1,0 +1,13 @@
+Statement,Header,Field Name,Field Value
+Statement,Data,Title,Transaction History
+Statement,Data,Period,"February 23, 2026 - August 25, 2026"
+Account Information,Header,Field Name,Field Value
+Account Information,Data,Account,U0000000
+Transaction History,Header,Date,Account,Description,Transaction Type,Symbol,Quantity,Price,Price Currency,Gross Amount,Commission,Net Amount
+Transaction History,Data,2026-03-06,U0000000,JPMORGAN EQUITY PREMIUM INCOME ETF,Buy,JEPI,25.0,57.20,USD,-1430.00,-0.35,-1430.35
+Transaction History,Data,2026-03-20,U0000000,JEPI(US46641Q3320) Cash Dividend USD 0.45 per Share (Ordinary Dividend),Dividend,JEPI,-,-,-,45.00,-,45.00
+Transaction History,Data,2026-03-20,U0000000,JPMORGAN EQUITY PREMIUM INCOME ETF,Buy,JEPI,0.7867,57.20,USD,-45.00,0,-45.00
+Transaction History,Data,2026-04-07,U0000000,SCHWAB US DIVIDEND EQUITY ETF,Sell,SCHD,-10.0,82.50,USD,825.00,-0.45,824.55
+Transaction History,Data,2026-04-15,U0000000,MLPI(US78433H4855) Payment in Lieu of Dividend (Ordinary Dividend),Payment in Lieu,MLPI,-,-,-,26.74,-,26.74
+Transaction History,Data,2026-03-20,U0000000,Buy 200 PROSHARES ULTRA SILVER (Assignment),Assignment,AGQ,200.0,100.0,USD,-20000.0,-,-20000.0
+Transaction History,Data,2026-05-05,U0000000,USD Debit Interest for Apr-2026,Debit Interest,-,-,-,-,-12.00,-,-12.00

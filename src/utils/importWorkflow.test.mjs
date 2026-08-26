@@ -18,8 +18,8 @@ import {
   isPinnableFormat,
 } from './importWorkflow.js'
 
-test('keeps the 19 brokerage import formats', () => {
-  assert.equal(TXN_FORMATS.length, 19)
+test('keeps the 21 brokerage import formats', () => {
+  assert.equal(TXN_FORMATS.length, 21)
   assert.deepEqual(TXN_FORMATS.map((item) => item.value), [
     'schwab',
     'schwab_all_accounts',
@@ -35,12 +35,31 @@ test('keeps the 19 brokerage import formats', () => {
     'shear_group_all_accounts',
     'shear_group_activity',
     'shear_group_all_accounts_activity',
+    'interactive_brokers',
+    'interactive_brokers_transactions',
     'portfolio_export',
     'generic_transactions',
     'snowball_holdings',
     'snowball_categories',
     'snowball',
   ])
+})
+
+test('Interactive Brokers is a single-account workflow like E*TRADE', () => {
+  assert.deepEqual(describeWorkflow('interactive_brokers'), {
+    brokerId: 'interactive_brokers',
+    role: 'positions',
+    schwabAllAccounts: false,
+    kind: 'positions',
+  })
+  assert.deepEqual(describeWorkflow('interactive_brokers_transactions'), {
+    brokerId: 'interactive_brokers',
+    role: 'transactions',
+    schwabAllAccounts: false,
+    kind: 'transactions',
+  })
+  assert.equal(isPositionsFormat('interactive_brokers'), true)
+  assert.equal(IMPORT_BROKERS.some((broker) => broker.id === 'interactive_brokers'), true)
 })
 
 test('Schwab, Fidelity, and Shear Group have All-Accounts positions formats', () => {
@@ -121,6 +140,13 @@ test('broker + role resolve to the single-account formats', () => {
   }), 'schwab_all_accounts')
   assert.equal(formatForWorkflow({ brokerId: 'fidelity', role: 'transactions' }), 'fidelity_transactions')
   assert.equal(formatForWorkflow({ brokerId: 'shear_group', role: 'transactions' }), 'shear_group_activity')
+  assert.equal(formatForWorkflow({ brokerId: 'interactive_brokers', role: 'positions' }), 'interactive_brokers')
+  assert.equal(formatForWorkflow({ brokerId: 'interactive_brokers', role: 'transactions' }), 'interactive_brokers_transactions')
+  assert.equal(formatForWorkflow({
+    brokerId: 'interactive_brokers',
+    role: 'positions',
+    schwabAllAccounts: true,
+  }), 'interactive_brokers')
 })
 
 test('switching accounts resets Broker Import to that account broker', () => {
@@ -154,8 +180,10 @@ test('transaction formats need a positions snapshot first', () => {
   assert.equal(needsPositionsSnapshotFirst('schwab_transactions'), true)
   assert.equal(needsPositionsSnapshotFirst('etrade_transactions'), true)
   assert.equal(needsPositionsSnapshotFirst('shear_group_activity'), true)
+  assert.equal(needsPositionsSnapshotFirst('interactive_brokers_transactions'), true)
   assert.equal(needsPositionsSnapshotFirst('generic_transactions'), true)
   assert.equal(needsPositionsSnapshotFirst('schwab'), false)
+  assert.equal(needsPositionsSnapshotFirst('interactive_brokers'), false)
   assert.equal(needsPositionsSnapshotFirst('snowball_categories'), false)
 })
 
@@ -163,6 +191,7 @@ test('maps a portfolio broker source onto the checklist broker', () => {
   assert.equal(brokerIdFromSource('schwab'), 'schwab')
   assert.equal(brokerIdFromSource('E*TRADE'), '')
   assert.equal(brokerIdFromSource('etrade'), 'etrade')
+  assert.equal(brokerIdFromSource('interactive_brokers'), 'interactive_brokers')
   assert.equal(brokerIdFromSource(''), '')
   assert.equal(brokerIdFromSource('snowball'), '')
 })

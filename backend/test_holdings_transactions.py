@@ -102,6 +102,25 @@ class BrokerImportRoutingTest(unittest.TestCase):
                 _broker_import_target_error(41, "snowball", self.conn)
             )
 
+    def test_interactive_brokers_source_authorizes_ib_import(self):
+        self.conn.execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner) VALUES (44, 'IBKR Test', 'interactive_brokers', 0)"
+        )
+        for fmt in ("interactive_brokers", "interactive_brokers_transactions"):
+            with self.subTest(fmt=fmt):
+                with app_module.app.test_request_context("/api/import/transactions/preview"):
+                    self.assertIsNone(
+                        _broker_import_target_error(44, fmt, self.conn)
+                    )
+                match = _account_match_info(
+                    "U4921319",
+                    "IBKR Test",
+                    fmt,
+                    "interactive_brokers",
+                )
+                self.assertTrue(match["matched"])
+                self.assertEqual(match["reason"], "broker_source_match")
+
 
 class HoldingsTransactionTest(unittest.TestCase):
     def setUp(self):
@@ -666,6 +685,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 quantity REAL,
                 price_paid REAL,
                 purchase_value REAL,
+                original_price_paid REAL,
+                original_purchase_value REAL,
+                broker_price_paid REAL,
+                broker_purchase_value REAL,
                 purchase_date TEXT,
                 base_quantity REAL,
                 import_date TEXT,
@@ -780,6 +803,12 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
+            CREATE TABLE monthly_payouts (
+                profile_id INTEGER,
+                year INTEGER,
+                month INTEGER,
+                amount REAL
+            );
             """
         )
         conn.close()
@@ -821,6 +850,48 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             return row[0] if row else None
         finally:
             conn.close()
+
+    def test_income_summary_lifetime_includes_dividends_from_closed_positions(self):
+        today = datetime.date.today()
+        current_year_date = today.replace(month=1, day=15).isoformat()
+        prior_year_date = today.replace(year=today.year - 1, month=12, day=15).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (28, 'Interactive Brokers', 0)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, total_divs_received, ytd_divs)
+               VALUES ('OPEN', 28, 10, 100, 90)"""
+        )
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                """INSERT INTO dividend_payments
+                   (ticker, profile_id, payment_date, amount, source)
+                   VALUES (?, 28, ?, ?, 'interactive_brokers')""",
+                [
+                    ("OPEN", prior_year_date, 10),
+                    ("OPEN", current_year_date, 80),
+                    ("CLOSED", current_year_date, 20),
+                    ("ESTIMATE", current_year_date, 999),
+                ],
+            )
+            conn.execute(
+                "UPDATE dividend_payments SET source = 'refresh_estimate' "
+                "WHERE ticker = 'ESTIMATE' AND profile_id = 28"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = self.client.get("/api/income-summary?profile_id=28")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["ytd_income"], 100.0)
+        # OPEN keeps its longer snapshot history ($100), while the closed
+        # position contributes its ledger-only $20.
+        self.assertEqual(data["lifetime_income"], 120.0)
 
     def _seed_missing_opening_lot(self):
         conn = self._get_connection()
@@ -1807,6 +1878,191 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertAlmostEqual(div_total, 5.0, places=2)
         self.assertAlmostEqual(holding["quantity"], 10.0, places=4)
         self.assertAlmostEqual(holding["total_divs_received"], 5.0, places=2)
+
+    def test_interactive_brokers_positions_use_statement_date_as_tracking_anchor(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (31, 'Interactive Brokers', 'interactive_brokers', 0, 0)"
+        )
+        content = (
+            "Statement,Header,Field Name,Field Value\n"
+            "Statement,Data,BrokerName,Interactive Brokers LLC\n"
+            "Statement,Data,Title,Activity Statement\n"
+            'Statement,Data,Period,"July 1, 2026 - July 31, 2026"\n'
+            "Account Information,Header,Field Name,Field Value\n"
+            "Account Information,Data,Account,U0000000\n"
+            "Open Positions,Header,DataDiscriminator,Asset Category,Currency,Symbol,Quantity,Mult,Cost Price,Cost Basis,Close Price,Value,Unrealized P/L,Code\n"
+            "Open Positions,Data,Summary,Stocks,USD,BST,125,1,30.0164,3752.05,49.67,6208.75,2456.70,\n"
+        )
+
+        original_holdings = app_module.populate_holdings
+        original_dividends = app_module.populate_dividends
+        original_income = app_module.populate_income_tracking
+        original_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_holdings = lambda profile_id: None
+        app_module.populate_dividends = lambda profile_id: None
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            response = self.client.post(
+                "/api/import/transactions?profile_id=31",
+                data={
+                    "format": "interactive_brokers",
+                    "nav_date": "2026-07-31",
+                    "file": (io.BytesIO(content.encode()), "positions.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_holdings = original_holdings
+            app_module.populate_dividends = original_dividends
+            app_module.populate_income_tracking = original_income
+            app_module._snapshot_nav_after_profile_update = original_snapshot
+
+        self.assertEqual(response.status_code, 200)
+        conn = self._get_connection()
+        try:
+            holding = conn.execute(
+                "SELECT import_date FROM all_account_info "
+                "WHERE profile_id = 31 AND ticker = 'BST'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(holding["import_date"], "2026-07-31")
+
+    def test_interactive_brokers_keeps_same_amount_dividends_on_nearby_dates(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (32, 'Interactive Brokers', 'interactive_brokers', 0, 1)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, price_paid, purchase_value, current_value)
+               VALUES ('WEEK', 32, 10, 20, 200, 210)"""
+        )
+        content = (
+            "Statement,Header,Field Name,Field Value\n"
+            "Statement,Data,Title,Transaction History\n"
+            "Transaction History,Header,Date,Account,Description,Transaction Type,Symbol,Quantity,Price,Price Currency,Gross Amount,Commission,Net Amount\n"
+            "Transaction History,Data,2026-08-03,U0000000,WEEK Cash Dividend,Dividend,WEEK,-,-,USD,10.00,-,10.00\n"
+            "Transaction History,Data,2026-08-06,U0000000,WEEK Cash Dividend,Dividend,WEEK,-,-,USD,10.00,-,10.00\n"
+        )
+
+        original_income = app_module.populate_income_tracking
+        original_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            def post():
+                return self.client.post(
+                    "/api/import/transactions?profile_id=32",
+                    data={
+                        "format": "interactive_brokers_transactions",
+                        "file": (io.BytesIO(content.encode()), "ib-transactions.csv"),
+                    },
+                    content_type="multipart/form-data",
+                )
+
+            first = post()
+            second = post()
+        finally:
+            app_module.populate_income_tracking = original_income
+            app_module._snapshot_nav_after_profile_update = original_snapshot
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(first.get_json()["dividends_applied"], 2)
+        self.assertEqual(second.get_json()["duplicates_skipped"], 2)
+        conn = self._get_connection()
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) AS rows, SUM(amount) AS amount "
+                "FROM dividend_payments WHERE profile_id = 32 AND ticker = 'WEEK'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row["rows"], 2)
+        self.assertEqual(row["amount"], 20.0)
+
+    def test_interactive_brokers_rolls_month_end_positions_through_later_trades(self):
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (33, 'Interactive Brokers', 'interactive_brokers', 0, 1)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, quantity, base_quantity, price_paid,
+                purchase_value, original_price_paid, original_purchase_value,
+                broker_price_paid, broker_purchase_value, import_date,
+                current_price, current_value)
+               VALUES ('SNAP', 33, 100, 100, 10, 1000, 10, 1000,
+                       10, 1000, '2026-07-31', 15, 1500)"""
+        )
+        content = (
+            "Statement,Header,Field Name,Field Value\n"
+            "Statement,Data,Title,Transaction History\n"
+            "Transaction History,Header,Date,Account,Description,Transaction Type,Symbol,Quantity,Price,Price Currency,Gross Amount,Commission,Net Amount\n"
+            "Transaction History,Data,2026-07-15,U0000000,Older buy,Buy,SNAP,20,9,USD,-180,0,-180\n"
+            "Transaction History,Data,2026-08-03,U0000000,Later buy,Buy,SNAP,10,12,USD,-120,0,-120\n"
+            "Transaction History,Data,2026-08-06,U0000000,Later sale,Sell,SNAP,-5,13,USD,65,0,65\n"
+            "Transaction History,Data,2026-08-05,U0000000,New position,Buy,NEW,4,20,USD,-80,0,-80\n"
+        )
+
+        original_income = app_module.populate_income_tracking
+        original_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        try:
+            def post():
+                return self.client.post(
+                    "/api/import/transactions?profile_id=33",
+                    data={
+                        "format": "interactive_brokers_transactions",
+                        "file": (io.BytesIO(content.encode()), "ib-transactions.csv"),
+                    },
+                    content_type="multipart/form-data",
+                )
+
+            first = post()
+            second = post()
+        finally:
+            app_module.populate_income_tracking = original_income
+            app_module._snapshot_nav_after_profile_update = original_snapshot
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(first.get_json()["snapshot_roll_forward"], {
+            "positions_updated": 1,
+            "positions_created": 1,
+            "trades_applied": 3,
+        })
+        self.assertEqual(second.get_json()["snapshot_roll_forward"]["trades_applied"], 0)
+        conn = self._get_connection()
+        try:
+            snap = conn.execute(
+                "SELECT quantity, base_quantity, purchase_value, import_date "
+                "FROM all_account_info WHERE profile_id = 33 AND ticker = 'SNAP'"
+            ).fetchone()
+            new = conn.execute(
+                "SELECT quantity, purchase_value, purchase_date, import_date "
+                "FROM all_account_info WHERE profile_id = 33 AND ticker = 'NEW'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(snap["quantity"], 105.0)
+        self.assertEqual(snap["base_quantity"], 105.0)
+        self.assertAlmostEqual(snap["purchase_value"], 1069.09, places=2)
+        self.assertEqual(snap["import_date"], "2026-08-06")
+        self.assertEqual(new["quantity"], 4.0)
+        self.assertEqual(new["purchase_value"], 80.0)
+        self.assertEqual(new["purchase_date"], "2026-08-05")
+        self.assertEqual(new["import_date"], "2026-08-05")
 
     def test_shear_group_positions_filter_to_selected_account(self):
         self._execute(

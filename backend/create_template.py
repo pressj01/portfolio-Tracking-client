@@ -18,6 +18,8 @@ FIDELITY_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'template
 FIDELITY_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'fidelity_transactions_template.xlsx')
 ROBINHOOD_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_transactions_template.csv')
 ROBINHOOD_HOLDINGS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'robinhood_holdings_template.csv')
+IB_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'interactive_brokers_positions_template.csv')
+IB_TRANSACTIONS_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), '..', 'templates', 'interactive_brokers_transactions_template.csv')
 
 
 def _write_csv_template(path, rows):
@@ -893,6 +895,59 @@ def create_robinhood_holdings_template():
     return _write_csv_template(ROBINHOOD_HOLDINGS_TEMPLATE_PATH, rows)
 
 
+def create_interactive_brokers_template():
+    """Create a CSV template matching an IBKR Activity Statement positions export."""
+    rows = [
+        ["Statement", "Header", "Field Name", "Field Value"],
+        ["Statement", "Data", "BrokerName", "Interactive Brokers LLC"],
+        ["Statement", "Data", "Title", "Activity Statement"],
+        ["Statement", "Data", "Period", "July 1, 2026 - July 31, 2026"],
+        ["Account Information", "Header", "Field Name", "Field Value"],
+        ["Account Information", "Data", "Name", "Sample Account"],
+        ["Account Information", "Data", "Account", "U0000000"],
+        ["Account Information", "Data", "Base Currency", "USD"],
+        ["Cash Report", "Header", "Currency Summary", "Currency", "Total"],
+        ["Cash Report", "Data", "Ending Cash", "Base Currency Summary", "1500.00"],
+        ["Forex Balances", "Header", "Asset Category", "Currency", "Description", "Quantity", "Cost Price", "Cost Basis in USD", "Close Price", "Value in USD", "Unrealized P/L in USD", "Code"],
+        ["Forex Balances", "Data", "Forex", "USD", "CAD", "-100", "0.72", "72", "0.71", "-71", "1", ""],
+        ["Open Positions", "Header", "DataDiscriminator", "Asset Category", "Currency", "Symbol", "Quantity", "Mult", "Cost Price", "Cost Basis", "Close Price", "Value", "Unrealized P/L", "Code"],
+        ["Open Positions", "Data", "Summary", "Stocks", "USD", "JEPI", "100", "1", "55.50", "5550.00", "57.20", "5720.00", "170.00", ""],
+        ["Open Positions", "Data", "Summary", "Stocks", "USD", "SCHD", "50", "1", "78.20", "3910.00", "82.50", "4125.00", "215.00", ""],
+        ["Open Positions", "Data", "Summary", "Stocks", "USD", "CIM PRB", "20", "1", "21.00", "420.00", "24.00", "480.00", "60.00", ""],
+        ["Open Positions", "Data", "Summary", "Stocks", "CAD", "PGDC", "100", "1", "0.50", "50.00", "0.40", "40.00", "-10.00", ""],
+        ["Open Positions", "Total", "", "Stocks", "CAD", "", "", "", "", "50.00", "", "40.00", "-10.00", ""],
+        ["Open Positions", "Total", "", "Stocks", "USD", "", "", "", "", "35.50", "", "28.40", "-7.10", ""],
+        ["Open Positions", "Header", "DataDiscriminator", "Asset Category", "Currency", "Symbol", "Quantity", "Mult", "Cost Price", "Cost Basis", "Close Price", "Value", "Unrealized P/L", "Code"],
+        ["Open Positions", "Data", "Summary", "Equity and Index Options", "USD", "AGQ 15JAN27 60 P", "-1", "100", "7.95", "-795.00", "12.10", "-1210.00", "-415.00", ""],
+        ["Financial Instrument Information", "Header", "Asset Category", "Symbol", "Description", "Conid", "Security ID", "Underlying", "Listing Exch", "Multiplier", "Type", "Code"],
+        ["Financial Instrument Information", "Data", "Stocks", "JEPI", "JPMorgan Equity Premium Income ETF", "", "", "JEPI", "NYSE", "1", "ETF", ""],
+        ["Financial Instrument Information", "Data", "Stocks", "SCHD", "Schwab U.S. Dividend Equity ETF", "", "", "SCHD", "NYSE", "1", "ETF", ""],
+        ["Financial Instrument Information", "Data", "Stocks", "CIM PRB", "CIM 8 PERP PD", "", "", "CIM PRB", "NYSE", "1", "PUBLIC", ""],
+        ["Financial Instrument Information", "Data", "Stocks", "PGDC", "PATAGONIA GOLD CORP", "", "", "PGDC", "VENTURE", "1", "COMMON", ""],
+    ]
+    return _write_csv_template(IB_TEMPLATE_PATH, rows)
+
+
+def create_interactive_brokers_transactions_template():
+    """Create a CSV template matching an IBKR Transaction History export."""
+    rows = [
+        ["Statement", "Header", "Field Name", "Field Value"],
+        ["Statement", "Data", "Title", "Transaction History"],
+        ["Statement", "Data", "Period", "February 23, 2026 - August 25, 2026"],
+        ["Account Information", "Header", "Field Name", "Field Value"],
+        ["Account Information", "Data", "Account", "U0000000"],
+        ["Transaction History", "Header", "Date", "Account", "Description", "Transaction Type", "Symbol", "Quantity", "Price", "Price Currency", "Gross Amount", "Commission", "Net Amount"],
+        ["Transaction History", "Data", "2026-03-06", "U0000000", "JPMORGAN EQUITY PREMIUM INCOME ETF", "Buy", "JEPI", "25.0", "57.20", "USD", "-1430.00", "-0.35", "-1430.35"],
+        ["Transaction History", "Data", "2026-03-20", "U0000000", "JEPI(US46641Q3320) Cash Dividend USD 0.45 per Share (Ordinary Dividend)", "Dividend", "JEPI", "-", "-", "-", "45.00", "-", "45.00"],
+        ["Transaction History", "Data", "2026-03-20", "U0000000", "JPMORGAN EQUITY PREMIUM INCOME ETF", "Buy", "JEPI", "0.7867", "57.20", "USD", "-45.00", "0", "-45.00"],
+        ["Transaction History", "Data", "2026-04-07", "U0000000", "SCHWAB US DIVIDEND EQUITY ETF", "Sell", "SCHD", "-10.0", "82.50", "USD", "825.00", "-0.45", "824.55"],
+        ["Transaction History", "Data", "2026-04-15", "U0000000", "MLPI(US78433H4855) Payment in Lieu of Dividend (Ordinary Dividend)", "Payment in Lieu", "MLPI", "-", "-", "-", "26.74", "-", "26.74"],
+        ["Transaction History", "Data", "2026-03-20", "U0000000", "Buy 200 PROSHARES ULTRA SILVER (Assignment)", "Assignment", "AGQ", "200.0", "100.0", "USD", "-20000.0", "-", "-20000.0"],
+        ["Transaction History", "Data", "2026-05-05", "U0000000", "USD Debit Interest for Apr-2026", "Debit Interest", "-", "-", "-", "-", "-12.00", "-", "-12.00"],
+    ]
+    return _write_csv_template(IB_TRANSACTIONS_TEMPLATE_PATH, rows)
+
+
 if __name__ == "__main__":
     path = create_template()
     print(f"Template created at: {path}")
@@ -916,3 +971,7 @@ if __name__ == "__main__":
     print(f"Robinhood holdings reference created at: {robinhood_holdings_path}")
     robinhood_txn_path = create_robinhood_transactions_template()
     print(f"Robinhood transactions template created at: {robinhood_txn_path}")
+    ib_path = create_interactive_brokers_template()
+    print(f"Interactive Brokers positions template created at: {ib_path}")
+    ib_txn_path = create_interactive_brokers_transactions_template()
+    print(f"Interactive Brokers transactions template created at: {ib_txn_path}")

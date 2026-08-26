@@ -2952,6 +2952,596 @@ def parse_etrade_transactions_xlsx(file_path, filename):
     }
 
 
+# Interactive Brokers (Activity Statement positions + Transaction History)
+
+_IB_SECTION_KINDS_DATA = {"Data"}
+_IB_OPTION_DESC_RE = re.compile(
+    r"^\S+\s+\d{1,2}[A-Z]{3}\d{2}\s+\d+(?:\.\d+)?\s+[CP]$",
+    re.I,
+)
+_IB_OCC_RE = re.compile(r"^[A-Z][A-Z0-9.]*\d{6}[CP]\d{8}$", re.I)
+_IB_PREFERRED_RE = re.compile(r"^([A-Z][A-Z0-9.]{0,9})\s+PR([A-Z])$", re.I)
+_IB_CLASS_SHARE_RE = re.compile(r"^([A-Z][A-Z0-9.]{0,9})\s+([A-Z])$", re.I)
+_IB_RIGHTS_RE = re.compile(r"\s+(RTWI|RTS|RIGHTS?|WTS|WARRANT)\b", re.I)
+_IB_DESC_TICKER_RE = re.compile(r"^([A-Z0-9.]+(?:\s+[A-Z0-9.]+)?)\s*\(")
+_IB_BUY_TYPES = {"buy", "bought"}
+_IB_SELL_TYPES = {"sell", "sold"}
+_IB_DIRECTIONAL_TYPES = {"assignment", "exercise"}
+_IB_DIVIDEND_TYPES = {
+    "dividend",
+    "dividends",
+    "payment in lieu",
+    "payment in lieu of dividends",
+    "payment in lieu of dividend",
+}
+
+
+def _ib_has_section(rows, section_name):
+    return any(str(row[0] or "").strip() == section_name for row in rows if row)
+
+
+def _ib_section_records(rows, section_name, kinds=_IB_SECTION_KINDS_DATA):
+    """Yield dicts for one IB Activity/Flex CSV section.
+
+    IB files prefix every row with ``Section,Kind`` and then the section's
+    own columns. Kind is Header, Data, Total, or SubTotal.
+    """
+    header = None
+    for row in rows:
+        if not row or str(row[0] or "").strip() != section_name:
+            continue
+        kind = str(row[1] if len(row) > 1 else "").strip()
+        if kind == "Header":
+            header = [str(cell or "").strip() for cell in row[2:]]
+            continue
+        if header is None or kind not in kinds:
+            continue
+        values = list(row[2:]) + [None] * max(0, len(header) - max(0, len(row) - 2))
+        record = {"_kind": kind}
+        for key, value in zip(header, values):
+            if key and key not in record:
+                record[key] = value
+        yield record
+
+
+def _ib_kv_section(rows, section_name):
+    mapping = {}
+    for rec in _ib_section_records(rows, section_name):
+        key = str(rec.get("Field Name") or "").strip()
+        if key:
+            mapping[key] = rec.get("Field Value")
+    return mapping
+
+
+def _ib_is_ib_file(rows):
+    broker = str(_ib_kv_section(rows, "Statement").get("BrokerName") or "").lower()
+    if "interactive broker" in broker:
+        return True
+    for row in rows[:80]:
+        if not row:
+            continue
+        section = str(row[0] or "").strip()
+        kind = str(row[1] if len(row) > 1 else "").strip()
+        if kind in {"Header", "Data"} and section in {
+            "Open Positions",
+            "Transaction History",
+            "Account Information",
+            "Net Asset Value",
+            "Financial Instrument Information",
+        }:
+            return True
+    return False
+
+
+def _ib_normalize_ticker(symbol):
+    """Turn IB symbols into the app's ticker spelling, or None to skip.
+
+    Preferred shares such as ``CIM PRB`` become ``CIM-PRB``. Class shares
+    such as ``PBR A`` become ``PBR-A``. Option contracts and rights are
+    dropped so they are not stored as equity holdings.
+    """
+    text = str(symbol or "").strip().upper()
+    if not text or text in {"-", "--"}:
+        return None
+    compact = re.sub(r"\s+", "", text)
+    if _IB_OCC_RE.match(compact) or _IB_OPTION_DESC_RE.match(text):
+        return None
+    if _IB_RIGHTS_RE.search(text):
+        return None
+    preferred = _IB_PREFERRED_RE.match(text)
+    if preferred:
+        ticker = f"{preferred.group(1)}-PR{preferred.group(2)}"
+        return ticker if TICKER_RE.match(ticker) else None
+    class_share = _IB_CLASS_SHARE_RE.match(text)
+    if class_share:
+        ticker = f"{class_share.group(1)}-{class_share.group(2)}"
+        return ticker if TICKER_RE.match(ticker) else None
+    if " " in text:
+        return None
+    if TICKER_RE.match(text):
+        return text
+    return None
+
+
+def _ib_ticker_from_description(description):
+    text = str(description or "").strip()
+    match = _IB_DESC_TICKER_RE.match(text)
+    if not match:
+        return None
+    return _ib_normalize_ticker(match.group(1))
+
+
+def _ib_is_option_asset(category):
+    return "option" in str(category or "").strip().lower()
+
+
+def _ib_is_stock_asset(category):
+    text = str(category or "").strip().lower()
+    return text in {"stocks", "stock", "etf", "adr", "fund", "equity"}
+
+
+def _ib_is_summary_row(record):
+    disc = str(record.get("DataDiscriminator") or "").strip().lower()
+    return disc in {"", "summary", "data"}
+
+
+def _ib_parse_date(raw):
+    text = str(raw or "").strip()
+    if not text or text in {"-", "--"}:
+        return None
+    return _parse_date_str(text.split(",")[0].strip())
+
+
+def _ib_usd_price(qty, price, gross_amount):
+    if qty and gross_amount is not None and abs(qty) > 0:
+        return abs(gross_amount) / abs(qty)
+    return price
+
+
+def _ib_fx_rates(rows):
+    """USD-per-unit close prices from Forex Balances, with CAD total fallback."""
+    rates = {"USD": 1.0}
+    for rec in _ib_section_records(rows, "Forex Balances"):
+        quote = str(rec.get("Description") or "").strip().upper()
+        close = _safe_float(rec.get("Close Price"))
+        if quote and close:
+            rates[quote] = close
+
+    pending_local = None
+    pending_ccy = None
+    header = None
+    for row in rows:
+        if not row or str(row[0] or "").strip() != "Open Positions":
+            continue
+        kind = str(row[1] if len(row) > 1 else "").strip()
+        if kind == "Header":
+            header = [str(cell or "").strip() for cell in row[2:]]
+            continue
+        if kind != "Total" or not header:
+            continue
+        rec = _row_record(header, row[2:])
+        ccy = str(rec.get("Currency") or "").strip().upper()
+        value = _safe_float(rec.get("Value"))
+        if ccy and ccy != "USD" and value:
+            pending_local = value
+            pending_ccy = ccy
+        elif ccy == "USD" and pending_local and pending_ccy and value:
+            rates.setdefault(pending_ccy, value / pending_local)
+            pending_local = None
+            pending_ccy = None
+    return rates
+
+
+def _ib_ending_cash_usd(rows):
+    for rec in _ib_section_records(rows, "Cash Report"):
+        name = str(rec.get("Currency Summary") or "").strip().lower()
+        currency = str(rec.get("Currency") or "").strip().lower()
+        if name == "ending cash" and currency in {
+            "base currency summary", "base currency", "usd",
+        }:
+            value = _safe_float(rec.get("Total"))
+            if value is not None:
+                return value
+    for rec in _ib_section_records(rows, "Net Asset Value"):
+        asset = str(rec.get("Asset Class") or "").strip().lower()
+        if asset.startswith("cash"):
+            value = _safe_float(rec.get("Current Total"))
+            if value is not None:
+                return value
+    return 0.0
+
+
+def _ib_instrument_descriptions(rows):
+    descriptions = {}
+    for rec in _ib_section_records(rows, "Financial Instrument Information"):
+        symbol = str(rec.get("Symbol") or "").strip()
+        desc = clean_security_description(rec.get("Description"))
+        if not symbol or not desc:
+            continue
+        descriptions[symbol] = desc
+        normalized = _ib_normalize_ticker(symbol)
+        if normalized:
+            descriptions.setdefault(normalized, desc)
+    return descriptions
+
+
+def _ib_account_fields(rows):
+    info = _ib_kv_section(rows, "Account Information")
+    account = str(info.get("Account") or "").strip()
+    name = str(info.get("Name") or "").strip()
+    number = account.split()[0] if account else ""
+    account_name = account or name or number
+    return account_name, name, number
+
+
+def _ib_statement_as_of(rows):
+    """Return the ending date of the IB statement period, when present."""
+    period = str(_ib_kv_section(rows, "Statement").get("Period") or "").strip()
+    if not period:
+        return None
+    candidates = [part.strip() for part in re.split(r"\s+-\s+", period) if part.strip()]
+    for candidate in reversed(candidates):
+        parsed = _parse_date_str(candidate)
+        if parsed:
+            return parsed
+        for fmt in ("%B %d, %Y", "%b %d, %Y"):
+            try:
+                return datetime.strptime(candidate, fmt).date().isoformat()
+            except ValueError:
+                continue
+    return None
+
+
+def _ib_merge_positions(positions):
+    merged = {}
+    for pos in positions:
+        ticker = pos["ticker"]
+        if ticker not in merged:
+            merged[ticker] = dict(pos)
+            continue
+        existing = merged[ticker]
+        total_qty = existing["quantity"] + pos["quantity"]
+        total_purchase = existing["purchase_value"] + pos["purchase_value"]
+        total_current = existing["current_value"] + pos["current_value"]
+        total_gain = existing["gain_or_loss"] + pos["gain_or_loss"]
+        existing["quantity"] = total_qty
+        existing["purchase_value"] = round(total_purchase, 2)
+        existing["current_value"] = round(total_current, 2)
+        existing["gain_or_loss"] = round(total_gain, 2)
+        existing["cost_per_share"] = round(total_purchase / total_qty, 4) if total_qty else 0
+        existing["current_price"] = pos["current_price"] or existing["current_price"]
+        if not existing["description"]:
+            existing["description"] = pos["description"]
+        if not existing["asset_type"]:
+            existing["asset_type"] = pos["asset_type"]
+    return list(merged.values())
+
+
+def _ib_txn_row(txn_type, ticker, date_str, shares, price, fees, dividend_amount, notes):
+    return {
+        "type": txn_type,
+        "ticker": ticker,
+        "date": date_str,
+        "shares": shares,
+        "price_per_share": price,
+        "fees": fees,
+        "dividend_amount": dividend_amount,
+        "notes": notes,
+    }
+
+
+def parse_interactive_brokers_positions(file_path, filename):
+    """Parse an Interactive Brokers Activity Statement CSV as current positions.
+
+    IB's positions export is a multi-section Activity Statement, not a flat
+    table. Open Positions is the source of truth for shares and cost basis.
+    Options, rights, and non-stock rows are skipped. Non-USD stock rows are
+    converted with the statement's FX close.
+    """
+    rows = _read_table_rows(file_path, filename)
+    if not rows:
+        raise ValueError("The file is empty.")
+    if _ib_has_section(rows, "Transaction History") and not _ib_has_section(rows, "Open Positions"):
+        raise ValueError(
+            "This is an Interactive Brokers Transaction History export. "
+            "Import it with 'Interactive Brokers (Transactions)'."
+        )
+    if not _ib_has_section(rows, "Open Positions"):
+        raise ValueError(
+            "Could not find an Open Positions section. In Interactive Brokers, "
+            "download an Activity Statement CSV (Performance / Reports > Statements) "
+            "and import it as Interactive Brokers (Positions)."
+        )
+
+    descriptions = _ib_instrument_descriptions(rows)
+    fx_rates = _ib_fx_rates(rows)
+    positions = []
+    filtered_count = 0
+    options_count = 0
+    options_value = 0.0
+
+    for rec in _ib_section_records(rows, "Open Positions"):
+        if not _ib_is_summary_row(rec):
+            filtered_count += 1
+            continue
+        category = rec.get("Asset Category")
+        symbol = str(rec.get("Symbol") or "").strip()
+        if _ib_is_option_asset(category):
+            options_count += 1
+            currency = str(rec.get("Currency") or "USD").strip().upper() or "USD"
+            fx = fx_rates.get(currency)
+            if fx is not None:
+                options_value += (_safe_float(rec.get("Value")) or 0.0) * fx
+            continue
+        if not _ib_is_stock_asset(category):
+            filtered_count += 1
+            continue
+        ticker = _ib_normalize_ticker(symbol)
+        if not ticker:
+            filtered_count += 1
+            continue
+        qty = _safe_float(rec.get("Quantity"))
+        if qty is None or qty <= 0:
+            filtered_count += 1
+            continue
+
+        currency = str(rec.get("Currency") or "USD").strip().upper() or "USD"
+        fx = fx_rates.get(currency)
+        if fx is None:
+            filtered_count += 1
+            continue
+
+        cost_price = (_safe_float(rec.get("Cost Price")) or 0.0) * fx
+        cost_basis = (_safe_float(rec.get("Cost Basis")) or 0.0) * fx
+        close_price = (_safe_float(rec.get("Close Price")) or 0.0) * fx
+        value = (_safe_float(rec.get("Value")) or 0.0) * fx
+        unrealized = _safe_float(rec.get("Unrealized P/L"))
+        if unrealized is not None:
+            unrealized *= fx
+
+        purchase_value = cost_basis if cost_basis else qty * cost_price
+        current_value = value if value else qty * close_price
+        if qty > 0 and purchase_value:
+            cost_price = purchase_value / qty
+        gain = unrealized if unrealized is not None else round(current_value - purchase_value, 2)
+
+        positions.append({
+            "ticker": ticker,
+            "description": descriptions.get(symbol) or descriptions.get(ticker) or "",
+            "quantity": qty,
+            "cost_per_share": cost_price or 0,
+            "current_price": close_price or 0,
+            "purchase_value": round(purchase_value, 2),
+            "current_value": round(current_value, 2),
+            "gain_or_loss": round(gain, 2) if gain is not None else round(current_value - purchase_value, 2),
+            "dividend_yield": None,
+            "reinvest_dividends": None,
+            "asset_type": str(category or "Stocks").strip(),
+        })
+
+    positions = _ib_merge_positions(positions)
+    if positions and all(p["purchase_value"] == 0 for p in positions):
+        raise ValueError(
+            "No cost basis data found — every position has a $0 cost. "
+            "This usually means a Transaction History file was selected with the "
+            "Positions format. Use 'Interactive Brokers (Transactions)' for that file."
+        )
+
+    cash = _ib_ending_cash_usd(rows)
+    account_name, _, account_number = _ib_account_fields(rows)
+    return {
+        "positions": positions,
+        "account_name": account_name,
+        "account_number": account_number,
+        "summary": {
+            "holdings": len(positions),
+            "filtered": filtered_count,
+            "options": options_count,
+            "options_value": round(options_value, 2),
+            "cash": round(cash, 2),
+            "account_value": round(
+                sum(position["current_value"] for position in positions) + cash,
+                2,
+            ),
+        },
+        "as_of": _ib_statement_as_of(rows),
+        "format_type": "positions",
+        "source_format": "interactive_brokers",
+    }
+
+
+def _ib_append_trade(kept, filtered_count, ticker, date_str, qty, price, fees, notes, explicit_type=None):
+    if not ticker or not date_str:
+        return filtered_count + 1
+    if qty is None or qty == 0:
+        return filtered_count + 1
+    txn_type = explicit_type or ("BUY" if qty > 0 else "SELL")
+    kept.append(_ib_txn_row(
+        txn_type,
+        ticker,
+        date_str,
+        abs(qty),
+        price,
+        abs(fees or 0),
+        None,
+        notes,
+    ))
+    return filtered_count
+
+
+def _ib_append_dividend(kept, filtered_count, ticker, date_str, amount, notes):
+    if not ticker or not date_str or amount is None:
+        return filtered_count + 1
+    kept.append(_ib_txn_row(
+        "DIVIDEND",
+        ticker,
+        date_str,
+        None,
+        None,
+        0.0,
+        round(amount, 2),
+        notes,
+    ))
+    return filtered_count
+
+
+def _ib_parse_transaction_history(rows):
+    kept = []
+    filtered_count = 0
+    for rec in _ib_section_records(rows, "Transaction History"):
+        ttype = str(rec.get("Transaction Type") or "").strip()
+        ttype_key = ttype.lower()
+        symbol = str(rec.get("Symbol") or "").strip()
+        description = str(rec.get("Description") or "").strip()
+        ticker = _ib_normalize_ticker(symbol) or _ib_ticker_from_description(description)
+        date_str = _ib_parse_date(rec.get("Date"))
+        qty = _safe_float(rec.get("Quantity"))
+        price = _safe_float(rec.get("Price"))
+        gross = _safe_float(rec.get("Gross Amount"))
+        net = _safe_float(rec.get("Net Amount"))
+        fees = abs(_safe_float(rec.get("Commission")) or 0.0)
+
+        if (
+            ttype_key in _IB_BUY_TYPES
+            or ttype_key in _IB_SELL_TYPES
+            or ttype_key in _IB_DIRECTIONAL_TYPES
+        ):
+            usd_price = _ib_usd_price(qty, price, gross)
+            notes = "Assignment" if ttype_key == "assignment" else (
+                "Exercise" if ttype_key == "exercise" else ""
+            )
+            if ttype_key in _IB_BUY_TYPES:
+                explicit = "BUY"
+            elif ttype_key in _IB_SELL_TYPES:
+                explicit = "SELL"
+            else:
+                description_key = description.lower()
+                if description_key.startswith(("sell ", "sold ")):
+                    explicit = "SELL"
+                elif description_key.startswith(("buy ", "bought ")):
+                    explicit = "BUY"
+                else:
+                    explicit = "BUY" if (qty or 0) > 0 else "SELL"
+            filtered_count = _ib_append_trade(
+                kept, filtered_count, ticker, date_str, qty, usd_price, fees, notes, explicit,
+            )
+            continue
+
+        if ttype_key in _IB_DIVIDEND_TYPES:
+            amount = gross if gross is not None else net
+            notes = ttype or "Dividend"
+            filtered_count = _ib_append_dividend(
+                kept, filtered_count, ticker, date_str, amount, notes,
+            )
+            continue
+
+        filtered_count += 1
+    return kept, filtered_count
+
+
+def _ib_parse_statement_activity(rows):
+    """Read buys, sells, and dividends out of an Activity Statement."""
+    kept = []
+    filtered_count = 0
+    fx_rates = _ib_fx_rates(rows)
+    for rec in _ib_section_records(rows, "Trades"):
+        if str(rec.get("DataDiscriminator") or "").strip().lower() not in {"", "order", "trade"}:
+            continue
+        if _ib_is_option_asset(rec.get("Asset Category")):
+            filtered_count += 1
+            continue
+        if rec.get("Asset Category") and not _ib_is_stock_asset(rec.get("Asset Category")):
+            filtered_count += 1
+            continue
+        ticker = _ib_normalize_ticker(rec.get("Symbol"))
+        date_str = _ib_parse_date(rec.get("Date/Time") or rec.get("Date"))
+        qty = _safe_float(rec.get("Quantity"))
+        currency = str(rec.get("Currency") or "USD").strip().upper() or "USD"
+        fx = fx_rates.get(currency)
+        if fx is None:
+            filtered_count += 1
+            continue
+        proceeds = _safe_float(rec.get("Proceeds"))
+        local_price = _ib_usd_price(qty, _safe_float(rec.get("T. Price")), proceeds)
+        price = local_price * fx if local_price is not None else None
+        fees = abs(_safe_float(rec.get("Comm/Fee")) or 0.0) * fx
+        filtered_count = _ib_append_trade(
+            kept, filtered_count, ticker, date_str, qty, price, fees, "",
+        )
+
+    for section, default_note in (
+        ("Dividends", "Dividend"),
+        ("Payment in Lieu of Dividends", "Payment in Lieu"),
+    ):
+        for rec in _ib_section_records(rows, section):
+            description = str(rec.get("Description") or "").strip()
+            ticker = _ib_normalize_ticker(rec.get("Symbol")) or _ib_ticker_from_description(description)
+            date_str = _ib_parse_date(rec.get("Date"))
+            amount = _safe_float(rec.get("Amount"))
+            note = default_note
+            if "payment in lieu" in description.lower():
+                note = "Payment in Lieu"
+            filtered_count = _ib_append_dividend(
+                kept, filtered_count, ticker, date_str, amount, note,
+            )
+    return kept, filtered_count
+
+
+def parse_interactive_brokers_transactions(file_path, filename):
+    """Parse Interactive Brokers Transaction History, or an Activity Statement.
+
+    The dedicated Transaction History CSV is preferred. An Activity Statement
+    is accepted too: Trades become BUY/SELL and Dividends / payment-in-lieu
+    become DIVIDEND. Options, interest, fees, withholding, and cash movements
+    are skipped.
+    """
+    rows = _read_table_rows(file_path, filename)
+    if not rows:
+        raise ValueError("The file is empty.")
+
+    if _ib_has_section(rows, "Transaction History"):
+        kept, filtered_count = _ib_parse_transaction_history(rows)
+    elif _ib_has_section(rows, "Trades") or _ib_has_section(rows, "Dividends"):
+        kept, filtered_count = _ib_parse_statement_activity(rows)
+    else:
+        raise ValueError(
+            "Could not find a Transaction History, Trades, or Dividends section. "
+            "In Interactive Brokers, export Transaction History CSV, or import an "
+            "Activity Statement CSV with 'Interactive Brokers (Transactions)'."
+        )
+
+    drip_count = _detect_drip(kept)
+    account_name, _, account_number = _ib_account_fields(rows)
+    if not account_name:
+        for rec in _ib_section_records(rows, "Transaction History"):
+            acct = str(rec.get("Account") or "").strip()
+            if acct and acct not in {"-", "--"}:
+                account_name = acct
+                account_number = acct
+                break
+    if not account_name:
+        title = str(_ib_kv_section(rows, "Statement").get("Title") or "")
+        if title:
+            account_name = title
+    buys = sum(1 for t in kept if t["type"] == "BUY")
+    sells = sum(1 for t in kept if t["type"] == "SELL")
+    divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
+    return {
+        "account_name": account_name,
+        "account_number": account_number,
+        "transactions": kept,
+        "summary": {
+            "buys": buys,
+            "sells": sells,
+            "dividends": divs,
+            "filtered": filtered_count,
+            "drip_detected": drip_count,
+            "splits_applied": 0,
+        },
+        "source_format": "interactive_brokers_transactions",
+    }
+
+
 PARSERS = {
     "generic_transactions": parse_generic_transactions,
     "snowball": parse_snowball_csv,
@@ -2971,6 +3561,8 @@ PARSERS = {
     "shear_group_activity": parse_shear_group_activity,
     "shear_group_all_accounts": parse_shear_group_all_accounts_positions,
     "shear_group_all_accounts_activity": parse_shear_group_all_accounts_activity,
+    "interactive_brokers": parse_interactive_brokers_positions,
+    "interactive_brokers_transactions": parse_interactive_brokers_transactions,
 }
 
 # Labels shown in the UI format dropdown
@@ -2993,4 +3585,6 @@ PARSER_LABELS = {
     "shear_group_activity": "Shear Group (Activity)",
     "shear_group_all_accounts": "Shear Group (All Accounts Positions)",
     "shear_group_all_accounts_activity": "Shear Group (All Accounts Activity)",
+    "interactive_brokers": "Interactive Brokers (Positions)",
+    "interactive_brokers_transactions": "Interactive Brokers (Transactions)",
 }

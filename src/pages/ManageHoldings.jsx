@@ -1485,6 +1485,7 @@ const DIV_SOURCE_OPTIONS = [
   { value: 'etrade', label: 'E*Trade' },
   { value: 'robinhood', label: 'Robinhood' },
   { value: 'shear_group', label: 'Shear Group' },
+  { value: 'interactive_brokers', label: 'Interactive Brokers' },
   { value: 'snapshot', label: 'Snapshot' },
   { value: 'yahoo', label: 'Yahoo' },
   { value: 'mixed', label: 'Mixed' },
@@ -1497,7 +1498,7 @@ const DIV_REPAIR_MODES = [
   { value: 'yahoo', label: 'Yahoo only' },
 ]
 
-const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'robinhood', 'shear_group', 'imported']
+const IMPORTED_DIV_SOURCES = ['broker', 'schwab', 'fidelity', 'snowball', 'etrade', 'robinhood', 'shear_group', 'interactive_brokers', 'imported']
 
 const DIV_SOURCE_META = {
   broker: { label: 'Imported', color: '#81c784' },
@@ -1507,6 +1508,7 @@ const DIV_SOURCE_META = {
   etrade: { label: 'E*Trade', color: '#80cbc4' },
   robinhood: { label: 'Robinhood', color: '#81c784' },
   shear_group: { label: 'Shear Group', color: '#9fa8da' },
+  interactive_brokers: { label: 'Interactive Brokers', color: '#90caf9' },
   imported: { label: 'Imported', color: '#81c784' },
   snapshot: { label: 'Snapshot', color: '#ce93d8' },
   yahoo: { label: 'Yahoo', color: '#64b5f6' },
@@ -1521,6 +1523,7 @@ const PREVIEW_SOURCE_COLUMNS = [
   { key: 'etrade', label: 'E*Trade' },
   { key: 'robinhood', label: 'Robinhood' },
   { key: 'shear_group', label: 'Shear Group' },
+  { key: 'interactive_brokers', label: 'Interactive Brokers' },
   { key: 'imported', label: 'Other' },
   { key: 'snapshot', label: 'Snapshot' },
   { key: 'yahoo', label: 'Yahoo' },
@@ -1535,6 +1538,7 @@ const normalizeDivSource = (source) => {
   if (value.startsWith('robinhood')) return 'robinhood'
   if (value.startsWith('snowball')) return 'snowball'
   if (value.startsWith('shear_group') || value.startsWith('shear group')) return 'shear_group'
+  if (value.startsWith('interactive_brokers') || value.startsWith('interactive broker') || value.startsWith('ibkr')) return 'interactive_brokers'
   if (value.startsWith('generic')) return 'imported'
   return value
 }

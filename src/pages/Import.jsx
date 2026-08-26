@@ -1039,6 +1039,14 @@ export default function Import() {
     window.open(`${API_BASE}/api/template/robinhood-transactions-download`, '_blank')
   }
 
+  const handleDownloadInteractiveBrokersTemplate = () => {
+    window.open(`${API_BASE}/api/template/interactive-brokers-download`, '_blank')
+  }
+
+  const handleDownloadInteractiveBrokersTransactionsTemplate = () => {
+    window.open(`${API_BASE}/api/template/interactive-brokers-transactions-download`, '_blank')
+  }
+
   const handleDownloadWatchlistTemplate = () => {
     window.open(`${API_BASE}/api/template/watchlist-download`, '_blank')
   }
@@ -1486,12 +1494,16 @@ export default function Import() {
                     ? <>Import activity history from a Shear Group <strong>Activity CSV or Excel</strong> export. This imports buys, sells, cash dividends, capital gains, and dividend reinvestments.</>
                   : txnFormat === 'shear_group_all_accounts_activity'
                     ? <>Import every Shear Group account from one combined <strong>Activity CSV or Excel</strong> export. Preview uses the same account mapping as the All Accounts Positions import.</>
+                  : txnFormat === 'interactive_brokers'
+                    ? <>Import current positions from an Interactive Brokers <strong>Activity Statement CSV</strong>. In IBKR, go to Performance &amp; Reports {'>'} Statements, generate an Activity Statement, and download CSV. The importer reads the Open Positions section for shares and cost basis, converts non-USD rows, and skips option contracts.</>
+                  : txnFormat === 'interactive_brokers_transactions'
+                    ? <>Import transaction history from an Interactive Brokers <strong>Transaction History CSV</strong>. In IBKR, go to Performance &amp; Reports {'>'} Transaction History and download CSV. An Activity Statement CSV also works: Trades become buys/sells and Dividends become payments. Imports buys, sells, assignments, cash dividends, payment in lieu, and DRIP reinvestments.</>
                  : <>Import BUY/SELL transactions and dividend payments from your broker or tracking app.
                  Each file should be a <strong>single account</strong> export — combined/merged exports will be rejected.</>
             }
           </p>
 
-          {['generic_transactions', 'snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity', 'shear_group_all_accounts_activity'].includes(txnFormat) && (
+          {['generic_transactions', 'snowball', 'schwab_transactions', 'etrade_transactions', 'fidelity_transactions', 'robinhood_transactions', 'shear_group_activity', 'shear_group_all_accounts_activity', 'interactive_brokers_transactions'].includes(txnFormat) && (
             <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
               <strong>Partial history warning:</strong> If this file does not cover the full account history
               (e.g. only the last 1–2 years), imported buy/sell transactions will recalculate your share
@@ -1500,7 +1512,7 @@ export default function Import() {
                 {' '}Snowball Analytics exports may also not exactly match the broker's live positions or account value.
               </>)}
               <br /><br />
-              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group)
+              <strong>Recommended approach:</strong> Import a <em>Positions</em> file first (Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, or Interactive Brokers)
               to set accurate current holdings, then import transaction history for dividend tracking and
               realized gain records. When a Positions import has been done first, transaction imports store
               history without overwriting your holdings data.
@@ -1649,6 +1661,31 @@ export default function Import() {
             </div>
           )}
 
+          {txnFormat === 'interactive_brokers' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Interactive Brokers Activity Statement:</strong> IBKR does not export a flat positions table.
+              Download the Activity Statement CSV and keep the section labels (Open Positions, Cash Report, Financial Instrument Information).
+              Preferred shares such as <em>CIM PRB</em> import as <em>CIM-PRB</em>; class shares such as <em>PBR A</em> import as <em>PBR-A</em>.
+              Option contracts are listed for reconciliation but are not imported as holdings. CAD positions are converted to USD using the statement FX rate.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" onClick={handleDownloadInteractiveBrokersTemplate}>
+                  Download Interactive Brokers Positions Template
+                </button>
+              </div>
+            </div>
+          )}
+
+          {txnFormat === 'interactive_brokers_transactions' && (
+            <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+              <strong>Interactive Brokers transactions template available:</strong> the downloadable CSV matches the Transaction History export this importer reads for buys, sells, assignments, cash dividends, payment in lieu, and DRIP reinvestments. An Activity Statement CSV with Trades and Dividends sections is also accepted.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button className="btn btn-secondary" onClick={handleDownloadInteractiveBrokersTransactionsTemplate}>
+                  Download Interactive Brokers Transactions Template
+                </button>
+              </div>
+            </div>
+          )}
+
           {txnFormat !== 'generic_transactions' && workflowStep !== 'refresh' && !isSnowballFormat(txnFormat) && (
             <div className="form-group" style={{ marginBottom: '1rem' }}>
               <label>Format</label>
@@ -1739,7 +1776,16 @@ export default function Import() {
                   const data = await res.json()
                   if (!res.ok) throw new Error(data.error || 'Preview failed')
                   setTxnPreview(data)
-                  if (data.as_of) setNavSnapshotDate(data.as_of)
+                  if (data.as_of) {
+                    setNavSnapshotDate(data.as_of)
+                    if (
+                      data.as_of !== dateInputToday
+                      && (data.format_type === 'positions' || data.format_type === 'positions_multi')
+                      && data.source_format !== 'interactive_brokers'
+                    ) {
+                      setTxnNavOnly(true)
+                    }
+                  }
                   if (data.format_type === 'positions_multi' || data.format_type === 'transactions_multi') {
                     const destSelected = mergeBrokerDestSelection(
                       txnDestSelected,
@@ -2079,7 +2125,8 @@ export default function Import() {
                 </div>
               )}
               <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-                <strong>{txnPreview.summary.holdings}</strong> holdings found.{' '}
+                <strong>{txnPreview.summary.holdings}</strong> holdings found
+                {txnPreview.as_of && <> as of <strong>{txnPreview.as_of}</strong></>}.{' '}
                 {txnPreview.summary.options > 0 && (
                   <>{txnPreview.summary.options} options skipped. </>
                 )}
@@ -2087,7 +2134,7 @@ export default function Import() {
                   <>{txnPreview.summary.filtered} rows filtered. </>
                 )}
                 Total value: <strong>{formatMoney(txnPreview.positions.reduce((s, p) => s + (p.current_value || 0), 0))}</strong>
-                {txnPreview.summary.cash > 0 && (
+                {txnPreview.summary.cash != null && Number(txnPreview.summary.cash) !== 0 && (
                   <> Cash: <strong>{formatMoney(txnPreview.summary.cash)}</strong></>
                 )}
                 {txnPreview.summary.account_value > 0 && (

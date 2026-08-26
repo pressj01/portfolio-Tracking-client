@@ -3425,6 +3425,7 @@ def _dividend_payment_totals_by_ticker(conn, profile_ids):
               ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
             WHERE dp.profile_id IN ({placeholders})
               AND (a.purchase_date IS NULL OR dp.payment_date >= a.purchase_date)
+              AND LOWER(COALESCE(dp.source, '')) != 'refresh_estimate'
             GROUP BY dp.ticker""",
         ids,
     ).fetchall()
@@ -3447,6 +3448,47 @@ def _apply_dividend_payment_total_floor(rows, payment_totals):
             payment_total,
         )
     return rows
+
+
+def _lifetime_dividend_income(conn, profile_ids, through_date=None):
+    """Return portfolio-wide dividend income, including closed positions.
+
+    Holdings snapshots can carry lifetime totals that predate the payment
+    ledger, while the payment ledger is the only remaining source for tickers
+    that have since been sold. Merge the two per ticker so overlapping history
+    is not counted twice and closed-position income is not lost.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return 0.0
+    placeholders = ",".join("?" * len(ids))
+    holding_rows = conn.execute(
+        f"""SELECT ticker, COALESCE(SUM(total_divs_received), 0) AS amount
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+            GROUP BY ticker""",
+        ids,
+    ).fetchall()
+    totals = {
+        row["ticker"]: _num_or_zero(row["amount"])
+        for row in holding_rows
+    }
+
+    date_clause = " AND payment_date <= ?" if through_date else ""
+    payment_params = ids + ([through_date] if through_date else [])
+    payment_rows = conn.execute(
+        f"""SELECT ticker, COALESCE(SUM(amount), 0) AS amount
+            FROM dividend_payments
+            WHERE profile_id IN ({placeholders}){date_clause}
+              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
+            GROUP BY ticker""",
+        payment_params,
+    ).fetchall()
+    for row in payment_rows:
+        ticker = row["ticker"]
+        payment_total = _num_or_zero(row["amount"])
+        totals[ticker] = max(totals[ticker], payment_total) if ticker in totals else payment_total
+    return round(sum(totals.values()), 2)
 
 
 def _cumulative_invested_cost_by_ticker(conn, profile_ids):
@@ -3650,7 +3692,8 @@ def _estimate_drip_tracking_from_dividend_history(ticker, profile_id, conn):
 
     payment_row = conn.execute(
         "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
-        "WHERE ticker = ? AND profile_id = ? AND amount > 0",
+        "WHERE ticker = ? AND profile_id = ? AND amount > 0 "
+        "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
         (ticker, profile_id),
     ).fetchone()
     payment_cash = _num_or_zero(payment_row[0] if payment_row else 0)
@@ -3897,6 +3940,7 @@ _ACCOUNT_MATCH_IGNORED_TOKENS = {
     "schwab", "charles", "fidelity", "robinhood", "shear", "group",
     "snowball", "analytics",
     "traditional",
+    "interactive", "broker", "brokers", "ibkr", "ib",
 }
 
 _BROKER_SOURCE_ALIASES = {
@@ -3905,6 +3949,11 @@ _BROKER_SOURCE_ALIASES = {
     "e trade": "etrade",
     "e*trade": "etrade",
     "shear group": "shear_group",
+    "interactive broker": "interactive_brokers",
+    "interactive brokers": "interactive_brokers",
+    "interactive_broker": "interactive_brokers",
+    "ibkr": "interactive_brokers",
+    "ib": "interactive_brokers",
 }
 
 _BROKER_SOURCE_LABELS = {
@@ -3913,6 +3962,7 @@ _BROKER_SOURCE_LABELS = {
     "fidelity": "Fidelity",
     "robinhood": "Robinhood",
     "shear_group": "Shear Group",
+    "interactive_brokers": "Interactive Brokers",
     "snowball": "Snowball",
     "other": "Other / Manual",
 }
@@ -3923,6 +3973,7 @@ _BROKER_IMPORT_SOURCE_PREFIXES = (
     ("fidelity", "fidelity"),
     ("robinhood", "robinhood"),
     ("shear_group", "shear_group"),
+    ("interactive_brokers", "interactive_brokers"),
 )
 
 
@@ -4417,7 +4468,9 @@ def _broker_import_target_error(profile_id, fmt, conn):
     return None
 
 
-_SNOWBALL_LAYERED_BROKER_SOURCES = {"schwab", "etrade", "fidelity", "shear_group", "generic", "other"}
+_SNOWBALL_LAYERED_BROKER_SOURCES = {
+    "schwab", "etrade", "fidelity", "shear_group", "interactive_brokers", "generic", "other",
+}
 
 # Formats where one file carries several accounts and routes each to its own
 # portfolio, instead of importing into the portfolio currently selected.
@@ -4449,6 +4502,7 @@ def _should_preserve_positions_for_transaction_import(profile_id, fmt, conn):
     if fmt in {
         "schwab", "schwab_all_accounts", "etrade", "fidelity", "fidelity_all_accounts",
         "snowball_holdings", "robinhood", "shear_group", "shear_group_all_accounts",
+        "interactive_brokers",
     }:
         return False
 
@@ -8244,6 +8298,12 @@ def _import_positions(parsed, profile_id, nav_date=None):
     _ensure_basis_columns(conn)
 
     positions = parsed["positions"]
+    snapshot_date = _date.today().isoformat()
+    try:
+        parsed_as_of = _date.fromisoformat(str(parsed.get("as_of") or ""))
+        snapshot_date = min(parsed_as_of, _date.today()).isoformat()
+    except ValueError:
+        pass
     positions_by_ticker = {pos["ticker"]: pos for pos in positions}
     is_snowball_holdings = parsed.get("source_format") == "snowball_holdings"
     preserve_existing_income = is_snowball_holdings
@@ -8303,7 +8363,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     pos["purchase_value"], pos["cost_per_share"], pos["purchase_value"],
                     pos["cost_per_share"], pos["purchase_value"],
                     pos["current_value"], pos["gain_or_loss"],
-                    pos["quantity"], _date.today().isoformat(),
+                    pos["quantity"], snapshot_date,
                     pos["description"],
                 ]
                 optional_fields = [
@@ -8346,7 +8406,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     pos["purchase_value"], pos["cost_per_share"], pos["purchase_value"],
                     pos["cost_per_share"], pos["purchase_value"],
                     pos["current_value"], pos["gain_or_loss"],
-                    pos["description"], _date.today().isoformat(),
+                    pos["description"], snapshot_date,
                 ]
                 optional_insert_fields = [
                     ("classification_type", "classification_type"),
@@ -8591,7 +8651,9 @@ def _ticker_div_frequency(conn, ticker, profile_id):
     return row["div_frequency"] if isinstance(row, dict) else row[0]
 
 
-def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
+def _layered_dividend_duplicate(
+    conn, ticker, profile_id, date_str, amount, incoming_source=None,
+):
     """Return True if a near-duplicate dividend already exists for this ticker.
 
     Matches a payment within a few days of ``date_str`` whose amount is the
@@ -8605,10 +8667,19 @@ def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
         return False
     lo = (d - datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
     hi = (d + datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
+    source_clause = ""
+    params = [ticker, profile_id, lo, hi]
+    if incoming_source:
+        # Near-date matching exists for layering two different feeds. Rows
+        # from this same feed can be legitimate repeated distributions (and
+        # include rows inserted earlier in the current import), so only exact
+        # ticker/date matching may deduplicate them.
+        source_clause = " AND LOWER(COALESCE(source, '')) != ?"
+        params.append(str(incoming_source).strip().lower())
     rows = conn.execute(
         "SELECT amount FROM dividend_payments WHERE ticker = ? AND profile_id = ? "
-        "AND payment_date BETWEEN ? AND ?",
-        (ticker, profile_id, lo, hi),
+        f"AND payment_date BETWEEN ? AND ?{source_clause}",
+        params,
     ).fetchall()
     target = float(amount or 0)
     tol = max(0.01, abs(target) * 0.01)
@@ -8619,6 +8690,182 @@ def _layered_dividend_duplicate(conn, ticker, profile_id, date_str, amount):
         if abs(float(existing) - target) <= tol:
             return True
     return False
+
+
+def _roll_forward_interactive_brokers_snapshot(conn, profile_id):
+    """Apply IB trades after the latest imported position snapshot.
+
+    An IB Activity Statement is often month-end while Transaction History is
+    exported through today. The snapshot is the authoritative opening balance;
+    only later stock trades should change it. Advancing each touched row's
+    import_date makes this replay idempotent on subsequent imports.
+    """
+    holding_rows = conn.execute(
+        """SELECT ticker, quantity, base_quantity, price_paid, purchase_value,
+                  original_price_paid, original_purchase_value,
+                  broker_price_paid, broker_purchase_value, purchase_date,
+                  import_date, current_price
+           FROM all_account_info
+           WHERE profile_id = ?""",
+        (profile_id,),
+    ).fetchall()
+    if not holding_rows:
+        return {"positions_updated": 0, "positions_created": 0, "trades_applied": 0}
+
+    states = {}
+    snapshot_dates = []
+    for raw in holding_rows:
+        row = dict(raw)
+        ticker = str(row.get("ticker") or "").strip().upper()
+        cutoff = _portfolio_event_date(row.get("import_date"))
+        if cutoff is not None:
+            snapshot_dates.append(cutoff)
+        quantity = _num_or_zero(row.get("quantity"))
+        basis = _first_not_none(
+            row.get("original_purchase_value"),
+            row.get("purchase_value"),
+            row.get("broker_purchase_value"),
+        )
+        if basis is None:
+            basis = quantity * _num_or_zero(row.get("price_paid"))
+        states[ticker] = {
+            **row,
+            "ticker": ticker,
+            "quantity": quantity,
+            "basis": max(0.0, _num_or_zero(basis)),
+            "cutoff": cutoff,
+            "latest": cutoff,
+            "created": False,
+            "changed": False,
+        }
+
+    if not snapshot_dates:
+        return {"positions_updated": 0, "positions_created": 0, "trades_applied": 0}
+    profile_cutoff = max(snapshot_dates)
+    query_cutoff = min(snapshot_dates)
+    transaction_rows = conn.execute(
+        """SELECT ticker, transaction_type, transaction_date, shares,
+                  price_per_share, fees
+           FROM transactions
+           WHERE profile_id = ?
+             AND UPPER(COALESCE(transaction_type, '')) IN ('BUY', 'SELL')
+             AND date(transaction_date) > date(?)
+           ORDER BY date(transaction_date), id""",
+        (profile_id, query_cutoff.isoformat()),
+    ).fetchall()
+
+    trades_applied = 0
+    for raw in transaction_rows:
+        txn = dict(raw)
+        ticker = str(txn.get("ticker") or "").strip().upper()
+        txn_date = _portfolio_event_date(txn.get("transaction_date"))
+        if not ticker or txn_date is None:
+            continue
+        state = states.get(ticker)
+        if state is None:
+            if str(txn.get("transaction_type") or "").upper() != "BUY":
+                continue
+            state = {
+                "ticker": ticker,
+                "quantity": 0.0,
+                "basis": 0.0,
+                "purchase_date": None,
+                "current_price": None,
+                "cutoff": profile_cutoff,
+                "latest": profile_cutoff,
+                "created": True,
+                "changed": False,
+            }
+            states[ticker] = state
+        cutoff = state.get("cutoff") or profile_cutoff
+        if txn_date <= cutoff:
+            continue
+
+        shares = abs(_num_or_zero(txn.get("shares")))
+        price = max(0.0, _num_or_zero(txn.get("price_per_share")))
+        fees = max(0.0, _num_or_zero(txn.get("fees")))
+        if shares <= 0:
+            continue
+        quantity = state["quantity"]
+        basis = state["basis"]
+        if str(txn.get("transaction_type") or "").upper() == "BUY":
+            if quantity <= 1e-9:
+                state["purchase_date"] = txn_date.isoformat()
+            quantity += shares
+            basis += shares * price + fees
+        else:
+            sold = min(shares, max(0.0, quantity))
+            if sold <= 0:
+                continue
+            average_cost = basis / quantity if quantity > 0 else 0.0
+            quantity = max(0.0, quantity - sold)
+            basis = max(0.0, basis - sold * average_cost)
+            if quantity <= 1e-9:
+                quantity = 0.0
+                basis = 0.0
+                state["purchase_date"] = None
+        state["quantity"] = quantity
+        state["basis"] = basis
+        state["latest"] = max(state.get("latest") or txn_date, txn_date)
+        state["current_price"] = state.get("current_price") or price
+        state["changed"] = True
+        trades_applied += 1
+
+    positions_updated = 0
+    positions_created = 0
+    for state in states.values():
+        if not state.get("changed"):
+            continue
+        quantity = state["quantity"]
+        basis = round(state["basis"], 2)
+        average_cost = basis / quantity if quantity > 0 else 0.0
+        current_price = _num_or_zero(state.get("current_price"))
+        current_value = round(quantity * current_price, 2)
+        gain = round(current_value - basis, 2)
+        gain_pct = gain / basis if basis > 0 else 0.0
+        latest = state["latest"].isoformat()
+        if state.get("created"):
+            conn.execute(
+                """INSERT INTO all_account_info
+                   (ticker, profile_id, description, quantity, base_quantity,
+                    price_paid, purchase_value, original_price_paid,
+                    original_purchase_value, broker_price_paid,
+                    broker_purchase_value, purchase_date, import_date,
+                    current_price, current_value, gain_or_loss,
+                    gain_or_loss_percentage, percent_change)
+                   VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    state["ticker"], profile_id, quantity, quantity,
+                    average_cost, basis, average_cost, basis,
+                    average_cost, basis, state.get("purchase_date"), latest,
+                    current_price, current_value, gain, gain_pct, gain_pct,
+                ),
+            )
+            positions_created += 1
+        else:
+            conn.execute(
+                """UPDATE all_account_info
+                   SET quantity = ?, base_quantity = ?, price_paid = ?,
+                       purchase_value = ?, original_price_paid = ?,
+                       original_purchase_value = ?, broker_price_paid = ?,
+                       broker_purchase_value = ?, purchase_date = ?,
+                       import_date = ?, current_value = ?, gain_or_loss = ?,
+                       gain_or_loss_percentage = ?, percent_change = ?
+                   WHERE ticker = ? AND profile_id = ?""",
+                (
+                    quantity, quantity, average_cost, basis, average_cost,
+                    basis, average_cost, basis, state.get("purchase_date"),
+                    latest, current_value, gain, gain_pct, gain_pct,
+                    state["ticker"], profile_id,
+                ),
+            )
+            positions_updated += 1
+
+    return {
+        "positions_updated": positions_updated,
+        "positions_created": positions_created,
+        "trades_applied": trades_applied,
+    }
 
 
 @app.route("/api/import/transactions", methods=["POST"])
@@ -8746,7 +8993,10 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
     if parsed.get("format_type") == "positions":
         if request.form.get("nav_only", "false").lower() == "true":
             return _record_positions_nav_only(parsed, profile_id, nav_date)
-        if _is_backdated_nav(nav_date):
+        if (
+            _is_backdated_nav(nav_date)
+            and parsed.get("source_format") != "interactive_brokers"
+        ):
             return jsonify({
                 "error": (
                     "Backdated position files can only be imported with Record NAV only. "
@@ -8768,6 +9018,11 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
     original_basis_updated = 0
     original_basis_skipped = 0
     original_basis_mismatches = []
+    snapshot_roll_forward = {
+        "positions_updated": 0,
+        "positions_created": 0,
+        "trades_applied": 0,
+    }
 
     from collections import Counter
 
@@ -8813,7 +9068,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             # stamped with a slightly different date. Treat a nearby same-amount
             # dividend as the same payment instead of double-counting it.
             if preserve_positions and _layered_dividend_duplicate(
-                conn, ticker, profile_id, date_str, info["amount"]
+                conn, ticker, profile_id, date_str, info["amount"], fmt,
             ):
                 duplicates_skipped += 1
                 _prune_superseded_refresh_estimates(
@@ -8900,6 +9155,12 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
         conn.commit()
 
+        if preserve_positions and fmt == "interactive_brokers_transactions":
+            snapshot_roll_forward = _roll_forward_interactive_brokers_snapshot(
+                conn, profile_id,
+            )
+            conn.commit()
+
         # Rollup each ticker that had BUY/SELL inserts
         if not preserve_positions:
             for ticker in tickers_with_txns:
@@ -8932,13 +9193,15 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
             total = conn.execute(
                 "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
-                "WHERE ticker = ? AND profile_id = ?",
+                "WHERE ticker = ? AND profile_id = ? "
+                "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
                 (ticker, profile_id),
             ).fetchone()[0]
 
             ytd = conn.execute(
                 "SELECT COALESCE(SUM(amount), 0) FROM dividend_payments "
-                "WHERE ticker = ? AND profile_id = ? AND payment_date LIKE ?",
+                "WHERE ticker = ? AND profile_id = ? AND payment_date LIKE ? "
+                "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
                 (ticker, profile_id, f"{current_year}%"),
             ).fetchone()[0]
 
@@ -8990,6 +9253,12 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
     if preserve_positions:
         parts.append("Your current share counts were kept from the broker positions import.")
+        if snapshot_roll_forward["trades_applied"]:
+            parts.append(
+                f"Applied {snapshot_roll_forward['trades_applied']} trade"
+                f"{'s' if snapshot_roll_forward['trades_applied'] != 1 else ''} "
+                "that occurred after the IB positions snapshot."
+            )
         if original_basis_updated:
             parts.append(
                 f"Cost basis was refreshed for {original_basis_updated} ticker"
@@ -9018,6 +9287,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         "original_basis_updated": original_basis_updated,
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,
+        "snapshot_roll_forward": snapshot_roll_forward,
         "message": " ".join(parts),
     })
 
@@ -11523,8 +11793,8 @@ def _clear_dividend_actuals(conn, profile_id, ticker):
     )
 
 
-DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "imported", "snapshot", "yahoo", "none")
-IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "imported"}
+DIVIDEND_REPAIR_SOURCE_KEYS = ("schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "interactive_brokers", "imported", "snapshot", "yahoo", "none")
+IMPORTED_DIVIDEND_SOURCES = {"schwab", "fidelity", "snowball", "etrade", "robinhood", "shear_group", "interactive_brokers", "imported"}
 REFRESH_ESTIMATE_DIVIDEND_SOURCE = "refresh_estimate"
 
 
@@ -11544,6 +11814,12 @@ def _normalise_dividend_payment_source(source):
         return "robinhood"
     if value.startswith("shear_group") or value.startswith("shear group"):
         return "shear_group"
+    if (
+        value.startswith("interactive_brokers")
+        or value.startswith("interactive broker")
+        or value.startswith("ibkr")
+    ):
+        return "interactive_brokers"
     return "imported"
 
 
@@ -20726,6 +21002,34 @@ def download_robinhood_transactions_template():
     )
 
 
+@app.route("/api/template/interactive-brokers-download", methods=["GET"])
+def download_interactive_brokers_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'interactive_brokers_positions_template.csv')
+    if not os.path.exists(template_path):
+        from create_template import create_interactive_brokers_template
+        create_interactive_brokers_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='interactive_brokers_positions_template.csv',
+        mimetype='text/csv',
+    )
+
+
+@app.route("/api/template/interactive-brokers-transactions-download", methods=["GET"])
+def download_interactive_brokers_transactions_template():
+    template_path = os.path.join(os.path.dirname(__file__), '..', 'templates', 'interactive_brokers_transactions_template.csv')
+    if not os.path.exists(template_path):
+        from create_template import create_interactive_brokers_transactions_template
+        create_interactive_brokers_transactions_template()
+    return send_file(
+        os.path.abspath(template_path),
+        as_attachment=True,
+        download_name='interactive_brokers_transactions_template.csv',
+        mimetype='text/csv',
+    )
+
+
 # ── Export Holdings ───────────────────────────────────────────────────────────
 
 # Shared column definitions (matches create_template.py headers exactly)
@@ -21980,8 +22284,10 @@ def _ticker_research_holding(symbol):
         if parsed is not None
     ]
     purchase_date = min(valid_purchase_dates) if valid_purchase_dates else None
+    purchase_date_source = "purchase_date" if purchase_date is not None else None
     if purchase_date is None and valid_transaction:
         purchase_date = _portfolio_event_date(valid_transaction["transaction_date"])
+        purchase_date_source = "transaction_date" if purchase_date is not None else None
     if purchase_date is None:
         valid_import_dates = [
             parsed
@@ -21989,6 +22295,7 @@ def _ticker_research_holding(symbol):
             if parsed is not None
         ]
         purchase_date = min(valid_import_dates) if valid_import_dates else None
+        purchase_date_source = "import_date" if purchase_date is not None else None
     for row in rows:
         qty = _json_float(row["quantity"] if "quantity" in row.keys() else None) or 0.0
         quantity += qty
@@ -22020,6 +22327,7 @@ def _ticker_research_holding(symbol):
         "purchase_value": round(purchase_value, 2),
         "current_value": round(current_value, 2),
         "purchase_date": purchase_date.isoformat() if purchase_date else None,
+        "purchase_date_source": purchase_date_source,
         "div_frequency": first["div_frequency"] if "div_frequency" in first.keys() else None,
         "reinvest": first["reinvest"] if "reinvest" in first.keys() else None,
         "estim_payment_per_year": round(annual_income, 2),
@@ -23115,26 +23423,28 @@ def ticker_return_chart(ticker):
         return jsonify({"error": f"No data found for {ticker}"}), 404
 
     purchase_date = pd.to_datetime(row["purchase_date"], errors="coerce")
+    purchase_date_known = not pd.isna(purchase_date)
     price_paid = float(row["price_paid"] or 0)
     description = row["description"] or ticker
 
     if pd.isna(purchase_date) and txn_row:
         purchase_date = pd.to_datetime(txn_row["transaction_date"], errors="coerce")
         price_paid = float(txn_row["price_per_share"] or 0)
+        purchase_date_known = not pd.isna(purchase_date)
     if pd.isna(purchase_date):
         import_date = row["import_date"] if "import_date" in row.keys() else None
         purchase_date = pd.to_datetime(import_date, errors="coerce")
     if price_paid <= 0 and txn_row:
         price_paid = float(txn_row["price_per_share"] or 0)
 
-    if pd.isna(purchase_date) or price_paid <= 0:
-        return jsonify({"error": f"Missing purchase date or price for {ticker}"}), 404
+    if price_paid <= 0:
+        return jsonify({"error": f"Missing purchase price for {ticker}"}), 404
 
     # The chart headline uses the displayed purchase date, but its history
     # must include every recorded ownership event.  Otherwise a partial sell
     # or a later-added transaction can make this holding chart start later
     # than the same holding on Total Return.
-    ownership_dates = [purchase_date]
+    ownership_dates = [] if pd.isna(purchase_date) else [purchase_date]
     for holding in holding_rows:
         for field in ("purchase_date", "import_date"):
             value = pd.to_datetime(holding[field], errors="coerce")
@@ -23144,8 +23454,8 @@ def ticker_return_chart(ticker):
         value = pd.to_datetime(transaction["transaction_date"], errors="coerce")
         if not pd.isna(value):
             ownership_dates.append(value)
-    history_start = min(ownership_dates)
-    start_str = purchase_date.strftime("%Y-%m-%d")
+    history_start = min(ownership_dates) if ownership_dates else pd.Timestamp.today()
+    start_str = None if pd.isna(purchase_date) else purchase_date.strftime("%Y-%m-%d")
     try:
         period_range = _resolve_total_return_period(
             period,
@@ -23234,6 +23544,20 @@ def ticker_return_chart(ticker):
             holding["position_key"] = (holding.get("profile_id"), accounting_ticker)
             canonical_holdings.append(holding)
 
+        # When ownership began is unknown, an import timestamp is only a
+        # tracking marker; it must not collapse YTD/1Y/etc. to one market day.
+        # Show the ticker's market return over the requested window instead.
+        # The current share count is sufficient because a single-security
+        # percentage return is independent of position size.
+        return_basis = "owned_period"
+        if not purchase_date_known:
+            return_basis = "market_period"
+            market_seed_date = close_frame.index[0].date().isoformat()
+            canonical_transactions = []
+            for holding in canonical_holdings:
+                holding["purchase_date"] = market_seed_date
+                holding["import_date"] = None
+
         series = _build_transaction_aware_portfolio_series(
             close_frame, adjusted_frame, divs_frame, cap_gains_frame,
             canonical_transactions, canonical_holdings,
@@ -23243,8 +23567,48 @@ def ticker_return_chart(ticker):
             index for index, value in enumerate(series["total"])
             if value is not None
         ]
+        if len(valid_indexes) < 2 and return_basis == "owned_period":
+            # A genuinely recent purchase can have only one owned close even
+            # though the selected market window has ample history. Keep the
+            # chart useful by falling back to ticker performance, clearly
+            # labelled as such in the response/UI.
+            return_basis = "market_period"
+            market_seed_date = close_frame.index[0].date().isoformat()
+            for holding in canonical_holdings:
+                holding["purchase_date"] = market_seed_date
+                holding["import_date"] = None
+            series = _build_transaction_aware_portfolio_series(
+                close_frame, adjusted_frame, divs_frame, cap_gains_frame,
+                [], canonical_holdings, stock_splits=splits_frame,
+            )
+            valid_indexes = [
+                index for index, value in enumerate(series["total"])
+                if value is not None
+            ]
         if len(valid_indexes) < 2:
-            return jsonify({"error": f"Not enough owned-period price history for {ticker}"}), 404
+            return jsonify({
+                "ticker": ticker,
+                "description": description,
+                "purchase_date": start_str,
+                "price_paid": price_paid,
+                "return_basis": return_basis,
+                "history_pending": True,
+                "message": (
+                    "Owned-period return history needs at least two market closes. "
+                    "It will appear after another close, or after earlier purchase "
+                    "history is added."
+                ),
+                "effective_start_date": series.get("actual_start_date"),
+                "effective_end_date": series.get("actual_end_date"),
+                "requested_start_date": period_range.get("start_date"),
+                "requested_end_date": period_range.get("end_date"),
+                "period_key": period_range.get("key"),
+                "period_label": (
+                    "Since Purchase"
+                    if period_range.get("key") == "all"
+                    else period_range.get("label")
+                ),
+            })
         first_index, last_index = valid_indexes[0], valid_indexes[-1]
         dates = close_frame.index[first_index:last_index + 1].strftime("%Y-%m-%d").tolist()
         price_return = [
@@ -23261,6 +23625,7 @@ def ticker_return_chart(ticker):
             "description": description,
             "purchase_date": start_str,
             "price_paid": price_paid,
+            "return_basis": return_basis,
             "dates": dates,
             "price_return": price_return,
             "total_return": total_return,
@@ -23274,7 +23639,12 @@ def ticker_return_chart(ticker):
                 if period_range.get("key") == "all"
                 else period_range.get("label")
             ),
-            "calculation_method": "Same transaction-aware return and selected date window as Total Return: dated buys and sells change weights without counting as performance; total return uses dividend-reinvested adjusted prices.",
+            "calculation_method": (
+                "Purchase date unavailable: selected-period ticker market return; "
+                "total return uses dividend-reinvested adjusted prices."
+                if return_basis == "market_period"
+                else "Same transaction-aware return and selected date window as Total Return: dated buys and sells change weights without counting as performance; total return uses dividend-reinvested adjusted prices."
+            ),
         })
     except Exception as e:
         return jsonify({"error": f"Could not compute return data for {ticker}: {str(e)}"}), 500
@@ -26252,7 +26622,8 @@ def income_summary():
         f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
-              AND payment_date >= ? AND payment_date <= ?""",
+              AND payment_date >= ? AND payment_date <= ?
+              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'""",
         payment_pids + [month_start, today_iso],
     ).fetchone()
     paid_month_to_date = None
@@ -26268,7 +26639,8 @@ def income_summary():
         f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
-              AND payment_date >= ? AND payment_date <= ?""",
+              AND payment_date >= ? AND payment_date <= ?
+              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'""",
         payment_pids + [today.replace(month=1, day=1).isoformat(), today_iso],
     ).fetchone()
     ytd_income_source = "holding_estimates"
@@ -26323,6 +26695,11 @@ def income_summary():
         total_ytd = float(payout_ytd["amount"] or 0)
         ytd_income_source = "monthly_payouts"
 
+    lifetime_income = _lifetime_dividend_income(conn, payment_pids, today_iso)
+    # Some legacy profiles only have current-year payout summaries. Until
+    # older history is imported, YTD is still a known lower bound for lifetime.
+    lifetime_income = max(lifetime_income, round(total_ytd, 2))
+
     # Split the actual current-month income into reinvested vs not-reinvested.
     # When income comes from recorded dividend payments we can attribute each
     # payment to its ticker's reinvest flag exactly; otherwise fall back to the
@@ -26342,7 +26719,8 @@ def income_summary():
                 LEFT JOIN all_account_info a
                   ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
                 WHERE dp.profile_id IN ({payment_placeholders})
-                  AND dp.payment_date >= ? AND dp.payment_date <= ?""",
+                  AND dp.payment_date >= ? AND dp.payment_date <= ?
+                  AND LOWER(COALESCE(dp.source, '')) != 'refresh_estimate'""",
             payment_pids + [month_start, today_iso],
         ).fetchone()
         current_month_reinvested = float(split["reinv"] or 0)
@@ -26367,6 +26745,7 @@ def income_summary():
 
     conn.close()
     return jsonify({
+        "lifetime_income": lifetime_income,
         "ytd_income": total_ytd,
         "fund_ytd_income": total_ytd,
         "realized_option_pnl_ytd": option_income_ytd,

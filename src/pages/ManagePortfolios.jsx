@@ -12,6 +12,7 @@ const BROKER_OPTIONS = [
   { value: 'fidelity', label: 'Fidelity' },
   { value: 'robinhood', label: 'Robinhood' },
   { value: 'shear_group', label: 'Shear Group' },
+  { value: 'interactive_brokers', label: 'Interactive Brokers' },
   { value: 'snowball', label: 'Snowball' },
   { value: 'other', label: 'Other / Manual' },
 ]

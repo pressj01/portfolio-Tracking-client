@@ -358,7 +358,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
   }, [ticker, pf, selection, period, customStart, customEnd, rangeError])
 
   useEffect(() => {
-    if (!chart || !window.Plotly) return undefined
+    if (!chart || chart.history_pending || !window.Plotly) return undefined
     const el = document.getElementById('ticker-research-chart')
     if (!el) return undefined
     const hasTotalReturn = chart.total_return_available !== false && Array.isArray(chart.total_return)
@@ -458,7 +458,12 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
               <PositionChip label="Cost" value={formatMoney(holding.purchase_value)} />
               <PositionChip label="Paid" value={formatMoney(holding.price_paid, { maximumFractionDigits: 4 })} />
               <PositionChip label="Yield" value={yieldDisplay} />
-              {holding.purchase_date && <PositionChip label="Purchased" value={holding.purchase_date} />}
+              {holding.purchase_date && (
+                <PositionChip
+                  label={holding.purchase_date_source === 'import_date' ? 'Tracked' : 'Purchased'}
+                  value={holding.purchase_date}
+                />
+              )}
             </div>
           ) : (
             <p className="trs-empty-position">Not in the current portfolio — showing public research only.</p>
@@ -540,8 +545,16 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
           )}
           {chartLoading && <div style={{ textAlign: 'center', padding: '2rem' }}><span className="spinner" /></div>}
           {chartError && <div className="alert alert-error">{chartError}</div>}
-          {chart && (
+          {chart?.history_pending && (
+            <div className="alert alert-info">{chart.message}</div>
+          )}
+          {chart && !chart.history_pending && (
             <>
+              {chart.return_basis === 'market_period' && (
+                <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
+                  Purchase date unavailable — showing this ticker&apos;s market return for the selected period.
+                </div>
+              )}
               <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
                 <strong>{chart.period_label || 'Selected period'}:</strong>{' '}
                 {formatPerformanceRange(chart.effective_start_date, chart.effective_end_date)

@@ -419,6 +419,65 @@ class ManualHoldingEditApiTest(unittest.TestCase):
             places=6,
         )
 
+    def test_holding_without_purchase_date_uses_selected_market_period(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, import_date, price_paid, "
+            "purchase_value, current_value) "
+            "VALUES ('BST', 2, 'BlackRock Science and Technology Trust', "
+            "125, '2026-08-26', 30.0164, 3752.05, 6208.75)"
+        )
+        history = pd.DataFrame(
+            {
+                "Close": [49.25, 49.67],
+                "Dividends": [0.0, 0.0],
+            },
+            index=pd.to_datetime(["2026-08-24", "2026-08-25"]),
+        )
+
+        with (
+            patch("yfinance.Ticker") as ticker_mock,
+            patch.object(app_module, "_chunked_yf_download", return_value=history),
+        ):
+            ticker_mock.return_value.info = {}
+            res = self.client.get("/api/ticker-return/BST?profile_id=2&period=ytd")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["return_basis"], "market_period")
+        self.assertEqual(data["dates"], ["2026-08-24", "2026-08-25"])
+        self.assertEqual(data["price_return"][0], 0.0)
+        self.assertAlmostEqual(data["price_return"][-1], 0.85, places=2)
+        self.assertEqual(data["price_return"], data["total_return"])
+
+    def test_one_close_owned_period_falls_back_to_selected_market_period(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, purchase_date, price_paid, "
+            "purchase_value, current_value) "
+            "VALUES ('FRESH', 2, 'Fresh Position', 10, '2026-08-25', 49.67, 496.70, 496.70)"
+        )
+        history = pd.DataFrame(
+            {
+                "Close": [49.25, 49.67],
+                "Dividends": [0.0, 0.0],
+            },
+            index=pd.to_datetime(["2026-08-24", "2026-08-25"]),
+        )
+
+        with (
+            patch("yfinance.Ticker") as ticker_mock,
+            patch.object(app_module, "_chunked_yf_download", return_value=history),
+        ):
+            ticker_mock.return_value.info = {}
+            res = self.client.get("/api/ticker-return/FRESH?profile_id=2&period=ytd")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["return_basis"], "market_period")
+        self.assertEqual(data["dates"], ["2026-08-24", "2026-08-25"])
+        self.assertAlmostEqual(data["total_return"][-1], 0.85, places=2)
+
     def test_holdings_read_repairs_stored_excel_line_breaks_in_fund_name(self):
         self._execute(
             "INSERT INTO all_account_info "

@@ -177,7 +177,7 @@ function Overview() {
       </p>
       <h3 style={{ marginBottom: '0.5rem' }}>Key Capabilities</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
-        <li><strong>Import</strong> — Starts on Broker Import: positions first, then transactions, followed by an optional market-data refresh. Supports Schwab (Positions, optional All Accounts Positions, and Transactions), E*TRADE, Fidelity, Robinhood, and Shear Group (including All Accounts Positions and Activity). Generic Positions/Transactions and Snowball (migration only) have their own tabs. Automatic database backups before every import and dividend repair with one-click restore.</li>
+        <li><strong>Import</strong> — Starts on Broker Import: positions first, then transactions, followed by an optional market-data refresh. Supports Schwab (Positions, optional All Accounts Positions, and Transactions), E*TRADE, Fidelity, Robinhood, Interactive Brokers (Activity Statement positions and Transaction History), and Shear Group (including All Accounts Positions and Activity). Generic Positions/Transactions and Snowball (migration only) have their own tabs. Automatic database backups before every import and dividend repair with one-click restore.</li>
         <li><strong>Holdings</strong> — Add, edit, and delete positions manually or through transaction lots (BUY/SELL). Tracks cost basis, gain/loss, dividend yields, DRIP reinvestment, and more.</li>
         <li><strong>Dashboard</strong> — At-a-glance summary of portfolio value, income, and allocation. Includes an Action Center preview panel showing the top follow-up items.</li>
         <li><strong>Action Center</strong> — Daily inbox of follow-up items drawn from your portfolio data, categorized by priority (Needs Review, Watch, Clear) and kind (Allocation, Data, Dividend, Options, NAV / CEF, Risk, Rebalance, Tax, etc.). Refresh Data runs a market refresh in place.</li>
@@ -223,7 +223,7 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Brokerage templates:</strong> Broker Import and Generic Positions include downloadable brokerage-position templates.
         Use the matching template if you want to paste or export positions from a broker first, then import them into the app.
-        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, and <strong>Robinhood</strong>, plus generic holdings and generic transaction templates and a Snowball holdings migration template.
+        The app currently provides templates for <strong>E*TRADE</strong>, <strong>Charles Schwab</strong>, <strong>Fidelity</strong>, <strong>Robinhood</strong>, and <strong>Interactive Brokers</strong>, plus generic holdings and generic transaction templates and a Snowball holdings migration template.
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
@@ -259,6 +259,8 @@ function ImportHelp() {
         <li><strong>Fidelity (Positions) template</strong> — use this when preparing a Fidelity positions workbook with the exact columns the importer reads.</li>
         <li><strong>Robinhood Holdings reference</strong> — a CSV showing the fields read from the Robinhood Holdings PDF. The actual import still expects the PDF export.</li>
         <li><strong>Robinhood Transactions template</strong> — a CSV with the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers.</li>
+        <li><strong>Interactive Brokers (Positions) template</strong> — a sectioned Activity Statement CSV with Open Positions, cash, and instrument names in the layout IBKR actually exports.</li>
+        <li><strong>Interactive Brokers (Transactions) template</strong> — a Transaction History CSV with Date, Transaction Type, Symbol, Quantity, Price, Gross Amount, and Commission.</li>
         <li><strong>Snowball Holdings template</strong> — on the Snowball tab, for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
         <li><strong>Generic Transactions template</strong> — use this broker-neutral XLSX for one-row-per-event BUY, SELL, DIVIDEND, and DRIP history.</li>
@@ -335,7 +337,7 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Recommended workflow:</strong>
         <ol style={{ paddingLeft: '1.5rem', marginTop: '0.5rem', marginBottom: 0 }}>
-          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, or Shear Group). This sets shares and cost basis. Schwab and Fidelity All Accounts are optional positions shortcuts; Shear Group All Accounts supports both its combined Positions and Activity files.</li>
+          <li>On <strong>Broker Import</strong>, pick your broker and import a current <strong>Positions</strong> file for this account (Schwab, E*TRADE, Fidelity, Robinhood, Interactive Brokers, or Shear Group). This sets shares and cost basis. Schwab and Fidelity All Accounts are optional positions shortcuts; Shear Group All Accounts supports both its combined Positions and Activity files. Interactive Brokers uses an Activity Statement CSV rather than a flat positions table.</li>
           <li>Then import that same account&apos;s <strong>Transaction History</strong> for dividends, DRIP, lots, and realized gains. Do this after the positions snapshot so a partial history file cannot rebuild share counts.</li>
           <li>Optionally run <strong>Refresh Prices &amp; Divs</strong> last to update market data, dividend fields, and pay-date estimates. It is not required for a successful import.</li>
         </ol>
@@ -431,6 +433,24 @@ function ImportHelp() {
         <li>In Robinhood, export your <strong>Activity CSV</strong>.</li>
         <li>On Broker Import, choose <strong>Robinhood</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, cash dividends, manufactured dividends, capital gain distributions, and ACAT share transfers.</li>
+        <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Interactive Brokers (Positions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Interactive Brokers, go to <strong>Performance &amp; Reports &gt; Statements</strong>, generate an <strong>Activity Statement</strong>, and download <strong>CSV</strong>.</li>
+        <li>On Broker Import, choose <strong>Interactive Brokers</strong> and the <strong>Positions</strong> step. IBKR does not have an All-Accounts importer — each file updates the selected portfolio.</li>
+        <li>The file is a multi-section statement, not a flat table. The importer reads <strong>Open Positions</strong> for shares and cost basis, <strong>Cash Report</strong> for ending cash, and <strong>Financial Instrument Information</strong> for names.</li>
+        <li>Preferred shares such as <em>CIM PRB</em> import as <em>CIM-PRB</em>; class shares such as <em>PBR A</em> import as <em>PBR-A</em>. CAD positions are converted to USD using the statement FX rate.</li>
+        <li>Option contracts are counted for reconciliation but are not imported as holdings.</li>
+      </ul>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Interactive Brokers (Transactions)</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>In Interactive Brokers, go to <strong>Performance &amp; Reports &gt; Transaction History</strong> and download <strong>CSV</strong>. An Activity Statement CSV is also accepted for trades and dividends.</li>
+        <li>On Broker Import, choose <strong>Interactive Brokers</strong> and the <strong>Transactions</strong> step.</li>
+        <li>Imports: BUY, SELL, option assignments as stock purchases, cash dividends, payment in lieu of dividends, and same-day DRIP reinvestment buys.</li>
+        <li>Interest, withholding tax, fees, withdrawals, FX adjustments, and option contract rows are skipped.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
@@ -7402,7 +7422,7 @@ function OptionTradesHelp() {
       <HelpScreenshot
         src="./help-screenshots/option-trades/import-transactions.png"
         alt="Import Option Transactions page with the file-format selector, drop zone, generic template download, and the rules explaining how rows are handled"
-        caption="Import option transactions accepts Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, and a generic CSV/XLSX template."
+        caption="Import option transactions accepts Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, Interactive Brokers, and a generic CSV/XLSX template."
       />
       <p style={{ marginBottom: '0.75rem' }}>
         Pick the format, choose the file, and use <strong>Preview executions</strong> before importing;

@@ -841,6 +841,7 @@ export default function Dashboard() {
     'etrade',
     'fidelity',
     'shear_group',
+    'interactive_brokers',
     'generic',
     'other',
   ].includes(String(currentProfile?.broker_source || '').toLowerCase())
@@ -1365,7 +1366,8 @@ export default function Dashboard() {
       ? currentValue
       : Number(portfolioValue.account_value)
 
-    return { lifetimeIncome: totalDivs, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, cashValue, accountValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
+    const lifetimeIncome = incomeSummary?.lifetime_income ?? totalDivs
+    return { lifetimeIncome, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, cashValue, accountValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
   }, [holdings, incomeSummary, portfolioValue])
 
   const marketExposure = useMemo(() => {

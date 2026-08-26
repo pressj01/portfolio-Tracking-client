@@ -40,7 +40,7 @@ const PAGE_KEYWORDS = {
   'security-research': ['research', 'lookup', 'ticker'],
   'closed-cef-information': ['cef', 'discount', 'nav'],
   'general-option-scanner': ['gos', 'scanner'],
-  import: ['schwab', 'upload'],
+  import: ['schwab', 'upload', 'interactive brokers', 'ibkr'],
 }
 
 export function matchQuery(query, texts) {
@@ -87,7 +87,7 @@ export function actionCatalogItems({ isRefreshing = false, basisMode = 'original
       hint: 'Action',
       action: 'navigate',
       path: '/import',
-      keywords: ['schwab', 'upload', 'broker'],
+      keywords: ['schwab', 'upload', 'broker', 'interactive brokers', 'ibkr'],
     },
     {
       id: 'action:help',
