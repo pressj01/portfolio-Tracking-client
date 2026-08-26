@@ -1879,7 +1879,7 @@ _OFFICIAL_DISTRIBUTION_CACHE = {}
 _OFFICIAL_DISTRIBUTION_TTL_SEC = 30 * 60
 # Bump when parser semantics change so a previously persisted successful
 # scrape cannot keep serving an obsolete cadence after the code is updated.
-_OFFICIAL_DISTRIBUTION_CACHE_VERSION = "v2"
+_OFFICIAL_DISTRIBUTION_CACHE_VERSION = "v3"
 # A successful capability probe assigns a ticker to an issuer parser without
 # requiring that ticker to be added to a hard-coded family list. Misses are
 # cached too so ordinary stocks do not fan out across issuer sites repeatedly.
@@ -10026,13 +10026,24 @@ def lookup_ticker(ticker):
         annual_rate = _positive_number(info.get("dividendRate"))
         if annual_rate:
             result["div"] = round(annual_rate, 6)
-    if not result["ex_div_date"]:
-        ex_ts = info.get("exDividendDate")
-        if ex_ts:
-            try:
-                result["ex_div_date"] = _dt.utcfromtimestamp(ex_ts).strftime("%m/%d/%y")
-            except Exception:
-                pass
+    # Yahoo publishes the next announced ex-date in quote metadata while its
+    # dividend series contains only completed ex-dates. Prefer that later date
+    # even when history is present; otherwise OTF and similar securities stay
+    # pinned to the last distribution that already paid.
+    ex_ts = info.get("exDividendDate")
+    if ex_ts:
+        try:
+            yahoo_ex = pd.Timestamp(ex_ts, unit="s", tz="UTC") if isinstance(
+                ex_ts, (int, float)
+            ) else pd.Timestamp(ex_ts)
+            current_ex = _parse_timestamp_value(result.get("ex_div_date"))
+            yahoo_ex = _parse_timestamp_value(yahoo_ex)
+            if yahoo_ex is not None and (
+                current_ex is None or yahoo_ex.normalize() > current_ex.normalize()
+            ):
+                result["ex_div_date"] = yahoo_ex.strftime("%m/%d/%y")
+        except Exception:
+            pass
 
     result["div_frequency"] = freq_code
 
@@ -13513,6 +13524,13 @@ def _is_lsfunds_fund(ticker, description=""):
     return ticker in {"OVF", "OVL", "OVS"}
 
 
+def _is_blue_owl_technology_finance(ticker, description=""):
+    """Identify OTF, whose BDC dividend page publishes forward declarations."""
+    ticker = (ticker or "").strip().upper()
+    description_l = (description or "").lower()
+    return ticker == "OTF" or "blue owl technology finance" in description_l
+
+
 def _is_infracap_fund(ticker, description=""):
     """Identify InfraCap ETFs that publish a DISTRIBUTION DETAIL table on infracapfund.com."""
     ticker = (ticker or "").strip().upper()
@@ -13852,6 +13870,16 @@ _FUND_FAMILY_REGISTRY = [
         "page_url": "https://lsfunds.com/etfs/{ticker_lower}",
     },
     {
+        "name": "Blue Owl Technology Finance",
+        "keywords": ["blue owl technology finance"],
+        "fetcher": "_fetch_blue_owl_technology_distribution_snapshot",
+        "legacy": _is_blue_owl_technology_finance,
+        "page_url": (
+            "https://www.blueowltechnologyfinance.com/"
+            "investors/stock-data/dividends"
+        ),
+    },
+    {
         "name": "InfraCap",
         "keywords": ["infracap", "infrastructure capital"],
         "fetcher": "_fetch_infracap_distribution_snapshot",
@@ -13963,13 +13991,13 @@ def _distribution_header_kind(label):
     if (
         "ex dividend date" in text
         or "ex distribution date" in text
-        or compact in {"exdate", "exrecorddate", "exdividenddate"}
+        or compact in {"exdate", "exrecorddate", "exdivdate", "exdividenddate"}
     ):
         return "ex_date"
     if (
         "payable date" in text
         or "payment date" in text
-        or compact in {"paydate", "payabledate", "paymentdate"}
+        or compact in {"paydate", "payabledate", "paymentdate", "payment"}
     ):
         return "pay_date"
     if (
@@ -14150,6 +14178,146 @@ def _generic_distribution_snapshot_from_html(body, ticker, source, source_url, a
         "source": source,
         "source_url": source_url,
     }
+
+
+_BLUE_OWL_TECH_DIVIDENDS_URL = (
+    "https://www.blueowltechnologyfinance.com/investors/stock-data/dividends"
+)
+
+
+def _blue_owl_technology_snapshot_from_html(body, ticker="OTF", as_of=None):
+    """Parse OTF's regular run rate and every separately declared next event.
+
+    OTF publishes a regular quarterly dividend and a smaller listing-related
+    special dividend in the same quarter. The holding's run-rate fields must
+    remain based on the regular $0.35 payment, while the calendar needs both
+    declared ex/pay pairs with their own amounts.
+    """
+    ticker = (ticker or "").strip().upper()
+    if ticker != "OTF" or not _page_identifies_distribution_ticker(body, ticker):
+        return None
+
+    parser = _SemanticDistributionTableParser()
+    try:
+        parser.feed(body or "")
+    except Exception:
+        return None
+
+    rows = []
+    for table in parser.tables:
+        for header_index, header in enumerate(table):
+            column_map = {}
+            frequency_index = None
+            for index, label in enumerate(header):
+                kind = _distribution_header_kind(label)
+                if kind and kind not in column_map:
+                    column_map[kind] = index
+                normalized = re.sub(r"[^a-z]+", " ", str(label or "").lower()).strip()
+                if normalized == "frequency":
+                    frequency_index = index
+            if not {"ex_date", "pay_date", "amount"}.issubset(column_map):
+                continue
+            for raw in table[header_index + 1:]:
+                try:
+                    ex_ts = _parse_timestamp_value(raw[column_map["ex_date"]])
+                    pay_ts = _parse_timestamp_value(raw[column_map["pay_date"]])
+                    amount = _distribution_amount_from_text(raw[column_map["amount"]])
+                except (IndexError, TypeError):
+                    continue
+                if ex_ts is None or pay_ts is None or amount is None:
+                    continue
+                frequency_label = (
+                    str(raw[frequency_index] or "").strip()
+                    if frequency_index is not None and frequency_index < len(raw)
+                    else ""
+                )
+                rows.append({
+                    "ex": ex_ts.normalize(),
+                    "pay": pay_ts.normalize(),
+                    "amount": amount,
+                    "frequency": frequency_label,
+                    "frequency_code": _distribution_frequency_code(frequency_label),
+                })
+            break
+
+    if not rows:
+        return None
+    deduped = {}
+    for row in rows:
+        key = (row["ex"], row["pay"], row["amount"], row["frequency"].lower())
+        deduped[key] = row
+    rows = sorted(deduped.values(), key=lambda row: (row["ex"], row["pay"]))
+
+    today = pd.Timestamp(as_of or pd.Timestamp.now()).normalize()
+    regular_rows = [row for row in rows if row["frequency_code"] == "Q"]
+    if not regular_rows:
+        return None
+    past_regular = [row for row in regular_rows if row["pay"] <= today]
+    latest_regular = past_regular[-1] if past_regular else None
+    unpaid_regular = [
+        row for row in regular_rows
+        if row["pay"] >= today or row["ex"] >= today
+    ]
+    chosen_regular = unpaid_regular[0] if unpaid_regular else latest_regular or regular_rows[-1]
+    run_rate_row = chosen_regular
+
+    paid_rows = [row for row in rows if row["pay"] <= today]
+    history = pd.Series(dtype=float)
+    if paid_rows:
+        history = pd.Series(
+            [row["amount"] for row in paid_rows],
+            index=pd.DatetimeIndex([row["ex"] for row in paid_rows]),
+        ).sort_index()
+
+    future_schedule = [
+        {
+            "ex_dividend_date": row["ex"].strftime("%Y-%m-%d"),
+            "payable_date": row["pay"].strftime("%Y-%m-%d"),
+            "amount": row["amount"],
+            "frequency": row["frequency"],
+            "frequency_code": row["frequency_code"],
+        }
+        for row in rows
+        if row["pay"] >= today or row["ex"] >= today
+    ]
+    return {
+        "known": True,
+        "has_dividend": True,
+        "div": run_rate_row["amount"],
+        "ex_div_date": chosen_regular["ex"].strftime("%m/%d/%y"),
+        "div_pay_date": chosen_regular["pay"].strftime("%m/%d/%y"),
+        "freq": "Q",
+        "history": history,
+        "future_schedule": future_schedule,
+        "source": "Blue Owl Technology Finance",
+        "source_url": _BLUE_OWL_TECH_DIVIDENDS_URL,
+    }
+
+
+def _fetch_blue_owl_technology_distribution_snapshot(ticker):
+    """Fetch OTF declarations from the company's investor-relations page."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    if ticker != "OTF":
+        return None
+    try:
+        response = requests.get(
+            _BLUE_OWL_TECH_DIVIDENDS_URL,
+            timeout=10,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+        )
+        response.raise_for_status()
+    except Exception:
+        return None
+    return _blue_owl_technology_snapshot_from_html(response.text or "", ticker)
 
 
 def _official_snapshot_has_data(snapshot):
@@ -14479,6 +14647,26 @@ def _fetch_refresh_dividend_snapshot(yf_ticker, preferred_freq=None):
             if isinstance(ex_ts, (int, float)):
                 ex_ts = pd.Timestamp(ex_ts, unit="s", tz=_timezone.utc)
             snapshot["ex_div_date"] = _format_mdy_date(ex_ts)
+
+    # ``Ticker.dividends`` is historical, but ``info.exDividendDate`` can
+    # already name the next announced event. The old mutually-exclusive branch
+    # ignored that forward date whenever any history existed, leaving the
+    # refresh and dividend calendar on a distribution that had already paid.
+    announced_ex = info.get("exDividendDate")
+    if announced_ex:
+        try:
+            if isinstance(announced_ex, (int, float)):
+                announced_ex = pd.Timestamp(
+                    announced_ex, unit="s", tz=_timezone.utc
+                )
+            announced_ts = _parse_timestamp_value(announced_ex)
+            saved_ts = _parse_timestamp_value(snapshot.get("ex_div_date"))
+            if announced_ts is not None and (
+                saved_ts is None or announced_ts.normalize() > saved_ts.normalize()
+            ):
+                snapshot["ex_div_date"] = announced_ts.strftime("%m/%d/%y")
+        except Exception:
+            pass
 
     official = _fetch_official_distribution_snapshot(
         ticker,
@@ -33946,28 +34134,47 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
         return []
     start = datetime.date(year, month, 1)
     end = datetime.date(year, month, calendar.monthrange(year, month)[1])
-    event_by_ticker = {
-        str(event.get("ticker") or "").strip().upper(): event
-        for event in events or []
-    }
-    universe = holdings or events or []
+    events_by_ticker = {}
+    for event in events or []:
+        event_ticker = str(event.get("ticker") or "").strip().upper()
+        if event_ticker:
+            events_by_ticker.setdefault(event_ticker, []).append(event)
+    universe = holdings or [ticker_events[0] for ticker_events in events_by_ticker.values()]
     projected = []
 
     for holding in universe:
         ticker = str(holding.get("ticker") or "").strip().upper()
         if not ticker:
             continue
-        event = event_by_ticker.get(ticker)
-        item = dict(holding)
-        if event:
-            item.update(event)
+        ticker_events = events_by_ticker.get(ticker, [])
+        event = next(
+            (
+                candidate for candidate in ticker_events
+                if str(candidate.get("distribution_type") or "").strip().lower()
+                != "special"
+            ),
+            ticker_events[0] if ticker_events else None,
+        )
+
+        def merged_event_item(selected_event):
+            merged = dict(holding)
+            if not selected_event:
+                return merged
+            merged.update(selected_event)
             for field in (
                 "quantity", "annual_income", "current_value", "current_price",
                 "payment_income", "payment_history", "description",
             ):
                 holding_value = holding.get(field)
+                # An expanded issuer row carries an event-specific cash amount;
+                # do not replace it with the holding's regular run-rate payment.
+                if selected_event.get("official_schedule") and field == "payment_income":
+                    continue
                 if holding_value is not None and (field != "description" or holding_value):
-                    item[field] = holding_value
+                    merged[field] = holding_value
+            return merged
+
+        item = merged_event_item(event)
         if _dividend_payment_value(item) <= 0 and not (
             event or _is_money_market_holding(item) or _calendar_frequency_pinned(item)
         ):
@@ -33979,13 +34186,14 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             (event or {}).get("pay_date") or item.get("pay_date") or item.get("div_pay_date")
         )
         event_pay_date = event_pay_ts.date() if event_pay_ts is not None else None
-        confirmed_event_date = (
-            event_pay_date
-            if event_pay_date is not None
-            and (event or {}).get("pay_estimated") is False
-            and start <= event_pay_date <= end
-            else None
-        )
+        confirmed_events = []
+        for candidate in ticker_events:
+            candidate_pay_ts = _parse_timestamp_value(candidate.get("pay_date"))
+            if candidate_pay_ts is None or candidate.get("pay_estimated") is not False:
+                continue
+            candidate_pay_date = candidate_pay_ts.date()
+            if start <= candidate_pay_date <= end:
+                confirmed_events.append((candidate_pay_date, candidate))
         stored_frequency = str(
             (event or {}).get("freq")
             or item.get("freq")
@@ -34012,13 +34220,18 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             frequency = _payment_history_frequency(history, stored_frequency)
             schedule_history = history
 
-        def add_payment(value, source):
+        def add_payment(value, source, payment_item=None):
             if value is None or value < start or value > end:
                 return
-            payment = dict(item)
+            payment = dict(payment_item or item)
+            payment_frequency = frequency
+            if payment.get("official_schedule"):
+                payment_frequency = str(
+                    payment.get("freq") or payment.get("div_frequency") or frequency
+                ).strip().upper() or frequency
             payment.update({
                 "ticker": ticker,
-                "freq": frequency,
+                "freq": payment_frequency,
                 "calendar_pay_date": value.isoformat(),
                 "calendar_source": source,
                 "calendar_projected": source == "projected",
@@ -34033,12 +34246,20 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 else event_pay_date or (ex_ts.date() if ex_ts is not None else None)
             )
             for value, is_actual in _project_weekly_payment_dates(schedule_history, anchor, start, end):
+                confirmed_match = next(
+                    (candidate for pay_date, candidate in confirmed_events if pay_date == value),
+                    None,
+                )
                 source = (
                     "confirmed"
-                    if confirmed_event_date == value
+                    if confirmed_match is not None
                     else "history" if is_actual else "projected"
                 )
-                add_payment(value, source)
+                add_payment(
+                    value,
+                    source,
+                    merged_event_item(confirmed_match) if confirmed_match else None,
+                )
             continue
 
         # A recorded cash transaction is the authoritative answer for a
@@ -34053,15 +34274,22 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             # the same month. Keep it when it is not merely the issuer-side
             # version of an imported cash date; Optimization then counts the
             # recorded payment plus the genuinely remaining one.
-            if (
-                confirmed_event_date is not None
-                and _closest_payment_date(selected_actuals, confirmed_event_date, 4) is None
-            ):
-                add_payment(confirmed_event_date, "confirmed")
+            for confirmed_date, confirmed_event in confirmed_events:
+                if _closest_payment_date(selected_actuals, confirmed_date, 4) is None:
+                    add_payment(
+                        confirmed_date,
+                        "confirmed",
+                        merged_event_item(confirmed_event),
+                    )
             continue
 
-        if confirmed_event_date is not None:
-            add_payment(confirmed_event_date, "confirmed")
+        if confirmed_events:
+            for confirmed_date, confirmed_event in confirmed_events:
+                add_payment(
+                    confirmed_date,
+                    "confirmed",
+                    merged_event_item(confirmed_event),
+                )
             continue
 
         predicted = None
@@ -34393,6 +34621,74 @@ def _cached_dividend_calendar_events(holdings, is_aggregate, profile_ids):
     return _cache_get(_DIVIDEND_CALENDAR_CACHE, cache_key)
 
 
+def _calendar_events_from_official_schedule(schedule, base_event, today=None):
+    """Expand issuer-declared rows that carry their own amount and pay date."""
+    today = today or datetime.date.today()
+    expanded = []
+    seen = set()
+    for row in schedule or []:
+        ex_ts = _parse_timestamp_value(row.get("ex_dividend_date"))
+        pay_ts = _parse_timestamp_value(
+            row.get("payable_date") or row.get("payment_date")
+        )
+        try:
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError, AttributeError):
+            amount = 0.0
+        if ex_ts is None or pay_ts is None or amount <= 0:
+            continue
+        ex_date = ex_ts.date()
+        pay_date = pay_ts.date()
+        if ex_date < today and pay_date < today:
+            continue
+        key = (ex_date, pay_date, round(amount, 8))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        event = dict(base_event)
+        frequency_label = str(row.get("frequency") or "").strip()
+        is_special = frequency_label.lower() == "special"
+        frequency = (
+            str(row.get("frequency_code") or "").strip().upper()
+            or _distribution_frequency_code(frequency_label)
+            or ("A" if is_special else "")
+            or str(base_event.get("freq") or "").strip().upper()
+        )
+        try:
+            quantity = float(base_event.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0.0
+        payment_income = round(amount * quantity, 2) if quantity > 0 else None
+        frequency_multiplier = {
+            "W": 52, "52": 52, "M": 12, "Q": 4,
+            "SA": 2, "S": 2, "A": 1,
+        }.get(frequency, 1)
+        event.update({
+            "date": ex_date.isoformat(),
+            "day": str(ex_date.day),
+            "month": ex_date.strftime("%b"),
+            "weekday": ex_date.strftime("%a"),
+            "amount": round(amount, 6),
+            "payment_income": payment_income,
+            "annual_income": (
+                round(payment_income * frequency_multiplier, 2)
+                if payment_income is not None else None
+            ),
+            "freq": frequency,
+            "freq_label": frequency_label.lower() or event.get("freq_label", ""),
+            "pay_date": pay_date.isoformat(),
+            "pay_month": pay_date.strftime("%b"),
+            "pay_day": str(pay_date.day),
+            "pay_estimated": False,
+            "pay_source": "issuer",
+            "distribution_type": frequency_label or None,
+            "official_schedule": True,
+        })
+        expanded.append(event)
+    return sorted(expanded, key=lambda event: (event["date"], event["pay_date"]))
+
+
 def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None):
     """Build dividend calendar events from all_account_info."""
     from datetime import datetime, timedelta
@@ -34480,6 +34776,7 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
         pay_value = row.get("pay_date")
         official_pay_ts = None
         official_lag = None
+        official_schedule = []
 
         # What the holdings screen recorded outranks the issuer feed, on exactly
         # the same terms the dashboard refresh applies. This screen re-derived
@@ -34512,6 +34809,8 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
                 if official.get("div_pay_date"):
                     pay_value = official.get("div_pay_date")
                     official_pay_ts = _parse_timestamp_value(pay_value)
+                if not amount_pinned:
+                    official_schedule = official.get("future_schedule") or []
                 lag_val = official.get("pay_lag_days")
                 if lag_val is not None:
                     try:
@@ -34636,7 +34935,7 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             continue
         normalized_pay_date = normalized_pay_ts.date()
 
-        events.append({
+        base_event = {
             "ticker":        ticker,
             "description":   description,
             "date":          dt.isoformat(),
@@ -34656,7 +34955,11 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             "pay_month":     normalized_pay_date.strftime("%b"),
             "pay_day":       str(normalized_pay_date.day),
             "pay_estimated": pay_estimated,
-        })
+        }
+        declared_events = _calendar_events_from_official_schedule(
+            official_schedule, base_event, today=today_d
+        )
+        events.extend(declared_events or [base_event])
 
     # Run every current event through the same transaction-history-aware date
     # resolver used by the Month view before any other screen consumes it.
@@ -34737,7 +35040,10 @@ def _canonical_upcoming_dividends(today=None):
             "amount": event.get("amount") or 0,
             "est_payment": round(_dividend_payment_value(event), 2),
             "frequency": frequency,
-            "freq_label": frequency_labels.get(frequency, frequency.title()),
+            "freq_label": (
+                event.get("distribution_type")
+                or frequency_labels.get(frequency, frequency.title())
+            ),
             "color": event.get("color") or "#7ecfff",
         })
 
