@@ -500,9 +500,10 @@ export default function Growth({ embedded = false }) {
                 <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
               </div>
               <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-                <strong>Grade cannot be computed for the Lifetime setting.</strong>{' '}
+                <strong>Life does not have graphs associated with it.</strong>{' '}
                 Life is cost-basis G/L, not a daily price series, so Portfolio Grade, Sharpe,
-                and Sortino stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom to grade that market window.
+                and Sortino also stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom to graph and
+                grade that market window.
               </div>
             </>
           )}

@@ -163,6 +163,11 @@ export default function PortfolioGrowth2({ embedded = false }) {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const { isDark } = useTheme()
+  // Split View can mount this screen twice. Refs keep each Plotly lifecycle
+  // tied to its own pane; fixed document IDs make both instances target the
+  // first chart and allow either instance's cleanup to purge the other one.
+  const valueChartRef = useRef(null)
+  const performanceChartRef = useRef(null)
 
   // Shared state
   const [initialCustomDates] = useState(() => readSharedPerformanceRange())
@@ -260,7 +265,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
       data.actual_start_date,
       data.actual_end_date,
     )
-    const el = document.getElementById('g2-value-chart')
+    const el = valueChartRef.current
     if (!el) return
     // Open the unified hover box on the last date so the current value reads
     // without hovering. Guarded: cleanup can purge the plot before newPlot lands.
@@ -321,7 +326,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
     return () => {
       cancelled = true
-      if (document.getElementById('g2-value-chart')) Plotly.purge(el)
+      Plotly.purge(el)
     }
   }, [data, showCostBasis, showTrades, isDark])
 
@@ -336,7 +341,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
       data.tracker_actual_start_date,
       data.tracker_actual_end_date,
     )
-    const el = document.getElementById('g2-perf-chart')
+    const el = performanceChartRef.current
     if (!el) return
     let cancelled = false
 
@@ -384,7 +389,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
 
     return () => {
       cancelled = true
-      if (document.getElementById('g2-perf-chart')) Plotly.purge(el)
+      Plotly.purge(el)
     }
   }, [data, groupProfitSource, profitMode, isDark])
 
@@ -622,10 +627,17 @@ export default function PortfolioGrowth2({ embedded = false }) {
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
           </div>
+          {isLifetimePerformancePeriod(period) && (
+            <div className="alert alert-info" role="status">
+              <strong>Life does not have graphs associated with it.</strong> It is a current cost-basis
+              snapshot of the shares still held, not a replayed market series. Choose <strong>All</strong>
+              to graph the full available market history.
+            </div>
+          )}
           {!isLifetimePerformancePeriod(period) && <>{/* ── Chart 1: Portfolio Value ── */}
           <div className="g2-chart-section">
             <div className="g2-chart-area">
-              <div id="g2-value-chart" className="g2-chart-box" />
+              <div ref={valueChartRef} className="g2-chart-box" />
             </div>
             <div className="g2-chart-controls">
               <Toggle label="Show cost basis" value={showCostBasis} onChange={setShowCostBasis} tooltip="Show the total invested amount line" />
@@ -636,7 +648,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
           {/* ── Chart 2: Portfolio Performance ── */}
           <div className="g2-chart-section">
             <div className="g2-chart-area">
-              <div id="g2-perf-chart" className="g2-chart-box" />
+              <div ref={performanceChartRef} className="g2-chart-box" />
             </div>
             <div className="g2-chart-controls">
               <TabButtons

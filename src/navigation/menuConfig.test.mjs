@@ -11,6 +11,7 @@ import {
   normalizeMenuOrder,
   orderMenuItems,
   PROTECTED_MENU_IDS,
+  splitViewNavigationGroups,
   TOP_LEVEL_SCOPE_ID,
   visibleNavigation,
 } from './menuConfig.js'
@@ -78,4 +79,24 @@ test('menuIdForPath maps routes, query strings, and CEF detail pages', () => {
   assert.equal(menuIdForPath('/growth?tab=lots'), 'growth')
   assert.equal(menuIdForPath('/closed-cef-info/AGD'), 'closed-cef-information')
   assert.equal(menuIdForPath('/div-calendar'), 'dividend-calendar')
+})
+
+test('Split View groups follow customized menu order and parent visibility', () => {
+  const custom = normalizeMenuOrder({
+    [TOP_LEVEL_SCOPE_ID]: ['admin', 'portfolio', 'dashboard'],
+    admin: ['settings', 'import'],
+    portfolio: ['growth', 'holdings', 'split-view'],
+  })
+  const groups = splitViewNavigationGroups(custom, ['options', 'cefs', 'holdings'])
+
+  assert.deepEqual(groups.slice(0, 3).map(group => group.group), ['Admin', 'Portfolio', 'Main'])
+  assert.deepEqual(groups[0].pages.slice(0, 2).map(page => page.id), ['settings', 'import'])
+  assert.equal(groups.some(group => group.group === 'Options'), false)
+  assert.equal(groups.some(group => group.group === "CEF's"), false)
+  assert.deepEqual(groups[1].pages.map(page => page.id), [
+    'growth',
+    ...custom.portfolio
+      .filter(id => !['growth', 'holdings', 'split-view'].includes(id)),
+  ])
+  assert.equal(groups.flatMap(group => group.pages).some(page => page.id === 'split-view'), false)
 })

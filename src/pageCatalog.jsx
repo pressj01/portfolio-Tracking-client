@@ -2,9 +2,8 @@
  * One list of every screen in the app, used for three things:
  *
  *   - `AppRoutes` renders the route table.
- *   - `PAGE_GROUPS` fills the page pickers in Split View. The grouping and the
- *     order deliberately mirror the nav bar, so a page is where the menu
- *     trained you to look for it.
+ *   - `PAGE_GROUPS` defines the screens that may render inside Split View. Its
+ *     picker projects the saved Menu Control navigation order onto these pages.
  *   - `pageElement` hands a Split View pane the screen to render.
  *
  * A pane renders the page component directly rather than through its own
@@ -14,8 +13,9 @@
  * pane opens a screen in its default state rather than a deep-linked one —
  * which is what a pane is for.
  *
- * The nav bar has a separate data model because it nests sub-groups and hides
- * a few screens. Menu Control reorders that model without changing routes.
+ * The nav bar has a separate data model because it nests sub-groups. Split
+ * View flattens that model to optgroups after Menu Control ordering and
+ * visibility have been applied, without changing routes.
  */
 import React from 'react'
 import { Navigate, Routes, Route } from 'react-router-dom'

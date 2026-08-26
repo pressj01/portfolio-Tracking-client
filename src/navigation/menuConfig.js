@@ -428,3 +428,36 @@ export function visibleNavigation(menuOrder, hiddenIds) {
     })
     .filter(Boolean)
 }
+
+/**
+ * Flatten the customized navigation into the one-level groups supported by an
+ * HTML page picker. Split View cannot contain itself, but every other visible
+ * navigation link is a valid pane destination. Keeping this projection beside
+ * `visibleNavigation` ensures parent visibility and every Menu Control ordering
+ * scope are applied exactly once instead of being reimplemented by Split View.
+ */
+export function splitViewNavigationGroups(menuOrder, hiddenIds) {
+  const groups = []
+
+  const append = (group, items) => {
+    const pages = items.filter(item => item.id !== 'split-view')
+    if (!pages.length) return
+    const existing = groups.find(section => section.group === group)
+    if (existing) existing.pages.push(...pages)
+    else groups.push({ group, pages: [...pages] })
+  }
+
+  visibleNavigation(menuOrder, hiddenIds).forEach(menu => {
+    if (menu.kind === 'link') {
+      append('Main', [menu])
+      return
+    }
+    if (menu.kind === 'dropdown') {
+      append(menu.label, menu.items)
+      return
+    }
+    append(menu.label, menu.groups.flatMap(group => group.items))
+  })
+
+  return groups
+}

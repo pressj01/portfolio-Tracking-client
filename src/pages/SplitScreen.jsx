@@ -16,8 +16,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { useMenuOrder } from '../context/MenuOrderContext'
 import { ProfileScope, useProfile } from '../context/ProfileContext'
-import { hiddenPathSet } from '../navigation/menuConfig'
-import { PAGE_GROUPS, isKnownPagePath, pageElement, pageLabel, pathnameOf } from '../pageCatalog'
+import { splitViewNavigationGroups } from '../navigation/menuConfig'
+import { isKnownPagePath, pageElement, pageLabel, pathnameOf } from '../pageCatalog'
 
 const SPLIT_STATE_KEY = 'portfolio_split_view_v1'
 const DEFAULT_LEFT = '/'
@@ -68,16 +68,12 @@ const remeasureCharts = () => {
   window.requestAnimationFrame(() => window.dispatchEvent(new Event('resize')))
 }
 
-function PagePicker({ value, onChange, side, hiddenIds }) {
+function PagePicker({ value, onChange, side, menuOrder, hiddenIds }) {
   const current = pathnameOf(value)
-  const hiddenPaths = hiddenPathSet(hiddenIds)
-  const groups = PAGE_GROUPS
-    .map(section => ({
-      ...section,
-      pages: section.pages.filter(page => !hiddenPaths.has(page.path) || page.path === current),
-    }))
-    .filter(section => section.pages.length)
-  const currentIsHidden = hiddenPaths.has(current)
+  const groups = splitViewNavigationGroups(menuOrder, hiddenIds)
+  const currentIsInMenu = groups.some(section => (
+    section.pages.some(page => page.path === current)
+  ))
 
   return (
     <select
@@ -90,13 +86,13 @@ function PagePicker({ value, onChange, side, hiddenIds }) {
         <optgroup key={section.group} label={section.group}>
           {section.pages.map(page => (
             <option key={page.path} value={page.path}>
-              {page.label}{page.path === current && currentIsHidden ? ' (hidden)' : ''}
+              {page.label}
             </option>
           ))}
         </optgroup>
       ))}
-      {current && !groups.some(section => section.pages.some(page => page.path === current)) && (
-        <option value={current}>{pageLabel(current) || current}</option>
+      {current && !currentIsInMenu && (
+        <option value={current}>{pageLabel(current) || current} (hidden from menu)</option>
       )}
     </select>
   )
@@ -151,7 +147,7 @@ function PaneFallback() {
 }
 
 export default function SplitScreen() {
-  const { hiddenIds } = useMenuOrder()
+  const { menuOrder, hiddenIds } = useMenuOrder()
   const [state, setState] = useState(readSplitState)
   const shellRef = useRef(null)
   const [dragging, setDragging] = useState(false)
@@ -249,7 +245,7 @@ export default function SplitScreen() {
       >
         <section className="split-pane">
           <header className="split-pane-head">
-            <PagePicker value={state.left} onChange={setPane} side="left" hiddenIds={hiddenIds} />
+            <PagePicker value={state.left} onChange={setPane} side="left" menuOrder={menuOrder} hiddenIds={hiddenIds} />
             <PaneAccountPicker value={state.leftProfile} onChange={setPaneProfile} side="left" />
           </header>
           <div className="split-pane-body">
@@ -274,7 +270,7 @@ export default function SplitScreen() {
 
         <section className="split-pane">
           <header className="split-pane-head">
-            <PagePicker value={state.right} onChange={setPane} side="right" hiddenIds={hiddenIds} />
+            <PagePicker value={state.right} onChange={setPane} side="right" menuOrder={menuOrder} hiddenIds={hiddenIds} />
             <PaneAccountPicker value={state.rightProfile} onChange={setPaneProfile} side="right" />
           </header>
           <div className="split-pane-body">
