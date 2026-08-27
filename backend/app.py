@@ -8022,11 +8022,14 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             notes = txn.get("notes") or "Imported from portfolio export"
             div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             existing = conn.execute(
-                "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                "SELECT id, source, amount FROM dividend_payments "
+                "WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
             ).fetchone()
             if existing:
-                if (existing["source"] or "").lower() == "refresh_estimate":
+                if _should_replace_imported_dividend(
+                    existing["source"], existing["amount"], amount,
+                ):
                     conn.execute(
                         "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
                         (round(amount, 2), "portfolio_export", notes, existing["id"]),
@@ -8625,6 +8628,25 @@ def _is_refresh_estimate_row(row):
     return str(row.get("source") or "").strip().lower() == REFRESH_ESTIMATE_DIVIDEND_SOURCE
 
 
+def _should_replace_imported_dividend(existing_source, existing_amount, new_amount):
+    """Replace a stored payment when this import is more complete.
+
+    Refresh estimates always yield to a broker feed. A broker row yields to a
+    later same-day import whose aggregated amount is larger: Fidelity splits
+    one ETF distribution across DIVIDEND RECEIVED, cap-gain, and return-of-
+    capital lines, so an earlier import that only kept the ordinary dividend
+    must not block the rest.
+    """
+    if str(existing_source or "").strip().lower() == "refresh_estimate":
+        return True
+    try:
+        stored = float(existing_amount or 0)
+        incoming = float(new_amount or 0)
+    except (TypeError, ValueError):
+        return False
+    return incoming > stored + 0.009
+
+
 def _prune_superseded_refresh_estimates(conn, ticker, profile_id, pay_date, frequency):
     """Drop projected payments that a real payment now covers.
 
@@ -9048,12 +9070,15 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         for (ticker, date_str), info in div_agg.items():
             div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             dup = conn.execute(
-                "SELECT id, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
+                "SELECT id, source, amount FROM dividend_payments "
+                "WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
             ).fetchone()
             if dup:
                 notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
-                if (dup["source"] or "").lower() == "refresh_estimate":
+                if _should_replace_imported_dividend(
+                    dup["source"], dup["amount"], info["amount"],
+                ):
                     conn.execute(
                         "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
                         (round(info["amount"], 2), fmt, notes, dup["id"]),

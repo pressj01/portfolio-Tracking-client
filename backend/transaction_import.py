@@ -1570,6 +1570,58 @@ def parse_fidelity_all_accounts_positions(file_path, filename):
     }
 
 
+# Cash distribution actions. Fidelity splits one ETF payout across several
+# lines (ordinary dividend, short/long-term cap gain, return of capital).
+# Only "DIVIDEND RECEIVED" used to import, so Daily/Weekly/Monthly Payments
+# showed a partial amount while the dividend calendar (shares × full DPS)
+# showed the complete payout.
+_FIDELITY_DISTRIBUTION_MARKERS = (
+    "DIVIDEND RECEIVED",
+    "QUALIFIED DIVIDEND",
+    "NONQUALIFIED DIVIDEND",
+    "NON-QUALIFIED DIVIDEND",
+    "ORDINARY DIVIDEND",
+    "FOREIGN DIVIDEND",
+    "EXEMPT-INTEREST DIVIDEND",
+    "EXEMPT INTEREST DIVIDEND",
+    "TAX-EXEMPT DIVIDEND",
+    "LONG-TERM CAP GAIN",
+    "LONG TERM CAP GAIN",
+    "SHORT-TERM CAP GAIN",
+    "SHORT TERM CAP GAIN",
+    "RETURN OF CAPITAL",
+    "ROC DISTRIBUTION",
+    "LIQUIDATING DISTRIBUTION",
+)
+_FIDELITY_DISTRIBUTION_EXACT = {"DIVIDEND", "DIVIDENDS", "CASH DIVIDEND"}
+
+
+def _fidelity_is_cash_distribution(action_upper):
+    text = str(action_upper or "")
+    if "WITHHELD" in text or "FOREIGN TAX" in text:
+        return False
+    if any(marker in text for marker in _FIDELITY_DISTRIBUTION_MARKERS):
+        return True
+    return text.strip() in _FIDELITY_DISTRIBUTION_EXACT
+
+
+def _fidelity_distribution_note(action_upper):
+    text = str(action_upper or "")
+    if "RETURN OF CAPITAL" in text or "ROC DISTRIBUTION" in text:
+        return "Return of Capital"
+    if "LONG-TERM CAP GAIN" in text or "LONG TERM CAP GAIN" in text:
+        return "Long-Term Cap Gain"
+    if "SHORT-TERM CAP GAIN" in text or "SHORT TERM CAP GAIN" in text:
+        return "Short-Term Cap Gain"
+    if "LIQUIDATING" in text:
+        return "Liquidating Distribution"
+    if "EXEMPT" in text:
+        return "Exempt Dividend"
+    if "NONQUALIFIED" in text or "NON-QUALIFIED" in text:
+        return "Non-Qualified Dividend"
+    return "Dividend Received"
+
+
 def parse_fidelity_transactions_xlsx(file_path, filename):
     """Parse a Fidelity transactions XLSX/XLS/CSV export."""
     rows = _fidelity_read_rows(file_path, filename, "Transactions")
@@ -1613,22 +1665,8 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         total_fees = round(commission + fees, 2)
         action_upper = action.upper()
 
-        if "DIVIDEND RECEIVED" in action_upper or action_upper in {"DIVIDEND", "DIVIDENDS", "CASH DIVIDEND"}:
-            if amount_val is None:
-                filtered_count += 1
-                continue
-            kept.append({
-                "type": "DIVIDEND",
-                "ticker": symbol,
-                "date": date_str,
-                "shares": None,
-                "price_per_share": None,
-                "fees": 0.0,
-                "dividend_amount": round(abs(amount_val), 2),
-                "notes": "Dividend Received",
-            })
-            continue
-
+        # Share buys from a reinvested distribution — handled before the
+        # cash-distribution check so "… CAP GAIN REINVESTMENT" stays a BUY.
         if "REINVESTMENT" in action_upper or "REINVEST" in action_upper:
             if qty_val is None or qty_val == 0:
                 filtered_count += 1
@@ -1642,6 +1680,22 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "fees": total_fees,
                 "dividend_amount": None,
                 "notes": "[DRIP] Reinvestment",
+            })
+            continue
+
+        if _fidelity_is_cash_distribution(action_upper):
+            if amount_val is None:
+                filtered_count += 1
+                continue
+            kept.append({
+                "type": "DIVIDEND",
+                "ticker": symbol,
+                "date": date_str,
+                "shares": None,
+                "price_per_share": None,
+                "fees": 0.0,
+                "dividend_amount": round(abs(amount_val), 2),
+                "notes": _fidelity_distribution_note(action_upper),
             })
             continue
 

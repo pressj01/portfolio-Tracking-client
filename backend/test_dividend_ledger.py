@@ -1,4 +1,5 @@
 import datetime
+import io
 import sqlite3
 import sys
 import tempfile
@@ -446,6 +447,51 @@ class DividendLedgerTest(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         today = datetime.date.today()
         self.assertEqual(res.get_json()["month"], f"{today.year:04d}-{today.month:02d}")
+
+    def test_fidelity_reimport_fills_in_cap_gain_and_roc_on_same_day(self):
+        # Calendar showed GDXW $2,315.81; the ledger kept only the ordinary
+        # DIVIDEND RECEIVED line from an earlier Fidelity import.
+        self._pay("2026-08-25", "GDXW", 1519.25, source="fidelity_transactions")
+        content = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '08/25/2026,ROTH IRA,DIVIDEND RECEIVED as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,1519.25',
+            '08/25/2026,ROTH IRA,LONG-TERM CAP GAIN as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,500.00',
+            '08/25/2026,ROTH IRA,SHORT-TERM CAP GAIN as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,200.00',
+            '08/25/2026,ROTH IRA,RETURN OF CAPITAL as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,96.56',
+        ])
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda *a, **k: None
+        try:
+            res = self.client.post(
+                "/api/import/transactions?profile_id=1",
+                data={
+                    "format": "fidelity_transactions",
+                    "file": (io.BytesIO(content.encode()), "History.csv"),
+                },
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT amount, notes FROM dividend_payments "
+                "WHERE ticker = 'GDXW' AND profile_id = 1 AND payment_date = '2026-08-25'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row["amount"], 2315.81, places=2)
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 2315.81, places=2)
+        self.assertEqual(day["payments"][0]["ticker"], "GDXW")
+        self.assertAlmostEqual(day["payments"][0]["amount"], 2315.81, places=2)
 
 
 if __name__ == "__main__":

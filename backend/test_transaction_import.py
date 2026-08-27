@@ -6,6 +6,7 @@ from pathlib import Path
 import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import app as app_module
 from transaction_import import (
     parse_etrade_transactions_xlsx,
     parse_fidelity_positions_xlsx,
@@ -296,6 +297,47 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual([txn["date"] for txn in dividends], ["2025-04-02", "2025-05-01"])
         self.assertEqual([txn["dividend_amount"] for txn in dividends], [356.40, 882.49])
 
+    def test_fidelity_transactions_imports_cap_gain_and_return_of_capital(self):
+        # Roundhill-style payouts arrive as several Fidelity action lines on
+        # the same day. The calendar uses shares × full DPS ($2,315.81); the
+        # payments ledger previously kept only DIVIDEND RECEIVED ($1,519.25).
+        content = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '08/25/2026,ROTH IRA,DIVIDEND RECEIVED as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,1519.25',
+            '08/25/2026,ROTH IRA,LONG-TERM CAP GAIN as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,500.00',
+            '08/25/2026,ROTH IRA,SHORT-TERM CAP GAIN as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,200.00',
+            '08/25/2026,ROTH IRA,RETURN OF CAPITAL as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,96.56',
+            '08/25/2026,ROTH IRA,REINVESTMENT as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,10,50.00,0,0,-500.00',
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "History.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+
+        dividends = [txn for txn in result["transactions"] if txn["type"] == "DIVIDEND"]
+        drips = [txn for txn in result["transactions"] if txn["type"] == "BUY"]
+        self.assertEqual(result["summary"]["dividends"], 4)
+        self.assertEqual(result["summary"]["drip_detected"], 1)
+        self.assertAlmostEqual(sum(txn["dividend_amount"] for txn in dividends), 2315.81, places=2)
+        self.assertEqual({txn["notes"] for txn in dividends}, {
+            "Dividend Received", "Long-Term Cap Gain", "Short-Term Cap Gain", "Return of Capital",
+        })
+        self.assertEqual(drips[0]["notes"], "[DRIP] Reinvestment")
+        self.assertEqual(drips[0]["shares"], 10)
+
+    def test_fidelity_transactions_skips_foreign_tax_withheld(self):
+        content = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '08/25/2026,ROTH IRA,FOREIGN TAX WITHHELD as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,-12.10',
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "History.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+        self.assertEqual(result["summary"]["dividends"], 0)
+        self.assertEqual(result["transactions"], [])
+
     def test_generic_transactions_csv_parses_trades_dividends_and_drips(self):
         content = "\n".join([
             "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes",
@@ -407,6 +449,15 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(sell["ticker"], "KOMP")
         self.assertEqual(sell["shares"], 11)
         self.assertEqual(sell["price_per_share"], 63.77)
+
+
+class ImportedDividendReplaceTest(unittest.TestCase):
+    def test_larger_same_day_import_replaces_partial_broker_row(self):
+        replace = app_module._should_replace_imported_dividend
+        self.assertTrue(replace("fidelity_transactions", 1519.25, 2315.81))
+        self.assertFalse(replace("fidelity_transactions", 2315.81, 1519.25))
+        self.assertFalse(replace("fidelity_transactions", 2315.81, 2315.81))
+        self.assertTrue(replace("refresh_estimate", 2315.81, 1519.25))
 
 
 if __name__ == "__main__":

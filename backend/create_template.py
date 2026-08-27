@@ -747,7 +747,7 @@ def create_fidelity_transactions_template():
 
     instruction_rows = [
         ("Worksheet layout", "Required", "Keep the first two blank rows and the header row on row 3."),
-        ("Action", "Required", "The importer reads YOU BOUGHT, YOU SOLD, DIVIDEND RECEIVED, and REINVESTMENT rows."),
+        ("Action", "Required", "The importer reads YOU BOUGHT, YOU SOLD, REINVESTMENT, DIVIDEND RECEIVED, LONG-TERM/SHORT-TERM CAP GAIN, and RETURN OF CAPITAL rows. Same-day distribution lines are summed into one payment."),
         ("Symbol", "Required", "Invalid or blank symbols are skipped."),
         ("Run Date", "Required", "Imported as the transaction date."),
         ("Quantity / Price ($)", "Required for buys, sells, and DRIP", "Dividend cash rows can leave Price blank and Quantity at 0."),
