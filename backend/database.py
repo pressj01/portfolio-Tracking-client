@@ -1921,6 +1921,26 @@ def ensure_tables_exist(conn=None):
         )
     """)
 
+    # Broker symbol -> Yahoo symbol. Broker exports carry symbols Yahoo does not
+    # use: Interactive Brokers writes TSX Venture listings bare (PGDC, SCOT, SKP)
+    # where Yahoo wants a suffix (PGDC.V), and preferreds as CIM-PRB where Yahoo
+    # wants CIM-PB. The broker symbol stays the identity everywhere -- it is what
+    # reconciles against a statement -- so the translation lives here and is
+    # applied only at the moment we call Yahoo.
+    #
+    # A blank yahoo_symbol records a completed probe that found nothing, the same
+    # convention security_names uses, so a genuinely unlistable symbol is not
+    # re-probed on every refresh.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS symbol_map (
+            broker_symbol TEXT PRIMARY KEY,
+            yahoo_symbol  TEXT,
+            source        TEXT,
+            note          TEXT,
+            updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     _seed_etf_provider_data(conn)
 
     conn.commit()
