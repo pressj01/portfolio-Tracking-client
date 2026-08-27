@@ -350,12 +350,18 @@ def _build_butterfly(
     always_success_above_upper: bool = True,
     exit_points: list[dict] | None = None,
     require_lower_wing_wider: bool = True,
+    with_analytics: bool = True,
 ) -> dict | None:
     """Calculate greeks, execution, payoff, and probabilities for one BWB.
 
     The default lower-long multiplier preserves this scanner's 4/-8/4
     structure. A multiplier of two prices the 4/-8/+8 structure used by the
     document-based 488 scanner, including its recovering downside tail.
+
+    ``with_analytics`` builds the probability schedule, profit-capture panel
+    and price-scenario table. Turn it off while enumerating candidates and
+    back on for the one that wins: nothing in the ranking reads them, and
+    they are the overwhelming majority of the cost per structure.
 
     ``body_short_target``, ``always_success_above_upper`` and ``exit_points``
     default to this scanner's own course values. The Road Trip screen supplies
@@ -364,6 +370,24 @@ def _build_butterfly(
     prescribed reverse-Harvey process manages a rally until the right side is
     flat or slightly profitable.
     """
+    analytics_pending = None if with_analytics else (
+        (upper_long, body_short, lower_long),
+        dict(
+            spot=spot,
+            expiration=expiration,
+            dte=dte,
+            upper_long_target=upper_long_target,
+            tranche_quantity=tranche_quantity,
+            lower_long_quantity_multiplier=lower_long_quantity_multiplier,
+            lower_long_target=lower_long_target,
+            body_short_target=body_short_target,
+            structure_kind=structure_kind,
+            dividend_yield=dividend_yield,
+            always_success_above_upper=always_success_above_upper,
+            exit_points=exit_points,
+            require_lower_wing_wider=require_lower_wing_wider,
+        ),
+    )
     upper_strike = _num(upper_long.get("strike"))
     body_strike = _num(body_short.get("strike"))
     lower_strike = _num(lower_long.get("strike"))
@@ -591,94 +615,102 @@ def _build_butterfly(
             "quantity": lower_quantity,
         },
     ]
-    probability_schedule, profit_capture = profit_probability_schedule(
-        spot=spot,
-        dte=dte,
-        expiration=expiration,
-        distribution_iv=probability_iv,
-        entry_cashflow=entry_credit,
-        legs=legs_for_probability,
-        exit_points=exit_points,
-        risk_free_rate=RISK_FREE,
-        dividend_yield=dividend_yield,
-        # The course treats an untested price above the upper long as a good
-        # trade. Inside the structure, the time-evolved theoretical P/L tent
-        # decides success. At expiration the near-$0 upper line therefore
-        # counts as success rather than swallowing the whole upper tail into
-        # the failure complement. Managed debit structures may also opt into
-        # this region when their trading plan explicitly repairs the upper line.
-        always_success_above=upper_strike if always_success_above_upper else None,
-        include_breakeven=True,
-        return_capture=True,
-    )
-    # The tent only pays as it converges, so the panel also has to answer when
-    # holding is worth most rather than only how likely a target is. The upper
-    # long is the tent's near edge: the strike price has to reach before any of
-    # this structure starts working.
-    price_scenarios = price_scenario_schedule(
-        spot=spot,
-        dte=dte,
-        expiration=expiration,
-        distribution_iv=probability_iv,
-        entry_cashflow=entry_credit,
-        legs=legs_for_probability,
-        tent_edge=upper_strike,
-        risk_free_rate=RISK_FREE,
-        dividend_yield=dividend_yield,
-    )
-    # Show how the tent develops instead of reducing the trade to one terminal
-    # payoff. The body strike is the tent peak at expiration; unchanged spot
-    # shows the untested upper region. Both are repriced at the Condor's same
-    # halfway and two-thirds management checkpoints.
-    for point in probability_schedule:
-        remaining_dte = int(point.get("remaining_dte") or 0)
-        unchanged_pl = _modeled_butterfly_pl(
-            exit_spot=spot,
-            remaining_dte=remaining_dte,
-            entry_credit=entry_credit,
-            upper_long=upper_long,
-            body_short=body_short,
-            lower_long=lower_long,
-            quantity=quantity,
+    # Every candidate structure is priced, but only one per expiration is
+    # ever chosen, and the ranking never reads these panels -- it sorts on
+    # delta, credit, theta and liquidity. Building them for every candidate
+    # cost ~42ms each across thousands of them, which was nearly the whole
+    # scan. The chosen structure is rebuilt with them switched on.
+    if with_analytics:
+        probability_schedule, profit_capture = profit_probability_schedule(
+            spot=spot,
+            dte=dte,
+            expiration=expiration,
+            distribution_iv=probability_iv,
+            entry_cashflow=entry_credit,
+            legs=legs_for_probability,
+            exit_points=exit_points,
+            risk_free_rate=RISK_FREE,
             dividend_yield=dividend_yield,
-            lower_long_quantity_multiplier=lower_multiplier,
+            # The course treats an untested price above the upper long as a good
+            # trade. Inside the structure, the time-evolved theoretical P/L tent
+            # decides success. At expiration the near-$0 upper line therefore
+            # counts as success rather than swallowing the whole upper tail into
+            # the failure complement. Managed debit structures may also opt into
+            # this region when their trading plan explicitly repairs the upper line.
+            always_success_above=upper_strike if always_success_above_upper else None,
+            include_breakeven=True,
+            return_capture=True,
         )
-        upper_long_pl = _modeled_butterfly_pl(
-            exit_spot=upper_strike,
-            remaining_dte=remaining_dte,
-            entry_credit=entry_credit,
-            upper_long=upper_long,
-            body_short=body_short,
-            lower_long=lower_long,
-            quantity=quantity,
+        # The tent only pays as it converges, so the panel also has to answer when
+        # holding is worth most rather than only how likely a target is. The upper
+        # long is the tent's near edge: the strike price has to reach before any of
+        # this structure starts working.
+        price_scenarios = price_scenario_schedule(
+            spot=spot,
+            dte=dte,
+            expiration=expiration,
+            distribution_iv=probability_iv,
+            entry_cashflow=entry_credit,
+            legs=legs_for_probability,
+            tent_edge=upper_strike,
+            risk_free_rate=RISK_FREE,
             dividend_yield=dividend_yield,
-            lower_long_quantity_multiplier=lower_multiplier,
         )
-        body_pl = _modeled_butterfly_pl(
-            exit_spot=body_strike,
-            remaining_dte=remaining_dte,
-            entry_credit=entry_credit,
-            upper_long=upper_long,
-            body_short=body_short,
-            lower_long=lower_long,
-            quantity=quantity,
-            dividend_yield=dividend_yield,
-            lower_long_quantity_multiplier=lower_multiplier,
-        )
-        point.update({
-            "unchanged_spot_pl_dollars": (
-                unchanged_pl * CONTRACT_MULTIPLIER
-                if unchanged_pl is not None else None
-            ),
-            "upper_long_pl_dollars": (
-                upper_long_pl * CONTRACT_MULTIPLIER
-                if upper_long_pl is not None else None
-            ),
-            "body_peak_pl_dollars": (
-                body_pl * CONTRACT_MULTIPLIER
-                if body_pl is not None else None
-            ),
-        })
+        # Show how the tent develops instead of reducing the trade to one terminal
+        # payoff. The body strike is the tent peak at expiration; unchanged spot
+        # shows the untested upper region. Both are repriced at the Condor's same
+        # halfway and two-thirds management checkpoints.
+        for point in probability_schedule:
+            remaining_dte = int(point.get("remaining_dte") or 0)
+            unchanged_pl = _modeled_butterfly_pl(
+                exit_spot=spot,
+                remaining_dte=remaining_dte,
+                entry_credit=entry_credit,
+                upper_long=upper_long,
+                body_short=body_short,
+                lower_long=lower_long,
+                quantity=quantity,
+                dividend_yield=dividend_yield,
+                lower_long_quantity_multiplier=lower_multiplier,
+            )
+            upper_long_pl = _modeled_butterfly_pl(
+                exit_spot=upper_strike,
+                remaining_dte=remaining_dte,
+                entry_credit=entry_credit,
+                upper_long=upper_long,
+                body_short=body_short,
+                lower_long=lower_long,
+                quantity=quantity,
+                dividend_yield=dividend_yield,
+                lower_long_quantity_multiplier=lower_multiplier,
+            )
+            body_pl = _modeled_butterfly_pl(
+                exit_spot=body_strike,
+                remaining_dte=remaining_dte,
+                entry_credit=entry_credit,
+                upper_long=upper_long,
+                body_short=body_short,
+                lower_long=lower_long,
+                quantity=quantity,
+                dividend_yield=dividend_yield,
+                lower_long_quantity_multiplier=lower_multiplier,
+            )
+            point.update({
+                "unchanged_spot_pl_dollars": (
+                    unchanged_pl * CONTRACT_MULTIPLIER
+                    if unchanged_pl is not None else None
+                ),
+                "upper_long_pl_dollars": (
+                    upper_long_pl * CONTRACT_MULTIPLIER
+                    if upper_long_pl is not None else None
+                ),
+                "body_peak_pl_dollars": (
+                    body_pl * CONTRACT_MULTIPLIER
+                    if body_pl is not None else None
+                ),
+            })
+    else:
+        probability_schedule, profit_capture, price_scenarios = [], None, None
     early_close_estimates = [
         {
             "label": point.get("label"),
@@ -834,6 +866,7 @@ def _build_butterfly(
         "probability_schedule": probability_schedule,
         "profit_capture": profit_capture,
         "price_scenarios": price_scenarios,
+        "_analytics_pending": analytics_pending,
         "early_close_estimates": early_close_estimates,
         "course_expected_hold_days": COURSE_EXPECTED_HOLD_DAYS,
         "course_quantity_scale": course_quantity_scale,
@@ -877,6 +910,39 @@ def _bias_name(value) -> str:
     if normalized not in BIAS_RANGES:
         raise ValueError("market_bias must be bearish, neutral, or bullish")
     return normalized
+
+
+# Exactly what the deferred build leaves out. Copying only these back means a
+# caller that overrode a base field after enumeration -- the 488 scanner
+# replaces the course hold days and max-loss target with its document's own --
+# keeps its value instead of having the rebuild's default reinstated.
+_DEFERRED_PANELS = (
+    "probability_schedule",
+    "profit_capture",
+    "price_scenarios",
+    "early_close_estimates",
+)
+
+
+def with_full_analytics(candidate: dict | None) -> dict | None:
+    """Finish a structure that was enumerated without its probability panels.
+
+    Prices it again with ``with_analytics`` on and takes only the panels from
+    that result, leaving every other field as the caller has it. A candidate
+    that was already built in full passes straight through.
+    """
+    if not candidate:
+        return candidate
+    pending = candidate.pop("_analytics_pending", None)
+    if not pending:
+        return candidate
+    legs, kwargs = pending
+    full = _build_butterfly(*legs, **kwargs, with_analytics=True)
+    if full is None:
+        return candidate
+    for key in _DEFERRED_PANELS:
+        candidate[key] = full.get(key)
+    return candidate
 
 
 def _candidate_quality(
@@ -1000,6 +1066,7 @@ def _candidates_for_target(
                     upper_long_target=upper_long_target,
                     tranche_quantity=tranche_quantity,
                     dividend_yield=dividend_yield,
+                    with_analytics=False,
                 )
                 if candidate:
                     candidates.append(candidate)
@@ -1047,6 +1114,9 @@ def _choose_candidate(
 
 def _round_candidate(candidate: dict) -> dict:
     out = dict(candidate)
+    # Enumeration-only bookkeeping: the arguments needed to rebuild a
+    # structure with its probability panels. Never part of a payload.
+    out.pop("_analytics_pending", None)
     for key, decimals in (
         ("target_upper_long_delta", 2),
         ("target_body_short_delta", 2),
@@ -1306,14 +1376,14 @@ def run_unbalanced_butterfly_scan(payload: dict) -> dict:
                 )
                 if not candidates:
                     continue
-                best = _choose_candidate(
+                best = with_full_analytics(_choose_candidate(
                     candidates,
                     bias_low=bias_low,
                     bias_high=bias_high,
                     delta_tolerance=delta_tolerance,
                     min_open_interest=min_open_interest,
                     target_theta_dollars=target_theta_dollars,
-                )
+                ))
                 best["market_bias"] = market_bias
                 best["bias_delta_min"] = bias_low
                 best["bias_delta_max"] = bias_high

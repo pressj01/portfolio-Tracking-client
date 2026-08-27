@@ -61,6 +61,7 @@ from put_scanner import (
 )
 from unbalanced_butterfly_scanner import (
     _build_butterfly,
+    with_full_analytics,
     _distance_to_range,
     _is_standard_monthly,
     _modeled_butterfly_pl,
@@ -750,6 +751,7 @@ def _candidates(
                     # probability result also retains the unattended P/L odds.
                     always_success_above_upper=True,
                     exit_points=_management_exit_points(int(dte)),
+                    with_analytics=False,
                 )
                 if not candidate:
                     continue
@@ -1019,14 +1021,14 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
             )
             if not candidates:
                 continue
-            chosen = _choose_candidate(
+            chosen = with_full_analytics(_choose_candidate(
                 candidates,
                 bias_low=bias_low,
                 bias_high=bias_high,
                 max_debit_to_margin_pct=max_debit_to_margin_pct,
                 min_theta_dollars=min_theta_dollars,
                 min_open_interest=min_open_interest,
-            )
+            ))
             if chosen:
                 chosen["dte_distance_scale"] = distance_scale
                 chosen["reference_dte"] = REFERENCE_DTE

@@ -438,8 +438,19 @@ def _build_put_condor(
     bought_quantity: int = 1,
     sold_quantity: int = 1,
     dividend_yield: float = 0.0,
+    with_analytics: bool = True,
 ) -> dict | None:
-    """Calculate expiration outcomes for one four-put structure."""
+    """Calculate expiration outcomes for one four-put structure.
+
+    ``with_analytics`` builds the price-scenario table. The ranking never
+    reads it, so enumeration turns it off and only the chosen structure is
+    finished, via :func:`with_full_analytics`.
+    """
+    analytics_pending = None if with_analytics else (
+        (upper_long, upper_short, lower_short, lower_long),
+        (spot, expiration, dte, preset, target_upper_delta,
+         target_lower_delta, bought_quantity, sold_quantity, dividend_yield),
+    )
     k1 = _num(upper_long.get("strike"))
     k2 = _num(upper_short.get("strike"))
     k3 = _num(lower_short.get("strike"))
@@ -669,7 +680,7 @@ def _build_put_condor(
         tent_edge=k1,
         risk_free_rate=RISK_FREE,
         dividend_yield=dividend_yield,
-    )
+    ) if with_analytics else None
 
     lower_short_distance_sigma = (
         math.log(spot / k3) / (probability_iv * math.sqrt(years))
@@ -678,6 +689,7 @@ def _build_put_condor(
 
     return {
         "price_scenarios": price_scenarios,
+        "_analytics_pending": analytics_pending,
         "expiration": expiration,
         "dte": int(dte),
         "preset": preset,
@@ -819,6 +831,27 @@ def _preset_names(value) -> list[str]:
     return names
 
 
+def with_full_analytics(candidate: dict | None) -> dict | None:
+    """Finish a structure enumerated without its scenario table.
+
+    Anything a caller attached in between (the width errors the ranking
+    adds) is preserved, so only the missing panels are filled in.
+    """
+    if not candidate:
+        return candidate
+    pending = candidate.pop("_analytics_pending", None)
+    if not pending:
+        return candidate
+    legs, args = pending
+    full = _build_put_condor(*legs, *args, with_analytics=True)
+    if full is None:
+        return candidate
+    # Only the panel the deferred build skipped; everything else stays as the
+    # caller has it, including the width errors added after enumeration.
+    candidate["price_scenarios"] = full.get("price_scenarios")
+    return candidate
+
+
 def _candidate_quality(candidate: dict) -> tuple:
     """Sort exact delta/width matches first, then execution quality."""
     return (
@@ -936,6 +969,7 @@ def _candidates_for_preset(
                 bought_quantity,
                 sold_quantity,
                 dividend_yield,
+                with_analytics=False,
             )
             if not candidate:
                 continue
@@ -951,6 +985,9 @@ def _candidates_for_preset(
 
 def _round_candidate(candidate: dict) -> dict:
     out = dict(candidate)
+    # Enumeration-only bookkeeping: the arguments needed to rebuild a
+    # structure with its probability panels. Never part of a payload.
+    out.pop("_analytics_pending", None)
     for key, decimals in (
         ("target_upper_short_delta", 2),
         ("target_lower_short_delta", 2),
@@ -1196,14 +1233,14 @@ def run_unbalanced_put_condor_scan(payload: dict) -> dict:
                 # pair locates the neighborhood; nearby listed strikes are
                 # searched for the complete four-leg package whose delta best
                 # matches the user's neutral, bullish, or bearish target.
-                best = _choose_candidate(
+                best = with_full_analytics(_choose_candidate(
                     candidates,
                     target_position_delta=target_position_delta,
                     delta_tolerance=delta_tolerance,
                     width_tolerance_pct=width_tolerance_pct,
                     min_open_interest=min_open_interest,
                     require_upside_credit=require_upside_credit,
-                )
+                ))
                 best["target_position_delta"] = target_position_delta
                 best["position_delta_error"] = abs(
                     (best.get("position_delta") or 0.0) - target_position_delta

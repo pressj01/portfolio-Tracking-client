@@ -32,6 +32,116 @@ def expiration_in(days):
     return (date.today() + timedelta(days=days)).isoformat()
 
 
+class DeferredAnalytics(unittest.TestCase):
+    """Enumeration skips the probability panels; the winner is finished later.
+
+    Building them for every candidate was ~42ms each across thousands of
+    structures, and the ranking never reads them, so they moved off the hot
+    path. These tests hold the two things that makes safe: the deferred build
+    really is cheaper, and finishing it reproduces the full build exactly.
+    """
+
+    LEGS = (leg(100, 10, -0.20), leg(90, 6, -0.15), leg(70, 2, -0.10))
+    PANELS = ("probability_schedule", "profit_capture", "price_scenarios")
+
+    def build(self, **overrides):
+        arguments = dict(
+            spot=105.0,
+            expiration=expiration_in(200),
+            dte=200,
+            upper_long_target=0.20,
+            tranche_quantity=4,
+            dividend_yield=0.0,
+        )
+        arguments.update(overrides)
+        return scanner._build_butterfly(*self.LEGS, **arguments)
+
+    def test_deferred_build_omits_the_panels(self):
+        cheap = self.build(with_analytics=False)
+        self.assertIsNotNone(cheap)
+        self.assertEqual(cheap["probability_schedule"], [])
+        self.assertIsNone(cheap["profit_capture"])
+        self.assertIsNone(cheap["price_scenarios"])
+        self.assertEqual(cheap["early_close_estimates"], [])
+        self.assertIsNotNone(cheap["_analytics_pending"])
+
+    def test_the_ranking_fields_survive_the_deferral(self):
+        # The whole optimisation rests on this: what sorts and filters
+        # candidates is computed either way, so the same structure wins.
+        cheap, full = self.build(with_analytics=False), self.build()
+        for field in (
+            "position_delta", "entry_credit_dollars", "theta_dollars_per_day",
+            "upper_long_delta_error", "body_short_delta_error",
+            "lower_long_delta_error", "execution_cost_dollars",
+            "open_interest_min",
+        ):
+            self.assertEqual(cheap[field], full[field], field)
+
+    def test_finishing_a_deferred_build_reproduces_the_full_one(self):
+        finished = scanner.with_full_analytics(self.build(with_analytics=False))
+        full = self.build()
+        full.pop("_analytics_pending", None)
+        self.assertEqual(set(finished), set(full))
+        for key in full:
+            self.assertEqual(finished[key], full[key], key)
+        for panel in self.PANELS:
+            self.assertTrue(finished[panel], panel)
+
+    def test_finishing_works_for_the_488_and_road_trip_shapes(self):
+        # Both borrow this builder with their own structure arguments, so the
+        # rebuild has to carry every one of them, not just the defaults.
+        for label, overrides in (
+            ("488", dict(lower_long_quantity_multiplier=2,
+                         structure_kind="double-hedge-put-butterfly")),
+            ("road trip", dict(structure_kind="road-trip-butterfly",
+                               body_short_target=0.15,
+                               lower_long_target=0.10,
+                               exit_points=[{"kind": "close", "label": "Close",
+                                             "remaining_dte": 60}])),
+        ):
+            with self.subTest(label):
+                finished = scanner.with_full_analytics(
+                    self.build(with_analytics=False, **overrides))
+                full = self.build(**overrides)
+                full.pop("_analytics_pending", None)
+                self.assertEqual(finished["structure_kind"], full["structure_kind"])
+                for key in full:
+                    self.assertEqual(finished[key], full[key], f"{label}: {key}")
+
+    def test_finishing_keeps_fields_added_after_enumeration(self):
+        # The 488 and Road Trip scanners enrich candidates before choosing one.
+        cheap = self.build(with_analytics=False)
+        cheap["width_error_pct"] = 1.25
+        finished = scanner.with_full_analytics(cheap)
+        self.assertEqual(finished["width_error_pct"], 1.25)
+        self.assertTrue(finished["price_scenarios"])
+
+    def test_finishing_does_not_reinstate_an_overridden_field(self):
+        # The 488 scanner replaces this builder's course values with its own
+        # document's. Rebuilding for the panels must not undo that: merging the
+        # rebuild over the candidate silently restored the butterfly defaults.
+        cheap = self.build(with_analytics=False)
+        self.assertIn("course_expected_hold_days", cheap)
+        cheap["course_expected_hold_days"] = 112
+        cheap["course_max_loss_target_dollars"] = 2000.0
+        finished = scanner.with_full_analytics(cheap)
+        self.assertEqual(finished["course_expected_hold_days"], 112)
+        self.assertEqual(finished["course_max_loss_target_dollars"], 2000.0)
+        self.assertTrue(finished["profit_capture"])
+
+    def test_a_full_build_passes_straight_through(self):
+        full = self.build()
+        self.assertIs(scanner.with_full_analytics(full), full)
+
+    def test_the_rebuild_spec_never_reaches_a_payload(self):
+        cheap = self.build(with_analytics=False)
+        self.assertNotIn("_analytics_pending", scanner._round_candidate(cheap))
+        self.assertNotIn(
+            "_analytics_pending",
+            condor_scanner._round_candidate({"_analytics_pending": object()}),
+        )
+
+
 class TargetConstruction(unittest.TestCase):
     def test_twenty_delta_mode_balances_with_ten_delta_lower_long(self):
         self.assertAlmostEqual(scanner._lower_long_target(0.20), 0.10)

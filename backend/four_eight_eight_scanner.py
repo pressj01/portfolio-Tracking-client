@@ -44,6 +44,7 @@ from put_scanner import (
 )
 from unbalanced_butterfly_scanner import (
     _build_butterfly,
+    with_full_analytics,
     _distance_to_range,
     _modeled_butterfly_pl,
     _monthly_expirations_in_window,
@@ -354,6 +355,7 @@ def _candidates(
                     lower_long_target=LOWER_LONG_TARGET,
                     structure_kind="double-hedge-put-butterfly",
                     dividend_yield=dividend_yield,
+                    with_analytics=False,
                 )
                 if candidate:
                     candidates.append(_enrich_candidate(
@@ -637,7 +639,7 @@ def run_488_scan(payload: dict) -> dict:
             )
             if not candidates:
                 continue
-            chosen = _choose_candidate(
+            chosen = with_full_analytics(_choose_candidate(
                 candidates,
                 bias_low=bias_low,
                 bias_high=bias_high,
@@ -645,7 +647,7 @@ def run_488_scan(payload: dict) -> dict:
                 min_open_interest=min_open_interest,
                 min_theta_dollars=min_theta_dollars,
                 min_t0_minus_20_dollars=min_t0_minus_20_dollars,
-            )
+            ))
             if chosen:
                 break
 
