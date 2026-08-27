@@ -374,6 +374,7 @@ def _resolve_total_return_period(
         "6m": "6 Months",
         "ytd": "Year to Date",
         "1y": "1 Year",
+        "2y": "2 Years",
         "5y": "5 Years",
         "all": "From First Trade",
         "custom": "Custom",
@@ -483,6 +484,8 @@ def _resolve_total_return_period(
         start_date = datetime.date(today.year, 1, 1)
     elif key == "1y":
         start_date = _calendar_years_ago(today, 1)
+    elif key == "2y":
+        start_date = _calendar_years_ago(today, 2)
     elif key == "5y":
         start_date = _calendar_years_ago(today, 5)
     else:
@@ -40410,7 +40413,8 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
                               port_metrics_before, curr_income, opt_income,
                               current_weights=None, coverage_map=None,
                               available_tickers=None,
-                              grade_returns_df=None, grade_tickers=None):
+                              grade_returns_df=None, grade_tickers=None,
+                              min_obs=None):
     """Compute before/after grade, income, coverage, and key metrics.
     Uses already-computed port_metrics and income values from the optimization branch
     so numbers match exactly what's shown in the optimization summary.
@@ -40421,7 +40425,8 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
     so the score delta reflects the weight change alone rather than a different
     measurement window. Optimization still runs on the full ticker set."""
     import numpy as np
-    from grading import grade_portfolio
+    from grading import MIN_RATIO_OBSERVATIONS, grade_portfolio
+    grade_min_obs = MIN_RATIO_OBSERVATIONS if min_obs is None else min_obs
     pm = port_metrics_before or {}
     grade_before = pm.get("grade", {})
 
@@ -40467,9 +40472,11 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         sub_w = np.array([opt_weights[idx[t]] for t in grade_tickers if t in idx], dtype=float)
         s = sub_w.sum()
         sub_w = sub_w / s if s > 0 else np.ones(len(grade_tickers)) / max(len(grade_tickers), 1)
-        pm_after = grade_portfolio(grade_returns_df[grade_tickers], sub_w, bench_ret)
+        pm_after = grade_portfolio(
+            grade_returns_df[grade_tickers], sub_w, bench_ret, min_obs=grade_min_obs,
+        )
     else:
-        pm_after = grade_portfolio(returns_df, opt_weights, bench_ret)
+        pm_after = grade_portfolio(returns_df, opt_weights, bench_ret, min_obs=grade_min_obs)
     return {
         "before": before,
         "after": {
@@ -40705,6 +40712,7 @@ def analytics_data():
     import numpy as np
     import yfinance as yf
     from grading import (ticker_score, grade_portfolio, letter_grade,
+                         min_observations_for_window,
                          _sharpe, _sortino, _calmar, _omega,
                          _ulcer_index, _max_drawdown, _capture_ratios, _safe)
     warnings.filterwarnings("ignore")
@@ -40712,7 +40720,7 @@ def analytics_data():
     data = request.get_json(force=True, silent=True) or {}
     tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
     benchmark = str(data.get("benchmark", "SPY")).strip().upper()
-    period = data.get("period", "1y")
+    period = str(data.get("period", "1y") or "1y").strip().lower()
     mode = data.get("mode", "metrics")
     min_sharpe = float(data.get("min_sharpe", 0.8))
     max_dd = float(data.get("max_dd", -0.20))
@@ -40724,18 +40732,26 @@ def analytics_data():
     valid_periods = {"1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "max"}
     if period not in valid_periods:
         period = "1y"
+    try:
+        # Same calendar-month / YTD / 1Y boundaries as Dashboard, Growth, and
+        # Total Return. yfinance's period="1mo" is a different window and the
+        # hardcoded 30-day ratio floor then blanks every 1M card.
+        period_range = _resolve_total_return_period(period)
+    except ValueError:
+        period_range = _resolve_total_return_period("1y")
+        period = "1y"
 
-    benchmark_map = {t: _nav_benchmark_for_ticker(t) for t in tickers}
-    benchmark_downloads = [part for b in benchmark_map.values() for part in _nav_benchmark_parts(b)]
-    all_dl = list(set(tickers + [benchmark] + benchmark_downloads))
+    # Grade on the same equity calendar as Dashboard. NAV-benchmark symbols
+    # (BTC-USD, ETH-USD, …) trade on weekends; those extra dates survive
+    # dropna(how="all") and then pct_change().fillna(0) wipes Monday's equity
+    # return, so a 3M Analytics grade can print F while Dashboard 3M prints C.
+    all_dl = list(dict.fromkeys([*tickers, benchmark]))
     try:
         raw = _chunked_yf_download(
             " ".join(all_dl),
-            period=period,
-            auto_adjust=False,
-            actions=True,
+            **period_range["yf_kwargs"],
+            auto_adjust=True,
             progress=False,
-            ignore_tz=True,
             threads=False,
         )
         if raw.empty:
@@ -40744,29 +40760,27 @@ def analytics_data():
         return jsonify(error=f"yfinance error: {str(e)}"), 500
 
     if isinstance(raw.columns, pd.MultiIndex):
-        close = (raw["Adj Close"] if "Adj Close" in raw.columns.get_level_values(0) else raw["Close"]).dropna(how="all")
-        nav_close = raw["Close"].dropna(how="all")
-        divs_all = raw["Dividends"] if "Dividends" in raw.columns.get_level_values(0) else None
+        close = raw["Close"].dropna(how="all") if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
     else:
-        close_col = "Adj Close" if "Adj Close" in raw.columns else "Close"
-        close = raw[[close_col]].dropna(how="all")
-        close.columns = [all_dl[0]]
-        nav_close = raw[["Close"]].dropna(how="all")
-        nav_close.columns = [all_dl[0]]
-        divs_all = raw[["Dividends"]] if "Dividends" in raw.columns else None
-        if divs_all is not None:
-            divs_all.columns = [all_dl[0]]
+        close = raw[["Close"]].dropna(how="all") if "Close" in raw.columns else pd.DataFrame()
+        if not close.empty:
+            close.columns = [all_dl[0]]
+    grade_cols = [c for c in all_dl if c in getattr(close, "columns", [])]
+    if grade_cols:
+        close = close[grade_cols].dropna(how="all")
 
-    # DB weights and yields
-    profile_id = get_profile_id()
+    # DB weights and yields — same holding gate as Dashboard.
+    _is_agg, pids = get_profile_filter()
     conn = get_connection()
     try:
+        placeholders = ",".join("?" * len(pids))
         db_rows = conn.execute(
             "SELECT ticker, current_price, quantity, description, classification_type, "
             "       current_value, estim_payment_per_year, nav_erosion_scope, nav_benchmark_override "
             "FROM all_account_info "
-            "WHERE current_value IS NOT NULL AND current_value > 0 AND profile_id = ?",
-            (profile_id,)
+            "WHERE current_value IS NOT NULL AND current_value > 0 AND quantity > 0 "
+            f"AND profile_id IN ({placeholders})",
+            pids,
         ).fetchall()
     except Exception:
         db_rows = []
@@ -40829,6 +40843,14 @@ def analytics_data():
             return None
         return v
 
+    # Same window-scaled floor as Dashboard. A 1-month window is ~21 trading
+    # days, so the default 30-observation ratio guard would skip every ticker
+    # and return a blank analytics page.
+    window_observations = max(len(close.index) - 1, 0)
+    min_obs = min_observations_for_window(window_observations)
+    window_too_short = min_obs is None
+    effective_min_obs = min_obs if min_obs is not None else 10 ** 9
+
     # Per-ticker metrics
     metrics = []
     available_tickers = []
@@ -40836,12 +40858,17 @@ def analytics_data():
         if t not in close.columns:
             continue
         tc = close[t].dropna()
-        if len(tc) < 30:
+        if len(tc) < effective_min_obs:
             continue
         available_tickers.append(t)
         tr = tc.pct_change().dropna()
-        score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc_v, ulcer_v = ticker_score(tc, tr, bench_ret)
-        uc_v, _ = _capture_ratios(tr, bench_ret) if bench_ret is not None else (None, None)
+        score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc_v, ulcer_v = ticker_score(
+            tc, tr, bench_ret, min_obs=effective_min_obs,
+        )
+        uc_v, _ = (
+            _capture_ratios(tr, bench_ret, min_obs=effective_min_obs)
+            if bench_ret is not None else (None, None)
+        )
         annual_ret = round(float(tr.mean() * 252) * 100, 2)
         annual_total_ret = round(annual_ret + yield_map.get(t, 0) * 100, 2)
         annual_vol = round(float(tr.std() * np.sqrt(252)) * 100, 2)
@@ -40869,39 +40896,19 @@ def analytics_data():
     result_corr = None
     result_dd = None
     if len(available_tickers) >= 2:
-        # Daily returns WITHOUT fabricating data. Previously this used
-        # .fillna(0), which turned every pre-inception day of a young ticker
-        # into a fake 0% return — deflating volatility, inflating Sharpe/Sortino
-        # and distorting the portfolio grade & correlations on longer windows.
+        # Match Dashboard: adjusted prices, current-value weights, and zero
+        # return on dates before a newer holding has its first quote. Pairwise
+        # correlation below still uses the raw (unfilled) returns so a young
+        # ticker is not treated as uncorrelated cash.
         ret_full = close[available_tickers].pct_change()
-
-        # Grade the portfolio on the clean common-overlap window (every held
-        # ticker has real data). One brand-new holding would otherwise shrink
-        # that overlap to a few days, so we drop the youngest tickers from the
-        # AGGREGATE (not the per-ticker table) until the window is usable.
-        MIN_GRADE_DAYS = 60
         grade_tickers = list(available_tickers)
         grade_excluded = []
-        graded_returns = ret_full[grade_tickers].dropna()
-        while len(graded_returns) < MIN_GRADE_DAYS and len(grade_tickers) > 2:
-            youngest = max(
-                grade_tickers,
-                key=lambda t: ret_full[t].first_valid_index() or ret_full.index[0],
-            )
-            grade_tickers.remove(youngest)
-            grade_excluded.append(youngest)
-            graded_returns = ret_full[grade_tickers].dropna()
+        returns_df = ret_full.fillna(0)
+        graded_returns = returns_df
+        # Raw current-value dollars, same as Dashboard; grade_portfolio renormalizes.
+        weights_arr = np.array([value_map.get(t, 0.0) for t in grade_tickers])
 
-        returns_df = graded_returns
-        weights_arr = np.array([weight_map.get(t, 0) for t in grade_tickers])
-        w_sum = weights_arr.sum()
-        if w_sum > 0:
-            weights_arr = weights_arr / w_sum
-        else:
-            # No DB weights available — use equal weight
-            weights_arr = np.ones(len(grade_tickers)) / len(grade_tickers)
-
-        pm = grade_portfolio(returns_df, weights_arr, bench_ret)
+        pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs)
         port_metrics = {
             "sharpe": pm.get("sharpe"),
             "sortino": pm.get("sortino"),
@@ -40922,9 +40929,11 @@ def analytics_data():
             "est_annual_income": round(sum(income_map.values()), 2),
         }
 
-        # Correlation matrix — pairwise complete observations (min 30 shared
-        # days), so each pair uses its real overlap instead of fabricated zeros.
-        corr = ret_full.corr(min_periods=30)
+        # Correlation matrix — pairwise complete observations, so each pair
+        # uses its real overlap instead of fabricated zeros. Floor tracks the
+        # selected window (1M cannot satisfy a 30-day pairwise minimum).
+        corr_min_periods = min_obs if min_obs is not None else 2
+        corr = ret_full.corr(min_periods=corr_min_periods)
         def _corr_cell(a, b):
             try:
                 v = float(corr.loc[a, b])
@@ -40961,10 +40970,13 @@ def analytics_data():
                   "results": cov_results,
                   "aggregate_coverage": coverage_payload.get("aggregate_coverage"),
                   "aggregate_severity": coverage_payload.get("aggregate_severity"),
-              }}
+              },
+              "window_too_short": window_too_short,
+              "min_observations": min_obs,
+              "window_observations": window_observations}
 
     # Benchmark risk/return point (for the Risk vs Return scatter)
-    if bench_ret is not None and len(bench_ret) >= 30:
+    if bench_ret is not None and len(bench_ret) >= effective_min_obs:
         result["benchmark_point"] = {
             "ticker": benchmark,
             "annual_vol": round(float(bench_ret.std() * np.sqrt(252)) * 100, 2),
@@ -40979,9 +40991,13 @@ def analytics_data():
         if len(used_index) > 0:
             result["data_window"] = {
                 "period": period,
+                "period_key": period_range.get("key"),
+                "period_label": period_range.get("label"),
                 "benchmark": benchmark,
                 "start": used_index.min().strftime("%Y-%m-%d"),
                 "end": used_index.max().strftime("%Y-%m-%d"),
+                "requested_start": period_range.get("start_date"),
+                "requested_end": period_range.get("end_date"),
                 "trading_days": int(len(used_index)),
             }
     except Exception:
@@ -41101,7 +41117,8 @@ def analytics_data():
                                                                    coverage_map=coverage_map,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
-                                                                   grade_tickers=grade_tickers)
+                                                                   grade_tickers=grade_tickers,
+                                                                   min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_income":
@@ -41118,7 +41135,7 @@ def analytics_data():
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
             # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
-            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret)
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
@@ -41154,7 +41171,8 @@ def analytics_data():
                                                                    coverage_map=coverage_map,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
-                                                                   grade_tickers=grade_tickers)
+                                                                   grade_tickers=grade_tickers,
+                                                                   min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
         elif mode == "optimize_balanced":
@@ -41192,7 +41210,7 @@ def analytics_data():
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
             # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
-            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret)
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
@@ -41203,7 +41221,7 @@ def analytics_data():
                 tc = close[t].dropna()
                 tr = tc.pct_change().dropna()
                 vol = float(tr.std() * np.sqrt(252)) if len(tr) > 1 else 0
-                sharpe_t = safe(_sharpe(tc))
+                sharpe_t = safe(_sharpe(tc, min_obs=effective_min_obs))
                 scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
                                      "vol_pct": round(vol * 100, 2), "sharpe": sharpe_t if sharpe_t else 0,
                                      "is_optimal": float(opt_w[i]) > 0.01})
@@ -41231,7 +41249,8 @@ def analytics_data():
                                                                    coverage_map=coverage_map,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
-                                                                   grade_tickers=grade_tickers)
+                                                                   grade_tickers=grade_tickers,
+                                                                   min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
     return jsonify(result)

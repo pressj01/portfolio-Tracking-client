@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import Plot from '../components/ThemedPlot'
@@ -62,6 +62,7 @@ export default function Analytics() {
   const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
   const [tickerCoverage, setTickerCoverage] = useState({})
   const [tickerCoverageSeverity, setTickerCoverageSeverity] = useState({})
+  const lastAnalyzedPeriod = useRef(null)
 
   // Load portfolio tickers on mount
   useEffect(() => {
@@ -88,11 +89,17 @@ export default function Analytics() {
     }
   }
 
-  const clearAll = () => { setTickers([]); setResult(null); setError(null) }
+  const clearAll = () => {
+    setTickers([])
+    setResult(null)
+    setError(null)
+    lastAnalyzedPeriod.current = null
+  }
 
-  const runAnalysis = (runMode) => {
+  const runAnalysis = useCallback((runMode) => {
     if (tickers.length < 1) { setError('Enter at least 1 ticker.'); return }
     setError(null); setResult(null); setLoading(true)
+    lastAnalyzedPeriod.current = period
     const body = { tickers, benchmark, period, mode: runMode || mode }
     if (runMode === 'optimize_balanced') body.balance = balance / 100
     pf('/api/analytics/data', {
@@ -121,7 +128,16 @@ export default function Analytics() {
       })
       .catch(e => setError('Request failed: ' + e.message))
       .finally(() => setLoading(false))
-  }
+  }, [tickers, benchmark, period, mode, balance, pf])
+
+  // Dashboard re-grades as soon as the lookback changes. Keep this page on
+  // the same window so a 1M click cannot keep showing last run's 1Y scores.
+  useEffect(() => {
+    if (tickers.length < 1) return
+    if (lastAnalyzedPeriod.current == null) return
+    if (lastAnalyzedPeriod.current === period) return
+    runAnalysis(mode)
+  }, [period, tickers.length, mode, runAnalysis])
 
   // Sort metrics table
   const sortedMetrics = React.useMemo(() => {
@@ -154,6 +170,87 @@ export default function Analytics() {
         Risk-adjusted metrics, portfolio grading, correlation analysis, and optimization.
       </p>
 
+      <details style={{ marginBottom: '1rem', borderLeft: '3px solid var(--accent-2)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 600, fontSize: '0.85rem' }}>
+          How this screen works — what every button does {'ⓘ'}
+        </summary>
+        <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
+          <p style={{ margin: '0 0 0.6rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>What this page is.</strong> Portfolio Analytics
+            grades a set of tickers over a lookback you choose. It scores risk-adjusted quality (Sharpe, Sortino,
+            Calmar, Omega, Ulcer, drawdowns), shows a letter grade for the whole portfolio and each holding,
+            flags NAV erosion on high-distribution funds, and can propose a new mix that favors returns, income,
+            or a blend. Nothing is sent to a broker — Analyze and Optimize only compute.
+          </p>
+          <p style={{ margin: '0 0 0.7rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>Typical path.</strong> Load your holdings (or type
+            tickers) → pick a period and benchmark → <strong>Analyze</strong> → read the grade card and
+            per-ticker table → optionally Optimize or open the chart tabs. 1M / 3M / YTD / 1Y use the same
+            calendar windows as the Dashboard, so a 1M grade here is meant to match the Dashboard 1M grade
+            for the same holdings.
+          </p>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Ticker list</p>
+          <ul style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li><strong>Ticker</strong> — type a symbol and press Enter or click <strong>Add</strong> to put it on the list.</li>
+            <li><strong>Load Portfolio (N)</strong> — adds every holding in the currently selected account (N is the count). Existing tickers stay; duplicates are ignored.</li>
+            <li><strong>×</strong> on a chip — removes that ticker from this analysis only. It does not sell or edit holdings.</li>
+            <li><strong>Clear</strong> — empties the ticker list and the last result.</li>
+            <li><strong>Suggested Growth / Income ETFs</strong> and <strong>Add All</strong> — appear after Analyze when the mix looks growth- or income-heavy. Click a chip (or Add All) to append those tickers, then Analyze again.</li>
+          </ul>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Lookback and benchmark</p>
+          <ul style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li><strong>Bench</strong> — comparison ticker for up/down capture and the Risk vs Return plot. Defaults to SPY; type any symbol.</li>
+            <li><strong>1M / 3M / 6M / YTD / 1Y / 2Y / 5Y / Max</strong> — the market window used for grades and ratios. After you have run Analyze once, clicking a period re-runs on that window so the table is not left showing a different lookback. 1M is one calendar month (same rule as Dashboard), not “the last 30 bars.” Max uses each ticker’s full available history.</li>
+          </ul>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Analyze</p>
+          <ul style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
+            <li><strong>Analyze</strong> — downloads prices for the selected window and fills the grade card, NAV erosion, per-ticker metrics, and charts. Needs at least one ticker. This is the button that produces the Dashboard-style grade.</li>
+          </ul>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Optimize Returns</p>
+          <p style={{ margin: '0 0 0.45rem' }}>
+            Re-weights the tickers already on the list to raise <strong>risk-adjusted total return</strong>
+            (about 60% Sharpe, 40% Sortino). It is not “pick the highest-returning ETF.” Needs at least two tickers.
+            Single-stock option ETFs are forced to a 0% target (sold). Funds with severe NAV erosion get a smaller
+            max weight. Each name is capped near 40%, and a sell cannot cut a current holding below about 25% of
+            its present weight in one pass. The result is a BUY / SELL / HOLD list versus your current mix.
+            Nothing is sent to a broker.
+          </p>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Optimize Income</p>
+          <p style={{ margin: '0 0 0.45rem' }}>
+            Re-weights toward <strong>higher cash yield</strong> while still scoring quality (Ulcer, Calmar, Omega, Sortino).
+            About 70% of the objective is yield and 30% is that quality score. Yield is reduced when a fund’s price
+            has been structurally eroding (so a 40% distribution on a melting NAV does not win). Names with no yield
+            are not bought. Per-holding cap is about 20%. Same BUY / SELL / HOLD report; no trades are placed.
+          </p>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Balanced</p>
+          <p style={{ margin: '0 0 0.45rem' }}>
+            Mixes the two goals. Clicking <strong>Balanced</strong> shows a <strong>Safety ↔ Income</strong> slider:
+            0% is capital preservation (quality / low drawdown), 100% is income. The default is 50/50. Per-holding
+            caps loosen from about 10% on the safety end to about 20% on the income end. Single-stock ETFs are
+            tapered off toward the safety end and only get full priority on the income end if they yield 10%+.
+            Move the slider, then click <strong>Balanced</strong> again — the slider alone does not re-run.
+          </p>
+          <p style={{ margin: '0 0 0.7rem' }}>
+            On any optimization result, <strong>Export CSV</strong> downloads the recommended trades and
+            <strong>Save Snapshot</strong> keeps a few runs so you can compare scenarios on this page.
+          </p>
+
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Tabs (once tickers are loaded)</p>
+          <ul style={{ margin: '0 0 0.2rem 1.1rem', padding: 0 }}>
+            <li><strong>Risk &amp; Returns</strong> — risk vs return scatter, correlation heatmap, drawdown path, and (after Optimize) the efficient-frontier / yield-vs-risk charts.</li>
+            <li><strong>Income &amp; Allocation</strong> — sector/type mix, monthly income calendar, trailing yield trend, and a NAV vs distributions chart for a selected ticker.</li>
+            <li><strong>Backtesting</strong> — growth of $10,000 over a period you pick here, risk contribution by holding, and rolling Sharpe/Sortino.</li>
+            <li><strong>Tools</strong> — peer lookup for a ticker and a What-If slider that estimates income and volatility if you change one holding’s weight. The slider does not edit your real portfolio.</li>
+          </ul>
+        </div>
+      </details>
+
       {/* Controls */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
@@ -169,7 +266,13 @@ export default function Analytics() {
             onKeyDown={e => { if (e.key === 'Enter') addTicker() }}
           />
           <button className="btn btn-primary" onClick={addTicker} style={{ padding: '0.35rem 0.8rem' }}>Add</button>
-          <button className="btn" onClick={loadPortfolio} style={{ padding: '0.35rem 0.8rem', color: 'var(--accent-2)' }}>
+          <button className="btn" onClick={loadPortfolio} style={{
+            padding: '0.35rem 0.8rem',
+            fontWeight: 600,
+            color: 'var(--accent-bright)',
+            background: 'color-mix(in srgb, var(--accent) 22%, var(--surface))',
+            border: '1px solid var(--accent)',
+          }}>
             Load Portfolio ({portfolioTickers.length})
           </button>
 
@@ -281,6 +384,20 @@ export default function Analytics() {
       </div>
 
       {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
+
+      {result && !loading && (!result.metrics || result.metrics.length === 0) && (
+        <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
+          {result.window_too_short ? (
+            <>
+              Only {result.window_observations ?? 0} trading{' '}
+              {result.window_observations === 1 ? 'day' : 'days'} in this window.
+              Risk ratios need at least 15 trading days — pick a longer period to grade this portfolio.
+            </>
+          ) : (
+            <>No holdings had enough price history in this window to compute metrics.</>
+          )}
+        </div>
+      )}
 
       {loading && (
         <div style={{ textAlign: 'center', padding: '2rem' }}>
@@ -440,7 +557,9 @@ export default function Analytics() {
               <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
                 Per-Ticker Metrics
                 <span style={{ color: 'var(--p-556677)', fontWeight: 400, fontSize: '0.82rem', marginLeft: '0.5rem' }}>
-                  ({PERIODS.find(p => p.value === period)?.label || period})
+                  ({result.data_window?.period_label
+                    || PERIODS.find(p => p.value === (result.data_window?.period || period))?.label
+                    || period})
                 </span>
               </h3>
 
@@ -470,12 +589,13 @@ export default function Analytics() {
                     <strong style={{ color: 'var(--text-strong)' }}>What it is.</strong> A single <strong>risk-adjusted quality score from 0 to 100</strong> (higher is better),
                     mapped to a letter grade. It is computed over the selected lookback period from daily returns and is purely
                     backward-looking — it rewards consistent risk-adjusted returns and penalizes deep, prolonged drawdowns.
-                    It is <em>not</em> a return forecast or a buy/sell signal.
+                    1M uses the same calendar-month window as the Dashboard. It is <em>not</em> a return forecast or a buy/sell signal.
                   </p>
 
                   <p style={{ margin: '0 0 0.4rem' }}>
                     <strong style={{ color: 'var(--text-strong)' }}>How it's computed.</strong> Each component metric is scored 0–100 against
-                    fixed thresholds, then combined as a <strong>weighted average</strong> (only metrics with enough data — ≥30 days — are
+                    fixed thresholds, then combined as a <strong>weighted average</strong> (only metrics with enough observations in the
+                    selected window — 30 days on a 1Y lookback, scaled down to about 15 days on 1M — are
                     included, and the weights renormalize over whatever is available). Higher-is-better metrics score 100 at/above their
                     "excellent" threshold; lower-is-better metrics score 100 at/below it; values in between are linearly interpolated.
                   </p>

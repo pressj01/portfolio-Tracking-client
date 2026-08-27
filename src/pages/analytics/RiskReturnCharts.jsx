@@ -180,11 +180,16 @@ export default function RiskReturnCharts({ result }) {
   }, [result, isDark])
 
   if (!result) return null
+  const hasScatter = result.metrics?.length > 0
+  const hasHeat = !!result.correlation
+  const hasDd = !!result.drawdown_series
+  const hasOpt = !!result.optimization
+  if (!hasScatter && !hasHeat && !hasDd && !hasOpt) return null
 
   return (
     <>
       {/* Optimization charts */}
-      {result.optimization && (
+      {hasOpt && (
         <>
           <div id="analytics-frontier" />
           <div id="analytics-income-scatter" style={{ marginTop: '1rem' }} />
@@ -192,18 +197,20 @@ export default function RiskReturnCharts({ result }) {
       )}
 
       {/* Main charts grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: result.correlation ? '1fr 1fr' : '1fr', gap: '1rem', marginTop: '1rem' }}>
-        <div className="card" style={{ padding: '0.75rem 1rem' }}>
-          <div id="analytics-scatter" />
-        </div>
-        {result.correlation && (
+      {hasScatter && (
+        <div style={{ display: 'grid', gridTemplateColumns: hasHeat ? '1fr 1fr' : '1fr', gap: '1rem', marginTop: '1rem' }}>
           <div className="card" style={{ padding: '0.75rem 1rem' }}>
-            <div id="analytics-heatmap" />
+            <div id="analytics-scatter" />
           </div>
-        )}
-      </div>
+          {hasHeat && (
+            <div className="card" style={{ padding: '0.75rem 1rem' }}>
+              <div id="analytics-heatmap" />
+            </div>
+          )}
+        </div>
+      )}
 
-      {result.drawdown_series && (
+      {hasDd && (
         <div className="card" style={{ padding: '0.75rem 1rem', marginTop: '1rem' }}>
           <div id="analytics-drawdown" />
         </div>

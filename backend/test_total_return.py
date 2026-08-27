@@ -73,6 +73,7 @@ class TotalReturnPeriodTest(unittest.TestCase):
             "6mo": "2026-01-23",
             "ytd": "2026-01-01",
             "1y": "2025-07-23",
+            "2y": "2024-07-23",
             "5y": "2021-07-23",
         }
 
