@@ -23787,6 +23787,23 @@ def portfolio_summary_data():
             if prev and prev.get("grade") and prev.get("grade") != "N/A":
                 ticker_grades[t] = prev
 
+    # The safety net just above can hand a ticker in `unpriced` a real, usable
+    # grade from cache. `unpriced`/`price_feed_outage`/`cacheable` stay exactly
+    # as computed above — they describe what THIS run's download actually did,
+    # which still governs whether the next load retries and whether this
+    # response is worth caching. But reporting a ticker as unpriced in the same
+    # payload that hands it a letter grade is a contradiction the frontend
+    # can't paper over: it rendered a real "B" next to a banner reading
+    # "Yahoo has no listing for CIM-PRB ... cannot be graded" for that exact
+    # ticker. What gets reported to the UI must match what the UI can actually
+    # show, so only report a ticker as unpriced here if it is STILL blank after
+    # the backfill above.
+    reported_unpriced = [
+        t for t in unpriced
+        if (ticker_grades.get(t) or {}).get("grade") in (None, "N/A")
+    ]
+    reported_unresolved_symbols = [] if price_feed_outage else list(reported_unpriced)
+
     import numpy as np
     portfolio_grade_info = {}
     if len(available) >= 2:
@@ -23883,12 +23900,13 @@ def portfolio_summary_data():
         "window_observations": window_observations,
         "min_observations": min_obs,
         "window_too_short": window_too_short,
-        # Symbols Yahoo returned no prices for at all. Their "N/A" is never a
-        # verdict on the holding, so the UI can say so — and say WHICH of the
-        # two causes it is, because only an outage is worth retrying.
-        "unpriced_tickers": unpriced,
+        # Symbols still lacking a usable grade after the cache-backfill safety
+        # net above. Their "N/A" is never a verdict on the holding, so the UI
+        # can say so — and say WHICH of the two causes it is, because only an
+        # outage is worth retrying.
+        "unpriced_tickers": reported_unpriced,
         "price_feed_outage": price_feed_outage,
-        "unresolved_symbols": unresolved_symbols,
+        "unresolved_symbols": reported_unresolved_symbols,
     }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the

@@ -403,6 +403,65 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
         self.assertEqual(sorted(payload["unpriced_tickers"]), ["AAA", "BBB", "CCC", "DDD"])
         self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 0)
 
+    @patch("yfinance.Ticker")
+    def test_cache_backfilled_grade_is_not_also_reported_as_unpriced(self, ticker_mock):
+        """A ticker the safety net rescues with a stale-but-real grade must not
+        also be reported as unresolved/unpriced in the same response.
+
+        Seen live: CIM-PRB showed a real "B" grade in the holdings table while
+        the banner simultaneously read "Yahoo has no listing for CIM-PRB ...
+        cannot be graded" for that same ticker. The grade came from this exact
+        cache-backfill safety net; `unpriced_tickers`/`unresolved_symbols` were
+        computed before the backfill ran and were never corrected afterward.
+        """
+        ticker_mock.return_value.info = {}
+
+        # First call: everything prices, including CCC. This is what populates
+        # the cache the second call's safety net will read from.
+        self.rate_limited = self.close.copy()
+        first = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+        self.assertNotEqual(first["ticker_grades"]["CCC"]["grade"], "N/A", first)
+        self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 1)
+
+        # Age that cache entry past its TTL. Otherwise the endpoint's top-level
+        # cache check short-circuits the second call entirely -- returning
+        # call 1's response verbatim without downloading anything -- which
+        # would make this test pass for the wrong reason (never actually
+        # exercising a failed re-download) rather than the real one (the
+        # safety net reads a since-expired entry to backfill a fresh miss).
+        [key] = app_module._PORTFOLIO_SUMMARY_CACHE.keys()
+        stale_ts, stale_payload = app_module._PORTFOLIO_SUMMARY_CACHE[key]
+        app_module._PORTFOLIO_SUMMARY_CACHE[key] = (
+            stale_ts - app_module._PORTFOLIO_SUMMARY_TTL_SEC - 1, stale_payload
+        )
+
+        # Second call, same cache key: CCC fails outright this time (NaN in the
+        # batch, and its individual re-fetch also comes back empty) while the
+        # other three tickers still price fine -- an isolated single-symbol
+        # miss, not a feed-wide outage.
+        self.rate_limited = self.close.copy()
+        self.rate_limited["CCC"] = np.nan
+        self.refetch_fails = {"CCC"}
+        second = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        self.assertFalse(second["price_feed_outage"], second)
+        self.assertNotEqual(
+            second["ticker_grades"]["CCC"]["grade"], "N/A",
+            "the safety net should have backfilled CCC's grade from cache",
+        )
+        self.assertNotIn(
+            "CCC", second["unpriced_tickers"],
+            "a ticker with a real (even if backfilled) grade must not also be flagged unpriced",
+        )
+        self.assertNotIn(
+            "CCC", second["unresolved_symbols"],
+            "a ticker with a real (even if backfilled) grade must not also be flagged unresolved",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
