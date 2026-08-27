@@ -332,7 +332,7 @@ function NavCell({ row }) {
   const coverage = row.navCoverage
   const invalid = Boolean(row.navBenchmark && meta.benchmark_valid === false)
   const severity = meta.nav_erosion_severity
-  const title = scope === 'skip'
+  const coverageTitle = scope === 'skip'
     ? 'Skipped by user override'
     : invalid
       ? `${row.navBenchmark} is not returning benchmark price history`
@@ -341,6 +341,18 @@ function NavCell({ row }) {
         : meta.nav_tested
           ? `Auto-tested${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
           : 'Auto: not tested by current NAV erosion rules'
+  const identityAvailable = meta.raw_nav_erosion_rate != null
+  const overallScore = meta.overall_nav_erosion_score
+  const overallSeverity = meta.overall_nav_erosion_severity
+  const rateText = value => value == null ? '--' : `${(Number(value) * 100).toFixed(2)}%`
+  const identityTitle = identityAvailable
+    ? `Raw 1Y accounting: e ${rateText(meta.raw_nav_erosion_rate)}, d ${rateText(meta.distribution_rate_on_starting_nav)}, r ${rateText(meta.accounting_total_return_rate)}; e = d - r. Positive e means NAV ERODER regardless of the benchmark; negative e means NAV rose; zero is flat. Higher r is better. A higher d is more cash, but is not automatically better when d exceeds r`
+    : ''
+  const coverageGuidance = coverage == null
+    ? ''
+    : 'Coverage is benchmark-gated and lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High'
+  const overallTitle = overallScore == null ? '' : `Overall verdict: ${overallSeverity} NAV erosion risk (${Number(overallScore).toFixed(1)}/100)`
+  const title = [overallTitle, coverageTitle, coverageGuidance, identityTitle].filter(Boolean).join('. ')
   const color = severity === 'High'
     ? 'var(--neg)'
     : severity === 'Medium'
@@ -373,6 +385,16 @@ function NavCell({ row }) {
         }}
         style={{ borderColor: invalid ? 'var(--neg)' : undefined }}
       />
+      {identityAvailable && (
+        <div style={{ marginTop: 3, fontSize: '0.66rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
+          e {rateText(meta.raw_nav_erosion_rate)} · d {rateText(meta.distribution_rate_on_starting_nav)} · r {rateText(meta.accounting_total_return_rate)}
+        </div>
+      )}
+      {overallScore != null && (
+        <div style={{ marginTop: 2, fontSize: '0.66rem', fontWeight: 700, color: overallSeverity === 'High' ? 'var(--neg)' : overallSeverity === 'Medium' ? 'var(--warning-money)' : 'var(--pos)', whiteSpace: 'nowrap' }}>
+          {String(overallSeverity).toUpperCase()} RISK · {Number(overallScore).toFixed(1)}/100
+        </div>
+      )}
     </div>
   )
 }
@@ -983,6 +1005,14 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
             nav_erosion_scope: row.nav_erosion_scope || 'auto',
             nav_benchmark_override: row.nav_benchmark_override || '',
             nav_erosion_severity: row.nav_erosion_severity || null,
+            raw_nav_erosion_rate: row.raw_nav_erosion_rate,
+            distribution_rate_on_starting_nav: row.distribution_rate_on_starting_nav,
+            accounting_total_return_rate: row.accounting_total_return_rate,
+            raw_payout_gap_ratio: row.raw_payout_gap_ratio,
+            overall_nav_erosion_score: row.overall_nav_erosion_score,
+            overall_nav_erosion_severity: row.overall_nav_erosion_severity,
+            accounting_window_start: row.accounting_window_start,
+            accounting_window_end: row.accounting_window_end,
           }
         })
         setCoverage(map)

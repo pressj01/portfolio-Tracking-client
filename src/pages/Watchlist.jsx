@@ -340,8 +340,8 @@ const WATCHLIST_HEADERS = [
   { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
   { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
   { label: '1Y Return', tip: 'Total return over the past 12 months' },
-  { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
-  { label: 'NAV Signal', tip: 'Signal from NAV Ratio: BUY <= 0.25, NEUTRAL <= 0.75, SELL > 0.75' },
+  { label: 'NAV Ratio', tip: 'Benchmark-gated Yield-Funding Coverage: qualifying fund price decline ÷ distribution yield. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High. A zero can mean the benchmark also fell; it does not prove raw NAV was flat.' },
+  { label: 'NAV Signal', tip: 'Signal from benchmark-gated coverage: BUY/Low at 0–0.25, NEUTRAL/Medium above 0.25–0.75, SELL/High above 0.75.' },
   { label: 'NAV Erosion', tip: 'Derived from NAV Ratio. Use Auto/Test/Skip and optional benchmark override to control watchlist NAV testing.' },
   { label: 'Notes' },
 ]
@@ -788,7 +788,7 @@ export default function Watchlist() {
                     <td>{a?.sharpe != null ? a.sharpe.toFixed(2) : '\u2014'}</td>
                     <td>{a?.sortino != null ? a.sortino.toFixed(2) : '\u2014'}</td>
                     <td className={pctClass(a?.one_yr_ret)}>{a?.one_yr_ret != null ? fmtPct(a.one_yr_ret) : '\u2014'}</td>
-                    <td>{a?.cov_ratio != null ? a.cov_ratio.toFixed(4) : '\u2014'}</td>
+                    <td title="Benchmark-gated Yield-Funding Coverage. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High. A zero can also result from a falling benchmark." style={{ cursor: a?.cov_ratio != null ? 'help' : undefined }}>{a?.cov_ratio != null ? a.cov_ratio.toFixed(4) : '\u2014'}</td>
                     <td><SignalBadge signal={a?.cov_sig} /></td>
                     <NavCell row={r} analysis={a} onSave={updateNavSettings} />
                     <td style={{ minWidth: 180 }}>

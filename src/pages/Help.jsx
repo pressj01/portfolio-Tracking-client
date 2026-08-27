@@ -801,7 +801,7 @@ function DashboardHelp() {
         <li><strong>Portfolio IRR / Filtered IRR</strong> — annualized money-weighted return from dated buys, sells, fees, recorded dividends, and current holdings value; idle account cash is excluded. The card shows <strong>Unavailable</strong> instead of estimating when transaction shares, transfers, or dividend payment history do not fully reconcile. <strong>Manage exclusions</strong> lists the blocking tickers and lets you omit selected ones. Any resulting number is labeled <strong>Filtered IRR</strong> and discloses the percentage of current portfolio value excluded, because it measures only the documented subset—not the whole account.</li>
         <li><strong>Avg Yield on Cost / Current Yield</strong> — dividend yield based on cost basis vs current price.</li>
         <li><strong>Price Return / Tracker Total Return</strong> — transaction-aware selected-period returns excluding and including dividends. The Shared Performance Date Range above the cards controls both; 1D measures from the previous trading close.</li>
-        <li><strong>NAV Erosion Ratio</strong> — dollar-weighted benchmark-adjusted NAV erosion context for income-oriented funds. The portfolio severity follows the aggregate ratio thresholds: low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
+        <li><strong>Raw NAV Erosion (e) and Yield-Funding Coverage</strong> — e is the unadjusted trailing-year principal change on starting NAV. Distribution rate d and accounting total return r use the same basis, so e = d − r. Coverage remains the separate benchmark-gated income-sustainability ratio; its severity is low at 0.25 or below, moderate from 0.25-0.75, and high above 0.75.</li>
         <li><strong>S&amp;P 500</strong> — the current S&amp;P 500 index level with its day's change, as a market reference alongside your portfolio's returns.</li>
       </ul>
 
@@ -937,7 +937,7 @@ function DashboardHelp() {
         data, or has an invalid benchmark override. Hover the NAV cell for more context.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        These controls live on the Dashboard holdings overview NAV column and also update the portfolio-level NAV Erosion Ratio.
+        These controls live on the Dashboard holdings overview NAV column and update benchmark-gated Yield-Funding Coverage. They do not change raw e, d, or r.
         The standalone NAV Erosion backtest and NAV Erosion Screener still use their own ticker inputs and
         automatic benchmark rules.
       </p>
@@ -4499,8 +4499,10 @@ Where:
       <p style={{ marginBottom: '0.75rem' }}>After running the backtest, a strip of metric tiles shows:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Benchmark / Benchmark Return</strong> — The actual comparison series and its full-window price return.</li>
+        <li><strong>Raw NAV Erosion (e), Distribution Rate (d), Accounting Total Return (r)</strong> — Same-window, starting-NAV measures satisfying e = d − r. These do not use the benchmark gate. Positive e means the fund is a NAV eroder over the selected window regardless of which benchmark is selected.</li>
         <li><strong>Benchmark-Confirmed Erosion</strong> — Yes only when at least one month meets the fund-down, benchmark-flat/up rule.</li>
-        <li><strong>Confirmed Erosion Ratio</strong> — Confirmed monthly losses divided by distributions over the same window.</li>
+        <li><strong>Confirmed Erosion Ratio</strong> — Benchmark-gated monthly losses divided by distributions over the same window. Its Low/Moderate/High grade describes only benchmark-gated coverage and never overrides positive raw e.</li>
+        <li><strong>Overall Verdict</strong> — Primary Low/Moderate/High NAV erosion conclusion, supported by a historical 0–100 score using the strongest of raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. It is not a forecast probability. Scores above 75 are High.</li>
         <li><strong>Relative Drag</strong> — How many percentage points the fund price lagged its benchmark.</li>
         <li><strong>Total Distributions</strong> — All distributions generated over the period.</li>
         <li><strong>Shares Purchased</strong> — Shares bought via DRIP reinvestment.</li>
@@ -4532,7 +4534,8 @@ Where:
         <li><strong>Portfolio Value</strong> — Current total value.</li>
         <li><strong>Break-Even Shares</strong> — Shares needed to recover original investment at current price.</li>
         <li><strong>Shares Needed / Extra To Breakeven</strong> — The share gap versus break-even, shown as shares plus percent. <span style={{ color: 'var(--p-ef9a9a)' }}>Red needed = you need that many more shares</span>; <span style={{ color: 'var(--p-81c784)' }}>green extra = you have that many shares above break-even</span>.</li>
-        <li><strong>Confirmed Ratio</strong> — That month&apos;s confirmed erosion loss divided by its distribution per share.</li>
+        <li><strong>Raw e / Dist d / Total Return r</strong> — Monthly values on the same starting-price basis; e = d − r.</li>
+        <li><strong>Confirmed Coverage</strong> — That month&apos;s benchmark-confirmed erosion loss divided by its distribution per share.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
@@ -4587,15 +4590,17 @@ function NavScreenerHelp() {
         <li>Total Distributions, Total Reinvested, and Cash Taken (the portion not reinvested)</li>
         <li>Confirmed Erosion count (e.g., "3 of 8 funds" with at least one qualifying month)</li>
         <li>Ending Price Deficit count — an informational break-even share check, separate from confirmed erosion.</li>
+        <li>Portfolio Raw e, Distribution Rate d, and Accounting Return r — amount-weighted same-window values satisfying e = d − r.</li>
+        <li>Overall Verdict — primary conclusion from the strongest-warning score using raw decline, e ÷ d, confirmed coverage, and relative drag; 0–25 Low, above 25–75 Moderate, above 75 High.</li>
         <li>Portfolio Confirmed Erosion Ratio — total benchmark-confirmed price-loss dollars divided by total distributions over the same window.</li>
         <li>Weighted benchmark return and relative price drag, plus best/worst performer and data errors.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results Table</h3>
-      <p style={{ marginBottom: '0.75rem' }}>A sortable 22-column table with a TOTAL footer row:</p>
+      <p style={{ marginBottom: '0.75rem' }}>A sortable results table with a TOTAL footer row:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker, Benchmark, Amount, Reinvest %</strong> — Inputs plus the mapped underlying used for the gate (for example, BTCI → BTC-USD).</li>
-        <li><strong>Start Price / End Price</strong> — Share price at beginning and end of period.</li>
+        <li><strong>Start Price / End Price</strong> — Share price at beginning and end of period. Reverse splits are normalized into the same share units and are not treated as investment gains.</li>
         <li><strong>Price Δ% / Benchmark Return %</strong> — Fund price change and mapped benchmark return over the selected window.</li>
         <li><strong>Total Distributions / Total Reinvested / Cash Taken</strong> — Distribution cash flow split by reinvestment choice.</li>
         <li><strong>Ending Shares Value / Ending Wealth</strong> — Shares at the end, then shares value plus cash taken.</li>
@@ -4603,6 +4608,7 @@ function NavScreenerHelp() {
         <li><strong>Total Return $</strong> and <strong>Total Return %</strong> — Including distributions.</li>
         <li><strong>Confirmed Erosion / Months</strong> — Yes only when at least one month has fund price down while the benchmark is flat or up.</li>
         <li><strong>Shares Needed / Extra To Breakeven</strong> — End-of-period capital-only share gap; informational and separate from the benchmark gate.</li>
+        <li><strong>Raw e / Dist d / Total Return r</strong> — Same-window accounting identity on the starting share-price basis. Positive e identifies a NAV eroder independently of the benchmark gate.</li>
         <li><strong>Confirmed Erosion Ratio</strong> — Confirmed price loss per share divided by all distributions per share in the selected window.</li>
         <li><strong>Note</strong> — Any data warnings for that ticker.</li>
       </ul>
@@ -5220,8 +5226,8 @@ function AnalyticsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>Click <strong>Analyze</strong> to run the base analysis. Results include:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Portfolio Grade Card</strong> — Letter grade (A+ through F) and numeric score with a breakdown bar showing individual grades and weights for Risk, Income, Diversification, and other dimensions.</li>
-        <li><strong>NAV Erosion Ratio</strong> — Colored display of dollar-weighted benchmark-adjusted NAV erosion context for the portfolio. Ratio is lower-is-better, and portfolio severity follows the aggregate ratio rather than the worst individual holding.</li>
-        <li><strong>NAV Erosion Bar Chart</strong> — Per-ticker NAV ratios with low/moderate/high thresholds. Tickers above 0.75, down 50%+, or carrying a 5%+ share deficit deserve a closer look.</li>
+        <li><strong>Raw NAV Erosion and Yield-Funding Coverage</strong> — Raw e, distribution rate d, and accounting return r share one trailing-year starting-NAV basis. Coverage is benchmark-gated and lower-is-better; portfolio severity follows the aggregate coverage ratio rather than the worst individual holding.</li>
+        <li><strong>Yield-Funding Coverage Chart</strong> — Per-ticker benchmark-gated coverage ratios with low/moderate/high thresholds. Tickers above 0.75, down 50%+, or carrying a 5%+ share deficit deserve a closer look.</li>
         <li><strong>Per-Ticker Metrics Table</strong> — One row per ticker with all risk metrics (see columns below). Sortable by any column.</li>
       </ul>
 
@@ -5239,7 +5245,7 @@ function AnalyticsHelp() {
         <li><strong>Annual Return %</strong> — Annualized price return.</li>
         <li><strong>Total Return %</strong> — Including dividends.</li>
         <li><strong>Annual Volatility %</strong> — Annualized standard deviation of returns.</li>
-        <li><strong>NAV Erosion Ratio</strong> — Benchmark-adjusted NAV erosion ratio for eligible income funds, with High severity also triggered by a 50%+ price decline or 5%+ ending share deficit.</li>
+        <li><strong>Coverage / e</strong> — Benchmark-gated yield-funding coverage above raw trailing-year NAV erosion e. Hover to see e, d, r and the identity e = d − r.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Optimization Modes</h3>
@@ -5315,7 +5321,7 @@ function PortfolioBuilderHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker, Grade, Score, Weight %, Current Price, Shares, Dollar Amount</strong></li>
         <li><strong>Ulcer Index, Sharpe, Sortino, Calmar, Omega</strong> — Risk metrics</li>
-        <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, NAV Erosion Ratio</strong></li>
+        <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, Yield-Funding Coverage / Raw e</strong></li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>

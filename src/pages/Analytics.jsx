@@ -37,7 +37,7 @@ function metricColor(val, thresholds, lowerBetter = false) {
 const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
 const navSeverityColor = (severity) => severity === 'High' ? '#ff6b6b' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#4dff91' : '#8899aa'
 const navSeverityBg = (severity) => severity === 'High' ? 'rgba(255,107,107,0.12)' : severity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)'
-const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Adjusted NAV Erosion' : severity === 'Medium' ? 'Moderate Benchmark-Adjusted NAV Erosion' : 'Low Benchmark-Adjusted NAV Erosion'
+const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Gated Coverage' : severity === 'Medium' ? 'Moderate Benchmark-Gated Coverage' : 'Low Benchmark-Gated Coverage'
 
 export default function Analytics() {
   const pf = useProfileFetch()
@@ -114,7 +114,7 @@ export default function Analytics() {
         setMode(runMode || mode)
         // Extract coverage from analytics response
         if (d.coverage) {
-          if (d.coverage.aggregate_coverage != null) setPortfolioCoverage(d.coverage.aggregate_coverage)
+          setPortfolioCoverage(d.coverage.aggregate_coverage ?? null)
           setPortfolioCoverageSeverity(d.coverage.aggregate_severity ?? null)
           const map = {}
           const severityMap = {}
@@ -144,15 +144,26 @@ export default function Analytics() {
     if (!result?.metrics) return []
     if (!sortCol) return result.metrics
     return [...result.metrics].sort((a, b) => {
-      const av = a[sortCol], bv = b[sortCol]
+      const av = sortCol === '_coverage' ? tickerCoverage[a.ticker] : a[sortCol]
+      const bv = sortCol === '_coverage' ? tickerCoverage[b.ticker] : b[sortCol]
       if (av == null && bv == null) return 0
       if (av == null) return 1
       if (bv == null) return -1
       return sortAsc ? av - bv : bv - av
     })
-  }, [result, sortCol, sortAsc])
+  }, [result, sortCol, sortAsc, tickerCoverage])
   const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
   const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
+  const portfolioRawErosion = result?.coverage?.aggregate_raw_nav_erosion_rate
+  const portfolioDistributionRate = result?.coverage?.aggregate_distribution_rate_on_starting_nav
+  const portfolioAccountingReturn = result?.coverage?.aggregate_accounting_total_return_rate
+  const portfolioRawPayoutGap = result?.coverage?.aggregate_raw_payout_gap_ratio
+  const portfolioOverallScore = result?.coverage?.aggregate_overall_nav_erosion_score
+  const portfolioOverallSeverity = result?.coverage?.aggregate_overall_nav_erosion_severity
+  const tickerNavAccounting = React.useMemo(() => Object.fromEntries(
+    (result?.coverage?.results || []).map(row => [row.ticker, row]),
+  ), [result])
+  const formatIdentityRate = value => value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%`
 
   const handleSort = (col) => {
     if (sortCol === col) setSortAsc(!sortAsc)
@@ -454,32 +465,58 @@ export default function Analytics() {
                   <Stat label="Est. Annual Income" value={formatMoneyWhole(pm.est_annual_income)} color="#66bb6a" />
                 </div>
 
-                {/* NAV Erosion Ratio */}
-                {portfolioCoverage != null && (
+                {/* Benchmark-gated coverage plus the raw NAV accounting identity. */}
+                {(portfolioCoverage != null || portfolioRawErosion != null) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 140, alignItems: 'center' }}>
-                    <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>NAV Erosion Ratio</div>
-                    <div style={{
-                      fontSize: '1.6rem', fontWeight: 700,
-                      color: portfolioNavColor,
-                    }}>
-                      {portfolioCoverage.toFixed(4)}
-                    </div>
-                    <div style={{
-                      padding: '0.3rem 0.7rem', borderRadius: 6,
-                      border: `2px solid ${portfolioNavColor}`,
-                      background: navSeverityBg(portfolioNavSeverity),
-                      fontSize: '0.78rem', fontWeight: 600, textAlign: 'center',
-                      color: portfolioNavColor,
-                    }}>
-                      {navSeverityText(portfolioNavSeverity)}
-                    </div>
+                    {portfolioOverallScore != null && (
+                      <div
+                        title="Primary combined historical verdict from raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. This is not a forecast probability."
+                        style={{
+                          width: '100%', padding: '0.45rem 0.7rem', borderRadius: 6,
+                          border: `3px solid ${navSeverityColor(portfolioOverallSeverity)}`,
+                          background: navSeverityBg(portfolioOverallSeverity),
+                          color: navSeverityColor(portfolioOverallSeverity),
+                          fontSize: '0.78rem', fontWeight: 700, textAlign: 'center', cursor: 'help',
+                        }}
+                      >
+                        <div>{`${String(portfolioOverallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}</div>
+                        <div style={{ fontWeight: 500, marginTop: 2 }}>{`Overall Verdict · ${Number(portfolioOverallScore).toFixed(1)} / 100 · gap ${portfolioRawPayoutGap != null ? Number(portfolioRawPayoutGap).toFixed(4) : '—'}`}</div>
+                      </div>
+                    )}
+                    {portfolioCoverage != null && <>
+                      <div title="Benchmark-gated price loss divided by distributions. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, and above 0.75 High. Check raw e because a falling benchmark can make coverage zero even when NAV fell." style={{ fontSize: '0.82rem', color: 'var(--text-dim)', cursor: 'help' }}>Yield-Funding Coverage (1Y) ⓘ</div>
+                      <div style={{
+                        fontSize: '1.6rem', fontWeight: 700,
+                        color: portfolioNavColor,
+                        cursor: 'help',
+                      }} title="Lower is better. 0 is best; values above 0.75 are High. This is the benchmark-gated income-sustainability screen, not raw NAV erosion.">
+                        {portfolioCoverage.toFixed(4)}
+                      </div>
+                      <div style={{
+                        padding: '0.3rem 0.7rem', borderRadius: 6,
+                        border: `2px solid ${portfolioNavColor}`,
+                        background: navSeverityBg(portfolioNavSeverity),
+                        fontSize: '0.78rem', fontWeight: 600, textAlign: 'center',
+                        color: portfolioNavColor,
+                        cursor: 'help',
+                      }} title="Low is favorable, Medium deserves review, and High is unfavorable. Severity is based on benchmark-gated coverage; raw e remains a separate principal measure.">
+                        {navSeverityText(portfolioNavSeverity)}
+                      </div>
+                    </>}
+                    {portfolioRawErosion != null && (
+                      <div title="Raw e has no benchmark gate: negative is favorable because NAV rose, zero is flat, and positive is erosion. Higher r is better. Higher d means more cash, but is not automatically better if d exceeds r." style={{ fontSize: '0.76rem', lineHeight: 1.45, color: 'var(--text-dim)', textAlign: 'center', cursor: 'help' }}>
+                        <div><strong style={{ color: portfolioRawErosion > 0 ? 'var(--neg)' : 'var(--pos)' }}>e {formatIdentityRate(portfolioRawErosion)}</strong> {portfolioRawErosion > 0 ? 'NAV ERODER' : portfolioRawErosion < 0 ? 'NAV rose' : 'NAV flat'}</div>
+                        <div>d {formatIdentityRate(portfolioDistributionRate)} · r {formatIdentityRate(portfolioAccountingReturn)}</div>
+                        <div style={{ fontFamily: 'monospace' }}>tested funds · e = d − r</div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             </div>
           )}
 
-          {/* NAV Erosion Ratio Chart */}
+          {/* Benchmark-gated yield-funding coverage chart. */}
           {sortedMetrics.length > 0 && Object.keys(tickerCoverage).length > 0 && (() => {
             const covTickers = sortedMetrics.filter(m => tickerCoverage[m.ticker] != null)
             if (covTickers.length === 0) return null
@@ -491,6 +528,15 @@ export default function Analytics() {
             const visualVals = rawVals.map(v => v === 0 ? ZERO_MARKER : Math.min(v, CAP))
             const colors = sorted.map(m => navSeverityColor(tickerCoverageSeverity[m.ticker] || navSeverityFromRatio(tickerCoverage[m.ticker])))
             const textLabels = rawVals.map(v => v > CAP ? v.toFixed(1) : v === 0 ? '0.0000' : '')
+            const hoverData = sorted.map(m => {
+              const accounting = tickerNavAccounting[m.ticker] || {}
+              return [
+                tickerCoverage[m.ticker],
+                Number(accounting.raw_nav_erosion_rate) * 100,
+                Number(accounting.distribution_rate_on_starting_nav) * 100,
+                Number(accounting.accounting_total_return_rate) * 100,
+              ]
+            })
             const yMax = Math.max(...rawVals, 0.75, ZERO_MARKER)
             return (
               <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
@@ -502,9 +548,9 @@ export default function Analytics() {
                       text: textLabels,
                       textposition: 'outside',
                       textfont: { color: '#4dff91', size: 10 },
-                      customdata: rawVals,
+                      customdata: hoverData,
                       showlegend: false,
-                      hovertemplate: '<b>%{x}</b><br>NAV Erosion Ratio: %{customdata:.4f}<extra></extra>',
+                      hovertemplate: '<b>%{x}</b><br>Coverage: %{customdata[0]:.4f} (lower is better)<br>Raw e: %{customdata[1]:.2f}% (≤0% is favorable)<br>Distribution d: %{customdata[2]:.2f}%<br>Accounting return r: %{customdata[3]:.2f}% (higher is better)<extra></extra>',
                     },
                     {
                       x: [tks[0], tks[tks.length - 1]], y: [0.75, 0.75],
@@ -518,7 +564,7 @@ export default function Analytics() {
                     { x: [null], y: [null], type: 'bar', name: 'High erosion', marker: { color: '#ff6b6b' } },
                   ]}
                   layout={themedPlotlyLayout({
-                    title: { text: 'Per-Ticker NAV Erosion Ratio', font: { color: '#e0e8f5', size: 14 } },
+                    title: { text: 'Per-Ticker Yield-Funding Coverage', font: { color: '#e0e8f5', size: 14 } },
                     template: 'plotly_dark',
                     paper_bgcolor: '#111124',
                     plot_bgcolor: '#111124',
@@ -534,7 +580,7 @@ export default function Analytics() {
                       zerolinecolor: '#2a3a4e',
                     },
                     yaxis: {
-                      title: { text: 'NAV Erosion Ratio', font: { color: '#e0e8f5' } },
+                      title: { text: 'Coverage Ratio', font: { color: '#e0e8f5' } },
                       color: '#b8c7d9',
                       gridcolor: '#1a2a3e',
                       zeroline: true,
@@ -708,25 +754,42 @@ export default function Analytics() {
               {/* Hidden explanation: NAV Erosion Ratio */}
               <details style={{ marginBottom: '0.75rem', borderLeft: '3px solid var(--p-ffb74d)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
                 <summary style={{ cursor: 'pointer', color: 'var(--p-ffb74d)', fontWeight: 600, fontSize: '0.85rem' }}>
-                  What is the NAV Erosion Ratio? {'ⓘ'}
+                  Raw NAV erosion vs. yield-funding coverage {'ⓘ'}
                 </summary>
                 <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
                   <p style={{ margin: '0 0 0.6rem' }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>What it is.</strong> For high-distribution funds, it answers one
-                    question: <em>how much of the yield was paid by eroding the fund's own price (NAV) rather than by real returns?</em>
-                    It is the share of trailing-12-month distributions that was effectively funded by price decay. Lower is better —
-                    <strong> 0</strong> means the price held up (the distribution was genuine), while <strong>1.0</strong> means the
-                    price fell by an amount equal to the entire year's distributions (the "yield" was largely return of capital).
+                    <strong style={{ color: 'var(--text-strong)' }}>Two questions, two measures.</strong> Raw
+                    NAV erosion <strong>e</strong> answers whether the unadjusted share price fell. Yield-funding
+                    coverage asks how much of the distribution looks financed by fund-specific price decay after
+                    applying the benchmark gate.
+                    It is the share of trailing-12-month distributions matched by benchmark-confirmed price decay. Lower is better —
+                    <strong> 0</strong> means there was no qualifying fund-specific decline, while <strong>1.0</strong> means the
+                    qualifying decline equaled the entire year&apos;s distributions. A zero caused by a falling benchmark does not,
+                    by itself, prove that the payout was fully earned; raw e shows the actual principal change.
                   </p>
 
                   <p style={{ margin: '0 0 0.4rem' }}>
                     <strong style={{ color: 'var(--text-strong)' }}>How it's computed.</strong>
                   </p>
                   <div style={{ margin: '0 0 0.6rem', padding: '0.4rem 0.6rem', background: 'var(--p-0b0b1c)', borderRadius: 4, border: '1px solid var(--p-2a3a4e)', fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--text-strong)' }}>
-                    NAV Erosion Ratio = benchmark-adjusted price decline ÷ TTM distribution yield
+                    e = d − r = (NAV₀ − NAVₜ) ÷ NAV₀
+                    <br />
+                    coverage = benchmark-gated price decline ÷ TTM distribution yield
+                  </div>
+                  <div style={{ margin: '0 0 0.6rem', padding: '0.5rem 0.65rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4 }}>
+                    <strong style={{ color: 'var(--text-strong)' }}>Symbol key</strong>
+                    <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.1rem' }}>
+                      <li><strong>NAV₀</strong> — unadjusted share price at the start of the window.</li>
+                      <li><strong>NAVₜ</strong> — unadjusted share price at the end of the window.</li>
+                      <li><strong>D</strong> — cash distributions paid per share during the window.</li>
+                      <li><strong>d</strong> — distribution rate, D ÷ NAV₀.</li>
+                      <li><strong>r</strong> — accounting total return, (NAVₜ − NAV₀ + D) ÷ NAV₀.</li>
+                      <li><strong>e</strong> — raw NAV erosion, d − r. Positive means NAV fell; zero means flat; negative means NAV rose.</li>
+                    </ul>
                   </div>
                   <ol style={{ margin: '0 0 0.6rem', paddingLeft: '1.1rem' }}>
-                    <li><strong>Price decline</strong> — the fund's 1-year price (NAV) change, using unadjusted close (so distributions are not added back).</li>
+                    <li><strong>e, d, and r</strong> — use the same trailing-year window and starting NAV. d is distributions ÷ NAV₀; r is (NAVₜ − NAV₀ + distributions) ÷ NAV₀. The benchmark never changes these accounting values.</li>
+                    <li><strong>Price decline</strong> — the fund's 1-year price (NAV proxy) change, using unadjusted close (so distributions are not added back).</li>
                     <li><strong>Benchmark gate</strong> — each fund is matched to a benchmark (e.g. an option-income ETF vs its underlying index). If the price <em>rose</em>, or the <em>benchmark also fell</em> over the same window, erosion counts as <strong>0</strong> — a broad market drop isn't treated as structural NAV erosion. Only a fund-specific decline (price down while the benchmark held up) is counted.</li>
                     <li><strong>TTM distribution yield</strong> — trailing-12-month distributions per share ÷ current price.</li>
                     <li><strong>Ratio</strong> — the fund-specific decline divided by that yield.</li>
@@ -774,7 +837,7 @@ export default function Analytics() {
                       { key: 'annual_ret', label: 'Ann Ret', tip: 'Price return annualized (excludes dividends)' },
                       { key: 'annual_total_ret', label: 'Tot Ret', tip: 'Price return + dividend yield annualized' },
                       { key: 'annual_vol', label: 'Ann Vol', tip: 'Annualized standard deviation. Lower = less volatile' },
-                      { key: '_coverage', label: 'NAV', tip: 'NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit.' },
+                      { key: '_coverage', label: 'Coverage / e', tip: 'Top: benchmark-gated yield-funding coverage. Bottom: raw 1Y NAV erosion e. The benchmark gate applies only to coverage.' },
                     ].map(col => (
                       <th key={col.key} onClick={() => handleSort(col.key)} title={col.tip || ''} style={{
                         padding: '0.4rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)',
@@ -821,8 +884,12 @@ export default function Analytics() {
                         {pm.down_capture?.toFixed(0) ?? '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }} colSpan={3}></td>
-                      <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? 'var(--p-556)' : portfolioNavColor }}>
-                        {portfolioCoverage != null ? portfolioCoverage.toFixed(2) : '—'}
+                      <td
+                        title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(portfolioRawErosion)}, d ${formatIdentityRate(portfolioDistributionRate)}, r ${formatIdentityRate(portfolioAccountingReturn)}; e = d - r. For e, negative is favorable, zero is flat, and positive is erosion. Higher r is better; higher d is not automatically better.`}
+                        style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? 'var(--p-556)' : portfolioNavColor }}
+                      >
+                        <div>{portfolioCoverage != null ? portfolioCoverage.toFixed(2) : '—'}</div>
+                        <small style={{ color: portfolioRawErosion > 0 ? 'var(--neg)' : 'var(--pos)' }}>e {formatIdentityRate(portfolioRawErosion)}</small>
                       </td>
                     </tr>
                   )}
@@ -868,9 +935,18 @@ export default function Analytics() {
                       {(() => {
                         const cov = tickerCoverage[m.ticker]
                         const severity = tickerCoverageSeverity[m.ticker] || navSeverityFromRatio(cov)
+                        const accounting = tickerNavAccounting[m.ticker] || {}
                         return (
-                          <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? 'var(--p-556)' : navSeverityColor(severity) }}>
-                            {cov != null ? cov.toFixed(2) : '—'}
+                          <td
+                            title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(accounting.raw_nav_erosion_rate)}, d ${formatIdentityRate(accounting.distribution_rate_on_starting_nav)}, r ${formatIdentityRate(accounting.accounting_total_return_rate)}; e = d - r. For e, negative is favorable, zero is flat, and positive is erosion. Higher r is better; higher d is not automatically better.`}
+                            style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? 'var(--p-556)' : navSeverityColor(severity) }}
+                          >
+                            <div>{cov != null ? cov.toFixed(2) : '—'}</div>
+                            {accounting.raw_nav_erosion_rate != null && (
+                              <small style={{ color: accounting.raw_nav_erosion_rate > 0 ? 'var(--neg)' : 'var(--pos)' }}>
+                                e {formatIdentityRate(accounting.raw_nav_erosion_rate)}
+                              </small>
+                            )}
                           </td>
                         )
                       })()}
@@ -1004,9 +1080,9 @@ export default function Analytics() {
                           const covDelta = b.coverage != null && a.coverage != null ? a.coverage - b.coverage : null
                           return (
                             <tr style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
-                              <td title="NAV severity uses the benchmark-adjusted ratio, and is forced High for a 50%+ price decline or a 5%+ ending share deficit." style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem', cursor: 'help' }}>NAV Erosion Ratio ⓘ</td>
-                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(b.coverage), fontWeight: 600 }}>{b.coverage != null ? b.coverage.toFixed(4) : '—'}</td>
-                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(a.coverage), fontWeight: 600 }}>{a.coverage != null ? a.coverage.toFixed(4) : '—'}</td>
+                              <td title="Benchmark-gated yield-funding coverage; lower is better." style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem', cursor: 'help' }}>Yield-Funding Coverage ⓘ</td>
+                              <td title="Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High." style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(b.coverage), fontWeight: 600, cursor: 'help' }}>{b.coverage != null ? b.coverage.toFixed(4) : '—'}</td>
+                              <td title="Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High." style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(a.coverage), fontWeight: 600, cursor: 'help' }}>{a.coverage != null ? a.coverage.toFixed(4) : '—'}</td>
                               <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covDelta == null ? 'var(--text-dim)' : covDelta < -0.01 ? 'var(--pos)' : covDelta > 0.01 ? 'var(--neg)' : 'var(--text-dim)', fontWeight: 600 }}>
                                 {covDelta != null ? (covDelta > 0 ? '+' : '') + covDelta.toFixed(4) : '—'}
                               </td>

@@ -8,6 +8,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 from app import (
+    _nav_benchmark_for_ticker,
     _nav_erosion_numerator,
     _nav_monthly_frame,
     _nav_split_adjust_close_and_divs,
@@ -15,6 +16,11 @@ from app import (
 
 
 class NavErosionBacktesterTest(unittest.TestCase):
+    def test_goldman_premium_income_auto_benchmarks_match_underlying_indexes(self):
+        with patch.object(app_module, "_nav_benchmark_overrides", return_value={}):
+            self.assertEqual(_nav_benchmark_for_ticker("GPIQ"), "QQQ")
+            self.assertEqual(_nav_benchmark_for_ticker("GPIX"), "SPY")
+
     def test_monthly_frame_aligns_new_york_fund_with_utc_crypto(self):
         fund_index = pd.DatetimeIndex(
             ["2026-01-30", "2026-02-27"], tz="America/New_York"
@@ -98,6 +104,12 @@ class NavErosionBacktesterTest(unittest.TestCase):
         self.assertAlmostEqual(summary["cash_taken"], 500.0, places=2)
         self.assertAlmostEqual(summary["ending_wealth"], 8500.0, places=2)
         self.assertAlmostEqual(summary["total_return_pct"], -15.0, places=2)
+        self.assertAlmostEqual(summary["raw_nav_erosion_rate"], 0.20, places=6)
+        self.assertAlmostEqual(summary["distribution_rate_on_starting_nav"], 0.05, places=6)
+        self.assertAlmostEqual(summary["accounting_total_return_rate"], -0.15, places=6)
+        self.assertAlmostEqual(summary["raw_payout_gap_ratio"], 4.0, places=6)
+        self.assertEqual(summary["overall_nav_erosion_score"], 100.0)
+        self.assertEqual(summary["overall_nav_erosion_severity"], "High")
         self.assertGreater(len({row["benchmark_price"] for row in data["rows"]}), 1)
         february = next(row for row in data["rows"] if row["date"] == "Feb 2026")
         self.assertAlmostEqual(february["coverage_ratio"], 5.0, places=4)
@@ -148,6 +160,12 @@ class NavErosionBacktesterTest(unittest.TestCase):
         self.assertAlmostEqual(row["cash_taken"], 500.0, places=2)
         self.assertAlmostEqual(row["ending_wealth"], 8500.0, places=2)
         self.assertAlmostEqual(row["total_return_pct"], -15.0, places=2)
+        self.assertAlmostEqual(row["raw_nav_erosion_rate"], 0.20, places=6)
+        self.assertAlmostEqual(row["distribution_rate_on_starting_nav"], 0.05, places=6)
+        self.assertAlmostEqual(row["accounting_total_return_rate"], -0.15, places=6)
+        self.assertAlmostEqual(row["raw_payout_gap_ratio"], 4.0, places=6)
+        self.assertEqual(row["overall_nav_erosion_score"], 100.0)
+        self.assertEqual(row["overall_nav_erosion_severity"], "High")
 
         # A non-distributing penny-stock-style holding has no cash leg, so its
         # investor total return must equal its price return exactly.
@@ -170,13 +188,66 @@ class NavErosionBacktesterTest(unittest.TestCase):
             no_div_row["total_return_pct"], no_div_row["price_delta_pct"], places=2
         )
 
-    def test_split_adjust_restates_pre_reverse_split_close(self):
+    def test_portfolio_route_uses_adjusted_close_for_benchmark_gate(self):
+        index = pd.DatetimeIndex(
+            ["2026-01-02", "2026-01-30", "2026-02-27"],
+            tz="UTC",
+        )
+        columns = pd.MultiIndex.from_tuples([
+            ("BTCI", "Close"),
+            ("BTCI", "Dividends"),
+            ("BTC-USD", "Close"),
+            ("BTC-USD", "Adj Close"),
+            ("BTC-USD", "Dividends"),
+        ])
+        raw = pd.DataFrame(
+            [
+                [100.0, 0.0, 100.0, 100.0, 0.0],
+                [100.0, 0.0, 99.0, 101.0, 0.0],
+                [90.0, 2.0, 98.0, 102.0, 0.0],
+            ],
+            index=index,
+            columns=columns,
+        )
+
+        with patch.object(app_module, "_chunked_yf_download", return_value=raw):
+            with app_module.app.test_client() as client:
+                response = client.post(
+                    "/api/nav-erosion-portfolio/data",
+                    json={
+                        "start": "2026-01-02",
+                        "end": "2026-02-27",
+                        "rows": [
+                            {"ticker": "BTCI", "amount": 10000, "reinvest_pct": 0}
+                        ],
+                    },
+                )
+
+        row = response.get_json()["results"][0]
+        self.assertEqual(row["confirmed_erosion_months"], 1)
+        self.assertAlmostEqual(row["coverage_ratio"], 5.0, places=4)
+
+    def test_split_adjust_restates_unadjusted_pre_reverse_split_history(self):
         index = pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-12-20", "2024-12-23"])
-        close = pd.Series([400.0, 400.0, 1.0, 1.0], index=index)
-        splits = pd.Series([0.0, 0.0, 0.0025, 0.0], index=index)
-        adj, _divs = _nav_split_adjust_close_and_divs(close, None, splits)
-        self.assertAlmostEqual(float(adj.iloc[0]), 1.0, places=4)
-        self.assertAlmostEqual(float(adj.iloc[-1]), 1.0, places=4)
+        close = pd.Series([4.0, 4.0, 40.0, 40.0], index=index)
+        divs = pd.Series([0.1, 0.1, 1.0, 1.0], index=index)
+        splits = pd.Series([0.0, 0.0, 0.1, 0.0], index=index)
+
+        adj, adj_divs = _nav_split_adjust_close_and_divs(close, divs, splits)
+
+        self.assertEqual(adj.tolist(), [40.0, 40.0, 40.0, 40.0])
+        self.assertEqual(adj_divs.tolist(), [1.0, 1.0, 1.0, 1.0])
+
+    def test_split_adjust_does_not_double_adjust_yahoo_restatement(self):
+        index = pd.DatetimeIndex(["2025-11-28", "2025-12-01", "2025-12-02"])
+        close = pd.Series([40.0, 39.56, 39.80], index=index)
+        divs = pd.Series([0.59, 0.0, 0.0], index=index)
+        splits = pd.Series([0.0, 0.1, 0.0], index=index)
+
+        adj, adj_divs = _nav_split_adjust_close_and_divs(close, divs, splits)
+
+        self.assertEqual(adj.tolist(), close.tolist())
+        self.assertEqual(adj_divs.tolist(), divs.tolist())
 
     def test_portfolio_row_can_override_benchmark(self):
         index = pd.DatetimeIndex(

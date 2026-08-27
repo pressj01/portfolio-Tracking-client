@@ -19,6 +19,9 @@ function fmt$(v) {
 function fmtPct(v) {
   return (v >= 0 ? '+' : '') + parseFloat(v).toFixed(2) + '%'
 }
+function fmtRate(v) {
+  return v == null ? '\u2014' : fmtPct(Number(v) * 100)
+}
 function fmtAbs4(v) {
   return Math.abs(parseFloat(v || 0)).toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
 }
@@ -42,15 +45,32 @@ function navSeverityColor(severity) {
   return severity === 'High' ? '#e05555' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#00c853' : '#666'
 }
 function navSeverityText(severity, portfolio = false) {
-  const scope = portfolio ? 'Portfolio NAV Erosion' : 'NAV Erosion'
-  return severity === 'High' ? `High Benchmark-Adjusted ${scope}` : severity === 'Medium' ? `Moderate Benchmark-Adjusted ${scope}` : `Low Benchmark-Adjusted ${scope}`
+  const scope = portfolio ? 'Portfolio Benchmark-Gated Coverage' : 'Benchmark-Gated Coverage'
+  return severity === 'High' ? `High ${scope}` : severity === 'Medium' ? `Moderate ${scope}` : `Low ${scope}`
 }
 
-function StatTile({ label, value, color, sub }) {
+function overallNavMetrics(rawErosion, distributionRate, coverage, relativeDragPct) {
+  if (rawErosion == null || !Number.isFinite(Number(rawErosion))) return { score: null, severity: null, rawGap: null }
+  const e = Number(rawErosion)
+  const d = Number(distributionRate) || 0
+  if (e <= 0) return { score: 0, severity: 'Low', rawGap: d > 0 ? 0 : null }
+  const rawGap = d > 0 ? e / d : null
+  const components = [Math.max(0, Number(coverage) || 0), e / 0.5, Math.max(0, Number(relativeDragPct) || 0) / 50]
+  if (rawGap != null) components.push(Math.max(0, rawGap))
+  const score = Math.min(100, Math.max(...components) * 100)
+  return { score, severity: score > 75 ? 'High' : score > 25 ? 'Medium' : 'Low', rawGap }
+}
+
+function StatTile({ label, value, color, sub, explanation }) {
   return (
-    <div className="nep-stat-tile">
+    <div
+      className="nep-stat-tile"
+      title={explanation || undefined}
+      aria-label={explanation ? `${label}: ${explanation}` : undefined}
+      style={explanation ? { cursor: 'help' } : undefined}
+    >
       <div className="nep-stat-val" style={{ color }}>{value}</div>
-      <div className="nep-stat-lbl">{label}</div>
+      <div className="nep-stat-lbl">{label}{explanation && <span aria-hidden="true" style={{ marginLeft: 4, opacity: 0.8 }}>ⓘ</span>}</div>
       {sub && <div className="nep-stat-sub">{sub}</div>}
     </div>
   )
@@ -60,7 +80,7 @@ export default function NavErosionPortfolio() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
-  const [startDate, setStartDate] = useState('2015-01-01')
+  const [startDate, setStartDate] = useState('2023-01-01')
   const [endDate, setEndDate] = useState('2025-12-31')
   const [gridRows, setGridRows] = useState([{ ticker: '', amount: '', reinvest_pct: '', benchmark: '' }])
   const [savedList, setSavedList] = useState([])
@@ -313,7 +333,9 @@ export default function NavErosionPortfolio() {
   const colKeys = ['ticker', 'benchmark', 'amount', 'reinvest_pct', 'start_price', 'end_price',
     'price_delta_pct', 'benchmark_return_pct', 'total_dist', 'total_reinvested', 'cash_taken',
     'final_value', 'ending_wealth', 'gain_loss_dollar', 'gain_loss_pct', 'total_return_dollar',
-    'total_return_pct', 'has_erosion', 'confirmed_erosion_months', 'final_deficit', 'coverage_ratio', 'warning']
+    'total_return_pct', 'has_erosion', 'confirmed_erosion_months', 'final_deficit',
+    'raw_nav_erosion_rate', 'distribution_rate_on_starting_nav', 'accounting_total_return_rate',
+    'coverage_ratio', 'warning']
 
   const sortedResults = useMemo(() => {
     if (!results) return []
@@ -343,6 +365,7 @@ export default function NavErosionPortfolio() {
     let totAmount = 0, totDist = 0, totReinv = 0, totCash = 0, totFinal = 0, totWealth = 0, totGL = 0, totTR = 0
     let erosionCount = 0, deficitCount = 0, validCount = 0, errorCount = 0
     let benchmarkReturnWeighted = 0, relativeDragWeighted = 0, returnWeight = 0
+    let rawErosionWeighted = 0, distributionRateWeighted = 0, accountingReturnWeighted = 0, accountingWeight = 0
     let best = null, worst = null
     let confirmedLossDollars = 0, distributionDollars = 0
     results.forEach(r => {
@@ -363,6 +386,13 @@ export default function NavErosionPortfolio() {
         relativeDragWeighted += (r.relative_drag_pct || 0) * (r.amount || 0)
         returnWeight += r.amount || 0
       }
+      if (r.raw_nav_erosion_rate != null) {
+        const weight = r.amount || 0
+        rawErosionWeighted += r.raw_nav_erosion_rate * weight
+        distributionRateWeighted += (r.distribution_rate_on_starting_nav || 0) * weight
+        accountingReturnWeighted += (r.accounting_total_return_rate || 0) * weight
+        accountingWeight += weight
+      }
       confirmedLossDollars += r.confirmed_erosion_dollar || 0
       distributionDollars += r.period_distributions_dollar || 0
       if (best === null || r.total_return_pct > best.total_return_pct) best = r
@@ -373,10 +403,16 @@ export default function NavErosionPortfolio() {
     const aggSeverity = navSeverityFromRatio(aggCoverage)
     const benchmarkReturnPct = returnWeight > 0 ? benchmarkReturnWeighted / returnWeight : null
     const relativeDragPct = returnWeight > 0 ? relativeDragWeighted / returnWeight : null
+    const aggregateRawErosionRate = accountingWeight > 0 ? rawErosionWeighted / accountingWeight : null
+    const aggregateDistributionRate = accountingWeight > 0 ? distributionRateWeighted / accountingWeight : null
+    const aggregateAccountingReturnRate = accountingWeight > 0 ? accountingReturnWeighted / accountingWeight : null
+    const overall = overallNavMetrics(aggregateRawErosionRate, aggregateDistributionRate, aggCoverage, relativeDragPct)
     return {
       totAmount, totDist, totReinv, totCash, totFinal, totWealth, totGL, totTR, totGLPct,
       erosionCount, deficitCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,
       benchmarkReturnPct, relativeDragPct,
+      aggregateRawErosionRate, aggregateDistributionRate, aggregateAccountingReturnRate,
+      overallScore: overall.score, overallSeverity: overall.severity, aggregateRawGap: overall.rawGap,
     }
   }, [results])
 
@@ -384,7 +420,7 @@ export default function NavErosionPortfolio() {
     'Price \u0394%', 'Benchmark Return %', 'Total Distributions', 'Total Reinvested', 'Cash Taken',
     'Ending Shares Value', 'Ending Wealth', 'Gain/Loss $', 'Gain/Loss %', 'Total Return $',
     'Total Return %', 'Confirmed Erosion', 'Months', 'Shares Needed / Extra To Breakeven',
-    'Confirmed Erosion Ratio', 'Note']
+    'Raw e / Status', 'Overall Verdict', 'Dist d', 'Total Return r', 'Confirmed Coverage', 'Note']
 
   return (
     <div className="nep-page">
@@ -397,6 +433,7 @@ export default function NavErosionPortfolio() {
         <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Confirmed Erosion = Yes</span> means at least one
         month had a fund price loss while its mapped underlying benchmark was flat or rising. This isolates
         fund-specific price decay instead of treating a broad market sell-off as NAV erosion.
+        It does not decide whether a fund is a NAV eroder: positive Raw e does that without a benchmark gate.
         <br />
         <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
@@ -424,6 +461,28 @@ export default function NavErosionPortfolio() {
           </section>
 
           <section>
+            <h4>Raw NAV accounting identity</h4>
+            <p>
+              Raw erosion does not use the benchmark. Over the selected window, all three values use the same
+              starting share price: <strong>e = d − r = (NAV₀ − NAVₜ) ÷ NAV₀</strong>. Positive e means the fund
+              is a NAV eroder over the window regardless of benchmark; zero means NAV was flat; negative e means it rose.
+            </p>
+            <p>
+              Distribution rate d is distributions per share ÷ NAV₀. Accounting total return r is
+              (NAVₜ − NAV₀ + distributions per share) ÷ NAV₀. Option-overlay P&amp;L and the holdings&apos; price
+              move are already reflected in the unadjusted share-price path.
+            </p>
+            <ul>
+              <li><strong>NAV₀</strong> — unadjusted share price at the start of the selected window.</li>
+              <li><strong>NAVₜ</strong> — unadjusted share price at the end of the selected window.</li>
+              <li><strong>D</strong> — cash distributions paid per share during the selected window.</li>
+              <li><strong>d</strong> — D ÷ NAV₀.</li>
+              <li><strong>r</strong> — (NAVₜ − NAV₀ + D) ÷ NAV₀.</li>
+              <li><strong>e</strong> — d − r. Positive means NAV fell; zero means flat; negative means NAV rose.</li>
+            </ul>
+          </section>
+
+          <section>
             <h4>NAV Ratio (benchmark-adjusted severity)</h4>
             <p>
               The <strong>Confirmed Erosion Ratio</strong> measures benchmark-confirmed price loss against
@@ -443,8 +502,27 @@ export default function NavErosionPortfolio() {
               </li>
             </ul>
             <p>
-              The <strong>Portfolio NAV Erosion Ratio</strong> tile is total confirmed price-loss dollars divided
-              by total distributions across the holdings that have distributions.
+              The <strong>Portfolio Confirmed Erosion Ratio</strong> tile is total confirmed price-loss dollars divided
+              by total distributions across the holdings that have distributions. This benchmark-gated grade never
+              overrides a positive Raw e / NAV ERODER status.
+            </p>
+          </section>
+
+          <section>
+            <h4>Overall Verdict and NAV Erosion Score</h4>
+            <p>
+              The Overall Verdict is the system&apos;s primary conclusion. Its supporting historical risk score applies
+              to the selected window and is not a forecast probability. It uses the
+              strongest warning rather than averaging severe erosion away. The components are raw NAV decline
+              (a 50% decline maps to 100), raw payout gap e ÷ d, benchmark-gated coverage, and full-window relative
+              drag (50 percentage points maps to 100). The score is zero when raw e is zero or negative.
+            </p>
+            <p className="nep-formula">
+              Score = 100 × min(1, max(raw e ÷ 50%, e ÷ d, confirmed coverage, relative drag ÷ 50 points))
+            </p>
+            <p>
+              0–25 is Low, above 25–75 is Moderate, and above 75 is High. Benchmark-gated coverage remains visible
+              separately so you can see which component produced a different conclusion.
             </p>
           </section>
 
@@ -670,34 +748,71 @@ export default function NavErosionPortfolio() {
           {/* Summary strip */}
           {summary && (
             <div className="nep-summary">
-              <StatTile label="Total Invested" value={fmt$(summary.totAmount)} color="#7ecfff" />
-              <StatTile label="Ending Shares Value" value={fmt$(summary.totFinal)} color="#7ecfff" />
-              <StatTile label="Ending Wealth" value={fmt$(summary.totWealth)} color="#7ecfff" sub="shares value + cash taken" />
-              <StatTile label="Total Gain / Loss" value={fmt$(summary.totGL)} color={summary.totGL >= 0 ? '#00c853' : '#e05555'} />
-              <StatTile label="Portfolio Return" value={fmtPct(summary.totGLPct)} color={summary.totGLPct >= 0 ? '#00c853' : '#e05555'} />
-              <StatTile label="Total Distributions" value={fmt$(summary.totDist)} color="#7ecfff" />
-              <StatTile label="Total Reinvested" value={fmt$(summary.totReinv)} color="#7ecfff" />
-              <StatTile label="Cash Taken" value={fmt$(summary.totCash)} color="#7ecfff" />
+              {summary.overallScore != null && (
+                <div
+                  className="nep-stat-tile"
+                  title="Primary combined verdict for this selected historical window, not a forecast. It uses the strongest warning from raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag."
+                  style={{
+                    border: `3px solid ${navSeverityColor(summary.overallSeverity)}`,
+                    borderRadius: 8,
+                    background: summary.overallSeverity === 'High' ? 'rgba(224,85,85,0.18)' : summary.overallSeverity === 'Medium' ? 'rgba(255,179,0,0.16)' : 'rgba(0,200,83,0.14)',
+                    cursor: 'help',
+                    flex: '1 1 260px',
+                  }}
+                >
+                  <div className="nep-stat-val" style={{ color: navSeverityColor(summary.overallSeverity), fontSize: '1rem', whiteSpace: 'normal' }}>
+                    {`${String(summary.overallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}
+                  </div>
+                  <div className="nep-stat-lbl">Overall Verdict ⓘ</div>
+                  <div className="nep-stat-sub">{`${summary.overallScore.toFixed(1)} / 100 · raw gap ${summary.aggregateRawGap != null ? summary.aggregateRawGap.toFixed(4) : '—'}`}</div>
+                </div>
+              )}
+              <StatTile label="Total Invested" value={fmt$(summary.totAmount)} color="#7ecfff" explanation="Sum of the initial dollar amounts entered for valid rows. It is the starting capital used as the portfolio comparison basis, not a good/bad score." />
+              <StatTile label="Ending Shares Value" value={fmt$(summary.totFinal)} color="#7ecfff" explanation="Market value of all ending shares, including shares bought through reinvestment. Above total invested is favorable for share capital, but this excludes cash taken." />
+              <StatTile label="Ending Wealth" value={fmt$(summary.totWealth)} color="#7ecfff" sub="shares value + cash taken" explanation="Ending shares value plus distributions taken as cash. Compare it with Total Invested: higher is better; above invested capital is a gain and below it is a loss." />
+              <StatTile label="Total Gain / Loss" value={fmt$(summary.totGL)} color={summary.totGL >= 0 ? '#00c853' : '#e05555'} explanation="Capital-only change in ending shares value versus the amount invested. Positive is favorable and negative is a capital loss. Cash taken is excluded." />
+              <StatTile label="Portfolio Return" value={fmtPct(summary.totGLPct)} color={summary.totGLPct >= 0 ? '#00c853' : '#e05555'} explanation="Capital-only percentage change in ending shares value. Positive is favorable, 0% is break-even, and negative is a loss. Use Ending Wealth and Total Return for the distribution-inclusive result." />
+              <StatTile label="Total Distributions" value={fmt$(summary.totDist)} color="#7ecfff" explanation="All distributions generated by the simulated holdings. More cash is not automatically better because high payouts can coexist with NAV erosion." />
+              <StatTile label="Total Reinvested" value={fmt$(summary.totReinv)} color="#7ecfff" explanation="Distribution cash used to buy more shares. This is not a new contribution. Its effect is captured in ending shares value and ending wealth." />
+              <StatTile label="Cash Taken" value={fmt$(summary.totCash)} color="#7ecfff" explanation="Distributions received as cash instead of reinvested. Higher means more spendable cash, but it is not itself a performance score; Ending Wealth includes it." />
+              <StatTile
+                label="Portfolio Raw NAV Erosion (e)"
+                value={fmtRate(summary.aggregateRawErosionRate)}
+                color={summary.aggregateRawErosionRate > 0 ? '#e05555' : '#00c853'}
+                sub={summary.aggregateRawErosionRate > 0 ? 'NAV ERODER — benchmark independent' : summary.aggregateRawErosionRate < 0 ? 'NAV rose — no raw erosion' : 'NAV flat'}
+                explanation="Amount-weighted raw NAV erosion with no benchmark gate. Negative is favorable because NAV rose; 0% is flat; positive is erosion because NAV fell. Positive e means distributions exceeded accounting total return."
+              />
+              <StatTile label="Portfolio Distribution Rate (d)" value={fmtRate(summary.aggregateDistributionRate)} color="#7ecfff" sub="distributions ÷ starting NAV" explanation="Amount-weighted distributions divided by starting NAV. Higher means more cash was paid, but is not automatically better. If d exceeds r, raw e is positive and NAV fell." />
+              <StatTile
+                label="Portfolio Accounting Return (r)"
+                value={fmtRate(summary.aggregateAccountingReturnRate)}
+                color={summary.aggregateAccountingReturnRate < 0 ? '#e05555' : '#00c853'}
+                sub="e = d − r"
+                explanation="Amount-weighted price change plus distributions on starting NAV. Higher is better. For payouts to be covered without NAV loss, r must be at least d, making e zero or negative."
+              />
               <StatTile
                 label="Confirmed Erosion"
                 value={summary.erosionCount + ' of ' + summary.validCount}
                 color={summary.erosionCount > 0 ? '#e05555' : '#00c853'}
                 sub="funds with a qualifying month"
+                explanation="Number of funds with at least one month where the fund fell while its benchmark was flat or rising. Fewer is better, but zero does not prove every fund's raw NAV rose."
               />
               <StatTile
                 label="Ending Price Deficit"
                 value={summary.deficitCount + ' of ' + summary.validCount}
                 color={summary.deficitCount > 0 ? '#e05555' : '#00c853'}
                 sub="informational only"
+                explanation="Number of funds whose ending shares are below the capital-only break-even share count. Fewer is better. Cash taken is excluded, so this is not a total-return verdict."
               />
               <StatTile
                 label="Portfolio Confirmed Erosion Ratio"
                 value={summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                 color={navSeverityColor(summary.aggSeverity)}
                 sub="confirmed loss ÷ distributions"
+                explanation="Total benchmark-confirmed price-loss dollars divided by distributions. Lower is better: 0 is best, 0–0.25 Low, above 0.25–0.75 Moderate, and above 0.75 High."
               />
               {summary.aggCoverage != null && (
-                <div className="nep-stat-tile" style={{
+                <div className="nep-stat-tile" title="Benchmark-gated coverage severity. Low is favorable, Moderate deserves review, and High means qualifying price losses consumed more than 75% of distributions. Raw e remains a separate principal measure." style={{
                   border: `2px solid ${navSeverityColor(summary.aggSeverity)}`,
                   borderRadius: '8px',
                   background: summary.aggSeverity === 'High' ? 'rgba(224,85,85,0.12)' : summary.aggSeverity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(0,200,83,0.12)',
@@ -710,8 +825,9 @@ export default function NavErosionPortfolio() {
                     lineHeight: 1.3,
                     textAlign: 'center',
                     whiteSpace: 'normal',
-                    overflow: 'visible',
-                    textOverflow: 'clip',
+                  overflow: 'visible',
+                  textOverflow: 'clip',
+                  cursor: 'help',
                   }}>
                     {navSeverityText(summary.aggSeverity, true)}
                   </div>
@@ -723,6 +839,7 @@ export default function NavErosionPortfolio() {
                   value={fmtPct(summary.benchmarkReturnPct)}
                   color={summary.benchmarkReturnPct >= 0 ? '#00c853' : '#e05555'}
                   sub="mapped underlying benchmarks"
+                  explanation="Initial-amount-weighted return of each fund's mapped benchmark. Positive means the underlying markets rose and negative means they fell. This is context, not a fund-performance score."
                 />
               )}
               {summary.relativeDragPct != null && (
@@ -731,6 +848,7 @@ export default function NavErosionPortfolio() {
                   value={fmtPct(summary.relativeDragPct)}
                   color={summary.relativeDragPct > 0 ? '#e05555' : '#00c853'}
                   sub="benchmark return − fund price return"
+                  explanation="Initial-amount-weighted benchmark return minus fund price return. Lower is better; 0 means no positive lag, while a larger positive value means more fund underperformance. Distributions are excluded."
                 />
               )}
               {summary.best && (
@@ -739,6 +857,7 @@ export default function NavErosionPortfolio() {
                   value={<span style={{ color: 'var(--pos-strong)', fontWeight: 700 }}>{summary.best.ticker}</span>}
                   color="#00c853"
                   sub={fmtPct(summary.best.total_return_pct || 0)}
+                  explanation="Ticker with the highest distribution-inclusive investor total return in this backtest. Positive is a gain; negative means it was merely the least-bad result."
                 />
               )}
               {summary.worst && (
@@ -747,10 +866,11 @@ export default function NavErosionPortfolio() {
                   value={<span style={{ color: 'var(--neg-3)', fontWeight: 700 }}>{summary.worst.ticker}</span>}
                   color="#e05555"
                   sub={fmtPct(summary.worst.total_return_pct || 0)}
+                  explanation="Ticker with the lowest distribution-inclusive investor total return in this backtest. A negative value is a loss; compare it with the best performer and raw e."
                 />
               )}
               {summary.errorCount > 0 && (
-                <StatTile label="No Data" value={summary.errorCount + ' ticker' + (summary.errorCount > 1 ? 's' : '')} color="#f9a825" sub="check Note column" />
+                <StatTile label="No Data" value={summary.errorCount + ' ticker' + (summary.errorCount > 1 ? 's' : '')} color="#f9a825" sub="check Note column" explanation="Number of requested tickers that could not be calculated. Zero is best. Review the Note column for missing price or benchmark history." />
               )}
             </div>
           )}
@@ -879,7 +999,23 @@ export default function NavErosionPortfolio() {
                       >
                         {fmtAbs4(r.final_deficit)} {gapKind} <span style={{ opacity: 0.8 }}>({fmtAbsPct(gapPct)})</span>
                       </td>
-                      <td style={{ color: r.coverage_ratio == null ? 'var(--p-666)' : navSeverityColor(navSeverity), fontWeight: r.coverage_ratio != null ? 600 : 400 }}>
+                      <td title="Raw e has no benchmark gate. Positive means NAV ERODER regardless of the benchmark; negative means NAV rose; 0% is flat." style={{ color: r.raw_nav_erosion_rate > 0 ? 'var(--neg-3)' : 'var(--pos-strong)', cursor: 'help' }}>
+                        <div>{fmtRate(r.raw_nav_erosion_rate)}</div>
+                        {r.raw_nav_erosion_rate != null && (
+                          <div style={{ fontSize: '0.68rem', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                            {r.raw_nav_erosion_rate > 0 ? 'NAV ERODER' : r.raw_nav_erosion_rate < 0 ? 'NAV ROSE' : 'NAV FLAT'}
+                          </div>
+                        )}
+                      </td>
+                      <td
+                        title={`Overall historical NAV erosion verdict. Strongest of raw decline, raw payout gap e ÷ d (${r.raw_payout_gap_ratio != null ? Number(r.raw_payout_gap_ratio).toFixed(4) : '—'}), benchmark coverage, and relative drag. Low 0–25; Moderate >25–75; High >75.`}
+                        style={{ color: navSeverityColor(r.overall_nav_erosion_severity), fontWeight: 700, cursor: 'help' }}
+                      >
+                        {r.overall_nav_erosion_score != null ? `${String(r.overall_nav_erosion_severity || '').toUpperCase()} RISK (${Number(r.overall_nav_erosion_score).toFixed(1)})` : '—'}
+                      </td>
+                      <td title="Distribution rate d is cash paid divided by starting NAV. Higher means more cash, but is not automatically better when d exceeds r." style={{ cursor: 'help' }}>{fmtRate(r.distribution_rate_on_starting_nav)}</td>
+                      <td title="Accounting return r includes price change and distributions. Higher is better; r at least equal to d means no raw NAV erosion." style={{ color: r.accounting_total_return_rate < 0 ? 'var(--neg-3)' : 'var(--pos-strong)', cursor: 'help' }}>{fmtRate(r.accounting_total_return_rate)}</td>
+                      <td title="Benchmark-confirmed price loss divided by distributions. Lower is better: 0–0.25 Low, above 0.25–0.75 Moderate, above 0.75 High." style={{ color: r.coverage_ratio == null ? 'var(--p-666)' : navSeverityColor(navSeverity), fontWeight: r.coverage_ratio != null ? 600 : 400, cursor: 'help' }}>
                         {r.coverage_ratio != null ? r.coverage_ratio.toFixed(4) : '\u2014'}
                       </td>
                       <td style={{ textAlign: 'left', fontSize: '0.78rem', color: 'var(--p-aaa)' }}>
@@ -908,7 +1044,11 @@ export default function NavErosionPortfolio() {
                     <td></td>
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
                     <td></td><td></td><td></td><td></td>
-                    <td style={{ color: navSeverityColor(summary.aggSeverity), fontWeight: 600 }}>
+                    <td title="Raw e: negative is favorable, zero is flat, and positive is erosion." className={summary.aggregateRawErosionRate > 0 ? 'pct-down' : 'pct-up'} style={{ cursor: 'help' }}>{fmtRate(summary.aggregateRawErosionRate)}</td>
+                    <td title={`Overall historical verdict; raw payout gap e ÷ d is ${summary.aggregateRawGap != null ? summary.aggregateRawGap.toFixed(4) : '—'}.`} style={{ color: navSeverityColor(summary.overallSeverity), fontWeight: 700, cursor: 'help' }}>{summary.overallScore != null ? `${String(summary.overallSeverity).toUpperCase()} RISK (${summary.overallScore.toFixed(1)})` : '—'}</td>
+                    <td title="Distribution rate d: higher cash is not automatically better; compare it with r." style={{ cursor: 'help' }}>{fmtRate(summary.aggregateDistributionRate)}</td>
+                    <td title="Accounting return r: higher is better; r at least equal to d means e is zero or negative." className={summary.aggregateAccountingReturnRate < 0 ? 'pct-down' : 'pct-up'} style={{ cursor: 'help' }}>{fmtRate(summary.aggregateAccountingReturnRate)}</td>
+                    <td title="Confirmed coverage is lower-is-better: 0–0.25 Low, above 0.25–0.75 Moderate, above 0.75 High." style={{ color: navSeverityColor(summary.aggSeverity), fontWeight: 600, cursor: 'help' }}>
                       {summary.aggCoverage != null ? summary.aggCoverage.toFixed(4) : '\u2014'}
                     </td>
                     <td></td>

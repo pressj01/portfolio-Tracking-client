@@ -79,14 +79,25 @@ export function navTrendCard(nav, loading = false) {
   const severity = nav.nav_erosion_severity
   const ratio = num(nav.coverage_ratio)
   const priceChange = num(nav.price_change_pct)
-  const tone = severity === 'High' ? 'bad' : severity === 'Medium' ? 'warn' : severity === 'Low' ? 'good' : 'muted'
+  const rawErosion = num(nav.raw_nav_erosion_rate)
+  const distributionRate = num(nav.distribution_rate_on_starting_nav)
+  const accountingReturn = num(nav.accounting_total_return_rate)
+  const overallScore = num(nav.overall_nav_erosion_score)
+  const overallSeverity = nav.overall_nav_erosion_severity
+  const verdictSeverity = overallSeverity || severity
+  const tone = verdictSeverity === 'High' ? 'bad' : verdictSeverity === 'Medium' ? 'warn' : verdictSeverity === 'Low' ? 'good' : 'muted'
   const parts = []
-  if (severity) parts.push(`${severity} confirmed price erosion`)
+  if (overallScore != null) parts.push(`Overall verdict: ${overallSeverity} NAV erosion risk (${overallScore.toFixed(1)}/100)`)
+  if (severity) parts.push(`${severity} benchmark-gated coverage`)
   if (priceChange != null) parts.push(`1Y price ${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%`)
+  if (rawErosion != null) parts.push(`raw e ${(rawErosion * 100).toFixed(2)}% (${rawErosion > 0 ? 'NAV ERODER' : rawErosion < 0 ? 'NAV rose' : 'NAV flat'})`)
+  if (distributionRate != null && accountingReturn != null) {
+    parts.push(`d ${(distributionRate * 100).toFixed(2)}% − r ${(accountingReturn * 100).toFixed(2)}%`)
+  }
   if (nav.benchmark) parts.push(`vs ${nav.benchmark}`)
   return {
     label: 'NAV trend',
-    value: ratio == null ? (severity || 'n/a') : ratio.toFixed(2),
+    value: overallScore == null ? (ratio == null ? (severity || 'n/a') : ratio.toFixed(2)) : `${overallSeverity} ${overallScore.toFixed(0)}`,
     detail: parts.join(' · ') || 'Benchmark-adjusted NAV coverage for this position.',
     tone,
   }

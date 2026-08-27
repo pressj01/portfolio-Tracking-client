@@ -26,12 +26,17 @@ test('NAV trend uses coverage ratio and severity', () => {
     coverage_ratio: 0.81,
     nav_erosion_severity: 'High',
     price_change_pct: -12.4,
+    raw_nav_erosion_rate: 0.124,
+    distribution_rate_on_starting_nav: 0.20,
+    accounting_total_return_rate: 0.076,
     benchmark: 'SPY',
     nav_tested: true,
   })
   assert.equal(card.tone, 'bad')
   assert.equal(card.value, '0.81')
   assert.match(card.detail, /SPY/)
+  assert.match(card.detail, /raw e 12\.40%/)
+  assert.match(card.detail, /d 20\.00% − r 7\.60%/)
 })
 
 test('distribution coverage prefers earnings cover, then NAV-return gap', () => {

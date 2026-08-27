@@ -22054,7 +22054,12 @@ def _ticker_info_from_holding_rows(rows):
 
 
 def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
-    """Shared benchmark-adjusted NAV erosion payload for dashboard and analytics."""
+    """Shared NAV accounting and benchmark-adjusted coverage payload.
+
+    Coverage remains the income-sustainability screen. The raw accounting
+    fields separately expose e = d - r = (NAV0 - NAVt) / NAV0 over the exact
+    same price/distribution window, without applying the benchmark gate.
+    """
     import yfinance as yf
     from datetime import datetime as _dt, timedelta as _td
 
@@ -22068,6 +22073,9 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     results = []
     total_price_return_dollars = 0.0
     total_dist_dollars = 0.0
+    accounting_start_nav_dollars = 0.0
+    accounting_end_nav_dollars = 0.0
+    accounting_distribution_dollars = 0.0
 
     for tk in tickers:
         info = ticker_info[tk]
@@ -22115,6 +22123,11 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             fund_return = (cur_price - price_1yr_ago) / price_1yr_ago
             divs = yf_tk.dividends
             ttm_dist_yield, ttm_dist_per_share = _nav_distribution_yield_from_history(divs, cur_price, close)
+            accounting = _nav_accounting_rates(
+                price_1yr_ago,
+                cur_price,
+                ttm_dist_per_share,
+            )
             annual_income = max(0.0, float(info.get("annual_income") or 0.0))
             current_value = max(0.0, float(info.get("current_value") or 0.0))
             estimated_annual_yield = annual_income / current_value if current_value > 0 else 0.0
@@ -22160,12 +22173,27 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             numerator = _nav_erosion_numerator(fund_return, benchmark_return)
             coverage = round(numerator / ttm_dist_yield, 4) if ttm_dist_yield > 0 and numerator is not None else None
             price_change_pct = fund_return * 100
+            relative_drag_pct = max(0.0, (benchmark_return - fund_return) * 100.0)
             severity = _nav_erosion_from_adjusted_ratio(coverage, price_change_pct=price_change_pct)
+            overall_erosion = _nav_overall_erosion_metrics(
+                accounting["raw_nav_erosion_rate"],
+                accounting["distribution_rate_on_starting_nav"],
+                coverage,
+                relative_drag_pct,
+            )
 
             results.append({
                 "ticker": tk,
                 "coverage_ratio": coverage,
                 "price_change_pct": round(price_change_pct, 2),
+                "relative_drag_pct": round(relative_drag_pct, 2),
+                **accounting,
+                **overall_erosion,
+                "accounting_start_nav": round(price_1yr_ago, 6),
+                "accounting_end_nav": round(cur_price, 6),
+                "accounting_distributions_per_share": round(ttm_dist_per_share, 6),
+                "accounting_window_start": close.index[0].strftime("%Y-%m-%d"),
+                "accounting_window_end": close.index[-1].strftime("%Y-%m-%d"),
                 "nav_erosion_severity": severity,
                 "benchmark": benchmark,
                 "benchmark_valid": True,
@@ -22173,6 +22201,11 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 "nav_erosion_scope": nav_scope,
                 "nav_benchmark_override": info.get("nav_benchmark_override"),
             })
+
+            if qty > 0:
+                accounting_start_nav_dollars += price_1yr_ago * qty
+                accounting_end_nav_dollars += cur_price * qty
+                accounting_distribution_dollars += ttm_dist_per_share * qty
 
             dist_dollars = ttm_dist_per_share * qty
             if dist_dollars > 0:
@@ -22185,10 +22218,28 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
 
     agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
     aggregate_severity = _nav_aggregate_severity(agg_coverage, results)
+    aggregate_accounting = _nav_accounting_rates(
+        accounting_start_nav_dollars,
+        accounting_end_nav_dollars,
+        accounting_distribution_dollars,
+    )
+    aggregate_overall = _nav_overall_erosion_metrics(
+        aggregate_accounting["raw_nav_erosion_rate"],
+        aggregate_accounting["distribution_rate_on_starting_nav"],
+        agg_coverage,
+    )
     payload = {
         "results": results,
         "aggregate_coverage": agg_coverage,
         "aggregate_severity": aggregate_severity,
+        "aggregate_raw_nav_erosion_rate": aggregate_accounting["raw_nav_erosion_rate"],
+        "aggregate_distribution_rate_on_starting_nav": aggregate_accounting["distribution_rate_on_starting_nav"],
+        "aggregate_accounting_total_return_rate": aggregate_accounting["accounting_total_return_rate"],
+        "aggregate_raw_payout_gap_ratio": aggregate_overall["raw_payout_gap_ratio"],
+        "aggregate_overall_nav_erosion_score": aggregate_overall["overall_nav_erosion_score"],
+        "aggregate_overall_nav_erosion_severity": aggregate_overall["overall_nav_erosion_severity"],
+        "accounting_window": "trailing_1_year",
+        "accounting_scope": "nav_tested_holdings",
     }
     if cache_key and use_cache:
         _PORTFOLIO_COVERAGE_CACHE[cache_key] = (time.time(), payload)
@@ -22221,7 +22272,7 @@ def portfolio_coverage():
     ticker_info = _ticker_info_from_holding_rows(rows)
     coverage_cache_key = (
         pid,
-        "destructive-nav-v14",
+        "destructive-nav-v16-overall-verdict",
         tuple(sorted((
             t,
             ticker_info[t].get("nav_erosion_scope", "auto"),
@@ -22476,7 +22527,7 @@ def _ticker_research_nav_payload(symbol, holding):
     if len(profile_ids) == 1:
         cache_key = (
             profile_ids[0],
-            "ticker-research-nav-v1",
+            "ticker-research-nav-v3-overall-verdict",
             symbol,
             ticker_info[symbol]["nav_erosion_scope"],
             ticker_info[symbol]["nav_benchmark_override"] or "",
@@ -26021,9 +26072,9 @@ def _nav_benchmark_for_ticker(ticker, name="", category=""):
     if override:
         return override
     direct = {
-        "QQQI": "QQQ", "XQQI": "QQQ", "KQQQ": "QQQ", "TDAQ": "QQQ", "TDAX": "QQQ",
+        "QQQI": "QQQ", "GPIQ": "QQQ", "XQQI": "QQQ", "KQQQ": "QQQ", "TDAQ": "QQQ", "TDAX": "QQQ",
         "TQQY": "QQQ", "QDTE": "QQQ", "QYLD": "QQQ", "JEPQ": "QQQ",
-        "SPYI": "SPY", "SPYH": "SPY", "XSPI": "SPY", "TSPY": "SPY",
+        "SPYI": "SPY", "GPIX": "SPY", "SPYH": "SPY", "XSPI": "SPY", "TSPY": "SPY",
         "TSYX": "SPY", "XDTE": "SPY", "DIVO": "SPY", "JEPI": "SPY", "XYLD": "SPY",
         "IWMI": "IWM", "RDTE": "IWM", "RYLD": "IWM",
         "BTCI": "BTC-USD", "BLOX": "BTC-USD",
@@ -26125,11 +26176,11 @@ def _nav_benchmark_parts(benchmark):
 def _nav_split_adjust_close_and_divs(close, dividends=None, splits=None):
     """Restate Close and Dividends in current-share units.
 
-    Yahoo's unadjusted Close keeps pre-reverse-split prints (AITX can show a
-    start price in the millions against a penny end price). NAV erosion needs
-    split-adjusted levels so the share count and percent change are real.
-    Dividends are scaled by the same factor so cash still matches that count.
-    Adj Close is not used here because it also rolls distributions into price.
+    Yahoo normally restates historical Close and Dividends for splits even when
+    ``auto_adjust=False``. Some histories do not arrive restated, though. Detect
+    an actual split-sized discontinuity before changing older observations so a
+    reverse split is never applied twice. Adj Close is not used because it also
+    rolls distributions into price.
     """
     close = pd.to_numeric(pd.Series(close), errors="coerce")
     close = close[close.notna() & (close > 0)]
@@ -26146,11 +26197,32 @@ def _nav_split_adjust_close_and_divs(close, dividends=None, splits=None):
     else:
         splits = pd.to_numeric(pd.Series(splits).reindex(idx), errors="coerce").fillna(0.0)
         splits = splits.where(splits > 0, 0.0)
-    factor = splits.replace(0.0, 1.0)
-    # A split on date T is already in that day's Close. Older closes still
-    # need every later split multiplied through.
-    subsequent = factor.shift(-1).fillna(1.0).iloc[::-1].cumprod().iloc[::-1]
-    return close * subsequent, dividends * subsequent
+    adjustment = pd.Series(1.0, index=idx, dtype=float)
+    for split_date, ratio in splits[splits > 0].items():
+        ratio = float(ratio)
+        if ratio <= 0 or math.isclose(ratio, 1.0, rel_tol=1e-9, abs_tol=1e-12):
+            continue
+        before = close[close.index < split_date]
+        on_or_after = close[close.index >= split_date]
+        if before.empty or on_or_after.empty:
+            continue
+
+        observed_jump = float(on_or_after.iloc[0]) / float(before.iloc[-1])
+        expected_unadjusted_jump = 1.0 / ratio
+        if observed_jump <= 0 or expected_unadjusted_jump <= 0:
+            continue
+
+        # If the observed price transition is closer to the split-sized jump
+        # than to a continuous series, Yahoo did not restate the older data.
+        # Convert those older prices/dividends to current-share units. When the
+        # series is already continuous (the normal Yahoo response), leave it
+        # untouched to avoid ULTY-style false gains after a reverse split.
+        distance_to_split_jump = abs(math.log(observed_jump / expected_unadjusted_jump))
+        distance_to_continuous = abs(math.log(observed_jump))
+        if distance_to_split_jump < distance_to_continuous:
+            adjustment.loc[adjustment.index < split_date] *= expected_unadjusted_jump
+
+    return close * adjustment, dividends * adjustment
 
 
 def _nav_repair_reverse_split_prices(close, adj_close, dividends):
@@ -26468,6 +26540,97 @@ def _nav_erosion_numerator(fund_return, benchmark_return):
     if fund_return >= 0 or benchmark_return < 0:
         return 0.0
     return abs(fund_return)
+
+
+def _nav_accounting_rates(start_nav, end_nav, distributions):
+    """Return the exact per-share NAV accounting identity on one basis.
+
+    e is positive when raw NAV fell, d is distributions divided by starting
+    NAV, and r is the distribution-inclusive total return. No benchmark gate
+    is applied here; that belongs only to the separate coverage calculation.
+    """
+    empty = {
+        "raw_nav_erosion_rate": None,
+        "distribution_rate_on_starting_nav": None,
+        "accounting_total_return_rate": None,
+    }
+    try:
+        start = float(start_nav)
+        end = float(end_nav)
+        paid = float(distributions or 0.0)
+    except (TypeError, ValueError):
+        return empty
+    if start <= 0 or not all(math.isfinite(value) for value in (start, end, paid)):
+        return empty
+
+    distribution_rate = paid / start
+    raw_erosion_rate = (start - end) / start
+    total_return_rate = (end - start + paid) / start
+    return {
+        "raw_nav_erosion_rate": raw_erosion_rate,
+        "distribution_rate_on_starting_nav": distribution_rate,
+        "accounting_total_return_rate": total_return_rate,
+    }
+
+
+def _nav_overall_erosion_metrics(
+    raw_erosion_rate,
+    distribution_rate,
+    benchmark_coverage,
+    relative_drag_pct=0.0,
+):
+    """Combine independent erosion warnings without averaging severe ones away.
+
+    The score is historical for the selected window, not a forecast. Positive
+    raw erosion is required; when NAV did not fall, the overall score is zero.
+    A 50% raw NAV decline or 50-point relative drag maps to 100, while the raw
+    payout gap (e / d) and benchmark-gated coverage retain their natural 0–1
+    scales. The strongest component determines the score.
+    """
+    empty = {
+        "raw_payout_gap_ratio": None,
+        "overall_nav_erosion_score": None,
+        "overall_nav_erosion_severity": None,
+    }
+    try:
+        erosion = float(raw_erosion_rate)
+    except (TypeError, ValueError):
+        return empty
+    if not math.isfinite(erosion):
+        return empty
+
+    try:
+        dist_rate = float(distribution_rate)
+    except (TypeError, ValueError):
+        dist_rate = 0.0
+    try:
+        coverage = float(benchmark_coverage)
+    except (TypeError, ValueError):
+        coverage = 0.0
+    try:
+        drag_pct = float(relative_drag_pct)
+    except (TypeError, ValueError):
+        drag_pct = 0.0
+
+    if erosion <= 0:
+        raw_gap = 0.0 if dist_rate > 0 else None
+        return {
+            "raw_payout_gap_ratio": raw_gap,
+            "overall_nav_erosion_score": 0.0,
+            "overall_nav_erosion_severity": "Low",
+        }
+
+    raw_gap = erosion / dist_rate if dist_rate > 0 else None
+    components = [max(0.0, coverage), erosion / 0.50, max(0.0, drag_pct) / 50.0]
+    if raw_gap is not None:
+        components.append(max(0.0, raw_gap))
+    score = round(min(1.0, max(components)) * 100.0, 1)
+    severity = "Low" if score <= 25 else "Medium" if score <= 75 else "High"
+    return {
+        "raw_payout_gap_ratio": raw_gap,
+        "overall_nav_erosion_score": score,
+        "overall_nav_erosion_severity": severity,
+    }
 
 
 def _nav_distribution_yield_from_history(divs_series, current_price, close_series=None):
@@ -38358,6 +38521,7 @@ def nav_erosion_data():
                 round(erosion_per_share / div_per_share, 4)
                 if div_per_share > 0 and numerator is not None else None
             )
+            monthly_accounting = _nav_accounting_rates(prev_price, price, div_per_share)
             prev_price = price
             prev_benchmark_price = benchmark_price
 
@@ -38382,6 +38546,7 @@ def nav_erosion_data():
                 "breakeven_sh": round(breakeven_sh, 4),
                 "shares_deficit": round(shares_deficit, 4),
                 "coverage_ratio": coverage_ratio,
+                **monthly_accounting,
             })
 
         final_row = rows[-1]
@@ -38398,6 +38563,11 @@ def nav_erosion_data():
             round(confirmed_erosion_per_share / cumulative_divs_per_share, 4)
             if cumulative_divs_per_share > 0 else None
         )
+        accounting = _nav_accounting_rates(
+            initial_price,
+            final_row["price"],
+            cumulative_divs_per_share,
+        )
         deficit_pct = (
             final_row["shares_deficit"] / final_row["breakeven_sh"] * 100
             if final_row.get("breakeven_sh", 0) and final_row["shares_deficit"] > 0
@@ -38411,6 +38581,12 @@ def nav_erosion_data():
         price_change_pct = fund_return * 100.0
         benchmark_return_pct = benchmark_return * 100.0
         relative_drag_pct = max(0.0, benchmark_return_pct - price_change_pct)
+        overall_erosion = _nav_overall_erosion_metrics(
+            accounting["raw_nav_erosion_rate"],
+            accounting["distribution_rate_on_starting_nav"],
+            total_coverage,
+            relative_drag_pct,
+        )
         summary = {
             "benchmark": benchmark,
             "benchmark_valid": True,
@@ -38434,6 +38610,11 @@ def nav_erosion_data():
             "final_deficit": final_row["shares_deficit"],
             "final_deficit_pct": round(deficit_pct, 2),
             "total_coverage": total_coverage,
+            **accounting,
+            **overall_erosion,
+            "accounting_start_nav": round(initial_price, 6),
+            "accounting_end_nav": round(final_row["price"], 6),
+            "accounting_distributions_per_share": round(cumulative_divs_per_share, 6),
             "nav_erosion_severity": total_severity,
         }
 
@@ -38900,6 +39081,7 @@ def nav_erosion_portfolio_data():
         return jsonify(error=f"Failed to fetch data: {str(e)}")
 
     ohlc_cache = {}
+    benchmark_close_cache = {}
 
     def get_ticker_df(sym):
         if sym in ohlc_cache:
@@ -38907,6 +39089,38 @@ def nav_erosion_portfolio_data():
         close, divs = _nav_resolve_ohlc(raw, sym, start_date, (requested_end + _td(days=1)).isoformat())
         ohlc_cache[sym] = (close, divs)
         return close, divs
+
+    def get_benchmark_close(sym):
+        """Match the single-fund tester's dividend-adjusted benchmark series."""
+        if sym in benchmark_close_cache:
+            return benchmark_close_cache[sym]
+        adjusted = _nav_pick_frame_column(raw, sym, "Adj Close")
+        if adjusted is not None:
+            adjusted = pd.to_numeric(pd.Series(adjusted), errors="coerce")
+            adjusted = adjusted[adjusted.notna() & (adjusted > 0)]
+        if (adjusted is None or adjusted.empty) and _nav_pick_frame_column(raw, sym, "Close") is not None:
+            # Synthetic/legacy downloads may not include Adj Close. Preserve
+            # their available Close series instead of making another request.
+            adjusted, _ = get_ticker_df(sym)
+        if adjusted is None or adjusted.empty:
+            try:
+                bench_hist = yf.Ticker(sym).history(
+                    start=start_date,
+                    end=(requested_end + _td(days=1)).isoformat(),
+                    interval="1d",
+                    auto_adjust=True,
+                )
+                adjusted = (
+                    pd.to_numeric(bench_hist["Close"], errors="coerce").dropna()
+                    if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns
+                    else None
+                )
+            except Exception:
+                adjusted = None
+        if adjusted is None or adjusted.empty:
+            adjusted, _ = get_ticker_df(sym)
+        benchmark_close_cache[sym] = adjusted
+        return adjusted
 
     results = []
     for r in validated:
@@ -38927,7 +39141,7 @@ def nav_erosion_portfolio_data():
 
         benchmark_parts = []
         for part in _nav_benchmark_parts(benchmark):
-            part_close, _ = get_ticker_df(part)
+            part_close = get_benchmark_close(part)
             if part_close is not None and not part_close.dropna().empty:
                 benchmark_parts.append(part_close.dropna().rename(part))
 
@@ -39080,8 +39294,20 @@ def nav_erosion_portfolio_data():
             round(confirmed_erosion_per_share / cumul_divs_per_share, 4)
             if cumul_divs_per_share > 0 else None
         )
+        accounting = _nav_accounting_rates(
+            initial_price,
+            final_price,
+            cumul_divs_per_share,
+        )
         deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
         nav_erosion_severity = _nav_erosion_from_adjusted_ratio(coverage_ratio)
+        relative_drag_pct = max(0.0, benchmark_return * 100.0 - price_delta_pct)
+        overall_erosion = _nav_overall_erosion_metrics(
+            accounting["raw_nav_erosion_rate"],
+            accounting["distribution_rate_on_starting_nav"],
+            coverage_ratio,
+            relative_drag_pct,
+        )
         starting_shares = amount / initial_price
         confirmed_erosion_dollar = confirmed_erosion_per_share * starting_shares
         period_distributions_dollar = cumul_divs_per_share * starting_shares
@@ -39104,7 +39330,7 @@ def nav_erosion_portfolio_data():
             "cash_taken": round(cash_taken, 2),
             "ending_wealth": round(portfolio_val + cash_taken, 2),
             "benchmark_return_pct": round(benchmark_return * 100.0, 2),
-            "relative_drag_pct": round(max(0.0, benchmark_return * 100.0 - price_delta_pct), 2),
+            "relative_drag_pct": round(relative_drag_pct, 2),
             "has_erosion": confirmed_erosion_months > 0,
             "confirmed_erosion_months": confirmed_erosion_months,
             "confirmed_erosion_per_share": round(confirmed_erosion_per_share, 4),
@@ -39114,6 +39340,11 @@ def nav_erosion_portfolio_data():
             "final_deficit": round(final_deficit, 4),
             "final_deficit_pct": round(deficit_pct, 2),
             "coverage_ratio": coverage_ratio,
+            **accounting,
+            **overall_erosion,
+            "accounting_start_nav": round(initial_price, 6),
+            "accounting_end_nav": round(final_price, 6),
+            "accounting_distributions_per_share": round(cumul_divs_per_share, 6),
             "nav_erosion_severity": nav_erosion_severity,
             "warning": warning,
             "error": None,
@@ -40995,6 +41226,11 @@ def analytics_data():
                   "results": cov_results,
                   "aggregate_coverage": coverage_payload.get("aggregate_coverage"),
                   "aggregate_severity": coverage_payload.get("aggregate_severity"),
+                  "aggregate_raw_nav_erosion_rate": coverage_payload.get("aggregate_raw_nav_erosion_rate"),
+                  "aggregate_distribution_rate_on_starting_nav": coverage_payload.get("aggregate_distribution_rate_on_starting_nav"),
+                  "aggregate_accounting_total_return_rate": coverage_payload.get("aggregate_accounting_total_return_rate"),
+                  "accounting_window": coverage_payload.get("accounting_window"),
+                  "accounting_scope": coverage_payload.get("accounting_scope"),
               },
               "window_too_short": window_too_short,
               "min_observations": min_obs,
