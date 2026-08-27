@@ -216,5 +216,159 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         self.assertEqual(list(series.values), [9.0, 8.0, 7.0])
 
 
+class RateLimitedTickerRecoveryTest(unittest.TestCase):
+    """A symbol Yahoo rate-limits comes back as an all-NaN column, not a missing one.
+
+    That is the shape of the outage that made most of a portfolio grade "N/A":
+    the recovery pass only re-fetched symbols whose column was absent, so the
+    NaN-filled ones were never retried, and the resulting N/A grades were then
+    cached for the full TTL.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE all_account_info (
+                ticker TEXT, profile_id INTEGER, quantity REAL,
+                current_value REAL, purchase_date TEXT, import_date TEXT
+            );
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY, ticker TEXT, profile_id INTEGER,
+                transaction_type TEXT, transaction_date TEXT, shares REAL,
+                price_per_share REAL, fees REAL
+            );
+            INSERT INTO all_account_info VALUES ('AAA', 6, 10, 1200, '2024-01-02', NULL);
+            INSERT INTO all_account_info VALUES ('BBB', 6, 20, 1800, '2024-01-02', NULL);
+            INSERT INTO all_account_info VALUES ('CCC', 6, 30, 2400, '2024-01-02', NULL);
+            INSERT INTO transactions VALUES (1, 'AAA', 6, 'BUY', '2024-01-02', 10, 100, 0);
+            INSERT INTO transactions VALUES (2, 'BBB', 6, 'BUY', '2024-01-02', 20, 80, 0);
+            INSERT INTO transactions VALUES (3, 'CCC', 6, 'BUY', '2024-01-02', 30, 60, 0);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        dates = pd.bdate_range("2024-01-02", periods=60)
+        step = np.arange(len(dates), dtype=float)
+        self.close = pd.DataFrame(
+            {
+                "AAA": 100 + step * 0.7 + np.sin(step / 2),
+                "BBB": 80 + step * 0.35 + np.cos(step / 3),
+                "CCC": 60 + step * 0.5 + np.sin(step / 5),
+                "SPY": 475 + step * 0.9 + np.sin(step / 4),
+                "QQQ": 405 + step * 1.1 + np.cos(step / 5),
+            },
+            index=dates,
+        )
+        # The failure signature: the batch prices everything except CCC, whose
+        # column is present but NaN end to end.
+        self.rate_limited = self.close.copy()
+        self.rate_limited["CCC"] = np.nan
+
+        self.batch_calls = []
+        self.single_calls = []
+        self.refetch_succeeds = True
+
+        self.orig_connection = app_module.get_connection
+        self.orig_download = app_module._chunked_yf_download
+        self.orig_testing = app_module.app.testing
+        self.orig_initialized = getattr(app_module.app, "_db_initialized", False)
+        app_module.get_connection = self._get_connection
+        app_module._chunked_yf_download = self._download
+        app_module.app.testing = True
+        app_module.app._db_initialized = True
+        app_module._PORTFOLIO_SUMMARY_CACHE.clear()
+        app_module._ticker_info_cache.clear()
+        self.client = app_module.app.test_client()
+
+    def tearDown(self):
+        app_module.get_connection = self.orig_connection
+        app_module._chunked_yf_download = self.orig_download
+        app_module.app.testing = self.orig_testing
+        app_module.app._db_initialized = self.orig_initialized
+        app_module._PORTFOLIO_SUMMARY_CACHE.clear()
+        app_module._ticker_info_cache.clear()
+        Path(self.db_path).unlink(missing_ok=True)
+
+    def _get_connection(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _frame(self, close):
+        zeros = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+        return pd.concat({"Close": close, "Adj Close": close, "Dividends": zeros}, axis=1)
+
+    def _download(self, tickers, **kwargs):
+        symbols = tickers.split() if isinstance(tickers, str) else list(tickers)
+        if len(symbols) > 1:
+            self.batch_calls.append(symbols)
+            return self._frame(self.rate_limited.copy())
+        self.single_calls.append(symbols[0])
+        if symbols[0] == "CCC" and not self.refetch_succeeds:
+            return pd.DataFrame()
+        return self._frame(self.close[[symbols[0]]].copy())
+
+    @patch("yfinance.Ticker")
+    def test_nan_filled_column_is_refetched_and_graded(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        self.assertIn("CCC", self.single_calls, "the NaN column was never re-fetched")
+        self.assertNotEqual(payload["ticker_grades"]["CCC"]["grade"], "N/A", payload)
+        self.assertIsNotNone(payload["ticker_risk"]["CCC"]["beta"])
+        self.assertEqual(payload["unpriced_tickers"], [])
+
+    @patch("yfinance.Ticker")
+    def test_unrecoverable_ticker_is_reported_and_not_cached(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.refetch_succeeds = False
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        # The other two holdings still grade, so the portfolio grade computes —
+        # which is exactly the case the old cache guard let through.
+        self.assertTrue(payload["portfolio_grade"].get("overall"), payload)
+        self.assertEqual(payload["unpriced_tickers"], ["CCC"])
+        self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 0)
+
+        # A second load must actually retry rather than replay the blank grade.
+        self.batch_calls.clear()
+        self.refetch_succeeds = True
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        self.assertTrue(self.batch_calls, "the partial result was served from cache")
+        self.assertNotEqual(payload["ticker_grades"]["CCC"]["grade"], "N/A", payload)
+
+    @patch("yfinance.Ticker")
+    def test_feed_wide_outage_does_not_retry_symbol_by_symbol(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        # Yahoo throttled the whole account: every column comes back NaN.
+        self.rate_limited = self.close.copy()
+        self.rate_limited[:] = np.nan
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        self.assertEqual(
+            self.single_calls, [],
+            "a feed-wide outage must not fan out into one request per holding",
+        )
+        self.assertEqual(sorted(payload["unpriced_tickers"]), ["AAA", "BBB", "CCC"])
+        self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -755,6 +755,10 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
   const [gradeStatus, setGradeStatus] = useState(null)
+  // Tickers the last grade run could not price at all. Kept apart from the
+  // grades themselves so an outage is never written into the long-lived
+  // Dashboard cache as if 'N/A' were this window's verdict.
+  const [gradeUnpriced, setGradeUnpriced] = useState([])
   const [tickerGrades, setTickerGrades] = useState({})
   const [tickerRisk, setTickerRisk] = useState({})
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
@@ -1190,6 +1194,7 @@ export default function Dashboard() {
       gradeFetchInFlightRef.current = false
       setTickerRiskLoading(false)
       setGradeStatus(null)
+      setGradeUnpriced([])
       setPortfolioGrade({})
       setTickerGrades({})
       setTickerRisk({})
@@ -1231,12 +1236,24 @@ export default function Dashboard() {
         setTickerGrades(g.ticker_grades || {})
         setTickerRisk(g.ticker_risk || {})
         setTickerClosureRisk(g.ticker_closure_risk || {})
+        const unpriced = Array.isArray(g.unpriced_tickers) ? g.unpriced_tickers : []
+        setGradeUnpriced(unpriced)
         if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) {
           setPortfolioGrade(g.portfolio_grade)
         }
         setGradeResultKey(selectedGradeDataKey)
-        setGradeStatus('Grades loaded.')
-        setTimeout(() => { if (active) setGradeStatus(null) }, 3000)
+        if (unpriced.length) {
+          // Say the quote feed came up empty for these. Left unsaid, a rate-limited
+          // symbol looks exactly like a holding we judged ungradeable.
+          setGradeStatus(
+            `No price data returned for ${unpriced.slice(0, 6).join(', ')}`
+            + `${unpriced.length > 6 ? ` +${unpriced.length - 6} more` : ''}`
+            + ' - their grades will fill in on the next refresh.'
+          )
+        } else {
+          setGradeStatus('Grades loaded.')
+          setTimeout(() => { if (active) setGradeStatus(null) }, 3000)
+        }
       })
       .catch(error => {
         if (!active || error?.name === 'AbortError' || controller.signal.aborted) return
@@ -1273,10 +1290,14 @@ export default function Dashboard() {
     // this window's result has not landed yet. Writing {} here used to wipe a
     // finished grade the moment someone clicked 6M, so the next Dashboard
     // visit showed blank ratio cards until a slow refetch completed.
+    // Never persist a run that failed to price part of the portfolio: those
+    // rows carry "N/A" only because the quote feed was down, and caching them
+    // makes the blank grades outlive the outage.
     const canStoreGrades = (
       gradePeriod === '1y'
       && gradeResultsAreCurrent
       && Boolean(activePortfolioGrade.overall)
+      && gradeUnpriced.length === 0
     )
     writeDashboardCache(dashboardCacheKey, {
       incomeSummary,
@@ -1310,6 +1331,7 @@ export default function Dashboard() {
     activePortfolioGrade,
     gradeResultsAreCurrent,
     gradePeriod,
+    gradeUnpriced,
     portfolioCoverage,
     portfolioCoverageSeverity,
     portfolioNavAccounting,

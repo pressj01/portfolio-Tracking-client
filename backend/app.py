@@ -22071,6 +22071,53 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
 
     one_year_ago = (_dt.now() - _td(days=365)).strftime("%Y-%m-%d")
     results = []
+    # Tickers whose price history Yahoo did not return on this pass. A blank
+    # NAV score for one of these means the quote feed was down, not that the
+    # holding is exempt from the test — and, critically, a payload containing
+    # any of them must not be cached, or the outage outlives itself by the full
+    # TTL. That is what pinned "--" on every NAV cell: one rate-limited run
+    # cached 53 nulls and every later load was served from it in 70ms.
+    unpriced = []
+
+    def _price_outage(tk, nav_scope, info, benchmark=None, warning=None):
+        unpriced.append(tk)
+        row = {
+            "ticker": tk,
+            "coverage_ratio": None,
+            "benchmark": benchmark,
+            "nav_tested": False,
+            "price_data_unavailable": True,
+            "nav_erosion_scope": nav_scope,
+            "nav_benchmark_override": info.get("nav_benchmark_override"),
+        }
+        if benchmark is not None:
+            row["benchmark_valid"] = False
+        if warning:
+            row["warning"] = warning
+        return row
+
+    # One download per distinct benchmark, not one per holding that uses it.
+    # Twelve SPY-benchmarked funds used to pull SPY twelve times; across a
+    # 50-holding portfolio that is well over a hundred un-batched requests per
+    # refresh, which is what provokes the Yahoo throttling that blanks this
+    # whole screen. Fetching the full window once and letting the inner join in
+    # _nav_align_series trim it to each fund's dates gives identical numbers.
+    benchmark_history = {}
+
+    def _benchmark_close(bench):
+        if bench not in benchmark_history:
+            series = None
+            try:
+                hist = yf.Ticker(bench).history(
+                    start=one_year_ago, interval="1d", auto_adjust=True
+                )
+                if hist is not None and not hist.empty and "Close" in hist.columns:
+                    cleaned = hist["Close"].dropna()
+                    series = cleaned if not cleaned.empty else None
+            except Exception:
+                series = None
+            benchmark_history[bench] = series
+        return benchmark_history[bench]
     total_price_return_dollars = 0.0
     total_dist_dollars = 0.0
     accounting_start_nav_dollars = 0.0
@@ -22107,12 +22154,12 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             yf_tk = yf.Ticker(tk)
             hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=False, actions=True)
             if hist.empty or len(hist) < 2:
-                results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
+                results.append(_price_outage(tk, nav_scope, info))
                 continue
 
             close = hist["Close"].dropna()
             if len(close) < 2:
-                results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
+                results.append(_price_outage(tk, nav_scope, info))
                 continue
             price_1yr_ago = float(close.iloc[0])
             cur_price = float(close.iloc[-1])
@@ -22144,9 +22191,8 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             component_returns = []
             try:
                 for bench in _nav_benchmark_parts(benchmark):
-                    bench_hist = yf.Ticker(bench).history(start=close.index[0], interval="1d", auto_adjust=True)
-                    if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
-                        bench_close = bench_hist["Close"].dropna()
+                    bench_close = _benchmark_close(bench)
+                    if bench_close is not None:
                         aligned = _nav_align_series(close.rename("fund"), bench_close.rename("benchmark"))
                         if len(aligned) >= 2:
                             bench_start = float(aligned["benchmark"].iloc[0])
@@ -22157,17 +22203,22 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                     benchmark_return = sum(component_returns)
             except Exception:
                 pass
-            if benchmark_override and not component_returns:
-                results.append({
-                    "ticker": tk,
-                    "coverage_ratio": None,
-                    "benchmark": benchmark,
-                    "benchmark_valid": False,
-                    "nav_tested": False,
-                    "nav_erosion_scope": nav_scope,
-                    "nav_benchmark_override": info.get("nav_benchmark_override"),
-                    "warning": "Benchmark override did not return price history",
-                })
+            # No benchmark priced. `benchmark_return` is still seeded with the
+            # fund's own return, and gating a fund against itself always yields
+            # a 0.0 coverage ratio — i.e. a confident "Low NAV erosion" verdict
+            # for a fund that may have dropped hard. An unavailable benchmark
+            # means untested, never reassuring, so bail the same way for an auto
+            # pick as for an explicit override.
+            if not component_returns:
+                results.append(_price_outage(
+                    tk, nav_scope, info,
+                    benchmark=benchmark,
+                    warning=(
+                        "Benchmark override did not return price history"
+                        if benchmark_override
+                        else f"{benchmark} did not return price history"
+                    ),
+                ))
                 continue
 
             numerator = _nav_erosion_numerator(fund_return, benchmark_return)
@@ -22214,7 +22265,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 total_price_return_dollars += erosion_dollars
 
         except Exception:
-            results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
+            results.append(_price_outage(tk, nav_scope, info))
 
     agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
     aggregate_severity = _nav_aggregate_severity(agg_coverage, results)
@@ -22240,8 +22291,9 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
         "aggregate_overall_nav_erosion_severity": aggregate_overall["overall_nav_erosion_severity"],
         "accounting_window": "trailing_1_year",
         "accounting_scope": "nav_tested_holdings",
+        "unpriced_tickers": unpriced,
     }
-    if cache_key and use_cache:
+    if cache_key and use_cache and not unpriced:
         _PORTFOLIO_COVERAGE_CACHE[cache_key] = (time.time(), payload)
     return payload
 
@@ -23044,11 +23096,11 @@ def portfolio_summary_data():
         if raw.empty:
             if cached:
                 return jsonify(cached)
-            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk)
+            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers)
     except Exception as e:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, warning=str(e))
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers, warning=str(e))
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all") if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
@@ -23060,7 +23112,7 @@ def portfolio_summary_data():
     if close.empty:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={})
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, unpriced_tickers=tickers)
 
     # Map renamed ticker columns back to original names
     for old_t, new_t in rename_map.items():
@@ -23170,7 +23222,39 @@ def portfolio_summary_data():
     # beta/delta row — which then gets cached for the full TTL even though the
     # rest of the portfolio graded fine. Re-fetch just the missing symbols
     # individually (rare, so cheap) and recompute before we build the response.
-    missing = [t for t in tickers if t not in close.columns]
+    #
+    # "Dropped" is NOT the same as "column absent". When Yahoo rate-limits part
+    # of a batch, yfinance still emits a column for every requested symbol and
+    # fills the failed ones with NaN end to end. Keying this pass on
+    # `t not in close.columns` therefore never fired for the failure mode that
+    # actually happens, so a rate-limited symbol graded "N/A" and that N/A was
+    # cached for the full TTL. Treat a column with no usable observations as
+    # missing too. An all-NaN column is unambiguously a failed download — a
+    # genuinely young fund returns a short series, not an empty one — so this
+    # does not re-download brand-new listings on every load.
+    def _has_no_prices(t):
+        if t not in close.columns:
+            return True
+        try:
+            return int(close[t].notna().sum()) == 0
+        except Exception:
+            return True
+
+    #
+    # Bound the retry, though. This pass exists for the *occasional* dropped
+    # symbol; when Yahoo throttles the account, the whole batch comes back NaN,
+    # and firing one request per holding (plus an .info lookup each in the
+    # rename pass below) turns a single throttled call into dozens — slower for
+    # the user and more likely to extend the throttle. If most of the portfolio
+    # failed, or the benchmark itself failed, it is a feed-wide outage: report
+    # it and let the next load retry, rather than retrying symbol by symbol.
+    unpriced_after_batch = [t for t in tickers if _has_no_prices(t)]
+    feed_wide_outage = bool(unpriced_after_batch) and (
+        bench_close is None
+        or len(unpriced_after_batch) > max(1, len(tickers) // 2)
+    )
+
+    missing = [] if feed_wide_outage else list(unpriced_after_batch)
     for t in missing:
         try:
             r = _chunked_yf_download(
@@ -23192,7 +23276,7 @@ def portfolio_summary_data():
     # Renames are the remaining miss: history under the old ticker is empty, but
     # Yahoo's listed symbol still prices. Only those leftover names pay for an
     # .info lookup — not the whole portfolio.
-    still_missing = [t for t in tickers if t not in close.columns]
+    still_missing = [] if feed_wide_outage else [t for t in tickers if _has_no_prices(t)]
     for t in still_missing:
         try:
             new_t, listed_info = _yahoo_listed_symbol(t)
@@ -23222,6 +23306,11 @@ def portfolio_summary_data():
         except Exception:
             continue
 
+    # Tickers Yahoo never priced, after every recovery pass. Their "N/A" is a
+    # download outage, not a verdict on the holding, so it must neither be
+    # reported as a fresh grade nor cached over a good one.
+    unpriced = [t for t in tickers if _has_no_prices(t)]
+
     # Safety net: if a ticker still came back blank (re-fetch also failed, or it
     # genuinely lacks enough history right now), reuse the last cached good beta
     # row rather than reverting a previously-computed value to "—". Market betas
@@ -23233,6 +23322,16 @@ def portfolio_summary_data():
                 prev = cached_risk.get(t)
                 if prev and prev.get("beta") is not None:
                     ticker_risk[t] = prev
+        # Same net for the letter grade. The cache key pins the profile set AND
+        # the window, so a cached grade was computed over exactly this period —
+        # reusing it is as safe as reusing the beta above. Only applied to
+        # symbols that failed to download; a ticker that priced fine and simply
+        # lacks the observations to grade keeps its honest "N/A".
+        cached_grades = cached.get("ticker_grades", {}) or {}
+        for t in unpriced:
+            prev = cached_grades.get(t)
+            if prev and prev.get("grade") and prev.get("grade") != "N/A":
+                ticker_grades[t] = prev
 
     import numpy as np
     portfolio_grade_info = {}
@@ -23330,6 +23429,10 @@ def portfolio_summary_data():
         "window_observations": window_observations,
         "min_observations": min_obs,
         "window_too_short": window_too_short,
+        # Symbols Yahoo returned no prices for at all. Their "N/A" says the quote
+        # feed was down for them, not that the holding is ungradeable, so the UI
+        # can say which it is instead of letting the two look identical.
+        "unpriced_tickers": unpriced,
     }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
@@ -23341,8 +23444,13 @@ def portfolio_summary_data():
     # re-download on every load. A window too short to carry the ratios is cached
     # for the same reason — that verdict is a property of the window, not a
     # transient download failure, so re-downloading on every click buys nothing.
+    # A per-ticker outage counts as partial too. The portfolio grade only needs
+    # two priceable holdings, so a run where Yahoo rate-limited most of the
+    # portfolio still produced a grade and benchmark betas — and the old guard
+    # happily cached it, pinning "N/A" on every rate-limited holding for the
+    # full 30 minutes. Let the next load retry those symbols instead.
     cacheable = (
-        (portfolio_grade_info and benchmark_betas_present)
+        (portfolio_grade_info and benchmark_betas_present and not unpriced)
         or window_too_short
         or len(tickers) < 2
     )

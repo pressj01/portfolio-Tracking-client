@@ -332,15 +332,21 @@ function NavCell({ row }) {
   const coverage = row.navCoverage
   const invalid = Boolean(row.navBenchmark && meta.benchmark_valid === false)
   const severity = meta.nav_erosion_severity
+  const priceOutage = Boolean(meta.price_data_unavailable)
   const coverageTitle = scope === 'skip'
     ? 'Skipped by user override'
-    : invalid
-      ? `${row.navBenchmark} is not returning benchmark price history`
-      : scope === 'test'
-        ? `Forced NAV test${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
-        : meta.nav_tested
-          ? `Auto-tested${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
-          : 'Auto: not tested by current NAV erosion rules'
+    : priceOutage
+      // Without this the cell reads exactly like a holding the rules exempt,
+      // and a quote-feed outage looks like a deliberate decision not to test.
+      ? (meta.warning
+        || 'No price history returned for this ticker right now - retry after the next refresh')
+      : invalid
+        ? `${row.navBenchmark} is not returning benchmark price history`
+        : scope === 'test'
+            ? `Forced NAV test${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
+            : meta.nav_tested
+              ? `Auto-tested${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
+              : 'Auto: not tested by current NAV erosion rules'
   const identityAvailable = meta.raw_nav_erosion_rate != null
   const overallScore = meta.overall_nav_erosion_score
   const overallSeverity = meta.overall_nav_erosion_severity
@@ -357,9 +363,13 @@ function NavCell({ row }) {
     ? 'var(--neg)'
     : severity === 'Medium'
       ? 'var(--warning-money)'
-      : coverage == null
-        ? 'var(--text-dim)'
-        : 'var(--pos)'
+      // An outage dash is tinted so it does not read as a dim "nothing to see
+      // here" next to the holdings the rules genuinely exempt.
+      : priceOutage
+        ? 'var(--warning-money)'
+        : coverage == null
+          ? 'var(--text-dim)'
+          : 'var(--pos)'
   return (
     <div className="ci-nav-cell" title={title}>
       <div className="ci-nav-row">
@@ -1005,6 +1015,8 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
             nav_erosion_scope: row.nav_erosion_scope || 'auto',
             nav_benchmark_override: row.nav_benchmark_override || '',
             nav_erosion_severity: row.nav_erosion_severity || null,
+            price_data_unavailable: !!row.price_data_unavailable,
+            warning: row.warning || null,
             raw_nav_erosion_rate: row.raw_nav_erosion_rate,
             distribution_rate_on_starting_nav: row.distribution_rate_on_starting_nav,
             accounting_total_return_rate: row.accounting_total_return_rate,
