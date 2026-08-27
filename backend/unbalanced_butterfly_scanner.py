@@ -26,7 +26,7 @@ import re
 import yfinance as yf
 from flask import jsonify, request
 
-from option_probability import profit_probability_schedule
+from option_probability import price_scenario_schedule, profit_probability_schedule
 from options_pricing import black_scholes, implied_vol
 from put_scanner import (
     MAX_TARGET_DTE,
@@ -611,6 +611,21 @@ def _build_butterfly(
         include_breakeven=True,
         return_capture=True,
     )
+    # The tent only pays as it converges, so the panel also has to answer when
+    # holding is worth most rather than only how likely a target is. The upper
+    # long is the tent's near edge: the strike price has to reach before any of
+    # this structure starts working.
+    price_scenarios = price_scenario_schedule(
+        spot=spot,
+        dte=dte,
+        expiration=expiration,
+        distribution_iv=probability_iv,
+        entry_cashflow=entry_credit,
+        legs=legs_for_probability,
+        tent_edge=upper_strike,
+        risk_free_rate=RISK_FREE,
+        dividend_yield=dividend_yield,
+    )
     # Show how the tent develops instead of reducing the trade to one terminal
     # payoff. The body strike is the tent peak at expiration; unchanged spot
     # shows the untested upper region. Both are repriced at the Condor's same
@@ -818,6 +833,7 @@ def _build_butterfly(
         ),
         "probability_schedule": probability_schedule,
         "profit_capture": profit_capture,
+        "price_scenarios": price_scenarios,
         "early_close_estimates": early_close_estimates,
         "course_expected_hold_days": COURSE_EXPECTED_HOLD_DAYS,
         "course_quantity_scale": course_quantity_scale,

@@ -122,12 +122,217 @@ function ProbabilityCard({
   )
 }
 
+
+const money = value => value == null || !Number.isFinite(Number(value))
+  ? '\u2014'
+  : `${Number(value) < 0 ? '\u2212' : '+'}$${Math.abs(Number(value)).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+
+const price = value => value == null || !Number.isFinite(Number(value))
+  ? '\u2014'
+  : `$${Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+function PriceScenarioTable({ scenarios }) {
+  const rows = Array.isArray(scenarios?.rows) ? scenarios.rows : []
+  const columns = Array.isArray(scenarios?.columns) ? scenarios.columns : []
+  if (!rows.length || !columns.length) return null
+  const zone = scenarios.zone || {}
+  return (
+    <div style={{
+      marginTop: '0.75rem',
+      background: 'var(--surface-inset)',
+      border: '1px solid var(--border)',
+      borderRadius: 7,
+      padding: '0.85rem 1rem',
+    }}>
+      <div style={{
+        color: 'var(--text-dim)',
+        fontSize: '0.66rem',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+      }}>
+        Holding it out
+      </div>
+      <div style={{ color: 'var(--text-strong)', fontWeight: 700, marginTop: '0.2rem' }}>
+        What the trade is worth each month, at three prices
+      </div>
+      <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem', marginTop: '0.25rem' }}>
+        Modeled P/L if the underlying sits at each price on that date &mdash; today&rsquo;s
+        price, {scenarios.step_pct}% toward the tent, and {scenarios.step_pct}% away from it.
+        The tent&rsquo;s near edge is {price(scenarios.tent_edge)}: nothing in this structure
+        pays until price reaches it. Each row&rsquo;s best month is highlighted.
+      </div>
+      <div style={{ overflowX: 'auto', marginTop: '0.6rem' }}>
+        <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 560 }}>
+          <thead>
+            <tr>
+              <th style={{
+                textAlign: 'left',
+                padding: '0.3rem 0.6rem 0.35rem 0',
+                color: 'var(--text-dim)',
+                fontSize: '0.66rem',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+                letterSpacing: '0.03em',
+                whiteSpace: 'nowrap',
+              }}>
+                If price is
+              </th>
+              {columns.map(column => (
+                <th
+                  key={column.remaining_dte}
+                  style={{
+                    textAlign: 'right',
+                    padding: '0.3rem 0 0.35rem 0.6rem',
+                    color: 'var(--text-dim)',
+                    fontSize: '0.66rem',
+                    fontWeight: 600,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <div style={{ color: 'var(--text-strong)', fontSize: '0.72rem' }}>
+                    {formatDate(column.exit_date)}
+                  </div>
+                  <div style={{ fontWeight: 400 }}>
+                    {column.kind === 'expiration'
+                      ? 'expiration'
+                      : `${column.remaining_dte} DTE left`}
+                  </div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(row => (
+              <tr key={row.key} style={{ borderTop: '1px solid var(--border)' }}>
+                <td style={{
+                  padding: '0.45rem 0.6rem 0.45rem 0',
+                  color: 'var(--text-strong)',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}>
+                  {price(row.price)}
+                  <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontWeight: 400 }}>
+                    {row.label}
+                  </div>
+                  {row.best_month && (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontWeight: 400 }}>
+                      best in {row.best_month.month_label}
+                    </div>
+                  )}
+                </td>
+                {row.cells.map(cell => (
+                  <td
+                    key={cell.remaining_dte}
+                    style={{
+                      padding: '0.45rem 0.4rem 0.45rem 0.6rem',
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap',
+                      background: cell.is_row_best
+                        ? 'color-mix(in srgb, var(--accent) 14%, transparent)'
+                        : undefined,
+                      outline: cell.is_row_best ? '1px solid var(--accent)' : undefined,
+                      borderRadius: cell.is_row_best ? 5 : undefined,
+                    }}
+                  >
+                    <strong style={{
+                      fontSize: '1.02rem',
+                      color: Number(cell.profit_dollars) > 0 ? 'var(--pos-strong)' : 'var(--neg-strong)',
+                    }}>
+                      {money(cell.profit_dollars)}
+                    </strong>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                      {row.is_spot
+                        ? 'price unchanged'
+                        : `${pct(cell.touch_pct)} touched by then`}
+                    </div>
+                    {!row.is_spot && (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                        {pct(cell.beyond_pct)} past it on the day
+                      </div>
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            <tr style={{ borderTop: '1px solid var(--border)' }}>
+              <td style={{
+                padding: '0.45rem 0.6rem 0.45rem 0',
+                color: 'var(--text-strong)',
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+              }}>
+                Best case
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontWeight: 400 }}>
+                  anywhere in the hold zone
+                </div>
+              </td>
+              {columns.map(column => (
+                <td
+                  key={column.remaining_dte}
+                  style={{ padding: '0.45rem 0.4rem 0.45rem 0.6rem', textAlign: 'right', whiteSpace: 'nowrap' }}
+                >
+                  <strong style={{ fontSize: '0.95rem', color: 'var(--text-strong)' }}>
+                    {money(column.zone_best_profit_dollars)}
+                  </strong>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                    at {price(column.zone_best_price)}
+                    {column.zone_best_at_edge ? ' \u00b7 zone edge' : ''}
+                  </div>
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style={{
+        borderTop: '1px solid var(--border)',
+        marginTop: '0.5rem',
+        paddingTop: '0.5rem',
+        color: 'var(--text-muted)',
+        fontSize: '0.72rem',
+        display: 'grid',
+        gap: '0.35rem',
+      }}>
+        <div>
+          <strong style={{ color: 'var(--text-strong)' }}>The hold zone</strong> is
+          {' '}{price(zone.low)} to {price(zone.high)} &mdash; up to {zone.above_pct}% above
+          today&rsquo;s price, down to {zone.inside_pct}% inside the tent. Below that the
+          position is running at its own wing, which is a move most holders close rather
+          than sit through, so the best case is not scanned there.
+        </div>
+        {scenarios.zone_best_pinned_to_edge && (
+          <div>
+            Every month&rsquo;s best case lands on the bottom of that zone, which means the
+            payoff is still improving as price falls: the limit here is how far you are
+            willing to let it run, not where the structure stops paying.
+          </div>
+        )}
+        <div>
+          Each column prices the same position at the same volatility, so the only things
+          changing across a row are the days remaining and the price. A real move of this
+          size would move implied volatility too.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
 function ProfitCaptureTable({ capture, expirationSuccessPct }) {
   const targets = Array.isArray(capture?.targets) ? capture.targets : []
   if (!targets.length) return null
   const horizons = targets[0].horizons || []
   if (!horizons.length) return null
   const headline = targets[0].horizons[targets[0].horizons.length - 1]
+  // A structure that only converges on its maximum at expiration cannot be
+  // worth a large fraction of it months out, whatever price does. Those cells
+  // are arithmetic, not a market view, and get said out loud.
+  const blocked = targets.filter(target =>
+    target.horizons.some(point => point.reachable === false))
+  const earliest = blocked
+    .map(target => target.reachable_from_dte)
+    .filter(value => value != null)
+    .sort((left, right) => right - left)[0]
   return (
     <div style={{
       marginTop: '0.75rem',
@@ -207,21 +412,48 @@ function ProfitCaptureTable({ capture, expirationSuccessPct }) {
                   <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem', fontWeight: 400 }}>
                     banking ${Number(target.target_profit_dollars).toFixed(0)} per contract
                   </div>
+                  {target.horizons.some(point => point.reachable === false)
+                    && target.reachable_from_dte != null && (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem', fontWeight: 400 }}>
+                      not priceable until {target.reachable_from_dte} DTE
+                      {' '}({formatDate(target.reachable_from_date)})
+                    </div>
+                  )}
                 </td>
                 {target.horizons.map(point => (
                   <td
                     key={point.remaining_dte}
                     style={{ padding: '0.45rem 0 0.45rem 0.6rem', textAlign: 'right', whiteSpace: 'nowrap' }}
                   >
-                    <strong style={{ fontSize: '1.1rem', color: 'var(--pos-strong)' }}>
-                      {pct(point.probability_by_pct)}
-                    </strong>
-                    <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
-                      reached by then
-                    </div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
-                      {pct(point.probability_at_pct)} still there on the day
-                    </div>
+                    {point.reachable === false ? (
+                      <>
+                        <strong style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>
+                          Out of reach
+                        </strong>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+                          best possible {point.best_profit_dollars != null
+                            ? `$${Number(point.best_profit_dollars).toFixed(0)}`
+                            : '—'}
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                          {point.best_profit_fraction_pct != null
+                            ? `${pct(point.best_profit_fraction_pct)} of max, on the peak`
+                            : 'below this target'}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <strong style={{ fontSize: '1.1rem', color: 'var(--pos-strong)' }}>
+                          {pct(point.probability_by_pct)}
+                        </strong>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.68rem' }}>
+                          reached by then
+                        </div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                          {pct(point.probability_at_pct)} still there on the day
+                        </div>
+                      </>
+                    )}
                   </td>
                 ))}
               </tr>
@@ -244,6 +476,19 @@ function ProfitCaptureTable({ capture, expirationSuccessPct }) {
           good-till-cancelled closing order needs in order to fill. It is the number to plan
           around if you intend to take profit early.
         </div>
+        {blocked.length > 0 && (
+          <div>
+            <strong style={{ color: 'var(--text-strong)' }}>Out of reach</strong> is not a long
+            shot &mdash; it means the target cannot be quoted on that date at any price. This
+            position only converges on its maximum as expiration approaches, so with time still
+            on the clock the whole structure is worth a fraction of max profit even with the
+            underlying sitting exactly on its best price.
+            {earliest != null && (
+              <> Partial-profit management only becomes possible inside about {earliest} DTE;
+                before that the checkpoints are for judging the trade, not for closing it.</>
+            )}
+          </div>
+        )}
         <div>
           <strong style={{ color: 'var(--text-strong)' }}>Still there on the day</strong> is the
           chance the position is at or past the target on that date itself. It is lower because a
@@ -270,6 +515,7 @@ function ProfitCaptureTable({ capture, expirationSuccessPct }) {
 export default function OptionProbabilityCards({
   schedule,
   capture,
+  scenarios,
   successHeadline = 'The complete position has positive modeled P/L',
   failureHeadline = 'The complete position has negative modeled P/L',
   successFooter = 'Success means the complete position can be closed for more than $0 modeled P/L.',
@@ -281,7 +527,13 @@ export default function OptionProbabilityCards({
 }) {
   const points = Array.isArray(schedule) ? schedule : []
   const expiration = points.find(point => point.kind === 'expiration' || point.remaining_dte === 0)
-  if (!expiration) return null
+  if (!expiration) {
+    return scenarios ? (
+      <div style={{ marginBottom: '0.9rem' }}>
+        <PriceScenarioTable scenarios={scenarios} />
+      </div>
+    ) : null
+  }
   const requestedPrimaryPoint = (
     primaryPointLabel
       ? points.find(point => point.label === primaryPointLabel)
@@ -330,6 +582,7 @@ export default function OptionProbabilityCards({
         capture={capture}
         expirationSuccessPct={expiration.probability_success_pct}
       />
+      <PriceScenarioTable scenarios={scenarios} />
       <div style={{ color: 'var(--text-dim)', fontSize: '0.67rem', marginTop: '0.5rem' }}>
         {methodNote || (
           <>

@@ -338,6 +338,8 @@ export function buildScannerProbabilitySummary(row) {
     .find(value => Array.isArray(value)) || []
   const capture = [meta.profit_capture, spread.profit_capture, row?.profit_capture]
     .find(value => Array.isArray(value?.targets) && value.targets.length) || null
+  const scenarios = [meta.price_scenarios, spread.price_scenarios, row?.price_scenarios]
+    .find(value => Array.isArray(value?.rows) && value.rows.length) || null
   const expiration = schedule.find(point => (
     point?.kind === 'expiration' || Number(point?.remaining_dte) === 0
   )) || {}
@@ -373,8 +375,9 @@ export function buildScannerProbabilitySummary(row) {
     prob_max_loss: firstNumber(meta.prob_max_loss, spread.prob_max_loss, row?.prob_max_loss),
     probability_schedule: schedule,
     profit_capture: capture,
+    price_scenarios: scenarios,
   }
-  return schedule.length || capture || [success, failure, otm, itm, touch, summary.prob_touch_put,
+  return schedule.length || capture || scenarios || [success, failure, otm, itm, touch, summary.prob_touch_put,
     summary.prob_touch_call, summary.prob_max_profit, summary.prob_max_loss].some(value => value != null)
     ? summary
     : null

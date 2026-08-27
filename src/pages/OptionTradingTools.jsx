@@ -910,7 +910,8 @@ function ScannerProbabilityPanel({ probabilities, risk }) {
   const schedule = Array.isArray(probabilities?.probability_schedule)
     ? probabilities.probability_schedule
     : []
-  if (!metrics.length && !schedule.length) return null
+  const scenarios = probabilities?.price_scenarios
+  if (!metrics.length && !schedule.length && !scenarios) return null
   return <section className="opt-scanner-probability-panel" aria-label="Scanner probability analysis">
     <div className="opt-scanner-probability-heading">
       <div><span>Position probability analysis</span><h3>Success, failure, moneyness and touch risk</h3></div>
@@ -926,6 +927,7 @@ function ScannerProbabilityPanel({ probabilities, risk }) {
     <OptionProbabilityCards
       schedule={schedule}
       capture={probabilities?.profit_capture}
+      scenarios={scenarios}
       successHeadline="The complete scanner trade has positive modeled P/L"
       failureHeadline="The complete scanner trade has negative modeled P/L"
       scheduleTitle="At every modeled management checkpoint"

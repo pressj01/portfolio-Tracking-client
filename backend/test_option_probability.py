@@ -6,12 +6,17 @@ import math
 import os
 import sys
 import unittest
+from datetime import date, timedelta
 from random import Random
 from statistics import NormalDist
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from option_probability import profit_capture_schedule, profit_probability_schedule
+from option_probability import (
+    price_scenario_schedule,
+    profit_capture_schedule,
+    profit_probability_schedule,
+)
 from options_pricing import black_scholes
 
 
@@ -179,6 +184,142 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class PriceScenarioScheduleTests(unittest.TestCase):
+    """The scenario table: what the trade is worth each month, at three prices."""
+
+    BROKEN_WING_FLY = dict(
+        spot=711.37,
+        dte=176,
+        expiration="2027-02-19",
+        distribution_iv=0.262,
+        entry_cashflow=-1.76,
+        legs=[
+            {"option_type": "put", "strike": 630, "iv": 0.2419, "quantity": 4},
+            {"option_type": "put", "strike": 600, "iv": 0.2620, "quantity": -8},
+            {"option_type": "put", "strike": 560, "iv": 0.2900, "quantity": 4},
+        ],
+        risk_free_rate=0.0375,
+        dividend_yield=0.005,
+    )
+
+    def test_columns_are_one_a_month_ending_at_expiration(self):
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        columns = data["columns"]
+        self.assertEqual(columns[-1]["remaining_dte"], 0)
+        self.assertEqual(columns[-1]["kind"], "expiration")
+        self.assertEqual(columns[-1]["exit_date"], "2027-02-19")
+        # Strictly earlier to later, roughly a month apart.
+        gaps = [
+            columns[index]["remaining_dte"] - columns[index + 1]["remaining_dte"]
+            for index in range(len(columns) - 1)
+        ]
+        self.assertTrue(all(20 <= gap <= 35 for gap in gaps), gaps)
+        self.assertEqual(columns[0]["month_label"], "September 2026")
+
+    def test_rows_step_toward_and_away_from_the_tent(self):
+        # The tent is below spot on a put structure, so "toward" is a lower
+        # price. Taking the direction from the strikes rather than assuming it
+        # is what lets a call structure share this code.
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        self.assertTrue(data["downside"])
+        self.assertAlmostEqual(data["tent_edge"], 630.0, places=2)
+        current, toward, away = data["rows"]
+        self.assertAlmostEqual(current["price"], 711.37, places=2)
+        self.assertAlmostEqual(toward["price"], 711.37 * 0.95, places=2)
+        self.assertAlmostEqual(away["price"], 711.37 * 1.05, places=2)
+        self.assertTrue(current["is_spot"])
+
+    def test_moving_toward_the_tent_pays_more_than_moving_away(self):
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        _, toward, away = data["rows"]
+        for near, far in zip(toward["cells"][:-1], away["cells"][:-1]):
+            self.assertGreater(near["profit"], far["profit"], near["exit_date"])
+        # At expiration the advantage vanishes: both prices are above the upper
+        # wing, so every leg expires worthless and both rows are the same full
+        # debit. Being nearer the tent only pays while there is time value left
+        # to sell it back.
+        self.assertEqual(toward["cells"][-1]["profit"], away["cells"][-1]["profit"])
+        self.assertLess(toward["cells"][-1]["profit"], 0)
+
+    def test_touch_odds_grow_with_time_and_the_spot_row_is_certain(self):
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        current, toward, _ = data["rows"]
+        for cell in current["cells"]:
+            self.assertEqual(cell["touch_pct"], 100.0)
+        touches = [cell["touch_pct"] for cell in toward["cells"]]
+        self.assertEqual(touches, sorted(touches))
+        # Reaching a level is always likelier than being past it on the day.
+        for cell in toward["cells"]:
+            self.assertGreaterEqual(cell["touch_pct"], cell["beyond_pct"])
+
+    def test_each_row_flags_its_own_best_month(self):
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        for row in data["rows"]:
+            flagged = [cell for cell in row["cells"] if cell["is_row_best"]]
+            self.assertEqual(len(flagged), 1, row["label"])
+            self.assertEqual(
+                flagged[0]["profit"],
+                max(cell["profit"] for cell in row["cells"]),
+            )
+            self.assertEqual(
+                row["best_month"]["remaining_dte"], flagged[0]["remaining_dte"]
+            )
+
+    def test_the_best_month_differs_by_price_rather_than_being_expiration(self):
+        # The point of the table: at an unchanged price this fly peaks months
+        # before expiry and then bleeds to the full debit, so a single "hold to
+        # expiration" answer would be wrong for two of the three rows.
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        current, toward, away = data["rows"]
+        self.assertGreater(current["best_month"]["remaining_dte"], 0)
+        self.assertGreater(toward["best_month"]["remaining_dte"], 0)
+        self.assertGreater(away["best_month"]["remaining_dte"], 0)
+        self.assertNotEqual(
+            current["best_month"]["month_label"], toward["best_month"]["month_label"]
+        )
+        for row in (current, toward, away):
+            self.assertEqual(row["cells"][-1]["profit_dollars"], -176.0)
+
+    def test_hold_zone_runs_from_inside_the_tent_to_above_spot(self):
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        zone = data["zone"]
+        self.assertAlmostEqual(zone["low"], 630.0 * 0.99, places=2)
+        self.assertAlmostEqual(zone["high"], 711.37 * 1.10, places=2)
+        for column in data["columns"]:
+            self.assertGreaterEqual(column["zone_best_price"], zone["low"] - 1e-6)
+            self.assertLessEqual(column["zone_best_price"], zone["high"] + 1e-6)
+
+    def test_zone_best_is_never_beaten_by_a_row_at_the_same_date(self):
+        # The rows sit inside the zone, so the zone scan has to dominate them.
+        data = price_scenario_schedule(**self.BROKEN_WING_FLY)
+        ceilings = {
+            column["remaining_dte"]: column["zone_best_profit"]
+            for column in data["columns"]
+        }
+        for row in data["rows"]:
+            if not zone_contains(data, row["price"]):
+                continue
+            for cell in row["cells"]:
+                self.assertGreaterEqual(
+                    ceilings[cell["remaining_dte"]] + 1e-6, cell["profit"]
+                )
+
+    def test_a_short_dated_trade_still_gets_expiration(self):
+        data = price_scenario_schedule(**{
+            **self.BROKEN_WING_FLY, "dte": 20, "expiration": "2026-09-16",
+        })
+        self.assertEqual([c["remaining_dte"] for c in data["columns"]], [0])
+
+    def test_missing_volatility_suppresses_the_table(self):
+        self.assertIsNone(price_scenario_schedule(**{
+            **self.BROKEN_WING_FLY, "distribution_iv": None,
+        }))
+
+
+def zone_contains(data, value):
+    return data["zone"]["low"] <= value <= data["zone"]["high"]
+
+
 class ProfitCaptureScheduleTests(unittest.TestCase):
     """The capture panel: odds of banking part of the maximum profit early."""
 
@@ -232,6 +373,66 @@ class ProfitCaptureScheduleTests(unittest.TestCase):
                 {"option_type": "call", "strike": 105, "iv": 0.30, "quantity": 1},
             ],
         ))
+
+    BROKEN_WING_FLY = dict(
+        # A long put butterfly whose body sits far below spot with half a year
+        # to run: the shape only pays near expiration, so partial-profit
+        # targets are unquotable at the early checkpoints.
+        spot=711.37,
+        dte=176,
+        expiration="2027-02-19",
+        distribution_iv=0.262,
+        entry_cashflow=-1.76,
+        legs=[
+            {"option_type": "put", "strike": 630, "iv": 0.2419, "quantity": 4},
+            {"option_type": "put", "strike": 600, "iv": 0.2620, "quantity": -8},
+            {"option_type": "put", "strike": 560, "iv": 0.2900, "quantity": 4},
+        ],
+        risk_free_rate=0.0375,
+        dividend_yield=0.005,
+    )
+
+    def test_butterfly_max_profit_lands_on_the_body_strike(self):
+        # The peak is a kink sitting exactly on the body. A log-spaced scan
+        # steps past it, and every capture target is a fraction of whatever it
+        # reports, so the strikes have to be in the grid.
+        capture = profit_capture_schedule(**self.BROKEN_WING_FLY)
+        self.assertAlmostEqual(capture["max_profit"], 4 * (630 - 600) - 1.76, places=2)
+
+    def test_unreachable_target_is_flagged_rather_than_shown_as_long_odds(self):
+        # $0 of the target is available at 88 DTE no matter where price goes:
+        # that is arithmetic about the structure, not a 0% market call.
+        capture = profit_capture_schedule(**self.BROKEN_WING_FLY)
+        for target in capture["targets"]:
+            early, _, expiry = target["horizons"]
+            self.assertFalse(early["reachable"], target["label"])
+            self.assertEqual(early["probability_by_pct"], 0.0)
+            self.assertLess(early["best_profit"], target["target_profit"])
+            self.assertTrue(expiry["reachable"], target["label"])
+            self.assertAlmostEqual(
+                expiry["best_profit"], capture["max_profit"], places=2
+            )
+
+    def test_unreachable_target_reports_when_it_becomes_priceable(self):
+        capture = profit_capture_schedule(**self.BROKEN_WING_FLY)
+        half, two_thirds = capture["targets"]
+        # The greedier target needs the tent to converge further, so it opens
+        # later, and neither is available at the panel's early checkpoints.
+        self.assertLess(two_thirds["reachable_from_dte"], half["reachable_from_dte"])
+        self.assertLess(half["reachable_from_dte"], half["horizons"][1]["remaining_dte"])
+        self.assertEqual(
+            half["reachable_from_date"],
+            (date(2027, 2, 19) - timedelta(days=half["reachable_from_dte"])).isoformat(),
+        )
+
+    def test_a_reachable_target_carries_no_out_of_reach_flag(self):
+        # The credit spread can be bought back for half its credit at any point,
+        # so nothing in its panel should be marked unreachable.
+        capture = profit_capture_schedule(**self.CREDIT_SPREAD)
+        for target in capture["targets"]:
+            for point in target["horizons"]:
+                self.assertTrue(point["reachable"], f'{target["label"]} @ {point["remaining_dte"]}')
+            self.assertEqual(target["reachable_from_dte"], 31)
 
     def test_reaching_a_target_is_likelier_than_still_holding_it(self):
         capture = profit_capture_schedule(**self.CREDIT_SPREAD)

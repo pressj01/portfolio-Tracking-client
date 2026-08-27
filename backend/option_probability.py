@@ -10,7 +10,7 @@ probabilities remain stable between renders.
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from statistics import NormalDist
 
 from options_pricing import black_scholes
@@ -417,6 +417,90 @@ _CAPTURE_TIME_STEPS = 192
 _CAPTURE_SCAN_POINTS = 96
 
 
+def _capture_scan_spots(spot, distribution_iv, total_years, extra_spots=()):
+    """Spot grid the capture maths is measured on.
+
+    Log-spaced around spot, plus the strikes themselves: a butterfly's peak is a
+    kink sitting exactly on a strike, and a log grid lands beside it rather than
+    on it.
+    """
+    scan_span = 6.0 * distribution_iv * math.sqrt(total_years)
+    spots = [
+        spot * math.exp(-scan_span + 2.0 * scan_span * index / (_CAPTURE_SCAN_POINTS - 1))
+        for index in range(_CAPTURE_SCAN_POINTS)
+    ]
+    low, high = spots[0], spots[-1]
+    spots.extend(
+        value for value in extra_spots
+        if value is not None and low < value < high
+    )
+    return sorted(set(spots))
+
+
+def _best_profit(profit_at_spot, remaining_years, scan_spots, refine_steps=96):
+    """Highest P/L the position can reach on that date, at any price.
+
+    Separates "unlikely" from "arithmetically impossible". A long butterfly only
+    converges on its maximum at expiration, so months out the whole tent is worth
+    a fraction of it even with price sitting on the peak -- a partial-profit
+    target above this ceiling cannot fill, and a 0% next to it is a fact about
+    the structure rather than an estimate about the market.
+    """
+    best = None
+    best_index = 0
+    for index, spot in enumerate(scan_spots):
+        value = profit_at_spot(spot, remaining_years)
+        if value is None:
+            return None
+        if best is None or value > best:
+            best, best_index = value, index
+    # The scan brackets the peak; walk the bracket so a curved top is not
+    # read off its shoulder.
+    low = scan_spots[max(0, best_index - 1)]
+    high = scan_spots[min(len(scan_spots) - 1, best_index + 1)]
+    if refine_steps > 0 and high > low:
+        for index in range(refine_steps + 1):
+            value = profit_at_spot(low + (high - low) * index / refine_steps, remaining_years)
+            if value is None:
+                return None
+            if value > best:
+                best = value
+    return best
+
+
+def _latest_reachable_dte(profit_at_spot, threshold, total_dte, scan_spots, cache):
+    """Most DTE that can still leave the target attainable, or None.
+
+    The best attainable P/L only shrinks as time to expiry grows -- a longer
+    horizon averages the same payoff over more paths -- so the attainable dates
+    are an unbroken run ending at expiration and a bisection finds where it
+    starts.
+    """
+    def attainable(remaining):
+        if remaining not in cache:
+            cache[remaining] = _best_profit(
+                profit_at_spot, remaining / 365.0, scan_spots
+            )
+        best = cache[remaining]
+        return None if best is None else best >= threshold
+
+    if attainable(0) is not True:
+        return None
+    if attainable(total_dte) is True:
+        return total_dte
+    low, high = 0, total_dte  # attainable at low, not at high
+    while high - low > 1:
+        mid = (low + high) // 2
+        verdict = attainable(mid)
+        if verdict is None:
+            return None
+        if verdict:
+            low = mid
+        else:
+            high = mid
+    return low
+
+
 def _target_regions(profit_at_spot, remaining_years, thresholds, scan_spots):
     """Spot intervals where P/L reaches each threshold, keyed by threshold.
 
@@ -477,6 +561,7 @@ def _capture_probabilities(
     risk_free_rate,
     dividend_yield,
     horizon_years,
+    extra_spots=(),
     steps=_CAPTURE_TIME_STEPS,
 ):
     """First-passage odds of reaching each threshold, by each horizon.
@@ -512,11 +597,9 @@ def _capture_probabilities(
     kernel /= kernel.sum()
 
     # The scan only has to bracket the region boundaries, not the whole grid.
-    scan_span = 6.0 * distribution_iv * math.sqrt(total_years)
-    scan_spots = [
-        spot * math.exp(-scan_span + 2.0 * scan_span * index / (_CAPTURE_SCAN_POINTS - 1))
-        for index in range(_CAPTURE_SCAN_POINTS)
-    ]
+    scan_spots = _capture_scan_spots(
+        spot, distribution_iv, total_years, extra_spots
+    )
 
     # Barriers on a coarse time grid, interpolated onto the fine one below.
     region_times = [
@@ -589,7 +672,9 @@ def _capture_probabilities(
     return results
 
 
-def _derive_max_profit(profit_at_spot, spot, distribution_iv, total_years):
+def _derive_max_profit(
+    profit_at_spot, spot, distribution_iv, total_years, extra_spots=()
+):
     """Best expiration P/L the position can reach, or None if unbounded.
 
     Read off the position's own payoff instead of asking each scanner for it,
@@ -604,6 +689,16 @@ def _derive_max_profit(profit_at_spot, spot, distribution_iv, total_years):
         spot * math.exp(-span + 2.0 * span * index / 240.0)
         for index in range(241)
     ]
+    # An expiration payoff bends only at strikes, so including them makes the
+    # peak exact instead of whatever the log grid happened to step onto -- a
+    # butterfly body missed by a few dollars understates max profit, and every
+    # capture target is a fraction of it.
+    low, high = inner[0], inner[-1]
+    inner.extend(
+        value for value in extra_spots
+        if value is not None and low < value < high
+    )
+    inner.sort()
     outer = [spot * math.exp(-3.0 * span), spot * math.exp(3.0 * span)]
     inner_profits = [profit_at_spot(value, 0.0) for value in inner]
     outer_profits = [profit_at_spot(value, 0.0) for value in outer]
@@ -687,9 +782,19 @@ def profit_capture_schedule(
             underlying_quantity=shares,
         )
 
+    strike_spots = sorted({
+        strike
+        for strike in (_number(leg.get("strike")) for leg in legs)
+        if strike is not None and strike > 0
+    })
+
     if peak is None:
         peak = _derive_max_profit(
-            profit_at_spot, spot_number, volatility, total_years
+            profit_at_spot,
+            spot_number,
+            volatility,
+            total_years,
+            extra_spots=strike_spots,
         )
     if peak is None or peak <= 0:
         return None
@@ -724,11 +829,26 @@ def profit_capture_schedule(
         risk_free_rate=rate,
         dividend_yield=yield_number,
         horizon_years=[remaining / 365.0 for remaining in horizons],
+        extra_spots=strike_spots,
     )
+
+    # How much of the maximum is even on the table at each checkpoint. A target
+    # above that ceiling is out of reach rather than long odds, and the panel
+    # says so instead of printing a 0% that reads like a market call.
+    scan_spots = _capture_scan_spots(
+        spot_number, volatility, total_years, strike_spots
+    )
+    best_profit = {
+        remaining: _best_profit(profit_at_spot, remaining / 365.0, scan_spots)
+        for remaining in horizons
+    }
 
     targets = []
     for fraction, threshold in zip(fractions, thresholds):
         cells = []
+        latest_reachable = _latest_reachable_dte(
+            profit_at_spot, threshold, total_dte, scan_spots, best_profit
+        )
         for remaining in horizons:
             point = _probability_at_exit(
                 spot=spot_number,
@@ -751,8 +871,17 @@ def profit_capture_schedule(
                 if path is None
                 else path.get(threshold, {}).get(round(remaining / 365.0, 10))
             )
+            ceiling = best_profit.get(remaining)
             cells.append({
                 "kind": "expiration" if remaining == 0 else "time_fraction",
+                "reachable": None if ceiling is None else ceiling >= threshold,
+                "best_profit": None if ceiling is None else round(ceiling, 2),
+                "best_profit_dollars": (
+                    None if ceiling is None else round(ceiling * 100.0, 0)
+                ),
+                "best_profit_fraction_pct": (
+                    None if ceiling is None else round(ceiling / peak * 100.0, 1)
+                ),
                 "label": (
                     "Expiration"
                     if remaining == 0
@@ -775,6 +904,14 @@ def profit_capture_schedule(
         targets.append({
             "fraction": round(fraction, 4),
             "label": f"{round(fraction * 100)}% of max profit",
+            "reachable_from_dte": latest_reachable,
+            "reachable_from_date": (
+                None
+                if latest_reachable is None
+                else (
+                    expiration_date - timedelta(days=latest_reachable)
+                ).isoformat()
+            ),
             "target_profit": round(threshold, 2),
             "target_profit_dollars": round(threshold * 100.0, 0),
             "horizons": cells,
@@ -786,4 +923,328 @@ def profit_capture_schedule(
         "max_profit": round(peak, 2),
         "max_profit_dollars": round(peak * 100.0, 0),
         "targets": targets,
+    }
+
+
+# --- Price scenarios -------------------------------------------------------
+#
+# The capture panel answers "what are the odds of banking X". This answers the
+# question a butterfly actually raises: the structure is worth almost nothing
+# until it converges, so *when* does holding it pay, and how much does the
+# answer move if price drifts a little either way. Three prices the trade might
+# see, priced at every month it is alive.
+
+_SCENARIO_ZONE_POINTS = 240
+
+
+def _touch_probability(
+    spot, barrier, years, volatility, risk_free_rate, dividend_yield
+):
+    """First-passage odds of price trading at ``barrier`` within ``years``.
+
+    Closed form, unlike the profit-target barrier in the capture panel: a price
+    level does not move as the trade ages, so no propagation is needed.
+    """
+    if spot <= 0 or barrier <= 0 or volatility <= 0:
+        return None
+    if years <= 0:
+        return 1.0 if abs(barrier - spot) < 1e-9 else 0.0
+    distance = math.log(barrier / spot)
+    if abs(distance) < 1e-12:
+        return 1.0
+    drift = risk_free_rate - dividend_yield - 0.5 * volatility * volatility
+    sigma_root_t = volatility * math.sqrt(years)
+    exponent = max(-700.0, min(700.0, 2.0 * drift * distance / (volatility ** 2)))
+    reflection = math.exp(exponent)
+    if distance < 0:
+        probability = (
+            _NORM.cdf((distance - drift * years) / sigma_root_t)
+            + reflection * _NORM.cdf((distance + drift * years) / sigma_root_t)
+        )
+    else:
+        probability = (
+            _NORM.cdf((-distance + drift * years) / sigma_root_t)
+            + reflection * _NORM.cdf((-distance - drift * years) / sigma_root_t)
+        )
+    return min(1.0, max(0.0, probability))
+
+
+def _beyond_probability(
+    spot, barrier, years, volatility, risk_free_rate, dividend_yield, below
+):
+    """Odds price sits at or past ``barrier`` on that date, not before it."""
+    if spot <= 0 or barrier <= 0 or volatility <= 0:
+        return None
+    if years <= 0:
+        return 1.0 if (spot <= barrier if below else spot >= barrier) else 0.0
+    drift = risk_free_rate - dividend_yield - 0.5 * volatility * volatility
+    z = (math.log(barrier / spot) - drift * years) / (volatility * math.sqrt(years))
+    probability = _NORM.cdf(z) if below else 1.0 - _NORM.cdf(z)
+    return min(1.0, max(0.0, probability))
+
+
+def _add_calendar_month(value):
+    month = value.month + 1
+    year = value.year + (month - 1) // 12
+    month = (month - 1) % 12 + 1
+    day = value.day
+    while day > 1:
+        try:
+            return date(year, month, day)
+        except ValueError:
+            day -= 1
+    return date(year, month, 1)
+
+
+def _monthly_columns(expiration_date, total_dte, minimum_gap=4):
+    """One checkpoint a month from today to expiration, expiration included.
+
+    Calendar months rather than 30-day steps, because the question being asked
+    is "which month does this pay best in" and the answer wants a month's name.
+    """
+    entry_date = expiration_date - timedelta(days=total_dte)
+    columns = []
+    cursor = _add_calendar_month(entry_date)
+    while cursor < expiration_date:
+        remaining = (expiration_date - cursor).days
+        if remaining >= minimum_gap:
+            columns.append(remaining)
+        cursor = _add_calendar_month(cursor)
+    columns.append(0)
+    return sorted(set(columns), reverse=True)
+
+
+_MONTH_NAMES = (
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+)
+
+
+def price_scenario_schedule(
+    *,
+    spot,
+    dte,
+    expiration,
+    distribution_iv,
+    entry_cashflow,
+    legs,
+    tent_edge=None,
+    step_pct=0.05,
+    zone_above_pct=0.10,
+    zone_inside_pct=0.01,
+    risk_free_rate=0.0,
+    dividend_yield=0.0,
+    underlying_quantity=0.0,
+) -> dict | None:
+    """Modeled P/L at three prices, every month the trade is alive.
+
+    Rows are today's price and a ``step_pct`` move each way -- toward the tent
+    and away from it, direction taken from where ``tent_edge`` sits rather than
+    assumed, so a call structure reads the same way a put one does.
+
+    ``best_month`` answers the separate question of when the trade pays best if
+    price behaves. It scans only the range a holder would actually sit through:
+    up to ``zone_above_pct`` above today, down to ``zone_inside_pct`` inside the
+    tent's near edge. Deeper than that and the position is running at its own
+    wing, which is a trade most people close rather than hold.
+    """
+    spot_number = _number(spot)
+    volatility = _number(distribution_iv)
+    cashflow = _number(entry_cashflow)
+    dte_number = _number(dte)
+    rate = _number(risk_free_rate)
+    yield_number = _number(dividend_yield)
+    shares = _number(underlying_quantity)
+    step = _number(step_pct)
+    if (
+        spot_number is None
+        or spot_number <= 0
+        or volatility is None
+        or volatility <= 0
+        or cashflow is None
+        or dte_number is None
+        or dte_number < 2
+        or rate is None
+        or yield_number is None
+        or shares is None
+        or step is None
+        or not 0 < step < 1
+        or not legs
+    ):
+        return None
+
+    try:
+        expiration_date = datetime.strptime(str(expiration), "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+    total_dte = max(2, int(round(dte_number)))
+
+    def profit_at(exit_spot, remaining_dte):
+        return _position_profit(
+            exit_spot,
+            remaining_dte / 365.0,
+            entry_spot=spot_number,
+            entry_cashflow=cashflow,
+            legs=legs,
+            risk_free_rate=rate,
+            dividend_yield=yield_number,
+            underlying_quantity=shares,
+        )
+
+    strikes = sorted({
+        value
+        for value in (_number(leg.get("strike")) for leg in legs)
+        if value is not None and value > 0
+    })
+    if not strikes:
+        return None
+
+    # The tent's near edge: the strike price has to reach before the structure
+    # starts paying. The caller may name it; otherwise take the strike nearest
+    # spot, which is that edge for every tent-shaped position.
+    edge = _number(tent_edge)
+    if edge is None or edge <= 0:
+        edge = min(strikes, key=lambda value: abs(value - spot_number))
+    downside = edge <= spot_number
+
+    columns = _monthly_columns(expiration_date, total_dte)
+    column_meta = []
+    for remaining in columns:
+        exit_date = expiration_date - timedelta(days=remaining)
+        column_meta.append({
+            "remaining_dte": remaining,
+            "exit_date": exit_date.isoformat(),
+            "month_label": "%s %d" % (_MONTH_NAMES[exit_date.month - 1], exit_date.year),
+            "kind": "expiration" if remaining == 0 else "month",
+        })
+
+    toward = spot_number * (1.0 - step if downside else 1.0 + step)
+    away = spot_number * (1.0 + step if downside else 1.0 - step)
+    percent = round(step * 100)
+    row_specs = [
+        ("current", "Current price", spot_number, 0.0),
+        ("toward", "%d%% toward the tent" % percent, toward, -step if downside else step),
+        ("away", "%d%% away from the tent" % percent, away, step if downside else -step),
+    ]
+
+    rows = []
+    for key, label, price, offset in row_specs:
+        cells = []
+        for meta in column_meta:
+            remaining = meta["remaining_dte"]
+            elapsed_years = (total_dte - remaining) / 365.0
+            profit = profit_at(price, remaining)
+            if profit is None:
+                return None
+            at_spot = abs(price - spot_number) < 1e-9
+            touch = (
+                1.0
+                if at_spot
+                else _touch_probability(
+                    spot_number, price, elapsed_years, volatility, rate, yield_number
+                )
+            )
+            beyond = _beyond_probability(
+                spot_number,
+                price,
+                elapsed_years,
+                volatility,
+                rate,
+                yield_number,
+                below=price <= spot_number,
+            )
+            cells.append({
+                "remaining_dte": remaining,
+                "exit_date": meta["exit_date"],
+                "profit": round(profit, 2),
+                "profit_dollars": round(profit * 100.0, 0),
+                "touch_pct": None if touch is None else round(touch * 100.0, 1),
+                "beyond_pct": None if beyond is None else round(beyond * 100.0, 1),
+            })
+        peak = max(cells, key=lambda cell: cell["profit"])
+        for cell in cells:
+            cell["is_row_best"] = cell["remaining_dte"] == peak["remaining_dte"]
+        peak_meta = next(
+            meta for meta in column_meta
+            if meta["remaining_dte"] == peak["remaining_dte"]
+        )
+        rows.append({
+            "key": key,
+            "label": label,
+            "price": round(price, 2),
+            "offset_pct": round(offset * 100.0, 1),
+            "is_spot": key == "current",
+            "cells": cells,
+            "best_month": {
+                "month_label": peak_meta["month_label"],
+                "exit_date": peak["exit_date"],
+                "remaining_dte": peak["remaining_dte"],
+                "profit_dollars": peak["profit_dollars"],
+                "positive": peak["profit"] > 0,
+            },
+        })
+
+    # Where the trade pays best, month by month, inside the range a holder
+    # would actually sit through.
+    above = spot_number * (1.0 + (_number(zone_above_pct) or 0.0))
+    inside_step = _number(zone_inside_pct) or 0.0
+    inside = edge * (1.0 - inside_step) if downside else edge * (1.0 + inside_step)
+    zone_low, zone_high = min(inside, above), max(inside, above)
+    if not zone_high > zone_low > 0:
+        return None
+
+    zone_points = [
+        zone_low + (zone_high - zone_low) * index / _SCENARIO_ZONE_POINTS
+        for index in range(_SCENARIO_ZONE_POINTS + 1)
+    ]
+    best_overall = None
+    for meta in column_meta:
+        remaining = meta["remaining_dte"]
+        best_profit, best_price = None, None
+        for price in zone_points:
+            profit = profit_at(price, remaining)
+            if profit is None:
+                return None
+            if best_profit is None or profit > best_profit:
+                best_profit, best_price = profit, price
+        meta["zone_best_profit"] = round(best_profit, 2)
+        meta["zone_best_profit_dollars"] = round(best_profit * 100.0, 0)
+        meta["zone_best_price"] = round(best_price, 2)
+        meta["zone_best_at_edge"] = (
+            abs(best_price - zone_low) < (zone_high - zone_low) / _SCENARIO_ZONE_POINTS
+        )
+        if best_overall is None or best_profit > best_overall["profit"]:
+            best_overall = {
+                "profit": best_profit,
+                "remaining_dte": remaining,
+                "exit_date": meta["exit_date"],
+                "month_label": meta["month_label"],
+                "price": best_price,
+            }
+
+    return {
+        "spot": round(spot_number, 2),
+        "step_pct": round(step * 100.0, 1),
+        "tent_edge": round(edge, 2),
+        "downside": downside,
+        "columns": column_meta,
+        "rows": rows,
+        "zone": {
+            "low": round(zone_low, 2),
+            "high": round(zone_high, 2),
+            "above_pct": round((_number(zone_above_pct) or 0.0) * 100.0, 1),
+            "inside_pct": round(inside_step * 100.0, 1),
+        },
+        "zone_best_pinned_to_edge": all(
+            meta.get("zone_best_at_edge") for meta in column_meta
+        ),
+        "best_month": None if best_overall is None else {
+            "month_label": best_overall["month_label"],
+            "exit_date": best_overall["exit_date"],
+            "remaining_dte": best_overall["remaining_dte"],
+            "price": round(best_overall["price"], 2),
+            "profit": round(best_overall["profit"], 2),
+            "profit_dollars": round(best_overall["profit"] * 100.0, 0),
+        },
     }

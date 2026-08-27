@@ -32,6 +32,7 @@ import re
 import yfinance as yf
 from flask import jsonify, request
 
+from option_probability import price_scenario_schedule
 from options_pricing import black_scholes
 from put_scanner import (
     MAX_TARGET_DTE,
@@ -629,12 +630,54 @@ def _build_put_condor(
         prob_touch_lower_long = None
         prob_finish_below_lower_short = None
         prob_finish_below_lower_long = None
+    legs_for_probability = [
+        {
+            "option_type": "put",
+            "strike": k1,
+            "iv": _num(upper_long.get("iv")),
+            "quantity": bought_quantity,
+        },
+        {
+            "option_type": "put",
+            "strike": k2,
+            "iv": _num(upper_short.get("iv")),
+            "quantity": -bought_quantity,
+        },
+        {
+            "option_type": "put",
+            "strike": k3,
+            "iv": _num(lower_short.get("iv")),
+            "quantity": -sold_quantity,
+        },
+        {
+            "option_type": "put",
+            "strike": k4,
+            "iv": _num(lower_long.get("iv")),
+            "quantity": sold_quantity,
+        },
+    ]
+    # k1 is the tent's near edge for the same reason the touch maths above uses
+    # it: it is the first put the position owns below spot, so nothing in the
+    # structure pays until price reaches it.
+    price_scenarios = price_scenario_schedule(
+        spot=spot,
+        dte=dte,
+        expiration=expiration,
+        distribution_iv=front_iv,
+        entry_cashflow=entry_credit,
+        legs=legs_for_probability,
+        tent_edge=k1,
+        risk_free_rate=RISK_FREE,
+        dividend_yield=dividend_yield,
+    )
+
     lower_short_distance_sigma = (
         math.log(spot / k3) / (probability_iv * math.sqrt(years))
         if spot > k3 and probability_iv is not None and probability_iv > 0 and years > 0 else None
     )
 
     return {
+        "price_scenarios": price_scenarios,
         "expiration": expiration,
         "dte": int(dte),
         "preset": preset,
