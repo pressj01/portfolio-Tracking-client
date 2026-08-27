@@ -22078,6 +22078,10 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     # TTL. That is what pinned "--" on every NAV cell: one rate-limited run
     # cached 53 nulls and every later load was served from it in 70ms.
     unpriced = []
+    # How many holdings actually reached a download. Needed to tell "the feed is
+    # down" from "these few broker symbols are not Yahoo symbols" — see the note
+    # in portfolio_summary_data.
+    attempted = []
 
     def _price_outage(tk, nav_scope, info, benchmark=None, warning=None):
         unpriced.append(tk)
@@ -22150,6 +22154,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
             continue
 
+        attempted.append(tk)
         try:
             yf_tk = yf.Ticker(tk)
             hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=False, actions=True)
@@ -22267,6 +22272,12 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
         except Exception:
             results.append(_price_outage(tk, nav_scope, info))
 
+    # A handful of unlistable broker symbols must not suppress this profile's
+    # cache forever; only a feed-wide failure is worth refusing to cache.
+    price_feed_outage = bool(unpriced) and bool(attempted) and (
+        len(unpriced) * 2 >= len(attempted)
+    )
+
     agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
     aggregate_severity = _nav_aggregate_severity(agg_coverage, results)
     aggregate_accounting = _nav_accounting_rates(
@@ -22292,8 +22303,10 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
         "accounting_window": "trailing_1_year",
         "accounting_scope": "nav_tested_holdings",
         "unpriced_tickers": unpriced,
+        "price_feed_outage": price_feed_outage,
+        "unresolved_symbols": [] if price_feed_outage else list(unpriced),
     }
-    if cache_key and use_cache and not unpriced:
+    if cache_key and use_cache and not price_feed_outage:
         _PORTFOLIO_COVERAGE_CACHE[cache_key] = (time.time(), payload)
     return payload
 
@@ -23096,11 +23109,11 @@ def portfolio_summary_data():
         if raw.empty:
             if cached:
                 return jsonify(cached)
-            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers)
+            return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers, price_feed_outage=True)
     except Exception as e:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers, warning=str(e))
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, ticker_closure_risk=ticker_closure_risk, unpriced_tickers=tickers, price_feed_outage=True, warning=str(e))
 
     if isinstance(raw.columns, pd.MultiIndex):
         close = raw["Close"].dropna(how="all") if "Close" in raw.columns.get_level_values(0) else pd.DataFrame()
@@ -23112,7 +23125,7 @@ def portfolio_summary_data():
     if close.empty:
         if cached:
             return jsonify(cached)
-        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, unpriced_tickers=tickers)
+        return jsonify(ticker_grades=default_ticker_grades, portfolio_grade={}, unpriced_tickers=tickers, price_feed_outage=True)
 
     # Map renamed ticker columns back to original names
     for old_t, new_t in rename_map.items():
@@ -23306,10 +23319,25 @@ def portfolio_summary_data():
         except Exception:
             continue
 
-    # Tickers Yahoo never priced, after every recovery pass. Their "N/A" is a
-    # download outage, not a verdict on the holding, so it must neither be
-    # reported as a fresh grade nor cached over a good one.
+    # Tickers Yahoo never priced, after every recovery pass.
     unpriced = [t for t in tickers if _has_no_prices(t)]
+    # ...but "no prices" has two very different causes, and only one of them is
+    # temporary. A throttled feed is transient and must not be cached. A symbol
+    # Yahoo simply does not list is permanent: broker exports carry symbols
+    # Yahoo never had (Interactive Brokers writes the TSX Venture listings as
+    # PGDC/SCOT/SKP, which Yahoo lists as PGDC.V/SCOT.V/SKP.V, and the preferred
+    # CIM-PRB as CIM-PB). Those never resolve, so treating them as an outage
+    # would suppress this profile's cache forever — every dashboard load paying
+    # for a full re-download plus a doomed per-symbol retry. If the rest of the
+    # portfolio priced, the feed is fine and the symbol is simply unknown.
+    # Half or more of the portfolio failing is a feed problem; a handful of odd
+    # symbols among many good ones is not. Written as a doubling rather than
+    # `>= len // 2` because integer division collapses to 1 for a 3-holding
+    # portfolio, which would call any single bad symbol an outage.
+    price_feed_outage = bool(unpriced) and (
+        feed_wide_outage or len(unpriced) * 2 >= len(tickers)
+    )
+    unresolved_symbols = [] if price_feed_outage else list(unpriced)
 
     # Safety net: if a ticker still came back blank (re-fetch also failed, or it
     # genuinely lacks enough history right now), reuse the last cached good beta
@@ -23429,10 +23457,12 @@ def portfolio_summary_data():
         "window_observations": window_observations,
         "min_observations": min_obs,
         "window_too_short": window_too_short,
-        # Symbols Yahoo returned no prices for at all. Their "N/A" says the quote
-        # feed was down for them, not that the holding is ungradeable, so the UI
-        # can say which it is instead of letting the two look identical.
+        # Symbols Yahoo returned no prices for at all. Their "N/A" is never a
+        # verdict on the holding, so the UI can say so — and say WHICH of the
+        # two causes it is, because only an outage is worth retrying.
         "unpriced_tickers": unpriced,
+        "price_feed_outage": price_feed_outage,
+        "unresolved_symbols": unresolved_symbols,
     }
     # Only cache a usable result. Caching an empty grade from a transient/partial
     # yfinance download would pin blank tiles for the full 30-min TTL, so the
@@ -23444,13 +23474,14 @@ def portfolio_summary_data():
     # re-download on every load. A window too short to carry the ratios is cached
     # for the same reason — that verdict is a property of the window, not a
     # transient download failure, so re-downloading on every click buys nothing.
-    # A per-ticker outage counts as partial too. The portfolio grade only needs
-    # two priceable holdings, so a run where Yahoo rate-limited most of the
+    # A feed outage counts as partial too. The portfolio grade only needs two
+    # priceable holdings, so a run where Yahoo rate-limited most of the
     # portfolio still produced a grade and benchmark betas — and the old guard
     # happily cached it, pinning "N/A" on every rate-limited holding for the
-    # full 30 minutes. Let the next load retry those symbols instead.
+    # full 30 minutes. Let the next load retry those symbols instead. Symbols
+    # Yahoo does not list are NOT an outage and must not block the cache.
     cacheable = (
-        (portfolio_grade_info and benchmark_betas_present and not unpriced)
+        (portfolio_grade_info and benchmark_betas_present and not price_feed_outage)
         or window_too_short
         or len(tickers) < 2
     )

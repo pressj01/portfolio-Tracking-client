@@ -244,9 +244,11 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
             INSERT INTO all_account_info VALUES ('AAA', 6, 10, 1200, '2024-01-02', NULL);
             INSERT INTO all_account_info VALUES ('BBB', 6, 20, 1800, '2024-01-02', NULL);
             INSERT INTO all_account_info VALUES ('CCC', 6, 30, 2400, '2024-01-02', NULL);
+            INSERT INTO all_account_info VALUES ('DDD', 6, 40, 3200, '2024-01-02', NULL);
             INSERT INTO transactions VALUES (1, 'AAA', 6, 'BUY', '2024-01-02', 10, 100, 0);
             INSERT INTO transactions VALUES (2, 'BBB', 6, 'BUY', '2024-01-02', 20, 80, 0);
             INSERT INTO transactions VALUES (3, 'CCC', 6, 'BUY', '2024-01-02', 30, 60, 0);
+            INSERT INTO transactions VALUES (4, 'DDD', 6, 'BUY', '2024-01-02', 40, 40, 0);
             """
         )
         conn.commit()
@@ -259,6 +261,7 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
                 "AAA": 100 + step * 0.7 + np.sin(step / 2),
                 "BBB": 80 + step * 0.35 + np.cos(step / 3),
                 "CCC": 60 + step * 0.5 + np.sin(step / 5),
+                "DDD": 40 + step * 0.3 + np.cos(step / 7),
                 "SPY": 475 + step * 0.9 + np.sin(step / 4),
                 "QQQ": 405 + step * 1.1 + np.cos(step / 5),
             },
@@ -271,7 +274,7 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
 
         self.batch_calls = []
         self.single_calls = []
-        self.refetch_succeeds = True
+        self.refetch_fails = set()
 
         self.orig_connection = app_module.get_connection
         self.orig_download = app_module._chunked_yf_download
@@ -309,7 +312,7 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
             self.batch_calls.append(symbols)
             return self._frame(self.rate_limited.copy())
         self.single_calls.append(symbols[0])
-        if symbols[0] == "CCC" and not self.refetch_succeeds:
+        if symbols[0] in self.refetch_fails:
             return pd.DataFrame()
         return self._frame(self.close[[symbols[0]]].copy())
 
@@ -322,34 +325,65 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
         ).get_json()
 
         self.assertIn("CCC", self.single_calls, "the NaN column was never re-fetched")
+        self.assertFalse(payload["price_feed_outage"], payload)
         self.assertNotEqual(payload["ticker_grades"]["CCC"]["grade"], "N/A", payload)
         self.assertIsNotNone(payload["ticker_risk"]["CCC"]["beta"])
         self.assertEqual(payload["unpriced_tickers"], [])
 
     @patch("yfinance.Ticker")
-    def test_unrecoverable_ticker_is_reported_and_not_cached(self, ticker_mock):
+    def test_majority_outage_is_reported_and_not_cached(self, ticker_mock):
         ticker_mock.return_value.info = {}
-        self.refetch_succeeds = False
+        self.rate_limited = self.close.copy()
+        self.rate_limited[["CCC", "DDD"]] = np.nan
+        self.refetch_fails = {"CCC", "DDD"}
 
         payload = self.client.get(
             "/api/portfolio-summary/data?profile_id=6&period=1y"
         ).get_json()
 
-        # The other two holdings still grade, so the portfolio grade computes —
-        # which is exactly the case the old cache guard let through.
+        # AAA and BBB still grade, so the portfolio grade and benchmark betas
+        # compute — which is exactly the case the old cache guard let through.
         self.assertTrue(payload["portfolio_grade"].get("overall"), payload)
-        self.assertEqual(payload["unpriced_tickers"], ["CCC"])
+        self.assertTrue(payload["price_feed_outage"], payload)
+        self.assertEqual(sorted(payload["unpriced_tickers"]), ["CCC", "DDD"])
+        self.assertEqual(payload["unresolved_symbols"], [])
         self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 0)
 
-        # A second load must actually retry rather than replay the blank grade.
+        # A second load must actually retry rather than replay the blank grades.
         self.batch_calls.clear()
-        self.refetch_succeeds = True
+        self.rate_limited = self.close.copy()
+        self.refetch_fails = set()
         payload = self.client.get(
             "/api/portfolio-summary/data?profile_id=6&period=1y"
         ).get_json()
 
-        self.assertTrue(self.batch_calls, "the partial result was served from cache")
-        self.assertNotEqual(payload["ticker_grades"]["CCC"]["grade"], "N/A", payload)
+        self.assertTrue(self.batch_calls, "the outage result was served from cache")
+        for tk in ("CCC", "DDD"):
+            self.assertNotEqual(payload["ticker_grades"][tk]["grade"], "N/A", payload)
+
+    @patch("yfinance.Ticker")
+    def test_unlistable_symbol_does_not_suppress_the_cache(self, ticker_mock):
+        """A broker symbol Yahoo never had is permanent, not a transient outage.
+
+        Interactive Brokers exports TSX Venture names as PGDC/SCOT/SKP (Yahoo:
+        PGDC.V/...) and preferreds as CIM-PRB (Yahoo: CIM-PB). Treating those as
+        an outage suppressed the profile's cache on every single load.
+        """
+        ticker_mock.return_value.info = {}
+        self.refetch_fails = {"CCC"}
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        # AAA, BBB and DDD priced, so the feed is plainly working.
+        self.assertFalse(payload["price_feed_outage"], payload)
+        self.assertEqual(payload["unpriced_tickers"], ["CCC"])
+        self.assertEqual(payload["unresolved_symbols"], ["CCC"])
+        self.assertEqual(
+            len(app_module._PORTFOLIO_SUMMARY_CACHE), 1,
+            "one unlistable symbol must not cost the whole profile its cache",
+        )
 
     @patch("yfinance.Ticker")
     def test_feed_wide_outage_does_not_retry_symbol_by_symbol(self, ticker_mock):
@@ -366,7 +400,7 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
             self.single_calls, [],
             "a feed-wide outage must not fan out into one request per holding",
         )
-        self.assertEqual(sorted(payload["unpriced_tickers"]), ["AAA", "BBB", "CCC"])
+        self.assertEqual(sorted(payload["unpriced_tickers"]), ["AAA", "BBB", "CCC", "DDD"])
         self.assertEqual(len(app_module._PORTFOLIO_SUMMARY_CACHE), 0)
 
 

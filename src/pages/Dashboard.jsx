@@ -1237,7 +1237,10 @@ export default function Dashboard() {
         setTickerRisk(g.ticker_risk || {})
         setTickerClosureRisk(g.ticker_closure_risk || {})
         const unpriced = Array.isArray(g.unpriced_tickers) ? g.unpriced_tickers : []
-        setGradeUnpriced(unpriced)
+        // Only a feed outage is worth retrying. A symbol Yahoo does not list
+        // never resolves, so it must not block the cache or promise a refresh.
+        const feedOutage = Boolean(g.price_feed_outage)
+        setGradeUnpriced(feedOutage ? unpriced : [])
         if (g.portfolio_grade && Object.keys(g.portfolio_grade).length) {
           setPortfolioGrade(g.portfolio_grade)
         }
@@ -1245,10 +1248,16 @@ export default function Dashboard() {
         if (unpriced.length) {
           // Say the quote feed came up empty for these. Left unsaid, a rate-limited
           // symbol looks exactly like a holding we judged ungradeable.
+          const named = unpriced.slice(0, 6).join(', ')
+            + (unpriced.length > 6 ? ` +${unpriced.length - 6} more` : '')
           setGradeStatus(
-            `No price data returned for ${unpriced.slice(0, 6).join(', ')}`
-            + `${unpriced.length > 6 ? ` +${unpriced.length - 6} more` : ''}`
-            + ' - their grades will fill in on the next refresh.'
+            feedOutage
+              ? `No price data returned for ${named} - their grades will fill in on the next refresh.`
+              // Naming the cause matters: these are broker symbols Yahoo does
+              // not use (foreign listings need a suffix like .V or .TO, and
+              // preferreds use -P<series>), so "refresh" is not the fix.
+              : `Yahoo has no listing for ${named} - these look like broker symbols`
+                + ' rather than Yahoo symbols, so they cannot be graded.'
           )
         } else {
           setGradeStatus('Grades loaded.')
