@@ -207,6 +207,247 @@ def _anchor_from_prior_close(frame, anchor_date):
     return trimmed.loc[eligible[-1]:]
 
 
+# ── Broker symbol -> Yahoo symbol ───────────────────────────────
+#
+# The broker symbol is the identity everywhere in this app: it is what an import
+# writes, what reconciles against a statement, and what the user recognises. But
+# it is not always what Yahoo calls the same security. Translation happens here,
+# at the moment of the call, and the result is mapped straight back so no caller
+# ever sees the Yahoo spelling.
+
+_SYMBOL_MAP_CACHE = {"ts": 0.0, "map": {}}
+_SYMBOL_MAP_TTL_SEC = 300
+
+# Exchange suffixes worth probing, most likely first. Yahoo appends these to the
+# bare symbol a broker exports for a non-US listing.
+_YAHOO_EXCHANGE_SUFFIXES = (
+    ".V",    # TSX Venture
+    ".TO",   # Toronto
+    ".CN",   # Canadian Securities Exchange
+    ".NE",   # Cboe Canada / NEO
+    ".L",    # London
+    ".AX",   # Australia
+    ".DE",   # Xetra
+    ".HK",   # Hong Kong
+)
+
+
+def _symbol_map_load(conn=None):
+    """Whole broker->Yahoo map, briefly cached. Never raises."""
+    now = time.time()
+    if (now - _SYMBOL_MAP_CACHE["ts"]) < _SYMBOL_MAP_TTL_SEC:
+        return _SYMBOL_MAP_CACHE["map"]
+    mapping = {}
+    own = conn is None
+    try:
+        if own:
+            conn = get_connection()
+        for row in conn.execute("SELECT broker_symbol, yahoo_symbol FROM symbol_map"):
+            broker = str(row["broker_symbol"] or "").strip().upper()
+            if broker:
+                mapping[broker] = str(row["yahoo_symbol"] or "").strip().upper()
+    except Exception:
+        # A missing table (fresh install, or a test harness on a minimal schema)
+        # must degrade to "no translation", never break a price fetch.
+        return _SYMBOL_MAP_CACHE["map"] or {}
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    _SYMBOL_MAP_CACHE["ts"] = now
+    _SYMBOL_MAP_CACHE["map"] = mapping
+    return mapping
+
+
+def _symbol_map_invalidate():
+    _SYMBOL_MAP_CACHE["ts"] = 0.0
+    _SYMBOL_MAP_CACHE["map"] = {}
+
+
+def _yahoo_symbol(ticker):
+    """The symbol to ask Yahoo for. Returns `ticker` unchanged when unmapped.
+
+    Two sources, checked in order:
+    1. `market_symbols.yahoo_symbol_for_ticker` — the existing, developer-curated
+       static map (BRK-A/B, the generic XXX-PR<Y> preferred-share pattern, and
+       ticker renames via the accounting-alias table, e.g. WPAY -> TOPW). It is
+       already called at 20+ sites across this file before a download; wiring
+       it in here too just means the two remaining gaps (the Dashboard grade
+       endpoint and NAV coverage, which called yfinance directly) get it too,
+       for free, along with every future caller of `_chunked_yf_download`.
+    2. The `symbol_map` DB table, this feature's own addition, for what the
+       static map can't derive by pattern: non-US listings a broker exports
+       bare (PGDC, where Yahoo wants PGDC.V) that need a real network probe or
+       a human's manual entry to resolve, not a regex.
+
+    A DB mapping to an empty string means "probed, Yahoo has no listing"; the
+    original is returned so the caller fails the same way it always did rather
+    than querying the empty string.
+    """
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return ticker
+    static = _yahoo_symbol_for_ticker(symbol)
+    if static and static != symbol:
+        return static
+    mapped = _symbol_map_load().get(symbol)
+    return mapped or ticker
+
+
+def _yahoo_symbols_for(tickers):
+    """(list of symbols to fetch, {yahoo_symbol: broker_symbol}) for a batch.
+
+    The reverse map only carries entries that actually differ, and skips a
+    translation that would collide with a symbol already in the batch — held
+    under both spellings, the broker symbol must keep its own column.
+    """
+    requested = [str(t or "").strip().upper() for t in tickers]
+    present = set(requested)
+    out, reverse = [], {}
+    for broker in requested:
+        yahoo = _yahoo_symbol(broker)
+        if yahoo != broker and yahoo not in present:
+            reverse[yahoo] = broker
+            out.append(yahoo)
+        else:
+            out.append(broker)
+    return out, reverse
+
+
+def _restore_broker_symbols(frame, reverse):
+    """Rename Yahoo-spelled columns back to the broker symbols the caller passed."""
+    if not reverse or frame is None or getattr(frame, "empty", True):
+        return frame
+    columns = frame.columns
+    if isinstance(columns, pd.MultiIndex):
+        # yfinance uses (price_type, ticker) by default and (ticker, price_type)
+        # under group_by="ticker". Rename whichever level holds the symbols;
+        # a level with no match is left alone, so this works without having to
+        # know which layout the caller asked for.
+        for level in range(columns.nlevels):
+            if set(columns.get_level_values(level)) & set(reverse):
+                frame.columns = columns.set_levels(
+                    [reverse.get(v, v) for v in columns.levels[level]], level=level
+                )
+                break
+    else:
+        frame.columns = [reverse.get(c, c) for c in columns]
+    return frame
+
+
+def _yf_ticker(symbol, *args, **kwargs):
+    """yf.Ticker for the Yahoo spelling of a broker symbol."""
+    import yfinance as yf
+    return yf.Ticker(_yahoo_symbol(symbol), *args, **kwargs)
+
+
+def _yahoo_symbol_candidates(ticker):
+    """Plausible Yahoo spellings for a broker symbol, best guess first.
+
+    Preferred-share and share-class patterns (CIM-PRB, BRKB, ...) are NOT
+    generated here — `market_symbols.yahoo_symbol_for_ticker` already covers
+    those by pattern, and `_yahoo_symbol` checks it before this function is
+    ever reached (see there). What's left, and what has no pattern to derive
+    from, is a non-US listing a broker exports without its exchange suffix.
+    """
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return []
+    # Already Yahoo-shaped, or already resolved by the static map — nothing
+    # left to guess.
+    if symbol.endswith(_YAHOO_EXCHANGE_SUFFIXES):
+        return []
+    static = _yahoo_symbol_for_ticker(symbol)
+    if static and static != symbol:
+        return []
+    candidates = []
+
+    def add(candidate):
+        if candidate and candidate != symbol and candidate not in candidates:
+            candidates.append(candidate)
+
+    # Only worth guessing a suffix onto a plain alphabetic symbol — anything
+    # with its own punctuation or digits is already a specific spelling.
+    if re.match(r"^[A-Z]{1,6}$", symbol):
+        for suffix in _YAHOO_EXCHANGE_SUFFIXES:
+            add(f"{symbol}{suffix}")
+    return candidates
+
+
+def _symbol_prices_on_yahoo(symbol):
+    """True when Yahoo returns any recent price history for `symbol`."""
+    import yfinance as yf
+    try:
+        with _YF_DOWNLOAD_LOCK:
+            history = yf.Ticker(symbol).history(period="5d")
+        return history is not None and not history.empty
+    except Exception:
+        return False
+
+
+def _symbol_map_write(broker_symbol, yahoo_symbol, source, note=None, conn=None):
+    """Upsert one mapping. A blank yahoo_symbol records a probe that found none."""
+    broker = str(broker_symbol or "").strip().upper()
+    if not broker:
+        return
+    yahoo = str(yahoo_symbol or "").strip().upper()
+    own = conn is None
+    try:
+        if own:
+            conn = get_connection()
+        conn.execute(
+            """INSERT INTO symbol_map (broker_symbol, yahoo_symbol, source, note, updated_at)
+               VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(broker_symbol) DO UPDATE SET
+                   yahoo_symbol = excluded.yahoo_symbol,
+                   source       = excluded.source,
+                   note         = excluded.note,
+                   updated_at   = CURRENT_TIMESTAMP""",
+            (broker, yahoo, source, note),
+        )
+        if own:
+            conn.commit()
+    except Exception:
+        return
+    finally:
+        if own and conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    _symbol_map_invalidate()
+
+
+def _resolve_yahoo_symbol(ticker, conn=None):
+    """Probe Yahoo for a working spelling of `ticker` and record the answer.
+
+    Returns the resolved Yahoo symbol, or None. A failed probe is stored as a
+    blank so a symbol Yahoo genuinely does not list is not re-probed forever.
+    """
+    symbol = str(ticker or "").strip().upper()
+    if not symbol:
+        return None
+    # Already resolvable via the static map or an earlier DB entry. Confirm it
+    # still prices and hand it back without touching the DB — nothing to
+    # persist, since `_yahoo_symbol` will keep resolving this by itself.
+    # Without this check, a symbol the static map owns (e.g. WPAY -> TOPW) has
+    # no candidates of its own to try (`_yahoo_symbol_candidates` skips it for
+    # exactly this reason), so an explicit re-probe would find nothing and
+    # wrongly overwrite it with a recorded miss.
+    already = _yahoo_symbol(symbol)
+    if already != symbol and _symbol_prices_on_yahoo(already):
+        return already
+    resolved = ""
+    for candidate in _yahoo_symbol_candidates(symbol):
+        if _symbol_prices_on_yahoo(candidate):
+            resolved = candidate
+            break
+    _symbol_map_write(symbol, resolved, "auto", conn=conn)
+    return resolved or None
+
+
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     """Drop-in replacement for yf.download that batches large ticker lists.
 
@@ -225,6 +466,11 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     if not tickers:
         return pd.DataFrame()
 
+    # Ask Yahoo for the spelling it knows, then hand every column back under the
+    # symbol the caller passed. Callers index the result by their own ticker, so
+    # the translation has to be invisible on the way out.
+    tickers, _broker_by_yahoo = _yahoo_symbols_for(tickers)
+
     # Carried inside yf_kwargs so every period-aware caller inherits it without
     # touching its own download call. Must not reach yfinance.
     trim_to_last_bars = kwargs.pop("trim_to_last_bars", None)
@@ -233,9 +479,12 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # Do NOT default group_by — preserve caller's intent
 
     def _shape(frame):
-        return _trim_to_last_bars(
-            _anchor_from_prior_close(frame, anchor_on_or_before),
-            trim_to_last_bars,
+        return _restore_broker_symbols(
+            _trim_to_last_bars(
+                _anchor_from_prior_close(frame, anchor_on_or_before),
+                trim_to_last_bars,
+            ),
+            _broker_by_yahoo,
         )
 
     if len(tickers) <= chunk_size:
@@ -6036,7 +6285,7 @@ def _calc_dividend_growth_batch(tickers):
 
     for t in tickers:
         try:
-            divs = yf.Ticker(t).dividends
+            divs = _yf_ticker(t).dividends
             if divs is None or len(divs) < 2:
                 continue
             divs = divs[divs > 0]
@@ -10337,7 +10586,7 @@ def lookup_ticker(ticker):
         return number if math.isfinite(number) and number > 0 else 0.0
 
     try:
-        tk = yf.Ticker(ticker)
+        tk = _yf_ticker(ticker)
     except Exception as e:
         return jsonify({"error": f"Could not look up {ticker}: {str(e)}"}), 404
 
@@ -10352,7 +10601,7 @@ def lookup_ticker(ticker):
     # Detect ticker rename (e.g. TOPW → WPAY).
     actual_symbol = str(info.get("symbol") or "").upper()
     if actual_symbol and actual_symbol != ticker:
-        tk = yf.Ticker(actual_symbol)
+        tk = _yf_ticker(actual_symbol)
         try:
             info = tk.info or {}
         except Exception:
@@ -11096,11 +11345,11 @@ def dividend_calc_lookup(ticker):
     if not ticker:
         return jsonify({"error": "ticker is required"}), 400
     try:
-        tk = yf.Ticker(ticker)
+        tk = _yf_ticker(ticker)
         info = tk.info or {}
         actual = (info.get("symbol") or "").upper()
         if actual and actual != ticker:
-            tk = yf.Ticker(actual)
+            tk = _yf_ticker(actual)
             info = tk.info or {}
             ticker = actual
         try:
@@ -11383,7 +11632,7 @@ def _fetch_yahoo_dividend_history_for_tickers(tickers):
     missing = [ticker for ticker in tickers if ticker not in histories]
     for ticker in missing:
         try:
-            series = yf.Ticker(ticker).dividends
+            series = _yf_ticker(ticker).dividends
             if series is not None and len(series) > 0:
                 cutoff = pd.Timestamp.now(tz=getattr(series.index, "tz", None)) - pd.Timedelta(days=365)
                 recent = series[series.index >= cutoff]
@@ -12020,7 +12269,7 @@ def _recompute_dividend_fields_from_payments(
                 for ticker in sorted(missing_metadata_tickers):
                     try:
                         snapshot = _fetch_refresh_dividend_snapshot(
-                            yf.Ticker(ticker),
+                            _yf_ticker(ticker),
                             preferred_freq=preferred_freqs.get(ticker),
                         )
                     except Exception:
@@ -15318,7 +15567,7 @@ def _reinvest_history(ticker):
         return cached
     import yfinance as yf
     try:
-        hist = yf.Ticker(ticker).history(period="max", auto_adjust=False, actions=True)
+        hist = _yf_ticker(ticker).history(period="max", auto_adjust=False, actions=True)
     except Exception:
         hist = None
     _cache_set(_REINVEST_HISTORY_CACHE, ticker, hist)
@@ -15583,7 +15832,7 @@ def refresh_market_data():
     for t in tickers:
         if t not in price_map:
             try:
-                info = yf.Ticker(t).info or {}
+                info = _yf_ticker(t).info or {}
                 new_sym = (info.get("symbol") or "").upper()
                 if new_sym and new_sym != t:
                     rename_map[t] = new_sym
@@ -15630,7 +15879,7 @@ def refresh_market_data():
                     # Update description if it matches the ticker (i.e., never got enriched)
                     if new_sym:
                         try:
-                            new_info = yf.Ticker(new_sym).info or {}
+                            new_info = _yf_ticker(new_sym).info or {}
                             new_desc = new_info.get("longName") or new_info.get("shortName")
                             if new_desc:
                                 for pid in source_pids:
@@ -15732,7 +15981,7 @@ def refresh_market_data():
                 lookup_symbol = rename_map.get(t, t)
                 try:
                     fallback_snapshot = _fetch_refresh_dividend_snapshot(
-                        yf.Ticker(lookup_symbol),
+                        _yf_ticker(lookup_symbol),
                         preferred_freq=preferred_freq,
                     )
                 except Exception:
@@ -15765,7 +16014,7 @@ def refresh_market_data():
             lookup_symbol = rename_map.get(t, t)
             try:
                 div_snapshot_map[t] = _fetch_refresh_dividend_snapshot(
-                    yf.Ticker(lookup_symbol),
+                    _yf_ticker(lookup_symbol),
                     preferred_freq=preferred_freq,
                 )
             except Exception:
@@ -21891,7 +22140,7 @@ def dividend_compare_holdings():
 
     def _get_fwd(sym):
         try:
-            info = yf.Ticker(sym).info or {}
+            info = _yf_ticker(sym).info or {}
             rate = info.get("dividendRate")
             return sym, rate if rate and rate > 0 else None
         except Exception:
@@ -21965,7 +22214,7 @@ def dividend_compare_lookup():
             "error": None,
         }
         try:
-            tk = yf.Ticker(tk_sym)
+            tk = _yf_ticker(tk_sym)
             info = tk.info or {}
             price = info.get("regularMarketPrice") or info.get("currentPrice") or 0
             entry["current_price"] = price
@@ -22104,7 +22353,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             continue
 
         try:
-            yf_tk = yf.Ticker(tk)
+            yf_tk = _yf_ticker(tk)
             hist = yf_tk.history(start=one_year_ago, interval="1d", auto_adjust=False, actions=True)
             if hist.empty or len(hist) < 2:
                 results.append({"ticker": tk, "coverage_ratio": None, "benchmark": None, "nav_tested": False})
@@ -22144,7 +22393,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             component_returns = []
             try:
                 for bench in _nav_benchmark_parts(benchmark):
-                    bench_hist = yf.Ticker(bench).history(start=close.index[0], interval="1d", auto_adjust=True)
+                    bench_hist = _yf_ticker(bench).history(start=close.index[0], interval="1d", auto_adjust=True)
                     if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
                         bench_close = bench_hist["Close"].dropna()
                         aligned = _nav_align_series(close.rename("fund"), bench_close.rename("benchmark"))
@@ -22280,6 +22529,183 @@ def portfolio_coverage():
         ) for t in ticker_info)),
     )
     return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
+
+
+def _all_held_tickers(conn):
+    """Every ticker held in any profile. Symbol mapping is not profile-scoped:
+    a broker symbol means the same security whichever account holds it."""
+    rows = conn.execute(
+        """SELECT DISTINCT UPPER(ticker) AS ticker
+           FROM all_account_info
+           WHERE COALESCE(quantity, 0) > 0 AND ticker IS NOT NULL AND ticker != ''
+           ORDER BY 1"""
+    ).fetchall()
+    return [r["ticker"] for r in rows]
+
+
+def _unpriceable_held_tickers(conn):
+    """Held tickers Yahoo returns no prices for, in one batch call.
+
+    Cheaper and far kinder to the rate limiter than probing each symbol: one
+    download tells us which symbols need a candidate search at all.
+    """
+    tickers = _all_held_tickers(conn)
+    if not tickers:
+        return []
+    try:
+        raw = _chunked_yf_download(
+            " ".join(tickers), period="5d", auto_adjust=True, progress=False, threads=False
+        )
+    except Exception:
+        return []
+    if raw is None or raw.empty:
+        return []
+    if isinstance(raw.columns, pd.MultiIndex):
+        if "Close" not in raw.columns.get_level_values(0):
+            return []
+        close = raw["Close"]
+    else:
+        close = raw[["Close"]] if "Close" in raw.columns else pd.DataFrame()
+        if not close.empty and len(tickers) == 1:
+            close.columns = [tickers[0]]
+    missing = []
+    for ticker in tickers:
+        if ticker not in close.columns:
+            missing.append(ticker)
+            continue
+        try:
+            if int(close[ticker].notna().sum()) == 0:
+                missing.append(ticker)
+        except Exception:
+            missing.append(ticker)
+    return missing
+
+
+@app.route("/api/symbol-map", methods=["GET"])
+def symbol_map_list():
+    """Current broker->Yahoo mappings, plus which held symbols still need one."""
+    conn = get_connection()
+    try:
+        try:
+            rows = conn.execute(
+                """SELECT broker_symbol, yahoo_symbol, source, note, updated_at
+                   FROM symbol_map ORDER BY broker_symbol"""
+            ).fetchall()
+        except Exception:
+            rows = []
+        held = set(_all_held_tickers(conn))
+    finally:
+        conn.close()
+
+    mappings = []
+    for row in rows:
+        broker = str(row["broker_symbol"] or "").upper()
+        yahoo = str(row["yahoo_symbol"] or "").upper()
+        mappings.append({
+            "broker_symbol": broker,
+            # A blank is a recorded miss, not a mapping to nothing.
+            "yahoo_symbol": yahoo or None,
+            "unlistable": not yahoo,
+            "source": row["source"] or "",
+            "note": row["note"] or "",
+            "updated_at": row["updated_at"],
+            "held": broker in held,
+        })
+    return jsonify({"mappings": mappings, "held_count": len(held)})
+
+
+@app.route("/api/symbol-map/resolve", methods=["POST"])
+def symbol_map_resolve():
+    """Find Yahoo spellings for held symbols Yahoo cannot price as written.
+
+    Body may carry {"tickers": [...]} to re-probe specific symbols (which also
+    clears a previously recorded miss); with no body it scans every holding.
+    """
+    payload = request.get_json(silent=True) or {}
+    requested = [
+        str(t or "").strip().upper()
+        for t in (payload.get("tickers") or [])
+        if str(t or "").strip()
+    ]
+
+    conn = get_connection()
+    try:
+        if requested:
+            targets = requested
+        else:
+            # Skip symbols already answered; a recorded miss is an answer.
+            try:
+                answered = {
+                    str(r["broker_symbol"] or "").upper()
+                    for r in conn.execute("SELECT broker_symbol FROM symbol_map")
+                }
+            except Exception:
+                answered = set()
+            targets = [t for t in _unpriceable_held_tickers(conn) if t not in answered]
+
+        resolved, unresolved = [], []
+        for ticker in targets:
+            match = _resolve_yahoo_symbol(ticker, conn=conn)
+            if match:
+                resolved.append({"broker_symbol": ticker, "yahoo_symbol": match})
+            else:
+                unresolved.append(ticker)
+        conn.commit()
+    finally:
+        conn.close()
+
+    _symbol_map_invalidate()
+    # A new mapping changes what every cached price answer was built from.
+    _PORTFOLIO_SUMMARY_CACHE.clear()
+    _PORTFOLIO_COVERAGE_CACHE.clear()
+    return jsonify({
+        "checked": len(targets),
+        "resolved": resolved,
+        "unresolved": unresolved,
+    })
+
+
+@app.route("/api/symbol-map", methods=["PUT"])
+def symbol_map_upsert():
+    """Set or clear one mapping by hand."""
+    payload = request.get_json(silent=True) or {}
+    broker = str(payload.get("broker_symbol") or "").strip().upper()
+    yahoo = str(payload.get("yahoo_symbol") or "").strip().upper()
+    if not broker:
+        return jsonify({"error": "broker_symbol is required"}), 400
+    if yahoo and yahoo != broker and not _symbol_prices_on_yahoo(yahoo):
+        # Saving a symbol Yahoo cannot price would silently reintroduce the very
+        # blank the mapping exists to fix, so refuse it and say so.
+        return jsonify({
+            "error": f"Yahoo returns no price history for {yahoo}. Check the symbol."
+        }), 400
+    _symbol_map_write(broker, yahoo, "manual", note=payload.get("note"))
+    _PORTFOLIO_SUMMARY_CACHE.clear()
+    _PORTFOLIO_COVERAGE_CACHE.clear()
+    return jsonify({
+        "broker_symbol": broker,
+        "yahoo_symbol": yahoo or None,
+        "unlistable": not yahoo,
+        "source": "manual",
+    })
+
+
+@app.route("/api/symbol-map/<broker_symbol>", methods=["DELETE"])
+def symbol_map_delete(broker_symbol):
+    """Forget a mapping, so the symbol is asked for exactly as the broker wrote it."""
+    broker = str(broker_symbol or "").strip().upper()
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM symbol_map WHERE broker_symbol = ?", (broker,))
+        conn.commit()
+    except Exception:
+        return jsonify({"error": "Could not remove that mapping"}), 500
+    finally:
+        conn.close()
+    _symbol_map_invalidate()
+    _PORTFOLIO_SUMMARY_CACHE.clear()
+    _PORTFOLIO_COVERAGE_CACHE.clear()
+    return jsonify({"deleted": broker})
 
 
 _TICKER_RESEARCH_CHECKLIST = {
@@ -22453,7 +22879,7 @@ def _ticker_research_kind(symbol, cef_row, holding=None, cef_universe=None):
         return "stock"
     try:
         import yfinance as yf
-        info = yf.Ticker(symbol).info or {}
+        info = _yf_ticker(symbol).info or {}
         name = info.get("longName") or info.get("shortName") or symbol
         kind = _classify_fund_kind(symbol, info, name, cef_universe=cef_universe or {})
         if kind in (None, "other"):
@@ -22832,7 +23258,7 @@ def _yf_ticker_info_cached_or_fetch(ticker, timeout_sec=4):
         import yfinance as yf
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
         with ThreadPoolExecutor(max_workers=1) as pool:
-            fut = pool.submit(lambda: yf.Ticker(ticker).info or {})
+            fut = pool.submit(lambda: _yf_ticker(ticker).info or {})
             try:
                 info = fut.result(timeout=timeout_sec) or {}
             except FuturesTimeout:
@@ -22856,7 +23282,7 @@ def _yahoo_listed_symbol(ticker):
 def _ticker_closure_risk_from_local_sources(tickers, fund_facts=None):
     """ETF closure risk from the in-process .info cache and provider catalog.
 
-    The dashboard grade endpoint used to call yf.Ticker(t).info for every
+    The dashboard grade endpoint used to call _yf_ticker(t).info for every
     holding before downloading prices. Yahoo's quoteSummary is far slower than
     the history download, so Portfolio Grade / Sharpe / beta sat blank for a
     long time (or never landed if the .info storm rate-limited the download).
@@ -23025,7 +23451,7 @@ def portfolio_summary_data():
     benchmark_symbols = {"sp500": "SPY", "nasdaq": "QQQ"}
     all_dl = list(set(tickers + list(benchmark_symbols.values())))
 
-    # Do NOT call yf.Ticker(t).info for every holding before the history
+    # Do NOT call _yf_ticker(t).info for every holding before the history
     # download. quoteSummary is much slower than history and rate-limits the
     # subsequent Close download, which is what the grade / Sharpe / beta cards
     # actually need. Renames are resolved only for symbols the batch omitted.
@@ -23549,7 +23975,7 @@ def ticker_return_chart(ticker):
     accounting_ticker = _accounting_symbol_for_ticker(ticker)
     dl_ticker = _yahoo_symbol_for_ticker(accounting_ticker) or accounting_ticker
     try:
-        _info = yf.Ticker(ticker).info or {}
+        _info = _yf_ticker(ticker).info or {}
         _new_sym = (_info.get("symbol") or "").upper()
         if _new_sym and _new_sym != ticker:
             dl_ticker = _new_sym
@@ -23742,7 +24168,7 @@ def ticker_return_1y(ticker):
     dl_ticker = _yahoo_symbol_for_ticker(ticker)
     description = ticker
     try:
-        _info = yf.Ticker(dl_ticker).info or {}
+        _info = _yf_ticker(dl_ticker).info or {}
         description = _info.get("longName") or _info.get("shortName") or ticker
         _new_sym = (_info.get("symbol") or "").upper()
         if _new_sym and _new_sym != dl_ticker:
@@ -24465,7 +24891,7 @@ def _research_adjusted_close_series(ticker, force_refresh=False):
     dl_symbol = _yahoo_symbol_for_ticker(symbol)
     description = symbol
     try:
-        yf_ticker = yf.Ticker(dl_symbol)
+        yf_ticker = _yf_ticker(dl_symbol)
         info = _cached_yf_info(yf_ticker, dl_symbol)
         description = info.get("longName") or info.get("shortName") or info.get("displayName") or symbol
         info_symbol = (info.get("symbol") or "").upper()
@@ -24665,7 +25091,7 @@ def _research_approx_yield(ticker):
     try:
         import yfinance as yf
         import datetime
-        t = yf.Ticker(ticker)
+        t = _yf_ticker(ticker)
         divs = t.dividends
         if divs is None or divs.empty:
             return None
@@ -25540,19 +25966,19 @@ def security_research(kind, ticker):
     yf_ticker = None
     info = {}
     try:
-        yf_ticker = yf.Ticker(lookup_symbol)
+        yf_ticker = _yf_ticker(lookup_symbol)
         info = _cached_yf_info(yf_ticker, lookup_symbol)
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != lookup_symbol:
             lookup_symbol = info_symbol
-            yf_ticker = yf.Ticker(lookup_symbol)
+            yf_ticker = _yf_ticker(lookup_symbol)
             info = _cached_yf_info(yf_ticker, lookup_symbol)
     except Exception as exc:
         if not preferred_official_profile:
             return jsonify({"error": f"Could not load {ticker}: {exc}"}), 404
         # Continue with official issuer facts when Yahoo is unavailable. The
         # guarded Yahoo calls below will simply return gaps.
-        yf_ticker = yf.Ticker(lookup_symbol)
+        yf_ticker = _yf_ticker(lookup_symbol)
         info = {}
 
     name = (
@@ -26392,14 +26818,14 @@ def _nav_ohlc_from_yahoo_ticker(sym, start_date, fetch_end):
 
     hist = pd.DataFrame()
     try:
-        hist = yf.Ticker(sym).history(
+        hist = _yf_ticker(sym).history(
             start=start_date, end=fetch_end, interval="1d", auto_adjust=False, actions=True,
         )
     except Exception:
         hist = pd.DataFrame()
     if hist is None or hist.empty:
         try:
-            hist = yf.Ticker(sym).history(period="max", interval="1d", auto_adjust=False, actions=True)
+            hist = _yf_ticker(sym).history(period="max", interval="1d", auto_adjust=False, actions=True)
         except Exception:
             return None, None
     if hist is None or hist.empty:
@@ -32258,7 +32684,7 @@ def gains_losses_descriptions():
         ticker for a month because one burst ran too fast.
         """
         try:
-            info = yf.Ticker(sym).info or {}
+            info = _yf_ticker(sym).info or {}
         except Exception:  # noqa: BLE001 - one bad ticker must not kill the batch
             return sym, "", False
         name = str(info.get("longName") or info.get("shortName") or "").strip()[:200]
@@ -33711,7 +34137,7 @@ def etf_screen_data():
     if mode == "ohlcv":
         dl_ticker = yahoo_by_symbol.get(ticker, ticker)
         try:
-            tk = yf.Ticker(dl_ticker)
+            tk = _yf_ticker(dl_ticker)
             history_kwargs = _range_kwargs()
             history_anchor = history_kwargs.pop("anchor_on_or_before", None)
             df = tk.history(interval=interval, auto_adjust=False, **history_kwargs)
@@ -33949,7 +34375,7 @@ def etf_screen_data():
                 try:
                     fallback_kwargs = _range_kwargs()
                     fallback_anchor = fallback_kwargs.pop("anchor_on_or_before", None)
-                    fallback = yf.Ticker(dl_sym).history(
+                    fallback = _yf_ticker(dl_sym).history(
                         interval="1d", auto_adjust=False, actions=True,
                         **fallback_kwargs,
                     )
@@ -34107,7 +34533,7 @@ def etf_screen_data():
             }
 
             try:
-                tk_obj = yf.Ticker(dl_sym)
+                tk_obj = _yf_ticker(dl_sym)
                 info = _cached_yf_info(tk_obj, dl_sym)
             except Exception:
                 tk_obj = None
@@ -34430,7 +34856,7 @@ def _money_market_sec_yield(ticker):
         return cached
     try:
         import yfinance as yf
-        info = yf.Ticker(ticker).info or {}
+        info = _yf_ticker(ticker).info or {}
         raw = info.get("yield") or info.get("sevenDayYield") or info.get("trailingAnnualDividendYield")
         yield_pct = float(raw) if raw not in (None, "") else None
         if yield_pct is not None and yield_pct > 1:
@@ -34467,7 +34893,7 @@ def _yf_div_pay_date(ticker):
     """Fetch next dividend pay date from yfinance. Returns date or None."""
     try:
         import yfinance as yf
-        cal = yf.Ticker(ticker).calendar
+        cal = _yf_ticker(ticker).calendar
         if not cal or not isinstance(cal, dict):
             return None
         d = cal.get("Dividend Date")
@@ -36225,7 +36651,7 @@ def _yf_earnings_info(ticker):
     found = False
 
     try:
-        tk = yf.Ticker(sym)
+        tk = _yf_ticker(sym)
     except Exception:
         _cache_set(_EARNINGS_TICKER_CACHE, sym, {})
         return None
@@ -37103,12 +37529,12 @@ def _build_stock_checklist(symbol, skip_if_fund=False):
         return None, "ticker is required"
     lookup = _yahoo_symbol_for_ticker(symbol)
     try:
-        tk = yf.Ticker(lookup)
+        tk = _yf_ticker(lookup)
         info = tk.info or {}
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != lookup:
             lookup = info_symbol
-            tk = yf.Ticker(lookup)
+            tk = _yf_ticker(lookup)
             info = tk.info or {}
     except Exception as exc:
         return None, f"Could not load {symbol}: {exc}"
@@ -37327,12 +37753,12 @@ def _build_stock_valuation(symbol, overrides=None):
         return None, "ticker is required"
     lookup = _yahoo_symbol_for_ticker(symbol)
     try:
-        tk = yf.Ticker(lookup)
+        tk = _yf_ticker(lookup)
         info = tk.info or {}
         info_symbol = (info.get("symbol") or "").upper()
         if info_symbol and info_symbol != lookup:
             lookup = info_symbol
-            tk = yf.Ticker(lookup)
+            tk = _yf_ticker(lookup)
             info = tk.info or {}
     except Exception as exc:
         return None, f"Could not load {symbol}: {exc}"
@@ -37914,7 +38340,7 @@ def _watchlist_security_description(ticker, stored_description="", ticker_obj=No
     try:
         if ticker_obj is None:
             import yfinance as yf
-            ticker_obj = yf.Ticker(ticker)
+            ticker_obj = _yf_ticker(ticker)
         info = _cached_yf_info(ticker_obj, ticker)
         description = clean_security_description(
             info.get("longName") or info.get("shortName") or ""
@@ -38215,7 +38641,7 @@ def watchlist_data():
         ticker_info = {}
 
         for ticker in watching_tickers:
-            yf_ticker_obj = yf.Ticker(ticker)
+            yf_ticker_obj = _yf_ticker(ticker)
             description = _watchlist_security_description(
                 ticker,
                 stored_descriptions.get(ticker, ""),
@@ -38480,7 +38906,7 @@ def nav_erosion_data():
         # the UI is actually included in the analysis.
         fetch_end = (requested_end + _td(days=1)).isoformat()
 
-        hist = yf.Ticker(sym).history(
+        hist = _yf_ticker(sym).history(
             start=start_date, end=fetch_end,
             interval="1d", auto_adjust=False, actions=True,
         )
@@ -38496,7 +38922,7 @@ def nav_erosion_data():
             hist["Dividends"] = _hist_divs.reindex(hist.index).fillna(0.0)
 
         def _fetch_benchmark_part(part):
-            bench_hist = yf.Ticker(part).history(
+            bench_hist = _yf_ticker(part).history(
                 start=start_date, end=fetch_end,
                 interval="1d", auto_adjust=True,
             )
@@ -39176,7 +39602,7 @@ def nav_erosion_portfolio_data():
             adjusted, _ = get_ticker_df(sym)
         if adjusted is None or adjusted.empty:
             try:
-                bench_hist = yf.Ticker(sym).history(
+                bench_hist = _yf_ticker(sym).history(
                     start=start_date,
                     end=(requested_end + _td(days=1)).isoformat(),
                     interval="1d",
@@ -40111,7 +40537,7 @@ def _pis_run_inner():
             yo = r["yield_override"]
 
             try:
-                hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
+                hist = _yf_ticker(sym).history(period="1y", auto_adjust=False, actions=True)
             except Exception as e:
                 results.append({"ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
                                 "is_comparison": r["is_comparison"],
@@ -41318,7 +41744,7 @@ def analytics_data():
         from concurrent.futures import ThreadPoolExecutor
         def _fetch_sector(t):
             try:
-                info = yf.Ticker(t).info
+                info = _yf_ticker(t).info
                 return t, info.get("sector", info.get("category", "Other")), info.get("quoteType", "Unknown")
             except Exception:
                 return t, "Unknown", "Unknown"
@@ -41791,7 +42217,7 @@ def analytics_yield_trend():
     result_series = []
     for t in req_tickers:
         try:
-            tk = yf.Ticker(t)
+            tk = _yf_ticker(t)
             hist = tk.history(period=period)
             divs = tk.dividends
             if hist.empty or divs.empty:
@@ -41904,7 +42330,7 @@ def analytics_nav_erosion_chart():
     result_series = []
     for t in req_tickers:
         try:
-            tk = yf.Ticker(t)
+            tk = _yf_ticker(t)
             hist = tk.history(period=period)
             divs = tk.dividends
             if hist.empty:
@@ -41998,7 +42424,7 @@ def analytics_peers():
 
     def _fetch_peer(t):
         try:
-            info = yf.Ticker(t).info
+            info = _yf_ticker(t).info
             name = info.get("shortName", info.get("longName", ""))
             yld = info.get("yield", info.get("dividendYield", 0))
             if yld and yld > 0:
@@ -43795,7 +44221,7 @@ def builder_analyze(port_id):
 
         # Dividend income — try info first, fall back to dividend history
         try:
-            yf_ticker = yf.Ticker(t)
+            yf_ticker = _yf_ticker(t)
             info = yf_ticker.info or {}
             div_yield = info.get("yield") or 0
             # dividendYield from yfinance can be a percentage (e.g. 11.84) or
@@ -44068,7 +44494,7 @@ def builder_compare():
         ann_income = 0
         for h in holdings:
             try:
-                info = yf.Ticker(h["ticker"]).info or {}
+                info = _yf_ticker(h["ticker"]).info or {}
                 dy = info.get("yield") or 0
                 if dy == 0:
                     raw_dy = info.get("dividendYield") or 0
@@ -44836,7 +45262,7 @@ def distribution_compare_lookup():
         return jsonify(error="No ticker provided."), 400
 
     try:
-        t = yf.Ticker(ticker)
+        t = _yf_ticker(ticker)
         hist = t.history(period="1y", auto_adjust=False, actions=True)
     except Exception as e:
         return jsonify(error=f"Failed to fetch data for {ticker}: {str(e)}"), 400
@@ -45124,7 +45550,7 @@ def _dc_simulate_price_path(sym, duration_months, market_type):
     vol_mult = vol_mult_map.get(market_type, 1.0)
 
     try:
-        hist = yf.Ticker(sym).history(period="1y", auto_adjust=False, actions=True)
+        hist = _yf_ticker(sym).history(period="1y", auto_adjust=False, actions=True)
     except Exception as e:
         return None, None, None, f"Failed to fetch data for {sym}: {str(e)}"
     if hist is None or hist.empty:
@@ -47415,7 +47841,7 @@ def _get_ticker_sensitivity(ticker, classification_type, description="", overrid
         info = cache_entry["info"]
     else:
         try:
-            info = yf.Ticker(ticker).info or {}
+            info = _yf_ticker(ticker).info or {}
             _ticker_info_cache[ticker] = {"info": info, "ts": now}
         except Exception:
             info = {}
@@ -50188,7 +50614,7 @@ def sp500_performance():
     import yfinance as yf
     from datetime import datetime, timedelta
     try:
-        spy = yf.Ticker("^GSPC")
+        spy = _yf_ticker("^GSPC")
         today = datetime.now()
         year_start = datetime(today.year, 1, 1)
         hist = spy.history(start=year_start - timedelta(days=5), end=today + timedelta(days=1))
@@ -50935,7 +51361,7 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
 
     def _fetch_info(t):
         try:
-            info = yf.Ticker(t).info or {}
+            info = _yf_ticker(t).info or {}
             etf_cat = info.get("category", "")
             etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, t)
             return t, {
@@ -51857,7 +52283,7 @@ def etf_evaluate(ticker):
 
     info_error = None
     try:
-        info = _cached_yf_info(yf.Ticker(ticker), ticker) or {}
+        info = _cached_yf_info(_yf_ticker(ticker), ticker) or {}
         if not info:
             info_error = RuntimeError("market data is temporarily unavailable")
     except Exception as exc:
@@ -51922,7 +52348,7 @@ def etf_evaluate(ticker):
         import time as _time
         _time.sleep(0.4)
         try:
-            peer_info = yf.Ticker(peer_ticker).info or {}
+            peer_info = _yf_ticker(peer_ticker).info or {}
         except Exception:
             return None
         name = peer_info.get("shortName") or peer_info.get("longName", "")
@@ -52000,7 +52426,7 @@ def etf_evaluate(ticker):
     fund_adj = None
     price_history_suspect = False
     try:
-        hist = yf.Ticker(ticker).history(period="max", auto_adjust=False)
+        hist = _yf_ticker(ticker).history(period="max", auto_adjust=False)
         if hist is not None and not hist.empty and len(hist) >= 30:
             close = hist["Close"].dropna()
             # A split/rename artifact (e.g. the dead NUSI series) makes every
@@ -52627,7 +53053,7 @@ def _run_fund_scan(kind):
 
     def _load_info(sym):
         try:
-            info = yf.Ticker(sym).info or {}
+            info = _yf_ticker(sym).info or {}
         except Exception as exc:  # noqa: BLE001 - one bad ticker must not kill the batch
             return sym, None, str(exc)
         return sym, info, None
@@ -53697,7 +54123,7 @@ def etf_funds_search():
     if search_q and not provider_filter and looks_like_ticker and not exact_symbol_found:
         try:
             import yfinance as yf
-            tk = yf.Ticker(search_q)
+            tk = _yf_ticker(search_q)
             info = tk.info or {}
             name = info.get('longName') or info.get('shortName') or ''
             if name:

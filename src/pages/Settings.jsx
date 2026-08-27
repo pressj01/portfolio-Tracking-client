@@ -34,6 +34,14 @@ export default function Settings() {
   const [navStatus, setNavStatus] = useState(null)
   const [navSaving, setNavSaving] = useState(false)
 
+  // Broker -> Yahoo symbol mapping
+  const [symbolMap, setSymbolMap] = useState([])
+  const [symbolStatus, setSymbolStatus] = useState(null)
+  const [symbolBusy, setSymbolBusy] = useState(false)
+  const [symbolScanning, setSymbolScanning] = useState(false)
+  const [symbolBroker, setSymbolBroker] = useState('')
+  const [symbolYahoo, setSymbolYahoo] = useState('')
+
   // Backup management
   const [backups, setBackups] = useState([])
   const [backupDir, setBackupDir] = useState('')
@@ -48,6 +56,73 @@ export default function Settings() {
     'BIL', 'BND', 'TLT', 'NLR', 'ITA',
     'XLE', 'SOXX', 'XLF', 'XLV', 'XLU', 'VNQ',
   ]
+
+  const fetchSymbolMap = () => {
+    pf('/api/symbol-map')
+      .then(r => r.json())
+      .then(d => setSymbolMap(Array.isArray(d?.mappings) ? d.mappings : []))
+      .catch(() => setSymbolMap([]))
+  }
+
+  const handleScanSymbols = () => {
+    setSymbolScanning(true)
+    setSymbolStatus({ type: 'info', msg: 'Checking every holding against Yahoo. This takes a minute.' })
+    pf('/api/symbol-map/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+      .then(r => r.json())
+      .then(d => {
+        const found = (d?.resolved || []).length
+        const stuck = d?.unresolved || []
+        setSymbolStatus({
+          type: found ? 'success' : 'info',
+          msg: found
+            ? `Matched ${found} symbol${found === 1 ? '' : 's'}.`
+              + (stuck.length ? ` No Yahoo listing for ${stuck.join(', ')}.` : '')
+            : stuck.length
+              ? `No Yahoo listing found for ${stuck.join(', ')}.`
+              : 'Every holding already prices under its own symbol.',
+        })
+        fetchSymbolMap()
+      })
+      .catch(() => setSymbolStatus({ type: 'error', msg: 'Symbol scan failed.' }))
+      .finally(() => setSymbolScanning(false))
+  }
+
+  const handleSaveSymbol = () => {
+    const broker = symbolBroker.trim().toUpperCase()
+    const yahoo = symbolYahoo.trim().toUpperCase()
+    if (!broker || !yahoo) return
+    setSymbolBusy(true)
+    pf('/api/symbol-map', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broker_symbol: broker, yahoo_symbol: yahoo }),
+    })
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(d?.error || 'Could not save that mapping')
+        setSymbolStatus({ type: 'success', msg: `${broker} will be priced as ${yahoo}.` })
+        setSymbolBroker('')
+        setSymbolYahoo('')
+        fetchSymbolMap()
+      })
+      .catch(e => setSymbolStatus({ type: 'error', msg: e.message }))
+      .finally(() => setSymbolBusy(false))
+  }
+
+  const handleRemoveSymbol = (broker) => {
+    setSymbolBusy(true)
+    pf(`/api/symbol-map/${encodeURIComponent(broker)}`, { method: 'DELETE' })
+      .then(() => {
+        setSymbolStatus({ type: 'success', msg: `${broker} will be asked for exactly as your broker writes it.` })
+        fetchSymbolMap()
+      })
+      .catch(() => setSymbolStatus({ type: 'error', msg: `Could not remove ${broker}.` }))
+      .finally(() => setSymbolBusy(false))
+  }
 
   const fetchStats = () => {
     pf('/api/data/stats')
@@ -215,7 +290,7 @@ export default function Settings() {
       .finally(() => setDeletingBackup(null))
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups() }, [selection])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -513,6 +588,102 @@ export default function Settings() {
             {navBenchmarkChoices.map(b => <option key={b} value={b} />)}
           </datalist>
           <button className="btn btn-primary" onClick={handleAddNavOverride} disabled={navSaving || !navTicker.trim() || !navBenchmark.trim()}>
+            Save
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2>Broker Symbol Mapping</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Brokers do not always spell a symbol the way Yahoo does. Interactive Brokers writes
+          TSX Venture listings bare (PGDC, where Yahoo wants PGDC.V) and preferreds as CIM-PRB
+          (Yahoo: CIM-PB); Fidelity writes Berkshire class B as BRKB (Yahoo: BRK-B). Without a
+          mapping those holdings get no price, so they show no grade and no NAV score.
+          Your broker&apos;s spelling stays the ticker everywhere &mdash; this only changes what
+          Yahoo is asked for.
+        </p>
+
+        {symbolStatus && (
+          <div className={`alert alert-${symbolStatus.type}`} style={{ marginBottom: '0.75rem' }}>{symbolStatus.msg}</div>
+        )}
+
+        <div style={{ marginBottom: '0.75rem' }}>
+          <button className="btn" onClick={handleScanSymbols} disabled={symbolScanning || symbolBusy}>
+            {symbolScanning ? 'Scanning...' : 'Scan holdings for unmatched symbols'}
+          </button>
+        </div>
+
+        {symbolMap.length > 0 && (
+          <div style={{ marginBottom: '0.75rem', overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+              <thead>
+                <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+                  <th style={{ padding: '4px 8px 4px 0' }}>Broker</th>
+                  <th style={{ padding: '4px 8px' }}>Yahoo</th>
+                  <th style={{ padding: '4px 8px' }}>Source</th>
+                  <th style={{ padding: '4px 0' }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {symbolMap.map(row => (
+                  <tr key={row.broker_symbol} style={{ borderTop: '1px solid var(--border)' }}>
+                    <td style={{ padding: '4px 8px 4px 0', fontWeight: 600 }}>
+                      {row.broker_symbol}
+                      {!row.held && (
+                        <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}> (not held)</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '4px 8px' }}>
+                      {row.yahoo_symbol || (
+                        // A recorded miss, kept so the symbol is not re-probed on
+                        // every scan. Worth showing: it explains a blank grade.
+                        <span style={{ color: 'var(--warning-money)' }}>no Yahoo listing</span>
+                      )}
+                    </td>
+                    <td style={{ padding: '4px 8px', color: 'var(--text-dim)' }}>{row.source}</td>
+                    <td style={{ padding: '4px 0', textAlign: 'right' }}>
+                      <button
+                        onClick={() => handleRemoveSymbol(row.broker_symbol)}
+                        disabled={symbolBusy || symbolScanning}
+                        style={{
+                          background: 'none', border: 'none', color: 'var(--neg)',
+                          cursor: 'pointer', padding: '0 2px', fontSize: '1rem', lineHeight: 1,
+                        }}
+                        title={`Remove ${row.broker_symbol}`}
+                      >&times;</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) minmax(90px, 1fr) auto', gap: '0.5rem', alignItems: 'center' }}>
+          <input
+            type="text"
+            value={symbolBroker}
+            onChange={e => setSymbolBroker(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && handleSaveSymbol()}
+            placeholder="Broker symbol"
+            style={{ textTransform: 'uppercase' }}
+            disabled={symbolBusy}
+          />
+          <input
+            type="text"
+            value={symbolYahoo}
+            onChange={e => setSymbolYahoo(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && handleSaveSymbol()}
+            placeholder="Yahoo symbol"
+            style={{ textTransform: 'uppercase' }}
+            disabled={symbolBusy}
+          />
+          <button
+            className="btn btn-primary"
+            onClick={handleSaveSymbol}
+            disabled={symbolBusy || !symbolBroker.trim() || !symbolYahoo.trim()}
+          >
             Save
           </button>
         </div>
