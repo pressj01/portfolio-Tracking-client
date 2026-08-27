@@ -26173,6 +26173,91 @@ def _nav_benchmark_parts(benchmark):
     return parts or ["SPY"]
 
 
+def _nav_benchmark_candidates(ticker, override="", name="", category=""):
+    """Benchmarks to try in order: the typed pick, the mapped default, then SPY."""
+    candidates = []
+    for cand in (
+        str(override or "").strip().upper(),
+        _nav_benchmark_for_ticker(ticker, name, category),
+        "SPY",
+    ):
+        if cand and cand not in candidates:
+            candidates.append(cand)
+    return candidates
+
+
+def _nav_compose_benchmark(label, fetch_part):
+    """Build a single close series for a benchmark label, which may be ``A+B``.
+
+    ``fetch_part`` returns a close series for one symbol, or None. Returns
+    ``(series, reason)``; ``series`` is None when the label has no usable history
+    and ``reason`` is the phrase that completes "<label> ...".
+    """
+    usable = []
+    for part in _nav_benchmark_parts(label):
+        try:
+            close = fetch_part(part)
+        except Exception:
+            close = None
+        if close is None:
+            continue
+        close = pd.to_numeric(pd.Series(close), errors="coerce").dropna()
+        if len(close) >= 2:
+            usable.append(close.rename(part))
+    if not usable:
+        return None, "has no usable price history"
+    if len(usable) == 1:
+        return usable[0].rename(label), None
+    aligned = _nav_align_series(*usable)
+    if len(aligned) < 2:
+        return None, "has no overlapping history across its parts"
+    composite = pd.Series(1.0, index=aligned.index, dtype=float)
+    for col in aligned.columns:
+        component_start = float(aligned[col].iloc[0])
+        if component_start <= 0:
+            return None, "has an invalid starting price"
+        composite = composite + (aligned[col] / component_start - 1.0)
+    return composite.rename(label), None
+
+
+def _nav_resolve_benchmark(ticker, override, fetch_part, name="", category=""):
+    """First candidate benchmark that actually has history, and what it replaced.
+
+    A mistyped benchmark used to abandon the whole back-test, including the raw
+    NAV numbers that never needed a benchmark. Fall back to the mapped default
+    instead and say so. Returns ``(label, series, note)``; ``series`` is None
+    only when every candidate — SPY included — came back empty, which points at
+    the price feed rather than the symbol, and ``note`` is then the full error.
+    """
+    candidates = _nav_benchmark_candidates(ticker, override, name, category)
+    typed = bool(str(override or "").strip())
+    first_label, first_reason = candidates[0], None
+    for index, label in enumerate(candidates):
+        series, reason = _nav_compose_benchmark(label, fetch_part)
+        if series is not None:
+            if index == 0:
+                return label, series, None
+            source = "you entered" if typed else "mapped for this fund"
+            note = (
+                f"Used {label} — the benchmark {source} ({first_label}) {first_reason}."
+            )
+            return label, series, note
+        if first_reason is None:
+            first_reason = reason
+    if len(candidates) == 1:
+        failure = f"No usable benchmark history: {first_label} {first_reason}."
+    else:
+        failure = (
+            f"No usable benchmark history: {first_label} {first_reason}, and the "
+            f"fallback{'s' if len(candidates) > 2 else ''} "
+            f"({', '.join(candidates[1:])}) came back empty too."
+        )
+    return None, None, (
+        f"{failure} That points at a price-data outage rather than a bad symbol — "
+        "try again shortly."
+    )
+
+
 def _nav_split_adjust_close_and_divs(close, dividends=None, splits=None):
     """Restate Close and Dividends in current-share units.
 
@@ -38395,24 +38480,10 @@ def nav_erosion_data():
         # the UI is actually included in the analysis.
         fetch_end = (requested_end + _td(days=1)).isoformat()
 
-        benchmark = benchmark_override or _nav_benchmark_for_ticker(sym)
         hist = yf.Ticker(sym).history(
             start=start_date, end=fetch_end,
             interval="1d", auto_adjust=False, actions=True,
         )
-        bench_series = []
-        for bench in _nav_benchmark_parts(benchmark):
-            try:
-                bench_hist = yf.Ticker(bench).history(
-                    start=start_date, end=fetch_end,
-                    interval="1d", auto_adjust=True,
-                )
-                if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
-                    bench_close = bench_hist["Close"].dropna().rename(bench)
-                    if len(bench_close) >= 2:
-                        bench_series.append(bench_close)
-            except Exception:
-                pass
 
         if hist.empty:
             return jsonify(error=f"No data found for ticker {sym}. Check the symbol and date range.")
@@ -38424,24 +38495,22 @@ def nav_erosion_data():
             hist = hist.copy()
             hist["Dividends"] = _hist_divs.reindex(hist.index).fillna(0.0)
 
-        if len(bench_series) == 1:
-            benchmark_close = bench_series[0]
-        elif len(bench_series) > 1:
-            aligned_bench = _nav_align_series(*bench_series)
-            if len(aligned_bench) < 2:
-                return jsonify(error=f"No overlapping benchmark history found for {benchmark}.")
-            composite = pd.Series(1.0, index=aligned_bench.index, dtype=float)
-            for col in aligned_bench.columns:
-                component_start = float(aligned_bench[col].iloc[0])
-                if component_start <= 0:
-                    return jsonify(error=f"Benchmark {benchmark} contains an invalid starting price.")
-                composite = composite + (aligned_bench[col] / component_start - 1.0)
-            benchmark_close = composite.rename(benchmark)
-        else:
-            return jsonify(
-                error=f"No usable benchmark history found for {benchmark}. "
-                      "The benchmark-adjusted result was not calculated."
+        def _fetch_benchmark_part(part):
+            bench_hist = yf.Ticker(part).history(
+                start=start_date, end=fetch_end,
+                interval="1d", auto_adjust=True,
             )
+            if bench_hist is None or bench_hist.empty or "Close" not in bench_hist.columns:
+                return None
+            return bench_hist["Close"].dropna()
+
+        benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
+            sym, benchmark_override, _fetch_benchmark_part
+        )
+        if benchmark_close is None:
+            return jsonify(error=benchmark_note)
+        if benchmark_note:
+            warning = benchmark_note
 
         aligned_daily = _nav_align_series(
             fund_close.rename("fund"),
@@ -38454,11 +38523,13 @@ def nav_erosion_data():
 
         actual_start = fund_daily.index[0].date()
         if (actual_start - requested_start).days > 30:
-            warning = (
+            short_history_note = (
                 f"{sym} only has data going back to {actual_start.strftime('%B %d, %Y')}. "
                 f"Results are shown from that date — your requested start "
                 f"({requested_start.strftime('%B %d, %Y')}) predates when this ETF existed."
             )
+            # A substituted benchmark is worth saying too, so append rather than replace.
+            warning = f"{warning} {short_history_note}" if warning else short_history_note
 
         df = _nav_monthly_frame(
             fund_daily,
@@ -39050,7 +39121,8 @@ def nav_erosion_portfolio_data():
         for r in validated
         if r.get("benchmark")
     }
-    _merge_nav_benchmark_overrides(explicit_benchmarks)
+    # Explicit picks are only persisted once they resolve to real history, so a
+    # typo cannot poison the saved mapping for every later run.
     benchmark_by_ticker = {
         t: (explicit_benchmarks.get(t) or _nav_benchmark_for_ticker(t))
         for t in unique_tickers
@@ -39123,6 +39195,7 @@ def nav_erosion_portfolio_data():
         return adjusted
 
     results = []
+    resolved_explicit = {}
     for r in validated:
         sym = r["ticker"]
         benchmark = benchmark_by_ticker.get(sym) or _nav_benchmark_for_ticker(sym)
@@ -39139,50 +39212,18 @@ def nav_erosion_portfolio_data():
             })
             continue
 
-        benchmark_parts = []
-        for part in _nav_benchmark_parts(benchmark):
-            part_close = get_benchmark_close(part)
-            if part_close is not None and not part_close.dropna().empty:
-                benchmark_parts.append(part_close.dropna().rename(part))
-
-        if not benchmark_parts:
+        benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
+            sym, explicit_benchmarks.get(sym), get_benchmark_close
+        )
+        if benchmark_close is None:
             results.append({
-                "ticker": sym, "benchmark": benchmark,
+                "ticker": sym, "benchmark": benchmark_by_ticker.get(sym),
                 "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": (
-                    f"No usable benchmark history found for {benchmark}. "
-                    "The benchmark-adjusted result was not calculated."
-                ),
+                "error": benchmark_note,
             })
             continue
-
-        if len(benchmark_parts) == 1:
-            benchmark_close = benchmark_parts[0]
-        else:
-            aligned_bench = _nav_align_series(*benchmark_parts)
-            if len(aligned_bench) < 2:
-                results.append({
-                    "ticker": sym, "benchmark": benchmark,
-                    "amount": amount, "reinvest_pct": reinvest_pct,
-                    "error": f"No overlapping benchmark history found for {benchmark}.",
-                })
-                continue
-            benchmark_close = pd.Series(1.0, index=aligned_bench.index, dtype=float)
-            invalid_benchmark = False
-            for col in aligned_bench.columns:
-                component_start = float(aligned_bench[col].iloc[0])
-                if component_start <= 0:
-                    invalid_benchmark = True
-                    break
-                benchmark_close = benchmark_close + (aligned_bench[col] / component_start - 1.0)
-            if invalid_benchmark:
-                results.append({
-                    "ticker": sym, "benchmark": benchmark,
-                    "amount": amount, "reinvest_pct": reinvest_pct,
-                    "error": f"Benchmark {benchmark} contains an invalid starting price.",
-                })
-                continue
-            benchmark_close.name = benchmark
+        if explicit_benchmarks.get(sym) and not benchmark_note:
+            resolved_explicit[sym] = benchmark
 
         aligned_daily = _nav_align_series(
             close.rename("fund"), benchmark_close.rename("benchmark")
@@ -39214,6 +39255,8 @@ def nav_erosion_portfolio_data():
                 f"{sym} only has data going back to {actual_start.strftime('%B %d, %Y')}. "
                 f"Results start from that date."
             )
+        if benchmark_note:
+            warning = f"{benchmark_note} {warning}" if warning else benchmark_note
 
         # Enter at the first available daily close, rather than the first
         # month-end close. This makes the selected start date economically
@@ -39349,6 +39392,8 @@ def nav_erosion_portfolio_data():
             "warning": warning,
             "error": None,
         })
+
+    _merge_nav_benchmark_overrides(resolved_explicit)
 
     return jsonify(results=results)
 

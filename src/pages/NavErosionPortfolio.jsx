@@ -2,16 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
+import { NAV_BENCHMARK_CHOICES } from '../utils/navBenchmarks'
 
 const MAX_ROWS = 80
-const NAV_BENCHMARK_CHOICES = [
-  'SPY', 'QQQ', 'IWM', 'DIA', 'EFA', 'EEM',
-  'BTC-USD', 'ETH-USD', 'SOL-USD', 'BTC-USD+GLD', 'SPY+BTC-USD',
-  'GLD', 'SLV', 'CPER', 'AMLP', 'PFF',
-  'BIL', 'BND', 'TLT', 'NLR', 'ITA',
-  'XLE', 'SOXX', 'XLF', 'XLV', 'XLU', 'VNQ',
-  'BIZD', 'TSLA', 'NVDA',
-]
 
 function fmt$(v) {
   return formatMoney(v, { zeroIfInvalid: true })

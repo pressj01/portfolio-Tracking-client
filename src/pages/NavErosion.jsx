@@ -5,6 +5,7 @@ import Plot from '../components/ThemedPlot'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import { NAV_BENCHMARK_CHOICES } from '../utils/navBenchmarks'
 import { todayInputValue } from '../utils/performancePeriods'
 
 function fmt$(v) {
@@ -228,10 +229,14 @@ export default function NavErosion() {
             style={{ width: 130, textTransform: 'uppercase' }}
             placeholder="Auto"
             maxLength={40}
+            list="ne-benchmark-choices"
             value={benchmark}
             onChange={e => setBenchmark(e.target.value.toUpperCase())}
-            title="Leave blank for the automatic underlying benchmark, or enter a ticker such as HODL."
+            title="Leave blank for the automatic underlying benchmark, or enter a ticker such as HODL. A symbol with no price history falls back to the automatic one."
           />
+          <datalist id="ne-benchmark-choices">
+            {NAV_BENCHMARK_CHOICES.map(b => <option key={b} value={b} />)}
+          </datalist>
         </div>
         <div className="ne-field">
           <label className="ne-label">Start Date</label>
