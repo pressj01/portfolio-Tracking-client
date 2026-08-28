@@ -157,9 +157,10 @@ export default function Analytics() {
   const portfolioRawErosion = result?.coverage?.aggregate_raw_nav_erosion_rate
   const portfolioDistributionRate = result?.coverage?.aggregate_distribution_rate_on_starting_nav
   const portfolioAccountingReturn = result?.coverage?.aggregate_accounting_total_return_rate
-  const portfolioRawPayoutGap = result?.coverage?.aggregate_raw_payout_gap_ratio
   const portfolioOverallScore = result?.coverage?.aggregate_overall_nav_erosion_score
   const portfolioOverallSeverity = result?.coverage?.aggregate_overall_nav_erosion_severity
+  const portfolioUpRecoveryScore = result?.coverage?.aggregate_up_market_recovery_score
+  const portfolioUpCapturePct = result?.coverage?.aggregate_up_market_capture_pct
   const tickerNavAccounting = React.useMemo(() => Object.fromEntries(
     (result?.coverage?.results || []).map(row => [row.ticker, row]),
   ), [result])
@@ -470,7 +471,7 @@ export default function Analytics() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 140, alignItems: 'center' }}>
                     {portfolioOverallScore != null && (
                       <div
-                        title="Primary combined historical verdict from raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. This is not a forecast probability."
+                        title="Primary historical verdict, not a forecast. Share-price recovery on benchmark up days can reduce the raw-loss warning by up to 75%, but cannot reduce benchmark-confirmed coverage or relative drag. Distributions and total return are excluded from recovery."
                         style={{
                           width: '100%', padding: '0.45rem 0.7rem', borderRadius: 6,
                           border: `3px solid ${navSeverityColor(portfolioOverallSeverity)}`,
@@ -480,7 +481,13 @@ export default function Analytics() {
                         }}
                       >
                         <div>{`${String(portfolioOverallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}</div>
-                        <div style={{ fontWeight: 500, marginTop: 2 }}>{`Overall Verdict · ${Number(portfolioOverallScore).toFixed(1)} / 100 · gap ${portfolioRawPayoutGap != null ? Number(portfolioRawPayoutGap).toFixed(4) : '—'}`}</div>
+                        <div style={{ fontWeight: 500, marginTop: 2 }}>{`Overall Verdict · ${Number(portfolioOverallScore).toFixed(1)} / 100 · recovery ${portfolioUpRecoveryScore != null ? Number(portfolioUpRecoveryScore).toFixed(1) : '—'}`}</div>
+                      </div>
+                    )}
+                    {portfolioUpRecoveryScore != null && (
+                      <div title="Price-only recovery on mapped-benchmark up days. Distributions and total return are excluded. Higher is better." style={{ fontSize: '0.76rem', color: 'var(--text-dim)', textAlign: 'center', cursor: 'help' }}>
+                        <strong style={{ color: portfolioUpRecoveryScore >= 75 ? 'var(--pos)' : portfolioUpRecoveryScore >= 40 ? '#ffb300' : 'var(--neg)' }}>Up-market recovery {Number(portfolioUpRecoveryScore).toFixed(1)} / 100</strong>
+                        <div>{portfolioUpCapturePct != null ? `${Number(portfolioUpCapturePct).toFixed(1)}% weighted price capture` : 'price capture unavailable'}</div>
                       </div>
                     )}
                     {portfolioCoverage != null && <>
@@ -938,13 +945,18 @@ export default function Analytics() {
                         const accounting = tickerNavAccounting[m.ticker] || {}
                         return (
                           <td
-                            title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(accounting.raw_nav_erosion_rate)}, d ${formatIdentityRate(accounting.distribution_rate_on_starting_nav)}, r ${formatIdentityRate(accounting.accounting_total_return_rate)}; e = d - r. For e, negative is favorable, zero is flat, and positive is erosion. Higher r is better; higher d is not automatically better.`}
+                            title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(accounting.raw_nav_erosion_rate)}, d ${formatIdentityRate(accounting.distribution_rate_on_starting_nav)}, r ${formatIdentityRate(accounting.accounting_total_return_rate)}; e = d - r. Price-only up-market recovery: ${accounting.up_market_recovery_score != null ? `${Number(accounting.up_market_recovery_score).toFixed(1)}/100 from ${Number(accounting.up_market_capture_pct).toFixed(1)}% capture` : 'insufficient data'}.`}
                             style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? 'var(--p-556)' : navSeverityColor(severity) }}
                           >
                             <div>{cov != null ? cov.toFixed(2) : '—'}</div>
                             {accounting.raw_nav_erosion_rate != null && (
                               <small style={{ color: accounting.raw_nav_erosion_rate > 0 ? 'var(--neg)' : 'var(--pos)' }}>
                                 e {formatIdentityRate(accounting.raw_nav_erosion_rate)}
+                              </small>
+                            )}
+                            {accounting.up_market_recovery_score != null && (
+                              <small style={{ display: 'block', color: 'var(--text-dim)' }}>
+                                recovery {Number(accounting.up_market_recovery_score).toFixed(0)}
                               </small>
                             )}
                           </td>

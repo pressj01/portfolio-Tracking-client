@@ -82,6 +82,8 @@ export function navTrendCard(nav, loading = false) {
   const rawErosion = num(nav.raw_nav_erosion_rate)
   const distributionRate = num(nav.distribution_rate_on_starting_nav)
   const accountingReturn = num(nav.accounting_total_return_rate)
+  const upRecovery = num(nav.up_market_recovery_score)
+  const upCapture = num(nav.up_market_capture_pct)
   const overallScore = num(nav.overall_nav_erosion_score)
   const overallSeverity = nav.overall_nav_erosion_severity
   const verdictSeverity = overallSeverity || severity
@@ -93,6 +95,9 @@ export function navTrendCard(nav, loading = false) {
   if (rawErosion != null) parts.push(`raw e ${(rawErosion * 100).toFixed(2)}% (${rawErosion > 0 ? 'NAV ERODER' : rawErosion < 0 ? 'NAV rose' : 'NAV flat'})`)
   if (distributionRate != null && accountingReturn != null) {
     parts.push(`d ${(distributionRate * 100).toFixed(2)}% − r ${(accountingReturn * 100).toFixed(2)}%`)
+  }
+  if (upRecovery != null) {
+    parts.push(`price-only up-market recovery ${upRecovery.toFixed(1)}/100${upCapture != null ? ` (${upCapture.toFixed(1)}% capture)` : ''}`)
   }
   if (nav.benchmark) parts.push(`vs ${nav.benchmark}`)
   return {

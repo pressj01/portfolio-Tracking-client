@@ -22376,6 +22376,9 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     accounting_start_nav_dollars = 0.0
     accounting_end_nav_dollars = 0.0
     accounting_distribution_dollars = 0.0
+    up_recovery_weighted = 0.0
+    up_capture_weighted = 0.0
+    up_recovery_weight = 0.0
 
     for tk in tickers:
         info = ticker_info[tk]
@@ -22441,29 +22444,21 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 info.get("description", ""),
                 info.get("classification_type", ""),
             )
-            benchmark_return = fund_return
-            component_returns = []
+            benchmark_close = None
+            aligned_benchmark = pd.DataFrame()
             try:
-                for bench in _nav_benchmark_parts(benchmark):
-                    bench_close = _benchmark_close(bench)
-                    if bench_close is not None:
-                        aligned = _nav_align_series(close.rename("fund"), bench_close.rename("benchmark"))
-                        if len(aligned) >= 2:
-                            bench_start = float(aligned["benchmark"].iloc[0])
-                            bench_end = float(aligned["benchmark"].iloc[-1])
-                            if bench_start > 0 and bench_end > 0:
-                                component_returns.append((bench_end - bench_start) / bench_start)
-                if component_returns:
-                    benchmark_return = sum(component_returns)
+                benchmark_close, _ = _nav_compose_benchmark(
+                    benchmark,
+                    _benchmark_close,
+                    anchor_series=close,
+                )
+                if benchmark_close is not None:
+                    aligned_benchmark = _nav_align_series(
+                        close.rename("fund"), benchmark_close.rename("benchmark")
+                    )
             except Exception:
                 pass
-            # No benchmark priced. `benchmark_return` is still seeded with the
-            # fund's own return, and gating a fund against itself always yields
-            # a 0.0 coverage ratio — i.e. a confident "Low NAV erosion" verdict
-            # for a fund that may have dropped hard. An unavailable benchmark
-            # means untested, never reassuring, so bail the same way for an auto
-            # pick as for an explicit override.
-            if not component_returns:
+            if len(aligned_benchmark) < 2:
                 results.append(_price_outage(
                     tk, nav_scope, info,
                     benchmark=benchmark,
@@ -22475,16 +22470,31 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 ))
                 continue
 
+            bench_start = float(aligned_benchmark["benchmark"].iloc[0])
+            bench_end = float(aligned_benchmark["benchmark"].iloc[-1])
+            if bench_start <= 0 or bench_end <= 0:
+                results.append(_price_outage(
+                    tk, nav_scope, info,
+                    benchmark=benchmark,
+                    warning=f"{benchmark} returned invalid price history",
+                ))
+                continue
+            benchmark_return = (bench_end - bench_start) / bench_start
+
             numerator = _nav_erosion_numerator(fund_return, benchmark_return)
             coverage = round(numerator / ttm_dist_yield, 4) if ttm_dist_yield > 0 and numerator is not None else None
             price_change_pct = fund_return * 100
             relative_drag_pct = max(0.0, (benchmark_return - fund_return) * 100.0)
             severity = _nav_erosion_from_adjusted_ratio(coverage, price_change_pct=price_change_pct)
+            up_market_recovery = _nav_up_market_recovery(
+                aligned_benchmark["fund"], aligned_benchmark["benchmark"]
+            )
             overall_erosion = _nav_overall_erosion_metrics(
                 accounting["raw_nav_erosion_rate"],
                 accounting["distribution_rate_on_starting_nav"],
                 coverage,
                 relative_drag_pct,
+                up_market_recovery["up_market_recovery_score"],
             )
 
             results.append({
@@ -22493,6 +22503,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 "price_change_pct": round(price_change_pct, 2),
                 "relative_drag_pct": round(relative_drag_pct, 2),
                 **accounting,
+                **up_market_recovery,
                 **overall_erosion,
                 "accounting_start_nav": round(price_1yr_ago, 6),
                 "accounting_end_nav": round(cur_price, 6),
@@ -22511,6 +22522,14 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
                 accounting_start_nav_dollars += price_1yr_ago * qty
                 accounting_end_nav_dollars += cur_price * qty
                 accounting_distribution_dollars += ttm_dist_per_share * qty
+                recovery_score = up_market_recovery["up_market_recovery_score"]
+                if recovery_score is not None:
+                    recovery_weight = price_1yr_ago * qty
+                    up_recovery_weighted += recovery_score * recovery_weight
+                    up_recovery_weight += recovery_weight
+                    capture_pct = up_market_recovery["up_market_capture_pct"]
+                    if capture_pct is not None:
+                        up_capture_weighted += capture_pct * recovery_weight
 
             dist_dollars = ttm_dist_per_share * qty
             if dist_dollars > 0:
@@ -22534,10 +22553,19 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
         accounting_end_nav_dollars,
         accounting_distribution_dollars,
     )
+    aggregate_up_recovery = (
+        round(up_recovery_weighted / up_recovery_weight, 1)
+        if up_recovery_weight > 0 else None
+    )
+    aggregate_up_capture = (
+        round(up_capture_weighted / up_recovery_weight, 1)
+        if up_recovery_weight > 0 else None
+    )
     aggregate_overall = _nav_overall_erosion_metrics(
         aggregate_accounting["raw_nav_erosion_rate"],
         aggregate_accounting["distribution_rate_on_starting_nav"],
         agg_coverage,
+        up_market_recovery_score=aggregate_up_recovery,
     )
     payload = {
         "results": results,
@@ -22546,7 +22574,11 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
         "aggregate_raw_nav_erosion_rate": aggregate_accounting["raw_nav_erosion_rate"],
         "aggregate_distribution_rate_on_starting_nav": aggregate_accounting["distribution_rate_on_starting_nav"],
         "aggregate_accounting_total_return_rate": aggregate_accounting["accounting_total_return_rate"],
+        "aggregate_up_market_capture_pct": aggregate_up_capture,
+        "aggregate_up_market_recovery_score": aggregate_up_recovery,
         "aggregate_raw_payout_gap_ratio": aggregate_overall["raw_payout_gap_ratio"],
+        "aggregate_pre_recovery_nav_erosion_score": aggregate_overall["pre_recovery_nav_erosion_score"],
+        "aggregate_up_market_recovery_credit_points": aggregate_overall["up_market_recovery_credit_points"],
         "aggregate_overall_nav_erosion_score": aggregate_overall["overall_nav_erosion_score"],
         "aggregate_overall_nav_erosion_severity": aggregate_overall["overall_nav_erosion_severity"],
         "accounting_window": "trailing_1_year",
@@ -26769,33 +26801,44 @@ def _nav_benchmark_candidates(ticker, override="", name="", category=""):
     return candidates
 
 
-def _nav_compose_benchmark(label, fetch_part):
+def _nav_compose_benchmark(label, fetch_part, anchor_series=None):
     """Build a single close series for a benchmark label, which may be ``A+B``.
 
     ``fetch_part`` returns a close series for one symbol, or None. Returns
     ``(series, reason)``; ``series`` is None when the label has no usable history
     and ``reason`` is the phrase that completes "<label> ...".
     """
+    parts = _nav_benchmark_parts(label)
     usable = []
-    for part in _nav_benchmark_parts(label):
+    missing = []
+    for part in parts:
         try:
             close = fetch_part(part)
         except Exception:
             close = None
         if close is None:
+            missing.append(part)
             continue
         close = pd.to_numeric(pd.Series(close), errors="coerce").dropna()
         if len(close) >= 2:
             usable.append(close.rename(part))
+        else:
+            missing.append(part)
     if not usable:
         return None, "has no usable price history"
+    if missing:
+        return None, f"is missing usable history for {', '.join(missing)}"
     if len(usable) == 1:
         return usable[0].rename(label), None
-    aligned = _nav_align_series(*usable)
+    alignment_series = list(usable)
+    if anchor_series is not None:
+        alignment_series.append(pd.Series(anchor_series).rename("__fund_anchor__"))
+    aligned = _nav_align_series(*alignment_series)
     if len(aligned) < 2:
         return None, "has no overlapping history across its parts"
+    component_columns = [series.name for series in usable]
     composite = pd.Series(1.0, index=aligned.index, dtype=float)
-    for col in aligned.columns:
+    for col in component_columns:
         component_start = float(aligned[col].iloc[0])
         if component_start <= 0:
             return None, "has an invalid starting price"
@@ -26803,7 +26846,9 @@ def _nav_compose_benchmark(label, fetch_part):
     return composite.rename(label), None
 
 
-def _nav_resolve_benchmark(ticker, override, fetch_part, name="", category=""):
+def _nav_resolve_benchmark(
+    ticker, override, fetch_part, name="", category="", anchor_series=None
+):
     """First candidate benchmark that actually has history, and what it replaced.
 
     A mistyped benchmark used to abandon the whole back-test, including the raw
@@ -26816,7 +26861,9 @@ def _nav_resolve_benchmark(ticker, override, fetch_part, name="", category=""):
     typed = bool(str(override or "").strip())
     first_label, first_reason = candidates[0], None
     for index, label in enumerate(candidates):
-        series, reason = _nav_compose_benchmark(label, fetch_part)
+        series, reason = _nav_compose_benchmark(
+            label, fetch_part, anchor_series=anchor_series
+        )
         if series is not None:
             if index == 0:
                 return label, series, None
@@ -27121,11 +27168,14 @@ def _nav_benchmark_close_from_df(close_df, benchmark, fallback_close):
             return fallback_close
         if len(series) == 1:
             return series[0]
-        aligned = _nav_align_series(*series)
+        alignment_series = list(series)
+        if fallback_close is not None:
+            alignment_series.append(pd.Series(fallback_close).rename("__fund_anchor__"))
+        aligned = _nav_align_series(*alignment_series)
         if len(aligned) < 2:
             return fallback_close
         composite = 1.0
-        for col in aligned.columns:
+        for col in [item.name for item in series]:
             start = float(aligned[col].iloc[0])
             if start <= 0:
                 return fallback_close
@@ -27241,22 +27291,85 @@ def _nav_accounting_rates(start_nav, end_nav, distributions):
     }
 
 
+def _nav_up_market_recovery(
+    fund_close,
+    benchmark_close,
+    min_up_periods=5,
+    full_confidence_periods=20,
+):
+    """Measure price recovery on benchmark up days, excluding distributions.
+
+    The capture ratio compares the fund's average daily share-price return with
+    the benchmark's average daily price return on days when the benchmark rose.
+    A short history receives proportionally less scoring weight until it reaches
+    ``full_confidence_periods`` qualifying observations.
+    """
+    empty = {
+        "up_market_capture_pct": None,
+        "up_market_positive_rate_pct": None,
+        "up_market_observations": 0,
+        "up_market_recovery_confidence": 0.0,
+        "up_market_recovery_score": None,
+    }
+    aligned = _nav_align_series(
+        pd.Series(fund_close).rename("fund"),
+        pd.Series(benchmark_close).rename("benchmark"),
+    )
+    if len(aligned) < 2:
+        return empty
+
+    returns = aligned[["fund", "benchmark"]].pct_change(fill_method=None).dropna()
+    up_periods = returns[returns["benchmark"] > 0]
+    observations = int(len(up_periods))
+    if observations == 0:
+        return empty
+
+    benchmark_mean = float(up_periods["benchmark"].mean())
+    fund_mean = float(up_periods["fund"].mean())
+    if benchmark_mean <= 0 or not all(
+        math.isfinite(value) for value in (benchmark_mean, fund_mean)
+    ):
+        return {**empty, "up_market_observations": observations}
+
+    capture_pct = fund_mean / benchmark_mean * 100.0
+    positive_rate_pct = float((up_periods["fund"] > 0).mean()) * 100.0
+    confidence = min(1.0, observations / max(1, int(full_confidence_periods)))
+    recovery_score = None
+    if observations >= max(1, int(min_up_periods)):
+        recovery_score = min(1.0, max(0.0, capture_pct) / 100.0) * confidence * 100.0
+
+    return {
+        "up_market_capture_pct": round(capture_pct, 1),
+        "up_market_positive_rate_pct": round(positive_rate_pct, 1),
+        "up_market_observations": observations,
+        "up_market_recovery_confidence": round(confidence, 4),
+        "up_market_recovery_score": (
+            round(recovery_score, 1) if recovery_score is not None else None
+        ),
+    }
+
+
 def _nav_overall_erosion_metrics(
     raw_erosion_rate,
     distribution_rate,
     benchmark_coverage,
     relative_drag_pct=0.0,
+    up_market_recovery_score=None,
 ):
-    """Combine independent erosion warnings without averaging severe ones away.
+    """Combine erosion warnings and a bounded price-recovery credit.
 
     The score is historical for the selected window, not a forecast. Positive
     raw erosion is required; when NAV did not fall, the overall score is zero.
     A 50% raw NAV decline or 50-point relative drag maps to 100, while the raw
     payout gap (e / d) and benchmark-gated coverage retain their natural 0–1
-    scales. The strongest component determines the score.
+    scales. Price capture in up markets can reduce the raw-loss warning by at
+    most 75%, but it cannot reduce benchmark-confirmed coverage or relative drag.
     """
     empty = {
         "raw_payout_gap_ratio": None,
+        "pre_recovery_nav_erosion_score": None,
+        "recovery_adjusted_raw_score": None,
+        "up_market_recovery_credit_points": None,
         "overall_nav_erosion_score": None,
         "overall_nav_erosion_severity": None,
     }
@@ -27279,23 +27392,54 @@ def _nav_overall_erosion_metrics(
         drag_pct = float(relative_drag_pct)
     except (TypeError, ValueError):
         drag_pct = 0.0
+    try:
+        recovery_score = float(up_market_recovery_score)
+        if not math.isfinite(recovery_score):
+            recovery_score = None
+    except (TypeError, ValueError):
+        recovery_score = None
+
+    coverage = coverage if math.isfinite(coverage) else 0.0
+    drag_pct = drag_pct if math.isfinite(drag_pct) else 0.0
 
     if erosion <= 0:
         raw_gap = 0.0 if dist_rate > 0 else None
         return {
             "raw_payout_gap_ratio": raw_gap,
+            "pre_recovery_nav_erosion_score": 0.0,
+            "recovery_adjusted_raw_score": 0.0,
+            "up_market_recovery_credit_points": 0.0,
             "overall_nav_erosion_score": 0.0,
             "overall_nav_erosion_severity": "Low",
         }
 
     raw_gap = erosion / dist_rate if dist_rate > 0 else None
-    components = [max(0.0, coverage), erosion / 0.50, max(0.0, drag_pct) / 50.0]
+    raw_components = [erosion / 0.50]
     if raw_gap is not None:
-        components.append(max(0.0, raw_gap))
-    score = round(min(1.0, max(components)) * 100.0, 1)
+        raw_components.append(max(0.0, raw_gap))
+    raw_warning = max(raw_components)
+    benchmark_warning = max(max(0.0, coverage), max(0.0, drag_pct) / 50.0)
+    pre_recovery_warning = max(raw_warning, benchmark_warning)
+
+    recovery_fraction = (
+        min(1.0, max(0.0, recovery_score) / 100.0)
+        if recovery_score is not None
+        else 0.0
+    )
+    adjusted_raw_warning = min(1.0, raw_warning) * (1.0 - 0.75 * recovery_fraction)
+    score = round(min(1.0, max(adjusted_raw_warning, benchmark_warning)) * 100.0, 1)
+    pre_recovery_score = round(min(1.0, pre_recovery_warning) * 100.0, 1)
+    adjusted_raw_score = round(min(1.0, adjusted_raw_warning) * 100.0, 1)
+    recovery_credit = round(
+        max(0.0, min(1.0, raw_warning) - min(1.0, adjusted_raw_warning)) * 100.0,
+        1,
+    )
     severity = "Low" if score <= 25 else "Medium" if score <= 75 else "High"
     return {
         "raw_payout_gap_ratio": raw_gap,
+        "pre_recovery_nav_erosion_score": pre_recovery_score,
+        "recovery_adjusted_raw_score": adjusted_raw_score,
+        "up_market_recovery_credit_points": recovery_credit,
         "overall_nav_erosion_score": score,
         "overall_nav_erosion_severity": severity,
     }
@@ -39088,7 +39232,10 @@ def nav_erosion_data():
             return bench_hist["Close"].dropna()
 
         benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
-            sym, benchmark_override, _fetch_benchmark_part
+            sym,
+            benchmark_override,
+            _fetch_benchmark_part,
+            anchor_series=fund_close,
         )
         if benchmark_close is None:
             return jsonify(error=benchmark_note)
@@ -39235,11 +39382,13 @@ def nav_erosion_data():
         price_change_pct = fund_return * 100.0
         benchmark_return_pct = benchmark_return * 100.0
         relative_drag_pct = max(0.0, benchmark_return_pct - price_change_pct)
+        up_market_recovery = _nav_up_market_recovery(fund_daily, benchmark_daily)
         overall_erosion = _nav_overall_erosion_metrics(
             accounting["raw_nav_erosion_rate"],
             accounting["distribution_rate_on_starting_nav"],
             total_coverage,
             relative_drag_pct,
+            up_market_recovery["up_market_recovery_score"],
         )
         summary = {
             "benchmark": benchmark,
@@ -39265,6 +39414,7 @@ def nav_erosion_data():
             "final_deficit_pct": round(deficit_pct, 2),
             "total_coverage": total_coverage,
             **accounting,
+            **up_market_recovery,
             **overall_erosion,
             "accounting_start_nav": round(initial_price, 6),
             "accounting_end_nav": round(final_row["price"], 6),
@@ -39796,7 +39946,10 @@ def nav_erosion_portfolio_data():
             continue
 
         benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
-            sym, explicit_benchmarks.get(sym), get_benchmark_close
+            sym,
+            explicit_benchmarks.get(sym),
+            get_benchmark_close,
+            anchor_series=close,
         )
         if benchmark_close is None:
             results.append({
@@ -39928,11 +40081,13 @@ def nav_erosion_portfolio_data():
         deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
         nav_erosion_severity = _nav_erosion_from_adjusted_ratio(coverage_ratio)
         relative_drag_pct = max(0.0, benchmark_return * 100.0 - price_delta_pct)
+        up_market_recovery = _nav_up_market_recovery(fund_daily, benchmark_daily)
         overall_erosion = _nav_overall_erosion_metrics(
             accounting["raw_nav_erosion_rate"],
             accounting["distribution_rate_on_starting_nav"],
             coverage_ratio,
             relative_drag_pct,
+            up_market_recovery["up_market_recovery_score"],
         )
         starting_shares = amount / initial_price
         confirmed_erosion_dollar = confirmed_erosion_per_share * starting_shares
@@ -39967,6 +40122,7 @@ def nav_erosion_portfolio_data():
             "final_deficit_pct": round(deficit_pct, 2),
             "coverage_ratio": coverage_ratio,
             **accounting,
+            **up_market_recovery,
             **overall_erosion,
             "accounting_start_nav": round(initial_price, 6),
             "accounting_end_nav": round(final_price, 6),

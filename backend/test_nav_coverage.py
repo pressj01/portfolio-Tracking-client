@@ -10,7 +10,9 @@ from app import (
     _build_nav_coverage_payload,
     _nav_accounting_rates,
     _nav_aggregate_severity,
+    _nav_compose_benchmark,
     _nav_overall_erosion_metrics,
+    _nav_up_market_recovery,
 )
 
 
@@ -25,6 +27,50 @@ class NavCoverageAggregationTest(unittest.TestCase):
         preserved = _nav_overall_erosion_metrics(-0.10, 0.20, 0.50, 30.0)
         self.assertEqual(preserved["overall_nav_erosion_score"], 0.0)
         self.assertEqual(preserved["overall_nav_erosion_severity"], "Low")
+
+    def test_price_recovery_reduces_raw_warning_but_not_confirmed_warning(self):
+        recovered = _nav_overall_erosion_metrics(
+            0.35, 0.08, 0.0, 0.0, up_market_recovery_score=100.0
+        )
+        self.assertEqual(recovered["pre_recovery_nav_erosion_score"], 100.0)
+        self.assertEqual(recovered["up_market_recovery_credit_points"], 75.0)
+        self.assertEqual(recovered["overall_nav_erosion_score"], 25.0)
+        self.assertEqual(recovered["overall_nav_erosion_severity"], "Low")
+
+        confirmed = _nav_overall_erosion_metrics(
+            0.35, 0.08, 0.80, 0.0, up_market_recovery_score=100.0
+        )
+        self.assertEqual(confirmed["overall_nav_erosion_score"], 80.0)
+        self.assertEqual(confirmed["overall_nav_erosion_severity"], "High")
+
+    def test_up_market_recovery_uses_daily_price_capture(self):
+        index = pd.date_range("2026-01-01", periods=25, freq="D")
+        benchmark = pd.Series([100.0 * (1.01 ** i) for i in range(25)], index=index)
+        fund = pd.Series([50.0 * (1.01 ** i) for i in range(25)], index=index)
+
+        recovery = _nav_up_market_recovery(fund, benchmark)
+
+        self.assertEqual(recovery["up_market_observations"], 24)
+        self.assertAlmostEqual(recovery["up_market_capture_pct"], 100.0, places=1)
+        self.assertEqual(recovery["up_market_positive_rate_pct"], 100.0)
+        self.assertEqual(recovery["up_market_recovery_score"], 100.0)
+
+    def test_composite_benchmark_starts_at_fund_overlap(self):
+        index = pd.date_range("2026-01-01", periods=3, freq="D")
+        histories = {
+            "BTC-USD": pd.Series([100.0, 200.0, 220.0], index=index),
+            "GLD": pd.Series([100.0, 100.0, 110.0], index=index),
+        }
+        fund = pd.Series([50.0, 55.0], index=index[1:])
+
+        composite, reason = _nav_compose_benchmark(
+            "BTC-USD+GLD", histories.get, anchor_series=fund
+        )
+
+        self.assertIsNone(reason)
+        self.assertEqual(composite.index.tolist(), index[1:].tolist())
+        self.assertAlmostEqual(float(composite.iloc[0]), 1.0)
+        self.assertAlmostEqual(float(composite.iloc[-1]), 1.2)
 
     def test_raw_accounting_identity_uses_one_starting_nav_basis(self):
         rates = _nav_accounting_rates(100.0, 90.0, 5.0)

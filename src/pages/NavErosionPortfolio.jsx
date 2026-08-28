@@ -42,16 +42,23 @@ function navSeverityText(severity, portfolio = false) {
   return severity === 'High' ? `High ${scope}` : severity === 'Medium' ? `Moderate ${scope}` : `Low ${scope}`
 }
 
-function overallNavMetrics(rawErosion, distributionRate, coverage, relativeDragPct) {
+function overallNavMetrics(rawErosion, distributionRate, coverage, relativeDragPct, upRecoveryScore) {
   if (rawErosion == null || !Number.isFinite(Number(rawErosion))) return { score: null, severity: null, rawGap: null }
   const e = Number(rawErosion)
   const d = Number(distributionRate) || 0
   if (e <= 0) return { score: 0, severity: 'Low', rawGap: d > 0 ? 0 : null }
   const rawGap = d > 0 ? e / d : null
-  const components = [Math.max(0, Number(coverage) || 0), e / 0.5, Math.max(0, Number(relativeDragPct) || 0) / 50]
-  if (rawGap != null) components.push(Math.max(0, rawGap))
-  const score = Math.min(100, Math.max(...components) * 100)
-  return { score, severity: score > 75 ? 'High' : score > 25 ? 'Medium' : 'Low', rawGap }
+  const rawWarning = Math.max(e / 0.5, rawGap == null ? 0 : Math.max(0, rawGap))
+  const benchmarkWarning = Math.max(Math.max(0, Number(coverage) || 0), Math.max(0, Number(relativeDragPct) || 0) / 50)
+  const recovery = upRecoveryScore == null ? 0 : Math.min(1, Math.max(0, Number(upRecoveryScore)) / 100)
+  const adjustedRawWarning = Math.min(1, rawWarning) * (1 - 0.75 * recovery)
+  const score = Math.min(100, Math.max(adjustedRawWarning, benchmarkWarning) * 100)
+  return {
+    score,
+    severity: score > 75 ? 'High' : score > 25 ? 'Medium' : 'Low',
+    rawGap,
+    preRecoveryScore: Math.min(100, Math.max(rawWarning, benchmarkWarning) * 100),
+  }
 }
 
 function StatTile({ label, value, color, sub, explanation }) {
@@ -327,7 +334,8 @@ export default function NavErosionPortfolio() {
     'price_delta_pct', 'benchmark_return_pct', 'total_dist', 'total_reinvested', 'cash_taken',
     'final_value', 'ending_wealth', 'gain_loss_dollar', 'gain_loss_pct', 'total_return_dollar',
     'total_return_pct', 'has_erosion', 'confirmed_erosion_months', 'final_deficit',
-    'raw_nav_erosion_rate', 'distribution_rate_on_starting_nav', 'accounting_total_return_rate',
+    'raw_nav_erosion_rate', 'overall_nav_erosion_score', 'up_market_recovery_score',
+    'distribution_rate_on_starting_nav', 'accounting_total_return_rate',
     'coverage_ratio', 'warning']
 
   const sortedResults = useMemo(() => {
@@ -359,6 +367,7 @@ export default function NavErosionPortfolio() {
     let erosionCount = 0, deficitCount = 0, validCount = 0, errorCount = 0
     let benchmarkReturnWeighted = 0, relativeDragWeighted = 0, returnWeight = 0
     let rawErosionWeighted = 0, distributionRateWeighted = 0, accountingReturnWeighted = 0, accountingWeight = 0
+    let upRecoveryWeighted = 0, upCaptureWeighted = 0, upRecoveryWeight = 0
     let best = null, worst = null
     let confirmedLossDollars = 0, distributionDollars = 0
     results.forEach(r => {
@@ -386,6 +395,12 @@ export default function NavErosionPortfolio() {
         accountingReturnWeighted += (r.accounting_total_return_rate || 0) * weight
         accountingWeight += weight
       }
+      if (r.up_market_recovery_score != null) {
+        const weight = r.amount || 0
+        upRecoveryWeighted += Number(r.up_market_recovery_score) * weight
+        upCaptureWeighted += Number(r.up_market_capture_pct || 0) * weight
+        upRecoveryWeight += weight
+      }
       confirmedLossDollars += r.confirmed_erosion_dollar || 0
       distributionDollars += r.period_distributions_dollar || 0
       if (best === null || r.total_return_pct > best.total_return_pct) best = r
@@ -399,12 +414,15 @@ export default function NavErosionPortfolio() {
     const aggregateRawErosionRate = accountingWeight > 0 ? rawErosionWeighted / accountingWeight : null
     const aggregateDistributionRate = accountingWeight > 0 ? distributionRateWeighted / accountingWeight : null
     const aggregateAccountingReturnRate = accountingWeight > 0 ? accountingReturnWeighted / accountingWeight : null
-    const overall = overallNavMetrics(aggregateRawErosionRate, aggregateDistributionRate, aggCoverage, relativeDragPct)
+    const aggregateUpRecoveryScore = upRecoveryWeight > 0 ? upRecoveryWeighted / upRecoveryWeight : null
+    const aggregateUpCapturePct = upRecoveryWeight > 0 ? upCaptureWeighted / upRecoveryWeight : null
+    const overall = overallNavMetrics(aggregateRawErosionRate, aggregateDistributionRate, aggCoverage, relativeDragPct, aggregateUpRecoveryScore)
     return {
       totAmount, totDist, totReinv, totCash, totFinal, totWealth, totGL, totTR, totGLPct,
       erosionCount, deficitCount, validCount, errorCount, best, worst, aggCoverage, aggSeverity,
       benchmarkReturnPct, relativeDragPct,
       aggregateRawErosionRate, aggregateDistributionRate, aggregateAccountingReturnRate,
+      aggregateUpRecoveryScore, aggregateUpCapturePct,
       overallScore: overall.score, overallSeverity: overall.severity, aggregateRawGap: overall.rawGap,
     }
   }, [results])
@@ -413,7 +431,7 @@ export default function NavErosionPortfolio() {
     'Price \u0394%', 'Benchmark Return %', 'Total Distributions', 'Total Reinvested', 'Cash Taken',
     'Ending Shares Value', 'Ending Wealth', 'Gain/Loss $', 'Gain/Loss %', 'Total Return $',
     'Total Return %', 'Confirmed Erosion', 'Months', 'Shares Needed / Extra To Breakeven',
-    'Raw e / Status', 'Overall Verdict', 'Dist d', 'Total Return r', 'Confirmed Coverage', 'Note']
+    'Raw e / Status', 'Overall Verdict', 'Up-Market Price Recovery', 'Dist d', 'Total Return r', 'Confirmed Coverage', 'Note']
 
   return (
     <div className="nep-page">
@@ -427,6 +445,8 @@ export default function NavErosionPortfolio() {
         month had a fund price loss while its mapped underlying benchmark was flat or rising. This isolates
         fund-specific price decay instead of treating a broad market sell-off as NAV erosion.
         It does not decide whether a fund is a NAV eroder: positive Raw e does that without a benchmark gate.
+        The Overall Verdict also credits funds that regain share price when their mapped market rises; distributions
+        and total return are deliberately excluded from that recovery test.
         <br />
         <span style={{ color: 'var(--neg-3)', fontWeight: 600 }}>Red needed</span> means shares still needed to breakeven.
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}> Green extra</span> means shares above breakeven.
@@ -511,7 +531,18 @@ export default function NavErosionPortfolio() {
               drag (50 percentage points maps to 100). The score is zero when raw e is zero or negative.
             </p>
             <p className="nep-formula">
-              Score = 100 × min(1, max(raw e ÷ 50%, e ÷ d, confirmed coverage, relative drag ÷ 50 points))
+              Raw warning = max(raw e ÷ 50%, e ÷ d)
+              <br />
+              Adjusted raw warning = min(1, raw warning) × (1 − 75% × recovery score ÷ 100)
+              <br />
+              Score = 100 × min(1, max(adjusted raw warning, confirmed coverage, relative drag ÷ 50 points))
+            </p>
+            <p>
+              Up-market recovery uses only unadjusted share-price returns on days when the mapped benchmark rises.
+              A 100% capture rate with at least 20 qualifying days earns full recovery credit; shorter histories are
+              confidence-weighted. The credit can reduce the raw-loss warning by at most 75%, and cannot reduce
+              benchmark-confirmed coverage or relative drag. This lets an ETF demonstrate that it can regain price
+              in a bull market without allowing distributions to disguise a declining NAV.
             </p>
             <p>
               0–25 is Low, above 25–75 is Moderate, and above 75 is High. Benchmark-gated coverage remains visible
@@ -744,7 +775,7 @@ export default function NavErosionPortfolio() {
               {summary.overallScore != null && (
                 <div
                   className="nep-stat-tile"
-                  title="Primary combined verdict for this selected historical window, not a forecast. It uses the strongest warning from raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag."
+                  title="Primary historical verdict, not a forecast. Share-price recovery on benchmark up days can reduce the raw-loss warning by up to 75%, but cannot reduce benchmark-confirmed coverage or relative drag. Distributions are excluded from recovery."
                   style={{
                     border: `3px solid ${navSeverityColor(summary.overallSeverity)}`,
                     borderRadius: 8,
@@ -757,7 +788,7 @@ export default function NavErosionPortfolio() {
                     {`${String(summary.overallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}
                   </div>
                   <div className="nep-stat-lbl">Overall Verdict ⓘ</div>
-                  <div className="nep-stat-sub">{`${summary.overallScore.toFixed(1)} / 100 · raw gap ${summary.aggregateRawGap != null ? summary.aggregateRawGap.toFixed(4) : '—'}`}</div>
+                  <div className="nep-stat-sub">{`${summary.overallScore.toFixed(1)} / 100 · price recovery ${summary.aggregateUpRecoveryScore != null ? summary.aggregateUpRecoveryScore.toFixed(1) : '—'}`}</div>
                 </div>
               )}
               <StatTile label="Total Invested" value={fmt$(summary.totAmount)} color="#7ecfff" explanation="Sum of the initial dollar amounts entered for valid rows. It is the starting capital used as the portfolio comparison basis, not a good/bad score." />
@@ -842,6 +873,15 @@ export default function NavErosionPortfolio() {
                   color={summary.relativeDragPct > 0 ? '#e05555' : '#00c853'}
                   sub="benchmark return − fund price return"
                   explanation="Initial-amount-weighted benchmark return minus fund price return. Lower is better; 0 means no positive lag, while a larger positive value means more fund underperformance. Distributions are excluded."
+                />
+              )}
+              {summary.aggregateUpRecoveryScore != null && (
+                <StatTile
+                  label="Up-Market Price Recovery"
+                  value={`${summary.aggregateUpRecoveryScore.toFixed(1)} / 100`}
+                  color={summary.aggregateUpRecoveryScore >= 75 ? '#00c853' : summary.aggregateUpRecoveryScore >= 40 ? '#ffb300' : '#e05555'}
+                  sub={`${summary.aggregateUpCapturePct.toFixed(1)}% weighted price capture`}
+                  explanation="Initial-amount-weighted recovery score across the tested income ETFs. It compares unadjusted share-price returns with mapped benchmark price returns on benchmark up days. Distributions and total return are excluded. Higher is better."
                 />
               )}
               {summary.best && (
@@ -1001,10 +1041,17 @@ export default function NavErosionPortfolio() {
                         )}
                       </td>
                       <td
-                        title={`Overall historical NAV erosion verdict. Strongest of raw decline, raw payout gap e ÷ d (${r.raw_payout_gap_ratio != null ? Number(r.raw_payout_gap_ratio).toFixed(4) : '—'}), benchmark coverage, and relative drag. Low 0–25; Moderate >25–75; High >75.`}
+                        title={`Recovery-adjusted historical NAV erosion verdict. Raw payout gap e ÷ d: ${r.raw_payout_gap_ratio != null ? Number(r.raw_payout_gap_ratio).toFixed(4) : '—'}. Up-market price recovery can reduce the raw warning by up to 75%, but cannot reduce confirmed coverage or relative drag. Low 0–25; Moderate >25–75; High >75.`}
                         style={{ color: navSeverityColor(r.overall_nav_erosion_severity), fontWeight: 700, cursor: 'help' }}
                       >
                         {r.overall_nav_erosion_score != null ? `${String(r.overall_nav_erosion_severity || '').toUpperCase()} RISK (${Number(r.overall_nav_erosion_score).toFixed(1)})` : '—'}
+                      </td>
+                      <td
+                        title={`Price-only recovery on benchmark up days; distributions and total return are excluded. ${r.up_market_observations || 0} qualifying day(s), ${r.up_market_positive_rate_pct != null ? `${Number(r.up_market_positive_rate_pct).toFixed(1)}% positive co-movement` : 'insufficient observations'}.`}
+                        style={{ color: r.up_market_recovery_score == null ? 'var(--p-666)' : r.up_market_recovery_score >= 75 ? 'var(--pos-strong)' : r.up_market_recovery_score >= 40 ? '#ffb300' : 'var(--neg-3)', cursor: 'help' }}
+                      >
+                        <div>{r.up_market_capture_pct != null ? `${Number(r.up_market_capture_pct).toFixed(1)}% capture` : '—'}</div>
+                        {r.up_market_recovery_score != null && <small>{`${Number(r.up_market_recovery_score).toFixed(1)} / 100 recovery`}</small>}
                       </td>
                       <td title="Distribution rate d is cash paid divided by starting NAV. Higher means more cash, but is not automatically better when d exceeds r." style={{ cursor: 'help' }}>{fmtRate(r.distribution_rate_on_starting_nav)}</td>
                       <td title="Accounting return r includes price change and distributions. Higher is better; r at least equal to d means no raw NAV erosion." style={{ color: r.accounting_total_return_rate < 0 ? 'var(--neg-3)' : 'var(--pos-strong)', cursor: 'help' }}>{fmtRate(r.accounting_total_return_rate)}</td>
@@ -1038,7 +1085,8 @@ export default function NavErosionPortfolio() {
                     <td className={summary.totTR >= 0 ? 'pct-up' : 'pct-down'}>{fmt$(summary.totTR)}</td>
                     <td></td><td></td><td></td><td></td>
                     <td title="Raw e: negative is favorable, zero is flat, and positive is erosion." className={summary.aggregateRawErosionRate > 0 ? 'pct-down' : 'pct-up'} style={{ cursor: 'help' }}>{fmtRate(summary.aggregateRawErosionRate)}</td>
-                    <td title={`Overall historical verdict; raw payout gap e ÷ d is ${summary.aggregateRawGap != null ? summary.aggregateRawGap.toFixed(4) : '—'}.`} style={{ color: navSeverityColor(summary.overallSeverity), fontWeight: 700, cursor: 'help' }}>{summary.overallScore != null ? `${String(summary.overallSeverity).toUpperCase()} RISK (${summary.overallScore.toFixed(1)})` : '—'}</td>
+                    <td title={`Recovery-adjusted historical verdict; raw payout gap e ÷ d is ${summary.aggregateRawGap != null ? summary.aggregateRawGap.toFixed(4) : '—'}.`} style={{ color: navSeverityColor(summary.overallSeverity), fontWeight: 700, cursor: 'help' }}>{summary.overallScore != null ? `${String(summary.overallSeverity).toUpperCase()} RISK (${summary.overallScore.toFixed(1)})` : '—'}</td>
+                    <td title="Weighted price-only recovery across tested holdings; distributions are excluded." style={{ cursor: 'help' }}>{summary.aggregateUpRecoveryScore != null ? `${summary.aggregateUpCapturePct.toFixed(1)}% / ${summary.aggregateUpRecoveryScore.toFixed(1)}` : '—'}</td>
                     <td title="Distribution rate d: higher cash is not automatically better; compare it with r." style={{ cursor: 'help' }}>{fmtRate(summary.aggregateDistributionRate)}</td>
                     <td title="Accounting return r: higher is better; r at least equal to d means e is zero or negative." className={summary.aggregateAccountingReturnRate < 0 ? 'pct-down' : 'pct-up'} style={{ cursor: 'help' }}>{fmtRate(summary.aggregateAccountingReturnRate)}</td>
                     <td title="Confirmed coverage is lower-is-better: 0–0.25 Low, above 0.25–0.75 Moderate, above 0.75 High." style={{ color: navSeverityColor(summary.aggSeverity), fontWeight: 600, cursor: 'help' }}>

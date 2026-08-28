@@ -4430,7 +4430,8 @@ function NavErosionHelp() {
         Confirmed erosion is a month in which the fund price declines while its underlying benchmark
         is flat or positive. A fund is therefore not penalized merely because its whole market fell.
         The page separately reports investor total return, relative benchmark drag, and the number of
-        shares needed to restore the initial capital value; those measures do not override the confirmed-erosion verdict.
+        shares needed to restore the initial capital value. It also measures whether the ETF regains share price
+        on benchmark up days; distributions are excluded from that recovery test.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Formula</h3>
@@ -4502,7 +4503,8 @@ Where:
         <li><strong>Raw NAV Erosion (e), Distribution Rate (d), Accounting Total Return (r)</strong> — Same-window, starting-NAV measures satisfying e = d − r. These do not use the benchmark gate. Positive e means the fund is a NAV eroder over the selected window regardless of which benchmark is selected.</li>
         <li><strong>Benchmark-Confirmed Erosion</strong> — Yes only when at least one month meets the fund-down, benchmark-flat/up rule.</li>
         <li><strong>Confirmed Erosion Ratio</strong> — Benchmark-gated monthly losses divided by distributions over the same window. Its Low/Moderate/High grade describes only benchmark-gated coverage and never overrides positive raw e.</li>
-        <li><strong>Overall Verdict</strong> — Primary Low/Moderate/High NAV erosion conclusion, supported by a historical 0–100 score using the strongest of raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. It is not a forecast probability. Scores above 75 are High.</li>
+        <li><strong>Overall Verdict</strong> — Primary Low/Moderate/High NAV erosion conclusion. Up-market share-price recovery can reduce the raw-loss warning by at most 75%, but cannot reduce benchmark-confirmed coverage or relative drag. It is not a forecast probability. Scores above 75 are High.</li>
+        <li><strong>Up-Market Price Recovery</strong> — Fund average share-price return divided by benchmark average price return on benchmark up days. Distributions and total return are excluded. At least 5 up days are required; confidence reaches full weight at 20.</li>
         <li><strong>Relative Drag</strong> — How many percentage points the fund price lagged its benchmark.</li>
         <li><strong>Total Distributions</strong> — All distributions generated over the period.</li>
         <li><strong>Shares Purchased</strong> — Shares bought via DRIP reinvestment.</li>
@@ -4591,7 +4593,8 @@ function NavScreenerHelp() {
         <li>Confirmed Erosion count (e.g., "3 of 8 funds" with at least one qualifying month)</li>
         <li>Ending Price Deficit count — an informational break-even share check, separate from confirmed erosion.</li>
         <li>Portfolio Raw e, Distribution Rate d, and Accounting Return r — amount-weighted same-window values satisfying e = d − r.</li>
-        <li>Overall Verdict — primary conclusion from the strongest-warning score using raw decline, e ÷ d, confirmed coverage, and relative drag; 0–25 Low, above 25–75 Moderate, above 75 High.</li>
+        <li>Overall Verdict — recovery-adjusted primary conclusion. Price-only up-market recovery can reduce the raw-loss warning by at most 75%, while confirmed coverage and relative drag remain hard floors; 0–25 Low, above 25–75 Moderate, above 75 High.</li>
+        <li>Up-Market Price Recovery — amount-weighted recovery score and capture rate based only on share-price moves during mapped-benchmark up days.</li>
         <li>Portfolio Confirmed Erosion Ratio — total benchmark-confirmed price-loss dollars divided by total distributions over the same window.</li>
         <li>Weighted benchmark return and relative price drag, plus best/worst performer and data errors.</li>
       </ul>
@@ -4609,6 +4612,7 @@ function NavScreenerHelp() {
         <li><strong>Confirmed Erosion / Months</strong> — Yes only when at least one month has fund price down while the benchmark is flat or up.</li>
         <li><strong>Shares Needed / Extra To Breakeven</strong> — End-of-period capital-only share gap; informational and separate from the benchmark gate.</li>
         <li><strong>Raw e / Dist d / Total Return r</strong> — Same-window accounting identity on the starting share-price basis. Positive e identifies a NAV eroder independently of the benchmark gate.</li>
+        <li><strong>Up-Market Price Recovery</strong> — Price capture and recovery score on benchmark up days; distributions and total return are excluded.</li>
         <li><strong>Confirmed Erosion Ratio</strong> — Confirmed price loss per share divided by all distributions per share in the selected window.</li>
         <li><strong>Note</strong> — Any data warnings for that ticker.</li>
       </ul>
@@ -5226,7 +5230,7 @@ function AnalyticsHelp() {
       <p style={{ marginBottom: '0.75rem' }}>Click <strong>Analyze</strong> to run the base analysis. Results include:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Portfolio Grade Card</strong> — Letter grade (A+ through F) and numeric score with a breakdown bar showing individual grades and weights for Risk, Income, Diversification, and other dimensions.</li>
-        <li><strong>Raw NAV Erosion and Yield-Funding Coverage</strong> — Raw e, distribution rate d, and accounting return r share one trailing-year starting-NAV basis. Coverage is benchmark-gated and lower-is-better; portfolio severity follows the aggregate coverage ratio rather than the worst individual holding.</li>
+        <li><strong>Raw NAV Erosion and Yield-Funding Coverage</strong> — Raw e, distribution rate d, and accounting return r share one trailing-year starting-NAV basis. Coverage is benchmark-gated and lower-is-better. The overall score also credits price-only recovery on benchmark up days, without letting that credit reduce confirmed coverage or relative drag.</li>
         <li><strong>Yield-Funding Coverage Chart</strong> — Per-ticker benchmark-gated coverage ratios with low/moderate/high thresholds. Tickers above 0.75, down 50%+, or carrying a 5%+ share deficit deserve a closer look.</li>
         <li><strong>Per-Ticker Metrics Table</strong> — One row per ticker with all risk metrics (see columns below). Sortable by any column.</li>
       </ul>
