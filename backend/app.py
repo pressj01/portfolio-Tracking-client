@@ -8896,6 +8896,42 @@ def _should_replace_imported_dividend(existing_source, existing_amount, new_amou
     return incoming > stored + 0.009
 
 
+def _accounts_from_dividend_notes(notes):
+    return {
+        match.strip().casefold()
+        for match in re.findall(r"\[acct:([^\]]+)\]", str(notes or ""))
+        if match and match.strip()
+    }
+
+
+def _imported_dividend_is_additional(existing_notes, existing_amount, incoming_notes, incoming_amount):
+    """True when a smaller same-day import is another account, not a duplicate.
+
+    Two Fidelity accounts can pay the same ticker on the same date into one
+    portfolio. The unique (ticker, profile, date) row would otherwise keep
+    only the first account — and skip the second because it is smaller.
+    """
+    try:
+        stored = float(existing_amount or 0)
+        incoming = float(incoming_amount or 0)
+    except (TypeError, ValueError):
+        return False
+    if incoming <= 0.009 or abs(incoming - stored) <= 0.009 or incoming > stored + 0.009:
+        return False
+    existing_accounts = _accounts_from_dividend_notes(existing_notes)
+    incoming_accounts = _accounts_from_dividend_notes(incoming_notes)
+    return bool(incoming_accounts and not incoming_accounts.issubset(existing_accounts))
+
+
+def _merge_dividend_import_notes(*parts):
+    merged = []
+    for part in parts:
+        text = str(part or "").strip()
+        if text and text not in merged:
+            merged.append(text)
+    return "; ".join(merged)
+
+
 def _prune_superseded_refresh_estimates(conn, ticker, profile_id, pay_date, frequency):
     """Drop projected payments that a real payment now covers.
 
@@ -9319,7 +9355,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         for (ticker, date_str), info in div_agg.items():
             div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             dup = conn.execute(
-                "SELECT id, source, amount FROM dividend_payments "
+                "SELECT id, source, amount, notes FROM dividend_payments "
                 "WHERE ticker = ? AND profile_id = ? AND payment_date = ?",
                 (ticker, profile_id, date_str),
             ).fetchone()
@@ -9331,6 +9367,20 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                     conn.execute(
                         "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
                         (round(info["amount"], 2), fmt, notes, dup["id"]),
+                    )
+                    dividends_applied += 1
+                    tickers_with_divs.add(ticker)
+                elif _imported_dividend_is_additional(
+                    dup["notes"], dup["amount"], notes, info["amount"],
+                ):
+                    conn.execute(
+                        "UPDATE dividend_payments SET amount = ?, source = ?, notes = ? WHERE id = ?",
+                        (
+                            round(float(dup["amount"] or 0) + info["amount"], 2),
+                            fmt,
+                            _merge_dividend_import_notes(dup["notes"], notes),
+                            dup["id"],
+                        ),
                     )
                     dividends_applied += 1
                     tickers_with_divs.add(ticker)
@@ -35377,18 +35427,22 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
         ).fetchall()
         history_by_ticker = {}
         last_payment_cash = {}
+        payment_cash_by_ticker_date = {}
         for row in history_rows:
             parsed = _parse_timestamp_value(row["payment_date"])
             if parsed is not None:
-                history_by_ticker.setdefault(row["ticker"], []).append(parsed.date().isoformat())
+                pay_iso = parsed.date().isoformat()
+                history_by_ticker.setdefault(row["ticker"], []).append(pay_iso)
                 try:
                     cash = float(row["amount"] or 0)
                 except (TypeError, ValueError):
                     cash = 0.0
                 if cash > 0:
                     last_payment_cash[row["ticker"]] = cash
+                    payment_cash_by_ticker_date.setdefault(row["ticker"], {})[pay_iso] = round(cash, 2)
         for holding in holdings:
             holding["payment_history"] = history_by_ticker.get(holding["ticker"], [])
+            holding["payment_cash_by_date"] = payment_cash_by_ticker_date.get(holding["ticker"], {})
             amt = holding.get("amount")
             if (amt is None or amt <= 0) and holding["quantity"] > 0:
                 cash = last_payment_cash.get(holding["ticker"])
@@ -35734,6 +35788,13 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 payment_frequency = str(
                     payment.get("freq") or payment.get("div_frequency") or frequency
                 ).strip().upper() or frequency
+            declared = _dividend_payment_value(payment)
+            cash_map = payment.get("payment_cash_by_date") or item.get("payment_cash_by_date") or {}
+            try:
+                cash = float(cash_map.get(value.isoformat()) or 0)
+            except (TypeError, ValueError):
+                cash = 0.0
+            payment_income = max(declared, cash)
             payment.update({
                 "ticker": ticker,
                 "freq": payment_frequency,
@@ -35742,6 +35803,8 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 "calendar_projected": source == "projected",
                 "calendar_estimated": source == "projected",
             })
+            if payment_income > 0:
+                payment["payment_income"] = round(payment_income, 2)
             projected.append(payment)
 
         if frequency in ("W", "52"):

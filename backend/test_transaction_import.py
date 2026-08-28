@@ -321,7 +321,10 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["drip_detected"], 1)
         self.assertAlmostEqual(sum(txn["dividend_amount"] for txn in dividends), 2315.81, places=2)
         self.assertEqual({txn["notes"] for txn in dividends}, {
-            "Dividend Received", "Long-Term Cap Gain", "Short-Term Cap Gain", "Return of Capital",
+            "[acct:ROTH IRA] Dividend Received",
+            "[acct:ROTH IRA] Long-Term Cap Gain",
+            "[acct:ROTH IRA] Short-Term Cap Gain",
+            "[acct:ROTH IRA] Return of Capital",
         })
         self.assertEqual(drips[0]["notes"], "[DRIP] Reinvestment")
         self.assertEqual(drips[0]["shares"], 10)
@@ -458,6 +461,21 @@ class ImportedDividendReplaceTest(unittest.TestCase):
         self.assertFalse(replace("fidelity_transactions", 2315.81, 1519.25))
         self.assertFalse(replace("fidelity_transactions", 2315.81, 2315.81))
         self.assertTrue(replace("refresh_estimate", 2315.81, 1519.25))
+
+    def test_smaller_same_day_import_from_another_fidelity_account_is_added(self):
+        additional = app_module._imported_dividend_is_additional
+        self.assertTrue(additional(
+            "[acct:ROTH IRA] Dividend Received", 1519.25,
+            "[acct:INDIVIDUAL] Dividend Received", 796.56,
+        ))
+        self.assertFalse(additional(
+            "[acct:ROTH IRA] Dividend Received", 1519.25,
+            "[acct:ROTH IRA] Dividend Received", 1519.25,
+        ))
+        self.assertFalse(additional(
+            "[acct:ROTH IRA] Dividend Received", 2315.81,
+            "[acct:ROTH IRA] Dividend Received", 1519.25,
+        ))
 
 
 if __name__ == "__main__":

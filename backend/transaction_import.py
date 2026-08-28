@@ -1201,6 +1201,7 @@ _FIDELITY_POSITION_ALIASES = {
 
 _FIDELITY_TRANSACTION_ALIASES = {
     "Run Date": ["Date", "Settlement Date", "Trade Date", "Activity Date"],
+    "Account": ["Account Name", "Account Nickname"],
     "Action": ["Transaction Type", "Type", "Activity Type"],
     "Symbol": ["Ticker"],
     "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
@@ -1605,7 +1606,15 @@ def _fidelity_is_cash_distribution(action_upper):
     return text.strip() in _FIDELITY_DISTRIBUTION_EXACT
 
 
-def _fidelity_distribution_note(action_upper):
+def _fidelity_distribution_note(action_upper, account=""):
+    note = _fidelity_distribution_type_label(action_upper)
+    account = str(account or "").strip()
+    if account:
+        return f"[acct:{account}] {note}"
+    return note
+
+
+def _fidelity_distribution_type_label(action_upper):
     text = str(action_upper or "")
     if "RETURN OF CAPITAL" in text or "ROC DISTRIBUTION" in text:
         return "Return of Capital"
@@ -1695,7 +1704,9 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "price_per_share": None,
                 "fees": 0.0,
                 "dividend_amount": round(abs(amount_val), 2),
-                "notes": _fidelity_distribution_note(action_upper),
+                "notes": _fidelity_distribution_note(
+                    action_upper, record.get("Account"),
+                ),
             })
             continue
 
