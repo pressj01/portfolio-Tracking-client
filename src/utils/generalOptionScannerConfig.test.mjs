@@ -150,6 +150,7 @@ test('short-premium risk profiles use the requested delta bands', () => {
   assert.equal(moderate.min_avg_dollar_volume, 25e6)
   assert.equal(cautious.min_open_interest, 250)
   assert.equal(cautious.bid_ask_level, 'Conservative (use bid/ask values)')
+  assert.ok(cautious.min_max_profit_dollars >= 40)
 })
 
 test('long-premium risk profiles cap IV Rank instead of requiring rich IV', () => {

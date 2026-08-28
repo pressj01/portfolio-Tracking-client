@@ -13,7 +13,7 @@ const STORAGE_KEY = 'bull-put-spread-scanner-filters'
 const PRESETS = {
   conservative: {
     label: 'Conservative',
-    tip: 'Confirmed uptrends, lower-delta shorts, more cushion, and tighter liquidity rules',
+    tip: 'Confirmed uptrends, lower-delta shorts, more cushion, a $40 minimum credit, and tighter liquidity rules',
     filters: {
       universe: 'large_cap', include_stocks: true, include_index_etfs: true, include_sector_etfs: false,
       min_market_cap: 20e9, fund_min_aum: 2e9, min_avg_dollar_volume: 100e6,
@@ -24,7 +24,7 @@ const PRESETS = {
       earnings_buffer_days: 7, lookback_days: 21, target_dte: 35,
       short_delta: 0.20, long_delta: 0.08, delta_tolerance: 0.10,
       min_width_pct: 1, max_width_pct: 10, min_credit_pct_of_width: 20,
-      min_cushion_pct: 5, min_open_interest: 100, max_exec_cost_pct: 20,
+      min_credit_dollars: 40, min_cushion_pct: 5, min_open_interest: 100, max_exec_cost_pct: 20,
     },
   },
   balanced: {
@@ -40,7 +40,7 @@ const PRESETS = {
       earnings_buffer_days: 5, lookback_days: 21, target_dte: 35,
       short_delta: 0.25, long_delta: 0.10, delta_tolerance: 0.12,
       min_width_pct: 1, max_width_pct: 15, min_credit_pct_of_width: 20,
-      min_cushion_pct: 3, min_open_interest: 50, max_exec_cost_pct: 30,
+      min_credit_dollars: 0, min_cushion_pct: 3, min_open_interest: 50, max_exec_cost_pct: 30,
     },
   },
   aggressive: {
@@ -56,7 +56,7 @@ const PRESETS = {
       earnings_buffer_days: 3, lookback_days: 42, target_dte: 45,
       short_delta: 0.30, long_delta: 0.12, delta_tolerance: 0.15,
       min_width_pct: 1, max_width_pct: 20, min_credit_pct_of_width: 18,
-      min_cushion_pct: 1.5, min_open_interest: 25, max_exec_cost_pct: 40,
+      min_credit_dollars: 0, min_cushion_pct: 1.5, min_open_interest: 25, max_exec_cost_pct: 40,
     },
   },
 }
@@ -538,6 +538,7 @@ export default function BullPutSpreadScanner() {
         {numField('Min width', 'min_width_pct', { step: 0.5, suffix: '% spot' })}
         {numField('Max width', 'max_width_pct', { step: 0.5, suffix: '% spot' })}
         {numField('Min credit', 'min_credit_pct_of_width', { suffix: '% width' })}
+        {numField('Min credit $', 'min_credit_dollars', { tip: 'Rejects defined-risk credits smaller than this dollar amount per contract. Conservative requires at least $40.' })}
         {numField('Min cushion', 'min_cushion_pct', { step: 0.5, suffix: '%' })}
         {numField('Min leg OI', 'min_open_interest', { width: 72 })}
         {numField('Max slippage', 'max_exec_cost_pct', { suffix: '% credit' })}

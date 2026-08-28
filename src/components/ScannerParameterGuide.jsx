@@ -88,6 +88,7 @@ const GUIDES = {
         ['Long delta', 'Places the lower-strike protective put. Lower delta normally creates a wider wing.'],
         ['Min / max width', 'Allowed strike distance as a percentage of spot.'],
         ['Min credit', 'Minimum net credit as a percentage of spread width.'],
+        ['Min credit $', 'Minimum net credit in dollars per one-lot. The Conservative preset rejects credits below $40.'],
         ['Min cushion', 'Minimum distance from spot down to the expiration breakeven.'],
         ['Min leg OI', 'Minimum open interest on the thinner of the two option legs.'],
         ['Max slippage', 'Maximum combined bid/ask cost as a percentage of the entry credit.'],

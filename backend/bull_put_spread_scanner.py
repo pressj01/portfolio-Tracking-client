@@ -13,7 +13,9 @@ The scan runs in three cached stages:
    funds that can support a bullish/neutral thesis.
 3. Options: enumerate same-expiration two-leg put spreads, require two-sided
    quotes, compute defined risk, and keep only pairs that satisfy the user's
-   credit, cushion, liquidity, and execution constraints.
+   credit, cushion, liquidity, and execution constraints. The option session
+   is primed once per ticker so Yahoo is not asked twice for the expiration
+   catalog, and the catalog itself is cached with the put chain.
 
 Endpoints:
   GET  /api/options/bull-put-spread-scan/universes
@@ -40,17 +42,22 @@ from put_scanner import (
     SECTOR_ETF_SET,
     UNIVERSE_CHOICES,
     LOW_CONFIDENCE_SELECTED_FUND_FLAG,
+    _CHAIN_TTL,
     _benchmark_returns,
+    _cache_get,
     _clean_tickers,
     _compute_technicals,
     _earnings_within_target_window,
+    _expirations_cache,
     _fetch_fundamentals_bulk,
     _fund_kind,
     _fund_size,
     _is_fund,
+    _load_expirations,
     _load_history,
     _load_put_chain,
     _num,
+    _option_bundle_expiration,
     _parse_date,
     _pick_expiration,
     _prepare_put_quote,
@@ -224,6 +231,27 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
     }
 
 
+def _spread_distribution_iv(spread: dict) -> float | None:
+    """Spot-distribution vol for the probability cards.
+
+    ATM IV understates left-tail risk on a put credit spread because skew
+    makes the short put richer than the at-the-money option. Averaging the
+    two put IVs matches the live risk graph and keeps expiration loss odds
+    in line with the short-put delta instead of collapsing toward 1%.
+    """
+    ivs = []
+    for value in (
+        (spread.get("short_leg") or {}).get("iv"),
+        (spread.get("long_leg") or {}).get("iv"),
+    ):
+        number = _num(value)
+        if number and number > 0:
+            ivs.append(number)
+    if ivs:
+        return sum(ivs) / len(ivs)
+    return _num(spread.get("atm_iv"))
+
+
 def _pair_quality(pair: dict) -> float:
     """Rank qualifying pairs without letting one seductive metric dominate."""
     score = _ramp(pair.get("prob_otm"), 65, 85, 25)
@@ -234,6 +262,31 @@ def _pair_quality(pair: dict) -> float:
     score += _ramp(-(exec_cost if exec_cost is not None else 100.0), -35, -8, 10)
     score += _ramp(pair.get("open_interest_min"), 50, 500, 8)
     return score
+
+
+def _prime_option_ticker(ticker: str):
+    """Open one yfinance session and keep the default chain Yahoo already sent.
+
+    ``Ticker.options`` and a later ``Ticker.option_chain(date)`` on a *new*
+    object each download the expiration catalog. Reusing the primed object
+    avoids that second catalog fetch; if the catalog-only response is already
+    the month we want, the default chain is reused as well.
+    """
+    try:
+        tk = yf.Ticker(ticker)
+    except Exception:
+        return None, [], None
+
+    default_chain = None
+    if _cache_get(_expirations_cache, ticker, _CHAIN_TTL) is None:
+        fetch = getattr(tk, "option_chain", None)
+        if callable(fetch):
+            try:
+                default_chain = fetch()
+            except Exception:
+                default_chain = None
+    expirations = _load_expirations(ticker, tk)
+    return tk, expirations, default_chain
 
 
 def _suggest_bull_put_spread(
@@ -250,6 +303,7 @@ def _suggest_bull_put_spread(
     min_width_pct: float = 1.0,
     max_width_pct: float = 15.0,
     min_credit_pct_of_width: float = 20.0,
+    min_credit_dollars: float = 0.0,
     min_cushion_pct: float = 3.0,
     min_open_interest: int = 50,
     max_exec_cost_pct: float = 30.0,
@@ -257,9 +311,8 @@ def _suggest_bull_put_spread(
     earnings_buffer_days: int = 5,
 ) -> dict | None:
     """Select the best live, same-expiration bull put credit spread."""
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
+    tk, expirations, default_chain = _prime_option_ticker(ticker)
+    if tk is None or not expirations:
         return None
 
     earnings_d = _parse_date(earnings_date)
@@ -273,7 +326,20 @@ def _suggest_bull_put_spread(
     if not expiration:
         return None
 
-    puts = _load_put_chain(ticker, expiration, spot, div_yield)
+    reuse_chain = (
+        default_chain
+        if default_chain is not None
+        and _option_bundle_expiration(default_chain) == expiration
+        else None
+    )
+    puts = _load_put_chain(
+        ticker,
+        expiration,
+        spot,
+        div_yield,
+        session_ticker=tk,
+        chain=reuse_chain,
+    )
     if not puts:
         return None
 
@@ -310,13 +376,20 @@ def _suggest_bull_put_spread(
     all_pairs: list[dict] = []
     passing: list[dict] = []
     for short_leg in short_pool:
+        short_strike = _num(short_leg.get("strike"))
+        if not short_strike:
+            continue
         for long_leg in long_pool:
+            long_strike = _num(long_leg.get("strike"))
+            if not long_strike or short_strike <= long_strike:
+                continue
+            width = short_strike - long_strike
+            if width < lo_width or width > hi_width:
+                continue
             pair = _build_credit_pair(
                 short_leg, long_leg, spot, dte or 1, forecast_vol
             )
             if pair is None:
-                continue
-            if pair["width"] < lo_width or pair["width"] > hi_width:
                 continue
             all_pairs.append(pair)
             estimated = pair["uses_last_trade_prices"]
@@ -325,6 +398,8 @@ def _suggest_bull_put_spread(
             if not estimated and pair["natural_credit"] <= 0:
                 continue
             if pair["credit_pct_of_width"] < min_credit_pct_of_width:
+                continue
+            if pair["credit_dollars"] < min_credit_dollars:
                 continue
             if (
                 pair["breakeven_cushion_pct"] is not None
@@ -629,6 +704,7 @@ DEFAULTS = {
     "min_width_pct": 1.0,
     "max_width_pct": 15.0,
     "min_credit_pct_of_width": 20.0,
+    "min_credit_dollars": 0.0,
     "min_cushion_pct": 3.0,
     "min_open_interest": 50,
     "max_exec_cost_pct": 30.0,
@@ -696,6 +772,9 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
     )
     min_credit = min(
         90.0, max(1.0, _num(p["min_credit_pct_of_width"], 20.0) or 20.0)
+    )
+    min_credit_dollars = max(
+        0.0, _num(p.get("min_credit_dollars"), 0.0) or 0.0
     )
     min_cushion = max(
         0.0, _num(p["min_cushion_pct"], 3.0) or 0.0
@@ -917,6 +996,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 min_width_pct=min_width,
                 max_width_pct=max_width,
                 min_credit_pct_of_width=min_credit,
+                min_credit_dollars=min_credit_dollars,
                 min_cushion_pct=min_cushion,
                 min_open_interest=min_oi,
                 max_exec_cost_pct=max_exec,
@@ -963,9 +1043,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 spot=tech.get("price"),
                 dte=spread.get("dte"),
                 expiration=spread.get("expiration"),
-                distribution_iv=spread.get("atm_iv") or (
-                    spread.get("short_leg") or {}
-                ).get("iv"),
+                distribution_iv=_spread_distribution_iv(spread),
                 entry_cashflow=spread.get("credit"),
                 legs=[
                     {
@@ -1152,6 +1230,7 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             "min_width_pct": min_width,
             "max_width_pct": max_width,
             "min_credit_pct_of_width": min_credit,
+            "min_credit_dollars": min_credit_dollars,
             "min_cushion_pct": min_cushion,
             "min_open_interest": min_oi,
             "max_exec_cost_pct": max_exec,

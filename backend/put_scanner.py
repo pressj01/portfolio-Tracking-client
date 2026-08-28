@@ -248,6 +248,8 @@ _history_cache: dict[tuple, tuple[float, pd.DataFrame]] = {}
 _info_cache: dict[str, tuple[float, dict]] = {}
 _put_chain_cache: dict[tuple[str, str], tuple[float, list]] = {}
 _put_skew_call_cache: dict[tuple[str, str], tuple[float, list]] = {}
+_expirations_cache: dict[str, tuple[float, list]] = {}
+_OCC_EXPIRY_RE = re.compile(r"(\d{6})[CP]\d+$")
 
 
 def _cache_get(cache: dict, key, ttl: float):
@@ -259,6 +261,43 @@ def _cache_get(cache: dict, key, ttl: float):
 
 def _cache_set(cache: dict, key, value):
     cache[key] = (time.time(), value)
+
+
+def _load_expirations(ticker: str, tk=None) -> list[str]:
+    """Expiration dates for a ticker, cached for the same window as option chains.
+
+    Pass a primed yfinance Ticker as ``tk`` after ``option_chain()`` or
+    ``.options`` so this does not open a second Yahoo session. Creating a
+    fresh Ticker just to read ``.options`` forces yfinance to download a
+    chain only to throw it away.
+    """
+    cached = _cache_get(_expirations_cache, ticker, _CHAIN_TTL)
+    if cached is not None:
+        return cached
+    try:
+        instrument = tk if tk is not None else yf.Ticker(ticker)
+        expirations = list(instrument.options or [])
+    except Exception:
+        expirations = []
+    _cache_set(_expirations_cache, ticker, expirations)
+    return expirations
+
+
+def _option_bundle_expiration(chain) -> str | None:
+    """ISO expiration encoded in OCC symbols of a yfinance option_chain bundle."""
+    for side in ("puts", "calls"):
+        frame = getattr(chain, side, None)
+        if frame is None or getattr(frame, "empty", True):
+            continue
+        columns = getattr(frame, "columns", None)
+        if columns is None or "contractSymbol" not in columns:
+            continue
+        match = _OCC_EXPIRY_RE.search(str(frame["contractSymbol"].iloc[0]))
+        if not match:
+            continue
+        raw = match.group(1)
+        return f"20{raw[0:2]}-{raw[2:4]}-{raw[4:6]}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -755,33 +794,52 @@ def _fetch_fundamentals_bulk(tickers: list[str], workers: int = 8) -> dict[str, 
 # Stage 3 - put chain and the suggested strike
 # ---------------------------------------------------------------------------
 
-def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float) -> list[dict]:
-    """Puts plus a cached call-side companion for 25-delta skew metrics."""
+def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float,
+                    session_ticker=None, chain=None) -> list[dict]:
+    """Puts plus a cached call-side companion for 25-delta skew metrics.
+
+    ``session_ticker`` reuses a yfinance Ticker that already loaded the
+    expiration catalog. A fresh Ticker.option_chain(date) otherwise downloads
+    that catalog again before the requested expiration.
+
+    ``chain`` is a preloaded option_chain bundle for this same expiration, so
+    the default Yahoo response can be used when it is already the contract
+    month we want.
+    """
     key = (ticker, expiration)
     cached = _cache_get(_put_chain_cache, key, _CHAIN_TTL)
     if cached is not None:
         return cached
 
-    try:
-        chain = yf.Ticker(ticker).option_chain(expiration)
-    except Exception:
-        _cache_set(_put_chain_cache, key, [])
-        _cache_set(_put_skew_call_cache, key, [])
-        return []
+    if chain is None:
+        try:
+            instrument = session_ticker if session_ticker is not None else yf.Ticker(ticker)
+            chain = instrument.option_chain(expiration)
+        except Exception:
+            _cache_set(_put_chain_cache, key, [])
+            _cache_set(_put_skew_call_cache, key, [])
+            return []
 
     dte = max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 0)
     T = max(dte, 0.25) / 365.0
 
     def rows_for(frame, option_type):
         rows = []
-        for _, r in frame.iterrows():
-            strike = _num(r.get("strike"))
+        if frame is None or getattr(frame, "empty", True):
+            return rows
+        try:
+            records = frame.to_dict("records")
+        except Exception:
+            records = [row for _, row in frame.iterrows()]
+        for r in records:
+            get = r.get if hasattr(r, "get") else lambda key, default=None: default
+            strike = _num(get("strike"))
             if not strike or strike <= 0:
                 continue
-            bid = _num(r.get("bid"), 0.0) or 0.0
-            ask = _num(r.get("ask"), 0.0) or 0.0
-            last = _num(r.get("lastPrice"), 0.0) or 0.0
-            iv = _num(r.get("impliedVolatility"), 0.0) or 0.0
+            bid = _num(get("bid"), 0.0) or 0.0
+            ask = _num(get("ask"), 0.0) or 0.0
+            last = _num(get("lastPrice"), 0.0) or 0.0
+            iv = _num(get("impliedVolatility"), 0.0) or 0.0
             mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last
             delta = None
             if iv > 0 and spot > 0:
@@ -801,14 +859,14 @@ def _load_put_chain(ticker: str, expiration: str, spot: float, div_yield: float)
                 "mid": mid,
                 "iv": iv,
                 "delta": delta,
-                "volume": int(_num(r.get("volume"), 0) or 0),
-                "open_interest": int(_num(r.get("openInterest"), 0) or 0),
+                "volume": int(_num(get("volume"), 0) or 0),
+                "open_interest": int(_num(get("openInterest"), 0) or 0),
                 "dte": dte,
             })
         return rows
 
-    puts = rows_for(getattr(chain, "puts", pd.DataFrame()), "put")
-    calls = rows_for(getattr(chain, "calls", pd.DataFrame()), "call")
+    puts = rows_for(getattr(chain, "puts", None), "put")
+    calls = rows_for(getattr(chain, "calls", None), "call")
     _cache_set(_put_chain_cache, key, puts)
     _cache_set(_put_skew_call_cache, key, calls)
     return puts

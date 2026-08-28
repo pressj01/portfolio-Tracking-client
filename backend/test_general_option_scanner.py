@@ -161,6 +161,12 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertAlmostEqual(payload["short_delta"], 0.10)
         self.assertAlmostEqual(payload["long_delta"], 0.045)
 
+    def test_bull_put_dollar_profit_floor_is_applied_during_pair_selection(self):
+        payload = _runner_payload("bull-put-spread", {
+            "min_max_profit_dollars": 40,
+        })
+        self.assertEqual(payload["min_credit_dollars"], 40)
+
     def test_long_dated_unbalanced_structures_use_index_etfs_only(self):
         payload = _runner_payload("unbalanced-butterfly", {})
         self.assertEqual(payload["tickers"], "SPY,QQQ,IWM,VOO")

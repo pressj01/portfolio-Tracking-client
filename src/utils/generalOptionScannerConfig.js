@@ -756,6 +756,9 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     result.max_abs_position_delta = [10, 20, 100][intensity]
   }
 
+  if (strategy === 'bull-put-spread' && intensity === 0) {
+    result.min_max_profit_dollars = Math.max(40, Number(result.min_max_profit_dollars) || 0)
+  }
   if (strategy === 'put-call-condor') result.credit_short_delta = profile.target / 100
   if (strategy === 'unbalanced-put-condor') result.delta_preset = ['15/5', '20/10', '25/15'][intensity]
   if (isIndexOnlyStrategy(strategy)) {

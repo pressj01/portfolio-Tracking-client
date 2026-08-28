@@ -545,7 +545,7 @@ export default function OptionProbabilityCards({
   const failure = failureProbability(primaryPoint)
   const horizonLabel = requestedPrimaryPoint
     ? (primaryHorizonLabel || `at ${primaryPoint.label.toLowerCase()}`)
-    : 'by expiration'
+    : 'at expiration'
   const primaryContext = primaryPoint === expiration
     ? `${formatDate(expiration.exit_date)} · modeled from today through expiration`
     : `${formatDate(primaryPoint.exit_date)} · ${primaryPoint.remaining_dte} DTE remaining`

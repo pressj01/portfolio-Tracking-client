@@ -792,5 +792,58 @@ class UniverseTests(unittest.TestCase):
         )
 
 
+class OptionSessionTests(unittest.TestCase):
+    def setUp(self):
+        ps._expirations_cache.clear()
+        ps._put_chain_cache.clear()
+        ps._put_skew_call_cache.clear()
+
+    def tearDown(self):
+        ps._expirations_cache.clear()
+        ps._put_chain_cache.clear()
+        ps._put_skew_call_cache.clear()
+
+    def test_expiration_catalog_is_cached(self):
+        fake = type("FakeTicker", (), {"options": ["2026-09-18", "2026-10-16"]})()
+        with patch.object(ps.yf, "Ticker", return_value=fake) as ctor:
+            first = ps._load_expirations("SESSION", fake)
+            second = ps._load_expirations("SESSION")
+        self.assertEqual(first, ["2026-09-18", "2026-10-16"])
+        self.assertEqual(second, first)
+        ctor.assert_not_called()
+
+    def test_option_bundle_expiration_reads_occ_symbol(self):
+        bundle = type("Bundle", (), {
+            "puts": pd.DataFrame({
+                "contractSymbol": ["XYZ260918P00095000"],
+                "strike": [95.0],
+            }),
+            "calls": pd.DataFrame(),
+        })()
+        self.assertEqual(ps._option_bundle_expiration(bundle), "2026-09-18")
+
+    def test_preloaded_chain_skips_yahoo(self):
+        bundle = type("Bundle", (), {
+            "puts": pd.DataFrame({
+                "strike": [95.0],
+                "bid": [2.0],
+                "ask": [2.1],
+                "lastPrice": [2.05],
+                "impliedVolatility": [0.28],
+                "volume": [10],
+                "openInterest": [50],
+            }),
+            "calls": pd.DataFrame(),
+        })()
+        with patch.object(ps.yf, "Ticker") as ctor:
+            rows = ps._load_put_chain(
+                "SESSION", "2026-09-18", 100.0, 0.0, chain=bundle
+            )
+        ctor.assert_not_called()
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["strike"], 95.0)
+        self.assertAlmostEqual(rows[0]["mid"], 2.05)
+
+
 if __name__ == "__main__":
     unittest.main()

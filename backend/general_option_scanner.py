@@ -291,6 +291,10 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
             elif strategy == "bear-put-spread":
                 result["long_delta"] = target_reference_delta
                 result["short_delta"] = max(0.02, target_reference_delta - 0.25)
+        if strategy == "bull-put-spread":
+            min_credit_dollars = _num(payload.get("min_max_profit_dollars"))
+            if min_credit_dollars is not None and min_credit_dollars > 0:
+                result["min_credit_dollars"] = min_credit_dollars
         if symbols:
             result.update({
                 "universe": "custom",

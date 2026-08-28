@@ -6,7 +6,11 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+import pandas as pd
+
 import bull_put_spread_scanner as bps
+import put_scanner as ps
+from option_probability import profit_probability_schedule
 
 
 def leg(strike, bid, ask, delta, oi=500, volume=100, iv=0.28):
@@ -142,6 +146,7 @@ class PairMathTests(unittest.TestCase):
 
 class PairSelectionTests(unittest.TestCase):
     def setUp(self):
+        ps._expirations_cache.clear()
         self.expiration = (date.today() + timedelta(days=35)).isoformat()
         self.chain = [
             leg(100, 4.8, 5.0, -0.48, 1000),
@@ -197,6 +202,17 @@ class PairSelectionTests(unittest.TestCase):
         picked = self._scan(min_credit_pct_of_width=80.0)
         self.assertTrue(picked["constraints_relaxed"])
 
+    def test_conservative_dollar_credit_floor_rejects_a_twenty_five_dollar_credit(self):
+        self.chain = [
+            leg(96, 0.39, 0.41, -0.25),
+            leg(95, 0.15, 0.17, -0.10),
+        ]
+        skinny = self._scan(min_credit_dollars=40.0, min_cushion_pct=1.0)
+        self.assertAlmostEqual(skinny["credit_dollars"], 24.0)
+        self.assertTrue(skinny["constraints_relaxed"])
+        generous = self._scan(min_credit_dollars=20.0, min_cushion_pct=1.0)
+        self.assertFalse(generous["constraints_relaxed"])
+
     def test_recent_trades_keep_after_hours_analysis_available(self):
         broken = [leg(95, 0, 2.0, -0.25), leg(90, 0.5, 0.4, -0.10)]
         with patch.object(bps.yf, "Ticker", return_value=type(
@@ -228,6 +244,101 @@ class PairSelectionTests(unittest.TestCase):
                 max_exec_cost_pct=100,
             )
         self.assertEqual(picked["expiration"], long_exp)
+
+    def test_chain_loader_reuses_the_primed_ticker(self):
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        with patch.object(bps.yf, "Ticker", return_value=fake_ticker), patch.object(
+            bps, "_load_put_chain", return_value=self.chain
+        ) as load:
+            picked = bps._suggest_bull_put_spread(
+                "XYZ", 100, 0, 0.24, 35, 1, 1095
+            )
+        self.assertIsNotNone(picked)
+        self.assertIs(load.call_args.kwargs.get("session_ticker"), fake_ticker)
+
+    def test_default_yahoo_chain_is_reused_when_it_is_the_chosen_expiration(self):
+        yymmdd = self.expiration[2:4] + self.expiration[5:7] + self.expiration[8:10]
+        bundle = type("Bundle", (), {
+            "puts": pd.DataFrame({
+                "contractSymbol": [f"XYZ{yymmdd}P00095000"],
+                "strike": [95.0],
+            }),
+            "calls": pd.DataFrame(),
+        })()
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        fake_ticker.option_chain = lambda date=None: bundle
+        with patch.object(bps.yf, "Ticker", return_value=fake_ticker), patch.object(
+            bps, "_load_put_chain", return_value=self.chain
+        ) as load:
+            picked = bps._suggest_bull_put_spread(
+                "XYZ", 100, 0, 0.24, 35, 1, 1095
+            )
+        self.assertIsNotNone(picked)
+        self.assertIs(load.call_args.kwargs.get("chain"), bundle)
+
+    def test_expiration_catalog_is_cached(self):
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        with patch.object(ps.yf, "Ticker", return_value=fake_ticker) as ctor:
+            first = bps._load_expirations("XYZ", fake_ticker)
+            second = bps._load_expirations("XYZ")
+        self.assertEqual(first, [self.expiration])
+        self.assertEqual(second, first)
+        ctor.assert_not_called()
+
+
+class ProbabilityWiringTests(unittest.TestCase):
+    def test_scanner_uses_the_shared_probability_schedule(self):
+        self.assertIs(bps.profit_probability_schedule, profit_probability_schedule)
+
+    def test_put_chain_loader_is_shared_so_the_cache_is_shared(self):
+        self.assertIs(bps._load_put_chain, ps._load_put_chain)
+
+    def test_distribution_iv_averages_the_put_legs_instead_of_a_lower_atm(self):
+        self.assertAlmostEqual(
+            bps._spread_distribution_iv({
+                "atm_iv": 0.10,
+                "short_leg": {"iv": 0.28},
+                "long_leg": {"iv": 0.32},
+            }),
+            0.30,
+        )
+
+    def test_expiration_loss_odds_stay_near_the_short_put_delta(self):
+        """ATM-only vol made a 7-delta short look like a 1% loss risk."""
+        expiration = (date.today() + timedelta(days=28)).isoformat()
+        legs = [
+            {"option_type": "put", "strike": 95.0, "iv": 0.28, "quantity": -1},
+            {"option_type": "put", "strike": 90.0, "iv": 0.32, "quantity": 1},
+        ]
+        spread = {
+            "atm_iv": 0.10,
+            "short_leg": legs[0],
+            "long_leg": legs[1],
+        }
+        kwargs = dict(
+            spot=100.0,
+            dte=28,
+            expiration=expiration,
+            entry_cashflow=0.66,
+            legs=legs,
+            risk_free_rate=0.0375,
+            dividend_yield=0.01,
+        )
+        optimistic = profit_probability_schedule(
+            **kwargs, distribution_iv=spread["atm_iv"],
+        )[-1]
+        realistic = profit_probability_schedule(
+            **kwargs, distribution_iv=bps._spread_distribution_iv(spread),
+        )[-1]
+        self.assertLess(optimistic["probability_failure_pct"], 3.0)
+        self.assertGreater(realistic["probability_failure_pct"], 8.0)
+        self.assertGreater(
+            realistic["probability_failure_pct"],
+            optimistic["probability_failure_pct"] + 5.0,
+        )
+
+    def test_default_credit_floor_is_off_until_a_preset_sets_it(self):
+        self.assertEqual(bps.DEFAULTS["min_credit_dollars"], 0.0)
 
 
 class ScoringTests(unittest.TestCase):
