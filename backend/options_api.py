@@ -201,11 +201,11 @@ def _analysis_year_frac(exp_str: str, eval_d: date) -> float:
     return max((exp_d - eval_d).days, 0) / 365.0
 
 
-def _fetch_quote(ticker: str) -> dict:
+def _fetch_quote(ticker: str, session_ticker=None) -> dict:
     cached = _cache_get(_quote_cache, ticker, _QUOTE_TTL)
     if cached:
         return cached
-    t = yf.Ticker(ticker)
+    t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
 
     def _get_fi(attr):
         try:
@@ -279,11 +279,18 @@ def _fetch_quote(ticker: str) -> dict:
     return result
 
 
-def _fetch_expirations(ticker: str) -> list[str]:
+def _fetch_expirations(ticker: str, session_ticker=None) -> list[str]:
+    """Expiration catalog for a ticker.
+
+    Pass a yfinance Ticker that has already loaded a chain as
+    ``session_ticker``. Reading ``.options`` off a *fresh* Ticker makes
+    yfinance download the catalog again -- and that response carries a full
+    default chain that is then thrown away.
+    """
     cached = _cache_get(_exp_cache, ticker, _EXP_TTL)
     if cached:
         return cached
-    t = yf.Ticker(ticker)
+    t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
     try:
         exps = list(t.options or [])
     except Exception:
@@ -292,16 +299,25 @@ def _fetch_expirations(ticker: str) -> list[str]:
     return exps
 
 
-def _fetch_chain(ticker: str, expiration: str) -> dict:
+def _fetch_chain(ticker: str, expiration: str, session_ticker=None, chain=None) -> dict:
+    """Priced calls and puts for one expiration.
+
+    ``session_ticker`` reuses a yfinance Ticker whose expiration catalog is
+    already loaded; a fresh ``Ticker.option_chain(date)`` downloads that
+    catalog again before the requested expiration. ``chain`` is an already
+    downloaded bundle for this same expiration, so the default response Yahoo
+    sends with the catalog can be used instead of asking for it twice.
+    """
     key = (ticker.upper(), expiration)
     cached = _cache_get(_chain_cache, key, _CHAIN_TTL)
     if cached:
         return cached
 
-    t = yf.Ticker(ticker)
-    chain = t.option_chain(expiration)
+    t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
+    if chain is None:
+        chain = t.option_chain(expiration)
 
-    quote = _fetch_quote(ticker)
+    quote = _fetch_quote(ticker, session_ticker=session_ticker)
     spot = quote.get('last') or quote.get('ask') or 0.0
     r = 0.0375
     q = quote.get('div_yield') or 0.0

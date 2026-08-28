@@ -1248,3 +1248,181 @@ def price_scenario_schedule(
             "profit_dollars": round(best_overall["profit"] * 100.0, 0),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Expiration payoff profile
+# ---------------------------------------------------------------------------
+
+CONTRACT_MULTIPLIER = 100.0
+DEFAULT_RISK_FREE_RATE = 0.0375
+
+
+def _first_number(*values):
+    for value in values:
+        number = _number(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _expiration_payoff(legs: list[dict], terminal_price: float) -> float | None:
+    total = 0.0
+    for leg in legs:
+        quantity = _number(leg.get("quantity"))
+        entry = _number(leg.get("entry_price"))
+        kind = str(leg.get("option_type") or "").lower()
+        if quantity is None or entry is None:
+            return None
+        if kind == "stock":
+            total += quantity * (terminal_price - entry)
+            continue
+        strike = _number(leg.get("strike"))
+        if strike is None:
+            return None
+        intrinsic = (
+            max(terminal_price - strike, 0.0)
+            if kind == "call" else max(strike - terminal_price, 0.0)
+        )
+        total += quantity * (intrinsic - entry) * CONTRACT_MULTIPLIER
+    return total
+
+
+def _terminal_price_cdf(price: float | None, *, spot: float, years: float, volatility: float,
+                  risk_free_rate: float, dividend_yield: float) -> float:
+    if price is None:
+        return 1.0
+    if price <= 0:
+        return 0.0
+    sigma_root_t = volatility * math.sqrt(years)
+    z_score = (
+        math.log(price / spot)
+        - (risk_free_rate - dividend_yield - 0.5 * volatility * volatility) * years
+    ) / sigma_root_t
+    return _NORM.cdf(z_score)
+
+
+def expiration_payoff_profile(legs: list[dict], spot, dte, distribution_iv,
+                      risk_free_rate=DEFAULT_RISK_FREE_RATE, dividend_yield=0.0) -> dict:
+    """Exact expiration risk and probabilities for a same-expiry position.
+
+    An expiration payoff is piecewise linear with kinks only at the strikes,
+    so the extrema and the flat stretches that produce them are found exactly
+    rather than sampled. That matters: counting a Monte Carlo or a fixed
+    quantile grid quantises the answer, and two different strikes on two
+    different expirations then report the identical probability of maximum
+    loss because they land in the same bucket.
+
+    Legs carry ``quantity`` (contracts, signed), ``entry_price`` per share,
+    ``option_type`` and ``strike``; a ``stock`` leg carries shares in
+    ``quantity``. Results are in dollars for one unit of the position.
+    """
+    empty = {
+        "max_profit": None, "max_loss": None,
+        "max_profit_unbounded": False, "max_loss_unbounded": False,
+        "prob_max_profit": None, "prob_max_loss": None,
+        "expected_value": None,
+    }
+    spot = _number(spot)
+    dte = _number(dte)
+    volatility = _number(distribution_iv)
+    rate = _first_number(risk_free_rate, DEFAULT_RISK_FREE_RATE)
+    yield_number = _first_number(dividend_yield, 0.0)
+    option_legs = [leg for leg in legs if leg.get("option_type") != "stock"]
+    expirations = {str(leg.get("expiration") or "") for leg in option_legs}
+    if (
+        not legs or not option_legs or len(expirations) != 1
+        or spot is None or spot <= 0 or dte is None or dte <= 0
+        or volatility is None or volatility <= 0
+    ):
+        return empty
+    if volatility > 3:
+        volatility /= 100.0
+    if yield_number > 1:
+        yield_number /= 100.0
+    if rate is None or rate < -1 or rate > 1 or yield_number < -1 or yield_number > 1:
+        return empty
+    if any(_number(leg.get("entry_price")) is None for leg in legs):
+        return empty
+
+    strikes = sorted({
+        float(leg["strike"]) for leg in option_legs
+        if _number(leg.get("strike")) is not None
+    })
+    if not strikes:
+        return empty
+    breakpoints = [0.0, *strikes]
+    payoffs = [_expiration_payoff(legs, price) for price in breakpoints]
+    if any(value is None for value in payoffs):
+        return empty
+    high_slope = sum(
+        (_number(leg.get("quantity")) or 0.0) * CONTRACT_MULTIPLIER
+        for leg in option_legs if leg.get("option_type") == "call"
+    ) + sum(
+        _number(leg.get("quantity")) or 0.0
+        for leg in legs if leg.get("option_type") == "stock"
+    )
+    max_profit_unbounded = high_slope > 1e-9
+    max_loss_unbounded = high_slope < -1e-9
+    max_profit = None if max_profit_unbounded else max(payoffs)
+    max_loss = None if max_loss_unbounded else max(0.0, -min(payoffs))
+
+    years = max(dte, 1.0) / 365.0
+    expected_terminal = spot * math.exp((rate - yield_number) * years)
+    expected_value = 0.0
+    for leg in legs:
+        quantity = float(leg["quantity"])
+        entry = float(leg["entry_price"])
+        kind = leg["option_type"]
+        if kind == "stock":
+            expected_value += quantity * (expected_terminal - entry)
+            continue
+        modeled = black_scholes(
+            spot, float(leg["strike"]), years, rate, yield_number, volatility, kind
+        )
+        expected_intrinsic = float(modeled["price"]) * math.exp(rate * years)
+        expected_value += quantity * (expected_intrinsic - entry) * CONTRACT_MULTIPLIER
+
+    intervals = []
+    for index, low in enumerate(breakpoints):
+        high = breakpoints[index + 1] if index + 1 < len(breakpoints) else None
+        probe = low + 1.0 if high is None else (low + high) / 2.0
+        slope = sum(
+            (_number(leg.get("quantity")) or 0.0)
+            * (1.0 if leg.get("option_type") == "stock" else CONTRACT_MULTIPLIER)
+            for leg in legs
+            if leg.get("option_type") == "stock"
+            or (leg.get("option_type") == "call" and probe > float(leg["strike"]))
+        ) - sum(
+            (_number(leg.get("quantity")) or 0.0) * CONTRACT_MULTIPLIER
+            for leg in option_legs
+            if leg.get("option_type") == "put" and probe < float(leg["strike"])
+        )
+        payoff = _expiration_payoff(legs, probe)
+        probability = _terminal_price_cdf(
+            high, spot=spot, years=years, volatility=volatility,
+            risk_free_rate=rate, dividend_yield=yield_number,
+        ) - _terminal_price_cdf(
+            low, spot=spot, years=years, volatility=volatility,
+            risk_free_rate=rate, dividend_yield=yield_number,
+        )
+        intervals.append((slope, payoff, max(0.0, probability)))
+
+    tolerance = 1e-6
+    prob_max_profit = None if max_profit is None else 100.0 * sum(
+        probability for slope, payoff, probability in intervals
+        if abs(slope) <= tolerance and abs((payoff or 0.0) - max_profit) <= tolerance
+    )
+    prob_max_loss = None if max_loss is None else 100.0 * sum(
+        probability for slope, payoff, probability in intervals
+        if abs(slope) <= tolerance and abs((payoff or 0.0) + max_loss) <= tolerance
+    )
+    return {
+        "max_profit": round(max_profit, 2) if max_profit is not None else None,
+        "max_loss": round(max_loss, 2) if max_loss is not None else None,
+        "max_profit_unbounded": max_profit_unbounded,
+        "max_loss_unbounded": max_loss_unbounded,
+        "prob_max_profit": round(prob_max_profit, 2) if prob_max_profit is not None else None,
+        "prob_max_loss": round(prob_max_loss, 2) if prob_max_loss is not None else None,
+        "expected_value": round(expected_value, 2),
+    }

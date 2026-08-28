@@ -343,6 +343,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [stats, setStats] = useState(restored?.stats || null)
+  const [unavailable, setUnavailable] = useState(restored?.unavailable || [])
   const [asOf, setAsOf] = useState(restored?.asOf || null)
   const [expirationScenario, setExpirationScenario] = useState(() => ({
     ...DEFAULT_EXPIRATION_SCENARIO,
@@ -366,7 +367,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
 
   const replaceFilters = nextFilters => {
     setFilters(nextFilters)
-    setRows([]); setSelected(null); setFocusedTicker(null); setStats(null); setAsOf(null); setError('')
+    setRows([]); setSelected(null); setFocusedTicker(null); setStats(null); setUnavailable([]); setAsOf(null); setError('')
   }
 
   useEffect(() => {
@@ -390,6 +391,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         selectedIndex: rows.indexOf(selected),
         focusedTicker,
         stats,
+        unavailable,
         asOf,
         expirationScenario,
         expirationScenarioEnabled,
@@ -397,7 +399,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     } catch {
       // A scan remains usable even when private browsing or storage quotas prevent restoration.
     }
-  }, [strategy, filters, rows, selected, focusedTicker, stats, asOf, expirationScenario, expirationScenarioEnabled])
+  }, [strategy, filters, rows, selected, focusedTicker, stats, unavailable, asOf, expirationScenario, expirationScenarioEnabled])
 
   useEffect(() => () => {
     scanRequestRef.current.controller?.abort()
@@ -495,7 +497,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     const requestId = scanRequestRef.current.id + 1
     const controller = new AbortController()
     scanRequestRef.current = { id: requestId, controller }
-    setLoading(true); setError(''); setFocusedTicker(null); setSelected(null); setRows([]); setStats(null); setAsOf(null)
+    setLoading(true); setError(''); setFocusedTicker(null); setSelected(null); setRows([]); setStats(null); setUnavailable([]); setAsOf(null)
     const requestFilters = isIndexOnlyStrategy(strategy)
       ? { ...filters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false }
       : filters
@@ -526,7 +528,8 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         hasScannerTrade(row._general?.trade_kind || strategy, row)
       ))
       if (requestId !== scanRequestRef.current.id) return
-      setRows(nextRows); setSelected(nextRows[0] || null); setStats(data.stats || null); setAsOf(data.as_of || null)
+      setRows(nextRows); setSelected(nextRows[0] || null); setStats(data.stats || null)
+      setUnavailable(Array.isArray(data.unavailable) ? data.unavailable : []); setAsOf(data.as_of || null)
     } catch (scanError) {
       if (scanError.name !== 'AbortError' && requestId === scanRequestRef.current.id) {
         setError(scanError.message)
@@ -569,6 +572,21 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     .sort((left, right) => Number(right[1]) - Number(left[1]))
     .slice(0, 4), [stats])
   const scanCompleted = Boolean(stats || asOf)
+  // Yahoo throttles bursts of chain requests, and a throttled symbol is simply
+  // absent from the results. Reporting that as "no candidates met every active
+  // filter" sends you to loosen rules that were never consulted, so say how
+  // much of the universe never got priced. A scan where *nothing* priced comes
+  // back as a scanner error instead and is shown above this.
+  const feedOutage = useMemo(() => {
+    const failures = (unavailable || []).filter(entry => /rate limit|too many requests|unavailable|timed out|timeout|connection|max retries|temporarily/i
+      .test(String(entry?.reason || '')))
+    if (!failures.length) return null
+    return {
+      count: failures.length,
+      universe: Number(stats?.universe) || failures.length,
+      reason: failures[0].reason,
+    }
+  }, [unavailable, stats])
 
   return <main className="page gos-page">
     <header className="gos-page-header">
@@ -618,7 +636,11 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
           <small>{asOf ? `As of ${new Date(asOf).toLocaleString()}` : 'Run the scan to load current Yahoo chains'}</small>
         </div>
         {error && <div className="error-message">{error}</div>}
-        {!loading && !error && !rows.length && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
+        {!loading && !error && feedOutage && <div className="gos-near-match-note" role="alert">
+          <strong>{`${feedOutage.count.toLocaleString()} of ${feedOutage.universe.toLocaleString()} symbols could not be priced — this is the quote feed, not your filters.`}</strong>
+          <span>{`First reason: ${feedOutage.reason} Yahoo rate-limits bursts of chain requests, so those symbols were skipped rather than rejected. Wait a few minutes and run the scan again for full coverage.`}</span>
+        </div>}
+        {!loading && !error && !rows.length && !feedOutage && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
           ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated${Number(stats?.unpriced_dropped) ? `, and ${Number(stats.unpriced_dropped).toLocaleString()} names without a listed contract were omitted` : ''}. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
           : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
         {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
