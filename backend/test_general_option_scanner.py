@@ -7,6 +7,7 @@ import pandas as pd
 from general_option_scanner import (
     STRATEGIES,
     _filter_reasons,
+    _general_metrics,
     _iv_history,
     _realized_vol_metrics,
     _runner_payload,
@@ -16,6 +17,25 @@ from general_option_scanner import (
 
 
 class GeneralOptionScannerTests(unittest.TestCase):
+    def test_general_metrics_exposes_pricing_inputs_for_compact_risk_graph(self):
+        metrics = _general_metrics("unbalanced-butterfly", {
+            "ticker": "SPY",
+            "price": 100,
+            "expiration": "2027-01-15",
+            "dte": 141,
+            "risk_free_rate": 0.025,
+            "dividend_yield": 0.012,
+            "upper_long_strike": 95,
+            "body_short_strike": 85,
+            "lower_long_strike": 70,
+            "upper_long_quantity": 1,
+            "body_short_quantity": 2,
+            "lower_long_quantity": 1,
+        })
+
+        self.assertEqual(metrics["risk_free_rate"], 0.025)
+        self.assertEqual(metrics["dividend_yield"], 0.012)
+
     def test_technical_context_exposes_expiration_scenario_references(self):
         context = _technical_context({
             "price": 100,

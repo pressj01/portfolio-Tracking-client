@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import RiskGraphButton from './RiskGraphButton'
-import { normalCdf } from '../utils/optionProbability'
 import { buildScannerTrade } from '../utils/optionTradeHandoff'
 import { optionMoneyness } from '../utils/optionMoneyness'
+import { scannerTradePayoff } from '../utils/generalScannerPayoff'
 
 const money = value => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -52,33 +52,6 @@ function daysTo(expiration) {
   return Math.max(0, Math.round((target - new Date()) / 86400000))
 }
 
-function optionValue(type, spot, strike, years, iv, rate = 0.04) {
-  if (years <= 0 || iv <= 0 || spot <= 0 || strike <= 0) {
-    return type === 'PUT' ? Math.max(strike - spot, 0) : Math.max(spot - strike, 0)
-  }
-  const root = Math.sqrt(years)
-  const d1 = (Math.log(spot / strike) + (rate + iv * iv / 2) * years) / (iv * root)
-  const d2 = d1 - iv * root
-  if (type === 'PUT') {
-    return strike * Math.exp(-rate * years) * normalCdf(-d2) - spot * normalCdf(-d1)
-  }
-  return spot * normalCdf(d1) - strike * Math.exp(-rate * years) * normalCdf(d2)
-}
-
-function payoff(trade, scenarioSpot, dte, ivPct) {
-  return trade.legs.reduce((total, leg) => {
-    const sign = String(leg.side).toUpperCase() === 'SELL' ? -1 : 1
-    const qty = Math.max(1, Number(leg.qty) || 1)
-    const type = String(leg.opt_type).toUpperCase()
-    if (type === 'STOCK') return total + sign * qty * (scenarioSpot - Number(leg.entry_price || 0))
-    const multiplier = 100
-    const current = dte <= 0
-      ? (type === 'PUT' ? Math.max(Number(leg.strike) - scenarioSpot, 0) : Math.max(scenarioSpot - Number(leg.strike), 0))
-      : optionValue(type, scenarioSpot, Number(leg.strike), dte / 365, ivPct / 100)
-    return total + sign * qty * multiplier * (current - Number(leg.entry_price || 0))
-  }, 0)
-}
-
 function interpolate(values, prices, price) {
   if (!values.length || !prices.length) return null
   if (price <= prices[0]) return values[0]
@@ -104,21 +77,22 @@ function formatExpirationDate(expiration) {
   return `${MONTH_LABELS[parsed.getMonth()]} ${ordinal(parsed.getDate())} ${parsed.getFullYear()}`
 }
 
-function PayoffChart({ trade, spot, dte, rangePct, markerPct, ivPct }) {
+function PayoffChart({ trade, spot, dte, rangePct, markerPct, baseIvPct, ivPct, rate, dividendYield }) {
   const [hover, setHover] = useState(null)
   const model = useMemo(() => {
     if (!trade || !spot) return null
     const low = Math.max(0.01, spot * (1 - rangePct / 100))
     const high = spot * (1 + rangePct / 100)
     const prices = Array.from({ length: 121 }, (_, index) => low + (high - low) * index / 120)
-    const expiration = prices.map(price => payoff(trade, price, 0, ivPct))
-    const current = prices.map(price => payoff(trade, price, dte, ivPct))
+    const pricing = { baseIvPct, selectedIvPct: ivPct, rate, dividendYield }
+    const expiration = prices.map(price => scannerTradePayoff(trade, price, 0, pricing))
+    const current = prices.map(price => scannerTradePayoff(trade, price, dte, pricing))
     const values = [...expiration, ...current, 0]
     const min = Math.min(...values)
     const max = Math.max(...values)
     const pad = Math.max(10, (max - min) * 0.12)
     return { prices, expiration, current, low, high, min: min - pad, max: max + pad }
-  }, [trade, spot, dte, rangePct, ivPct])
+  }, [trade, spot, dte, rangePct, baseIvPct, ivPct, rate, dividendYield])
   const strikeMarkers = useMemo(() => {
     const seen = new Set()
     return (trade?.legs || []).map(leg => {
@@ -296,9 +270,9 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
           <label><span>Analysis Date</span><input type="range" min="0" max={originalDte} value={originalDte - analysisDte} onChange={event => setAnalysisDte(originalDte - Number(event.target.value))} aria-label="Analysis Date" /><output>{analysisDte} <b>DTE</b></output></label>
           <label><span>Range</span><input type="range" min="10" max="100" value={rangePct} onChange={event => setRangePct(Number(event.target.value))} /><output>{rangePct} <b>%</b></output></label>
           <label><span>Price Markers</span><input type="range" min="1" max="25" step="1" value={markerPct} onChange={event => setMarkerPct(Number(event.target.value))} /><output>{markerPct} <b>%</b></output></label>
-          <label><span>Implied Volatility</span><input type="range" min="5" max="200" step="0.1" value={ivPct} onChange={event => setIvPct(Number(event.target.value))} /><output>{number(ivPct, 1)} <b>%</b></output></label>
+          <label><span>IV Surface Average</span><input type="range" min="5" max="200" step="0.1" value={ivPct} onChange={event => setIvPct(Number(event.target.value))} /><output>{number(ivPct, 1)} <b>%</b></output></label>
         </div>
-        <PayoffChart trade={trade} spot={Number(meta.price) || Number(row.price)} dte={analysisDte} rangePct={rangePct} markerPct={markerPct} ivPct={ivPct} />
+        <PayoffChart trade={trade} spot={Number(meta.price) || Number(row.price)} dte={analysisDte} rangePct={rangePct} markerPct={markerPct} baseIvPct={baseIv} ivPct={ivPct} rate={Number(meta.risk_free_rate) || 0.0375} dividendYield={Number(meta.dividend_yield) || 0} />
       </div> : <LegTable trade={trade} />}
       <div className="gsa-view-toggle"><button className={view === 'table' ? 'active' : ''} onClick={() => setView('table')}>Table</button><button className={view === 'controls' ? 'active' : ''} onClick={() => setView('controls')}>Controls</button></div>
     </>}

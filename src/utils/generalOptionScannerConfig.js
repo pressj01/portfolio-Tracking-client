@@ -334,7 +334,7 @@ const PUT_CALL_CONDOR_FIELDS = [
 ]
 
 const UNBALANCED_CONDOR_FIELDS = [
-  choice('delta_preset', 'Delta preset', [['all', 'All'], ['conservative', 'Conservative'], ['balanced', 'Balanced'], ['aggressive', 'Aggressive']]),
+  choice('delta_preset', 'Delta preset', [['all', 'All'], ['15/5', 'Conservative (15/5)'], ['20/10', 'Balanced (20/10)'], ['25/15', 'Aggressive (25/15)']]),
   field('bought_width', 'Bought spread width', { prefix: '$', step: 0.5, min: 0.5 }),
   field('sold_width', 'Sold spread width', { prefix: '$', step: 0.5, min: 0.5 }),
   field('bought_quantity', 'Bought quantity', { step: 1, min: 1 }),
@@ -348,7 +348,7 @@ const UNBALANCED_CONDOR_FIELDS = [
 ]
 
 const UNBALANCED_BUTTERFLY_FIELDS = [
-  choice('upper_long_delta', 'Upper long delta', [['both', 'Both presets'], ['60', '60 delta'], ['70', '70 delta']]),
+  choice('upper_long_delta', 'Upper long delta', [['both', 'Both presets'], ['20', '20 delta'], ['25', '25 delta']]),
   choice('market_bias', 'Market bias', [['neutral', 'Neutral'], ['bullish', 'Bullish'], ['bearish', 'Bearish']]),
   field('tranche_quantity', 'Tranche quantity', { step: 1, min: 1 }),
   field('delta_tolerance', 'Leg delta tolerance', { step: 0.005, min: 0.005, max: 0.2 }),
@@ -757,7 +757,7 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
   }
 
   if (strategy === 'put-call-condor') result.credit_short_delta = profile.target / 100
-  if (strategy === 'unbalanced-put-condor') result.delta_preset = ['conservative', 'balanced', 'aggressive'][intensity]
+  if (strategy === 'unbalanced-put-condor') result.delta_preset = ['15/5', '20/10', '25/15'][intensity]
   if (isIndexOnlyStrategy(strategy)) {
     Object.assign(result, {
       entry_credit_mode: ['debit_or_flat', 'flat_or_slight_credit', 'credit'][intensity],
@@ -765,7 +765,7 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     })
     if (fieldKeys.has('market_bias')) result.market_bias = ['bearish', 'neutral', 'bullish'][intensity]
     if (fieldKeys.has('upper_long_delta')) result.upper_long_delta = ['20', 'both', '25'][intensity]
-    if (fieldKeys.has('delta_preset')) result.delta_preset = ['conservative', 'balanced', 'aggressive'][intensity]
+    if (fieldKeys.has('delta_preset')) result.delta_preset = ['15/5', '20/10', '25/15'][intensity]
     if (fieldKeys.has('target_position_delta')) result.target_position_delta = [-1, 0, 0][intensity]
     if (fieldKeys.has('require_upside_credit')) result.require_upside_credit = intensity === 2
     if (strategy === 'road-trip-butterfly' && fieldKeys.has('upper_offset_pct')) {

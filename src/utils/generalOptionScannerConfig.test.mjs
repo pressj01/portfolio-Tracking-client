@@ -268,6 +268,16 @@ test('long-dated unbalanced profiles use index universes and opening-cash bands'
   assert.equal(open.include_stocks, false)
   assert.equal(open.entry_credit_mode, 'any')
   assert.deepEqual([cautious.entry_credit_mode, cautious.upper_long_delta, cautious.market_bias], ['debit_or_flat', '20', 'bearish'])
-  assert.deepEqual([moderate.entry_credit_mode, moderate.delta_preset], ['flat_or_slight_credit', 'balanced'])
+  assert.deepEqual([moderate.entry_credit_mode, moderate.delta_preset], ['flat_or_slight_credit', '20/10'])
   assert.deepEqual([aggressive.entry_credit_mode, aggressive.market_bias], ['credit', 'bullish'])
+})
+
+test('long-dated strategy editors use the scanner engines\' supported delta values', () => {
+  const condorPreset = fieldsForGeneralStrategy('unbalanced-put-condor')
+    .find(field => field.key === 'delta_preset')
+  const butterflyDelta = fieldsForGeneralStrategy('unbalanced-butterfly')
+    .find(field => field.key === 'upper_long_delta')
+
+  assert.deepEqual(condorPreset.options.map(([value]) => value), ['all', '15/5', '20/10', '25/15'])
+  assert.deepEqual(butterflyDelta.options.map(([value]) => value), ['both', '20', '25'])
 })

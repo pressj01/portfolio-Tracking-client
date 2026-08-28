@@ -45,6 +45,7 @@ from put_scanner import (
     _fetch_fundamentals_bulk,
     _load_history,
     _ticker_frame,
+    dividend_yield_for_pricing,
     resolve_scan_universe,
     run_put_scan,
 )
@@ -892,13 +893,15 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         and (point.get("kind") == "expiration" or point.get("remaining_dte") == 0)
     ), {})
     prob_success = _num(_nested(
-        row, "spread.prob_profit", "prob_profit", "probability_profit_pct",
+        row, "spread.prob_success", "prob_success",
+        "spread.prob_profit", "prob_profit", "probability_profit_pct",
         "probability_of_profit",
     ))
     if prob_success is None:
         prob_success = _num(expiration_probability.get("probability_success_pct"))
     prob_failure = _num(_nested(
-        row, "spread.prob_loss", "prob_loss", "probability_loss_pct",
+        row, "spread.prob_failure", "prob_failure",
+        "spread.prob_loss", "prob_loss", "probability_loss_pct",
     ))
     if prob_failure is None:
         prob_failure = _num(expiration_probability.get("probability_failure_pct"))
@@ -1015,6 +1018,13 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "iv_rank_source": row.get("iv_rank_source"),
         "iv_rank_observations": int(_num(row.get("iv_rank_observations")) or 0),
         "atm_iv": atm_iv,
+        "risk_free_rate": _first_num(
+            _nested(row, "spread.risk_free_rate", "risk_free_rate"),
+            GENERAL_RISK_FREE_RATE,
+        ),
+        "dividend_yield": _first_num(
+            _nested(row, "spread.dividend_yield", "dividend_yield")
+        ),
         "rv": None,
         "rv_rank": None,
         "iv_rv": None,
@@ -1159,6 +1169,10 @@ def _score_rows(rows: list[dict]) -> None:
             )
         meta["stock_scores"] = scores
         fund = fundamentals.get(ticker) or {}
+        if meta.get("dividend_yield") is None:
+            meta["dividend_yield"] = dividend_yield_for_pricing(
+                fund, meta.get("price")
+            )
         meta["market_cap"] = _num(row.get("market_cap")) or _num(fund.get("market_cap"))
         meta["fund_aum"] = _num(row.get("total_assets")) or _num(fund.get("total_assets"))
         meta["avg_dollar_volume"] = (

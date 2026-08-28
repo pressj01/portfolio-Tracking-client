@@ -6,6 +6,8 @@ import {
   buildScannerTrade,
   buildTrackedTrade,
   hydrateTrackedTradeLegs,
+  resolveStrategyLabProbabilities,
+  scannerProbabilitySuccessMode,
 } from './optionTradeHandoff.js'
 
 const expiration = '2026-09-11'
@@ -59,6 +61,93 @@ test('preserves scanner success, failure, moneyness, touch, and management-date 
   assert.equal(probabilities.prob_max_profit, 82)
   assert.equal(probabilities.prob_max_loss, 4.5)
   assert.deepEqual(probabilities.probability_schedule, schedule)
+})
+
+test('Strategy Lab uses the live position model as one coherent probability set', () => {
+  const resolved = resolveStrategyLabProbabilities({
+    prob_success: 15.4,
+    prob_failure: 84.6,
+    prob_max_profit: 23.7,
+    prob_max_loss: 3.6,
+  }, {
+    position_probability: {
+      probability_success_pct: 15.4,
+      probability_failure_pct: 84.6,
+      probability_max_profit_pct: 12.1,
+      probability_max_loss_pct: 4.2,
+    },
+  })
+
+  assert.equal(resolved.position_source, 'active_risk_model')
+  assert.equal(resolved.prob_success, 15.4)
+  assert.equal(resolved.prob_max_profit, 12.1)
+  assert.ok(resolved.prob_max_profit <= resolved.prob_success)
+  assert.ok(resolved.prob_max_loss <= resolved.prob_failure)
+})
+
+test('long-dated unbalanced downside campaigns count profitable or untested outcomes as success', () => {
+  assert.equal(scannerProbabilitySuccessMode('unbalanced-put-condor'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('QQQ unbalanced put condor'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('unbalanced_put_condor'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('unbalanced-butterfly'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('double-hedge-put-butterfly'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('road-trip-butterfly'), 'profit-or-untested')
+  assert.equal(scannerProbabilitySuccessMode('iron-condor'), 'positive-pnl')
+
+  const resolved = resolveStrategyLabProbabilities({}, {
+    position_probability: {
+      success_mode: 'profit-or-untested',
+      probability_success_pct: 97.9,
+      probability_failure_pct: 2.1,
+      probability_positive_pnl_pct: 22.1,
+      probability_max_profit_pct: 20.5,
+      probability_max_loss_pct: 1.6,
+    },
+  })
+
+  assert.equal(resolved.success_mode, 'profit-or-untested')
+  assert.equal(resolved.prob_success, 97.9)
+  assert.equal(resolved.prob_failure, 2.1)
+})
+
+test('a live unbounded outcome stays unavailable instead of using a stale scanner maximum', () => {
+  const resolved = resolveStrategyLabProbabilities({
+    prob_success: 60,
+    prob_max_profit: 99,
+  }, {
+    position_probability: {
+      probability_success_pct: 62,
+      probability_failure_pct: 38,
+      probability_max_profit_pct: null,
+      probability_max_loss_pct: 12,
+    },
+  })
+
+  assert.equal(resolved.prob_success, 62)
+  assert.equal(resolved.prob_max_profit, null)
+  assert.equal(resolved.prob_max_loss, 12)
+})
+
+test('live reference probabilities replace the scanner OTM, ITM, and touch trio together', () => {
+  const resolved = resolveStrategyLabProbabilities({
+    prob_otm: 80,
+    prob_itm: 20,
+    prob_touch: 40,
+    prob_touch_estimated: true,
+  }, {
+    probability_range: {
+      probability_otm_pct: 70,
+      probability_itm_pct: 30,
+      probability_touch_pct: 55,
+    },
+  })
+
+  assert.equal(resolved.reference_source, 'active_risk_model')
+  assert.deepEqual(
+    [resolved.prob_otm, resolved.prob_itm, resolved.prob_touch],
+    [70, 30, 55],
+  )
+  assert.equal(resolved.prob_touch_estimated, false)
 })
 
 test('builds every leg of a six-leg iron-condor variant for the risk graph', () => {
