@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import call_scanner as cs
 import put_scanner as ps
+from option_probability import profit_probability_schedule
 
 
 def synthetic_frame(daily_sigma=0.012, drift=0.0, days=300, run_pct=None,
@@ -484,6 +486,9 @@ class VerdictTests(unittest.TestCase):
 class SuggestCallSelectionTests(unittest.TestCase):
     """Strike selection, exercised against a synthetic chain (no network)."""
 
+    def setUp(self):
+        ps._expirations_cache.clear()
+
     def _chain(self):
         return [
             {"strike": s, "bid": max(0.05, 6.0 - (s - 100) * 0.5),
@@ -588,6 +593,105 @@ class SuggestCallSelectionTests(unittest.TestCase):
         self.assertEqual(pick["quote_source"], "last_trade_estimate")
         self.assertGreater(pick["iv"], 0)
         self.assertIsNotNone(pick["delta"])
+
+    def test_chain_loader_reuses_the_primed_ticker(self):
+        expiration = (date.today() + timedelta(days=35)).isoformat()
+        fake = type("FakeTicker", (), {"options": [expiration]})()
+        with patch.object(cs.yf, "Ticker", return_value=fake), patch.object(
+            cs, "_load_call_chain", return_value=self._chain()
+        ) as load:
+            pick = cs._suggest_call(
+                "CCALL", 100.0, 0.0, 35, 0.30, 14, 70, min_otm_pct=2.0,
+            )
+        self.assertIsNotNone(pick)
+        self.assertIs(load.call_args.kwargs.get("session_ticker"), fake)
+
+    def test_default_yahoo_chain_is_reused_when_it_is_the_chosen_expiration(self):
+        expiration = (date.today() + timedelta(days=35)).isoformat()
+        yymmdd = expiration[2:4] + expiration[5:7] + expiration[8:10]
+        bundle = type("Bundle", (), {
+            "calls": pd.DataFrame({
+                "contractSymbol": [f"CCALL{yymmdd}C00105000"],
+                "strike": [105.0],
+            }),
+            "puts": pd.DataFrame(),
+        })()
+        fake = type("FakeTicker", (), {"options": [expiration]})()
+        fake.option_chain = lambda date=None: bundle
+        with patch.object(cs.yf, "Ticker", return_value=fake), patch.object(
+            cs, "_load_call_chain", return_value=self._chain()
+        ) as load:
+            pick = cs._suggest_call(
+                "CCALL", 100.0, 0.0, 35, 0.30, 14, 70, min_otm_pct=2.0,
+            )
+        self.assertIsNotNone(pick)
+        self.assertIs(load.call_args.kwargs.get("chain"), bundle)
+
+
+class CallProbabilityTests(unittest.TestCase):
+    def test_distribution_iv_takes_the_richer_of_atm_and_the_short_call(self):
+        self.assertAlmostEqual(
+            cs._call_distribution_iv({"iv": 0.16, "atm_iv": 0.22}),
+            0.22,
+        )
+        self.assertAlmostEqual(
+            cs._call_distribution_iv({"iv": 0.30, "atm_iv": 0.18}),
+            0.30,
+        )
+
+    def test_covered_call_expiration_profit_starts_at_the_credit_breakeven(self):
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        call = {"iv": 0.20, "atm_iv": 0.20, "strike": 105.0, "mid": 2.0}
+        schedule = profit_probability_schedule(
+            spot=100.0,
+            dte=30,
+            expiration=expiration,
+            distribution_iv=cs._call_distribution_iv(call),
+            entry_cashflow=2.0,
+            legs=[{
+                "option_type": "call",
+                "strike": 105.0,
+                "iv": 0.20,
+                "quantity": -1,
+            }],
+            underlying_quantity=1,
+        )
+        terminal = schedule[-1]
+        profitable_range = terminal["profitable_ranges"][0]
+        self.assertAlmostEqual(profitable_range["lower"], 98.0, places=2)
+        self.assertIsNone(profitable_range["upper"])
+        self.assertGreater(terminal["probability_failure_pct"], 5.0)
+        self.assertLess(terminal["probability_success_pct"], 95.0)
+
+    def test_quiet_otm_call_iv_does_not_erase_downside_loss_odds(self):
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        call = {"iv": 0.10, "atm_iv": 0.24, "strike": 105.0, "mid": 2.0}
+        kwargs = dict(
+            spot=100.0,
+            dte=30,
+            expiration=expiration,
+            entry_cashflow=2.0,
+            legs=[{
+                "option_type": "call",
+                "strike": 105.0,
+                "iv": 0.10,
+                "quantity": -1,
+            }],
+            underlying_quantity=1,
+            risk_free_rate=0.0,
+            dividend_yield=0.0,
+        )
+        optimistic = profit_probability_schedule(
+            **kwargs, distribution_iv=call["iv"],
+        )[-1]
+        realistic = profit_probability_schedule(
+            **kwargs, distribution_iv=cs._call_distribution_iv(call),
+        )[-1]
+        self.assertGreater(
+            realistic["probability_failure_pct"],
+            optimistic["probability_failure_pct"] + 5.0,
+        )
+        self.assertGreater(realistic["probability_failure_pct"], 8.0)
 
 
 class HeldPositionTests(unittest.TestCase):

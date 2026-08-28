@@ -32,7 +32,9 @@ Plus the two risks a put seller never faces, both of which take your shares:
     exercises the day before to collect it.
 
 Stage structure and the caches are shared with put_scanner, so running one screen
-after the other reuses the downloaded history and `.info` payloads.
+after the other reuses the downloaded history and `.info` payloads. The option
+session is primed once per ticker so Yahoo is not asked twice for the
+expiration catalog, and the catalog is cached with the call chain (~5 min).
 
 Endpoints:
   GET  /api/options/call-scan/universes
@@ -77,11 +79,14 @@ from put_scanner import (
     _clean_tickers,
     _fetch_fundamentals_bulk,
     _earnings_within_target_window,
+    _expirations_cache,
     _fund_kind,
     _fund_size,
     _is_fund,
+    _load_expirations,
     _load_history,
     _num,
+    _option_bundle_expiration,
     _parse_date,
     _pick_expiration,
     _prepare_option_quote,
@@ -99,6 +104,47 @@ from put_scanner import (
 _CHAIN_TTL = 300          # 5 min
 _call_chain_cache: dict[tuple[str, str], tuple[float, list]] = {}
 _call_skew_put_cache: dict[tuple[str, str], tuple[float, list]] = {}
+
+
+def _prime_option_ticker(ticker: str):
+    """Open one yfinance session and keep the default chain Yahoo already sent.
+
+    ``Ticker.options`` and a later ``Ticker.option_chain(date)`` on a *new*
+    object each download the expiration catalog. Reusing the primed object
+    avoids that second catalog fetch; if the catalog-only response is already
+    the month we want, the default chain is reused as well.
+    """
+    try:
+        tk = yf.Ticker(ticker)
+    except Exception:
+        return None, [], None
+
+    default_chain = None
+    if _cache_get(_expirations_cache, ticker, _CHAIN_TTL) is None:
+        fetch = getattr(tk, "option_chain", None)
+        if callable(fetch):
+            try:
+                default_chain = fetch()
+            except Exception:
+                default_chain = None
+    expirations = _load_expirations(ticker, tk)
+    return tk, expirations, default_chain
+
+
+def _call_distribution_iv(call: dict) -> float | None:
+    """Spot-distribution vol for a covered call.
+
+    Complete-position success is the stock staying above the credit-adjusted
+    breakeven — a near-ATM drop — while the sold strike is further OTM. A
+    quieter OTM-call IV would thin that left tail. Take the richer of ATM and
+    the short call so assignment-event vol is not ignored either.
+    """
+    ivs = []
+    for value in (call.get("iv"), call.get("atm_iv")):
+        number = _num(value)
+        if number and number > 0:
+            ivs.append(number)
+    return max(ivs) if ivs else None
 
 # ---------------------------------------------------------------------------
 # Small caps
@@ -407,33 +453,52 @@ def assess_early_assignment(mid: float | None, spot: float | None, strike: float
 # Stage 3 - call chain and the suggested strike
 # ---------------------------------------------------------------------------
 
-def _load_call_chain(ticker: str, expiration: str, spot: float, div_yield: float) -> list[dict]:
-    """Calls plus a cached put-side companion for 25-delta skew metrics."""
+def _load_call_chain(ticker: str, expiration: str, spot: float, div_yield: float,
+                     session_ticker=None, chain=None) -> list[dict]:
+    """Calls plus a cached put-side companion for 25-delta skew metrics.
+
+    ``session_ticker`` reuses a yfinance Ticker that already loaded the
+    expiration catalog. A fresh Ticker.option_chain(date) otherwise downloads
+    that catalog again before the requested expiration.
+
+    ``chain`` is a preloaded option_chain bundle for this same expiration, so
+    the default Yahoo response can be used when it is already the contract
+    month we want.
+    """
     key = (ticker, expiration)
     cached = _cache_get(_call_chain_cache, key, _CHAIN_TTL)
     if cached is not None:
         return cached
 
-    try:
-        chain = yf.Ticker(ticker).option_chain(expiration)
-    except Exception:
-        _cache_set(_call_chain_cache, key, [])
-        _cache_set(_call_skew_put_cache, key, [])
-        return []
+    if chain is None:
+        try:
+            instrument = session_ticker if session_ticker is not None else yf.Ticker(ticker)
+            chain = instrument.option_chain(expiration)
+        except Exception:
+            _cache_set(_call_chain_cache, key, [])
+            _cache_set(_call_skew_put_cache, key, [])
+            return []
 
     dte = max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 0)
     T = max(dte, 0.25) / 365.0
 
     def rows_for(frame, option_type):
         rows = []
-        for _, r in frame.iterrows():
-            strike = _num(r.get("strike"))
+        if frame is None or getattr(frame, "empty", True):
+            return rows
+        try:
+            records = frame.to_dict("records")
+        except Exception:
+            records = [row for _, row in frame.iterrows()]
+        for r in records:
+            get = r.get if hasattr(r, "get") else lambda key, default=None: default
+            strike = _num(get("strike"))
             if not strike or strike <= 0:
                 continue
-            bid = _num(r.get("bid"), 0.0) or 0.0
-            ask = _num(r.get("ask"), 0.0) or 0.0
-            last = _num(r.get("lastPrice"), 0.0) or 0.0
-            iv = _num(r.get("impliedVolatility"), 0.0) or 0.0
+            bid = _num(get("bid"), 0.0) or 0.0
+            ask = _num(get("ask"), 0.0) or 0.0
+            last = _num(get("lastPrice"), 0.0) or 0.0
+            iv = _num(get("impliedVolatility"), 0.0) or 0.0
             mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else last
             delta = None
             if iv > 0 and spot > 0:
@@ -453,14 +518,14 @@ def _load_call_chain(ticker: str, expiration: str, spot: float, div_yield: float
                 "mid": mid,
                 "iv": iv,
                 "delta": delta,
-                "volume": int(_num(r.get("volume"), 0) or 0),
-                "open_interest": int(_num(r.get("openInterest"), 0) or 0),
+                "volume": int(_num(get("volume"), 0) or 0),
+                "open_interest": int(_num(get("openInterest"), 0) or 0),
                 "dte": dte,
             })
         return rows
 
-    calls = rows_for(getattr(chain, "calls", pd.DataFrame()), "call")
-    puts = rows_for(getattr(chain, "puts", pd.DataFrame()), "put")
+    calls = rows_for(getattr(chain, "calls", None), "call")
+    puts = rows_for(getattr(chain, "puts", None), "put")
     _cache_set(_call_chain_cache, key, calls)
     _cache_set(_call_skew_put_cache, key, puts)
     return calls
@@ -485,9 +550,8 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
       * when the cost basis is known, strikes below it are avoided — being
         called away below what you paid turns a premium into a realized loss.
     """
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
+    tk, expirations, default_chain = _prime_option_ticker(ticker)
+    if tk is None or not expirations:
         return None
 
     cutoff = None
@@ -501,7 +565,20 @@ def _suggest_call(ticker: str, spot: float, div_yield: float, target_dte: int,
     if not expiration:
         return None
 
-    calls = _load_call_chain(ticker, expiration, spot, div_yield)
+    reuse_chain = (
+        default_chain
+        if default_chain is not None
+        and _option_bundle_expiration(default_chain) == expiration
+        else None
+    )
+    calls = _load_call_chain(
+        ticker,
+        expiration,
+        spot,
+        div_yield,
+        session_ticker=tk,
+        chain=reuse_chain,
+    )
     puts = _load_call_skew_puts(ticker, expiration)
     if not calls:
         return None
@@ -1385,7 +1462,7 @@ def run_call_scan(payload: dict) -> dict:
                 spot=tech.get("price"),
                 dte=call.get("dte"),
                 expiration=call.get("expiration"),
-                distribution_iv=call.get("atm_iv") or call.get("iv"),
+                distribution_iv=_call_distribution_iv(call),
                 entry_cashflow=call.get("mid"),
                 legs=[{
                     "option_type": "call",
