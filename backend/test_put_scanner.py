@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 from datetime import date, timedelta
+from statistics import NormalDist
 from unittest.mock import patch
 
 import numpy as np
@@ -11,6 +12,7 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import put_scanner as ps
+from option_probability import profit_probability_schedule
 
 
 def synthetic_frame(daily_sigma=0.012, drift=0.0, days=300, drop_pct=None,
@@ -843,6 +845,123 @@ class OptionSessionTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertAlmostEqual(rows[0]["strike"], 95.0)
         self.assertAlmostEqual(rows[0]["mid"], 2.05)
+
+
+class PutSuggestionTests(unittest.TestCase):
+    def setUp(self):
+        ps._expirations_cache.clear()
+        self.expiration = (date.today() + timedelta(days=35)).isoformat()
+        self.chain = [
+            {
+                "strike": 100.0, "bid": 4.8, "ask": 5.0, "mid": 4.9,
+                "iv": 0.30, "delta": -0.48, "volume": 200, "open_interest": 1000,
+            },
+            {
+                "strike": 95.0, "bid": 2.0, "ask": 2.1, "mid": 2.05,
+                "iv": 0.28, "delta": -0.25, "volume": 150, "open_interest": 700,
+            },
+            {
+                "strike": 90.0, "bid": 0.75, "ask": 0.85, "mid": 0.80,
+                "iv": 0.32, "delta": -0.10, "volume": 80, "open_interest": 400,
+            },
+        ]
+
+    def _scan(self, **overrides):
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        with patch.object(ps.yf, "Ticker", return_value=fake_ticker), patch.object(
+            ps, "_load_put_chain", return_value=self.chain
+        ):
+            return ps._suggest_put(
+                "CSPUT", 100.0, 0.0, 35, 0.25, 1, 1095, **overrides
+            )
+
+    def test_picks_the_requested_delta_on_a_live_otm_put(self):
+        picked = self._scan()
+        self.assertIsNotNone(picked)
+        self.assertAlmostEqual(picked["strike"], 95.0)
+        self.assertAlmostEqual(abs(picked["delta"]), 0.25)
+        self.assertEqual(picked["expiration"], self.expiration)
+
+    def test_chain_loader_reuses_the_primed_ticker(self):
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        with patch.object(ps.yf, "Ticker", return_value=fake_ticker), patch.object(
+            ps, "_load_put_chain", return_value=self.chain
+        ) as load:
+            picked = ps._suggest_put("CSPUT", 100.0, 0.0, 35, 0.25, 1, 1095)
+        self.assertIsNotNone(picked)
+        self.assertIs(load.call_args.kwargs.get("session_ticker"), fake_ticker)
+
+    def test_default_yahoo_chain_is_reused_when_it_is_the_chosen_expiration(self):
+        yymmdd = self.expiration[2:4] + self.expiration[5:7] + self.expiration[8:10]
+        bundle = type("Bundle", (), {
+            "puts": pd.DataFrame({
+                "contractSymbol": [f"CSPUT{yymmdd}P00095000"],
+                "strike": [95.0],
+            }),
+            "calls": pd.DataFrame(),
+        })()
+        fake_ticker = type("FakeTicker", (), {"options": [self.expiration]})()
+        fake_ticker.option_chain = lambda date=None: bundle
+        with patch.object(ps.yf, "Ticker", return_value=fake_ticker), patch.object(
+            ps, "_load_put_chain", return_value=self.chain
+        ) as load:
+            picked = ps._suggest_put("CSPUT", 100.0, 0.0, 35, 0.25, 1, 1095)
+        self.assertIsNotNone(picked)
+        self.assertIs(load.call_args.kwargs.get("chain"), bundle)
+
+
+class PutProbabilityTests(unittest.TestCase):
+    def test_distribution_iv_uses_the_short_put_not_a_lower_atm(self):
+        self.assertAlmostEqual(
+            ps._put_distribution_iv({"iv": 0.28, "atm_iv": 0.10}),
+            0.28,
+        )
+        self.assertAlmostEqual(
+            ps._put_distribution_iv({"iv": 0.0, "atm_iv": 0.22}),
+            0.22,
+        )
+
+    def test_expiration_loss_odds_match_the_short_put_breakeven(self):
+        """ATM-only vol made a typical cash-secured put look nearly riskless."""
+        expiration = (date.today() + timedelta(days=30)).isoformat()
+        put = {"iv": 0.20, "atm_iv": 0.10, "strike": 95.0, "mid": 2.0}
+        legs = [{
+            "option_type": "put",
+            "strike": 95.0,
+            "iv": 0.20,
+            "quantity": -1,
+        }]
+        kwargs = dict(
+            spot=100.0,
+            dte=30,
+            expiration=expiration,
+            entry_cashflow=2.0,
+            legs=legs,
+            risk_free_rate=0.0,
+            dividend_yield=0.0,
+        )
+        optimistic = profit_probability_schedule(
+            **kwargs, distribution_iv=put["atm_iv"],
+        )[-1]
+        realistic = profit_probability_schedule(
+            **kwargs, distribution_iv=ps._put_distribution_iv(put),
+        )[-1]
+        years = 30 / 365.0
+        d2 = (
+            math.log(100 / 93)
+            - 0.5 * 0.20 * 0.20 * years
+        ) / (0.20 * math.sqrt(years))
+        expected_success = NormalDist().cdf(d2) * 100.0
+        self.assertAlmostEqual(
+            realistic["probability_success_pct"],
+            expected_success,
+            delta=0.15,
+        )
+        self.assertGreater(
+            realistic["probability_failure_pct"],
+            optimistic["probability_failure_pct"] + 5.0,
+        )
+        self.assertGreater(realistic["probability_failure_pct"], 8.0)
 
 
 if __name__ == "__main__":

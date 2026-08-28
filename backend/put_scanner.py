@@ -14,7 +14,10 @@ The screen runs in three stages so a broad universe stays affordable:
                     Concurrent, cached ~6 h.
   3. Option stage - live put chain for the finalists only: strike near the
                     target delta, premium, annualized return on cash, and the
-                    effective cost basis if assigned. Cached ~5 min.
+                    effective cost basis if assigned. The option session is
+                    primed once per ticker so Yahoo is not asked twice for the
+                    expiration catalog, and the catalog is cached with the
+                    put chain (~5 min).
 
 Endpoints:
   GET  /api/options/put-scan/universes
@@ -298,6 +301,45 @@ def _option_bundle_expiration(chain) -> str | None:
         raw = match.group(1)
         return f"20{raw[0:2]}-{raw[2:4]}-{raw[4:6]}"
     return None
+
+
+def _prime_option_ticker(ticker: str):
+    """Open one yfinance session and keep the default chain Yahoo already sent.
+
+    ``Ticker.options`` and a later ``Ticker.option_chain(date)`` on a *new*
+    object each download the expiration catalog. Reusing the primed object
+    avoids that second catalog fetch; if the catalog-only response is already
+    the month we want, the default chain is reused as well.
+    """
+    try:
+        tk = yf.Ticker(ticker)
+    except Exception:
+        return None, [], None
+
+    default_chain = None
+    if _cache_get(_expirations_cache, ticker, _CHAIN_TTL) is None:
+        fetch = getattr(tk, "option_chain", None)
+        if callable(fetch):
+            try:
+                default_chain = fetch()
+            except Exception:
+                default_chain = None
+    expirations = _load_expirations(ticker, tk)
+    return tk, expirations, default_chain
+
+
+def _put_distribution_iv(put: dict) -> float | None:
+    """Spot-distribution vol for a cash-secured short put.
+
+    ATM IV understates left-tail risk because put skew makes the sold strike
+    richer than the at-the-money option. Use the short put's own IV so
+    expiration loss odds stay in line with delta-based P(ITM) instead of
+    collapsing toward 1%. Fall back to ATM IV only when the strike has none.
+    """
+    short_iv = _num(put.get("iv"))
+    if short_iv and short_iv > 0:
+        return short_iv
+    return _num(put.get("atm_iv"))
 
 
 # ---------------------------------------------------------------------------
@@ -1027,9 +1069,8 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     Prefers an expiration that closes before the next earnings report (with a
     buffer), so the position is not held through the announcement.
     """
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
+    tk, expirations, default_chain = _prime_option_ticker(ticker)
+    if tk is None or not expirations:
         return None
 
     cutoff = None
@@ -1043,7 +1084,20 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     if not expiration:
         return None
 
-    puts = _load_put_chain(ticker, expiration, spot, div_yield)
+    reuse_chain = (
+        default_chain
+        if default_chain is not None
+        and _option_bundle_expiration(default_chain) == expiration
+        else None
+    )
+    puts = _load_put_chain(
+        ticker,
+        expiration,
+        spot,
+        div_yield,
+        session_ticker=tk,
+        chain=reuse_chain,
+    )
     calls = _load_put_skew_calls(ticker, expiration)
     prepared_puts = [
         prepared
@@ -1924,7 +1978,7 @@ def run_put_scan(payload: dict) -> dict:
                 spot=tech.get("price"),
                 dte=put.get("dte"),
                 expiration=put.get("expiration"),
-                distribution_iv=put.get("atm_iv") or put.get("iv"),
+                distribution_iv=_put_distribution_iv(put),
                 entry_cashflow=put.get("mid"),
                 legs=[{
                     "option_type": "put",
