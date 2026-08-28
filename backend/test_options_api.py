@@ -494,8 +494,8 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertIn(93.0, data["breakevens"])
         self.assertEqual(data["max_profit"], 1700.0)
         probability = data["probability_range"]
-        self.assertEqual(probability["low"], 99.0)
-        self.assertEqual(probability["high"], 121.0)
+        self.assertAlmostEqual(probability["low"], 110 / 1.1, places=4)
+        self.assertAlmostEqual(probability["high"], 110 / 0.9, places=4)
         self.assertEqual(probability["lower_label"], "10% OTM")
         self.assertEqual(probability["upper_label"], "10% ITM")
         self.assertAlmostEqual(
@@ -544,11 +544,59 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         probability = response.get_json()["probability_range"]
         self.assertEqual(probability["opt_type"], "CALL")
-        self.assertEqual(probability["low"], 175.5)
-        self.assertEqual(probability["high"], 214.5)
+        self.assertAlmostEqual(probability["low"], 195 / 1.1, places=4)
+        self.assertAlmostEqual(probability["high"], 195 / 0.9, places=4)
         self.assertEqual(probability["lower_label"], "10% OTM")
         self.assertEqual(probability["upper_label"], "10% ITM")
         self.assertEqual(probability["probability_touch_pct"], 100.0)
+
+    def test_call_moneyness_uses_percent_of_price_not_percent_of_strike(self):
+        low, high, lower, upper = options_api._option_moneyness_range(300, "CALL", 10, 10)
+        self.assertAlmostEqual(low, 300 / 1.1, places=6)
+        self.assertAlmostEqual(high, 300 / 0.9, places=6)
+        self.assertGreater(low, 266.43)
+        self.assertNotAlmostEqual(low, 300 * 0.9, places=2)
+        self.assertEqual(lower, "10% OTM")
+        self.assertEqual(upper, "10% ITM")
+
+    @patch("options_api._fetch_quote", return_value={"last": 266.43, "div_yield": 0.0})
+    def test_far_otm_covered_call_moneyness_band_stays_above_spot(self, _quote):
+        expiration = self.today + timedelta(days=30)
+        payload = self.payload(self.today)
+        payload["underlying"] = "AMZN"
+        payload["spot_override"] = 266.43
+        payload["price_range"] = {"low": 173, "high": 393, "steps": 61}
+        payload["probability_range"] = {
+            "enabled": True,
+            "low": 270,
+            "high": 330,
+            "iv": 0.28,
+            "anchor_strike": 300,
+            "opt_type": "CALL",
+            "itm_pct": 10,
+            "otm_pct": 10,
+            "range_mode": "moneyness",
+        }
+        payload["legs"] = [
+            {
+                "side": "BUY", "qty": 100, "opt_type": "STOCK", "strike": 0,
+                "expiration": "", "entry_price": 266.43,
+            },
+            {
+                "side": "SELL", "qty": 1, "opt_type": "CALL", "strike": 300,
+                "expiration": expiration.isoformat(), "entry_price": 1.5, "iv": 0.28,
+            },
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        probability = response.get_json()["probability_range"]
+        self.assertEqual(probability["opt_type"], "CALL")
+        self.assertAlmostEqual(probability["low"], 300 / 1.1, places=4)
+        self.assertGreater(probability["low"], 266.43)
+        self.assertGreater(probability["probability_otm_pct"], 80)
+        self.assertLess(probability["probability_itm_pct"], 20)
 
     @patch("options_api._fetch_quote", return_value={"last": 725.51, "div_yield": 0.0041})
     def test_covered_call_with_put_spread_reports_whole_domain_bounds(self, _quote):

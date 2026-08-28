@@ -4,10 +4,10 @@ import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
 import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { chartTheme } from '../utils/chartTheme'
-import { riskChartViewRevision } from '../utils/optionsRiskChart'
+import { interpolateRiskPnl, RISK_CHART_SPOT_COLOR, riskChartFocusRange, riskChartMoneynessFills, riskChartSpotValue, riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
-import { hydrateTrackedTradeLegs, resolveStrategyLabProbabilities, scannerProbabilitySuccessMode, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
-import { optionMoneyness, optionMoneynessRange } from '../utils/optionMoneyness'
+import { hydrateTrackedTradeLegs, isCoveredCallTrade, resolveStrategyLabProbabilities, scannerProbabilitySuccessMode, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
+import { moneynessPercentFromPrice, optionMoneyness, optionMoneynessRange } from '../utils/optionMoneyness'
 import {
   applyVolatilitySurfaceShock,
   buildVolatilityScenarioLeg,
@@ -285,6 +285,21 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       line: { color: `rgba(126, 207, 255, ${Math.min(0.72, 0.28 + index * 0.07)})`, width: 1.4 },
       hoverinfo: 'skip',
     }))
+    const probability = result.probability_range
+    const spotValue = riskChartSpotValue(result.spot)
+    const todayPnlAtSpot = spotValue == null ? null : interpolateRiskPnl(evaluation, spotValue)
+    const expiryPnlAtSpot = spotValue == null ? null : interpolateRiskPnl(expiration, spotValue)
+    const xRange = riskChartFocusRange({
+      spot: spotValue,
+      strikes: [
+        ...(positionStrikes || []),
+        Number(probability?.anchor_strike),
+        Number(probability?.low),
+        Number(probability?.high),
+      ],
+      evaluationLow: evaluation[0].s,
+      evaluationHigh: evaluation[evaluation.length - 1].s,
+    }) || [evaluation[0].s, evaluation[evaluation.length - 1].s]
     const traces = [
       {
         x: expiration.map(point => point.s),
@@ -306,9 +321,35 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         line: { color: '#d46adf', width: 3 },
         hovertemplate: `<b>Underlying %{x:$,.2f}</b><br>${displayEvaluationDate} · P/L open: %{customdata[0]:$,.2f}<br>${horizonName}: %{customdata[1]:$,.2f}<extra></extra>`,
       },
+      ...(spotValue != null && Number.isFinite(todayPnlAtSpot) ? [{
+        x: [spotValue],
+        y: [todayPnlAtSpot],
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Current price',
+        showlegend: false,
+        hoverinfo: 'skip',
+        marker: {
+          color: '#d46adf',
+          size: 11,
+          line: { color: RISK_CHART_SPOT_COLOR, width: 2 },
+        },
+      }] : []),
+      ...(spotValue != null && Number.isFinite(expiryPnlAtSpot) ? [{
+        x: [spotValue],
+        y: [expiryPnlAtSpot],
+        type: 'scatter',
+        mode: 'markers',
+        name: 'Current price at expiration',
+        showlegend: false,
+        hoverinfo: 'skip',
+        marker: {
+          color: '#20c7c7',
+          size: 11,
+          line: { color: RISK_CHART_SPOT_COLOR, width: 2 },
+        },
+      }] : []),
     ]
-    const probability = result.probability_range
-    const spotValue = Number(result.spot)
     const probabilityAnchorMoneyness = (() => {
       const anchorStrike = Number(probability?.anchor_strike)
       const anchorType = String(probability?.opt_type || '').toUpperCase()
@@ -340,9 +381,31 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       font: { color, size: 10 },
     })
     if (probability && Number(probability.high) > Number(probability.low)) {
-      shapes.push({
-        type: 'rect', x0: probability.low, x1: probability.high, y0: 0, y1: 1, yref: 'paper',
-        editable: false, fillcolor: probabilityColor.fill, line: { width: 0 }, layer: 'below',
+      const moneynessFills = riskChartMoneynessFills({
+        low: probability.low,
+        high: probability.high,
+        strike: probability.anchor_strike,
+        optType: probability.opt_type,
+        spot: spotValue,
+        rangeMode: probability.range_mode,
+      })
+      moneynessFills.forEach(fill => {
+        const fillColor = probabilityColors[fill.kind]?.fill || probabilityColor.fill
+        shapes.push({
+          type: 'rect', x0: fill.x0, x1: fill.x1, y0: 0, y1: 1, yref: 'paper',
+          editable: false, fillcolor: fillColor, line: { width: 0 }, layer: 'below',
+        })
+        if (fill.kind === 'OTM' || fill.kind === 'ITM') {
+          probabilityLineAnnotations.push({
+            x: (Number(fill.x0) + Number(fill.x1)) / 2,
+            y: 0.86,
+            yref: 'paper',
+            text: `<b>${fill.kind}</b>`,
+            xanchor: 'center',
+            yanchor: 'middle',
+            ...annotationTag(probabilityColors[fill.kind].line),
+          })
+        }
       })
       shapes.push({
         type: 'line', x0: probability.anchor_strike, x1: probability.anchor_strike, y0: 0, y1: 1, yref: 'paper',
@@ -415,30 +478,29 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
         ...annotationTag('#7ecfff'),
       })
     })
-    const spotColor = '#8eb6ff'
-    if (Number.isFinite(spotValue) && spotValue > 0) {
+    if (spotValue != null) {
       shapes.push({
         type: 'line', x0: spotValue, x1: spotValue, y0: 0, y1: 1, yref: 'paper',
         editable: false, layer: 'above',
-        line: { color: spotColor, width: 2.25, dash: 'longdash' },
+        line: { color: RISK_CHART_SPOT_COLOR, width: 2.5, dash: 'solid' },
       })
     }
     const annotations = [
-      ...(Number.isFinite(spotValue) && spotValue > 0 ? [{
+      ...(spotValue != null ? [{
         x: spotValue,
-        y: 0,
+        y: 0.02,
         yref: 'paper',
-        yshift: -28,
-        text: `<b>Current price</b> · ${result.underlying || 'Underlying'} $${fmt(spotValue)}`,
-        xanchor: 'center',
-        yanchor: 'top',
+        text: `<b>Current</b> · ${result.underlying || 'Underlying'} $${fmt(spotValue)}`,
+        xanchor: 'left',
+        yanchor: 'bottom',
+        xshift: 6,
         showarrow: false,
         captureevents: false,
         bgcolor: 'rgba(16, 24, 40, 0.94)',
-        bordercolor: spotColor,
+        bordercolor: RISK_CHART_SPOT_COLOR,
         borderwidth: 1,
         borderpad: 4,
-        font: { color: spotColor, size: 11, family: 'Inter, system-ui, sans-serif' },
+        font: { color: RISK_CHART_SPOT_COLOR, size: 11, family: 'Inter, system-ui, sans-serif' },
       }] : []),
       ...(result.breakevens || []).map((value, index, values) => ({
         x: value, y: 1.10, yref: 'paper', text: `<b>B/E</b> · $${fmt(value)}`,
@@ -481,25 +543,6 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       if (handle.kind === 'probability') onAdjustProbabilityBoundary?.(handle.edge, nextValue)
       else onResizeStructure?.(handle.edge, nextValue)
     }
-    // Interpolate the P/L on a curve for any underlying price so the readout
-    // moves smoothly between the sampled points rather than snapping to them.
-    const interpolatePnl = (curve, price) => {
-      if (!curve.length) return null
-      if (price <= curve[0].s) return curve[0].pnl
-      const last = curve[curve.length - 1]
-      if (price >= last.s) return last.pnl
-      let low = 0
-      let high = curve.length - 1
-      while (high - low > 1) {
-        const mid = (low + high) >> 1
-        if (curve[mid].s <= price) low = mid
-        else high = mid
-      }
-      const a = curve[low]
-      const b = curve[high]
-      const span = b.s - a.s || 1
-      return a.pnl + ((price - a.s) / span) * (b.pnl - a.pnl)
-    }
     // Custom thinkorswim-style crosshair: a price tag pinned to the x-axis and
     // a color-coded date/P&L legend that track the cursor across the graph.
     const handlePointerMove = event => {
@@ -520,8 +563,8 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       }
       const underlying = xAxis.p2d(Math.min(plotRight, Math.max(plotLeft, px)) - plotLeft)
       if (!Number.isFinite(underlying)) return
-      const todayPnl = interpolatePnl(evaluation, underlying)
-      const expiryPnl = interpolatePnl(expiration, underlying)
+      const todayPnl = interpolateRiskPnl(evaluation, underlying)
+      const expiryPnl = interpolateRiskPnl(expiration, underlying)
       const tagX = Math.min(plotRight - 42, Math.max(plotLeft + 42, px))
       setHover({
         x: px,
@@ -548,7 +591,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       paper_bgcolor: ct.surface,
       plot_bgcolor: ct.plot,
       font: { color: ct.font, family: 'Inter, system-ui, sans-serif' },
-      margin: { l: 70, r: 25, t: 130, b: Number.isFinite(spotValue) && spotValue > 0 ? 74 : 55 },
+      margin: { l: 70, r: 25, t: 130, b: 55 },
       height: chartHeight,
       hovermode: 'x unified',
       hoverdistance: -1,
@@ -565,7 +608,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       xaxis: {
         title: 'Underlying price', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline,
         autorange: false,
-        range: [evaluation[0].s, evaluation[evaluation.length - 1].s],
+        range: xRange,
         showspikes: true,
         spikemode: 'across+toaxis',
         spikesnap: 'cursor',
@@ -881,22 +924,33 @@ function SummaryMetric({ label, value, tone, helper }) {
   )
 }
 
-function ScannerProbabilityPanel({ probabilities, risk }) {
+function ScannerProbabilityPanel({ probabilities, risk, tradeKind, tradeLabel }) {
   const combined = resolveStrategyLabProbabilities(probabilities, risk)
   const campaignSuccess = combined.success_mode === 'profit-or-untested'
+  const coveredCall = isCoveredCallTrade(tradeKind) || isCoveredCallTrade(tradeLabel)
   const metrics = [
-    ['Probability of success', combined.prob_success, 'positive', campaignSuccess
-      ? 'Position finishes profitable or remains untested above the upper long'
-      : 'Complete position finishes with positive modeled P/L'],
-    ['Probability of failure', combined.prob_failure, 'negative', campaignSuccess
-      ? 'Position finishes in the downside loss region'
-      : 'Complete position finishes at or below $0 modeled P/L'],
-    ['Probability OTM', combined.prob_otm, '', 'Reference option expires out of the money'],
-    ['Probability ITM', combined.prob_itm, '', 'Reference option expires in the money'],
+    ['Probability of success', combined.prob_success, 'positive', coveredCall
+      ? 'Stock finishes above the credit breakeven (spot minus premium). A drop larger than the credit loses money even if the call expires worthless.'
+      : campaignSuccess
+        ? 'Position finishes profitable or remains untested above the upper long'
+        : 'Complete position finishes with positive modeled P/L'],
+    ['Probability of failure', combined.prob_failure, 'negative', coveredCall
+      ? 'Stock drops more than the premium collected, so the covered call has negative modeled P/L'
+      : campaignSuccess
+        ? 'Position finishes in the downside loss region'
+        : 'Complete position finishes at or below $0 modeled P/L'],
+    ['Probability OTM', combined.prob_otm, '', coveredCall
+      ? 'Short call expires worthless; shares are not called away. This is not the same event as P/L success.'
+      : 'Reference option expires out of the money'],
+    ['Probability ITM', combined.prob_itm, '', coveredCall
+      ? 'Short call finishes in the money; shares are assigned at the strike'
+      : 'Reference option expires in the money'],
     ['Probability of touch', combined.prob_touch, '', probabilities?.prob_touch_estimated ? 'Estimated as approximately 2 × probability ITM' : 'Modeled chance the reference strike is touched'],
     ['Put-side touch', combined.prob_touch_put, '', 'Modeled chance the put-side boundary is touched'],
     ['Call-side touch', combined.prob_touch_call, '', 'Modeled chance the call-side boundary is touched'],
-    ['Chance of max profit', combined.prob_max_profit, 'positive', 'Modeled chance of reaching the expiration maximum'],
+    ['Chance of max profit', combined.prob_max_profit, 'positive', coveredCall
+      ? 'Stock finishes at or above the short strike (assignment, capped gain)'
+      : 'Modeled chance of reaching the expiration maximum'],
     ['Chance of max loss', combined.prob_max_loss, 'negative', 'Modeled chance of reaching the expiration maximum loss'],
   ].filter(([, value]) => value != null && Number.isFinite(Number(value)))
   const schedule = Array.isArray(probabilities?.probability_schedule)
@@ -920,8 +974,12 @@ function ScannerProbabilityPanel({ probabilities, risk }) {
       schedule={schedule}
       capture={probabilities?.profit_capture}
       scenarios={scenarios}
-      successHeadline="The complete scanner trade has positive modeled P/L"
-      failureHeadline="The complete scanner trade has negative modeled P/L"
+      successHeadline={coveredCall
+        ? 'The stock finishes above the covered-call breakeven (spot minus premium)'
+        : 'The complete scanner trade has positive modeled P/L'}
+      failureHeadline={coveredCall
+        ? 'The stock drops more than the premium, even if the short call expires worthless'
+        : 'The complete scanner trade has negative modeled P/L'}
       scheduleTitle="At every modeled management checkpoint"
     />
     <p>These are option-implied risk gauges based on the scanner’s entry assumptions and the active analysis date and volatility—not guarantees.</p>
@@ -1102,6 +1160,7 @@ export default function OptionTradingTools() {
   const [probabilityAnchorId, setProbabilityAnchorId] = useState('')
   const [probabilityRangeMode, setProbabilityRangeMode] = useState('moneyness')
   const [probabilityMode, setProbabilityMode] = useState('ITM')
+  const syncedProbabilityModeKey = useRef('')
   const [probabilityMassPct, setProbabilityMassPct] = useState(68.27)
   const [itmRangePct, setItmRangePct] = useState(10)
   const [otmRangePct, setOtmRangePct] = useState(10)
@@ -1367,6 +1426,16 @@ export default function OptionTradingTools() {
       || compareRiskLegs(a, b)
     ))[0] || null
   }, [activeOptionLegs, probabilityAnchorId, spot])
+  useEffect(() => {
+    const key = probabilityAnchor?.local_id
+    if (!key || !(spot > 0)) return
+    if (syncedProbabilityModeKey.current === key) return
+    const moneyness = optionMoneyness(probabilityAnchor, spot)
+    if (moneyness?.status === 'OTM' || moneyness?.status === 'ITM') {
+      setProbabilityMode(moneyness.status)
+      syncedProbabilityModeKey.current = key
+    }
+  }, [probabilityAnchor, spot])
   const positionStrikes = useMemo(
     () => [...new Set(activeOptionLegs.map(leg => Number(leg.strike)).filter(Number.isFinite))].sort((a, b) => a - b),
     [activeOptionLegs],
@@ -1709,11 +1778,14 @@ export default function OptionTradingTools() {
       return
     }
     const isCall = String(probabilityAnchor.opt_type).toUpperCase() === 'CALL'
-    const percentFromStrike = edge === 'low'
-      ? (1 - proposedPrice / anchorStrike) * 100
-      : (proposedPrice / anchorStrike - 1) * 100
-    const nextPercent = Math.max(1, Math.round(percentFromStrike * 10) / 10)
-    if ((edge === 'low' && isCall) || (edge === 'high' && !isCall)) setOtmRangePct(nextPercent)
+    const fromPrice = moneynessPercentFromPrice(probabilityAnchor, proposedPrice)
+    if (!fromPrice) return
+    const isOtmHandle = (edge === 'low' && isCall) || (edge === 'high' && !isCall)
+    const expectedEdge = isOtmHandle ? 'otm' : 'itm'
+    const nextPercent = fromPrice.edge === expectedEdge
+      ? Math.max(1, Math.round(fromPrice.percent * 10) / 10)
+      : 1
+    if (isOtmHandle) setOtmRangePct(nextPercent)
     else setItmRangePct(nextPercent)
   }, [probabilityAnchor, probabilityRangeMode, risk, spot, ratePct, quote?.div_yield])
 
@@ -2338,7 +2410,7 @@ export default function OptionTradingTools() {
             <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
             <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
           </div>
-          {scannerTrade && <ScannerProbabilityPanel probabilities={scannerTrade.probabilities} risk={risk} />}
+          {scannerTrade && <ScannerProbabilityPanel probabilities={scannerTrade.probabilities} risk={risk} tradeKind={scannerTrade.kind} tradeLabel={scannerTrade.label || scannerTrade.name} />}
           {hasMixedExpirations && <div className="opt-horizon-note"><strong>Mixed expirations:</strong> analysis ends at the first expiration, {formatExpiration(analysisHorizon)}. Later-dated legs retain their remaining modeled time value.</div>}
           {riskLoading && <div className="opt-calculating">Updating the risk graph…</div>}
           {riskError && <div className="opt-error">{riskError}</div>}

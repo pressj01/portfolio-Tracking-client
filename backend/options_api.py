@@ -1019,6 +1019,43 @@ def _probability_touch(spot: float, barrier: float, sigma: float, T: float,
     return min(max(probability, 0.0), 1.0)
 
 
+def _option_moneyness_range(strike: float, opt_type: str, itm_pct: float,
+                            otm_pct: float) -> tuple[float, float, str, str]:
+    """Map ITM/OTM percentages onto prices using |strike − S| / S.
+
+    A haircut off the strike (K × 0.9) parks "10% OTM" on a far-away call —
+    $270 on a $300 strike when the stock is already $266, so a 12% OTM
+    covered call looks at the money. Percent-of-price keeps the same
+    definition the rest of Strategy Lab uses for "currently X% OTM".
+    """
+    strike = float(strike)
+    itm_pct = max(0.0, float(itm_pct or 0.0))
+    otm_pct = max(0.0, float(otm_pct or 0.0))
+    is_call = str(opt_type or '').upper() == 'CALL'
+
+    def below_strike(percent: float) -> float:
+        return strike / (1.0 + percent / 100.0) if percent < 1000 else strike * 0.5
+
+    def above_strike(percent: float) -> float:
+        if 0 < percent < 100:
+            return strike / (1.0 - percent / 100.0)
+        return strike * (1.0 + percent / 100.0)
+
+    if is_call:
+        return (
+            below_strike(otm_pct),
+            above_strike(itm_pct),
+            f'{otm_pct:g}% OTM',
+            f'{itm_pct:g}% ITM',
+        )
+    return (
+        below_strike(itm_pct),
+        above_strike(otm_pct),
+        f'{itm_pct:g}% ITM',
+        f'{otm_pct:g}% OTM',
+    )
+
+
 def _probability_range(spot: float, low: float, high: float, sigma: float,
                        T: float, r: float, q: float) -> dict:
     """Return lognormal probabilities below, inside, and above two prices."""
@@ -1325,16 +1362,9 @@ def register_routes(app):
             else:
                 range_mode = 'moneyness'
                 if anchor_strike > 0 and has_moneyness_percentages:
-                    if anchor_type == 'CALL':
-                        range_low = anchor_strike * (1.0 - otm_pct / 100.0)
-                        range_high = anchor_strike * (1.0 + itm_pct / 100.0)
-                        lower_label = f'{otm_pct:g}% OTM'
-                        upper_label = f'{itm_pct:g}% ITM'
-                    else:
-                        range_low = anchor_strike * (1.0 - itm_pct / 100.0)
-                        range_high = anchor_strike * (1.0 + otm_pct / 100.0)
-                        lower_label = f'{itm_pct:g}% ITM'
-                        upper_label = f'{otm_pct:g}% OTM'
+                    range_low, range_high, lower_label, upper_label = _option_moneyness_range(
+                        anchor_strike, anchor_type, itm_pct, otm_pct,
+                    )
             probability_out = _probability_range(
                 spot,
                 range_low,

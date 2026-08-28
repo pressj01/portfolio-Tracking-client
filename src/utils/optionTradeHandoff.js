@@ -337,6 +337,11 @@ const PROFIT_OR_UNTESTED_SCANNERS = new Set([
   'road-trip-butterfly',
 ])
 
+export function isCoveredCallTrade(kind) {
+  const normalized = String(kind || '').trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '-')
+  return normalized.includes('covered-call')
+}
+
 /** Select the campaign's intended meaning of a successful outcome. */
 export function scannerProbabilitySuccessMode(kind) {
   const normalized = String(kind || '').trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '-')

@@ -6,6 +6,7 @@ import {
   buildScannerTrade,
   buildTrackedTrade,
   hydrateTrackedTradeLegs,
+  isCoveredCallTrade,
   resolveStrategyLabProbabilities,
   scannerProbabilitySuccessMode,
 } from './optionTradeHandoff.js'
@@ -83,6 +84,13 @@ test('Strategy Lab uses the live position model as one coherent probability set'
   assert.equal(resolved.prob_max_profit, 12.1)
   assert.ok(resolved.prob_max_profit <= resolved.prob_success)
   assert.ok(resolved.prob_max_loss <= resolved.prob_failure)
+})
+
+test('covered-call labels identify the stock-plus-short-call trade', () => {
+  assert.equal(isCoveredCallTrade('covered-call'), true)
+  assert.equal(isCoveredCallTrade('covered call'), true)
+  assert.equal(isCoveredCallTrade('AMZN covered call'), true)
+  assert.equal(isCoveredCallTrade('cash-secured-put'), false)
 })
 
 test('long-dated unbalanced downside campaigns count profitable or untested outcomes as success', () => {
