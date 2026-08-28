@@ -6,7 +6,7 @@ import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDe
 import { chartTheme } from '../utils/chartTheme'
 import { riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
-import { hydrateTrackedTradeLegs, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
+import { hydrateTrackedTradeLegs, resolveStrategyLabProbabilities, scannerProbabilitySuccessMode, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
 import { optionMoneyness, optionMoneynessRange } from '../utils/optionMoneyness'
 import {
   applyVolatilitySurfaceShock,
@@ -882,23 +882,15 @@ function SummaryMetric({ label, value, tone, helper }) {
 }
 
 function ScannerProbabilityPanel({ probabilities, risk }) {
-  const firstFinite = (...values) => values.find(value => value != null && Number.isFinite(Number(value)))
-  const positionModel = risk?.position_probability || {}
-  const referenceModel = risk?.probability_range || {}
-  const combined = {
-    prob_success: firstFinite(probabilities?.prob_success, positionModel.probability_success_pct),
-    prob_failure: firstFinite(probabilities?.prob_failure, positionModel.probability_failure_pct),
-    prob_otm: firstFinite(probabilities?.prob_otm, referenceModel.probability_otm_pct),
-    prob_itm: firstFinite(probabilities?.prob_itm, referenceModel.probability_itm_pct),
-    prob_touch: firstFinite(probabilities?.prob_touch, referenceModel.probability_touch_pct),
-    prob_touch_put: firstFinite(probabilities?.prob_touch_put),
-    prob_touch_call: firstFinite(probabilities?.prob_touch_call),
-    prob_max_profit: firstFinite(probabilities?.prob_max_profit, positionModel.probability_max_profit_pct),
-    prob_max_loss: firstFinite(probabilities?.prob_max_loss, positionModel.probability_max_loss_pct),
-  }
+  const combined = resolveStrategyLabProbabilities(probabilities, risk)
+  const campaignSuccess = combined.success_mode === 'profit-or-untested'
   const metrics = [
-    ['Probability of success', combined.prob_success, 'positive', 'Complete position finishes with positive modeled P/L'],
-    ['Probability of failure', combined.prob_failure, 'negative', 'Complete position finishes at or below $0 modeled P/L'],
+    ['Probability of success', combined.prob_success, 'positive', campaignSuccess
+      ? 'Position finishes profitable or remains untested above the upper long'
+      : 'Complete position finishes with positive modeled P/L'],
+    ['Probability of failure', combined.prob_failure, 'negative', campaignSuccess
+      ? 'Position finishes in the downside loss region'
+      : 'Complete position finishes at or below $0 modeled P/L'],
     ['Probability OTM', combined.prob_otm, '', 'Reference option expires out of the money'],
     ['Probability ITM', combined.prob_itm, '', 'Reference option expires in the money'],
     ['Probability of touch', combined.prob_touch, '', probabilities?.prob_touch_estimated ? 'Estimated as approximately 2 × probability ITM' : 'Modeled chance the reference strike is touched'],
@@ -915,7 +907,7 @@ function ScannerProbabilityPanel({ probabilities, risk }) {
   return <section className="opt-scanner-probability-panel" aria-label="Scanner probability analysis">
     <div className="opt-scanner-probability-heading">
       <div><span>Position probability analysis</span><h3>Success, failure, moneyness and touch risk</h3></div>
-      <small>Scanner estimates, completed by the active risk model when needed</small>
+      <small>Current position and reference cards use the active risk model; scanner entry snapshots remain below</small>
     </div>
     {!!metrics.length && <div className="opt-scanner-probability-grid">
       {metrics.map(([label, value, tone, helper]) => <article key={label}>
@@ -1499,6 +1491,9 @@ export default function OptionTradingTools() {
           probability_range: showProbabilityRange && probabilityRange
             ? { enabled: true, ...probabilityRange }
             : { enabled: false },
+          probability_success_mode: scannerProbabilitySuccessMode(
+            scannerTrade?.kind || scannerTrade?.label || scannerTrade?.name,
+          ),
           vol_surface: {
             dynamics: volatilityDynamics,
             parallel_shock_pct: volatilitySurfaceShockValue,
@@ -1544,7 +1539,7 @@ export default function OptionTradingTools() {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [activeLegs, activeExpirations, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilityDynamics, volatilitySurfaceShockValue, volatilitySkewPointsValue, volatilityTermShocks, legVolatilityScenarios, modeledSkewByExpiration, showProbabilityRange, probabilityRange])
+  }, [activeLegs, activeExpirations, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilityDynamics, volatilitySurfaceShockValue, volatilitySkewPointsValue, volatilityTermShocks, legVolatilityScenarios, modeledSkewByExpiration, showProbabilityRange, probabilityRange, scannerTrade?.kind])
 
   const submitTicker = event => {
     event.preventDefault()

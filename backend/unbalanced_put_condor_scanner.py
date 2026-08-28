@@ -58,6 +58,11 @@ DELTA_PRESETS = {
     "20/10": (0.20, 0.10),
     "25/15": (0.25, 0.15),
 }
+DELTA_PRESET_ALIASES = {
+    "conservative": "15/5",
+    "balanced": "20/10",
+    "aggressive": "25/15",
+}
 # When the upstream IV solver cannot converge - which is every contract without
 # a live quote, so most of the chain outside market hours - it reports a halving
 # sequence (0.5, 0.25, ... 1e-5) instead of failing.  Those are not market vols,
@@ -636,11 +641,31 @@ def _build_put_condor(
             RISK_FREE,
             dividend_yield,
         )
+        # Campaign success is broader than strict expiration P/L for this
+        # structure: the entire untested upper line counts, plus the profitable
+        # portion just inside the tent.  Only finishing beyond the downside
+        # breakeven is failure.  This is the management definition used by the
+        # scanner, where an upside move can be repaired with another put spread
+        # to lift the upper line back to zero or better.
+        campaign_failure = (
+            _prob_finish_below(
+                spot,
+                lower_breakeven,
+                years,
+                probability_iv,
+                RISK_FREE,
+                dividend_yield,
+            )
+            if lower_breakeven is not None else 0.0
+        )
+        campaign_success = 1.0 - campaign_failure if campaign_failure is not None else None
     else:
         prob_touch_lower_short = None
         prob_touch_lower_long = None
         prob_finish_below_lower_short = None
         prob_finish_below_lower_long = None
+        campaign_success = None
+        campaign_failure = None
     legs_for_probability = [
         {
             "option_type": "put",
@@ -792,6 +817,12 @@ def _build_put_condor(
             (spot - k3) / spot * 100.0 if spot > 0 else None
         ),
         "lower_short_distance_sigma": lower_short_distance_sigma,
+        "prob_success": (
+            campaign_success * 100.0 if campaign_success is not None else None
+        ),
+        "prob_failure": (
+            campaign_failure * 100.0 if campaign_failure is not None else None
+        ),
         "open_interest_min": oi_min,
         "volume_min": volume_min,
         "upper_long_leg": _leg_view(upper_long),
@@ -822,12 +853,20 @@ def _preset_names(value) -> list[str]:
     if value is None or str(value).strip().lower() == "all":
         return list(DELTA_PRESETS)
     if isinstance(value, (list, tuple)):
-        requested = [str(item).strip() for item in value]
+        requested = [str(item).strip().lower() for item in value]
     else:
-        requested = [part.strip() for part in str(value).split(",")]
-    names = [name for name in requested if name in DELTA_PRESETS]
+        requested = [part.strip().lower() for part in str(value).split(",")]
+    names = [
+        DELTA_PRESET_ALIASES.get(name, name)
+        for name in requested
+        if DELTA_PRESET_ALIASES.get(name, name) in DELTA_PRESETS
+    ]
+    names = list(dict.fromkeys(names))
     if not names:
-        raise ValueError("delta_preset must be all, 15/5, 20/10, or 25/15")
+        raise ValueError(
+            "delta_preset must be all, conservative (15/5), balanced "
+            "(20/10), or aggressive (25/15)"
+        )
     return names
 
 

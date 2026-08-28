@@ -1066,7 +1066,8 @@ def _position_probability_profile(legs: list[dict], spot: float, sigma: float,
                                   T: float, r: float, q: float, model: str,
                                   breakevens: list[float],
                                   theoretical_max_profit: float | None,
-                                  theoretical_max_loss: float | None) -> dict:
+                                  theoretical_max_loss: float | None,
+                                  success_mode: str = 'positive-pnl') -> dict:
     """Integrate the complete position payoff over its breakeven regions."""
     structural_prices = {
         max(0.0, float(leg.get('strike') or 0.0))
@@ -1083,11 +1084,13 @@ def _position_probability_profile(legs: list[dict], spot: float, sigma: float,
             total += leg['qty'] * leg_pnl
         return total
 
-    success = 0.0
+    positive_pnl_probability = 0.0
+    untested_or_profit_probability = 0.0
     max_profit_probability = 0.0
     max_loss_probability = 0.0
     max_profit_available = theoretical_max_profit is not None
     max_loss_available = theoretical_max_loss is not None
+    upper_option_strike = max(structural_prices, default=0.0)
     for index in range(1, len(boundaries)):
         low = boundaries[index - 1]
         high = boundaries[index]
@@ -1102,19 +1105,37 @@ def _position_probability_profile(legs: list[dict], spot: float, sigma: float,
             width = high - low
             samples = [low + width * 0.25, low + width * 0.75]
         sample_pnls = [position_pnl(max(0.0001, sample)) for sample in samples]
-        if sum(sample_pnls) / len(sample_pnls) > 0:
-            success += mass
+        positive_pnl = sum(sample_pnls) / len(sample_pnls) > 0
+        if positive_pnl:
+            positive_pnl_probability += mass
+        # Long-dated downside campaigns treat the region above their highest
+        # put as a successful, still-untested outcome.  A small entry debit can
+        # make that flat line slightly negative at expiration, but it is not the
+        # downside failure event this campaign probability is intended to show.
+        if positive_pnl or low >= upper_option_strike - 1e-9:
+            untested_or_profit_probability += mass
         if max_profit_available and all(abs(value - theoretical_max_profit) <= 0.05 for value in sample_pnls):
             max_profit_probability += mass
         if max_loss_available and all(abs(value - theoretical_max_loss) <= 0.05 for value in sample_pnls):
             max_loss_probability += mass
 
-    success = min(max(success, 0.0), 1.0)
+    positive_pnl_probability = min(max(positive_pnl_probability, 0.0), 1.0)
+    untested_or_profit_probability = min(max(untested_or_profit_probability, 0.0), 1.0)
+    selected_success = (
+        untested_or_profit_probability
+        if success_mode == 'profit-or-untested'
+        else positive_pnl_probability
+    )
     return {
         'date': None,
         'iv': round(max(float(sigma), 1e-4), 6),
-        'probability_success_pct': round(success * 100.0, 2),
-        'probability_failure_pct': round((1.0 - success) * 100.0, 2),
+        'success_mode': success_mode,
+        'probability_success_pct': round(selected_success * 100.0, 2),
+        'probability_failure_pct': round((1.0 - selected_success) * 100.0, 2),
+        'probability_positive_pnl_pct': round(positive_pnl_probability * 100.0, 2),
+        'probability_nonpositive_pnl_pct': round((1.0 - positive_pnl_probability) * 100.0, 2),
+        'probability_untested_or_profit_pct': round(untested_or_profit_probability * 100.0, 2),
+        'probability_downside_failure_pct': round((1.0 - untested_or_profit_probability) * 100.0, 2),
         'probability_max_profit_pct': round(max_profit_probability * 100.0, 2) if max_profit_available else None,
         'probability_max_loss_pct': round(max_loss_probability * 100.0, 2) if max_loss_available else None,
     }
@@ -1274,7 +1295,7 @@ def register_routes(app):
         if probability_in.get('enabled'):
             option_ivs = [leg['iv'] for leg in legs if leg['opt_type'] != 'stock' and leg['iv'] > 0]
             probability_iv = float(probability_in.get('iv') or (sum(option_ivs) / len(option_ivs) if option_ivs else 0.20))
-            probability_T = max((horizon_d - date.today()).days, 0) / 365.0
+            probability_T = max((horizon_d - eval_d).days, 0) / 365.0
             range_mode = str(probability_in.get('range_mode') or 'moneyness').lower()
             probability_mode = str(probability_in.get('probability_mode') or 'ITM').upper()
             if probability_mode not in ('ITM', 'OTM', 'TOUCH'):
@@ -1448,18 +1469,22 @@ def register_routes(app):
             breakevens = exact_breakevens
         position_probability = None
         option_ivs = [leg['iv'] for leg in legs if leg['opt_type'] != 'stock' and leg['iv'] > 0]
-        probability_T = max((horizon_d - date.today()).days, 0) / 365.0
-        if option_ivs and probability_T > 0:
+        probability_T = max((horizon_d - eval_d).days, 0) / 365.0
+        if option_ivs:
             probability_iv = (
                 float(probability_out['iv'])
                 if probability_out and probability_out.get('iv') is not None
                 else sum(option_ivs) / len(option_ivs)
             )
+            success_mode = str(payload.get('probability_success_mode') or 'positive-pnl').strip().lower()
+            if success_mode not in {'positive-pnl', 'profit-or-untested'}:
+                success_mode = 'positive-pnl'
             position_probability = _position_probability_profile(
                 legs, spot, probability_iv, probability_T, r, q, model,
                 breakevens,
                 payoff_bounds.get('theoretical_max_profit'),
                 payoff_bounds.get('theoretical_max_loss'),
+                success_mode,
             )
             position_probability['date'] = horizon_d.isoformat()
 

@@ -111,6 +111,85 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertIsNone(profile["probability_max_profit_pct"])
         self.assertGreater(profile["probability_max_loss_pct"], 0)
 
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_put_condor_maximum_regions_are_subsets_of_profit_and_loss(self, _quote):
+        payload = self.payload(self.today)
+        payload["legs"] = [
+            {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 95,
+             "expiration": self.expiration.isoformat(), "entry_price": 5.0, "iv": 0.24},
+            {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 90,
+             "expiration": self.expiration.isoformat(), "entry_price": 4.0, "iv": 0.25},
+            {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 75,
+             "expiration": self.expiration.isoformat(), "entry_price": 1.5, "iv": 0.29},
+            {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 65,
+             "expiration": self.expiration.isoformat(), "entry_price": 1.0, "iv": 0.31},
+        ]
+
+        response = self.client.post("/api/options/risk-graph", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        profile = response.get_json()["position_probability"]
+        self.assertGreater(profile["probability_success_pct"], profile["probability_max_profit_pct"])
+        self.assertGreater(profile["probability_failure_pct"], profile["probability_max_loss_pct"])
+        self.assertAlmostEqual(
+            profile["probability_success_pct"] + profile["probability_failure_pct"],
+            100.0,
+            places=1,
+        )
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_unbalanced_put_condor_counts_profitable_or_untested_as_success(self, _quote):
+        payload = self.payload(self.today)
+        payload["probability_success_mode"] = "profit-or-untested"
+        payload["legs"] = [
+            {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 90,
+             "expiration": self.expiration.isoformat(), "entry_price": 3.0, "iv": 0.20},
+            {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 85,
+             "expiration": self.expiration.isoformat(), "entry_price": 2.0, "iv": 0.21},
+            {"side": "SELL", "qty": 1, "opt_type": "PUT", "strike": 70,
+             "expiration": self.expiration.isoformat(), "entry_price": 0.8, "iv": 0.25},
+            {"side": "BUY", "qty": 1, "opt_type": "PUT", "strike": 60,
+             "expiration": self.expiration.isoformat(), "entry_price": 0.3, "iv": 0.27},
+        ]
+
+        profile = self.client.post("/api/options/risk-graph", json=payload).get_json()["position_probability"]
+
+        self.assertEqual(profile["success_mode"], "profit-or-untested")
+        self.assertGreater(profile["probability_success_pct"], 90)
+        self.assertGreater(
+            profile["probability_success_pct"],
+            profile["probability_positive_pnl_pct"],
+        )
+        self.assertAlmostEqual(
+            profile["probability_success_pct"] + profile["probability_failure_pct"],
+            100.0,
+            places=1,
+        )
+        self.assertLessEqual(
+            profile["probability_max_loss_pct"],
+            profile["probability_failure_pct"],
+        )
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_probability_horizon_shrinks_with_the_analysis_date(self, _quote):
+        payload = self.payload(self.today)
+        payload["probability_range"] = {
+            "enabled": True, "low": 90, "high": 110, "iv": 0.25,
+            "anchor_strike": 100, "opt_type": "CALL",
+        }
+        initial = self.client.post("/api/options/risk-graph", json=payload).get_json()
+        payload["eval_date"] = (self.today + timedelta(days=15)).isoformat()
+        evolved = self.client.post("/api/options/risk-graph", json=payload).get_json()
+
+        self.assertNotEqual(
+            initial["position_probability"]["probability_success_pct"],
+            evolved["position_probability"]["probability_success_pct"],
+        )
+        self.assertNotEqual(
+            initial["probability_range"]["probability_itm_pct"],
+            evolved["probability_range"]["probability_itm_pct"],
+        )
+
     def test_dividend_yield_normalization_uses_trailing_yield_to_resolve_units(self):
         self.assertAlmostEqual(options_api._normalize_dividend_yield(0.41, 0.00245), 0.0041)
         self.assertAlmostEqual(options_api._normalize_dividend_yield(1.5, 0.015), 0.015)
@@ -660,7 +739,9 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_probability_mode_returns_adjustable_band_and_touch_probability(self, _quote):
         expiration = self.today + timedelta(days=45)
-        payload = self.payload(expiration)
+        payload = self.payload(self.today)
+        for leg in payload["legs"]:
+            leg["expiration"] = expiration.isoformat()
         payload["probability_range"] = {
             "enabled": True,
             "range_mode": "probability",

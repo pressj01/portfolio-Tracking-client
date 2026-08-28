@@ -94,6 +94,15 @@ class PayoffArithmetic(unittest.TestCase):
         self.assertAlmostEqual(result["max_loss_dollars"], 100.0)
         self.assertAlmostEqual(result["lower_breakeven"], 86.0)
         self.assertAlmostEqual(result["upper_breakeven"], 104.0)
+        expected_failure = scanner._prob_finish_below(
+            spot=110,
+            barrier=86,
+            years=170 / 365,
+            volatility=0.20,
+        ) * 100.0
+        self.assertAlmostEqual(result["prob_failure"], expected_failure)
+        self.assertAlmostEqual(result["prob_success"], 100.0 - expected_failure)
+        self.assertGreater(result["prob_success"], 80.0)
 
     def test_position_delta_is_reported_in_contract_share_equivalents(self):
         result = scanner._build_put_condor(
@@ -683,6 +692,17 @@ class Presets(unittest.TestCase):
         self.assertEqual(
             scanner._preset_names("all"),
             ["15/5", "20/10", "25/15"],
+        )
+
+    def test_general_scanner_profile_names_map_to_exact_pairs(self):
+        self.assertEqual(scanner._preset_names("conservative"), ["15/5"])
+        self.assertEqual(scanner._preset_names("balanced"), ["20/10"])
+        self.assertEqual(scanner._preset_names("aggressive"), ["25/15"])
+
+    def test_mixed_aliases_and_pairs_are_deduplicated(self):
+        self.assertEqual(
+            scanner._preset_names(["balanced", "20/10", "aggressive"]),
+            ["20/10", "25/15"],
         )
 
     def test_leg_view_preserves_half_cent_pricing_for_ratio_handoff(self):

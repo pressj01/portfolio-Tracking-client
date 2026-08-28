@@ -330,6 +330,21 @@ const firstNumber = (...values) => {
   return null
 }
 
+const PROFIT_OR_UNTESTED_SCANNERS = new Set([
+  'unbalanced-put-condor',
+  'unbalanced-butterfly',
+  'double-hedge-put-butterfly',
+  'road-trip-butterfly',
+])
+
+/** Select the campaign's intended meaning of a successful outcome. */
+export function scannerProbabilitySuccessMode(kind) {
+  const normalized = String(kind || '').trim().toLowerCase().replaceAll('_', '-').replaceAll(' ', '-')
+  return [...PROFIT_OR_UNTESTED_SCANNERS].some(scanner => normalized.includes(scanner))
+    ? 'profit-or-untested'
+    : 'positive-pnl'
+}
+
 /** Preserve the scanner's position-level probability model for Strategy Lab. */
 export function buildScannerProbabilitySummary(row) {
   const meta = row?._general || {}
@@ -381,6 +396,69 @@ export function buildScannerProbabilitySummary(row) {
     summary.prob_touch_call, summary.prob_max_profit, summary.prob_max_loss].some(value => value != null)
     ? summary
     : null
+}
+
+/**
+ * Keep Strategy Lab's probability cards on one coherent model.
+ *
+ * Once the live risk graph has a position profile, all four position outcomes
+ * must come from that profile. Falling back one field at a time can combine a
+ * live probability of profit with a scanner-snapshot max-profit probability
+ * calculated from another IV, making the subset larger than the whole. The
+ * same rule applies to the reference option's OTM/ITM/touch trio.
+ */
+export function resolveStrategyLabProbabilities(probabilities, risk) {
+  const scanner = probabilities || {}
+  const position = risk?.position_probability || {}
+  const reference = risk?.probability_range || {}
+  const hasLivePosition = firstNumber(
+    position.probability_success_pct,
+    position.probability_failure_pct,
+  ) != null
+  const hasLiveReference = firstNumber(
+    reference.probability_otm_pct,
+    reference.probability_itm_pct,
+    reference.probability_touch_pct,
+  ) != null
+
+  const liveSuccess = firstNumber(position.probability_success_pct)
+  const liveFailure = firstNumber(
+    position.probability_failure_pct,
+    liveSuccess == null ? null : 100 - liveSuccess,
+  )
+  const scannerSuccess = firstNumber(scanner.prob_success)
+  const scannerFailure = firstNumber(
+    scanner.prob_failure,
+    scannerSuccess == null ? null : 100 - scannerSuccess,
+  )
+
+  return {
+    prob_success: hasLivePosition ? liveSuccess : scannerSuccess,
+    prob_failure: hasLivePosition ? liveFailure : scannerFailure,
+    // A null live maximum is meaningful for an unbounded payoff. Do not fill
+    // it with a stale finite scanner estimate.
+    prob_max_profit: hasLivePosition
+      ? firstNumber(position.probability_max_profit_pct)
+      : firstNumber(scanner.prob_max_profit),
+    prob_max_loss: hasLivePosition
+      ? firstNumber(position.probability_max_loss_pct)
+      : firstNumber(scanner.prob_max_loss),
+    prob_otm: hasLiveReference
+      ? firstNumber(reference.probability_otm_pct)
+      : firstNumber(scanner.prob_otm),
+    prob_itm: hasLiveReference
+      ? firstNumber(reference.probability_itm_pct)
+      : firstNumber(scanner.prob_itm),
+    prob_touch: hasLiveReference
+      ? firstNumber(reference.probability_touch_pct)
+      : firstNumber(scanner.prob_touch),
+    prob_touch_estimated: hasLiveReference ? false : Boolean(scanner.prob_touch_estimated),
+    prob_touch_put: firstNumber(scanner.prob_touch_put),
+    prob_touch_call: firstNumber(scanner.prob_touch_call),
+    success_mode: hasLivePosition ? position.success_mode || 'positive-pnl' : 'scanner-snapshot',
+    position_source: hasLivePosition ? 'active_risk_model' : 'scanner_snapshot',
+    reference_source: hasLiveReference ? 'active_risk_model' : 'scanner_snapshot',
+  }
 }
 
 /** Convert a scanner result into the saved-strategy API shape. */
