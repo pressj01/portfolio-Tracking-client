@@ -181,7 +181,7 @@ function riskPnlRange(result) {
   return [lower - padding, upper + padding]
 }
 
-function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary }) {
+function RiskChart({ result, evaluationDate, controls, loading, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary }) {
   const ref = useRef(null)
   const shellRef = useRef(null)
   const { isDark } = useTheme()
@@ -446,7 +446,12 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
       })
     }
     shapes.push(
-      { type: 'line', x0: evaluation[0].s, x1: evaluation[evaluation.length - 1].s, y0: 0, y1: 0, editable: false, line: { color: ct.zeroline, width: 1 } },
+      // Break-even reference. Paper-width so it stays drawn while the price axis
+      // is zoomed or panned past the modeled range.
+      {
+        type: 'line', xref: 'paper', x0: 0, x1: 1, y0: 0, y1: 0,
+        editable: false, layer: 'below', line: { color: ct.font, width: 1.5, dash: 'dot' },
+      },
       ...(result.breakevens || []).map(value => ({
         type: 'line', x0: value, x1: value, y0: 0, y1: 1, yref: 'paper',
         editable: false, line: { color: '#ff6b6b', width: 1, dash: 'dash' },
@@ -488,19 +493,15 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
     const annotations = [
       ...(spotValue != null ? [{
         x: spotValue,
-        y: 0.02,
+        y: 0,
         yref: 'paper',
-        text: `<b>Current</b> · ${result.underlying || 'Underlying'} $${fmt(spotValue)}`,
-        xanchor: 'left',
+        text: `${fmt(spotValue)}`,
+        textangle: -90,
+        xanchor: 'right',
         yanchor: 'bottom',
-        xshift: 6,
-        showarrow: false,
-        captureevents: false,
-        bgcolor: 'rgba(16, 24, 40, 0.94)',
-        bordercolor: RISK_CHART_SPOT_COLOR,
-        borderwidth: 1,
-        borderpad: 4,
-        font: { color: RISK_CHART_SPOT_COLOR, size: 11, family: 'Inter, system-ui, sans-serif' },
+        xshift: -1,
+        yshift: 5,
+        ...annotationTag(RISK_CHART_SPOT_COLOR),
       }] : []),
       ...(result.breakevens || []).map((value, index, values) => ({
         x: value, y: 1.10, yref: 'paper', text: `<b>B/E</b> · $${fmt(value)}`,
@@ -673,6 +674,7 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
 
   return (
     <div ref={shellRef} className={`opt-risk-chart-shell${isExpanded ? ' is-expanded' : ''}`}>
+      {controls}
       <div className="opt-risk-chart-tools" role="toolbar" aria-label="Risk graph view controls">
         <span className="opt-risk-chart-tool-group">
           <button type="button" className={dragMode === 'zoom' ? 'active' : ''} onClick={() => setDragMode('zoom')} aria-pressed={dragMode === 'zoom'} title="Drag over the plot to zoom the underlying-price axis">Zoom</button>
@@ -699,9 +701,10 @@ function RiskChart({ result, evaluationDate, strikeStructure, positionStrikes, o
           <small style={{ color: '#20c7c7' }}>{horizonLabel}</small>
           <strong>{hover ? hover.rows[1].value : '—'}</strong>
         </span>
-        {!hover && <span className="opt-risk-readout-hint">Move across the graph to read the price and P/L</span>}
+        {loading && <span className="opt-risk-readout-busy">Repricing…</span>}
+        {!hover && !loading && <span className="opt-risk-readout-hint">Move across the graph to read the price and P/L</span>}
       </div>
-      <div className={`opt-risk-chart-frame is-${dragMode}`}>
+      <div className={`opt-risk-chart-frame is-${dragMode}${loading ? ' is-busy' : ''}`}>
         <div ref={ref} className="opt-risk-chart" role="img" aria-label="Interactive option strategy profit and loss graph. Drag or use the mouse wheel to adjust the underlying-price axis while the profit-and-loss height stays fixed, and drag probability or strike handles to adjust the strategy." />
         {hover && (
           <div className="opt-risk-crosshair" aria-hidden="true">
@@ -2132,6 +2135,41 @@ export default function OptionTradingTools() {
 
   const changeTone = Number(quote?.change || 0) >= 0 ? 'positive' : 'negative'
 
+  const riskControls = (
+    <div className="opt-risk-controls" ref={riskControlsRef}>
+      <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
+      <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
+      <label className="opt-volatility-slider">
+        <span>Vol surface · {volatilitySurfaceShockLabel}</span>
+        <input
+          type="range"
+          min={MIN_VOLATILITY_SURFACE_SHOCK_PCT}
+          max={MAX_VOLATILITY_SURFACE_SHOCK_PCT}
+          step="1"
+          value={volatilitySurfaceShockValue}
+          onInput={event => setVolatilitySurfaceShock(Number(event.target.value))}
+          onChange={event => setVolatilitySurfaceShock(Number(event.target.value))}
+          aria-label="Volatility surface adjustment"
+          aria-valuetext={volatilitySurfaceShockLabel}
+          title="Proportionally raise or lower every option leg's own modeled IV while preserving the current skew"
+        />
+        <small className="opt-volatility-scale"><span>−50%</span><span>0</span><span>+50%</span></small>
+      </label>
+      <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
+      <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
+    </div>
+  )
+
+  const priceSlices = (
+    <div className="opt-risk-slices">
+      <div className="opt-slice-heading">
+        <div><span>Price slices</span><h3>Greeks and modeled P/L at selected prices</h3></div>
+        <div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" value={offset} onChange={event => setSliceOffsets(values => values.map((value, current) => current === index ? Number(event.target.value) : value))} /><span>%</span></label>)}</div>
+      </div>
+      <div className="opt-table-wrap"><table className="opt-slices-table"><thead><tr><th>Underlying</th><th>Move</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>P/L open</th><th>1-day theta</th></tr></thead><tbody>{(risk?.price_slices || []).map((slice, index) => <tr key={`${slice.s}-${index}`} className={Number(sliceOffsets[index]) === 0 ? 'opt-slice-current' : ''}><td>{money(slice.s)}</td><td>{Number(sliceOffsets[index]) > 0 ? '+' : ''}{sliceOffsets[index]}%</td><td>{fmt(slice.delta, 3)}</td><td>{fmt(slice.gamma, 4)}</td><td>{fmt(slice.theta, 2)}</td><td>{fmt(slice.vega, 2)}</td><td className={Number(slice.pnl_open) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_open)}</td><td className={Number(slice.pnl_day) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_day)}</td></tr>)}</tbody></table></div>
+    </div>
+  )
+
   return (
     <div className="page opt-page">
       <div className="opt-page-header">
@@ -2388,37 +2426,38 @@ export default function OptionTradingTools() {
         </section>
       ) : (
         <section className={`card opt-risk-workspace${riskLoading && risk ? ' is-repricing' : ''}`} aria-busy={riskLoading}>
-          <div className="opt-risk-controls" ref={riskControlsRef}>
-            <label><span>Analysis date</span><input type="date" min={TODAY()} max={analysisHorizon} value={evaluationDate} onInput={event => setBoundedEvaluationDate(event.target.value)} onChange={event => setBoundedEvaluationDate(event.target.value)} /></label>
-            <label className="opt-time-slider"><span>Move through time · day {evaluationOffset} of {evolutionDays}</span><input type="range" min="0" max={evolutionDays} value={evaluationOffset} onInput={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} onChange={event => setBoundedEvaluationDate(addDays(TODAY(), event.target.value))} /></label>
-            <label className="opt-volatility-slider">
-              <span>Vol surface · {volatilitySurfaceShockLabel}</span>
-              <input
-                type="range"
-                min={MIN_VOLATILITY_SURFACE_SHOCK_PCT}
-                max={MAX_VOLATILITY_SURFACE_SHOCK_PCT}
-                step="1"
-                value={volatilitySurfaceShockValue}
-                onInput={event => setVolatilitySurfaceShock(Number(event.target.value))}
-                onChange={event => setVolatilitySurfaceShock(Number(event.target.value))}
-                aria-label="Volatility surface adjustment"
-                aria-valuetext={volatilitySurfaceShockLabel}
-                title="Proportionally raise or lower every option leg's own modeled IV while preserving the current skew"
-              />
-              <small className="opt-volatility-scale"><span>−50%</span><span>0</span><span>+50%</span></small>
-            </label>
-            <label><span>Price range</span><div className="opt-suffix-input"><input type="number" min="5" max="100" value={priceRangePct} onChange={event => setPriceRangePct(event.target.value)} /><b>±%</b></div></label>
-            <label><span>Day-step lines</span><select value={dayStep} onChange={event => setDayStep(Number(event.target.value))}><option value="0">Off</option><option value="1">Every day</option><option value="3">Every 3 days</option><option value="5">Every 5 days</option><option value="7">Every 7 days</option><option value="14">Every 14 days</option></select></label>
-          </div>
-          {scannerTrade && <ScannerProbabilityPanel probabilities={scannerTrade.probabilities} risk={risk} tradeKind={scannerTrade.kind} tradeLabel={scannerTrade.label || scannerTrade.name} />}
+          {!risk && riskControls}
           {hasMixedExpirations && <div className="opt-horizon-note"><strong>Mixed expirations:</strong> analysis ends at the first expiration, {formatExpiration(analysisHorizon)}. Later-dated legs retain their remaining modeled time value.</div>}
-          {riskLoading && <div className="opt-calculating">Updating the risk graph…</div>}
+          {/* Once a graph is on screen the repricing cue lives inside the chart shell.
+              A block-level notice here would insert and remove itself on every slider
+              tick, shifting the whole page each time a parameter changes. */}
+          {riskLoading && !risk && <div className="opt-calculating">Updating the risk graph…</div>}
           {riskError && <div className="opt-error">{riskError}</div>}
           {!activeLegs.length && <div className="opt-risk-empty"><strong>{legs.length ? 'No legs are included in the risk graph.' : 'Add positions to build a risk profile.'}</strong><span>{legs.length ? 'Check Use for each leg you want included in the graph and risk totals.' : 'Add stock, use the option chain, or choose a learning template, then return here.'}</span>{!legs.length && <button className="btn btn-primary" onClick={() => setWorkspace('trades')}>Open simulated trade</button>}</div>}
           {risk && <>
               {!!positionStrikes.length && <div className="opt-position-strikes"><strong>Position strikes</strong>{positionStrikes.map(strike => <span key={strike}>{money(strike)}</span>)}</div>}
               {strikeStructure && <div className="opt-structure-drag-hint"><span aria-hidden="true">↔</span><span>Drag either blue strike handle to widen or narrow the entire structure around <strong>{money(strikeStructure.center)}</strong>.</span></div>}
-              <RiskChart result={risk} evaluationDate={evaluationDate} strikeStructure={strikeStructure} positionStrikes={positionStrikes} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} />
+              <RiskChart result={risk} evaluationDate={evaluationDate} controls={riskControls} loading={riskLoading} strikeStructure={strikeStructure} positionStrikes={positionStrikes} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} />
+              {priceSlices}
+              <div className="opt-summary-grid">
+                <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
+                <SummaryMetric
+                  label={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'Max profit' : 'Range max profit'}
+                  value={risk.max_profit_unlimited ? 'Unlimited' : money(risk.theoretical_max_profit ?? risk.max_profit)}
+                  tone="positive"
+                  helper={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'At expiration' : 'Within displayed prices'}
+                />
+                <SummaryMetric
+                  label={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'Max loss' : 'Range max loss'}
+                  value={risk.max_loss_unlimited ? 'Unlimited' : money(risk.theoretical_max_loss ?? risk.max_loss)}
+                  tone="negative"
+                  helper={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'At expiration' : 'Within displayed prices'}
+                />
+                <SummaryMetric label="Breakeven" value={(risk.breakevens || []).length ? risk.breakevens.map(value => fmt(value)).join(' · ') : 'None in range'} />
+                <SummaryMetric label="Delta" value={fmt(risk.portfolio_greeks?.delta, 2)} />
+                <SummaryMetric label="Theta / day" value={fmt(risk.portfolio_greeks?.theta, 2)} tone={Number(risk.portfolio_greeks?.theta) >= 0 ? 'positive' : 'negative'} />
+                <SummaryMetric label="Vega / point" value={fmt(risk.portfolio_greeks?.vega, 2)} />
+              </div>
               {!!activeOptionLegs.length && <div className="opt-risk-price-panel">
                 <div className="opt-slice-heading">
                   <div><span>Price vs strikes</span><h3>Where {ticker} sits against every strike in the position</h3></div>
@@ -2443,26 +2482,8 @@ export default function OptionTradingTools() {
                   {!!brokerChartRecords.length && <BrokerMoneynessChart ticker={ticker} spot={spot} legs={activeOptionLegs} records={brokerChartRecords} chartType={brokerChartType} />}
                 </>}
               </div>}
-              <div className="opt-summary-grid">
-                <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
-                <SummaryMetric
-                  label={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'Max profit' : 'Range max profit'}
-                  value={risk.max_profit_unlimited ? 'Unlimited' : money(risk.theoretical_max_profit ?? risk.max_profit)}
-                  tone="positive"
-                  helper={risk.max_profit_unlimited || risk.theoretical_max_profit != null ? 'At expiration' : 'Within displayed prices'}
-                />
-                <SummaryMetric
-                  label={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'Max loss' : 'Range max loss'}
-                  value={risk.max_loss_unlimited ? 'Unlimited' : money(risk.theoretical_max_loss ?? risk.max_loss)}
-                  tone="negative"
-                  helper={risk.max_loss_unlimited || risk.theoretical_max_loss != null ? 'At expiration' : 'Within displayed prices'}
-                />
-                <SummaryMetric label="Breakeven" value={(risk.breakevens || []).length ? risk.breakevens.map(value => fmt(value)).join(' · ') : 'None in range'} />
-                <SummaryMetric label="Delta" value={fmt(risk.portfolio_greeks?.delta, 2)} />
-                <SummaryMetric label="Theta / day" value={fmt(risk.portfolio_greeks?.theta, 2)} tone={Number(risk.portfolio_greeks?.theta) >= 0 ? 'positive' : 'negative'} />
-                <SummaryMetric label="Vega / point" value={fmt(risk.portfolio_greeks?.vega, 2)} />
-              </div>
             </>}
+              {scannerTrade && <ScannerProbabilityPanel probabilities={scannerTrade.probabilities} risk={risk} tradeKind={scannerTrade.kind} tradeLabel={scannerTrade.label || scannerTrade.name} />}
               <div className="opt-risk-chain-entry">
                 <div><strong>Build on this trade</strong><span>Add any listed strike and DTE, including deep out-of-the-money options and LEAPS. The graph reprices every active leg together.</span></div>
                 <button type="button" className="btn btn-primary" onClick={showRiskChainPicker ? closeRiskChainPicker : openRiskChainPicker} disabled={!showRiskChainPicker && (!expirations.length || marketLoading)} aria-expanded={showRiskChainPicker}>
@@ -2564,10 +2585,6 @@ export default function OptionTradingTools() {
                   <span className={risk.probability_range.range_mode === 'probability' ? 'tail' : String(risk.probability_range.upper_label).endsWith('ITM') ? 'itm' : 'otm'}><strong>{risk.probability_range.upper_label}</strong>{money(risk.probability_range.high)}</span>
                 </div>}
               </div>
-              {risk && <>
-              <div className="opt-slice-heading"><div><span>Price slices</span><h3>Greeks and modeled P/L at selected prices</h3></div><div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" value={offset} onChange={event => setSliceOffsets(values => values.map((value, current) => current === index ? Number(event.target.value) : value))} /><span>%</span></label>)}</div></div>
-              <div className="opt-table-wrap"><table className="opt-slices-table"><thead><tr><th>Underlying</th><th>Move</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>P/L open</th><th>1-day theta</th></tr></thead><tbody>{(risk.price_slices || []).map((slice, index) => <tr key={`${slice.s}-${index}`}><td>{money(slice.s)}</td><td>{Number(sliceOffsets[index]) > 0 ? '+' : ''}{sliceOffsets[index]}%</td><td>{fmt(slice.delta, 3)}</td><td>{fmt(slice.gamma, 4)}</td><td>{fmt(slice.theta, 2)}</td><td>{fmt(slice.vega, 2)}</td><td className={Number(slice.pnl_open) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_open)}</td><td className={Number(slice.pnl_day) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_day)}</td></tr>)}</tbody></table></div>
-            </>}
         </section>
       )}
 

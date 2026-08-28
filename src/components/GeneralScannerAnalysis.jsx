@@ -159,7 +159,7 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, baseIvPct, ivPct, 
           <line x1={x(price)} x2={x(price)} y1={top} y2={height - bottom} className={changePct === 0 ? 'gsa-spot' : 'gsa-grid'} />
           <text x={x(price)} y={height - 23} textAnchor="middle" className={changePct === 0 ? 'gsa-current-tick' : ''}>
             <tspan>{changePct > 0 ? '+' : ''}{changePct}%</tspan>
-            <tspan x={x(price)} dy="12">{number(price, 0)}</tspan>
+            <tspan x={x(price)} dy="12">{number(price, changePct === 0 ? 2 : 0)}</tspan>
           </text>
         </g>
       })}
@@ -177,7 +177,6 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, baseIvPct, ivPct, 
       <line x1={left} x2={width - right} y1={y(0)} y2={y(0)} className="gsa-zero" />
       <path d={path(model.current)} className="gsa-profile-current" />
       <path d={path(model.expiration)} className="gsa-profile-expiry" />
-      <text x={Math.min(width - 96, x(spot) + 5)} y={top - 7} className="gsa-spot-label">Current {number(spot, 2)}</text>
       {breakevenLabels.map((item, index) => {
         const labelX = Math.max(left + 45, Math.min(width - right - 45, x(item.price)))
         const labelY = top + 5 + index * 24
