@@ -480,6 +480,57 @@ export default function ManagePortfolios() {
 
       {selectorPreferenceError && <div className="alert alert-error">{selectorPreferenceError}</div>}
 
+      {/* Collapsed by default, like the other screens' help. The Cash column is
+          the part that surprises people: it is a dated snapshot, not a live
+          balance, and the rules about what overwrites what only make sense once
+          that is said out loud. */}
+      <details className="tracker-help">
+        <summary>How does the Cash column work?</summary>
+        <p className="tracker-help-footer">
+          Cash is a <strong>dated snapshot, not a live balance</strong>. A broker import writes it,
+          and it then stands untouched until something writes it again. Every screen that shows it
+          also shows the day it was written, because on a portfolio of weekly payers settling on
+          different days something lands nearly every business day — so a figure from Tuesday can be
+          hundreds of dollars light by Friday without anything being wrong.
+        </p>
+        <div className="tracker-help-grid">
+          <section>
+            <h3>Setting it by hand</h3>
+            <ul>
+              <li>Click the amount in the <strong>Cash</strong> column, type the balance, press Enter. Escape cancels.</li>
+              <li>Negative is allowed — a margin debit is real cash owed, and the importers already store it that way.</li>
+              <li>Set it on the <strong>individual account</strong>. Owner and aggregates add up their members rather than holding cash of their own, so they refuse the edit instead of stranding a figure nothing reads.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>What wins: the import</h3>
+            <ul>
+              <li><strong>Last write wins, whoever wrote it.</strong> Your typed figure replaces the last import; the next import replaces your typed figure.</li>
+              <li>There is deliberately <strong>no lock</strong>. Cash is the one field where the broker outranks you: a number you type is right for the moment you type it, while the import is right for its own day.</li>
+              <li>An account the import file does not mention is left alone, so a partial import never wipes cash you entered elsewhere.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Reading the date line</h3>
+            <ul>
+              <li><strong>as imported 8/26 · 3 days ago</strong> — a broker import wrote it, and that is how far back.</li>
+              <li><strong>entered by hand today</strong> — you typed it.</li>
+              <li><strong>date unknown</strong> — the account holds cash but never recorded when the figure was written.</li>
+              <li>On the account card, a total covering several accounts reports the <strong>oldest</strong> of them, since a sum is only as current as its stalest part.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>&quot;+$125.60 paid since · at least $13,039.93&quot;</h3>
+            <ul>
+              <li>Distributions that settled <em>after</em> the balance was written, added on — what the payment ledger already knows changed.</li>
+              <li>It says <strong>at least</strong> because it is a floor. Trades, option premium, fees and interest also move cash and leave no trace in that ledger, so the real balance is usually higher.</li>
+              <li>Reinvested (DRIP) holdings are left out: that money bought shares instead of settling as cash, so counting it would invent money.</li>
+              <li>A payment on the same day the balance was written is already inside it and is not counted twice.</li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       <table className="holdings-table" style={{ marginBottom: '2rem' }}>
         <thead>
           <tr>

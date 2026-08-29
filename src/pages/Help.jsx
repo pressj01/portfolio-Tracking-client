@@ -5753,11 +5753,72 @@ function PortfoliosHelp() {
         <li><strong>Account Type</strong> — mark the portfolio as User-owned or Test / non-owned. Test/non-owned portfolios remain selectable and keep their data, but are clearly labeled and cannot be included in Owner.</li>
         <li><strong>Show</strong> — controls whether the portfolio appears in the navbar portfolio selector. Clear it to keep a test or retired portfolio around without deleting it or cluttering the dropdown. Owner (ID 1) is always shown and cannot be hidden.</li>
         <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
+        <li><strong>Cash</strong> — the account&apos;s cash balance, with the date it was written underneath. Click the amount to type a new one. See <em>Cash balances</em> below.</li>
         <li><strong>↑ / ↓ arrows</strong> (Actions column) — move a portfolio up or down. This sets the order portfolios appear in the navbar selector.</li>
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
         <li><strong>Clear</strong>, <strong>Reset</strong>, and <strong>Delete</strong> — the three actions that remove data. See the comparison below.</li>
         <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in Owner and shown in the selector.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Cash balances</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Cash is a <strong>dated snapshot, not a live balance</strong>. A broker import writes it, and it
+        then stands untouched until something writes it again. That matters more than it sounds: on a
+        portfolio of weekly payers settling on different days, something lands nearly every business
+        day, so a balance imported on Tuesday can be hundreds of dollars light by Friday without
+        anything being broken. Every screen that shows cash therefore also shows the day it was written.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Cash is not part of any return. Price Return and End Value measure the positions being charted,
+        so cash sits outside them and is added back on the <strong>Account Value</strong> card — that is
+        the figure to compare against a broker&apos;s net liquidating value, not End Value.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Setting it by hand</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>Click the amount in the <strong>Cash</strong> column, type the balance, and press Enter. Escape cancels.</li>
+        <li>Negative values are allowed. A margin debit is real cash owed, and broker imports already store it that way.</li>
+        <li>Set cash on the <strong>individual account</strong>. Owner and aggregates total their members rather than holding cash of their own, so they refuse the edit rather than stranding a figure nothing reads.</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>What overwrites what</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Last write wins, whoever wrote it.</strong> A figure you type replaces the last import,
+        and the next import replaces what you typed. There is deliberately no lock on cash, unlike the
+        dividend cadence and per-share pins on the Holdings screen.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The reason is that cash is the one field where the broker outranks you. A number you type is
+        right for the moment you type it and starts decaying as soon as the next distribution settles;
+        the import is right for its own day. A lock would make the app prefer your older figure over the
+        broker&apos;s newer one, which is backwards. An account that an import file does not mention is
+        left alone, so a partial import never wipes cash entered on another account.
+      </p>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>Reading the date line</h4>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>as imported 8/26 &middot; 3 days ago</strong> — a broker import wrote it, and that is how far back.</li>
+        <li><strong>entered by hand today</strong> — you typed it.</li>
+        <li><strong>date unknown</strong> — the account holds cash but has no record of when the figure was written.</li>
+        <li><strong>oldest of 4 accounts</strong> — on the Account Value card, a total spanning several accounts reports the oldest of their dates, because a sum is only as current as its stalest part.</li>
+      </ul>
+
+      <h4 style={{ marginTop: '1rem', marginBottom: '0.4rem' }}>The &quot;paid since&quot; estimate</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A stale balance also shows a line such as
+        {' '}<strong>+$125.60 paid since &middot; at least $13,039.93</strong>. That is the distributions
+        the payment ledger knows settled <em>after</em> the balance was written, added on.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li>It says <strong>at least</strong> because it is a floor, never the balance. Trades, option premium, fees and interest also move cash and leave no trace in the payment ledger, so the real figure is usually higher.</li>
+        <li><strong>Reinvested (DRIP) holdings are excluded.</strong> That money bought shares rather than settling as cash, so counting it would invent money that never arrived.</li>
+        <li>A payment settling on the same day the balance was written is already inside that balance and is not counted a second time.</li>
+        <li>An account with no recorded date shows no estimate — there is no &quot;since&quot; to measure from.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Treat it as a nudge toward the right number rather than a replacement for importing. The
+        reliable fix for a stale balance is a fresh broker import, or typing today&apos;s figure.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Clear vs Reset vs Delete</h3>
       <p style={{ marginBottom: '0.75rem' }}>
