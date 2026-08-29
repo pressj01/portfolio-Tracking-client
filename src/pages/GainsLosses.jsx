@@ -20,6 +20,8 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatAccountingCoverage,
+  formatCoverageShortfall,
+  isCoverageMaterial,
   formatPerformanceChartRange,
   formatPerformanceAsOf,
   formatClockStamp,
@@ -1074,6 +1076,14 @@ export default function GainsLosses({ embedded = false }) {
               </>
             )}
           </p>
+          {isCoverageMaterial(periodMetrics) && (
+            <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+              <strong>&#9888; Partial reading &mdash; not this account&apos;s return.</strong>
+              {' '}{formatCoverageShortfall(periodMetrics)}
+              {' '}A whole-portfolio gap usually means the price download was throttled or
+              came back incomplete for this range, not that those positions moved.
+            </div>
+          )}
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             {isLifetimePerformancePeriod(period) ? (
               <>

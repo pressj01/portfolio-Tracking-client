@@ -17,6 +17,10 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatAccountingCoverage,
+  formatCoverageShortfall,
+  formatCoveragePartialTag,
+  isCoverageMaterial,
+  isCoverageSevere,
   formatPerformanceChartRange,
   formatPerformanceAsOf,
   formatPerformanceDate,
@@ -932,6 +936,21 @@ export default function TotalReturn() {
     .reduce((sum, lot) => sum + Number(lot.start_value_overstatement || 0), 0)
   const footerInferredTickers = [...new Set(footerInferredLots.map(lot => lot.ticker))]
 
+  // When positions drop out of the replay for want of price history, the cards
+  // keep their normal shape and quietly describe a smaller portfolio than the
+  // one being asked about. Carry the weight of what was dropped so the strip
+  // can stop presenting a partial reading as this account's return.
+  const coverageIsPartial = isCoverageMaterial(t)
+  const coverageIsSevere = isCoverageSevere(t)
+  const coverageWarning = formatCoverageShortfall(t)
+  const coveragePartialTag = formatCoveragePartialTag(t)
+  // Past the severe mark the figure is no longer a version of the answer, so it
+  // steps out of the headline slot and the card says what it actually is.
+  const partialValue = (rendered) => (coverageIsSevere ? 'Partial' : rendered)
+  const partialNote = coverageIsPartial
+    ? <div className="summary-sub" style={{ color: 'var(--warn, #ffb86c)' }}>{coveragePartialTag}</div>
+    : null
+
   const dashboardRequestedRange = formatComparisonRange(chartData?.requested_start_date, chartData?.requested_end_date)
   const dashboardActualRange = formatComparisonRange(chartData?.actual_start_date, chartData?.actual_end_date)
   const dashboardCardRange = dashboardActualRange || dashboardRequestedRange
@@ -1201,6 +1220,18 @@ export default function TotalReturn() {
               </>
             )}
           </p>
+          {/* Above the standard note on purpose: nothing below it can be read
+              correctly until the reader knows most of the account is missing. */}
+          {coverageIsPartial && (
+            <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+              <strong>⚠ Partial reading — this is not your account&apos;s return.</strong>
+              {' '}{coverageWarning}
+              {' '}The excluded tickers are named in the coverage note above. A whole-portfolio
+              gap on a short range usually means the price download was throttled or came back
+              incomplete rather than that those positions changed — reload the range, and if it
+              persists, refresh market data before trusting any figure on this page.
+            </div>
+          )}
           {!lifetimeView && <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> this page is the reference calculation for
             transaction-aware Total Return. Dashboard, Growth (its Dollars, Vs market, and Lots
@@ -1225,10 +1256,18 @@ export default function TotalReturn() {
             {/* Say what these measure. Only when something is actually left out,
                 so an account with no cash and no options is not told twice that
                 it has neither. */}
-            <MetricCard label="Start Value" value={fmtInt(t.start_value)} range={startValueAsOf}>
+            <MetricCard label="Start Value" value={partialValue(fmtInt(t.start_value))} range={startValueAsOf}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">Would have read {fmtInt(t.start_value)} on the positions that priced</div>
+              )}
               {t.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
             </MetricCard>
-            <MetricCard label="End Value" value={fmtInt(t.end_value)} range={endValueAsOf}>
+            <MetricCard label="End Value" value={partialValue(fmtInt(t.end_value))} range={endValueAsOf}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">Would have read {fmtInt(t.end_value)} on the positions that priced</div>
+              )}
               {t.account_reconciliation && (
                 <div className="summary-sub">Holdings only — no cash; see Account Value</div>
               )}
@@ -1256,33 +1295,64 @@ export default function TotalReturn() {
                 already-calculated current-position replay that was previously
                 available only in the table footer. */}
             <MetricCard label={lifetimeView ? 'Life Price G/L' : 'Tracker Price Return'} range={dashboardCardRange}
-              value={<span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>}>
+              value={partialValue(
+                <span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>,
+              )}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">{fmtInt(t.price_return_dollar)} on the positions that priced</div>
+              )}
               <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L — current value minus cost basis' : TRACKER_SCOPE_NOTE}</div>
             </MetricCard>
             <MetricCard label={lifetimeView ? 'Life Price G/L %' : 'Tracker Price Return %'} range={dashboardCardRange}
-              value={<span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>}>
+              value={partialValue(
+                <span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>,
+              )}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">{fmtPct(t.price_return_pct)} on the positions that priced</div>
+              )}
               <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L %' : TRACKER_SCOPE_NOTE}</div>
               {!lifetimeView && <div className="summary-sub">Same number as Growth Price Return %</div>}
             </MetricCard>
             {!lifetimeView && (
               <MetricCard label="Open Lots Price Return" range={dashboardCardRange}
-                value={<span style={{ color: (openPositionTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.price_return_dollar)}</span>}>
+                value={partialValue(
+                  <span style={{ color: (openPositionTotals.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.price_return_dollar)}</span>,
+                )}>
+                {partialNote}
+                {coverageIsSevere && (
+                  <div className="summary-sub">{fmtInt(openPositionTotals.price_return_dollar)} on the positions that priced</div>
+                )}
                 <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
                 <div className="summary-sub">Selected-period return; choose Life for cost-basis G/L</div>
               </MetricCard>
             )}
             {!lifetimeView && (
               <MetricCard label="Open Lots Price Return %" range={dashboardCardRange}
-                value={<span style={{ color: (openPositionTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.price_return_pct)}</span>}>
+                value={partialValue(
+                  <span style={{ color: (openPositionTotals.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.price_return_pct)}</span>,
+                )}>
+                {partialNote}
+                {coverageIsSevere && (
+                  <div className="summary-sub">{fmtPct(openPositionTotals.price_return_pct)} on the positions that priced</div>
+                )}
                 <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
                 <div className="summary-sub">Matches the Open lots only table footer</div>
               </MetricCard>
             )}
-            <MetricCard label="Distributions" value={fmtInt(t.distribution_dollar)} range={dashboardCardRange}>
+            <MetricCard label="Distributions" value={partialValue(fmtInt(t.distribution_dollar))} range={dashboardCardRange}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">{fmtInt(t.distribution_dollar)} on the positions that priced</div>
+              )}
               <div className="summary-sub">{lifetimeView ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
             <MetricCard label={lifetimeView ? 'Life Total Return' : 'Tracker Total Return'} range={dashboardCardRange}
-              value={<span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>}>
+              value={partialValue(
+                <span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>,
+              )}>
+              {partialNote}
               <div className="summary-sub">
                 Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
                 {Number(t.realized_return_dollar || 0) !== 0
@@ -1292,13 +1362,22 @@ export default function TotalReturn() {
               {!lifetimeView && <div className="summary-sub">Includes positions fully closed during this range</div>}
             </MetricCard>
             <MetricCard label={lifetimeView ? 'Life Total Return %' : 'Tracker Total Return %'} range={dashboardCardRange}
-              value={<span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>}>
+              value={partialValue(
+                <span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>,
+              )}>
+              {partialNote}
+              {coverageIsSevere && (
+                <div className="summary-sub">{fmtPct(t.total_return_pct)} on the positions that priced</div>
+              )}
               <div className="summary-sub">{lifetimeView ? 'Cost-basis total return, not time-weighted' : 'Time-weighted — timing-neutral performance'}</div>
               <div className="summary-sub">Same calculation as Dashboard, Growth &amp; Gains/Losses{lifetimeView ? '' : '; separately read live quotes can differ until close'}</div>
             </MetricCard>
             {!lifetimeView && (
               <MetricCard label="Open Lots Total Return" range={dashboardCardRange}
-                value={<span style={{ color: (openPositionTotals.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.total_return_dollar)}</span>}>
+                value={partialValue(
+                  <span style={{ color: (openPositionTotals.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(openPositionTotals.total_return_dollar)}</span>,
+                )}>
+                {partialNote}
                 <div className="summary-sub">
                   Open-lot price {fmtInt(openPositionTotals.price_return_dollar)} + distributions {fmtInt(openPositionTotals.distribution_dollar)}
                 </div>
@@ -1307,7 +1386,13 @@ export default function TotalReturn() {
             )}
             {!lifetimeView && (
               <MetricCard label="Open Lots Total Return %" range={dashboardCardRange}
-                value={<span style={{ color: (openPositionTotals.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.total_return_pct)}</span>}>
+                value={partialValue(
+                  <span style={{ color: (openPositionTotals.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(openPositionTotals.total_return_pct)}</span>,
+                )}>
+                {partialNote}
+                {coverageIsSevere && (
+                  <div className="summary-sub">{fmtPct(openPositionTotals.total_return_pct)} on the positions that priced</div>
+                )}
                 <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
                 <div className="summary-sub">Matches the Open lots only table footer</div>
               </MetricCard>

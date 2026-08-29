@@ -1,3 +1,7 @@
+// Extension required: this module is covered by a plain `node --test` suite,
+// which resolves ESM specifiers literally rather than through Vite.
+import { formatMoneyWhole } from './money.js'
+
 // Every period ends at the latest market observation: a live quote when Yahoo
 // provides one for today, otherwise the most recent close. `hint` is the hover
 // help on each button and must keep describing what the backend actually
@@ -307,6 +311,59 @@ export const formatPerformanceRange = (start, end) => {
   const startLabel = formatPerformanceDate(start)
   const endLabel = formatPerformanceDate(end)
   return startLabel && endLabel ? `${startLabel}–${endLabel}` : ''
+}
+
+// A ticker list alone cannot tell a reader whether the number beside it is off
+// by a rounding error or is not their portfolio at all. The backend weighs the
+// dropped positions against the book and grades the result; these read that
+// grade so every screen reacts to a shortfall the same way.
+const coverageShortfall = (metrics) => (metrics && metrics.coverage_shortfall) || null
+
+export const coverageSeverity = (metrics) => {
+  const shortfall = coverageShortfall(metrics)
+  if (!shortfall || !shortfall.is_material) return 'none'
+  return shortfall.severity === 'severe' ? 'severe' : 'material'
+}
+
+// True once the surviving slice is too small for the figure to lead. The number
+// is still reported, but as a footnote to the warning rather than as an answer.
+export const isCoverageSevere = (metrics) => coverageSeverity(metrics) === 'severe'
+
+export const isCoverageMaterial = (metrics) => coverageSeverity(metrics) !== 'none'
+
+// Through formatMoneyWhole rather than Intl directly: these are backend USD
+// figures like every other amount on the page, so they have to follow the same
+// display-currency conversion instead of quietly staying in dollars.
+const wholeDollars = (value) => formatMoneyWhole(value, { fallback: '' })
+
+// The headline sentence for a material shortfall. Leads with what was left out
+// rather than with the symbols, because the weight is the part that decides
+// whether the number can be used at all.
+export const formatCoverageShortfall = (metrics) => {
+  const shortfall = coverageShortfall(metrics)
+  if (!shortfall || !shortfall.is_material) return ''
+  const percent = Number(shortfall.excluded_weight || 0) * 100
+  const percentLabel = percent >= 99.5
+    ? '>99'
+    : percent.toFixed(percent < 10 ? 1 : 0)
+  const positions = Number(shortfall.excluded_positions || 0)
+  const excluded = wholeDollars(shortfall.excluded_value)
+  const covered = wholeDollars(shortfall.covered_value)
+  return (
+    `${percentLabel}% of this portfolio has no usable market history for the selected range, `
+    + `so it is not in these numbers: ${positions} position${positions === 1 ? '' : 's'}`
+    + `${excluded ? ` worth ${excluded}` : ''} left out`
+    + `${covered ? `, leaving ${covered} measured` : ''}. `
+    + 'Treat the figures below as a partial reading, not this account\'s return.'
+  )
+}
+
+// Short enough to sit under a card without pushing the strip around.
+export const formatCoveragePartialTag = (metrics) => {
+  const shortfall = coverageShortfall(metrics)
+  if (!shortfall || !shortfall.is_material) return ''
+  const covered = wholeDollars(shortfall.covered_value)
+  return covered ? `Partial — measured on ${covered} only` : 'Partial reading'
 }
 
 export const formatAccountingCoverage = (metrics) => {

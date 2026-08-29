@@ -157,6 +157,61 @@ from accumulation_sim import run_accumulation_comparison
 _YF_DOWNLOAD_LOCK = threading.Lock()
 
 
+# Above this many rows, "at least two real bars" is a harmless coverage test.
+# At or below it the window is short enough that the same test starts meaning
+# "every session must have printed", so coverage is judged on the boundaries.
+# 1D is the period that lands here: it trims to exactly two sessions.
+_SHORT_WINDOW_MAX_ROWS = 3
+
+# Fields that carry a price level forward sensibly. Dividends, Capital Gains
+# and Stock Splits are events, not levels: repeating one would pay the same
+# distribution twice and re-apply a split. Volume is excluded because a carried
+# volume is not a volume that happened.
+_CARRY_FORWARD_PRICE_FIELDS = ("Open", "High", "Low", "Close", "Adj Close")
+
+
+def _price_column_positions(columns):
+    """Positions of the price-level columns in a raw download frame.
+
+    yfinance hands back (price_type, ticker) by default and (ticker, price_type)
+    under ``group_by="ticker"``, so the level holding the field names has to be
+    found rather than assumed. A single-ticker download has flat columns that
+    are the field names themselves.
+    """
+    fields = {field.casefold() for field in _CARRY_FORWARD_PRICE_FIELDS}
+    if isinstance(columns, pd.MultiIndex):
+        for level in range(columns.nlevels):
+            if {str(value).casefold() for value in columns.get_level_values(level)} & fields:
+                return [
+                    position for position, label in enumerate(columns)
+                    if str(label[level]).casefold() in fields
+                ]
+        return []
+    return [
+        position for position, label in enumerate(columns)
+        if str(label).casefold() in fields
+    ]
+
+
+def _carry_prices_into_trimmed_window(frame):
+    """Carry each ticker's last real close forward before rows are discarded.
+
+    The trim below throws away the very history that explains a gap. A ticker
+    that simply did not print on one of the kept sessions — thinly traded, OTC,
+    or landing on the wrong side of a chunk boundary in a multi-download merge —
+    would arrive as a NaN with nothing left to resolve it from, and the caller's
+    coverage test would then drop the position out of the portfolio entirely.
+    Carrying the real prior close in first keeps that position priced at its
+    actual last trade.
+    """
+    positions = _price_column_positions(frame.columns)
+    if not positions:
+        return frame
+    carried = frame.copy()
+    carried.iloc[:, positions] = carried.iloc[:, positions].ffill()
+    return carried
+
+
 def _trim_to_last_bars(frame, bars):
     """Keep only the final ``bars`` observations of a download.
 
@@ -171,7 +226,12 @@ def _trim_to_last_bars(frame, bars):
     trimmed = frame
     if trimmed.index.has_duplicates:
         trimmed = trimmed.loc[~trimmed.index.duplicated(keep="last")]
-    return trimmed.sort_index().iloc[-int(bars):]
+    trimmed = trimmed.sort_index()
+    # Only when rows are actually about to be discarded: that is the moment the
+    # information behind a gap disappears.
+    if len(trimmed) > int(bars):
+        trimmed = _carry_prices_into_trimmed_window(trimmed)
+    return trimmed.iloc[-int(bars):]
 
 
 def _anchor_from_prior_close(frame, anchor_date):
@@ -1045,6 +1105,100 @@ def _scale_transaction_events_for_yahoo_prices(events, snapshots, split_factors)
     return scaled
 
 
+# Share of the book that has to drop out before the replay stops being a
+# portfolio return and starts being a return on whatever happened to survive.
+# Below this a gap is a rounding error; at or above it the number is not the
+# portfolio's and must not be presented as though it were.
+_MATERIAL_COVERAGE_SHORTFALL = 0.02
+# Past this the surviving slice is no longer a version of the portfolio at all,
+# so the figure stops being a headline and becomes a footnote to the warning.
+_SEVERE_COVERAGE_SHORTFALL = 0.20
+
+
+def _holding_market_value(row):
+    """Best available current value for one holding row."""
+    for key in ("current_value", "market_value"):
+        try:
+            value = float(row.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            return abs(value)
+    try:
+        quantity = float(row.get("quantity") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    for key in ("current_price", "price", "last_price"):
+        try:
+            price = float(row.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if price:
+            return abs(quantity * price)
+    # Cost basis last. It is the wrong number for a position that has moved,
+    # but a stale weight still answers "is this most of the account?" — which
+    # is the only question being asked here — far better than a zero does.
+    for key in ("purchase_value", "broker_purchase_value"):
+        try:
+            value = float(row.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        if value:
+            return abs(value)
+    return 0.0
+
+
+def _market_coverage_shortfall(missing_symbols, current_holdings):
+    """Weigh the excluded symbols against the book they were excluded from.
+
+    A list of dropped tickers cannot tell a reader whether the number built
+    without them is off by a rounding error or is not their portfolio at all.
+    Only the weight separates those, so it is measured here instead of being
+    left to whoever reads the note. Symbols that are missing but hold no
+    current value — a position closed inside the window — carry no weight and
+    correctly raise nothing.
+    """
+    missing = {
+        str(symbol).strip().upper()
+        for symbol in (missing_symbols or [])
+        if str(symbol or "").strip()
+    }
+    excluded_value = 0.0
+    total_value = 0.0
+    excluded_positions = 0
+    for row in current_holdings or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
+        if not symbol:
+            continue
+        value = _holding_market_value(row)
+        total_value += value
+        if symbol in missing:
+            excluded_value += value
+            excluded_positions += 1
+    # No priced holdings means there is nothing to weigh against. Stay silent
+    # rather than raising an alarm we cannot substantiate; the symbols are
+    # still listed either way.
+    weight = (excluded_value / total_value) if total_value > 0 else 0.0
+    is_material = bool(missing) and weight >= _MATERIAL_COVERAGE_SHORTFALL
+    if not is_material:
+        severity = "none"
+    elif weight >= _SEVERE_COVERAGE_SHORTFALL:
+        severity = "severe"
+    else:
+        severity = "material"
+    return {
+        "excluded_positions": excluded_positions,
+        "excluded_value": round(excluded_value, 2),
+        "covered_value": round(max(total_value - excluded_value, 0.0), 2),
+        "portfolio_value": round(total_value, 2),
+        "excluded_weight": round(weight, 6),
+        "is_material": is_material,
+        "severity": severity,
+    }
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -1089,6 +1243,7 @@ def _build_transaction_aware_portfolio_series(
         "start_price": None,
         "end_price": None,
         "missing_market_symbols": [],
+        "coverage_shortfall": _market_coverage_shortfall([], current_holdings),
         "fallback_date_sources": {
             "purchase_date": 0,
             "import_date": 0,
@@ -1122,19 +1277,51 @@ def _build_transaction_aware_portfolio_series(
         prices = prices.loc[:, ~prices.columns.duplicated(keep="first")]
     prices.index = pd.to_datetime(prices.index)
     prices = prices.sort_index().apply(pd.to_numeric, errors="coerce")
-    # A return requires two actual market observations. Do not treat a lone
-    # quote followed by forward-filled blanks as valid historical coverage.
+    # A return needs a real observation to open the window and a real one to
+    # close it. Do not treat a lone quote followed by forward-filled blanks as
+    # valid historical coverage.
+    #
+    # "At least two non-null bars" is a safe proxy for that on a long window and
+    # stops being one as the window shrinks. 1D trims the frame to exactly two
+    # rows, where the very same proxy quietly means "a perfect 2-of-2 hit rate
+    # or you are deleted from the portfolio" — and on a 266-ticker book split
+    # into eleven separate downloads, one missed print takes the whole position
+    # out of Start Value, End Value and the return at once. Test the boundaries
+    # directly so the requirement scales with the window instead of hardening
+    # into a demand for perfection.
+    row_count = int(len(prices.index))
+
+    def _has_return_coverage(column):
+        observed = prices[column].notna()
+        if not bool(observed.any()):
+            return False
+        if row_count <= _SHORT_WINDOW_MAX_ROWS:
+            # On a window this short the two boundaries *are* the measurement.
+            # A price carried in from real pre-window history counts: the carry
+            # happens before the trim, off an actual close, never off a blank.
+            return bool(observed.iloc[0]) and bool(observed.iloc[-1])
+        return int(observed.sum()) >= 2
+
     valid_price_columns = [
         column for column in prices.columns
-        if int(prices[column].notna().sum()) >= 2
+        if _has_return_coverage(column)
     ]
     prices = prices[valid_price_columns].ffill()
     if prices.empty:
-        return {**empty, "missing_market_symbols": requested_market_symbols}
+        return {
+            **empty,
+            "missing_market_symbols": requested_market_symbols,
+            "coverage_shortfall": _market_coverage_shortfall(
+                requested_market_symbols, current_holdings,
+            ),
+        }
     missing_market_symbols = sorted(
         set(requested_market_symbols) - {
             str(column).strip().upper() for column in prices.columns
         }
+    )
+    coverage_shortfall = _market_coverage_shortfall(
+        missing_market_symbols, current_holdings,
     )
 
     def aligned_frame(frame, fill_value=None):
@@ -1644,6 +1831,7 @@ def _build_transaction_aware_portfolio_series(
         "start_price": start_price,
         "end_price": end_price,
         "missing_market_symbols": missing_market_symbols,
+        "coverage_shortfall": coverage_shortfall,
         "fallback_date_sources": fallback_date_sources,
     }
 
@@ -1696,6 +1884,7 @@ def _portfolio_period_metrics(series_result):
         "split_adjusted_transactions": int(series_result.get("split_adjusted_transactions") or 0),
         "split_adjusted_positions": int(series_result.get("split_adjusted_positions") or 0),
         "missing_market_symbols": list(series_result.get("missing_market_symbols") or []),
+        "coverage_shortfall": series_result.get("coverage_shortfall") or {},
         "fallback_date_sources": series_result.get("fallback_date_sources") or {},
     }
 
@@ -31335,7 +31524,7 @@ def total_return_charts():
 
     rows = conn.execute(
         f"""SELECT ticker, profile_id, description, classification_type,
-                   purchase_value, quantity, purchase_date, import_date
+                   purchase_value, current_value, quantity, purchase_date, import_date
             FROM all_account_info
             WHERE COALESCE(quantity, 0) > 0
               AND profile_id IN ({position_placeholders})
@@ -32152,6 +32341,7 @@ def total_return_compare():
                     "split_adjusted_transactions": portfolio_result["split_adjusted_transactions"],
                     "split_adjusted_positions": portfolio_result["split_adjusted_positions"],
                     "missing_market_symbols": portfolio_result["missing_market_symbols"],
+                    "coverage_shortfall": portfolio_result.get("coverage_shortfall") or {},
                     "fallback_date_sources": portfolio_result["fallback_date_sources"],
                 }
 
@@ -42781,7 +42971,7 @@ def _portfolio_tester_actual_history(
         placeholders = ",".join("?" * len(position_profile_ids))
         holding_rows = conn.execute(
             f"""SELECT ticker, profile_id, description, classification_type,
-                       purchase_value, quantity, purchase_date, import_date
+                       purchase_value, current_value, quantity, purchase_date, import_date
                   FROM all_account_info
                  WHERE COALESCE(quantity, 0) > 0
                    AND profile_id IN ({placeholders})
@@ -42945,6 +43135,7 @@ def _portfolio_tester_actual_history(
         "fallback_positions": tracker.get("fallback_positions", 0),
         "inferred_opening_positions": tracker.get("inferred_opening_positions", 0),
         "missing_market_symbols": tracker.get("missing_market_symbols", []),
+        "coverage_shortfall": tracker.get("coverage_shortfall") or {},
         "scope": "selected_holdings" if selected_accounting_tickers else "entire_account",
         "selected_tickers": sorted(selected_accounting_tickers),
     }
@@ -54066,6 +54257,7 @@ def growth_2_data():
             "split_adjusted_transactions": portfolio_return_result["split_adjusted_transactions"],
             "split_adjusted_positions": portfolio_return_result["split_adjusted_positions"],
             "missing_market_symbols": portfolio_return_result["missing_market_symbols"],
+            "coverage_shortfall": portfolio_return_result.get("coverage_shortfall") or {},
             "fallback_date_sources": portfolio_return_result["fallback_date_sources"],
         },
         "requested_start_date": period_range["start_date"],

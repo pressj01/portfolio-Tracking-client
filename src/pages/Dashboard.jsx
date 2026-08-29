@@ -29,6 +29,8 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatAccountingCoverage,
+  formatCoverageShortfall,
+  isCoverageMaterial,
   formatPerformanceChartRange,
   formatPerformanceRange,
   readSharedPerformanceRange,
@@ -1440,6 +1442,8 @@ export default function Dashboard() {
     trackerPerformance?.actual_end_date || trackerPerformance?.requested_end_date,
   )
   const trackerAccountingCoverage = formatAccountingCoverage(trackerPortfolioMetrics)
+  const trackerCoverageIsPartial = isCoverageMaterial(trackerPortfolioMetrics)
+  const trackerCoverageWarning = formatCoverageShortfall(trackerPortfolioMetrics)
   const trackerPerformanceByTicker = useMemo(() => new Map(
     (trackerPerformance?.performance_rows || []).map(row => [
       String(row.ticker || '').trim().toUpperCase(),
@@ -2102,6 +2106,19 @@ export default function Dashboard() {
       {trackerPerformanceError && (
         <div className="alert alert-error">
           Shared-period Total Return could not be loaded: {trackerPerformanceError}
+        </div>
+      )}
+      {/* Ahead of the accounting note: the ticker list explains which positions
+          were dropped, but only the weight says whether the portfolio and
+          account-change boxes below are still describing this account. */}
+      {trackerCoverageIsPartial && !trackerPerformanceLoading && (
+        <div className="alert alert-warning">
+          <strong>⚠ Partial reading — the performance figures below are not your
+          account&apos;s return.</strong>
+          {' '}{trackerCoverageWarning}
+          {' '}This usually means the price download was throttled or came back incomplete
+          for the selected range, not that those positions moved. Reload the range before
+          comparing anything here with your broker.
         </div>
       )}
       {trackerAccountingCoverage && !trackerPerformanceLoading && (

@@ -12,6 +12,8 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatAccountingCoverage,
+  formatCoverageShortfall,
+  isCoverageMaterial,
   formatPerformanceChartRange,
   formatPerformanceAsOf,
   formatPerformanceRange,
@@ -569,6 +571,14 @@ export default function PortfolioGrowth2({ embedded = false }) {
               ? ` ${formatAccountingCoverage(data.tracker_coverage)}`
               : ''}
           </p>
+          {isCoverageMaterial(data.tracker_coverage) && (
+            <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+              <strong>&#9888; Partial reading &mdash; not this account&apos;s return.</strong>
+              {' '}{formatCoverageShortfall(data.tracker_coverage)}
+              {' '}A whole-portfolio gap usually means the price download was throttled or
+              came back incomplete for this range, not that those positions moved.
+            </div>
+          )}
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             {isLifetimePerformancePeriod(period) ? (
               <>

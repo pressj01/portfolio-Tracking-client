@@ -17,6 +17,7 @@ from app import (
     _resolve_total_return_period,
     _stock_split_history_for_period,
     _transactions_for_current_positions,
+    _market_coverage_shortfall,
     _trim_to_last_bars,
 )
 from market_symbols import accounting_symbol_for_ticker, yahoo_symbol_for_ticker
@@ -1194,6 +1195,204 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(annotated[0]["shares_remaining"], 0.0)
         self.assertIsNone(annotated[1]["shares_remaining"])
         self.assertAlmostEqual(annotated[2]["shares_remaining"], 85.605, places=3)
+
+
+class OneDayCoverageTest(unittest.TestCase):
+    """The 1D window is the only period trimmed down to two rows.
+
+    Every guard written against a long window has to be re-checked at that
+    size: a rule like "at least two real bars" silently becomes "every session
+    must have printed" once the window is only two sessions long.
+    """
+
+    @staticmethod
+    def _raw_download(closes, dividends=None, days=10):
+        index = pd.bdate_range("2026-08-17", periods=days)
+        fields = ["Close"] + (["Dividends"] if dividends else [])
+        columns = pd.MultiIndex.from_product([fields, list(closes)])
+        data = {("Close", ticker): values for ticker, values in closes.items()}
+        for ticker, values in (dividends or {}).items():
+            data[("Dividends", ticker)] = values
+        return pd.DataFrame(data, index=index)[columns]
+
+    @staticmethod
+    def _holdings(values, purchase_date="2026-01-05"):
+        return [
+            {
+                "ticker": ticker,
+                "market_symbol": ticker,
+                "position_key": (1, ticker),
+                "quantity": 1000,
+                "current_value": value,
+                "purchase_date": purchase_date,
+            }
+            for ticker, value in values.items()
+        ]
+
+    def test_a_missed_print_no_longer_deletes_the_position(self):
+        # THIN stopped printing before the kept window and BIG missed only the
+        # final session. Both used to fail the two-observation test and drop
+        # out of Start Value, End Value and the return together.
+        raw = self._raw_download({
+            "GOOD": [100.0] * 9 + [96.0],
+            "THIN": [50.0] * 8 + [float("nan"), float("nan")],
+            "BIG": [500.0] * 9 + [float("nan")],
+        })
+
+        close = _trim_to_last_bars(raw, 2)["Close"]
+        result = _build_transaction_aware_portfolio_series(
+            close, None, None, None, [],
+            self._holdings({"GOOD": 96000, "THIN": 50000, "BIG": 500000}),
+        )
+
+        self.assertEqual(result["missing_market_symbols"], [])
+        # A ticker that did not trade is carried at its real last close, so the
+        # whole book is priced instead of only the ticker that printed twice.
+        self.assertAlmostEqual(result["market_value"][0], 650000.0)
+        self.assertAlmostEqual(result["market_value"][-1], 646000.0)
+        self.assertAlmostEqual(result["price_gain_dollar"], -4000.0)
+
+    def test_carry_forward_never_repeats_a_distribution(self):
+        # Prices are levels and carry forward; dividends are events and must
+        # not. Repeating one would pay the same distribution twice.
+        raw = self._raw_download(
+            {"GOOD": [100.0] * 9 + [float("nan")]},
+            dividends={"GOOD": [0.0] * 7 + [1.25, 0.0, 0.0]},
+        )
+
+        trimmed = _trim_to_last_bars(raw, 2)
+
+        self.assertEqual(list(trimmed["Close"]["GOOD"]), [100.0, 100.0])
+        self.assertEqual(list(trimmed["Dividends"]["GOOD"]), [0.0, 0.0])
+
+    def test_group_by_ticker_columns_are_carried_too(self):
+        # yfinance emits (ticker, field) under group_by="ticker", so the level
+        # holding the field names has to be found rather than assumed.
+        index = pd.bdate_range("2026-08-17", periods=10)
+        columns = pd.MultiIndex.from_tuples([("GOOD", "Close"), ("GOOD", "Dividends")])
+        raw = pd.DataFrame(
+            {
+                ("GOOD", "Close"): [100.0] * 9 + [float("nan")],
+                ("GOOD", "Dividends"): [0.0] * 7 + [1.25, 0.0, 0.0],
+            },
+            index=index,
+        )[columns]
+
+        trimmed = _trim_to_last_bars(raw, 2)
+
+        self.assertEqual(list(trimmed[("GOOD", "Close")]), [100.0, 100.0])
+        self.assertEqual(list(trimmed[("GOOD", "Dividends")]), [0.0, 0.0])
+
+    def test_a_ticker_with_no_history_at_all_is_still_excluded(self):
+        # A throttled chunk comes back all-NaN rather than absent. There is no
+        # price to carry, so the position cannot be replayed and must not be
+        # invented.
+        raw = self._raw_download({
+            "GOOD": [100.0] * 9 + [96.0],
+            "DEAD": [float("nan")] * 10,
+        })
+
+        close = _trim_to_last_bars(raw, 2)["Close"]
+        result = _build_transaction_aware_portfolio_series(
+            close, None, None, None, [],
+            self._holdings({"GOOD": 96000, "DEAD": 500000}),
+        )
+
+        self.assertEqual(result["missing_market_symbols"], ["DEAD"])
+
+    def test_a_position_first_priced_on_the_closing_session_has_no_baseline(self):
+        # Its first ever print is the closing session, so there is no prior
+        # close to measure from and nothing earlier to carry.
+        raw = self._raw_download({
+            "GOOD": [100.0] * 9 + [96.0],
+            "NEW": [float("nan")] * 9 + [25.0],
+        })
+
+        close = _trim_to_last_bars(raw, 2)["Close"]
+        result = _build_transaction_aware_portfolio_series(
+            close, None, None, None, [],
+            self._holdings({"GOOD": 96000, "NEW": 25000}),
+        )
+
+        self.assertEqual(result["missing_market_symbols"], ["NEW"])
+
+    def test_long_windows_keep_the_two_observation_rule(self):
+        # The count proxy is still the right test once the window is long
+        # enough that it cannot mean "every session must have printed".
+        index = pd.bdate_range("2026-07-20", periods=30)
+        close = pd.DataFrame(
+            {
+                "SPARSE": [10.0] + [float("nan")] * 28 + [12.0],
+                "LONE": [10.0] + [float("nan")] * 29,
+            },
+            index=index,
+        )
+
+        result = _build_transaction_aware_portfolio_series(
+            close, None, None, None, [],
+            self._holdings({"SPARSE": 12000, "LONE": 10000}),
+        )
+
+        self.assertEqual(result["missing_market_symbols"], ["LONE"])
+
+
+class CoverageShortfallTest(unittest.TestCase):
+    """A list of dropped tickers cannot tell a reader whether the number is
+    still their portfolio's. Only the weight separates the two."""
+
+    @staticmethod
+    def _holdings(values):
+        return [
+            {
+                "ticker": ticker,
+                "market_symbol": ticker,
+                "quantity": 1,
+                "current_value": value,
+            }
+            for ticker, value in values.items()
+        ]
+
+    def test_weighs_the_excluded_value_against_the_book(self):
+        shortfall = _market_coverage_shortfall(
+            ["BIG"], self._holdings({"GOOD": 96000, "BIG": 500000}),
+        )
+
+        self.assertEqual(shortfall["excluded_positions"], 1)
+        self.assertAlmostEqual(shortfall["excluded_value"], 500000.0)
+        self.assertAlmostEqual(shortfall["covered_value"], 96000.0)
+        self.assertAlmostEqual(shortfall["excluded_weight"], 500000 / 596000, places=6)
+        self.assertTrue(shortfall["is_material"])
+
+    def test_a_trivial_gap_is_not_material(self):
+        shortfall = _market_coverage_shortfall(
+            ["TINY"], self._holdings({"GOOD": 1000000, "TINY": 500}),
+        )
+
+        self.assertFalse(shortfall["is_material"])
+
+    def test_nothing_missing_is_never_material(self):
+        shortfall = _market_coverage_shortfall([], self._holdings({"GOOD": 1000}))
+
+        self.assertFalse(shortfall["is_material"])
+        self.assertEqual(shortfall["excluded_value"], 0.0)
+
+    def test_a_closed_position_carries_no_weight(self):
+        # Missing from the price frame but no longer held, so it cannot move
+        # the current book and must not raise an alarm.
+        shortfall = _market_coverage_shortfall(
+            ["SOLD"], self._holdings({"GOOD": 100000}),
+        )
+
+        self.assertFalse(shortfall["is_material"])
+        self.assertEqual(shortfall["excluded_value"], 0.0)
+
+    def test_an_unpriced_book_stays_silent_rather_than_guessing(self):
+        # Nothing to weigh against, so no alarm can be substantiated. The
+        # symbols are still listed either way.
+        shortfall = _market_coverage_shortfall(["ANY"], self._holdings({"GOOD": 0}))
+
+        self.assertFalse(shortfall["is_material"])
+        self.assertEqual(shortfall["excluded_weight"], 0.0)
 
 
 if __name__ == "__main__":
