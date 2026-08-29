@@ -1,7 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { cashAgeDays, cashOriginLabel, cashRowStamp, cashRowTitle } from './cashSnapshot.js'
+import {
+  cashAgeDays,
+  cashOriginLabel,
+  cashRowStamp,
+  cashRowTitle,
+  cashDriftLine,
+  cashDriftTitle,
+} from './cashSnapshot.js'
 
 const NOW = new Date('2026-08-29T18:00:00').getTime()
 
@@ -68,4 +75,36 @@ test('an account with no cash and no stamp says nothing at all', () => {
 test('the hover text says the import wins', () => {
   const title = cashRowTitle({ cash_source: 'manual' })
   assert.match(title, /next broker import overwrites/)
+})
+
+// --- drift: a floor built from the payment ledger, never the balance ---
+
+test('drift reads as a floor, not a balance', () => {
+  const line = cashDriftLine({ amount: 113.75, payments: 3 }, 984.58)
+  assert.match(line, /at least/)
+  assert.doesNotMatch(line, /^\+.*is /)
+})
+
+test('drift adds onto the written balance', () => {
+  const line = cashDriftLine({ amount: 113.75, payments: 3 }, 984.58,
+    v => `$${v.toFixed(2)}`)
+  assert.match(line, /\+\$113\.75 paid since/)
+  assert.match(line, /at least \$1098\.33/)
+})
+
+test('no drift means no line at all', () => {
+  assert.equal(cashDriftLine(null, 984.58), '')
+  assert.equal(cashDriftLine({ amount: 0, payments: 0 }, 984.58), '')
+  assert.equal(cashDriftLine(undefined, 0), '')
+})
+
+test('the drift tooltip names what it cannot see', () => {
+  const title = cashDriftTitle({ amount: 113.75, payments: 3 })
+  assert.match(title, /3 distributions/)
+  assert.match(title, /Reinvested distributions are excluded/)
+  assert.match(title, /Trades, option premium, fees and interest are not counted/)
+})
+
+test('a single distribution is described in the singular', () => {
+  assert.match(cashDriftTitle({ amount: 40, payments: 1 }), /1 distribution settled/)
 })

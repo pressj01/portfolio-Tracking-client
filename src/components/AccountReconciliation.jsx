@@ -1,5 +1,5 @@
 import { formatMoney, formatMoneyDelta } from '../utils/money'
-import { cashAgeDays, cashOriginLabel } from '../utils/cashSnapshot'
+import { cashAgeDays, cashOriginLabel, cashDriftLine } from '../utils/cashSnapshot'
 
 // Cash in this sum is a dated snapshot, not a live balance. The shared helpers
 // keep this wording identical to the Manage Portfolios column, so the same
@@ -20,7 +20,9 @@ export function cashSnapshotNote(data, now = Date.now()) {
   const age = days === 0 ? 'today' : `${date}, ${days} day${days === 1 ? '' : 's'} ago`
   // A rollup is only as fresh as its stalest account, so name that it is one.
   const scope = snapshot.accounts > 1 ? ` · oldest of ${snapshot.accounts} accounts` : ''
-  return `Cash ${amount} · ${origin} ${age}${scope}`
+  // What the ledger knows has settled since — a floor, worded as one.
+  const drift = cashDriftLine(snapshot.drift, data.cash_value, formatMoney)
+  return `Cash ${amount} · ${origin} ${age}${scope}${drift ? ` · ${drift}` : ''}`
 }
 
 // What a broker calls the account, next to what a tracking screen measures.

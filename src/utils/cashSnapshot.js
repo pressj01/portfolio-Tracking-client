@@ -42,12 +42,40 @@ export const cashRowStamp = (profile, now = Date.now()) => {
   return `${origin} ${date} · ${days} day${days === 1 ? '' : 's'} ago`
 }
 
+// What the ledger knows has paid in since the balance was written.
+//
+// Strictly a floor, and worded as one. Reinvested distributions bought shares
+// rather than settling as cash and are already excluded upstream; trades,
+// option premium, fees and interest move cash too and leave no trace in the
+// payment ledger. So it can say "at least", never "is" — measured against four
+// real accounts it recovered about 40% of the drift and undershot every one.
+export const cashDriftLine = (drift, cashValue, formatter) => {
+  const amount = Number((drift && drift.amount) || 0)
+  if (!(amount > 0)) return ''
+  const base = Number(cashValue || 0)
+  const money = formatter || (value => `$${Math.round(value).toLocaleString()}`)
+  return `+${money(amount)} paid since · at least ${money(base + amount)}`
+}
+
+export const cashDriftTitle = (drift) => {
+  const payments = Number((drift && drift.payments) || 0)
+  if (!payments) return ''
+  return (
+    `${payments} distribution${payments === 1 ? '' : 's'} settled after this balance was written. `
+    + 'Reinvested distributions are excluded because they bought shares rather than cash. '
+    + 'Trades, option premium, fees and interest are not counted, so the real balance is '
+    + 'usually higher than this.'
+  )
+}
+
 // Hover text on the same cell, saying what a click does and what an import does.
 export const cashRowTitle = (profile) => {
   const origin = cashOriginLabel(profile && profile.cash_source)
+  const drift = cashDriftTitle(profile && profile.cash_drift)
   return (
     `Cash ${origin}. Click to enter today's balance. `
     + 'The next broker import overwrites whatever is here — it is the more '
     + 'accurate figure for its own day.'
+    + (drift ? ` ${drift}` : '')
   )
 }

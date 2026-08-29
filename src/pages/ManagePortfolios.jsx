@@ -4,7 +4,7 @@ import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
-import { cashRowStamp, cashRowTitle } from '../utils/cashSnapshot'
+import { cashRowStamp, cashRowTitle, cashDriftLine, cashDriftTitle } from '../utils/cashSnapshot'
 
 const BROKER_OPTIONS = [
   { value: '', label: 'Not set' },
@@ -101,8 +101,10 @@ export default function ManagePortfolios() {
   const saveCash = async (p) => {
     const raw = editCash.trim().replace(/[$,\s]/g, '')
     const value = Number(raw)
-    if (raw === '' || !Number.isFinite(value) || value < 0) {
-      setCashError('Enter a cash balance of 0 or more.')
+    // Negative is allowed: a margin debit is stored as negative cash, and the
+    // importers already write it that way.
+    if (raw === '' || !Number.isFinite(value)) {
+      setCashError('Enter a cash balance, for example 1343.98 or -250.')
       return
     }
     const res = await fetch(`${API_BASE}/api/profiles/${p.id}/cash`, {
@@ -616,6 +618,16 @@ export default function ManagePortfolios() {
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
                   {cashRowStamp(p)}
                 </div>
+                {/* A floor, not a balance: it counts distributions the ledger
+                    knows about and cannot see trades. Hence "at least". */}
+                {cashDriftLine(p.cash_drift, p.cash_value, fmt) && (
+                  <div
+                    style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}
+                    title={cashDriftTitle(p.cash_drift)}
+                  >
+                    {cashDriftLine(p.cash_drift, p.cash_value, fmt)}
+                  </div>
+                )}
                 {editingCashId === p.id && cashError && (
                   <div style={{ fontSize: '0.68rem', color: 'var(--warn, #ffb86c)' }}>{cashError}</div>
                 )}

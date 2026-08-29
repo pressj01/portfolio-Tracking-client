@@ -4677,6 +4677,68 @@ def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
     return ids
 
 
+def _cash_drift_by_profile(conn, profile_ids):
+    """Distributions that settled after each account's cash figure was written.
+
+    Cash is a dated snapshot, so between imports the stored figure is knowably
+    behind by whatever has paid since. That much the ledger can account for, so
+    it is worth adding rather than leaving the reader to guess.
+
+    It is a floor, never the balance. Reinvested distributions bought shares
+    instead of settling as cash and are excluded outright; trades, option
+    premium, fees and interest move cash too and leave no trace here. So this
+    only ever says "at least this much arrived", and the UI has to say so.
+    """
+    ids = [int(pid) for pid in (profile_ids or [])]
+    if not ids:
+        return {}
+    table_names = {
+        row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'",
+        ).fetchall()
+    }
+    if "dividend_payments" not in table_names:
+        return {}
+    profile_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
+    }
+    if "cash_updated_at" not in profile_cols:
+        return {}
+
+    placeholders = ",".join("?" * len(ids))
+    # Strictly after the stamp's calendar day: a payment settling the same day
+    # the balance was written is already inside that balance, and counting it
+    # again would inflate every estimate by a day's distributions.
+    rows = conn.execute(
+        f"""SELECT dp.profile_id AS profile_id,
+                   COALESCE(SUM(dp.amount), 0) AS amount,
+                   COUNT(*) AS payments,
+                   MIN(dp.payment_date) AS first_payment,
+                   MAX(dp.payment_date) AS last_payment
+              FROM dividend_payments dp
+              JOIN profiles p ON p.id = dp.profile_id
+              LEFT JOIN all_account_info a
+                     ON a.profile_id = dp.profile_id
+                    AND UPPER(TRIM(a.ticker)) = UPPER(TRIM(dp.ticker))
+             WHERE dp.profile_id IN ({placeholders})
+               AND p.cash_updated_at IS NOT NULL
+               AND dp.payment_date > SUBSTR(p.cash_updated_at, 1, 10)
+               AND COALESCE(UPPER(TRIM(a.reinvest)), 'N') <> 'Y'
+             GROUP BY dp.profile_id""",
+        ids,
+    ).fetchall()
+    return {
+        int(row["profile_id"]): {
+            "amount": round(float(row["amount"] or 0), 2),
+            "payments": int(row["payments"] or 0),
+            "first_payment": row["first_payment"],
+            "last_payment": row["last_payment"],
+        }
+        for row in rows
+        if float(row["amount"] or 0)
+    }
+
+
 def _cash_snapshot_summary(rows):
     """Date the cash figure so a reader can tell how far behind it is.
 
@@ -5905,6 +5967,13 @@ def _account_value_reconciliation(
             ).fetchall()
             cash_value = sum(float(row["cash_value"] or 0) for row in cash_rows)
             cash_snapshot = _cash_snapshot_summary(cash_rows)
+            drift = _cash_drift_by_profile(conn, cash_profile_ids)
+            if drift:
+                cash_snapshot["drift"] = {
+                    "amount": round(sum(d["amount"] for d in drift.values()), 2),
+                    "payments": sum(d["payments"] for d in drift.values()),
+                    "accounts": len(drift),
+                }
         options = open_option_liquidating_value(conn, position_profile_ids)
     finally:
         conn.close()
@@ -6914,13 +6983,15 @@ def set_profile_cash(pid):
     data = request.get_json() or {}
     raw = data.get("cash_value")
     try:
-        cash_value = round(float(raw), 2)
+        cash_value = float(raw)
     except (TypeError, ValueError):
         return jsonify({"error": "Cash value must be a number"}), 400
-    if cash_value < 0:
-        return jsonify({"error": "Cash value cannot be negative"}), 400
+    # Negative is legitimate and has to stay editable: a margin debit is stored
+    # as negative cash, and the importers already write it that way. Rejecting
+    # it would leave exactly those accounts uncorrectable by hand.
     if not math.isfinite(cash_value):
         return jsonify({"error": "Cash value must be a real number"}), 400
+    cash_value = round(cash_value, 2)
 
     conn = get_connection()
     try:
@@ -7602,8 +7673,14 @@ def profiles_summary():
         ORDER BY p.display_order, p.id
     """).fetchall()
     flag = conn.execute("SELECT value FROM settings WHERE key = 'owner_import_used'").fetchone()
+    profiles = rows_to_dicts(rows)
+    # What has paid into each account since its cash figure was written, so a
+    # stale balance can say how far behind it is rather than only how old.
+    drift = _cash_drift_by_profile(conn, [p["id"] for p in profiles])
+    for profile in profiles:
+        profile["cash_drift"] = drift.get(profile["id"])
     conn.close()
-    return jsonify({"profiles": rows_to_dicts(rows), "owner_import_used": bool(flag)})
+    return jsonify({"profiles": profiles, "owner_import_used": bool(flag)})
 
 
 @app.route("/api/aggregates", methods=["GET"])
