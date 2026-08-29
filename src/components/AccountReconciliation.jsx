@@ -1,4 +1,27 @@
 import { formatMoney, formatMoneyDelta } from '../utils/money'
+import { cashAgeDays, cashOriginLabel } from '../utils/cashSnapshot'
+
+// Cash in this sum is a dated snapshot, not a live balance. The shared helpers
+// keep this wording identical to the Manage Portfolios column, so the same
+// figure is never described two ways on two screens.
+export function cashSnapshotNote(data, now = Date.now()) {
+  if (!data || data.cash_included || !(data.cash_value > 0)) return ''
+  const snapshot = data.cash_snapshot || {}
+  const amount = formatMoney(data.cash_value)
+  const days = cashAgeDays(snapshot.as_of, now)
+  if (days === null) {
+    // Undateable is worth saying plainly: an account holding cash has no record
+    // of when that figure was written, so its age cannot be claimed.
+    return `Cash ${amount} · date unknown`
+  }
+  const origin = cashOriginLabel(snapshot.source)
+  const date = new Date(snapshot.as_of)
+    .toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+  const age = days === 0 ? 'today' : `${date}, ${days} day${days === 1 ? '' : 's'} ago`
+  // A rollup is only as fresh as its stalest account, so name that it is one.
+  const scope = snapshot.accounts > 1 ? ` · oldest of ${snapshot.accounts} accounts` : ''
+  return `Cash ${amount} · ${origin} ${age}${scope}`
+}
 
 // What a broker calls the account, next to what a tracking screen measures.
 // Each screen measures the positions it charts — the right basis for a return,
@@ -53,6 +76,11 @@ export function AccountValueCard({ data, label = 'Account Value', basisLabel, ho
       {/* Led by "Holdings" so the line reads as the whole sum, not as a set of
           adjustments to some figure the reader has to go find. */}
       {detail.length > 0 && <div className="summary-sub">Holdings {detail.join(' ')}</div>}
+      {/* The cash in that sum is only true as of the day it was written. Say
+          which day, or a routine import lag reads as a wrong number. */}
+      {cashSnapshotNote(data) && (
+        <div className="summary-sub">{cashSnapshotNote(data)}</div>
+      )}
       {/* This card inherits its screen's holdings clock, and the option mark is
           quoted fresh on every request. Two screens can therefore print two
           account values for the same account, which needs saying on the card

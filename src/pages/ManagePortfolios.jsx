@@ -4,6 +4,7 @@ import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
+import { cashRowStamp, cashRowTitle } from '../utils/cashSnapshot'
 
 const BROKER_OPTIONS = [
   { value: '', label: 'Not set' },
@@ -41,6 +42,9 @@ export default function ManagePortfolios() {
   const [reconciling, setReconciling] = useState(false)
   const [busyAction, setBusyAction] = useState(null)
   const [selectorPreferenceError, setSelectorPreferenceError] = useState('')
+  const [editingCashId, setEditingCashId] = useState(null)
+  const [editCash, setEditCash] = useState('')
+  const [cashError, setCashError] = useState('')
 
   const loadSummary = useCallback(() => {
     fetch(`${API_BASE}/api/profiles/summary`)
@@ -88,6 +92,32 @@ export default function ManagePortfolios() {
       loadSummary()
     }
     setEditingId(null)
+  }
+
+  // Deliberately no lock: the next broker import overwrites this without
+  // asking, exactly as this overwrites the last import. Cash is the one field
+  // where the broker outranks a typed figure, because a typed figure is a
+  // snapshot that starts decaying the moment the next distribution settles.
+  const saveCash = async (p) => {
+    const raw = editCash.trim().replace(/[$,\s]/g, '')
+    const value = Number(raw)
+    if (raw === '' || !Number.isFinite(value) || value < 0) {
+      setCashError('Enter a cash balance of 0 or more.')
+      return
+    }
+    const res = await fetch(`${API_BASE}/api/profiles/${p.id}/cash`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cash_value: value }),
+    })
+    const body = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      setCashError(body.error || 'Could not save the cash balance.')
+      return
+    }
+    setCashError('')
+    setEditingCashId(null)
+    loadSummary()
   }
 
   const saveBrokerSource = async (p, brokerSource) => {
@@ -457,6 +487,10 @@ export default function ManagePortfolios() {
             <th style={{ textAlign: 'center' }} title="Show this portfolio in the navbar portfolio selector">Show</th>
             <th style={{ textAlign: 'center' }} title="Include this portfolio in the Owner aggregate">Owner</th>
             <th style={{ textAlign: 'right' }}>Holdings</th>
+            <th
+              style={{ textAlign: 'right' }}
+              title="Cash as of the last broker import, or as you last entered it. The next import overwrites it."
+            >Cash</th>
             <th style={{ textAlign: 'right' }}>Total Value</th>
             <th style={{ textAlign: 'right' }}>Created</th>
             <th style={{ textAlign: 'center' }}>Actions</th>
@@ -545,6 +579,47 @@ export default function ManagePortfolios() {
                 )}
               </td>
               <td style={{ textAlign: 'right' }}>{p.holdings_count}</td>
+              <td style={{ textAlign: 'right' }}>
+                {editingCashId === p.id ? (
+                  <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'flex-end' }}>
+                    <input
+                      className="input input-sm"
+                      style={{ width: '6.5rem', textAlign: 'right' }}
+                      value={editCash}
+                      autoFocus
+                      onChange={e => setEditCash(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') saveCash(p)
+                        if (e.key === 'Escape') { setEditingCashId(null); setCashError('') }
+                      }}
+                      aria-label={`Cash balance for ${p.name}`}
+                    />
+                    <button className="btn btn-sm" onClick={() => saveCash(p)}>Save</button>
+                  </div>
+                ) : (
+                  <button
+                    className="btn btn-sm"
+                    style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+                    onClick={() => {
+                      setEditingCashId(p.id)
+                      setEditCash(String(p.cash_value ?? 0))
+                      setCashError('')
+                    }}
+                    title={cashRowTitle(p)}
+                  >
+                    {fmt(p.cash_value)}
+                  </button>
+                )}
+                {/* The date is the point. A bare figure reads as current when it
+                    is usually a few days behind, and on a book of staggered
+                    weekly payers cash moves nearly every business day. */}
+                <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
+                  {cashRowStamp(p)}
+                </div>
+                {editingCashId === p.id && cashError && (
+                  <div style={{ fontSize: '0.68rem', color: 'var(--warn, #ffb86c)' }}>{cashError}</div>
+                )}
+              </td>
               <td style={{ textAlign: 'right' }}>{fmt(p.total_value)}</td>
               <td style={{ textAlign: 'right' }}>{p.created_at ? new Date(p.created_at).toLocaleDateString() : ''}</td>
               <td style={{ textAlign: 'center' }}>

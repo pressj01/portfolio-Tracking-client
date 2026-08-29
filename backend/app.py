@@ -4677,6 +4677,42 @@ def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
     return ids
 
 
+def _cash_snapshot_summary(rows):
+    """Date the cash figure so a reader can tell how far behind it is.
+
+    Cash is a dated snapshot, never a live balance: it is written by a broker
+    import and then stands untouched until the next one. On a book of weekly
+    payers settling on staggered days that goes stale within about a day, so a
+    bare dollar figure reads as current when it is not — which is exactly how
+    an ordinary lag gets mistaken for a broken number.
+
+    A rollup is only as fresh as its stalest member, so the oldest stamp is the
+    honest one. An account carrying cash with no stamp at all leaves the total
+    undateable, which has to be said rather than guessed around.
+    """
+    contributing = [row for row in rows if float(row["cash_value"] or 0) != 0]
+    if not contributing:
+        return {"as_of": None, "source": None, "accounts": 0, "undated_accounts": 0}
+
+    undated = [row for row in contributing if not row["cash_updated_at"]]
+    stamps = sorted(
+        str(row["cash_updated_at"]) for row in contributing if row["cash_updated_at"]
+    )
+    sources = {
+        str(row["cash_source"]).strip().lower()
+        for row in contributing
+        if row["cash_source"]
+    }
+    return {
+        # None whenever any contributing account is undated: the total cannot
+        # be dated more precisely than its least-known part.
+        "as_of": (stamps[0] if stamps and not undated else None),
+        "source": (sources.pop() if len(sources) == 1 else ("mixed" if sources else None)),
+        "accounts": len(contributing),
+        "undated_accounts": len(undated),
+    }
+
+
 def _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids):
     """Portfolio income/value snapshot for a cash-flow view.
 
@@ -5849,14 +5885,26 @@ def _account_value_reconciliation(
         profile_cols = {
             row[1] for row in conn.execute("PRAGMA table_info(profiles)").fetchall()
         }
+        cash_snapshot = {"as_of": None, "source": None, "accounts": 0, "undated_accounts": 0}
         if "cash_value" in profile_cols:
             cash_profile_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
             cash_placeholders = ",".join("?" * len(cash_profile_ids))
-            cash_row = conn.execute(
-                f"SELECT COALESCE(SUM(cash_value), 0) FROM profiles WHERE id IN ({cash_placeholders})",
+            # cash_source and cash_updated_at were added after cash_value, and
+            # this function has always been written to answer from whatever the
+            # schema actually has. Select the stamp only where it exists, so a
+            # database predating that migration still reconciles — undated,
+            # which _cash_snapshot_summary already reports honestly.
+            stamp_columns = ", ".join(
+                column if column in profile_cols else f"NULL AS {column}"
+                for column in ("cash_source", "cash_updated_at")
+            )
+            cash_rows = conn.execute(
+                f"""SELECT COALESCE(cash_value, 0) AS cash_value, {stamp_columns}
+                      FROM profiles WHERE id IN ({cash_placeholders})""",
                 cash_profile_ids,
-            ).fetchone()
-            cash_value = float(cash_row[0] if cash_row else 0)
+            ).fetchall()
+            cash_value = sum(float(row["cash_value"] or 0) for row in cash_rows)
+            cash_snapshot = _cash_snapshot_summary(cash_rows)
         options = open_option_liquidating_value(conn, position_profile_ids)
     finally:
         conn.close()
@@ -5868,6 +5916,7 @@ def _account_value_reconciliation(
     return {
         "cash_value": round(cash_value, 2),
         "cash_included": bool(cash_included),
+        "cash_snapshot": cash_snapshot,
         "open_options": options,
         "account_value": round(end_value + missing_cash + option_value, 2),
     }
@@ -6848,6 +6897,60 @@ def set_profile_ownership(pid):
         conn.close()
 
 
+@app.route("/api/profiles/<int:pid>/cash", methods=["PUT"])
+def set_profile_cash(pid):
+    """Hand-enter an account's cash balance between broker imports.
+
+    Deliberately no lock. Cash is the one field where the broker outranks the
+    user: a typed figure is a snapshot that starts decaying immediately, and on
+    a book of staggered weekly payers something settles nearly every business
+    day. So the next import overwrites this without asking, exactly as this
+    overwrites the last import — last write wins, whoever wrote it.
+
+    An aggregate or the Owner rollup owns no cash of its own; it sums its
+    members. Writing to it would strand a figure nothing reads, so say which
+    account to edit instead.
+    """
+    data = request.get_json() or {}
+    raw = data.get("cash_value")
+    try:
+        cash_value = round(float(raw), 2)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Cash value must be a number"}), 400
+    if cash_value < 0:
+        return jsonify({"error": "Cash value cannot be negative"}), 400
+    if not math.isfinite(cash_value):
+        return jsonify({"error": "Cash value must be a real number"}), 400
+
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT id FROM profiles WHERE id = ?", (pid,)).fetchone()
+        if not row:
+            return jsonify({"error": "Portfolio not found"}), 404
+        source_ids = _get_owner_source_profile_ids(conn)
+        if pid == 1 and source_ids:
+            return jsonify({
+                "error": (
+                    "Owner totals its accounts' cash rather than holding its own. "
+                    "Set cash on the individual account."
+                ),
+            }), 400
+        _set_profile_cash_value(conn, pid, cash_value, source="manual")
+        conn.commit()
+        saved = conn.execute(
+            "SELECT cash_value, cash_source, cash_updated_at FROM profiles WHERE id = ?",
+            (pid,),
+        ).fetchone()
+        return jsonify({
+            "id": pid,
+            "cash_value": float(saved["cash_value"] or 0),
+            "cash_source": saved["cash_source"],
+            "cash_updated_at": saved["cash_updated_at"],
+        })
+    finally:
+        conn.close()
+
+
 @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
 def delete_profile(pid):
     if pid == 1:
@@ -7490,6 +7593,7 @@ def profiles_summary():
                p.is_user_owned,
                p.display_order, p.hidden_from_selector,
                COALESCE(p.cash_value, 0) AS cash_value,
+               p.cash_source, p.cash_updated_at,
                COUNT(a.ticker) as holdings_count,
                COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
         FROM profiles p
