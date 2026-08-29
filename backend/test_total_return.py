@@ -81,16 +81,20 @@ class TotalReturnPeriodTest(unittest.TestCase):
         for period, expected_start in expected_starts.items():
             with self.subTest(period=period):
                 result = _resolve_total_return_period(period, today=self.today)
+                # The reported window is the range the user asked for and does
+                # not move. Only the download reaches further back.
                 self.assertEqual(result["start_date"], expected_start)
                 self.assertEqual(result["end_date"], "2026-07-23")
-                if period == "ytd":
-                    self.assertLess(result["yf_kwargs"]["start"], expected_start)
-                    self.assertEqual(
-                        result["yf_kwargs"]["anchor_on_or_before"],
-                        expected_start,
-                    )
-                else:
-                    self.assertEqual(result["yf_kwargs"]["start"], expected_start)
+                # Every calendar offset can land on a weekend or a holiday, so
+                # every one of them over-requests and anchors on the close
+                # already held going into the window. YTD used to be the only
+                # period guarded this way; the rest opened on the session after
+                # their start and silently dropped that first move.
+                self.assertLess(result["yf_kwargs"]["start"], expected_start)
+                self.assertEqual(
+                    result["yf_kwargs"]["anchor_on_or_before"],
+                    expected_start,
+                )
                 self.assertEqual(result["yf_kwargs"]["end"], "2026-07-24")
 
     def test_resolves_all_from_portfolio_inception(self):
@@ -1393,6 +1397,91 @@ class CoverageShortfallTest(unittest.TestCase):
 
         self.assertFalse(shortfall["is_material"])
         self.assertEqual(shortfall["excluded_weight"], 0.0)
+
+
+class WeekendStartAnchorTest(unittest.TestCase):
+    """A calendar offset lands on a closed market often enough to matter.
+
+    The same day-of-month is a weekend roughly two times in seven, and 7D is
+    one every weekend. Without an anchor the window opens on the session after
+    the start rather than the close already held going into it, so the first
+    session's move leaves the return without leaving a trace.
+    """
+
+    def test_every_preset_anchors_a_weekend_start_backward(self):
+        # 2026-08-29 is a Saturday, so 7D asks for Saturday 2026-08-22 and the
+        # monthly and yearly offsets land on weekends of their own.
+        saturday = datetime.date(2026, 8, 29)
+
+        for period in ("7d", "1m", "3m", "6m", "ytd", "1y", "2y", "5y"):
+            with self.subTest(period=period):
+                result = _resolve_total_return_period(period, today=saturday)
+                kwargs = result["yf_kwargs"]
+                self.assertEqual(
+                    kwargs["anchor_on_or_before"], result["start_date"],
+                    "the anchor is the requested start, not the download start",
+                )
+                self.assertLess(
+                    kwargs["start"], result["start_date"],
+                    "the download has to reach past the closure to find a baseline",
+                )
+
+    def test_the_anchor_reaches_past_a_long_holiday_closure(self):
+        # Independence Day 2026 falls on a Saturday and is observed Friday the
+        # 3rd, so a start on the 4th has to look back through a three-day gap.
+        result = _resolve_total_return_period(
+            "custom", start_date="2026-07-04", end_date="2026-07-31",
+        )
+        reach = (
+            datetime.date.fromisoformat(result["start_date"])
+            - datetime.date.fromisoformat(result["yf_kwargs"]["start"])
+        ).days
+        self.assertGreaterEqual(reach, 4)
+
+    def test_a_weekend_start_measures_from_the_prior_close(self):
+        # The bug in one frame: a stock closes Friday at 100 and holds 104 all
+        # of the following week. Opening on Monday reports 0% for a week it
+        # plainly rose 4%.
+        sessions = pd.to_datetime([
+            "2026-08-21", "2026-08-24", "2026-08-25",
+            "2026-08-26", "2026-08-27", "2026-08-28",
+        ])
+        frame = pd.DataFrame({"AAA": [100.0, 104.0, 104.0, 104.0, 104.0, 104.0]},
+                             index=sessions)
+
+        anchored = _anchor_from_prior_close(frame, "2026-08-22")
+
+        self.assertEqual(anchored.index[0].date(), datetime.date(2026, 8, 21))
+        self.assertEqual(float(anchored["AAA"].iloc[0]), 100.0)
+
+    def test_a_trading_day_start_keeps_its_own_bar(self):
+        # Ordinary ranges must not move: the anchor only rescues starts that
+        # would otherwise have opened on a later session.
+        sessions = pd.to_datetime(["2026-08-21", "2026-08-24", "2026-08-25"])
+        frame = pd.DataFrame({"AAA": [100.0, 104.0, 105.0]}, index=sessions)
+
+        anchored = _anchor_from_prior_close(frame, "2026-08-24")
+
+        self.assertEqual(anchored.index[0].date(), datetime.date(2026, 8, 24))
+
+    def test_cash_paid_on_the_anchor_bar_is_not_counted(self):
+        # Anchoring backward pulls an extra bar in. That bar is the baseline,
+        # so a distribution on it belongs to the period before this one.
+        sessions = pd.to_datetime(["2026-02-27", "2026-03-02", "2026-03-03"])
+        close = pd.DataFrame({"AAA": [100.0, 100.0, 100.0]}, index=sessions)
+        dividends = pd.DataFrame({"AAA": [5.0, 3.0, 0.0]}, index=sessions)
+        zeros = pd.DataFrame(0.0, index=sessions, columns=["AAA"])
+        holdings = [{
+            "ticker": "AAA", "market_symbol": "AAA", "position_key": (1, "AAA"),
+            "quantity": 100, "current_value": 10000, "purchase_date": "2025-01-01",
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, dividends, zeros, [], holdings,
+        )
+
+        # Only the $3 paid after the baseline, never the $5 paid on it.
+        self.assertAlmostEqual(result["distribution_dollar"], 300.0)
 
 
 if __name__ == "__main__":

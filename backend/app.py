@@ -800,18 +800,25 @@ def _resolve_total_return_period(
     else:
         raise ValueError(f"Unsupported period: {period}")
 
+    # Every period above is a calendar offset, so its start lands on a weekend
+    # or a holiday often enough to matter: the same day-of-month roughly two
+    # times in seven, and 7D on every weekend. Without a baseline to anchor on,
+    # the window opens on the session *after* the start instead of the close
+    # already held going into it, and that first session's move drops out of
+    # the return entirely — YTD used to be the only one guarded against it.
+    #
+    # Reach back past the longest market closure so the prior close is present,
+    # then anchor onto it. A start that is already a trading day keeps that
+    # exact bar, so ordinary ranges are unaffected; only the starts that would
+    # have anchored forward move, and those are the ones that were wrong.
+    #
+    # Anchoring backward is safe for distributions: the anchor bar is row 0 of
+    # the replay, which is baseline-only, so cash paid on it is not counted.
     yf_kwargs = {
-        "start": start_date.isoformat(),
+        "start": (start_date - datetime.timedelta(days=10)).isoformat(),
         "end": (today + datetime.timedelta(days=1)).isoformat(),
+        "anchor_on_or_before": start_date.isoformat(),
     }
-    if key == "ytd":
-        # YTD begins before the first market session of the year. Include and
-        # anchor on the last close on or before Jan 1 so the first session's
-        # move is part of the return instead of becoming the zero baseline.
-        yf_kwargs.update({
-            "start": (start_date - datetime.timedelta(days=10)).isoformat(),
-            "anchor_on_or_before": start_date.isoformat(),
-        })
 
     return {
         "key": key,
