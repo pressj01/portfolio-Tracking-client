@@ -185,6 +185,18 @@ def _scan_scope(payload: dict) -> dict:
     return scope
 
 
+def _earnings_in_trade(payload: dict) -> str:
+    """Return skip, any, or require from the General scanner earnings filter."""
+    raw = str((payload or {}).get("earnings_in_trade") or "").strip().lower()
+    if raw in {"skip", "any", "require"}:
+        return raw
+    if bool((payload or {}).get("require_earnings_before_expiry")):
+        return "require"
+    if bool((payload or {}).get("exclude_earnings_before_expiry")):
+        return "skip"
+    return "any"
+
+
 def _quality_from_payload(payload: dict) -> dict:
     """Copy the General scanner's quality gates onto a dedicated runner."""
     result = {}
@@ -198,6 +210,14 @@ def _quality_from_payload(payload: dict) -> dict:
         if number is None:
             continue
         result[key] = max(0, int(number)) if key == "min_open_interest" else max(0.0, number)
+    if any(key in (payload or {}) for key in (
+        "earnings_in_trade",
+        "exclude_earnings_before_expiry",
+        "require_earnings_before_expiry",
+    )):
+        # Dedicated runners only understand the skip gate. Require/Allow must
+        # reach this adapter with earnings names still attached.
+        result["exclude_earnings_before_expiry"] = _earnings_in_trade(payload) == "skip"
     return result
 
 
@@ -1336,6 +1356,10 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         ("annualized_return_pct", "min_annualized_return_pct", "Annualized return", "min"),
         ("skew_rank", "min_skew_rank", "Skew Rank", "min"),
         ("skew_rank", "max_skew_rank", "Skew Rank", "max"),
+        ("put_skew_rank", "min_put_skew_rank", "Put Skew Rank", "min"),
+        ("put_skew_rank", "max_put_skew_rank", "Put Skew Rank", "max"),
+        ("call_skew_rank", "min_call_skew_rank", "Call Skew Rank", "min"),
+        ("call_skew_rank", "max_call_skew_rank", "Call Skew Rank", "max"),
         ("min_leg_open_interest", "min_open_interest", "Open interest", "min"),
         ("avg_dollar_volume", "min_avg_dollar_volume", "Share dollar volume", "min"),
     )
@@ -1450,9 +1474,12 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         aum = _num(meta.get("fund_aum"))
         if aum is not None and aum < min_aum:
             reasons.append("Fund AUM")
-    if bool(payload.get("exclude_earnings_before_expiry")) and not is_fund:
-        if meta.get("earnings_before_expiry") is True:
+    if not is_fund:
+        earnings_mode = _earnings_in_trade(payload)
+        if earnings_mode == "skip" and meta.get("earnings_before_expiry") is True:
             reasons.append("Earnings before expiry")
+        elif earnings_mode == "require" and meta.get("earnings_before_expiry") is not True:
+            reasons.append("Earnings inside the trade required")
     return reasons
 
 
@@ -1524,9 +1551,15 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
         row["_general"]["filter_reasons"] = reasons
         for reason in set(reasons):
             rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
+    hard_reasons = {
+        "Expired contract",
+        "Invalid expiration",
+        "Earnings before expiry",
+        "Earnings inside the trade required",
+    }
     eligible_rows = [
         row for row in rows
-        if not ({"Expired contract", "Invalid expiration"} & set(row["_general"]["filter_reasons"]))
+        if not (hard_reasons & set(row["_general"]["filter_reasons"]))
     ]
     exact_rows = [row for row in eligible_rows if not row["_general"]["filter_reasons"]]
     exact_rows.sort(key=lambda row: (

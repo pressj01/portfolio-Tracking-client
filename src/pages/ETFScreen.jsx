@@ -23,6 +23,7 @@ import {
   ema,
   computeMacd,
   computeRsi,
+  smaOverlayTraces,
   tradingSessionRangeBreaks,
 } from '../utils/chartIndicators'
 
@@ -2610,6 +2611,11 @@ export default function ETFScreen() {
     } else {
       traces.push({ x: dates, y: records.map(r => r.close), type: 'scatter', mode: 'lines', name: chartLabel, line: { color: '#2196F3', width: 2 }, xaxis: 'x', yaxis: 'y' })
     }
+    const studyNames = new Set(mainTraces.map(trace => trace.name))
+    smaOverlayTraces(records, {
+      skipNames: studyNames,
+      transform: isPct ? toPct : undefined,
+    }).forEach(trace => traces.push({ ...trace, xaxis: 'x', yaxis: 'y' }))
     // Transform indicator overlays for percent mode
     mainTraces.forEach(t => {
       if (isPct && t.y) {

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../config'
 import { useTheme } from '../context/ThemeContext'
 import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
+import { smaOverlayTraces } from '../utils/chartIndicators'
 import { chartTheme } from '../utils/chartTheme'
 import { interpolateRiskPnl, RISK_CHART_SPOT_COLOR, riskChartFocusRange, riskChartMoneynessFills, riskChartSpotValue, riskChartViewRevision } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
@@ -827,8 +828,10 @@ function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
       line: { color: '#7ecfff', width: 2.5, dash: 'solid' },
       hovertemplate: `<b>${ticker} current</b><br>${money(spot)}<extra></extra>`,
     }
+    const maTraces = smaOverlayTraces(records)
     const values = [
       ...records.flatMap(row => [Number(row.low), Number(row.high)]),
+      ...maTraces.flatMap(trace => trace.y),
       ...moneynessRows.map(row => row.value.strike),
       Number(spot),
     ].filter(Number.isFinite)
@@ -865,7 +868,7 @@ function BrokerMoneynessChart({ ticker, spot, legs, records, chartType }) {
     })
     const gapDays = dates.slice(1).map((value, index) => (new Date(value) - new Date(dates[index])) / 86400000).filter(Number.isFinite)
     const rangebreaks = gapDays.length && Math.min(...gapDays) < 4 ? [{ bounds: ['sat', 'mon'] }] : []
-    const traces = [priceTrace, ...(chartType === 'candlestick' ? [ohlcHoverTrace] : []), currentTrace, ...strikeTraces]
+    const traces = [priceTrace, ...(chartType === 'candlestick' ? [ohlcHoverTrace] : []), ...maTraces, currentTrace, ...strikeTraces]
     window.Plotly.react(ref.current, traces, {
       template: ct.template,
       paper_bgcolor: ct.surface,

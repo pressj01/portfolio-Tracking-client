@@ -4046,7 +4046,7 @@ function ETFScreenHelp() {
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker symbol in the input field and click <strong>Load</strong> (or press Enter).</li>
         <li>Select a <strong>time period</strong>: 1D, 5D, 1W, 1M, 3M, 6M, YTD, 1Y, or 5Y.</li>
-        <li>The main chart loads with price data and volume bars below it.</li>
+        <li>The main chart loads with price data, the 50- and 200-period simple moving averages, and volume bars below it.</li>
       </ol>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Controls</h3>
@@ -4065,7 +4065,7 @@ function ETFScreenHelp() {
         Available indicators include:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Overlays</strong> — SMAs (Simple Moving Averages), Bollinger Bands (plotted on the price chart itself).</li>
+        <li><strong>Overlays</strong> — SMA 50 and SMA 200 are drawn on the price pane by default. Add more Simple Moving Averages or Bollinger Bands from the studies list; they also plot on the price chart itself.</li>
         <li><strong>Momentum</strong> — RSI (Relative Strength Index), MACD (Moving Average Convergence Divergence), Stochastic, CCI (Commodity Channel Index), Momentum.</li>
         <li><strong>Volatility</strong> — ATR (Average True Range), Awesome Oscillator.</li>
       </ul>

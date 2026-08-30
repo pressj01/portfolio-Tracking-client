@@ -17,6 +17,31 @@ export function sma(values, period) {
   return result
 }
 
+export const PRICE_CHART_SMAS = [
+  { period: 50, color: '#FF6B35' },
+  { period: 200, color: '#2EC4B6' },
+]
+
+/** SMA 50 and SMA 200 overlays used on ticker price charts. */
+export function smaOverlayTraces(records, options = {}) {
+  const skipNames = new Set(options.skipNames || [])
+  const transform = typeof options.transform === 'function' ? options.transform : value => value
+  const dates = (records || []).map(record => record.date)
+  const closes = (records || []).map(record => Number(record.close))
+  return PRICE_CHART_SMAS.flatMap(({ period, color }) => {
+    const name = `SMA ${period}`
+    if (skipNames.has(name)) return []
+    return [{
+      x: dates,
+      y: sma(closes, period).map(value => (value == null || !Number.isFinite(value) ? null : transform(value))),
+      type: 'scatter',
+      mode: 'lines',
+      name,
+      line: { color, width: 1.5 },
+    }]
+  })
+}
+
 /** Exponential moving average seeded with the first value so it starts at bar 0. */
 export function ema(values, period) {
   const result = new Array(values.length).fill(null)

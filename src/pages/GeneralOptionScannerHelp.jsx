@@ -15,10 +15,10 @@ const universeRows = [
 
 const filterRows = [
   ['Descriptive data', 'Chooses the underlyings: stocks, core or broad index ETFs, sector ETFs, commodity ETFs, or exact symbols.'],
-  ['Quality and liquidity', 'Drops names that are too small, too thinly traded, or that report earnings inside the option’s life. It also requires a minimum open interest on the legs.'],
+  ['Quality and liquidity', 'Drops names that are too small or too thinly traded, and applies the Earnings in the trade filter to stocks. Results to show chooses Exact matches only or Nearest trades if none qualify. Every starting point and setup defaults to the nearest-trade fallback. Switch Earnings to Allow or Require if you want the event. Funds are not earnings-filtered.'],
   ['Fundamental data', 'Applies the app’s 1–10 Fundamental, Growth, and Technical scores. Fundamental and Growth are not required for ETFs because those company measures do not apply cleanly to funds.'],
   ['Technical market conditions', 'Filters by the SPY trend, the underlying trend, recent price direction, lookback, minimum move, and RSI.'],
-  ['Consolidated options data', 'Filters the option chain by total contract volume, locally collected IV Rank (a percentile), IV − RV, IV − RV Rank, RV Rank, Volatility score, and Skew Rank.'],
+  ['Consolidated options data', 'Filters the option chain by total contract volume, locally collected IV Rank (a percentile), IV − RV, IV − RV Rank, RV Rank, Volatility score, Put Skew Rank, Call Skew Rank, and Skew Rank. Risk and Setup presets require a favorable vol skew for the selected strategy.'],
   ['Option data', 'Controls expiration/DTE, the assumed bid/ask fill, and the reference-leg delta when the construction uses one.'],
   ['Strategy specific', 'Changes with the selected trade. It contains payoff, risk, probability, moneyness, and construction rules.'],
 ]
@@ -89,17 +89,17 @@ export default function GeneralOptionScannerHelp() {
         <article>
           <b>Open Filters</b>
           <p className="gos-help-pop">Typical success: unconstrained</p>
-          <p>Discovery only. It keeps the strategy’s strikes and DTE construction but turns off quality, trend, and probability floors. Use it to see what exists, then tighten.</p>
+          <p>Discovery only. It keeps the strategy’s strikes and DTE construction but turns off quality, trend, and probability floors. Earnings in the trade is Allow. If nothing passes every rule, nearest constructible trades are shown. Use it to see what exists, then tighten.</p>
         </article>
         <article>
           <b>Risk Averse</b>
           <p className="gos-help-pop">Credit: ~85–95% · floor 65% · 5–15Δ short</p>
-          <p>Highest-probability short-premium entries: further OTM, skip earnings, conservative fills, larger names. Debit trades use 60–75 delta longs and a 35% max-profit floor — still a directional bet, not a 90% income trade.</p>
+          <p>Highest-probability short-premium entries: further OTM, skip earnings, favorable vol skew, conservative fills, larger names. If nothing passes every rule, nearest constructible trades are still shown and labelled as near matches. Debit trades use 60–75 delta longs and a 35% max-profit floor — still a directional bet, not a 90% income trade.</p>
         </article>
         <article>
           <b>Moderate</b>
           <p className="gos-help-pop">Credit: ~80–85% · floor 55% · 15–20Δ short</p>
-          <p>The default “tradable” pack. Setup buttons start here. Debit trades use 45–60 delta and a 25% max-profit floor.</p>
+          <p>The default “tradable” pack. Setup buttons start here. Debit trades use 45–60 delta and a 25% max-profit floor. Stocks with earnings inside the expiration are skipped, and the selected strategy’s favorable vol skew is required. If nothing passes every rule, nearest constructible trades are shown. Change Earnings in the trade if you want the event.</p>
         </article>
         <article>
           <b>Aggressive</b>
@@ -169,8 +169,9 @@ export default function GeneralOptionScannerHelp() {
         <article><h3>IV − RV Rank</h3><p>A 0–100 percentile of today’s IV − RV versus the same spread over the past year. It is mean-reverting. It uses the stored IV snapshots paired with realized vol from price history, so it warms up with IV Rank.</p></article>
         <article><h3>RV Rank</h3><p>A 0–100 percentile of the past month’s realized volatility versus the previous year. It shows whether recent actual movement is high or low for this name and is also mean-reverting.</p></article>
         <article><h3>Volatility score</h3><p>The average of IV Rank and IV − RV Rank. A high score is a smoother signal that options look overpriced; a low score that they look underpriced. An asterisk marks a provisional reading while fewer than about 20 daily observations are available.</p></article>
-        <article><h3>Put / Call Skew Rank</h3><p>On the short-put and covered-call screens, this ranks the roughly 30-DTE 25-delta option IV minus same-side ATM IV against the ticker’s own trailing-year readings.</p></article>
-        <article><h3>Skew Rank</h3><p>Ranks the roughly 30-DTE 25-delta put-IV minus 25-delta call-IV gap. High values mean puts are unusually expensive versus calls; low values mean calls are unusually expensive.</p></article>
+        <article><h3>Earnings in the trade</h3><p>Skip hides stocks whose next report falls on or before expiration. Allow includes those names. Require keeps only stocks with earnings inside the selected expiration. Funds are not filtered. Missing report dates are not treated as a hit for Skip, and they fail Require. Put/call spread, put-selling, and call-selling presets start on Skip.</p></article>
+        <article><h3>Put / Call Skew Rank</h3><p>Put Skew Rank is 25-delta put IV minus ATM put IV; Call Skew Rank is the same reading on the call side. High values mean that wing is unusually expensive. Put-selling and put-spread presets require expensive puts; call-selling and call-spread presets require expensive calls.</p></article>
+        <article><h3>Skew Rank</h3><p>Ranks the roughly 30-DTE 25-delta put-IV minus 25-delta call-IV gap. High values mean puts are unusually expensive versus calls; low values mean calls are unusually expensive. Put-selling presets prefer a high reading; call-selling presets prefer a low reading.</p></article>
         <article><h3>What “Warming up” means</h3><p>The app is collecting at most one usable skew observation per ticker per day. Zero days means that specific metric lacked usable 25-delta or ATM inputs; one or two days means the raw gaps were saved but cannot yet support a percentile. From 3–19 days the app shows a provisional rank marked with an asterisk. At about 20 usable daily observations the asterisk disappears. Re-running a scan on the same day does not increase the count, and the count is unrelated to DTE.</p></article>
         <article><h3>Expected value</h3><p>The probability-weighted expiration payoff from the model. Positive modeled EV does not guarantee a profitable trade.</p></article>
         <article><h3>Profit ratio</h3><p>Maximum profit divided by maximum loss. A 25% ratio means $25 of maximum profit for every $100 of maximum loss.</p></article>
@@ -189,8 +190,8 @@ export default function GeneralOptionScannerHelp() {
     <HelpSection id="results" eyebrow="7 · RESULTS" title="Exact matches versus constructible near matches">
       <figure className="gos-help-figure"><img src={helpImage('general-scanner-results.png')} alt="General Option Scanner results with a near-match warning, rows, missed-rule badges, and the selected trade analysis" /><figcaption>Exact matches pass every active rule. A yellow near-match row is a real, priced structure that missed one or more rules.</figcaption></figure>
       <div className="gos-help-two-column">
-        <article><h3>Exact match</h3><p>The row passed every active filter. The table shows the best-ranked structure for each ticker; click the ⊕ ticker control to drill into more candidates for that ticker.</p></article>
-        <article><h3>Near match</h3><p>If there are no exact matches and near matches are enabled, the scanner can show the closest constructible trades. The row badge gives the number of missed rules; selecting it lists the exact rules above the analysis.</p></article>
+        <article><h3>Exact match</h3><p>The row passed every active filter, including max loss, skew, and earnings. The table shows the best-ranked structure for each ticker; click the ⊕ ticker control to drill into more candidates for that ticker. Starting points default to nearest trades if none qualify; switch Results to show to Exact matches only when you want an empty table instead of near matches.</p></article>
+        <article><h3>Near match</h3><p>If Results to show is set to Nearest trades if none qualify and nothing passed every rule, the scanner can show the closest constructible trades. Those rows are not approvals of the missed rules — a $2,400 max loss against a $500 cap is still a miss. The row badge gives the number of missed rules; selecting it lists the exact rules above the analysis.</p></article>
       </div>
       <aside className="gos-help-warning"><b>Example: the IWF Risk Averse result</b><span>IWF showed total option volume of 596 against a required 5,000 and probability of max profit of 62.1% against a required 65%. It was therefore a near match—not a trade that passed the preset.</span></aside>
       <figure className="gos-help-figure"><img src={helpImage('general-scanner-near-match-example.png')} alt="Risk Averse Iron Condor scan showing the no exact preset match banner and the selected IWF near-match structure" /><figcaption>In this Risk Averse scan, the warning banner and yellow row edges indicate fallback near matches. The selected IWF structure is valid and priced, but it did not satisfy every green rule on the left.</figcaption></figure>

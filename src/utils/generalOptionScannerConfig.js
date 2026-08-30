@@ -25,6 +25,49 @@ export function updateDteFilters(current, key, rawValue) {
   return next
 }
 
+export const EARNINGS_IN_TRADE_OPTIONS = [
+  ['skip', 'Skip earnings before expiry'],
+  ['any', 'Allow earnings'],
+  ['require', 'Require earnings before expiry'],
+]
+
+export const MATCH_RESULTS_OPTIONS = [
+  ['true', 'Nearest trades if none qualify'],
+  ['false', 'Exact matches only'],
+]
+
+export function earningsInTradeState(mode) {
+  const earnings_in_trade = ['skip', 'any', 'require'].includes(mode) ? mode : 'any'
+  return {
+    earnings_in_trade,
+    exclude_earnings_before_expiry: earnings_in_trade === 'skip',
+    require_earnings_before_expiry: earnings_in_trade === 'require',
+  }
+}
+
+export function normalizeEarningsFilter(filters) {
+  if (!filters || typeof filters !== 'object') return filters
+  if (['skip', 'any', 'require'].includes(filters.earnings_in_trade)) {
+    return { ...filters, ...earningsInTradeState(filters.earnings_in_trade) }
+  }
+  if (filters.require_earnings_before_expiry) {
+    return { ...filters, ...earningsInTradeState('require') }
+  }
+  if (filters.exclude_earnings_before_expiry) {
+    return { ...filters, ...earningsInTradeState('skip') }
+  }
+  return { ...filters, ...earningsInTradeState('any') }
+}
+
+const OPEN_SKEW_FILTERS = {
+  min_skew_rank: 0,
+  max_skew_rank: 100,
+  min_put_skew_rank: 0,
+  max_put_skew_rank: 100,
+  min_call_skew_rank: 0,
+  max_call_skew_rank: 100,
+}
+
 const COMMON = {
   risk_profile: 'open',
   symbols: '',
@@ -66,13 +109,12 @@ const COMMON = {
   target_dte: 30,
   max_results: 100,
   include_near_matches: true,
-  exclude_earnings_before_expiry: false,
+  ...earningsInTradeState('any'),
   min_market_cap: 0,
   fund_min_aum: 0,
   min_avg_dollar_volume: 0,
   min_open_interest: 0,
-  min_skew_rank: 0,
-  max_skew_rank: 100,
+  ...OPEN_SKEW_FILTERS,
 }
 
 // The supplied Samurai examples remain available as the per-strategy preset,
@@ -114,13 +156,13 @@ const OPEN_FILTERS = {
   max_abs_position_delta: 100,
   iron_condor_shape: 'any',
   butterfly_shape: 'any',
-  exclude_earnings_before_expiry: false,
+  include_near_matches: true,
+  ...earningsInTradeState('any'),
   min_market_cap: 0,
   fund_min_aum: 0,
   min_avg_dollar_volume: 0,
   min_open_interest: 0,
-  min_skew_rank: 0,
-  max_skew_rank: 100,
+  ...OPEN_SKEW_FILTERS,
 }
 
 export const GENERAL_RISK_PROFILES = {
@@ -183,6 +225,63 @@ const HOLDINGS_SETUP_STRATEGIES = new Set([
   'covered-call', 'collar', 'married-put',
 ])
 
+const PUT_SPREAD_STRATEGIES = new Set([
+  'bull-put-spread', 'bear-put-spread', 'put-ratio-spread', 'put-butterfly',
+])
+const CALL_SPREAD_STRATEGIES = new Set([
+  'bear-call-spread', 'bull-call-spread', 'call-ratio-spread', 'call-butterfly',
+])
+const PUT_SELLING_STRATEGIES = new Set(['cash-secured-put'])
+const CALL_SELLING_STRATEGIES = new Set(['covered-call', 'naked-call'])
+const PUT_BUYING_STRATEGIES = new Set(['long-put', 'married-put'])
+const CALL_BUYING_STRATEGIES = new Set(['long-call', 'married-call'])
+const TWO_SIDED_SELL_STRATEGIES = new Set([
+  'iron-condor', 'iron-butterfly', 'short-strangle', 'short-straddle', 'put-call-condor',
+])
+const TWO_SIDED_BUY_STRATEGIES = new Set(['long-straddle', 'long-strangle'])
+
+export function favorableSkewFilters(strategy, intensity = 1) {
+  const floor = [60, 50, 40][intensity] ?? 50
+  const cap = 100 - floor
+  const result = { ...OPEN_SKEW_FILTERS }
+  if (
+    PUT_SPREAD_STRATEGIES.has(strategy)
+    || PUT_SELLING_STRATEGIES.has(strategy)
+    || strategy === 'long-put-calendar'
+    || strategy === 'long-put-diagonal'
+  ) {
+    result.min_put_skew_rank = floor
+    result.min_skew_rank = floor
+  } else if (
+    CALL_SPREAD_STRATEGIES.has(strategy)
+    || CALL_SELLING_STRATEGIES.has(strategy)
+    || strategy === 'long-call-calendar'
+    || strategy === 'long-call-diagonal'
+  ) {
+    result.min_call_skew_rank = floor
+    result.max_skew_rank = cap
+  } else if (PUT_BUYING_STRATEGIES.has(strategy)) {
+    result.max_put_skew_rank = cap
+    result.max_skew_rank = cap
+  } else if (CALL_BUYING_STRATEGIES.has(strategy)) {
+    result.max_call_skew_rank = cap
+    result.min_skew_rank = floor
+  } else if (TWO_SIDED_SELL_STRATEGIES.has(strategy)) {
+    result.min_put_skew_rank = floor
+    result.min_call_skew_rank = floor
+  } else if (TWO_SIDED_BUY_STRATEGIES.has(strategy)) {
+    result.max_put_skew_rank = cap
+    result.max_call_skew_rank = cap
+  } else if (strategy === 'collar') {
+    result.min_call_skew_rank = floor
+    result.max_put_skew_rank = cap
+    result.max_skew_rank = cap
+  } else if (INDEX_ONLY_STRATEGIES.has(strategy)) {
+    result.min_put_skew_rank = floor
+  }
+  return result
+}
+
 export const CORE_INDEX_TICKERS = 'SPY,QQQ,IWM'
 
 export const GENERAL_SETUP_PRESETS = [
@@ -204,7 +303,7 @@ export const GENERAL_SETUP_PRESETS = [
   {
     key: 'high_iv',
     label: 'High IV',
-    title: 'Sell expensive options: higher IV Rank, skip earnings, tighter spreads. For credit and short-premium trades.',
+    title: 'Sell expensive options: higher IV Rank, skip earnings, favorable vol skew, tighter spreads. For credit and short-premium trades.',
   },
   {
     key: 'cheap_iv',
@@ -666,7 +765,7 @@ export function strategyDefaultsForGeneralStrategy(strategy) {
 }
 
 export function defaultsForGeneralStrategy(strategy) {
-  return { ...strategyDefaultsForGeneralStrategy(strategy), ...OPEN_FILTERS }
+  return normalizeEarningsFilter({ ...strategyDefaultsForGeneralStrategy(strategy), ...OPEN_FILTERS })
 }
 
 export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
@@ -700,8 +799,9 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     fund_min_aum: [2e9, 500e6, 200e6][intensity],
     min_avg_dollar_volume: [50e6, 25e6, 10e6][intensity],
     min_open_interest: [250, 100, 0][intensity],
-    min_skew_rank: 0,
-    max_skew_rank: 100,
+    include_near_matches: true,
+    ...earningsInTradeState('skip'),
+    ...favorableSkewFilters(strategy, intensity),
   })
 
   if (PREMIUM_SELLING_STRATEGIES.has(strategy)) {
@@ -709,16 +809,12 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
     result.max_iv_rank = 100
     result.min_volatility_score = [50, 35, 0][intensity]
     result.max_volatility_score = 100
-    result.exclude_earnings_before_expiry = true
     if (intensity === 0) result.bid_ask_level = 'Conservative (use bid/ask values)'
   } else if (PREMIUM_BUYING_STRATEGIES.has(strategy)) {
     result.min_iv_rank = 0
     result.max_iv_rank = [50, 75, 100][intensity]
     result.min_volatility_score = 0
     result.max_volatility_score = [50, 70, 100][intensity]
-    result.exclude_earnings_before_expiry = intensity === 0
-  } else {
-    result.exclude_earnings_before_expiry = intensity === 0
   }
 
   if (BULLISH_PULLBACK_STRATEGIES.has(strategy)) {
@@ -812,7 +908,6 @@ export function setupDefaultsForGeneralStrategy(strategy, setupKey) {
     result.max_iv_rank = 100
     result.min_volatility_score = 50
     result.max_volatility_score = 100
-    result.exclude_earnings_before_expiry = true
     if (fieldKeys.has('max_bid_ask_spread')) result.max_bid_ask_spread = 0.35
     result.min_total_option_volume = Math.max(Number(result.min_total_option_volume) || 0, 2500)
   } else if (setupKey === 'cheap_iv') {
@@ -845,6 +940,7 @@ export function setupDefaultsForGeneralStrategy(strategy, setupKey) {
     result.require_shares_held = strategy === 'covered-call'
     result.respect_cost_basis = strategy === 'covered-call'
   }
+  Object.assign(result, earningsInTradeState('skip'), { include_near_matches: true })
   return result
 }
 

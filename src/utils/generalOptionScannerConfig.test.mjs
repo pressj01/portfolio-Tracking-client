@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   CORE_INDEX_TICKERS,
   defaultsForGeneralStrategy,
+  earningsInTradeState,
+  favorableSkewFilters,
   fieldsForGeneralStrategy,
   GENERAL_STRATEGY_CONFIG,
   isIndexOnlyStrategy,
@@ -123,11 +125,18 @@ test('new scans start open while keeping construction defaults', () => {
   assert.equal(open.min_prob_max_profit, 0)
   assert.equal(open.max_prob_max_loss, 100)
   assert.equal(open.max_max_loss_dollars, null)
+  assert.equal(open.earnings_in_trade, 'any')
   assert.equal(open.exclude_earnings_before_expiry, false)
+  assert.equal(open.require_earnings_before_expiry, false)
   assert.equal(open.min_market_cap, 0)
   assert.equal(open.min_open_interest, 0)
   assert.equal(open.min_skew_rank, 0)
   assert.equal(open.max_skew_rank, 100)
+  assert.equal(open.min_put_skew_rank, 0)
+  assert.equal(open.max_put_skew_rank, 100)
+  assert.equal(open.min_call_skew_rank, 0)
+  assert.equal(open.max_call_skew_rank, 100)
+  assert.equal(open.include_near_matches, true)
 })
 
 test('short-premium risk profiles use the requested delta bands', () => {
@@ -144,8 +153,20 @@ test('short-premium risk profiles use the requested delta bands', () => {
   assert.equal(cautious.min_iv_rank, 40)
   assert.equal(moderate.min_iv_rank, 25)
   assert.equal(aggressive.min_iv_rank, 15)
+  assert.equal(cautious.earnings_in_trade, 'skip')
   assert.equal(cautious.exclude_earnings_before_expiry, true)
   assert.equal(moderate.exclude_earnings_before_expiry, true)
+  assert.equal(aggressive.earnings_in_trade, 'skip')
+  assert.equal(cautious.include_near_matches, true)
+  assert.equal(moderate.include_near_matches, true)
+  assert.equal(aggressive.include_near_matches, true)
+  assert.deepEqual(favorableSkewFilters('bull-put-spread', 0), {
+    min_skew_rank: 60, max_skew_rank: 100,
+    min_put_skew_rank: 60, max_put_skew_rank: 100,
+    min_call_skew_rank: 0, max_call_skew_rank: 100,
+  })
+  assert.equal(moderate.min_put_skew_rank, 50)
+  assert.equal(moderate.min_skew_rank, 50)
   assert.equal(cautious.min_market_cap, 10e9)
   assert.equal(moderate.min_avg_dollar_volume, 25e6)
   assert.equal(cautious.min_open_interest, 250)
@@ -161,8 +182,11 @@ test('long-premium risk profiles cap IV Rank instead of requiring rich IV', () =
   assert.equal(moderate.max_iv_rank, 75)
   assert.equal(aggressive.max_iv_rank, 100)
   assert.equal(cautious.min_iv_rank, 0)
+  assert.equal(cautious.earnings_in_trade, 'skip')
   assert.equal(cautious.exclude_earnings_before_expiry, true)
-  assert.equal(aggressive.exclude_earnings_before_expiry, false)
+  assert.equal(aggressive.earnings_in_trade, 'skip')
+  assert.equal(aggressive.exclude_earnings_before_expiry, true)
+  assert.equal(aggressive.require_earnings_before_expiry, false)
 })
 
 test('long debit profiles invert delta sensibly while replacing every setting', () => {
@@ -214,27 +238,42 @@ test('setup presets start from Moderate and overlay the named setup', () => {
   assert.equal(pullback.underlying_trend, 'uptrend')
   assert.equal(pullback.recent_move_direction, 'down')
   assert.equal(pullback.min_reference_delta, 15)
+  assert.equal(pullback.earnings_in_trade, 'skip')
   assert.equal(pullback.exclude_earnings_before_expiry, true)
+  assert.equal(pullback.min_put_skew_rank, 50)
+  assert.equal(pullback.include_near_matches, true)
 
   const rally = setupDefaultsForGeneralStrategy('bear-call-spread', 'rally_downtrend')
   assert.equal(rally.market_trend, 'downtrend')
   assert.equal(rally.recent_move_direction, 'up')
+  assert.equal(rally.earnings_in_trade, 'skip')
+  assert.equal(rally.min_call_skew_rank, 50)
+  assert.equal(rally.max_skew_rank, 50)
 
   const rich = setupDefaultsForGeneralStrategy('iron-condor', 'high_iv')
   assert.equal(rich.min_iv_rank, 40)
   assert.equal(rich.min_volatility_score, 50)
   assert.equal(rich.exclude_earnings_before_expiry, true)
+  assert.equal(rich.min_put_skew_rank, 50)
+  assert.equal(rich.min_call_skew_rank, 50)
 
   const cheap = setupDefaultsForGeneralStrategy('long-put', 'cheap_iv')
   assert.equal(cheap.max_iv_rank, 50)
   assert.equal(cheap.max_volatility_score, 50)
   assert.equal(cheap.min_iv_rank, 0)
+  assert.equal(cheap.earnings_in_trade, 'skip')
+  assert.equal(cheap.max_put_skew_rank, 50)
 
   const weeklies = setupDefaultsForGeneralStrategy('covered-call', 'weeklies')
   assert.deepEqual([weeklies.min_dte, weeklies.target_dte, weeklies.max_dte], [5, 10, 14])
+  assert.equal(weeklies.earnings_in_trade, 'skip')
+  assert.equal(weeklies.min_call_skew_rank, 50)
+  assert.equal(weeklies.max_skew_rank, 50)
 
   const monthlies = setupDefaultsForGeneralStrategy('bull-put-spread', 'monthlies')
   assert.deepEqual([monthlies.min_dte, monthlies.target_dte, monthlies.max_dte], [21, 35, 45])
+  assert.equal(monthlies.min_put_skew_rank, 50)
+  assert.equal(monthlies.earnings_in_trade, 'skip')
 
   const indexes = setupDefaultsForGeneralStrategy('iron-condor', 'core_indexes')
   assert.equal(indexes.include_stocks, false)
@@ -281,4 +320,32 @@ test('long-dated strategy editors use the scanner engines\' supported delta valu
 
   assert.deepEqual(condorPreset.options.map(([value]) => value), ['all', '15/5', '20/10', '25/15'])
   assert.deepEqual(butterflyDelta.options.map(([value]) => value), ['both', '20', '25'])
+})
+
+test('put/call spread and selling presets skip earnings and require favorable skew', () => {
+  assert.deepEqual(earningsInTradeState('require'), {
+    earnings_in_trade: 'require',
+    exclude_earnings_before_expiry: false,
+    require_earnings_before_expiry: true,
+  })
+
+  for (const strategy of ['bull-put-spread', 'bear-put-spread', 'cash-secured-put']) {
+    const moderate = riskProfileDefaultsForGeneralStrategy(strategy, 'moderate')
+    assert.equal(moderate.earnings_in_trade, 'skip', strategy)
+    assert.equal(moderate.include_near_matches, true, strategy)
+    assert.equal(moderate.min_put_skew_rank, 50, strategy)
+    assert.equal(moderate.min_skew_rank, 50, strategy)
+  }
+
+  for (const strategy of ['bear-call-spread', 'bull-call-spread', 'covered-call', 'naked-call']) {
+    const moderate = riskProfileDefaultsForGeneralStrategy(strategy, 'moderate')
+    assert.equal(moderate.earnings_in_trade, 'skip', strategy)
+    assert.equal(moderate.min_call_skew_rank, 50, strategy)
+    assert.equal(moderate.max_skew_rank, 50, strategy)
+  }
+
+  const condor = riskProfileDefaultsForGeneralStrategy('iron-condor', 'aggressive')
+  assert.equal(condor.earnings_in_trade, 'skip')
+  assert.equal(condor.min_put_skew_rank, 40)
+  assert.equal(condor.min_call_skew_rank, 40)
 })

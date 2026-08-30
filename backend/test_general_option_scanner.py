@@ -114,7 +114,8 @@ class GeneralOptionScannerTests(unittest.TestCase):
         stock = {
             "ticker": "AAPL", "is_etf": False, "market_cap": 1e9,
             "avg_dollar_volume": 5e6, "earnings_before_expiry": True,
-            "skew_rank": 20, "min_leg_open_interest": 40,
+            "skew_rank": 20, "put_skew_rank": 15, "call_skew_rank": 80,
+            "min_leg_open_interest": 40,
         }
         tight = {
             "exclude_earnings_before_expiry": True,
@@ -122,6 +123,8 @@ class GeneralOptionScannerTests(unittest.TestCase):
             "min_avg_dollar_volume": 25e6,
             "min_open_interest": 100,
             "min_skew_rank": 40,
+            "min_put_skew_rank": 50,
+            "max_call_skew_rank": 50,
         }
         reasons = _filter_reasons(stock, tight)
         self.assertIn("Earnings before expiry", reasons)
@@ -129,6 +132,8 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertIn("Share dollar volume", reasons)
         self.assertIn("Open interest", reasons)
         self.assertIn("Skew Rank", reasons)
+        self.assertIn("Put Skew Rank", reasons)
+        self.assertIn("Call Skew Rank", reasons)
 
         unknown = _filter_reasons({"ticker": "AAPL", "is_etf": False}, tight)
         self.assertEqual(unknown, [])
@@ -139,6 +144,92 @@ class GeneralOptionScannerTests(unittest.TestCase):
         )
         self.assertIn("Fund AUM", fund)
         self.assertNotIn("Earnings before expiry", fund)
+
+    def test_earnings_in_trade_filter_supports_skip_allow_and_require(self):
+        stock_inside = {"ticker": "AAPL", "is_etf": False, "earnings_before_expiry": True}
+        stock_clear = {"ticker": "AAPL", "is_etf": False, "earnings_before_expiry": False}
+        stock_unknown = {"ticker": "AAPL", "is_etf": False}
+        fund = {"ticker": "SPY", "is_etf": True, "earnings_before_expiry": False}
+
+        self.assertIn("Earnings before expiry", _filter_reasons(
+            stock_inside, {"earnings_in_trade": "skip"}
+        ))
+        self.assertEqual(_filter_reasons(stock_clear, {"earnings_in_trade": "skip"}), [])
+        self.assertEqual(_filter_reasons(stock_unknown, {"earnings_in_trade": "skip"}), [])
+        self.assertEqual(_filter_reasons(stock_inside, {"earnings_in_trade": "any"}), [])
+        self.assertIn("Earnings inside the trade required", _filter_reasons(
+            stock_clear, {"earnings_in_trade": "require"}
+        ))
+        self.assertIn("Earnings inside the trade required", _filter_reasons(
+            stock_unknown, {"earnings_in_trade": "require"}
+        ))
+        self.assertEqual(_filter_reasons(stock_inside, {"earnings_in_trade": "require"}), [])
+        self.assertEqual(_filter_reasons(fund, {"earnings_in_trade": "require"}), [])
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_skip_earnings_hides_stocks_even_as_near_matches(self, score_rows, iv_history):
+        def annotate(rows):
+            for row in rows:
+                row["_general"].update(
+                    stock_scores={},
+                    is_etf=False,
+                    earnings_before_expiry=row["ticker"] == "EARN",
+                )
+        score_rows.side_effect = annotate
+        rows = [
+            {
+                "ticker": "EARN", "price": 100, "expiration": "2026-09-18",
+                "short_strike": 95, "long_strike": 90,
+            },
+            {
+                "ticker": "CLEAN", "price": 100, "expiration": "2026-09-18",
+                "short_strike": 95, "long_strike": 90,
+            },
+        ]
+        skipped = run_general_option_scan(
+            {
+                "strategy": "bull-put-spread",
+                "earnings_in_trade": "skip",
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": rows},
+        )
+        self.assertEqual([row["ticker"] for row in skipped["rows"]], ["CLEAN"])
+
+        required = run_general_option_scan(
+            {
+                "strategy": "bull-put-spread",
+                "earnings_in_trade": "require",
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": rows},
+        )
+        self.assertEqual([row["ticker"] for row in required["rows"]], ["EARN"])
+
+        allowed = run_general_option_scan(
+            {
+                "strategy": "bull-put-spread",
+                "earnings_in_trade": "any",
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": rows},
+        )
+        self.assertEqual(
+            sorted(row["ticker"] for row in allowed["rows"]),
+            ["CLEAN", "EARN"],
+        )
+
+    def test_require_earnings_does_not_drop_names_in_the_dedicated_runner(self):
+        payload = _runner_payload("bull-put-spread", {
+            "earnings_in_trade": "require",
+            "exclude_earnings_before_expiry": False,
+            "require_earnings_before_expiry": True,
+        })
+        self.assertFalse(payload["exclude_earnings_before_expiry"])
+
+        skip = _runner_payload("cash-secured-put", {"earnings_in_trade": "skip"})
+        self.assertTrue(skip["exclude_earnings_before_expiry"])
 
     def test_iron_condor_is_the_only_legacy_runner_given_general_mode(self):
         self.assertTrue(_runner_payload("iron-condor", {})["general_scanner_mode"])
@@ -475,6 +566,36 @@ class GeneralOptionScannerTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["_general"]["match_status"], "near_match")
         self.assertEqual(result["rows"][0]["_general"]["filter_reasons"], ["Maximum profit"])
         self.assertTrue(result["stats"]["showing_near_matches"])
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_exact_matches_only_hides_near_matches(self, score_rows, iv_history):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        result = run_general_option_scan(
+            {
+                "strategy": "bull-put-spread",
+                "max_max_loss_dollars": 500,
+                "include_near_matches": False,
+            },
+            runner=lambda _: {
+                "rows": [{
+                    "ticker": "NVDA",
+                    "price": 218,
+                    "spread": {
+                        "expiration": "2026-09-25",
+                        "short_strike": 195,
+                        "long_strike": 170,
+                        "max_loss_dollars": 2396,
+                        "max_profit_dollars": 104,
+                    },
+                }],
+            },
+        )
+        self.assertEqual(result["rows"], [])
+        self.assertFalse(result["stats"]["showing_near_matches"])
+        self.assertEqual(result["stats"]["filter_rejections"].get("Maximum loss"), 1)
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")

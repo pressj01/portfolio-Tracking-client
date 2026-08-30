@@ -292,9 +292,9 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
       <article><span>IV − RV Rank</span><strong>{meta.iv_rv_rank == null ? 'Warming up' : `${number(meta.iv_rv_rank, 1)}%`}</strong></article>
       <article><span>RV Rank</span><strong>{meta.rv_rank == null ? '—' : `${number(meta.rv_rank, 1)}%`}</strong></article>
       <article><span>Volatility score</span><strong>{meta.volatility_score == null ? 'Warming up' : <>{number(meta.volatility_score, 1)}{meta.volatility_score_provisional ? '*' : ''}</>}</strong></article>
-      {meta.trade_kind === 'cash-secured-put' && <article><span>Put Skew Rank</span><strong>{meta.put_skew_rank == null ? 'Warming up' : `${number(meta.put_skew_rank, 1)}%${meta.put_skew_rank_ready ? '' : '*'}`}</strong></article>}
-      {meta.trade_kind === 'covered-call' && <article><span>Call Skew Rank</span><strong>{meta.call_skew_rank == null ? 'Warming up' : `${number(meta.call_skew_rank, 1)}%${meta.call_skew_rank_ready ? '' : '*'}`}</strong></article>}
-      {['cash-secured-put', 'covered-call'].includes(meta.trade_kind) && <article><span>Skew Rank</span><strong>{meta.skew_rank == null ? 'Warming up' : `${number(meta.skew_rank, 1)}%${meta.skew_rank_ready ? '' : '*'}`}</strong></article>}
+      <article><span>Put Skew Rank</span><strong>{meta.put_skew_rank == null ? 'Warming up' : `${number(meta.put_skew_rank, 1)}%${meta.put_skew_rank_ready ? '' : '*'}`}</strong></article>
+      <article><span>Call Skew Rank</span><strong>{meta.call_skew_rank == null ? 'Warming up' : `${number(meta.call_skew_rank, 1)}%${meta.call_skew_rank_ready ? '' : '*'}`}</strong></article>
+      <article><span>Skew Rank</span><strong>{meta.skew_rank == null ? 'Warming up' : `${number(meta.skew_rank, 1)}%${meta.skew_rank_ready ? '' : '*'}`}</strong></article>
       <article><span>Max loss</span><strong>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</strong></article>
     </div><LegTable trade={trade} /></div>}
   </section>

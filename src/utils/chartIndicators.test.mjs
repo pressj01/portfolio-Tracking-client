@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { sma, ema, computeMacd, computeRsi, tradingSessionRangeBreaks } from './chartIndicators.js'
+import { sma, smaOverlayTraces, ema, computeMacd, computeRsi, tradingSessionRangeBreaks } from './chartIndicators.js'
 
 function bars(closes, startDate = '2026-01-05') {
   // Consecutive weekdays so the daily rangebreak path is exercised.
@@ -18,6 +18,16 @@ function bars(closes, startDate = '2026-01-05') {
 test('sma warms up from bar 0 with a partial window', () => {
   const got = sma([2, 4, 6, 8], 3)
   assert.deepEqual(got, [2, 3, 4, 6])   // 2, (2+4)/2, (2+4+6)/3, (4+6+8)/3
+})
+
+test('price charts overlay SMA 50 and SMA 200', () => {
+  const records = bars(Array.from({ length: 10 }, (_, i) => 10 + i))
+  const traces = smaOverlayTraces(records)
+  assert.deepEqual(traces.map(trace => trace.name), ['SMA 50', 'SMA 200'])
+  assert.equal(traces[0].y.length, records.length)
+  assert.equal(traces[1].line.color, '#2EC4B6')
+  const withoutFifty = smaOverlayTraces(records, { skipNames: ['SMA 50'] })
+  assert.deepEqual(withoutFifty.map(trace => trace.name), ['SMA 200'])
 })
 
 test('ema seeds with the first value and tracks a constant series', () => {

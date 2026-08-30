@@ -4,17 +4,12 @@ import { useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
-import { sma, computeMacd, computeRsi, tradingSessionRangeBreaks } from '../utils/chartIndicators'
+import { computeMacd, computeRsi, smaOverlayTraces, tradingSessionRangeBreaks } from '../utils/chartIndicators'
 
 const PERIODS = [
   { value: '3mo', label: '3M' }, { value: '6mo', label: '6M' },
   { value: 'ytd', label: 'YTD' }, { value: '1y', label: '1Y' },
   { value: '2y', label: '2Y' }, { value: '5y', label: '5Y' },
-]
-
-const MA_CONFIG = [
-  { period: 50, color: '#FF6B35' },
-  { period: 200, color: '#2EC4B6' },
 ]
 
 // Panel heights, price pane first. Matches the Analysis screen's proportions.
@@ -90,14 +85,7 @@ export default function PriceChartModal({ ticker, onClose, initialPeriod = '1y' 
       })
     }
 
-    // Moving averages on the price pane.
-    MA_CONFIG.forEach(({ period: maPeriod, color }) => {
-      traces.push({
-        x: dates, y: sma(closes, maPeriod), type: 'scatter', mode: 'lines',
-        name: `SMA ${maPeriod}`, line: { color, width: 1.5 },
-        xaxis: 'x', yaxis: 'y',
-      })
-    })
+    smaOverlayTraces(records).forEach(trace => traces.push({ ...trace, xaxis: 'x', yaxis: 'y' }))
 
     const macd = computeMacd(records)
     const rsi = computeRsi(records)
