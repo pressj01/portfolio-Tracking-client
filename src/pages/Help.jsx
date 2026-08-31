@@ -1468,15 +1468,16 @@ function HoldingsHelp() {
       {/* ── Editing a Holding ──────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Holding</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        There are two ways to open the edit form:
+        Click the "Edit" button in the row's Actions column to open the edit form.
       </p>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li>Click the ticker name (blue link) in the table, or</li>
-        <li>Click the "Edit" button in the row's Actions column.</li>
-      </ul>
       <p style={{ marginBottom: '0.75rem' }}>
         The form opens pre-filled with all current values. The Ticker field is locked (you cannot rename a ticker — delete and re-add instead).
       </p>
+      <div className="alert alert-info" style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+        Clicking the ticker name (blue link) in the table instead opens the Security Research sheet for that
+        ticker — a quick lookup of NAV trend, distribution coverage, checklist score, and closure risk. It doesn't
+        edit the holding.
+      </div>
 
       <h4 style={{ marginBottom: '0.4rem' }}>Without Transactions</h4>
       <p style={{ marginBottom: '0.75rem' }}>
