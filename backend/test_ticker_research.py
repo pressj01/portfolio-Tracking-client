@@ -175,6 +175,11 @@ class TickerResearchApiTest(unittest.TestCase):
         self.assertEqual(app_module._combined_export_clean_date("20226-04-10"), "")
         self.assertEqual(app_module._combined_export_clean_date("04/10/2026"), "2026-04-10")
 
+    def test_combined_export_does_not_turn_blank_cells_into_nan_text(self):
+        self.assertEqual(app_module._combined_export_clean_text(float("nan")), "")
+        self.assertEqual(app_module._combined_export_clean_text(None), "")
+        self.assertEqual(app_module._combined_export_clean_text("  imported note  "), "imported note")
+
     def test_transaction_date_validation_checks_the_whole_date(self):
         self.assertIsNone(app_module._transaction_date_error("2026-04-10"))
         self.assertIn("YYYY-MM-DD", app_module._transaction_date_error("2026-13-40"))

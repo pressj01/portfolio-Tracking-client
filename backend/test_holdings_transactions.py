@@ -2184,6 +2184,93 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(data[1]["notes"], "Account: Schwab IRA; member note")
         self.assertEqual(data[1]["source_account_name"], "Schwab IRA")
 
+    def test_ticker_transaction_list_can_include_dividend_events(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Fidelity Test', 0)")
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid) "
+            "VALUES ('ABC', 20, 1, 10)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 20, 'BUY', '2026-01-01', 2, 10, 0, 'buy')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('ABC', 20, '2026-01-15', 3.25, 'portfolio_export', 'cash dividend')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('ABC', 20, 'SELL', '2026-02-01', 1, 12, 0, 'sell')"
+        )
+
+        default_data = self.client.get(
+            "/api/holdings/ABC/transactions?profile_id=20"
+        ).get_json()
+        history_data = self.client.get(
+            "/api/holdings/ABC/transactions?profile_id=20&include_dividends=true"
+        ).get_json()
+
+        self.assertEqual(
+            [row["transaction_type"] for row in default_data],
+            ["BUY", "SELL"],
+        )
+        self.assertEqual(
+            [row["transaction_type"] for row in history_data],
+            ["BUY", "DIVIDEND", "SELL"],
+        )
+        dividend = history_data[1]
+        self.assertEqual(dividend["dividend_amount"], 3.25)
+        self.assertTrue(str(dividend["id"]).startswith("dividend-"))
+        self.assertIsNone(dividend["position_after"])
+
+    def test_full_transaction_history_includes_closed_tickers_and_actual_dividends(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Fidelity Test', 0)")
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid) "
+            "VALUES ('OPEN', 20, 1, 10)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('OPEN', 20, 'BUY', '2026-01-01', 1, 10, 0, 'open buy')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('CLOSED', 20, 'BUY', '2025-01-01', 2, 8, 0, 'closed buy')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('CLOSED', 20, 'SELL', '2025-02-01', 2, 9, 0, 'closed sell')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('CLOSED', 20, '2025-01-15', 1.5, 'portfolio_export', 'closed dividend')"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('OPEN', 20, '2026-02-15', 99, 'refresh_estimate', 'projection only')"
+        )
+
+        res = self.client.get("/api/transactions/history?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["summary"]["transactions"], 4)
+        self.assertEqual(data["summary"]["buys"], 2)
+        self.assertEqual(data["summary"]["sells"], 1)
+        self.assertEqual(data["summary"]["dividends"], 1)
+        self.assertEqual(data["summary"]["closed_position_events"], 3)
+        self.assertEqual(data["summary"]["tickers"], 2)
+        closed_rows = [row for row in data["events"] if row["ticker"] == "CLOSED"]
+        self.assertEqual(len(closed_rows), 3)
+        self.assertTrue(all(row["closed_position"] for row in closed_rows))
+        self.assertTrue(all(row["source_account_name"] == "Fidelity Test" for row in data["events"]))
+        self.assertFalse(any(row.get("source") == "refresh_estimate" for row in data["events"]))
+
     def test_owner_target_reference_shows_included_subaccount_targets(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 1)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")

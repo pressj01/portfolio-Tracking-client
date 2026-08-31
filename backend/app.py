@@ -8440,6 +8440,24 @@ def _combined_export_clean_float(value):
         return None
 
 
+def _combined_export_clean_text(value):
+    """Return spreadsheet text without leaking pandas NaN sentinels.
+
+    ``str(float('nan'))`` becomes the literal string ``"nan"``.  That used to
+    make blank Notes cells in a Holdings + Transactions workbook appear as a
+    real note after import, and could also turn a blank profile/ticker cell into
+    misleading text while parsing.
+    """
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    return str(value).strip()
+
+
 def _combined_export_clean_date(value):
     if value is None:
         return ""
@@ -8510,8 +8528,8 @@ def _parse_portfolio_export_workbook(path, filename=None):
         if not txdf.empty and _combined_export_has_columns(txdf, ["Ticker", "Type", "Date"]):
             colmap = {str(c).strip().lower(): c for c in txdf.columns}
             for _, row in txdf.iterrows():
-                ticker = str(row.get(colmap["ticker"], "") or "").strip().upper()
-                txn_type = str(row.get(colmap["type"], "") or "BUY").strip().upper()
+                ticker = _combined_export_clean_text(row.get(colmap["ticker"])).upper()
+                txn_type = _combined_export_clean_text(row.get(colmap["type"])).upper() or "BUY"
                 if not ticker or txn_type not in {"BUY", "SELL", "DIVIDEND"}:
                     continue
                 transaction_date = _combined_export_clean_date(row.get(colmap["date"]))
@@ -8530,7 +8548,9 @@ def _parse_portfolio_export_workbook(path, filename=None):
                         continue
                     transactions.append({
                         "id": row.get(colmap.get("transaction id")) if colmap.get("transaction id") else None,
-                        "profile": str(row.get(colmap.get("profile"), "") or "").strip(),
+                        "profile": _combined_export_clean_text(
+                            row.get(colmap.get("profile")) if colmap.get("profile") else None
+                        ),
                         "ticker": ticker,
                         "type": "DIVIDEND",
                         "date": transaction_date,
@@ -8539,7 +8559,9 @@ def _parse_portfolio_export_workbook(path, filename=None):
                         "fees": 0,
                         "realized_gain": None,
                         "dividend_amount": amount,
-                        "notes": str(row.get(colmap.get("notes"), "") or "").strip(),
+                        "notes": _combined_export_clean_text(
+                            row.get(colmap.get("notes")) if colmap.get("notes") else None
+                        ),
                         "created_at": _combined_export_clean_date(row.get(colmap.get("created at"))),
                     })
                     continue
@@ -8548,7 +8570,9 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     continue
                 transactions.append({
                     "id": row.get(colmap.get("transaction id")) if colmap.get("transaction id") else None,
-                    "profile": str(row.get(colmap.get("profile"), "") or "").strip(),
+                    "profile": _combined_export_clean_text(
+                        row.get(colmap.get("profile")) if colmap.get("profile") else None
+                    ),
                     "ticker": ticker,
                     "type": txn_type,
                     "date": transaction_date,
@@ -8557,7 +8581,9 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     "fees": _combined_export_clean_float(row.get(colmap.get("fees"))) or 0,
                     "realized_gain": _combined_export_clean_float(row.get(colmap.get("realized gain"))),
                     "dividend_amount": None,
-                    "notes": str(row.get(colmap.get("notes"), "") or "").strip(),
+                    "notes": _combined_export_clean_text(
+                        row.get(colmap.get("notes")) if colmap.get("notes") else None
+                    ),
                     "created_at": _combined_export_clean_date(row.get(colmap.get("created at"))),
                 })
 
@@ -20551,9 +20577,158 @@ def repair_cost_basis():
     })
 
 
+def _transaction_event_sort_key(event):
+    """Chronological ordering shared by ticker and full-ledger views."""
+    type_order = {"BUY": 0, "DIVIDEND": 1, "SELL": 2}
+    event_type = str(event.get("transaction_type") or "BUY").upper()
+    return (
+        str(event.get("transaction_date") or ""),
+        type_order.get(event_type, 3),
+        str(event.get("created_at") or ""),
+        str(event.get("id") or ""),
+    )
+
+
+def _dividend_transaction_events(conn, profile_ids, ticker=None):
+    """Expose actual dividend payments in the transaction-history shape.
+
+    Dividend payments intentionally live in their own table because they do
+    not change share count or cost basis.  The holdings history UI previously
+    queried only ``transactions``, which made valid imported DIVIDEND rows look
+    as though the importer had dropped them.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in profile_ids if pid is not None))
+    if not ids:
+        return []
+    placeholders = ",".join("?" * len(ids))
+    columns = _table_columns(conn, "dividend_payments")
+    created_at_expr = "created_at" if "created_at" in columns else "NULL"
+    query = (
+        "SELECT id, ticker, profile_id, payment_date, amount, source, notes, "
+        f"{created_at_expr} AS created_at FROM dividend_payments "
+        f"WHERE profile_id IN ({placeholders}) "
+        "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'"
+    )
+    params = list(ids)
+    if ticker:
+        query += " AND UPPER(ticker) = ?"
+        params.append(str(ticker).upper())
+    query += " ORDER BY payment_date, id"
+
+    events = []
+    for row in conn.execute(query, params).fetchall():
+        item = dict(row) if hasattr(row, "keys") else {
+            "id": row[0], "ticker": row[1], "profile_id": row[2],
+            "payment_date": row[3], "amount": row[4], "source": row[5],
+            "notes": row[6], "created_at": row[7],
+        }
+        payment_id = item.get("id")
+        events.append({
+            "id": f"dividend-{payment_id}",
+            "dividend_payment_id": payment_id,
+            "record_type": "dividend",
+            "ticker": str(item.get("ticker") or "").upper(),
+            "profile_id": item.get("profile_id"),
+            "transaction_type": "DIVIDEND",
+            "transaction_date": item.get("payment_date"),
+            "shares": None,
+            "price_per_share": None,
+            "fees": None,
+            "realized_gain": None,
+            "dividend_amount": float(item.get("amount") or 0),
+            "source": item.get("source"),
+            "notes": item.get("notes") or "",
+            "created_at": item.get("created_at"),
+            "lot_allocations": [],
+            "shares_remaining": None,
+            "position_after": None,
+            "avg_cost_after": None,
+            "total_cost_after": None,
+        })
+    return events
+
+
+@app.route("/api/transactions/history", methods=["GET"])
+def transaction_history():
+    """Return every saved buy, sell, and actual dividend in the active scope.
+
+    This ledger deliberately includes tickers with no current holding so a
+    closed position does not disappear from the only place users inspect their
+    imported transaction history.
+    """
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        equity_pids, include_account_note = _get_transaction_read_scope(conn, is_agg, pids)
+        equity_placeholders = ",".join("?" * len(equity_pids))
+        ticker_filter = str(request.args.get("ticker") or "").strip().upper()
+        equity_query = (
+            "SELECT * FROM transactions "
+            f"WHERE profile_id IN ({equity_placeholders})"
+        )
+        equity_params = list(equity_pids)
+        if ticker_filter:
+            equity_query += " AND UPPER(ticker) = ?"
+            equity_params.append(ticker_filter)
+        equity_query += " ORDER BY transaction_date, id"
+        equity_rows = conn.execute(equity_query, equity_params).fetchall()
+        equity_events = []
+        for row in equity_rows:
+            event = dict(row) if hasattr(row, "keys") else dict(zip(row.keys(), row))
+            transaction_id = event.get("id")
+            event["id"] = f"transaction-{transaction_id}"
+            event["transaction_id"] = transaction_id
+            event["record_type"] = "equity"
+            event["dividend_amount"] = None
+            equity_events.append(event)
+
+        dividend_pids = _dividend_payment_profile_ids_for_read(conn, equity_pids)
+        dividend_events = _dividend_transaction_events(
+            conn, dividend_pids, ticker=ticker_filter or None,
+        )
+        all_pids = list(dict.fromkeys([*equity_pids, *dividend_pids]))
+        current_positions = set()
+        if all_pids:
+            current_placeholders = ",".join("?" * len(all_pids))
+            current_positions = {
+                (int(row["profile_id"]), str(row["ticker"] or "").upper())
+                for row in conn.execute(
+                    "SELECT profile_id, ticker FROM all_account_info "
+                    f"WHERE profile_id IN ({current_placeholders}) AND quantity > 0",
+                    all_pids,
+                ).fetchall()
+            }
+
+        events = [*equity_events, *dividend_events]
+        for event in events:
+            position_key = (
+                int(event.get("profile_id") or 1),
+                str(event.get("ticker") or "").upper(),
+            )
+            event["closed_position"] = position_key not in current_positions
+
+        # The full ledger has an Account column even for a single-account view.
+        # ``include_account_note`` controls whether that label is also prefixed
+        # to Notes; it should not suppress the structured account name.
+        profile_names = _load_profile_name_map(conn, all_pids)
+        events = _add_transaction_source_notes(events, profile_names, include_account_note)
+        events.sort(key=_transaction_event_sort_key, reverse=True)
+        summary = {
+            "transactions": len(events),
+            "buys": sum(1 for event in events if event.get("transaction_type") == "BUY"),
+            "sells": sum(1 for event in events if event.get("transaction_type") == "SELL"),
+            "dividends": sum(1 for event in events if event.get("transaction_type") == "DIVIDEND"),
+            "closed_position_events": sum(1 for event in events if event.get("closed_position")),
+            "tickers": len({event.get("ticker") for event in events if event.get("ticker")}),
+        }
+        return jsonify({"events": events, "summary": summary})
+    finally:
+        conn.close()
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["GET"])
 def list_transactions(ticker):
-    """List all transactions for a ticker."""
+    """List equity lots for a ticker and optionally its dividend payments."""
     is_agg, pids = get_profile_filter()
     ticker = ticker.upper()
     conn = get_connection()
@@ -20569,10 +20744,21 @@ def list_transactions(ticker):
         if ((row["transaction_type"] if hasattr(row, "keys") else row[1]) or "BUY").upper() == "SELL"
     ]
     alloc_map = _load_lot_alloc_map(conn, sell_ids)
-    profile_names = _load_profile_name_map(conn, read_pids) if include_account_note else {}
     fallback_basis = _untracked_share_basis(conn, ticker, read_pids[0]) if read_pids else None
-    conn.close()
     transactions = _annotate_transaction_rows(rows, alloc_map, fallback_basis)
+    profile_ids_for_names = list(read_pids)
+    include_dividends = str(request.args.get("include_dividends") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    if include_dividends:
+        dividend_pids = _dividend_payment_profile_ids_for_read(conn, read_pids)
+        transactions.extend(_dividend_transaction_events(conn, dividend_pids, ticker=ticker))
+        profile_ids_for_names.extend(dividend_pids)
+        transactions.sort(key=_transaction_event_sort_key)
+    profile_names = (
+        _load_profile_name_map(conn, profile_ids_for_names) if include_account_note else {}
+    )
+    conn.close()
     return jsonify(_add_transaction_source_notes(transactions, profile_names, include_account_note))
 
 

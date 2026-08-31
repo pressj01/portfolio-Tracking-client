@@ -1278,6 +1278,215 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   )
 }
 
+const transactionTypeColor = (type) => {
+  if (type === 'SELL') return 'var(--p-ef9a9a)'
+  if (type === 'DIVIDEND') return 'var(--p-4fc3f7)'
+  return 'var(--p-81c784)'
+}
+
+const transactionCashAmount = (txn) => {
+  const type = String(txn.transaction_type || 'BUY').toUpperCase()
+  if (type === 'DIVIDEND') return Number(txn.dividend_amount) || 0
+  const shares = Number(txn.shares) || 0
+  const price = Number(txn.price_per_share) || 0
+  const fees = Number(txn.fees) || 0
+  return type === 'SELL' ? (shares * price) - fees : (shares * price) + fees
+}
+
+const isDripBuyTransaction = (txn) => {
+  if (String(txn.transaction_type || 'BUY').toUpperCase() !== 'BUY') return false
+  const notes = `${txn.notes || ''} ${txn.raw_notes || ''}`.toUpperCase()
+  return notes.includes('DIVIDEND_REINVEST') || notes.includes('[DRIP]')
+}
+
+const isClosedBuyLot = (txn) => {
+  if (String(txn.transaction_type || 'BUY').toUpperCase() !== 'BUY') return false
+  return txn.shares_remaining != null && Number(txn.shares_remaining) <= 1e-9
+}
+
+function TransactionHistoryModal({ onClose, pf }) {
+  const [payload, setPayload] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [query, setQuery] = useState('')
+  const [typeFilter, setTypeFilter] = useState('ALL')
+  const [closedOnly, setClosedOnly] = useState(false)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    pf('/api/transactions/history', { signal: controller.signal })
+      .then(async response => {
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.error || 'Failed to load transaction history')
+        return data
+      })
+      .then(data => {
+        if (controller.signal.aborted) return
+        setPayload(data)
+        setError(null)
+      })
+      .catch(err => {
+        if (err?.name === 'AbortError' || controller.signal.aborted) return
+        setError(err.message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+    return () => controller.abort()
+  }, [pf])
+
+  useEffect(() => {
+    const onKeyDown = event => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  const events = useMemo(() => {
+    const search = query.trim().toLowerCase()
+    return (payload?.events || []).filter(event => {
+      const type = String(event.transaction_type || 'BUY').toUpperCase()
+      if (typeFilter !== 'ALL' && type !== typeFilter) return false
+      if (closedOnly && !event.closed_position) return false
+      if (!search) return true
+      return [event.ticker, event.notes, event.raw_notes, event.source_account_name]
+        .some(value => String(value || '').toLowerCase().includes(search))
+    })
+  }, [payload, query, typeFilter, closedOnly])
+
+  const summary = payload?.summary || {}
+  const fmtNumber = (value, digits = 3) => value == null
+    ? '-'
+    : Number(value).toLocaleString(undefined, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    })
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
+    }}>
+      <div className="card" style={{ width: '97vw', maxWidth: 1500, maxHeight: '92vh', overflow: 'hidden', padding: 0 }}>
+        <div style={{ padding: '1rem 1.25rem 0.85rem', borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start' }}>
+            <div>
+              <h2 style={{ margin: 0 }}>Transaction History</h2>
+              <div style={{ color: 'var(--text-dim-2)', fontSize: '0.82rem', marginTop: '0.3rem' }}>
+                Every saved buy, sell, and actual dividend, including tickers that are no longer held.
+              </div>
+            </div>
+            <button className="btn btn-secondary" onClick={onClose}>Close</button>
+          </div>
+
+          {!loading && !error && (
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
+              {[
+                ['All', summary.transactions || 0, 'var(--text-strong)'],
+                ['Buys', summary.buys || 0, 'var(--p-81c784)'],
+                ['Sells', summary.sells || 0, 'var(--p-ef9a9a)'],
+                ['Dividends', summary.dividends || 0, 'var(--p-4fc3f7)'],
+                ['Closed-position rows', summary.closed_position_events || 0, 'var(--p-ffb74d)'],
+              ].map(([label, value, color]) => (
+                <span key={label} style={{
+                  padding: '0.25rem 0.55rem', borderRadius: 999,
+                  border: '1px solid var(--border)', color, fontSize: '0.76rem', fontWeight: 700,
+                }}>
+                  {label}: {value.toLocaleString()}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', marginTop: '0.85rem', alignItems: 'center' }}>
+            <input
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder="Search ticker, account, or notes"
+              aria-label="Search transaction history"
+              style={{ minWidth: 260, flex: '1 1 320px' }}
+            />
+            <select value={typeFilter} onChange={event => setTypeFilter(event.target.value)} aria-label="Filter transaction type">
+              <option value="ALL">All types</option>
+              <option value="BUY">Buys</option>
+              <option value="SELL">Sells</option>
+              <option value="DIVIDEND">Dividends</option>
+            </select>
+            <label style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center', fontSize: '0.82rem', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={closedOnly} onChange={event => setClosedOnly(event.target.checked)} />
+              Closed positions only
+            </label>
+            <span style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem' }}>
+              Showing {events.length.toLocaleString()}
+            </span>
+          </div>
+        </div>
+
+        <div style={{ overflow: 'auto', maxHeight: 'calc(92vh - 190px)' }}>
+          {loading && <div style={{ padding: '2rem', textAlign: 'center' }}><span className="spinner" /> Loading history...</div>}
+          {error && <div className="alert alert-error" style={{ margin: '1rem' }}>{error}</div>}
+          {!loading && !error && events.length === 0 && (
+            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-dim-2)' }}>No transactions match these filters.</div>
+          )}
+          {!loading && !error && events.length > 0 && (
+            <table style={{ width: '100%', minWidth: 1180, fontSize: '0.8rem', margin: 0 }}>
+              <thead>
+                <tr>
+                  {['Date', 'Ticker', 'Type', 'Shares', 'Price', 'Fees', 'Cash Amount', 'Realized G/L', 'Account', 'Status', 'Notes'].map(label => (
+                    <th key={label} style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2, whiteSpace: 'nowrap' }}>{label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {events.map(event => {
+                  const type = String(event.transaction_type || 'BUY').toUpperCase()
+                  const isDividend = type === 'DIVIDEND'
+                  const isBuy = type === 'BUY'
+                  return (
+                    <tr key={event.id}>
+                      <td style={{ whiteSpace: 'nowrap' }}>{event.transaction_date || '-'}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{event.ticker || '-'}</td>
+                      <td style={{ color: transactionTypeColor(type), fontWeight: 700 }}>{type}</td>
+                      <td title={isDividend ? 'This dividend was recorded as cash, so it did not directly add shares.' : undefined}>
+                        {isDividend ? fmtNumber(0) : fmtNumber(event.shares)}
+                      </td>
+                      <td title={isDividend ? 'A cash dividend has no purchase or sale price.' : undefined}>
+                        {formatMoney(isDividend ? 0 : event.price_per_share, { fallback: '$0.00' })}
+                      </td>
+                      <td title={isDividend ? 'No transaction fee was recorded for this dividend.' : undefined}>
+                        {formatMoney(isDividend ? 0 : event.fees, { fallback: '$0.00' })}
+                      </td>
+                      <td>{formatMoney(transactionCashAmount(event), { fallback: '-' })}</td>
+                      <td
+                        title={isDividend
+                          ? 'Dividend income is shown in Cash Amount, not as realized capital gain.'
+                          : isBuy
+                            ? 'A BUY does not realize a gain or loss. Any result is recorded on the later SELL.'
+                            : undefined}
+                        style={{ color: event.realized_gain > 0 ? 'var(--p-81c784)' : event.realized_gain < 0 ? 'var(--p-ef9a9a)' : undefined }}
+                      >
+                        {formatMoney(event.realized_gain, { fallback: '$0.00' })}
+                      </td>
+                      <td>{event.source_account_name || '-'}</td>
+                      <td>
+                        {event.closed_position
+                          ? <span style={{ color: 'var(--p-ffb74d)', whiteSpace: 'nowrap' }}>Closed position</span>
+                          : <span style={{ color: 'var(--p-81c784)' }}>Open</span>}
+                      </td>
+                      <td title={event.raw_notes || event.notes || ''} style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {event.raw_notes || event.notes || '-'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // Column definitions for sortable table
 // The first FROZEN_COLS visible columns are frozen horizontally. Widths live on
 // the column definitions so hiding or reordering cannot shift them out of line.
@@ -1395,31 +1604,26 @@ const COLUMNS = [
 ]
 
 const LOT_COLUMNS = [
-  { key: 'transaction_type', label: 'Type', type: 'string' },
-  { key: 'transaction_date', label: 'Date', type: 'date' },
-  { key: 'shares', label: 'Shares', type: 'number' },
-  { key: 'price_per_share', label: 'Price', type: 'number' },
-  { key: 'fees', label: 'Fees', type: 'number' },
-  { key: 'cost_proceeds', label: 'Cost/Proceeds', type: 'number' },
-  { key: 'unrealized_gain', label: 'Unrealized G/L', type: 'number' },
-  { key: 'realized_gain', label: 'Realized G/L', type: 'number' },
-  { key: 'position_after', label: 'Position', type: 'number', divider: true },
-  { key: 'avg_cost_after', label: 'Avg Cost', type: 'number' },
-  { key: 'total_cost_after', label: 'Total Cost', type: 'number' },
-  { key: 'notes', label: 'Notes', type: 'string' },
+  { key: 'transaction_type', label: 'Type', type: 'string', tip: 'BUY adds shares, SELL removes shares, and DIVIDEND records cash income.' },
+  { key: 'transaction_date', label: 'Date', type: 'date', tip: 'The transaction date from the imported brokerage history.' },
+  { key: 'shares', label: 'Shares', type: 'number', tip: 'Shares bought or sold. Cash dividend rows display 0.000 because the separate DRIP BUY adds the shares.' },
+  { key: 'price_per_share', label: 'Price', type: 'number', tip: 'Purchase or sale price per share. Cash dividend rows display $0.00.' },
+  { key: 'fees', label: 'Fees', type: 'number', tip: 'Brokerage fees recorded for this event. No recorded fee displays $0.00.' },
+  { key: 'cost_proceeds', label: 'Cost/Proceeds / Amount', type: 'number', tip: 'BUY cost, SELL proceeds, or DIVIDEND cash amount.' },
+  { key: 'unrealized_gain', label: 'Unrealized G/L', type: 'number', tip: 'Current gain or loss only for BUY lots that still have shares. Closed lots display Closed and $0.00.' },
+  { key: 'realized_gain', label: 'Realized G/L', type: 'number', tip: 'Gain or loss recorded by a SELL. BUY and DIVIDEND rows display $0.00.' },
+  { key: 'position_after', label: 'Position', type: 'number', divider: true, tip: 'Total position immediately after a BUY or SELL. DIVIDEND rows say No change.' },
+  { key: 'avg_cost_after', label: 'Avg Cost', type: 'number', tip: 'Average cost immediately after a BUY or SELL. DIVIDEND rows say No change.' },
+  { key: 'total_cost_after', label: 'Total Cost', type: 'number', tip: 'Total cost basis immediately after a BUY or SELL. DIVIDEND rows say No change.' },
+  { key: 'notes', label: 'Notes', type: 'string', tip: 'Brokerage description imported with the event.' },
 ]
 
 const lotCostOrProceeds = (txn) => {
-  const shares = Number(txn.shares) || 0
-  const price = Number(txn.price_per_share) || 0
-  const fees = Number(txn.fees) || 0
-  return (txn.transaction_type || 'BUY') === 'SELL'
-    ? (shares * price) - fees
-    : (shares * price) + fees
+  return transactionCashAmount(txn)
 }
 
 const lotUnrealizedGain = (txn, holding) => {
-  if ((txn.transaction_type || 'BUY') === 'SELL') return null
+  if ((txn.transaction_type || 'BUY') !== 'BUY') return null
   const originalShares = Number(txn.shares) || 0
   const remaining = txn.shares_remaining
   const shares = remaining == null ? originalShares : Number(remaining)
@@ -1805,6 +2009,7 @@ export default function ManageHoldings() {
   const [applyingRepair, setApplyingRepair] = useState(false)
   const [txnTicker, setTxnTicker] = useState(null)    // ticker for transaction modal
   const [txnIsNew, setTxnIsNew] = useState(false)      // true = new ticker via transaction
+  const [showTransactionHistory, setShowTransactionHistory] = useState(false)
   const [tickerRisk, setTickerRisk] = useState({})
   const [tickerGrades, setTickerGrades] = useState({})
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
@@ -2183,7 +2388,7 @@ export default function ManageHoldings() {
     }
     setExpandedTickers(prev => ({ ...prev, [ticker]: 'loading' }))
     try {
-      const res = await pf(`/api/holdings/${ticker}/transactions`)
+      const res = await pf(`/api/holdings/${ticker}/transactions?include_dividends=true`)
       const data = await res.json()
       setExpandedTickers(prev => ({ ...prev, [ticker]: data }))
     } catch {
@@ -2691,6 +2896,9 @@ export default function ManageHoldings() {
           <button className="btn btn-secondary" onClick={() => navigate('/import')}>
             Import Holdings
           </button>
+          <button className="btn btn-secondary" onClick={() => setShowTransactionHistory(true)}>
+            Transaction History
+          </button>
           <select
             value={divSourceFilter}
             onChange={(e) => setDivSourceFilter(e.target.value)}
@@ -3120,6 +3328,22 @@ export default function ManageHoldings() {
                         </div>
                       ) : (
                         <div style={{ padding: '0.5rem 1rem' }}>
+                          <details style={{
+                            margin: '0 0 0.5rem', padding: '0.45rem 0.65rem', borderRadius: 4,
+                            background: 'rgba(79, 195, 247, 0.08)', color: 'var(--text-dim)',
+                            fontSize: '0.76rem', lineHeight: 1.45,
+                          }}>
+                            <summary style={{ cursor: 'pointer', color: 'var(--p-4fc3f7)', fontWeight: 700 }}>
+                              How to read this transaction table
+                            </summary>
+                            <div style={{ marginTop: '0.4rem', display: 'grid', gap: '0.2rem' }}>
+                              <div><strong>Closed · $0.00</strong> means a BUY lot was fully sold. Its result is included on the related SELL row.</div>
+                              <div><strong>BUY Realized G/L $0.00</strong> means buying did not realize a gain or loss; realization happens when shares are sold.</div>
+                              <div><strong>DIVIDEND $0.00 fields</strong> do not represent missing data. The cash income is in Amount, and the dividend itself has no shares or capital gain/loss.</div>
+                              <div><strong>DIVIDEND + DRIP reinvestment</strong> are two related events: cash was received, then used by the separate BUY to acquire shares.</div>
+                              <div>Hover a value or column heading for additional help.</div>
+                            </div>
+                          </details>
                           <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
@@ -3144,7 +3368,7 @@ export default function ManageHoldings() {
                                       <button
                                         type="button"
                                         onClick={() => handleLotSort(h.ticker, col.key)}
-                                        title={`Sort lots by ${col.label}`}
+                                        title={`${col.tip || col.label} Click to sort by ${col.label}.`}
                                         style={{
                                           alignItems: 'center',
                                           background: 'transparent',
@@ -3171,29 +3395,84 @@ export default function ManageHoldings() {
                             </thead>
                             <tbody>
                               {sortLotTransactions(expandedTickers[h.ticker], h, lotSorts[h.ticker]).map(txn => {
-                                const isSell = (txn.transaction_type || 'BUY') === 'SELL'
+                                const txnType = String(txn.transaction_type || 'BUY').toUpperCase()
+                                const isDividend = txnType === 'DIVIDEND'
+                                const isDripBuy = isDripBuyTransaction(txn)
+                                const isClosedBuy = isClosedBuyLot(txn)
                                 const lotCost = lotCostOrProceeds(txn)
                                 const lotGL = lotUnrealizedGain(txn, h)
+                                const unrealizedHelp = isClosedBuy
+                                  ? 'This BUY lot has no remaining shares. Its gain or loss was realized on the related SELL transaction.'
+                                  : isDividend
+                                    ? 'Dividend income is cash, not an open security lot, so it has no unrealized capital gain or loss.'
+                                    : txnType === 'SELL'
+                                      ? 'A SELL has no remaining open lot. Its result is shown in Realized G/L.'
+                                      : 'Current unrealized gain or loss for the shares still open in this BUY lot.'
+                                const realizedHelp = txnType === 'SELL'
+                                  ? 'Gain or loss realized by this sale.'
+                                  : isDividend
+                                    ? 'Dividend income is shown in Amount, not as realized capital gain.'
+                                    : 'A BUY does not realize a gain or loss. Any result is recorded on the later SELL.'
                                 return (
-                                  <tr key={txn.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: isSell ? 'var(--p-ef9a9a)' : 'var(--p-81c784)', fontWeight: 600 }}>{isSell ? 'SELL' : 'BUY'}</td>
+                                  <tr
+                                    key={txn.id}
+                                    style={{
+                                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                      background: (isDividend || isDripBuy) ? 'rgba(79, 195, 247, 0.025)' : undefined,
+                                    }}
+                                  >
+                                    <td
+                                      title={isDividend
+                                        ? 'Cash dividend received. A separate DRIP BUY may reinvest the same amount.'
+                                        : isDripBuy
+                                          ? 'Dividend reinvestment BUY: cash from a dividend was used to acquire these shares.'
+                                          : undefined}
+                                      style={{
+                                        padding: '0.3rem 0.75rem', color: transactionTypeColor(txnType), fontWeight: 600,
+                                        borderLeft: (isDividend || isDripBuy) ? '3px solid var(--p-4fc3f7)' : '3px solid transparent',
+                                      }}
+                                    >
+                                      <div>{txnType}</div>
+                                      {(isDividend || isDripBuy) && (
+                                        <div style={{ fontSize: '0.62rem', color: 'var(--text-dim-2)', whiteSpace: 'nowrap', fontWeight: 500 }}>
+                                          {isDividend ? 'Cash payment' : 'DRIP reinvestment'}
+                                        </div>
+                                      )}
+                                    </td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>
                                       <div>{txn.transaction_date || '-'}</div>
                                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
                                     </td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmt(txn.shares, 3)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.price_per_share)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.fees)}</td>
+                                    <td title={isDividend ? 'This cash dividend did not directly add shares; the separate DRIP BUY did.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
+                                      {fmt(isDividend ? 0 : txn.shares, 3)}
+                                    </td>
+                                    <td title={isDividend ? 'A cash dividend has no purchase or sale price.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
+                                      {fmtM(isDividend ? 0 : txn.price_per_share)}
+                                    </td>
+                                    <td title={isDividend ? 'No transaction fee was recorded for this dividend.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
+                                      {fmtM(isDividend ? 0 : txn.fees)}
+                                    </td>
                                     <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(lotCost)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
-                                      {formatMoney(lotGL, { fallback: '-' })}
+                                    <td title={unrealizedHelp} style={{ padding: '0.3rem 0.75rem', color: lotGL != null ? (lotGL >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
+                                      {isClosedBuy ? (
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', whiteSpace: 'nowrap' }}>
+                                          <span style={{ color: 'var(--p-ffb74d)', fontSize: '0.68rem', fontWeight: 700 }}>Closed</span>
+                                          <span>$0.00</span>
+                                        </span>
+                                      ) : formatMoney(lotGL, { fallback: '$0.00' })}
                                     </td>
-                                    <td style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
-                                      {formatMoney(txn.realized_gain, { fallback: '-' })}
+                                    <td title={realizedHelp} style={{ padding: '0.3rem 0.75rem', color: txn.realized_gain != null ? (txn.realized_gain >= 0 ? 'var(--p-81c784)' : 'var(--p-ef9a9a)') : undefined }}>
+                                      {formatMoney(txn.realized_gain, { fallback: '$0.00' })}
                                     </td>
-                                    <td style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>{fmt(txn.position_after, 3)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.avg_cost_after)}</td>
-                                    <td style={{ padding: '0.3rem 0.75rem' }}>{fmtM(txn.total_cost_after)}</td>
+                                    <td title={isDividend ? 'The dividend did not change the share position.' : undefined} style={{ padding: '0.3rem 0.75rem', borderLeft: '1px solid var(--p-1a3a5c)', fontWeight: 600 }}>
+                                      {isDividend ? 'No change' : fmt(txn.position_after, 3)}
+                                    </td>
+                                    <td title={isDividend ? 'The dividend did not change average cost; any DRIP BUY is shown separately.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
+                                      {isDividend ? 'No change' : fmtM(txn.avg_cost_after)}
+                                    </td>
+                                    <td title={isDividend ? 'The dividend did not change cost basis; any DRIP BUY is shown separately.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
+                                      {isDividend ? 'No change' : fmtM(txn.total_cost_after)}
+                                    </td>
                                     <td style={{ padding: '0.3rem 0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{txn.notes || '-'}</td>
                                   </tr>
                                 )
@@ -3341,6 +3620,13 @@ export default function ManageHoldings() {
           onOpeningLotRecorded={() => {
             if (transactionReturnPath) navigate(transactionReturnPath)
           }}
+          pf={pf}
+        />
+      )}
+
+      {showTransactionHistory && (
+        <TransactionHistoryModal
+          onClose={() => setShowTransactionHistory(false)}
           pf={pf}
         />
       )}
