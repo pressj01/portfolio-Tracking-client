@@ -135,6 +135,67 @@ def fetch_payments(conn, profile_ids, start, end, include_estimates=True):
     return payments
 
 
+def fetch_holding_payment_floors(conn, profile_ids):
+    """Declared cash per ticker from current lots (shares × DPS).
+
+    The dividend calendar already uses this figure for a pay date. A broker
+    import can miss cap-gain/ROC lines, or cash from an account that no longer
+    has the holding, so the ledger would otherwise show less than the calendar
+    on the same day.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT UPPER(TRIM(ticker)) AS ticker,
+                   SUM(COALESCE(div, 0) * COALESCE(quantity, 0)) AS declared
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 0
+            GROUP BY UPPER(TRIM(ticker))
+            HAVING declared > 0""",
+        ids,
+    ).fetchall()
+    floors = {}
+    for row in rows:
+        try:
+            declared = float(row["declared"] or 0)
+        except (TypeError, ValueError):
+            continue
+        if declared > 0:
+            floors[str(row["ticker"] or "").strip().upper()] = declared
+    return floors
+
+
+def apply_holding_payment_floors(entries, floors):
+    """Raise a pay date's imported cash up to the calendar's declared amount."""
+    if not floors or not entries:
+        return entries
+    by_key = {}
+    for index, entry in enumerate(entries):
+        ticker = str(entry.get("ticker") or "").strip().upper()
+        date = entry.get("date")
+        if not ticker or not date:
+            continue
+        by_key.setdefault((ticker, date), []).append(index)
+
+    for (ticker, _date), indexes in by_key.items():
+        declared = floors.get(ticker)
+        if not declared:
+            continue
+        cash = sum(float(entries[index]["amount"] or 0) for index in indexes)
+        extra = round(float(declared) - cash, 2)
+        if extra <= 0.009:
+            continue
+        target = next(
+            (index for index in indexes if not entries[index].get("estimated")),
+            indexes[0],
+        )
+        entries[target]["amount"] = round(float(entries[target]["amount"] or 0) + extra, 2)
+    return entries
+
+
 def resolve_accounts(conn, profile_ids):
     """Name every account the ledger is summing, in profile-id order."""
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
@@ -550,8 +611,12 @@ def build_ledger(conn, profile_ids, month=None, today=None, week_start="mon",
     first_visible = week_start_for(month_first, week_start)
     last_visible = week_end_for(month_last, week_start)
 
-    ledger_entries = fetch_payments(
-        conn, profile_ids, first_visible, last_visible, include_estimates
+    floors = fetch_holding_payment_floors(conn, profile_ids)
+    ledger_entries = apply_holding_payment_floors(
+        fetch_payments(
+            conn, profile_ids, first_visible, last_visible, include_estimates
+        ),
+        floors,
     )
     days = build_days(
         ledger_entries, first_visible, last_visible,
@@ -561,7 +626,10 @@ def build_ledger(conn, profile_ids, month=None, today=None, week_start="mon",
 
     accounts = resolve_accounts(conn, profile_ids)
     prior_first, prior_last = month_bounds(*add_months(year, month_num, -1))
-    prior_entries = fetch_payments(conn, profile_ids, prior_first, prior_last, include_estimates)
+    prior_entries = apply_holding_payment_floors(
+        fetch_payments(conn, profile_ids, prior_first, prior_last, include_estimates),
+        floors,
+    )
     month_summary = build_month_summary(
         days, month_first, month_last, today, prior_entries,
         month_entries=_window(ledger_entries, month_first, month_last),
@@ -571,7 +639,10 @@ def build_ledger(conn, profile_ids, month=None, today=None, week_start="mon",
     # "Now" spans back to the start of last year for the year-over-year reads.
     now_start = datetime.date(today.year - 1, 1, 1)
     now_end = max(today, week_end_for(today, week_start), month_bounds(today.year, today.month)[1])
-    now_entries = fetch_payments(conn, profile_ids, now_start, now_end, include_estimates)
+    now_entries = apply_holding_payment_floors(
+        fetch_payments(conn, profile_ids, now_start, now_end, include_estimates),
+        floors,
+    )
 
     return {
         "today": today.isoformat(),

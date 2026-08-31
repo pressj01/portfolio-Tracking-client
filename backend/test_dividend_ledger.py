@@ -493,6 +493,94 @@ class DividendLedgerTest(unittest.TestCase):
         self.assertEqual(day["payments"][0]["ticker"], "GDXW")
         self.assertAlmostEqual(day["payments"][0]["amount"], 2315.81, places=2)
 
+    def _holding(self, ticker, quantity, div, profile_id=1):
+        conn = self._connect()
+        conn.execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, description, quantity, current_price,
+                current_value, div, div_frequency, estim_payment_per_year)
+               VALUES (?, ?, ?, ?, 50, ?, ?, 'M', ?)""",
+            (
+                ticker, profile_id, f"{ticker} fund", quantity,
+                quantity * 50, div, quantity * div * 12,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_ledger_matches_calendar_declared_cash_without_the_other_holding(self):
+        # One Fidelity account imported $1,519.25. The calendar still shows
+        # $2,315.81 because remaining shares × DPS already cover both accounts'
+        # payout — even if the second account no longer has a GDXW lot.
+        self._pay("2026-08-25", "GDXW", 1519.25, source="fidelity_transactions")
+        self._holding("GDXW", 100, 23.1581)
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 2315.81, places=2)
+        self.assertAlmostEqual(day["payments"][0]["amount"], 2315.81, places=2)
+
+    def test_ledger_does_not_stack_declared_floor_on_top_of_both_accounts(self):
+        self._pay("2026-08-25", "GDXW", 1519.25, profile_id=1, source="fidelity_transactions")
+        self._pay("2026-08-25", "GDXW", 796.56, profile_id=2, source="fidelity_transactions")
+        self._holding("GDXW", 100, 23.1581, profile_id=1)
+        payload = self._ledger(
+            profile_ids=[1, 2], month="2026-08", today=datetime.date(2026, 8, 27),
+        )
+        day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 2315.81, places=2)
+
+    def test_closed_position_cash_still_shows_without_a_holding(self):
+        self._pay("2026-08-25", "GDXW", 796.56, profile_id=2, source="fidelity_transactions")
+        payload = self._ledger(
+            profile_ids=[2], month="2026-08", today=datetime.date(2026, 8, 27),
+        )
+        day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 796.56, places=2)
+
+    def test_second_fidelity_account_same_day_import_adds_without_a_holding(self):
+        first = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '08/25/2026,ROTH IRA,DIVIDEND RECEIVED as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,1519.25',
+        ])
+        second = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            '08/25/2026,INDIVIDUAL,DIVIDEND RECEIVED as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,796.56',
+        ])
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda *a, **k: None
+        try:
+            for content, name in ((first, "Roth.csv"), (second, "Individual.csv")):
+                res = self.client.post(
+                    "/api/import/transactions?profile_id=1",
+                    data={
+                        "format": "fidelity_transactions",
+                        "file": (io.BytesIO(content.encode()), name),
+                    },
+                    content_type="multipart/form-data",
+                )
+                self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT amount, notes FROM dividend_payments "
+                "WHERE ticker = 'GDXW' AND profile_id = 1 AND payment_date = '2026-08-25'"
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        self.assertAlmostEqual(row["amount"], 2315.81, places=2)
+        self.assertIn("[acct:ROTH IRA]", row["notes"] or "")
+        self.assertIn("[acct:INDIVIDUAL]", row["notes"] or "")
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 2315.81, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()
