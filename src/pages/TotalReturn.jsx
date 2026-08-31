@@ -77,9 +77,9 @@ const COMPARISON_TRACE_STYLES = {
 const formatComparisonDate = formatPerformanceDate
 const formatComparisonRange = formatPerformanceRange
 
-function MetricCard({ label, value, range, className, children }) {
+function MetricCard({ label, value, range, className, children, title }) {
   return (
-    <div className={`summary-card ${className || ''}`}>
+    <div className={`summary-card ${className || ''}`} title={title}>
       <div className="summary-label">{label}</div>
       <div className="summary-value">{value ?? '—'}</div>
       {range && (
@@ -1094,8 +1094,8 @@ export default function TotalReturn() {
           <section>
             <h3>Value and return cards</h3>
             <ul>
-              <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
-              <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add. The cash in it is a <strong>dated snapshot</strong>, not a live balance: a broker import writes it and it stands until something writes it again, so the card names the day it came from. When this card lags your broker, that date is usually why — set the balance on the Portfolios page, or re-import.</li>
+              <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash, on <strong>any</strong> period — Life is not an exception.</li>
+              <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown on every period, not just Life, as long as the range runs through today and no ticker filter is active — it drops away only for a Custom range that ends in the past, a ticker filter, or an account with neither cash nor an open option. The cash in it is a <strong>dated snapshot</strong>, not a live balance: a broker import writes it and it stands until something writes it again, so the card names the day it came from. When this card lags your broker, that date is usually why — set the balance on the Portfolios page, or re-import.</li>
               <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
               <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Choose <strong>Life</strong> instead when comparing current value with the cost basis of shares still held.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
@@ -1256,14 +1256,16 @@ export default function TotalReturn() {
             {/* Say what these measure. Only when something is actually left out,
                 so an account with no cash and no options is not told twice that
                 it has neither. */}
-            <MetricCard label="Start Value" value={partialValue(fmtInt(t.start_value))} range={startValueAsOf}>
+            <MetricCard label="Start Value" value={partialValue(fmtInt(t.start_value))} range={startValueAsOf}
+              title="Holdings only — cash is never counted here, on any period including Life. See Account Value for the figure with cash added back.">
               {partialNote}
               {coverageIsSevere && (
                 <div className="summary-sub">Would have read {fmtInt(t.start_value)} on the positions that priced</div>
               )}
               {t.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
             </MetricCard>
-            <MetricCard label="End Value" value={partialValue(fmtInt(t.end_value))} range={endValueAsOf}>
+            <MetricCard label="End Value" value={partialValue(fmtInt(t.end_value))} range={endValueAsOf}
+              title="Holdings only — cash is never counted here, on any period including Life. See Account Value for the figure with cash added back.">
               {partialNote}
               {coverageIsSevere && (
                 <div className="summary-sub">Would have read {fmtInt(t.end_value)} on the positions that priced</div>

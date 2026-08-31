@@ -71,7 +71,10 @@ export function AccountValueCard({ data, label = 'Account Value', basisLabel, ho
   if (!data) return null
   const detail = parts(data)
   return (
-    <div className="summary-card">
+    <div
+      className="summary-card"
+      title="Shown on every period, not just Life, whenever the range runs through today and no ticker filter is active — a Custom range ending in the past or a ticker filter leaves it off."
+    >
       <div className="summary-label">{label}</div>
       <div className="summary-value">{formatMoney(data.account_value)}</div>
       {basisLabel && <div className="summary-sub">{basisLabel}</div>}
