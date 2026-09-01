@@ -574,15 +574,19 @@ export default function Import() {
     return () => { cancelled = true }
   }, [selection, loadBackups, loadDataStats])
 
-  // A positions file describes one brokerage account, so it needs a single
-  // account as its destination. Two selections fail that: an aggregate, and
-  // Owner once Owner is fed by more than one account. Only the All-Accounts
-  // format is exempt — it names its own target per account block.
+  // A positions file describes one brokerage account, so it needs a regular
+  // account as its destination. Owner and aggregates are always rollups. Only
+  // an All-Accounts format is exempt because each file block names its own
+  // regular target.
   const ownerSourceCount = useMemo(
     () => profiles.filter(p => p.id !== 1 && p.include_in_owner).length,
     [profiles],
   )
-  const isOwnerRollup = !isAggregate && profileId === 1 && ownerSourceCount > 1
+  const currentProfile = useMemo(
+    () => profiles.find(p => Number(p.id) === Number(profileId)) || null,
+    [profiles, profileId],
+  )
+  const isOwnerRollup = !isAggregate && !!currentProfile?.is_owner
   const isRollupTarget = isAggregate || isOwnerRollup
 
   const workflow = useMemo(() => describeWorkflow(txnFormat), [txnFormat])
@@ -692,10 +696,6 @@ export default function Import() {
         : txnPreview.transactions.length > 0)
     : false
   const txnAccountMismatch = Boolean(txnPreview?.account_match && txnPreview.account_match.matched === false)
-  const currentProfile = useMemo(
-    () => profiles.find(profile => profile.id === profileId) || null,
-    [profiles, profileId],
-  )
   const currentProfileRecordId = currentProfile?.id ?? null
   const currentProfileBrokerSource = currentProfile?.broker_source || ''
   const txnNeedsPositionsAck = needsPositionsSnapshotFirst(txnFormat) && !hasPositions && !txnIsMultiTransactionFormat

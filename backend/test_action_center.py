@@ -20,6 +20,7 @@ class ActionCenterCompletionApiTest(unittest.TestCase):
         conn = self._get_connection()
         database.ensure_tables_exist(conn)
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         conn.execute(
             """INSERT INTO all_account_info
                (ticker, profile_id, description, quantity, current_value, div,

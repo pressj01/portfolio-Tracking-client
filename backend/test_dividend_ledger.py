@@ -30,6 +30,7 @@ class DividendLedgerTest(unittest.TestCase):
         conn.row_factory = sqlite3.Row
         database.ensure_tables_exist(conn)
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (2, 'Roth')")
         conn.commit()
         conn.close()
@@ -451,7 +452,10 @@ class DividendLedgerTest(unittest.TestCase):
     def test_fidelity_reimport_fills_in_cap_gain_and_roc_on_same_day(self):
         # Calendar showed GDXW $2,315.81; the ledger kept only the ordinary
         # DIVIDEND RECEIVED line from an earlier Fidelity import.
-        self._pay("2026-08-25", "GDXW", 1519.25, source="fidelity_transactions")
+        self._pay(
+            "2026-08-25", "GDXW", 1519.25,
+            profile_id=2, source="fidelity_transactions",
+        )
         content = "\n".join([
             "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
             '08/25/2026,ROTH IRA,DIVIDEND RECEIVED as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,1519.25',
@@ -465,7 +469,7 @@ class DividendLedgerTest(unittest.TestCase):
         app_module._snapshot_nav_after_profile_update = lambda *a, **k: None
         try:
             res = self.client.post(
-                "/api/import/transactions?profile_id=1",
+                "/api/import/transactions?profile_id=2",
                 data={
                     "format": "fidelity_transactions",
                     "file": (io.BytesIO(content.encode()), "History.csv"),
@@ -481,13 +485,15 @@ class DividendLedgerTest(unittest.TestCase):
         try:
             row = conn.execute(
                 "SELECT amount, notes FROM dividend_payments "
-                "WHERE ticker = 'GDXW' AND profile_id = 1 AND payment_date = '2026-08-25'"
+                "WHERE ticker = 'GDXW' AND profile_id = 2 AND payment_date = '2026-08-25'"
             ).fetchone()
         finally:
             conn.close()
         self.assertIsNotNone(row)
         self.assertAlmostEqual(row["amount"], 2315.81, places=2)
-        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        payload = self._ledger(
+            profile_ids=[2], month="2026-08", today=datetime.date(2026, 8, 27),
+        )
         day = self._day(payload, "2026-08-25")
         self.assertAlmostEqual(day["total"], 2315.81, places=2)
         self.assertEqual(day["payments"][0]["ticker"], "GDXW")
@@ -553,7 +559,7 @@ class DividendLedgerTest(unittest.TestCase):
         try:
             for content, name in ((first, "Roth.csv"), (second, "Individual.csv")):
                 res = self.client.post(
-                    "/api/import/transactions?profile_id=1",
+                    "/api/import/transactions?profile_id=2",
                     data={
                         "format": "fidelity_transactions",
                         "file": (io.BytesIO(content.encode()), name),
@@ -569,7 +575,7 @@ class DividendLedgerTest(unittest.TestCase):
         try:
             row = conn.execute(
                 "SELECT amount, notes FROM dividend_payments "
-                "WHERE ticker = 'GDXW' AND profile_id = 1 AND payment_date = '2026-08-25'"
+                "WHERE ticker = 'GDXW' AND profile_id = 2 AND payment_date = '2026-08-25'"
             ).fetchone()
         finally:
             conn.close()
@@ -577,7 +583,9 @@ class DividendLedgerTest(unittest.TestCase):
         self.assertAlmostEqual(row["amount"], 2315.81, places=2)
         self.assertIn("[acct:ROTH IRA]", row["notes"] or "")
         self.assertIn("[acct:INDIVIDUAL]", row["notes"] or "")
-        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        payload = self._ledger(
+            profile_ids=[2], month="2026-08", today=datetime.date(2026, 8, 27),
+        )
         day = self._day(payload, "2026-08-25")
         self.assertAlmostEqual(day["total"], 2315.81, places=2)
 

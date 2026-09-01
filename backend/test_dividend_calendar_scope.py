@@ -28,6 +28,7 @@ class DividendCalendarScopeTest(unittest.TestCase):
                 (12, "Other user", 0),
             ],
         )
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         self._holding(conn, 1, "AAA", 999)  # duplicated Owner snapshot
         self._holding(conn, 6, "AAA", 10)
         self._holding(conn, 6, "BBB", 20)

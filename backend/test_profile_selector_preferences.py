@@ -17,6 +17,7 @@ class ProfileSelectorPreferencesApiTest(unittest.TestCase):
         conn = self._get_connection()
         database.ensure_tables_exist(conn)
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         conn.execute("INSERT INTO profiles (id, name) VALUES (2, 'Brokerage')")
         conn.execute("INSERT INTO profiles (id, name) VALUES (3, 'Test Portfolio')")
         conn.execute("INSERT INTO aggregates (id, name) VALUES (1, 'Combined')")
@@ -59,7 +60,10 @@ class ProfileSelectorPreferencesApiTest(unittest.TestCase):
         owner_hidden = self.client.put(
             "/api/profiles/1/selector-visibility", json={"visible": False}
         )
-        self.assertEqual(owner_hidden.status_code, 400)
+        self.assertEqual(owner_hidden.status_code, 200)
+        profiles = self.client.get("/api/profiles").get_json()
+        owner = next(profile for profile in profiles if profile["id"] == 1)
+        self.assertEqual(owner["hidden_from_selector"], 1)
 
     def test_aggregates_can_be_reordered_and_hidden_from_selector(self):
         ordered = self.client.put("/api/aggregates/order", json={"ordered_ids": [2, 1]})

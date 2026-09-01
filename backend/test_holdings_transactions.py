@@ -2461,6 +2461,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(data[1]["source_account_name"], "Fidelity Taxable")
 
     def test_accrual_summary_includes_expected_payment_details(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Schwab IRA', 1)")
         self._execute(
             "INSERT INTO settings (key, value) VALUES ('last_refresh_2', '2026-05-19T08:00:00')"

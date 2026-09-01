@@ -33,6 +33,8 @@ export default function ManagePortfolios() {
   const dialog = useDialog()
   const [summary, setSummary] = useState([])
   const [ownerImportUsed, setOwnerImportUsed] = useState(false)
+  const [ownerActive, setOwnerActive] = useState(false)
+  const [ownerMemberCount, setOwnerMemberCount] = useState(0)
   const [editingId, setEditingId] = useState(null)
   const [editName, setEditName] = useState('')
   const [editBrokerSource, setEditBrokerSource] = useState('')
@@ -50,8 +52,20 @@ export default function ManagePortfolios() {
     fetch(`${API_BASE}/api/profiles/summary`)
       .then(r => r.json())
       .then(data => {
-        setSummary(data.profiles || [])
+        const nextProfiles = (data.profiles || []).map(profile => ({
+          ...profile,
+          // Keep hot-reloaded frontends compatible with a backend process
+          // that has not restarted yet and therefore does not emit is_owner.
+          is_owner: profile.is_owner ?? Number(profile.id) === 1,
+        }))
+        const hasOwner = nextProfiles.some(profile => profile.is_owner)
+        setSummary(nextProfiles)
         setOwnerImportUsed(data.owner_import_used || false)
+        setOwnerActive(data.owner_active == null ? hasOwner : !!data.owner_active)
+        setOwnerMemberCount(Number(
+          data.owner_member_count
+            ?? nextProfiles.filter(profile => !profile.is_owner && profile.include_in_owner).length
+        ))
       })
       .catch(() => {})
   }, [])
@@ -72,6 +86,22 @@ export default function ManagePortfolios() {
       await refreshProfiles()
       loadSummary()
     }
+  }
+
+  const createOwner = async () => {
+    const ok = await dialog.confirm(
+      'Create Owner?\n\nOwner is an optional rollup, not a brokerage account. After creating it, use the Owner column to choose which regular accounts it combines.'
+    )
+    if (!ok) return
+    const res = await fetch(`${API_BASE}/api/owner`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      await dialog.alert(data.error || 'Could not create Owner.')
+      return
+    }
+    await refreshProfiles()
+    loadSummary()
+    setProfileId('1')
   }
 
   const startRename = (p) => {
@@ -160,10 +190,6 @@ export default function ManagePortfolios() {
 
   const runDestructiveAction = async (p, scope) => {
     const action = ACTIONS[scope]
-    if (scope === 'delete' && p.id === 1) {
-      await dialog.alert('Cannot delete the default portfolio. Use Clear or Reset to empty it instead.')
-      return
-    }
     setBusyAction(`${p.id}:${scope}`)
     try {
       const previewRes = await fetch(`${API_BASE}/api/profiles/${p.id}/data-preview?scope=${scope}`)
@@ -246,10 +272,14 @@ export default function ManagePortfolios() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ include: newVal }),
     })
-    if (res.ok) {
-      clearDashboardCacheForSelection('p:1')
-      loadSummary()
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      await dialog.alert(data.error || 'Could not update Owner membership.')
+      return
     }
+    clearDashboardCacheForSelection('p:1')
+    await refreshProfiles()
+    loadSummary()
   }
 
   const saveSelectorPreference = async (path, options, fallbackMessage) => {
@@ -291,7 +321,11 @@ export default function ManagePortfolios() {
     if (saved) {
       await refreshProfiles()
       loadSummary()
-      if (!isAggregate && profileId === p.id && !nextVisible) setProfileId('1')
+      if (!isAggregate && profileId === p.id && !nextVisible) {
+        const fallback = profiles.find(profile => profile.id !== p.id && !profile.hidden_from_selector)
+        if (fallback) setProfileId(fallback.id)
+        else if (aggregates.length) setAggregateSelection(aggregates[0].id)
+      }
     }
   }
 
@@ -346,7 +380,10 @@ export default function ManagePortfolios() {
     const res = await fetch(`${API_BASE}/api/aggregates/${agg.id}`, { method: 'DELETE' })
     if (res.ok) {
       await refreshAggregates()
-      if (isAggregate && aggregateId === agg.id) setProfileId('1')
+      if (isAggregate && aggregateId === agg.id) {
+        const fallback = profiles.find(profile => !profile.hidden_from_selector)
+        if (fallback) setProfileId(fallback.id)
+      }
     }
   }
 
@@ -372,7 +409,10 @@ export default function ManagePortfolios() {
     }, `Could not update ${agg.name} selector visibility`)
     if (saved) {
       await refreshAggregates()
-      if (isAggregate && aggregateId === agg.id && nextHidden) setProfileId('1')
+      if (isAggregate && aggregateId === agg.id && nextHidden) {
+        const fallback = profiles.find(profile => !profile.hidden_from_selector)
+        if (fallback) setProfileId(fallback.id)
+      }
     }
   }
 
@@ -436,17 +476,42 @@ export default function ManagePortfolios() {
   }
 
   const fmt = (v) => formatMoney(v, { zeroIfInvalid: true })
+  const regularProfiles = summary.filter(p => !(p.is_owner || p.id === 1))
 
   return (
     <div className="page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <h2>Manage Portfolios</h2>
-        <button className="btn btn-primary" onClick={createPortfolio}>+ New Portfolio</button>
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {!ownerActive && (
+            <button className="btn" onClick={createOwner}>+ Create Owner</button>
+          )}
+          <button className="btn btn-primary" onClick={createPortfolio}>+ New Portfolio</button>
+        </div>
       </div>
 
       <p style={{ color: 'var(--p-aaa)', marginTop: 0, marginBottom: '1rem', fontSize: '0.9rem' }}>
-        Use <strong>Account Type</strong> to identify test or non-user-owned data. Optimization stays scoped to the active account; test/non-owned accounts are also kept out of Owner.
+        Every portfolio starts as a regular account. Create Owner only when you want a personal rollup, then choose its member accounts in the Owner column.
       </p>
+
+      <details className="tracker-help" style={{ marginBottom: '1.25rem' }}>
+        <summary>What is the optional Owner account?</summary>
+        <div className="tracker-help-footer">
+          <p>
+            <strong>Owner is a rollup, not a broker.</strong> It combines the regular brokerage
+            accounts you check in the Owner column and shows their holdings, income, cash, and
+            supported history together. Schwab, Fidelity, E*TRADE, Interactive Brokers, Shear
+            Group, and manual accounts can all be members.
+          </p>
+          <ul>
+            <li>Create each brokerage account normally and import only that account&apos;s files into it.</li>
+            <li>Click <strong>Create Owner</strong> when you want the rollup, then check any user-owned accounts to include.</li>
+            <li>Owner is never an import destination and has no broker source or cash balance of its own.</li>
+            <li>The Show checkbox can hide Owner from the selector without deleting it.</li>
+            <li>To delete Owner, first uncheck every member. Deleting Owner never deletes its brokerage accounts.</li>
+          </ul>
+        </div>
+      </details>
 
       <div
         style={{
@@ -470,7 +535,8 @@ export default function ManagePortfolios() {
           <li>
             <strong style={{ color: 'var(--p-ef9a9a)' }}>Delete</strong> — removes the portfolio
             itself along with everything it holds. It disappears from the portfolio selector and
-            from any aggregates. Owner cannot be deleted.
+            from any aggregates. Owner can be deleted after all of its members are removed; its
+            brokerage accounts are not deleted.
           </li>
         </ul>
         All three take a database backup first (restore it from the Import page), warn you with
@@ -553,7 +619,16 @@ export default function ManagePortfolios() {
           {summary.map((p, index) => (
             <tr key={p.id}>
               <td>
-                {editingId === p.id ? (
+                {p.is_owner ? (
+                  <span title="Owner is a rollup identity and cannot be renamed">
+                    <strong>Owner</strong>
+                    {p.name !== 'Owner' && (
+                      <small style={{ display: 'block', color: 'var(--text-dim)' }}>
+                        Previously named {p.name}
+                      </small>
+                    )}
+                  </span>
+                ) : editingId === p.id ? (
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     <input
                       className="dialog-input"
@@ -578,7 +653,9 @@ export default function ManagePortfolios() {
                 )}
               </td>
               <td>
-                <select
+                {p.is_owner ? (
+                  <span title="Owner combines brokerage accounts and is not tied to a broker">Rollup — no broker</span>
+                ) : <select
                   value={editingId === p.id ? editBrokerSource : (p.broker_source || '')}
                   onChange={(e) => {
                     if (editingId === p.id) {
@@ -593,15 +670,15 @@ export default function ManagePortfolios() {
                   {BROKER_OPTIONS.map(opt => (
                     <option key={opt.value} value={opt.value}>{opt.label}</option>
                   ))}
-                </select>
+                </select>}
               </td>
               <td>
                 <select
                   value={p.is_user_owned ? 'owned' : 'test'}
-                  disabled={p.id === 1}
+                  disabled={!!p.is_owner}
                   onChange={(e) => saveAccountOwnership(p, e.target.value === 'owned')}
                   style={{ width: '150px' }}
-                  title={p.id === 1 ? 'Owner is always user-owned' : 'Classify this portfolio without deleting its data'}
+                  title={p.is_owner ? 'Owner is always user-owned' : 'Classify this portfolio without deleting its data'}
                   aria-label={`Account type for ${p.name}`}
                 >
                   <option value="owned">User-owned</option>
@@ -612,28 +689,35 @@ export default function ManagePortfolios() {
                 <input
                   type="checkbox"
                   checked={!p.hidden_from_selector}
-                  disabled={p.id === 1}
                   onChange={() => toggleProfileSelectorVisibility(p)}
-                  title={p.id === 1 ? 'Owner always remains visible in the portfolio selector' : 'Show this portfolio in the portfolio selector'}
+                  title="Show this portfolio in the portfolio selector"
                   aria-label={`Show ${p.name} in the portfolio selector`}
                 />
               </td>
               <td style={{ textAlign: 'center' }}>
-                {p.id === 1 ? (
-                  <input type="checkbox" checked disabled title="Owner is always included" />
+                {p.is_owner ? (
+                  <span title="This is the Owner rollup">—</span>
                 ) : (
                   <input
                     type="checkbox"
                     checked={!!p.include_in_owner}
-                    disabled={!p.is_user_owned}
+                    disabled={!ownerActive || !p.is_user_owned}
                     onChange={() => toggleIncludeInOwner(p)}
-                    title={p.is_user_owned ? 'Include in Owner aggregate' : 'Test / non-owned accounts cannot be included in Owner'}
+                    title={
+                      !ownerActive
+                        ? 'Create Owner before adding accounts to it'
+                        : p.is_user_owned
+                          ? 'Include in Owner'
+                          : 'Test / non-owned accounts cannot be included in Owner'
+                    }
                   />
                 )}
               </td>
               <td style={{ textAlign: 'right' }}>{p.holdings_count}</td>
               <td style={{ textAlign: 'right' }}>
-                {editingCashId === p.id ? (
+                {p.is_owner ? (
+                  <span title="Owner totals cash from its member accounts">—</span>
+                ) : editingCashId === p.id ? (
                   <div style={{ display: 'flex', gap: '0.3rem', justifyContent: 'flex-end' }}>
                     <input
                       className="input input-sm"
@@ -689,34 +773,48 @@ export default function ManagePortfolios() {
                 <button className="btn btn-sm" onClick={() => moveProfile(p.id, -1)} disabled={index === 0} title="Move portfolio up" aria-label={`Move ${p.name} up`}>↑</button>
                 <button className="btn btn-sm" style={{ marginLeft: '0.3rem' }} onClick={() => moveProfile(p.id, 1)} disabled={index === summary.length - 1} title="Move portfolio down" aria-label={`Move ${p.name} down`}>↓</button>
                 <button className="btn btn-sm" onClick={() => setProfileId(String(p.id))} title="Switch to this portfolio">Select</button>
-                <button
-                  className="btn btn-sm"
-                  style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
-                  onClick={() => clearPortfolioData(p)}
-                  disabled={busyAction === `${p.id}:clear`}
-                  title="Empty the holdings and transaction ledger, keeping the portfolio, option trades, and the DRIP contribution schedule"
-                >
-                  {busyAction === `${p.id}:clear` ? 'Clearing…' : 'Clear'}
-                </button>
-                <button
-                  className="btn btn-sm"
-                  style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
-                  onClick={() => resetPortfolio(p)}
-                  disabled={busyAction === `${p.id}:reset`}
-                  title="Empty holdings, the transaction ledger, option trades, and the DRIP contribution schedule, keeping the portfolio so you can import it again from scratch"
-                >
-                  {busyAction === `${p.id}:reset` ? 'Resetting…' : 'Reset'}
-                </button>
-                {p.id !== 1 && (
+                {!p.is_owner && (
+                  <>
+                    <button
+                      className="btn btn-sm"
+                      style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
+                      onClick={() => clearPortfolioData(p)}
+                      disabled={busyAction === `${p.id}:clear`}
+                      title="Empty the holdings and transaction ledger, keeping the portfolio, option trades, and the DRIP contribution schedule"
+                    >
+                      {busyAction === `${p.id}:clear` ? 'Clearing…' : 'Clear'}
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      style={{ marginLeft: '0.5rem', borderColor: 'var(--p-f0ad4e)', color: 'var(--p-f0ad4e)' }}
+                      onClick={() => resetPortfolio(p)}
+                      disabled={busyAction === `${p.id}:reset`}
+                      title="Empty holdings, the transaction ledger, option trades, and the DRIP contribution schedule, keeping the portfolio so you can import it again from scratch"
+                    >
+                      {busyAction === `${p.id}:reset` ? 'Resetting…' : 'Reset'}
+                    </button>
+                  </>
+                )}
+                {(!p.is_owner || ownerMemberCount === 0) && (
                   <button
                     className="btn btn-sm btn-danger"
                     style={{ marginLeft: '0.5rem' }}
                     onClick={() => deletePortfolio(p)}
                     disabled={busyAction === `${p.id}:delete`}
-                    title="Remove the portfolio itself along with all of its data — it disappears from the selector and from any aggregates"
+                    title={p.is_owner
+                      ? 'Delete the empty Owner rollup; brokerage accounts are not affected'
+                      : 'Remove the portfolio itself along with all of its data — it disappears from the selector and from any aggregates'}
                   >
                     {busyAction === `${p.id}:delete` ? 'Deleting…' : 'Delete'}
                   </button>
+                )}
+                {p.is_owner && ownerMemberCount > 0 && (
+                  <button
+                    className="btn btn-sm btn-danger"
+                    style={{ marginLeft: '0.5rem' }}
+                    disabled
+                    title={`Remove ${ownerMemberCount} member account${ownerMemberCount === 1 ? '' : 's'} from Owner before deleting it`}
+                  >Delete</button>
                 )}
               </td>
             </tr>
@@ -733,8 +831,8 @@ export default function ManagePortfolios() {
         Define one or more virtual portfolios that combine selected real portfolios. Use the controls below to order them or hide one from the portfolio selector.
       </p>
 
-      {profiles.length <= 1 ? (
-        <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>Add at least one additional portfolio to use aggregates.</p>
+      {regularProfiles.length === 0 ? (
+        <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>Add at least one regular portfolio to use aggregates.</p>
       ) : aggregates.length === 0 ? (
         <p style={{ color: 'var(--p-888)', fontStyle: 'italic' }}>No aggregates yet. Click "+ Add Aggregate" to create one.</p>
       ) : (
@@ -777,10 +875,10 @@ export default function ManagePortfolios() {
                 </div>
               </div>
               <div style={{ color: 'var(--p-aaa)', fontSize: '0.85rem', marginBottom: '0.4rem' }}>
-                Members ({agg.member_ids.length} of {summary.filter(p => p.id !== 1).length}):
+                Members ({agg.member_ids.length} of {regularProfiles.length}):
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem 1rem' }}>
-                {summary.filter(p => p.id !== 1).map(p => (
+                {regularProfiles.map(p => (
                   <label key={p.id} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
@@ -796,7 +894,7 @@ export default function ManagePortfolios() {
         </div>
       )}
 
-      {ownerImportUsed && (
+      {ownerActive && ownerImportUsed && (
         <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--p-333)' }}>
           <h3 style={{ marginBottom: '0.5rem' }}>Sync Owner</h3>
           <p style={{ color: 'var(--p-aaa)', marginBottom: '1rem', fontSize: '0.9rem' }}>

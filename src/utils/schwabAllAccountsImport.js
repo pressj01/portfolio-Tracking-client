@@ -20,18 +20,16 @@ export const shouldAutodetectSchwabAllAccounts = (fileName, selectedFormat) => (
 const profileId = (profile) => String(profile?.id)
 
 export const brokerImportDestinations = (profiles, brokerSource) => {
-  const list = profiles || []
+  // Owner is a rollup, never a broker import destination. This applies even
+  // when it is the only visible selection: the first broker account must be
+  // created as a normal portfolio instead of being written into profile 1.
+  const list = (profiles || []).filter(profile => Number(profile.id) !== 1 && !profile.is_owner)
   const brokerProfiles = list.filter(profile => isBrokerSource(profile.broker_source, brokerSource))
-  const brokerOthers = brokerProfiles.filter(profile => Number(profile.id) !== 1)
-  // Owner is a rollup when other broker portfolios exist, so it is not an
-  // import target until it is the only eligible portfolio.
-  if (brokerOthers.length) return brokerOthers
   if (brokerProfiles.length) return brokerProfiles
   // No portfolio is tagged with this broker yet; offer untagged ones so the
   // first All-Accounts import still has somewhere to land.
   const untagged = list.filter(profile => !String(profile.broker_source || '').trim())
-  const untaggedOthers = untagged.filter(profile => Number(profile.id) !== 1)
-  return untaggedOthers.length ? untaggedOthers : untagged
+  return untagged
 }
 
 export const schwabImportDestinations = (profiles) => brokerImportDestinations(profiles, 'schwab')

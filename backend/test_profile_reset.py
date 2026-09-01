@@ -22,6 +22,7 @@ class _ProfileFixture:
         conn = self._get_connection()
         database.ensure_tables_exist(conn)
         conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         conn.execute("INSERT INTO profiles (id, name) VALUES (2, 'Brokerage')")
         conn.execute("INSERT INTO profiles (id, name) VALUES (3, 'Roth IRA')")
         conn.execute("INSERT INTO aggregates (id, name) VALUES (1, 'Combined')")
@@ -482,10 +483,19 @@ class ClearAndDeleteWarningTest(_ProfileFixture, unittest.TestCase):
             self.assertEqual(self._count(table, 1), 1)
             self.assertEqual(self._count(table, 3), 1)
 
-    def test_owner_cannot_be_deleted_even_with_the_name(self):
+    def test_empty_owner_can_be_deleted_without_touching_regular_accounts(self):
         res = self.client.delete("/api/profiles/1", json={"confirm_name": "Owner"})
-        self.assertEqual(res.status_code, 400)
-        self.assertEqual(self._count("all_account_info", 1), 1)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self._count("all_account_info", 1), 0)
+        self.assertEqual(self._count("all_account_info", 2), 1)
+        conn = self._get_connection()
+        try:
+            owner = conn.execute(
+                "SELECT owner_active FROM profiles WHERE id = 1"
+            ).fetchone()
+            self.assertEqual(owner["owner_active"], 0)
+        finally:
+            conn.close()
 
 
 class AggregateWriteGuardTest(_ProfileFixture, unittest.TestCase):

@@ -213,6 +213,20 @@ def ensure_tables_exist(conn=None):
 
     cur = conn.cursor()
 
+    # Profile 1 is retained as an internal compatibility slot because older
+    # databases and a number of historical records use it as the Owner scope.
+    # New databases no longer expose that slot automatically: a user creates
+    # Owner explicitly from Manage Portfolios.  Capture whether this database
+    # already had profile 1 before adding the lifecycle column so upgrades keep
+    # their existing Owner instead of making it disappear.
+    _profiles_table_existed = bool(cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'profiles'"
+    ).fetchone())
+    _legacy_owner_existed = bool(
+        _profiles_table_existed
+        and cur.execute("SELECT 1 FROM profiles WHERE id = 1").fetchone()
+    )
+
     # ── profiles ───────────────────────────────────────────────────────────────
     cur.execute("""
         CREATE TABLE IF NOT EXISTS profiles (
@@ -227,6 +241,7 @@ def ensure_tables_exist(conn=None):
             cash_value       REAL NOT NULL DEFAULT 0,
             cash_source      TEXT,
             cash_updated_at  TEXT,
+            owner_active     INTEGER NOT NULL DEFAULT 0,
             created_at       TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -251,8 +266,15 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE profiles ADD COLUMN cash_source TEXT")
     if "cash_updated_at" not in cols:
         cur.execute("ALTER TABLE profiles ADD COLUMN cash_updated_at TEXT")
+    if "owner_active" not in cols:
+        cur.execute("ALTER TABLE profiles ADD COLUMN owner_active INTEGER NOT NULL DEFAULT 0")
+        if _legacy_owner_existed:
+            cur.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
     cur.execute("""
-        INSERT OR IGNORE INTO profiles (id, name, include_in_owner, positions_managed, display_order) VALUES (1, 'Owner', 1, 0, 1)
+        INSERT OR IGNORE INTO profiles
+            (id, name, include_in_owner, positions_managed, display_order,
+             hidden_from_selector, owner_active)
+        VALUES (1, 'Owner', 1, 0, 1, 1, 0)
     """)
     # Existing databases and direct imports may not have assigned an order yet.
     # Initialize only unset rows so a saved custom order is never disturbed.

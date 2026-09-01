@@ -44,15 +44,26 @@ function encodeSelection(rawSelection) {
   return `p:${rawSelection}`
 }
 
-function resolveSelection(parsed, aggregates) {
+function fallbackSelection(profiles, aggregates) {
+  if (profiles.length > 0) return { kind: 'profile', id: profiles[0].id }
+  if (aggregates.length > 0) return { kind: 'aggregate', id: aggregates[0].id }
+  // The backend retains profile 1 as an invisible compatibility slot. This is
+  // only a transient value while a brand-new user has not created any account.
+  return { kind: 'profile', id: 1 }
+}
+
+function resolveSelection(parsed, profiles, aggregates) {
   if (parsed.kind === 'aggregate-legacy') {
     if (aggregates.length > 0) return { kind: 'aggregate', id: aggregates[0].id }
-    return { kind: 'profile', id: 1 }
+    return fallbackSelection(profiles, aggregates)
   }
   if (parsed.kind === 'aggregate' && parsed.id != null) {
     if (!aggregates.some(a => a.id === parsed.id)) {
-      return { kind: 'profile', id: 1 }
+      return fallbackSelection(profiles, aggregates)
     }
+  }
+  if (parsed.kind === 'profile' && profiles.length > 0 && !profiles.some(p => p.id === parsed.id)) {
+    return fallbackSelection(profiles, aggregates)
   }
   return parsed
 }
@@ -92,8 +103,8 @@ export function ProfileScope({ selection: scopedSelection, onSelectionChange, ch
   const selection = scopedSelection || parent.selection
   const parsed = useMemo(() => parseSelection(selection), [selection])
   const resolved = useMemo(
-    () => resolveSelection(parsed, parent.aggregates),
-    [parsed, parent.aggregates],
+    () => resolveSelection(parsed, parent.profiles, parent.aggregates),
+    [parsed, parent.profiles, parent.aggregates],
   )
   const view = useMemo(
     () => viewFromResolved(
@@ -138,8 +149,8 @@ export default function ProfileProvider({ children }) {
 
   const parsed = useMemo(() => parseSelection(selection), [selection])
   const resolvedSelection = useMemo(
-    () => resolveSelection(parsed, aggregates),
-    [parsed, aggregates],
+    () => resolveSelection(parsed, profiles, aggregates),
+    [parsed, profiles, aggregates],
   )
   const {
     isAggregate,
@@ -166,8 +177,12 @@ export default function ProfileProvider({ children }) {
     return fetch(`${API_BASE}/api/profiles`)
       .then(r => r.json())
       .then(data => {
-        setProfiles(data)
-        return data
+        const normalized = (data || []).map(profile => ({
+          ...profile,
+          is_owner: profile.is_owner ?? Number(profile.id) === 1,
+        }))
+        setProfiles(normalized)
+        return normalized
       })
       .catch(() => [])
   }, [])
@@ -210,10 +225,11 @@ export default function ProfileProvider({ children }) {
     refreshAggregates()
   }, [refreshProfiles, refreshAggregates])
 
-  // If the selected profile was deleted, reset to 1
+  // If the selected profile was deleted (including an optional Owner), move to
+  // the first remaining real account instead of resurrecting profile 1.
   useEffect(() => {
     if (!isAggregate && profiles.length > 0 && !profiles.find(p => p.id === profileId)) {
-      setProfileId('1')
+      setProfileId(profiles[0].id)
     }
   }, [profiles, profileId, isAggregate, setProfileId])
 

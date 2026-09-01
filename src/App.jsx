@@ -133,12 +133,12 @@ function App() {
 }
 
 function ProfileSelector() {
-  const { profiles, selection, isAggregate, aggregateId, setProfileId, currentProfileName, aggregates } = useProfile()
+  const { profiles, profileId, isAggregate, aggregateId, setProfileId, currentProfileName, aggregates } = useProfile()
   const visibleProfiles = profiles.filter(profile => !profile.hidden_from_selector)
   const visibleAggregates = aggregates.filter(aggregate => !aggregate.hidden_from_selector)
 
   // Map the resolved selection back to a value the <select> can match
-  const selectValue = isAggregate ? `a:${aggregateId}` : (selection.startsWith('p:') ? selection : `p:${selection}`)
+  const selectValue = isAggregate ? `a:${aggregateId}` : `p:${profileId}`
 
   return (
     <div className="profile-selector">

@@ -3075,19 +3075,12 @@ def _reject_rollup_import_target(action):
         return blocked
     if get_profile_id() != 1:
         return None
-    conn = get_connection()
-    try:
-        owner_sources = _get_owner_source_profile_ids(conn)
-    finally:
-        conn.close()
-    if len(owner_sources) <= 1:
-        return None
     return jsonify({
         "error": (
-            f"{action} needs a single account, but Owner is a rollup of "
-            f"{len(owner_sources)} accounts. Import into the underlying source "
-            "portfolio instead, or use a Schwab or Fidelity All Accounts file, "
-            "which routes each account to its own portfolio."
+            f"{action} needs a regular brokerage account, but Owner is a rollup. "
+            "Create or select the underlying brokerage portfolio instead, or use "
+            "a supported All Accounts file, which routes each account to its own "
+            "regular portfolio."
         )
     }), 400
 
@@ -5296,10 +5289,38 @@ def _cash_flow_portfolio_for_view(conn, is_aggregate, profile_ids):
 
 def _get_owner_source_profile_ids(conn):
     """Return profile ids that feed Owner reconciliation/DRIP sync."""
+    if not _owner_profile_is_active(conn):
+        return []
     rows = conn.execute(
         "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
     ).fetchall()
     return [r["id"] if isinstance(r, dict) else r[0] for r in rows]
+
+
+def _owner_profile_is_active(conn):
+    """Whether the reserved profile-1 Owner is currently user-visible.
+
+    Databases created before Owner became optional do not have the lifecycle
+    column until ``ensure_tables_exist`` runs.  Treat those as active during a
+    narrow migration/test window so legacy data never disappears merely
+    because an older fixture opened it.
+    """
+    try:
+        row = conn.execute(
+            "SELECT owner_active FROM profiles WHERE id = 1"
+        ).fetchone()
+    except sqlite3.OperationalError:
+        try:
+            row = conn.execute("SELECT 1 FROM profiles WHERE id = 1").fetchone()
+        except sqlite3.OperationalError:
+            # A few narrow read-only callers/tests use a deliberately minimal
+            # schema with no profiles table. They cannot represent Owner.
+            return False
+        return bool(row)
+    if not row:
+        return False
+    value = row["owner_active"] if isinstance(row, dict) else row[0]
+    return bool(value)
 
 
 def _position_history_profile_ids(conn, is_aggregate, profile_ids):
@@ -5467,12 +5488,10 @@ def _broker_import_target_error(profile_id, fmt, conn):
         )
 
     if profile_id == 1:
-        owner_sources = _get_owner_source_profile_ids(conn)
-        if len(owner_sources) > 1:
-            return (
-                "Broker and Snowball imports cannot be imported into Owner when Owner is made up "
-                "of more than one account. Import into the underlying source portfolio instead."
-            )
+        return (
+            "Broker and Snowball imports cannot be imported into Owner. Owner is a rollup, "
+            "not a brokerage account. Create or select the underlying brokerage portfolio instead."
+        )
 
     selected_broker = _profile_broker_source(profile_id, conn)
     import_broker = _broker_source_for_import(fmt)
@@ -5681,7 +5700,6 @@ def _multi_account_import_target_profiles(conn, broker_source):
         "SELECT id, name, broker_source FROM profiles "
         "ORDER BY COALESCE(display_order, id), id"
     ).fetchall()
-    owner_sources = _get_owner_source_profile_ids(conn)
     candidates = []
     for row in rows:
         pid = row["id"] if isinstance(row, dict) else row[0]
@@ -5692,9 +5710,10 @@ def _multi_account_import_target_profiles(conn, broker_source):
         # A portfolio pinned to another broker rejects this import anyway.
         if broker and broker != broker_source:
             continue
-        # Owner rolls the other accounts up once more than one feeds it, so a
-        # single account block must never overwrite the rollup.
-        if pid == 1 and len(owner_sources) > 1:
+        # Owner is always a virtual destination. Every account block belongs in
+        # a regular broker portfolio, including the very first account imported
+        # into a new database.
+        if pid == 1:
             continue
         candidates.append({"id": pid, "name": name, "broker_source": broker})
     return candidates
@@ -7183,11 +7202,10 @@ def _auto_reconcile_owner():
     conn = get_connection()
     owner_id = 1
 
-    # Only reconcile if Owner import was used
-    _oiu = conn.execute(
-        "SELECT value FROM settings WHERE key = 'owner_import_used'"
-    ).fetchone()
-    if not (_oiu and _oiu[0] == "true"):
+    # New databases keep an inactive compatibility row at profile 1 until the
+    # user explicitly creates Owner. Normal broker imports must never wake or
+    # populate that hidden row.
+    if not _owner_profile_is_active(conn):
         conn.close()
         return
 
@@ -7195,6 +7213,22 @@ def _auto_reconcile_owner():
     rows = conn.execute("SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1", (owner_id,)).fetchall()
     source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
     if not source_ids:
+        owner_row = conn.execute(
+            "SELECT broker_source FROM profiles WHERE id = 1"
+        ).fetchone()
+        owner_broker = (
+            owner_row["broker_source"] if isinstance(owner_row, dict)
+            else owner_row[0] if owner_row
+            else ""
+        )
+        # A user-created Owner has no broker source and owns no direct data.
+        # Once its last member is removed, clear the now-invalid rollup snapshot
+        # so an empty Owner cannot continue displaying yesterday's members.
+        # Legacy profile-1 broker accounts are left alone until the user
+        # explicitly deletes or migrates them.
+        if not str(owner_broker or "").strip():
+            _clear_profile_data(conn, owner_id)
+            conn.commit()
         conn.close()
         return
 
@@ -7319,8 +7353,10 @@ def list_profiles():
     conn = get_connection()
     rows = conn.execute("""
         SELECT id, name, created_at, display_order, hidden_from_selector,
-               broker_source, is_user_owned, include_in_owner
+               broker_source, is_user_owned, include_in_owner, owner_active,
+               CASE WHEN id = 1 THEN 1 ELSE 0 END AS is_owner
         FROM profiles
+        WHERE id != 1 OR owner_active = 1
         ORDER BY display_order, id
     """).fetchall()
     conn.close()
@@ -7350,7 +7386,37 @@ def create_profile():
         "name": name,
         "broker_source": broker_source,
         "is_user_owned": 1,
+        "include_in_owner": 0,
+        "is_owner": False,
     }), 201
+
+
+@app.route("/api/owner", methods=["POST"])
+def create_owner_profile():
+    """Activate the reserved Owner rollup only when the user asks for it."""
+    conn = get_connection()
+    try:
+        if _owner_profile_is_active(conn):
+            return jsonify({"error": "Owner already exists"}), 409
+        conn.execute(
+            """UPDATE profiles
+                  SET name = 'Owner', broker_source = '', include_in_owner = 1,
+                      positions_managed = 0, display_order = 1,
+                      hidden_from_selector = 0, is_user_owned = 1,
+                      cash_value = 0, cash_source = NULL, cash_updated_at = NULL,
+                      owner_active = 1
+                WHERE id = 1"""
+        )
+        conn.commit()
+        row = conn.execute(
+            """SELECT id, name, created_at, display_order, hidden_from_selector,
+                      broker_source, is_user_owned, include_in_owner, owner_active,
+                      1 AS is_owner
+                 FROM profiles WHERE id = 1"""
+        ).fetchone()
+        return jsonify(dict(row)), 201
+    finally:
+        conn.close()
 
 
 @app.route("/api/profiles/order", methods=["PUT"])
@@ -7367,7 +7433,11 @@ def update_profile_order():
 
     conn = get_connection()
     try:
-        existing_ids = [row["id"] for row in conn.execute("SELECT id FROM profiles").fetchall()]
+        existing_ids = [
+            row["id"] for row in conn.execute(
+                "SELECT id FROM profiles WHERE id != 1 OR owner_active = 1"
+            ).fetchall()
+        ]
         if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != set(existing_ids):
             return jsonify({"error": "ordered_ids must include every portfolio exactly once"}), 400
         for position, pid in enumerate(ordered_ids, start=1):
@@ -7383,10 +7453,10 @@ def set_profile_selector_visibility(pid):
     """Hide or show an individual portfolio in the navbar selector."""
     data = request.get_json() or {}
     visible = bool(data.get("visible", True))
-    if pid == 1 and not visible:
-        return jsonify({"error": "Owner must remain visible in the portfolio selector"}), 400
     conn = get_connection()
     try:
+        if pid == 1 and not _owner_profile_is_active(conn):
+            return jsonify({"error": "Owner has not been created"}), 404
         row = conn.execute("SELECT id FROM profiles WHERE id = ?", (pid,)).fetchone()
         if not row:
             return jsonify({"error": "Portfolio not found"}), 404
@@ -7407,6 +7477,19 @@ def update_profile(pid):
     if not name:
         return jsonify({"error": "Name is required"}), 400
     conn = get_connection()
+    if pid == 1:
+        if not _owner_profile_is_active(conn):
+            conn.close()
+            return jsonify({"error": "Owner has not been created"}), 404
+        # Owner is a rollup identity, never a brokerage destination. Keeping
+        # both fields fixed prevents it from masquerading as the first broker
+        # account again.
+        conn.execute(
+            "UPDATE profiles SET name = 'Owner', broker_source = '' WHERE id = 1"
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"id": 1, "name": "Owner", "broker_source": ""})
     if "broker_source" in data:
         broker_source = (data.get("broker_source") or "").strip()
         conn.execute(
@@ -7505,11 +7588,22 @@ def set_profile_cash(pid):
 
 @app.route("/api/profiles/<int:pid>", methods=["DELETE"])
 def delete_profile(pid):
-    if pid == 1:
-        return jsonify({"error": "Cannot delete the default profile"}), 400
     conn = get_connection()
     try:
         name = _profile_name_or_none(conn, pid)
+        if pid == 1:
+            if not _owner_profile_is_active(conn):
+                return jsonify({"error": "Owner does not exist"}), 404
+            member_count = conn.execute(
+                "SELECT COUNT(*) FROM profiles WHERE id != 1 AND include_in_owner = 1"
+            ).fetchone()[0]
+            if member_count:
+                return jsonify({
+                    "error": (
+                        f"Remove all {member_count} brokerage account"
+                        f"{'s' if member_count != 1 else ''} from Owner before deleting it."
+                    )
+                }), 409
     finally:
         conn.close()
     if name is None:
@@ -7528,7 +7622,26 @@ def delete_profile(pid):
         # includes those indirect children and orders profile-scoped tables from
         # child to parent using the live foreign-key graph.
         deleted = _delete_profile_records(conn, pid)
-        conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
+        if pid == 1:
+            # Keep the compatibility slot so legacy profile-1 references have a
+            # stable home, but remove it completely from the user's experience.
+            # A later Create Owner starts from this clean shell.
+            conn.execute("UPDATE profiles SET include_in_owner = 0 WHERE id != 1")
+            conn.execute(
+                """UPDATE profiles
+                      SET name = 'Owner', broker_source = '', include_in_owner = 1,
+                          positions_managed = 0, display_order = 1,
+                          hidden_from_selector = 1, is_user_owned = 1,
+                          cash_value = 0, cash_source = NULL, cash_updated_at = NULL,
+                          owner_active = 0
+                    WHERE id = 1"""
+            )
+            conn.execute(
+                "DELETE FROM settings WHERE key IN "
+                "('owner_import_used', 'schwab_import_default_destinations')"
+            )
+        else:
+            conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
         conn.commit()
     finally:
         conn.close()
@@ -7538,7 +7651,11 @@ def delete_profile(pid):
         "removed": deleted,
         "total": sum(deleted.values()),
         "backup": os.path.basename(backup_path) if backup_path else None,
-        "message": f'Deleted "{name}" and all {sum(deleted.values())} of its records.',
+        "message": (
+            f'Deleted Owner and all {sum(deleted.values())} of its records.'
+            if pid == 1
+            else f'Deleted "{name}" and all {sum(deleted.values())} of its records.'
+        ),
     })
 
 
@@ -8131,13 +8248,16 @@ def reset_profile_for_reimport(pid):
 
 @app.route("/api/profiles/<int:pid>/include-in-owner", methods=["PUT"])
 def set_include_in_owner(pid):
-    """Toggle whether a profile is included in Owner reconciliation."""
+    """Toggle whether a regular profile is included in the Owner rollup."""
     if pid == 1:
         return jsonify({"error": "Owner is always included"}), 400
     data = request.get_json() or {}
     val = 1 if data.get("include") else 0
     conn = get_connection()
     ensure_tables_exist(conn)
+    if not _owner_profile_is_active(conn):
+        conn.close()
+        return jsonify({"error": "Create Owner before adding brokerage accounts to it"}), 409
     profile = conn.execute(
         "SELECT is_user_owned FROM profiles WHERE id = ?", (pid,)
     ).fetchone()
@@ -8157,6 +8277,7 @@ def set_include_in_owner(pid):
     # so a budget that was already borrowed does not vanish.
     linked = _backfill_owner_subaccount_sources(conn) if val else 0
     conn.close()
+    _auto_reconcile_owner()
     return jsonify({"id": pid, "include_in_owner": val, "cash_flow_plans_linked": linked})
 
 
@@ -8167,6 +8288,8 @@ def profiles_summary():
     rows = conn.execute("""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
                p.is_user_owned,
+               p.owner_active,
+               CASE WHEN p.id = 1 THEN 1 ELSE 0 END AS is_owner,
                p.display_order, p.hidden_from_selector,
                COALESCE(p.cash_value, 0) AS cash_value,
                p.cash_source, p.cash_updated_at,
@@ -8174,6 +8297,7 @@ def profiles_summary():
                COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
         FROM profiles p
         LEFT JOIN all_account_info a ON p.id = a.profile_id
+        WHERE p.id != 1 OR p.owner_active = 1
         GROUP BY p.id
         ORDER BY p.display_order, p.id
     """).fetchall()
@@ -8185,7 +8309,16 @@ def profiles_summary():
     for profile in profiles:
         profile["cash_drift"] = drift.get(profile["id"])
     conn.close()
-    return jsonify({"profiles": profiles, "owner_import_used": bool(flag)})
+    owner_active = any(bool(p.get("is_owner")) for p in profiles)
+    owner_member_count = sum(
+        1 for p in profiles if not p.get("is_owner") and p.get("include_in_owner")
+    )
+    return jsonify({
+        "profiles": profiles,
+        "owner_import_used": bool(flag),
+        "owner_active": owner_active,
+        "owner_member_count": owner_member_count,
+    })
 
 
 @app.route("/api/aggregates", methods=["GET"])
@@ -8203,7 +8336,12 @@ def create_aggregate():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    member_ids = data.get("member_ids") or []
+    try:
+        member_ids = [int(mid) for mid in (data.get("member_ids") or [])]
+    except (TypeError, ValueError):
+        return jsonify({"error": "member_ids must contain portfolio ids"}), 400
+    if 1 in member_ids:
+        return jsonify({"error": "Owner cannot be a member of another aggregate"}), 400
     conn = get_connection()
     try:
         next_order = conn.execute(
@@ -8217,7 +8355,7 @@ def create_aggregate():
         for mid in member_ids:
             conn.execute(
                 "INSERT OR IGNORE INTO aggregate_config (aggregate_id, member_profile_id) VALUES (?, ?)",
-                (agg_id, int(mid)),
+                (agg_id, mid),
             )
         conn.commit()
         return jsonify({"id": agg_id, "name": name, "member_ids": list(member_ids)})
@@ -8239,12 +8377,17 @@ def update_aggregate(agg_id):
                 return jsonify({"error": "Name is required"}), 400
             conn.execute("UPDATE aggregates SET name = ? WHERE id = ?", (name, agg_id))
         if "member_ids" in data:
-            member_ids = data.get("member_ids") or []
+            try:
+                member_ids = [int(mid) for mid in (data.get("member_ids") or [])]
+            except (TypeError, ValueError):
+                return jsonify({"error": "member_ids must contain portfolio ids"}), 400
+            if 1 in member_ids:
+                return jsonify({"error": "Owner cannot be a member of another aggregate"}), 400
             conn.execute("DELETE FROM aggregate_config WHERE aggregate_id = ?", (agg_id,))
             for mid in member_ids:
                 conn.execute(
                     "INSERT OR IGNORE INTO aggregate_config (aggregate_id, member_profile_id) VALUES (?, ?)",
-                    (agg_id, int(mid)),
+                    (agg_id, mid),
                 )
         if "hidden_from_selector" in data:
             conn.execute(

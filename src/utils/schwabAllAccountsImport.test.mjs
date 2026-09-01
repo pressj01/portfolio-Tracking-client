@@ -67,12 +67,12 @@ test('falls back to untagged portfolios when none are tagged Schwab', () => {
   assert.deepEqual(destinations.map(p => p.name), ['Roth'])
 })
 
-test('keeps Owner when it is the only Schwab-eligible portfolio', () => {
+test('never offers Owner when it is the only Schwab-eligible portfolio', () => {
   const destinations = schwabImportDestinations([
     { id: 1, name: 'Owner', broker_source: 'schwab' },
     { id: 5, name: 'Jim Fidelity', broker_source: 'fidelity' },
   ])
-  assert.deepEqual(destinations.map(p => p.name), ['Owner'])
+  assert.deepEqual(destinations.map(p => p.name), [])
 })
 
 test('defaults to selecting the listed Schwab destinations', () => {

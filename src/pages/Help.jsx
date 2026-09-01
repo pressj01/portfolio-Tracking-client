@@ -5738,8 +5738,8 @@ function PortfoliosHelp() {
       <p style={{ marginBottom: '1rem' }}>
         The Portfolios page lets you create and manage multiple independent portfolios, control which
         ones are user-owned versus test/non-owned, choose which appear (and in what order) in the navbar selector, configure one or more Aggregate views
-        that combine selected portfolios, and sync the Owner portfolio against the combined totals of
-        sub-portfolios.
+        that combine selected portfolios, and optionally create an Owner rollup for the brokerage
+        accounts that belong to the user.
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
@@ -5754,13 +5754,14 @@ function PortfoliosHelp() {
         <li><strong>Rename</strong> — click a portfolio name (underlined in blue) to edit it inline. Press Enter or click away to save.</li>
         <li><strong>Broker Source</strong> — which broker's imports are authorized to write into this portfolio, independent of its name. Matching broker imports check this field, not the portfolio name.</li>
         <li><strong>Account Type</strong> — mark the portfolio as User-owned or Test / non-owned. Test/non-owned portfolios remain selectable and keep their data, but are clearly labeled and cannot be included in Owner.</li>
-        <li><strong>Show</strong> — controls whether the portfolio appears in the navbar portfolio selector. Clear it to keep a test or retired portfolio around without deleting it or cluttering the dropdown. Owner (ID 1) is always shown and cannot be hidden.</li>
-        <li><strong>Owner checkbox</strong> — marks a portfolio for inclusion in the Owner aggregate. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
+        <li><strong>Show</strong> — controls whether the portfolio appears in the navbar portfolio selector. Clear it to keep a test, retired portfolio, or Owner rollup around without deleting it or cluttering the dropdown.</li>
+        <li><strong>Owner checkbox</strong> — after Owner has been created, marks a regular user-owned portfolio for inclusion in that rollup. Portfolios checked here are used for Sync Owner and for calculating the DRIP/Cash income split on the Dashboard.</li>
         <li><strong>Cash</strong> — the account&apos;s cash balance, with the date it was written underneath. Click the amount to type a new one. See <em>Cash balances</em> below.</li>
         <li><strong>↑ / ↓ arrows</strong> (Actions column) — move a portfolio up or down. This sets the order portfolios appear in the navbar selector.</li>
         <li><strong>Select</strong> — switches the active portfolio in the navbar without leaving the page.</li>
         <li><strong>Clear</strong>, <strong>Reset</strong>, and <strong>Delete</strong> — the three actions that remove data. See the comparison below.</li>
-        <li><strong>+ New Portfolio</strong> button (top-right) — creates a new empty portfolio. New portfolios are automatically included in Owner and shown in the selector.</li>
+        <li><strong>+ New Portfolio</strong> — creates a new, regular empty portfolio. It is shown in the selector and is not added to Owner unless you check it.</li>
+        <li><strong>+ Create Owner</strong> — appears when Owner does not exist. It creates the optional rollup without creating or changing any brokerage accounts.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Cash balances</h3>
@@ -5877,7 +5878,7 @@ function PortfoliosHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li><strong>Clear</strong> — use when you want to reload a portfolio from a fresh export. The transaction ledger goes with the holdings, so whatever you import next is exactly what the portfolio ends up with. That matters because a transaction import skips rows it already has on file: a ledger left in place would treat your corrected rows as duplicates, discard them, and hand back the same bad history you just fixed.</li>
         <li><strong>Reset</strong> — use when an import went wrong and you want to start that portfolio's import over from scratch. This is the one that also wipes option trades and the DRIP contribution schedule, which Clear leaves behind because no positions or transactions file rebuilds them.</li>
-        <li><strong>Delete</strong> — use when you no longer want the portfolio at all. It disappears from the navbar selector and from any aggregates it belonged to. The Owner/default portfolio (ID 1) cannot be deleted, so its row shows no Delete button — Clear or Reset it instead.</li>
+        <li><strong>Delete</strong> — use when you no longer want the portfolio at all. It disappears from the navbar selector and from any aggregates it belonged to. Owner can be deleted after every member has been unchecked; deleting it leaves those brokerage accounts untouched.</li>
       </ul>
 
       <div className="alert alert-warning" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
@@ -5889,11 +5890,10 @@ function PortfoliosHelp() {
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
-        <strong>Owner and broker imports:</strong> Owner is a permanent portfolio, but it is not locked to one broker.
-        To use a different broker for Owner, select Owner, clear or export first if needed, then import that broker's
-        positions or transaction file. If Owner represents multiple source portfolios, import broker files into the
-        underlying source portfolios instead, then use Sync Owner to roll those accounts back up into Owner.
-        Broker and Snowball imports into Owner are blocked when Owner is made up of more than one source account.
+        <strong>Owner and broker imports:</strong> Owner is optional and is never a broker import destination.
+        Create a regular portfolio for each brokerage account, import that account&apos;s files there, then check the
+        portfolios that should feed Owner. This rule also applies to the first account in a new database, preventing
+        a Schwab, Fidelity, or other broker account from silently becoming Owner.
       </div>
 
       <div className="alert alert-info" style={{ marginTop: '0.5rem', marginBottom: '1rem' }}>
@@ -5921,9 +5921,9 @@ function PortfoliosHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Sync Owner</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        This section appears once the Owner-format import has been used. It updates the Owner portfolio
-        (profile 1) to match the combined holdings of a chosen source: either the portfolios checked
-        <strong> Owner</strong> in the table above, or a specific aggregate.
+        This compatibility section appears for existing setups that previously used an Owner-format
+        import. New Owner rollups update automatically from the portfolios checked <strong>Owner</strong>
+        in the table above.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>Tickers present in the source but missing from Owner are <strong>added</strong>.</li>
