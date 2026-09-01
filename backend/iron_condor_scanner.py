@@ -82,6 +82,8 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
@@ -984,10 +986,14 @@ def _suggest_iron_condors(
     expected move does not reach it, near enough that the credit is worth
     collecting.
     """
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
-        return []
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", ticker,
+        lambda: list(yf.Ticker(ticker).options or []),
+    )[0] or []
 
     earnings_d = _parse_date(earnings_date)
     cutoff = (
@@ -1473,10 +1479,14 @@ def _suggest_variant_structures(
     earnings_buffer_days: int = 5, fund: dict | None = None,
 ) -> list[dict]:
     """Every requested variant on one underlying, priced off one shared chain."""
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
-        return []
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", ticker,
+        lambda: list(yf.Ticker(ticker).options or []),
+    )[0] or []
 
     earnings_d = _parse_date(earnings_date)
     cutoff = (

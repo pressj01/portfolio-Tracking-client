@@ -143,6 +143,7 @@ from dividend_safety import (
     summarize_dividend_safety,
 )
 from accumulation_sim import run_accumulation_comparison
+import yahoo_gateway
 
 # yfinance stashes each download's frames in a module-level dict keyed by ticker
 # ALONE (yfinance.shared._DFS) — the date range is not part of the key. Two
@@ -154,7 +155,12 @@ from accumulation_sim import run_accumulation_comparison
 # state, and nothing in app.py fans them out across threads, so the only requests
 # that ever wait are the genuinely concurrent ones that would otherwise corrupt
 # each other.
-_YF_DOWNLOAD_LOCK = threading.Lock()
+#
+# The lock lives in yahoo_gateway so that module can hold it for a network
+# attempt and *release* it across a backoff pause: sleeping out a 429 while
+# holding the app-wide download lock would stall every other Yahoo caller for
+# the length of the retry.
+_YF_DOWNLOAD_LOCK = yahoo_gateway.DOWNLOAD_LOCK
 
 
 # Above this many rows, "at least two real bars" is a harmless coverage test.
@@ -437,11 +443,20 @@ def _yahoo_symbol_candidates(ticker):
 
 
 def _symbol_prices_on_yahoo(symbol):
-    """True when Yahoo returns any recent price history for `symbol`."""
+    """True when Yahoo returns any recent price history for `symbol`.
+
+    A throttled probe must answer False *without* being recorded as "Yahoo has
+    no such listing": the caller writes that verdict into `symbol_map` as a
+    permanent blank, and a symbol wrongly marked unlisted is never probed
+    again. `_resolve_yahoo_symbol` therefore checks the breaker before it
+    records anything.
+    """
     import yfinance as yf
     try:
-        with _YF_DOWNLOAD_LOCK:
-            history = yf.Ticker(symbol).history(period="5d")
+        history = yahoo_gateway.call(
+            lambda: yf.Ticker(symbol).history(period="5d"),
+            lock=_YF_DOWNLOAD_LOCK,
+        )
         return history is not None and not history.empty
     except Exception:
         return False
@@ -504,8 +519,198 @@ def _resolve_yahoo_symbol(ticker, conn=None):
         if _symbol_prices_on_yahoo(candidate):
             resolved = candidate
             break
-    _symbol_map_write(symbol, resolved, "auto", conn=conn)
+    # A failed probe is normally worth recording so a symbol Yahoo genuinely
+    # does not list is not re-probed forever. But a probe that failed because
+    # the feed was throttling proves nothing, and the blank it would write is
+    # permanent — the symbol would never be probed again even once Yahoo came
+    # back. Leave it unrecorded and let a later call try again.
+    if resolved or not yahoo_gateway.is_cooling_down():
+        _symbol_map_write(symbol, resolved, "auto", conn=conn)
     return resolved or None
+
+
+# Column labels yfinance uses for the measurement, as opposed to the symbol.
+# `actions=True` adds the event columns; `auto_adjust=False` adds Adj Close.
+_YF_FIELD_LABELS = {
+    "open", "high", "low", "close", "adj close",
+    "volume", "dividends", "stock splits", "capital gains",
+}
+
+
+def _ticker_level(columns):
+    """Which level of a download's MultiIndex holds the symbols.
+
+    Found by identifying the *field* level and taking the other one, never by
+    testing which level contains the requested symbols: LOW and OPEN are real
+    tickers, so a symbol-match test picks the wrong level for any portfolio
+    that holds one of them. A level is the field level only when every label on
+    it is a known yfinance field name and one of them is Close, which no
+    plausible basket of tickers satisfies.
+    """
+    if not isinstance(columns, pd.MultiIndex) or columns.nlevels != 2:
+        return None
+    for level in range(2):
+        values = {str(value).casefold() for value in columns.get_level_values(level)}
+        if values and values <= _YF_FIELD_LABELS and "close" in values:
+            return 1 - level
+    return None
+
+
+def _frame_symbols_with_data(frame, tickers):
+    """Symbols that came back with at least one real observation.
+
+    A rate-limited symbol is NOT absent from the frame: yfinance still emits
+    its columns and fills them with NaN end to end. Presence therefore has to
+    be judged on the values, not on the column labels.
+    """
+    if frame is None or getattr(frame, "empty", True):
+        return set()
+    wanted = {str(t).strip().upper() for t in tickers}
+    columns = frame.columns
+    level = _ticker_level(columns)
+    present = set()
+    if level is None:
+        # Flat columns: a single-ticker download whose columns are the field
+        # names. Any real observation means that one ticker priced.
+        try:
+            if len(wanted) == 1 and int(frame.notna().sum().sum()) > 0:
+                return set(wanted)
+        except Exception:
+            return set()
+        return set()
+    for position, label in enumerate(columns):
+        symbol = str(label[level]).strip().upper()
+        if symbol not in wanted or symbol in present:
+            continue
+        try:
+            if int(frame.iloc[:, position].notna().sum()) > 0:
+                present.add(symbol)
+        except Exception:
+            continue
+    return present
+
+
+def _drop_symbol_columns(frame, symbols):
+    """Remove every column belonging to `symbols` from a download frame."""
+    if frame is None or getattr(frame, "empty", True) or not symbols:
+        return frame
+    unwanted = {str(s).strip().upper() for s in symbols}
+    columns = frame.columns
+    level = _ticker_level(columns)
+    if level is None:
+        return frame
+    keep = [
+        position for position, label in enumerate(columns)
+        if str(label[level]).strip().upper() not in unwanted
+    ]
+    if len(keep) == len(columns):
+        return frame
+    return frame.iloc[:, keep]
+
+
+def _as_multiindex_chunk(raw, symbol, caller_group_by):
+    """Give a single-ticker download the column shape a multi-ticker one has."""
+    if raw is None or getattr(raw, "empty", True):
+        return raw
+    if isinstance(raw.columns, pd.MultiIndex):
+        return raw
+    if caller_group_by == "ticker":
+        # Caller wants (ticker, price_type) MultiIndex
+        return pd.concat({symbol: raw}, axis=1)
+    # Default yfinance format: (price_type, ticker) MultiIndex
+    raw.columns = pd.MultiIndex.from_tuples([(col, symbol) for col in raw.columns])
+    return raw
+
+
+def _merge_download_frames(frames):
+    """Concat chunk frames and drop the duplicate labels Yahoo sometimes repeats.
+
+    A repeated label makes scalar lookups such as ``frame.loc[date, ticker]``
+    return a Series instead of a number.
+    """
+    if not frames:
+        return pd.DataFrame()
+    combined = frames[0] if len(frames) == 1 else pd.concat(frames, axis=1)
+    if combined.index.has_duplicates:
+        combined = combined.loc[~combined.index.duplicated(keep="last")]
+    if combined.columns.has_duplicates:
+        combined = combined.loc[:, ~combined.columns.duplicated(keep="first")]
+    return combined
+
+
+# A recovery pass this size is no longer "the occasional dropped symbol".
+# Below it, retrying is cheap enough that the outage test should not fire even
+# when the missing share looks high: one absent name out of two is 50% of the
+# batch but still just one request.
+_MIN_MISSING_FOR_OUTAGE = 3
+# Ceiling on recovery requests from a single batch, whatever the proportions.
+_MAX_RECOVERY_REQUESTS = 8
+
+
+def _looks_like_feed_outage(missing, tickers):
+    """Whether a batch's empty symbols mean the feed failed, not the symbols.
+
+    Half or more of the batch coming back empty is the feed refusing the
+    account rather than Yahoo dropping names — but only once enough symbols are
+    involved for the proportion to mean anything. A two-name request with one
+    blank is a dropped symbol, and calling that an outage would suppress the
+    recovery that fixes it.
+    """
+    return len(missing) >= _MIN_MISSING_FOR_OUTAGE and len(missing) * 2 >= len(tickers)
+
+
+def _retry_unpriced_symbols(combined, tickers, kwargs, caller_group_by):
+    """Re-request only the symbols the batch failed to price.
+
+    Three rules keep this from making a throttle worse:
+
+    * It runs *only* on the symbols with no observations, never on the whole
+      list. A batch that mostly worked has a handful of genuine drop-outs, and
+      those are cheap to fetch.
+    * It does not run at all when the pattern says the feed failed rather than
+      the symbols — firing one request per holding into a live rate limit is
+      precisely what turns a brief throttle into a long one.
+    * It stops at the first refusal, and never issues more than
+      `_MAX_RECOVERY_REQUESTS` in one pass.
+    """
+    import yfinance as yf
+
+    present = _frame_symbols_with_data(combined, tickers)
+    missing = [t for t in tickers if str(t).strip().upper() not in present]
+    if not missing or _looks_like_feed_outage(missing, tickers):
+        return combined
+    if yahoo_gateway.is_cooling_down():
+        return combined
+    missing = missing[:_MAX_RECOVERY_REQUESTS]
+
+    recovered = []
+    for symbol in missing:
+        try:
+            raw = yahoo_gateway.call(
+                lambda s=symbol: yf.download(s, **kwargs),
+                lock=_YF_DOWNLOAD_LOCK,
+            )
+        except Exception:
+            # Includes YahooCooldown: the breaker closed partway through the
+            # recovery pass, so stop asking rather than finish the list.
+            break
+        shaped = _as_multiindex_chunk(raw, symbol, caller_group_by)
+        if shaped is not None and not getattr(shaped, "empty", True):
+            recovered.append(shaped)
+
+    if not recovered:
+        return combined
+    # Drop the all-NaN placeholders first: concatenating over them would leave
+    # two columns per symbol, and the de-duplication below keeps the first —
+    # which is the empty one.
+    base = _drop_symbol_columns(combined, missing)
+    frames = [base] if base is not None and not getattr(base, "empty", True) else []
+    return _merge_download_frames(frames + recovered)
+
+
+def _download_kwargs_key(kwargs):
+    """Hashable identity for a download's parameters, for request coalescing."""
+    return tuple(sorted((str(k), repr(v)) for k, v in kwargs.items()))
 
 
 def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
@@ -515,6 +720,14 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     This splits into chunks and merges the results.
     Single-ticker and small lists pass through unchanged.
     Caller's group_by preference is fully preserved across all paths.
+
+    Every request goes through `yahoo_gateway`, which supplies the shared
+    rate-limit policy: 429-aware backoff, a cooldown breaker that fails fast
+    instead of hammering a throttled feed, and coalescing so two endpoints
+    asking for the identical window during one dashboard load pay for one
+    download between them. A cooldown returns an empty frame — the same shape
+    callers already handle for a failed download, and the same shape their
+    outage detection already refuses to cache.
     """
     import yfinance as yf
 
@@ -535,8 +748,12 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # touching its own download call. Must not reach yfinance.
     trim_to_last_bars = kwargs.pop("trim_to_last_bars", None)
     anchor_on_or_before = kwargs.pop("anchor_on_or_before", None)
+    # Opt out where a caller is deliberately probing whether one symbol exists
+    # and an extra retry would only cost time.
+    retry_missing = kwargs.pop("retry_missing", True)
     kwargs.setdefault("progress", False)
     # Do NOT default group_by — preserve caller's intent
+    caller_group_by = kwargs.get("group_by", None)
 
     def _shape(frame):
         return _restore_broker_symbols(
@@ -547,50 +764,83 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
             _broker_by_yahoo,
         )
 
-    if len(tickers) <= chunk_size:
-        with _YF_DOWNLOAD_LOCK:
-            raw = yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs)
-        return _shape(raw)
+    def _download_single_batch():
+        return yahoo_gateway.call(
+            lambda: yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs),
+            lock=_YF_DOWNLOAD_LOCK,
+        )
 
-    # Multi-chunk path: use caller's group_by (if any) in each chunk.
-    # Single-ticker chunks return flat columns and must be normalized to match
-    # what a multi-ticker download with the same group_by setting would return.
-    import time as _time
-    caller_group_by = kwargs.get("group_by", None)
-    frames = []
-    for i in range(0, len(tickers), chunk_size):
-        if i > 0:
-            _time.sleep(1)
-        chunk = tickers[i:i + chunk_size]
-        try:
-            with _YF_DOWNLOAD_LOCK:
-                raw = yf.download(chunk if len(chunk) > 1 else chunk[0], **kwargs)
-            if not raw.empty:
-                if len(chunk) == 1 and not isinstance(raw.columns, pd.MultiIndex):
-                    if caller_group_by == "ticker":
-                        # Caller wants (ticker, price_type) MultiIndex
-                        raw = pd.concat({chunk[0]: raw}, axis=1)
-                    else:
-                        # Default yfinance format: (price_type, ticker) MultiIndex
-                        raw.columns = pd.MultiIndex.from_tuples(
-                            [(col, chunk[0]) for col in raw.columns]
-                        )
+    def _download_chunked():
+        # Multi-chunk path: use caller's group_by (if any) in each chunk.
+        # Single-ticker chunks return flat columns and must be normalized to
+        # match what a multi-ticker download with the same group_by would
+        # return.
+        import time as _time
+        frames = []
+        for i in range(0, len(tickers), chunk_size):
+            if i > 0:
+                _time.sleep(1)  # pause between batches to avoid rate limits
+            chunk = tickers[i:i + chunk_size]
+            try:
+                raw = yahoo_gateway.call(
+                    lambda c=chunk: yf.download(c if len(c) > 1 else c[0], **kwargs),
+                    lock=_YF_DOWNLOAD_LOCK,
+                )
+            except yahoo_gateway.YahooCooldown:
+                # The breaker closed mid-sweep. Keep the chunks already in hand
+                # and stop; the remaining symbols come back as unpriced, which
+                # every caller's outage handling already understands.
+                break
+            except Exception:
+                continue
+            if raw is not None and not raw.empty:
+                if len(chunk) == 1:
+                    raw = _as_multiindex_chunk(raw, chunk[0], caller_group_by)
                 frames.append(raw)
-        except Exception:
-            pass
+        return _merge_download_frames(frames)
 
-    if not frames:
+    def _produce():
+        combined = (
+            _download_single_batch() if len(tickers) <= chunk_size
+            else _download_chunked()
+        )
+        if retry_missing and len(tickers) > 1:
+            combined = _retry_unpriced_symbols(combined, tickers, kwargs, caller_group_by)
+        return combined
+
+    # Coalesce on the raw request, before shaping: two callers wanting the same
+    # download but different trims still share the one network round trip and
+    # then trim their own copy.
+    key = ("yf.download", tuple(tickers), int(chunk_size), _download_kwargs_key(kwargs))
+
+    # Opt-in reuse of a recent identical download. Off unless the user turns it
+    # on in Settings, because it is the one guard rail here that trades price
+    # freshness for fewer Yahoo requests.
+    reused = yahoo_gateway.cached_download(key)
+    if reused is not None:
+        return _shape(reused[0])
+
+    try:
+        raw = yahoo_gateway.coalesce(key, _produce)
+    except yahoo_gateway.YahooCooldown:
         return pd.DataFrame()
-    combined = pd.concat(frames, axis=1)
-    # Yahoo can occasionally repeat a date or ticker column in one of the
-    # chunks.  A repeated label makes scalar lookups such as
-    # frame.loc[first_valid_date, ticker] return a Series instead of a number.
-    # Keep one observation for each axis before handing the frame to callers.
-    if combined.index.has_duplicates:
-        combined = combined.loc[~combined.index.duplicated(keep="last")]
-    if combined.columns.has_duplicates:
-        combined = combined.loc[:, ~combined.columns.duplicated(keep="first")]
-    return _shape(combined)
+    except Exception as exc:
+        # Preserves the historical contract: a failed download is an empty
+        # frame, not an exception thrown at ~50 call sites. Recorded so the
+        # feed-status endpoint can still name the cause — swallowing it here
+        # without a trace would make a genuine bug (a bad period, a broken
+        # yfinance upgrade) indistinguishable from an empty market response.
+        yahoo_gateway.note_failure(exc)
+        return pd.DataFrame()
+
+    if raw is None:
+        return pd.DataFrame()
+    # Only a real download is worth reusing. store_download ignores an empty
+    # frame, so a throttled result can never be served back as a price.
+    yahoo_gateway.store_download(key, raw)
+    # An empty frame is still passed through _shape: callers have always been
+    # handed whatever columns a failed download carried, and some inspect them.
+    return _shape(raw)
 
 
 def _normalize_prices_to_100(close):
@@ -2401,6 +2651,114 @@ def api_health():
         "ok": True,
         "instance_token": os.environ.get("PORTFOLIO_BACKEND_TOKEN", ""),
     })
+
+
+PRICE_REUSE_ENABLED_KEY = "price_reuse_enabled"
+PRICE_REUSE_TTL_KEY = "price_reuse_ttl_minutes"
+
+
+def _load_price_reuse_policy():
+    """Apply the stored reuse preference to the gateway. Never raises.
+
+    Called once at import and again whenever the setting is saved, so the
+    download path can read the policy from memory instead of hitting the
+    settings table on every request.
+    """
+    enabled, minutes = False, yahoo_gateway.DEFAULT_REUSE_TTL_SEC / 60.0
+    conn = None
+    try:
+        conn = get_connection()
+        rows = {
+            r["key"]: r["value"]
+            for r in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN (?, ?)",
+                (PRICE_REUSE_ENABLED_KEY, PRICE_REUSE_TTL_KEY),
+            )
+        }
+        enabled = str(rows.get(PRICE_REUSE_ENABLED_KEY, "")).strip().lower() in (
+            "1", "true", "yes", "on"
+        )
+        if rows.get(PRICE_REUSE_TTL_KEY):
+            minutes = float(rows[PRICE_REUSE_TTL_KEY])
+    except Exception:
+        # A fresh install has no settings table yet. Off is the safe default.
+        pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return yahoo_gateway.set_reuse_policy(enabled, minutes * 60.0)
+
+
+@app.route("/api/market-feed/status", methods=["GET"])
+def market_feed_status():
+    """Whether Yahoo requests are currently being held back, and for how long.
+
+    Rate limiting used to be visible only as data that quietly went missing —
+    blank grades, "--" in NAV cells, a scanner reporting no options. This
+    reports the state directly so a screen can say the feed is cooling down and
+    when it will resume, rather than presenting an outage as a result.
+    """
+    return jsonify({
+        "ok": True,
+        **yahoo_gateway.breaker_state(),
+        "price_reuse": yahoo_gateway.reuse_stats(),
+    })
+
+
+@app.route("/api/market-feed/price-reuse", methods=["GET", "POST"])
+def market_feed_price_reuse():
+    """Read or set the opt-in "reuse recent prices" preference.
+
+    POST body: {"enabled": bool, "ttl_minutes": number}. Saving always clears
+    whatever is currently held, so turning the setting off takes effect on the
+    very next request rather than after the last cached window expires.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled"))
+        try:
+            minutes = float(data.get("ttl_minutes") or 10)
+        except (TypeError, ValueError):
+            minutes = 10.0
+        minutes = max(1.0, min(60.0, minutes))
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (PRICE_REUSE_ENABLED_KEY, "true" if enabled else "false"),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (PRICE_REUSE_TTL_KEY, str(minutes)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        yahoo_gateway.set_reuse_policy(enabled, minutes * 60.0)
+    return jsonify({"ok": True, **yahoo_gateway.reuse_stats()})
+
+
+@app.route("/api/market-feed/clear-price-cache", methods=["POST"])
+def market_feed_clear_price_cache():
+    """Drop every reused price so the next request goes to Yahoo."""
+    yahoo_gateway.reset_reuse_cache()
+    return jsonify({"ok": True, **yahoo_gateway.reuse_stats()})
+
+
+@app.route("/api/market-feed/resume", methods=["POST"])
+def market_feed_resume():
+    """Clear the cooldown early, at the user's request.
+
+    The escalating cooldown is a good default but a poor cage: if Yahoo has in
+    fact recovered, the user should be able to say so and retry immediately
+    rather than wait out a 15-minute back-off.
+    """
+    yahoo_gateway.reset_breaker()
+    return jsonify({"ok": True, **yahoo_gateway.breaker_state()})
+
 
 _PORTFOLIO_SUMMARY_CACHE = {}
 _PORTFOLIO_COVERAGE_CACHE = {}
@@ -46278,6 +46636,11 @@ def save_settings():
     if "nav_benchmark_overrides" in data:
         _NAV_BENCHMARK_OVERRIDE_CACHE.update({"ts": 0, "data": {}})
         _PORTFOLIO_COVERAGE_CACHE.clear()
+    if PRICE_REUSE_ENABLED_KEY in data or PRICE_REUSE_TTL_KEY in data:
+        # Written through the generic settings endpoint rather than its own
+        # route; the gateway still has to be told, or the change does nothing
+        # until the next restart.
+        _load_price_reuse_policy()
     return jsonify({"ok": True})
 
 
@@ -52679,11 +53042,24 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
     fund_data = {}
 
     def _fetch_info(t):
-        try:
+        """Fundamentals for one ticker, falling back to the last good scrape.
+
+        `.info` is the slowest and most throttle-prone call in the app, and this
+        loop makes one per ticker. Fundamentals barely move day to day, so a
+        throttled scrape is far better served by the previous good answer than
+        by an error row that blanks the ticker's whole fundamentals block.
+        """
+
+        def _load():
             info = _yf_ticker(t).info or {}
+            if not info:
+                # Distinguishable from a successful scrape of a sparse ticker:
+                # an empty payload means the request did not really land, and
+                # persisting it would overwrite good stored fundamentals.
+                raise ValueError("empty info payload")
             etf_cat = info.get("category", "")
             etf_category, etf_strategy, etf_cap_size = _classify_etf(etf_cat, t)
-            return t, {
+            return {
                 "name": info.get("shortName") or info.get("longName", ""),
                 "sector": info.get("sector", ""),
                 "industry": info.get("industry", ""),
@@ -52713,11 +53089,23 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
                 "beta_3y": info.get("beta3Year"),
                 "fund_family": info.get("fundFamily", ""),
             }
-        except Exception as exc:
-            return t, {"_error": str(exc)}
+
+        mapped, meta = yahoo_gateway.fetch("scanner_fundamentals", t, _load)
+        if mapped is None:
+            return t, {"_error": meta["error"] or "no fundamentals returned"}
+        return t, ({**mapped, "_stale": True} if meta["stale"] else mapped)
 
     INFO_BATCH = 10
+    stale_fundamentals = []
+    feed_cooldown_sec = 0.0
     for i in range(0, len(info_tickers), INFO_BATCH):
+        # Stop rather than grind through the remaining batches once the breaker
+        # has shut. Every further request is refused locally anyway, and the
+        # ones that do slip through only extend the throttle. The tickers not
+        # reached simply keep the fundamentals already in the cache.
+        if yahoo_gateway.is_cooling_down():
+            feed_cooldown_sec = yahoo_gateway.cooldown_remaining()
+            break
         batch = info_tickers[i:i + INFO_BATCH]
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {pool.submit(_fetch_info, t): t for t in batch}
@@ -52726,9 +53114,16 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
                 if "_error" in result:
                     errors.append({"ticker": t, "error": result["_error"]})
                 else:
+                    # `_stale` is bookkeeping, not a column: the upsert below
+                    # builds its column list straight from these keys.
+                    if result.pop("_stale", False):
+                        stale_fundamentals.append(t)
                     fund_data[t] = result
         if i + INFO_BATCH < len(info_tickers):
             _time.sleep(1)  # pause between info batches to avoid rate limits
+    # Whatever was buffered during the sweep, on disk before the response says
+    # the refresh succeeded.
+    yahoo_gateway.flush_persisted()
 
     # ── 3. Merge and upsert into cache ───────────────────────────────────────
     # Commit every UPSERT_BATCH rows so concurrent readers/writers aren't
@@ -52772,6 +53167,13 @@ def _general_scanner_refresh_impl(tickers, type_map, force_info=False):
         "errors": errors,
         "info_fetched": len(fund_data),
         "info_skipped": len(tickers) - len(info_tickers) if not force_info else 0,
+        # A refresh that was cut short by the rate limiter still reports ok:
+        # the rows it did write are good. These say how complete it actually
+        # was, so the screen can offer a retry instead of implying the cache is
+        # now current.
+        "stale_fundamentals": stale_fundamentals,
+        "feed_cooling_down": feed_cooldown_sec > 0,
+        "feed_retry_after_sec": round(feed_cooldown_sec, 1),
     }
 
 
@@ -56127,4 +56529,10 @@ if __name__ == "__main__":
             print(f"Fund look-through {_seed_name} seed failed: {_seed_problem}")
     finally:
         conn.close()
+    # The stored "reuse recent prices" preference has to reach the gateway
+    # before the first request, or the setting silently does nothing until it
+    # is next saved.
+    _reuse = _load_price_reuse_policy()
+    if _reuse["enabled"]:
+        print(f"[startup] reusing prices for {_reuse['ttl_sec'] / 60:.0f} min to reduce Yahoo requests")
     app.run(debug=not is_packaged, port=5001, use_reloader=False)

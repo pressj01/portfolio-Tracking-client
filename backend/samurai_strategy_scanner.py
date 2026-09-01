@@ -34,6 +34,8 @@ from statistics import NormalDist
 
 import yfinance as yf
 
+import yahoo_gateway
+
 from options_api import (
     _EXP_TTL,
     _cache_get,
@@ -180,7 +182,15 @@ def _prime_option_ticker(ticker: str):
     cached = _cache_get(_exp_cache, ticker, _EXP_TTL)
     if cached is None:
         try:
-            default_chain = tk.option_chain()
+            default_chain = yahoo_gateway.call(lambda: tk.option_chain())
+        except yahoo_gateway.YahooCooldown as exc:
+            # Keeps what Yahoo actually said, so `_is_feed_outage` still reads
+            # this as a feed problem rather than a ticker without options, and
+            # adds when it is worth trying again.
+            return tk, [], None, (
+                f"Option chain unavailable: {exc.cause or 'rate limited'}"
+                f" — retry in {exc.retry_after:.0f}s"
+            )
         except Exception as exc:
             return tk, [], None, f"Option chain unavailable: {exc}"
     return tk, _fetch_expirations(ticker, session_ticker=tk), default_chain, None

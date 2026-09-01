@@ -51,6 +51,8 @@ from datetime import date, datetime, timedelta
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from config import get_connection
@@ -124,7 +126,7 @@ def _prime_option_ticker(ticker: str):
         fetch = getattr(tk, "option_chain", None)
         if callable(fetch):
             try:
-                default_chain = fetch()
+                default_chain = yahoo_gateway.call(fetch)
             except Exception:
                 default_chain = None
     expirations = _load_expirations(ticker, tk)

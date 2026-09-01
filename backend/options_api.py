@@ -25,6 +25,7 @@ from typing import Any
 import yfinance as yf
 from flask import jsonify, request
 
+import yahoo_gateway
 from config import get_connection
 from options_backtest import run_options_backtest
 from options_pricing import price_option, black_scholes
@@ -201,81 +202,132 @@ def _analysis_year_frac(exp_str: str, eval_d: date) -> float:
     return max((exp_d - eval_d).days, 0) / 365.0
 
 
+def _blank_quote(ticker: str) -> dict:
+    return {
+        'ticker': ticker.upper(), 'name': None, 'last': None, 'bid': None,
+        'ask': None, 'prev_close': None, 'change': None, 'change_pct': None,
+        'volume': None, 'open': None, 'high': None, 'low': None, 'div_yield': 0.0,
+    }
+
+
 def _fetch_quote(ticker: str, session_ticker=None) -> dict:
+    """Live quote for a ticker, with the shared Yahoo rate-limit policy applied.
+
+    A throttled quote used to be indistinguishable from a quote for a ticker
+    that simply has no price: every accessor swallowed its own exception, the
+    all-``None`` result was written to the 30-second cache, and the scanner then
+    read "no price" for that whole window. Now a run where nothing priced
+    re-raises the throttle so the breaker sees it, the last-good quote is served
+    in its place, and the empty result is never cached.
+    """
     cached = _cache_get(_quote_cache, ticker, _QUOTE_TTL)
     if cached:
         return cached
-    t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
 
-    def _get_fi(attr):
+    def _build():
+        t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
+        # A throttle met while assembling the quote is remembered rather than
+        # raised on the spot: fast_info may already have handed over a good
+        # price, and discarding that to report an outage would be worse than
+        # returning a quote with no dividend yield on it.
+        throttle = []
+
+        def _guard(exc):
+            if yahoo_gateway.is_rate_limited(exc):
+                throttle.append(exc)
+
+        def _get_fi(attr):
+            try:
+                fi = t.fast_info
+                v = getattr(fi, attr, None)
+                if v is None and hasattr(fi, '__getitem__'):
+                    try:
+                        v = fi[attr]
+                    except Exception:
+                        v = None
+                return _safe(v)
+            except Exception as exc:
+                _guard(exc)
+                return None
+
+        last = _get_fi('last_price')
+        bid = _get_fi('bid')
+        ask = _get_fi('ask')
+        prev = _get_fi('previous_close')
+        vol = _get_fi('last_volume')
+        open_ = _get_fi('open')
+        high = _get_fi('day_high')
+        low = _get_fi('day_low')
+
+        # Fallback: pull last close from recent history if fast_info is empty
+        if last is None:
+            try:
+                hist = t.history(period='5d', auto_adjust=False)
+                if not hist.empty:
+                    last = float(hist['Close'].iloc[-1])
+                    if prev is None and len(hist) >= 2:
+                        prev = float(hist['Close'].iloc[-2])
+                    if open_ is None:
+                        open_ = float(hist['Open'].iloc[-1])
+                    if high is None:
+                        high = float(hist['High'].iloc[-1])
+                    if low is None:
+                        low = float(hist['Low'].iloc[-1])
+                    if vol is None:
+                        vol = int(hist['Volume'].iloc[-1])
+            except Exception as exc:
+                _guard(exc)
+
+        # Dividend yield + name from slow info
+        div_yield = 0.0
+        name = None
         try:
-            fi = t.fast_info
-            v = getattr(fi, attr, None)
-            if v is None and hasattr(fi, '__getitem__'):
-                try:
-                    v = fi[attr]
-                except Exception:
-                    v = None
-            return _safe(v)
-        except Exception:
-            return None
+            slow = t.info or {}
+            name = slow.get('shortName') or slow.get('longName')
+            dy = _safe(slow.get('dividendYield'))
+            trailing_yield = _safe(slow.get('trailingAnnualDividendYield'))
+            div_yield = _normalize_dividend_yield(dy, trailing_yield)
+        except Exception as exc:
+            _guard(exc)
 
-    last = _get_fi('last_price')
-    bid = _get_fi('bid')
-    ask = _get_fi('ask')
-    prev = _get_fi('previous_close')
-    vol = _get_fi('last_volume')
-    open_ = _get_fi('open')
-    high = _get_fi('day_high')
-    low = _get_fi('day_low')
+        if last is None and throttle:
+            # Nothing usable came back and the feed said why. Surfacing it lets
+            # the breaker count this call and the caller fall back to last-good.
+            raise throttle[0]
 
-    # Fallback: pull last close from recent history if fast_info is empty
-    if last is None:
-        try:
-            hist = t.history(period='5d', auto_adjust=False)
-            if not hist.empty:
-                last = float(hist['Close'].iloc[-1])
-                if prev is None and len(hist) >= 2:
-                    prev = float(hist['Close'].iloc[-2])
-                if open_ is None:
-                    open_ = float(hist['Open'].iloc[-1])
-                if high is None:
-                    high = float(hist['High'].iloc[-1])
-                if low is None:
-                    low = float(hist['Low'].iloc[-1])
-                if vol is None:
-                    vol = int(hist['Volume'].iloc[-1])
-        except Exception:
-            pass
+        return {
+            'ticker': ticker.upper(),
+            'name': name,
+            'last': last,
+            'bid': bid,
+            'ask': ask,
+            'prev_close': prev,
+            'change': (last - prev) if (last is not None and prev is not None) else None,
+            'change_pct': ((last - prev) / prev * 100.0) if (last and prev) else None,
+            'volume': vol,
+            'open': open_,
+            'high': high,
+            'low': low,
+            'div_yield': div_yield,
+        }
 
-    # Dividend yield + name from slow info
-    div_yield = 0.0
-    name = None
-    try:
-        slow = t.info or {}
-        name = slow.get('shortName') or slow.get('longName')
-        dy = _safe(slow.get('dividendYield'))
-        trailing_yield = _safe(slow.get('trailingAnnualDividendYield'))
-        div_yield = _normalize_dividend_yield(dy, trailing_yield)
-    except Exception:
-        pass
-
-    result = {
-        'ticker': ticker.upper(),
-        'name': name,
-        'last': last,
-        'bid': bid,
-        'ask': ask,
-        'prev_close': prev,
-        'change': (last - prev) if (last is not None and prev is not None) else None,
-        'change_pct': ((last - prev) / prev * 100.0) if (last and prev) else None,
-        'volume': vol,
-        'open': open_,
-        'high': high,
-        'low': low,
-        'div_yield': div_yield,
-    }
-    _cache_set(_quote_cache, ticker, result)
+    result, meta = yahoo_gateway.fetch(
+        'quote', ticker, _build,
+        coalesce_key=('options.quote', ticker.upper()),
+    )
+    if result is None:
+        result = _blank_quote(ticker)
+    result = dict(result)
+    result['stale'] = bool(meta['stale'])
+    if meta['stale'] or meta['cooling_down']:
+        result['feed_status'] = {
+            'cooling_down': meta['cooling_down'],
+            'retry_after_sec': meta['retry_after_sec'],
+        }
+    # Only a live answer earns a cache slot. Caching a throttled blank is what
+    # made one 429 look like 30 seconds of a dead ticker.
+    if not meta['stale'] and not meta['error']:
+        _cache_set(_quote_cache, ticker, result)
     return result
 
 
@@ -286,16 +338,28 @@ def _fetch_expirations(ticker: str, session_ticker=None) -> list[str]:
     ``session_ticker``. Reading ``.options`` off a *fresh* Ticker makes
     yfinance download the catalog again -- and that response carries a full
     default chain that is then thrown away.
+
+    An empty catalog is a real answer for a ticker with no listed options, but
+    it is also what a throttled request produces. Only the former is cached;
+    the latter falls back to the last catalog Yahoo did return, which does not
+    change from one day to the next anyway.
     """
     cached = _cache_get(_exp_cache, ticker, _EXP_TTL)
     if cached:
         return cached
-    t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
-    try:
-        exps = list(t.options or [])
-    except Exception:
+
+    def _load():
+        t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
+        return list(t.options or [])
+
+    exps, meta = yahoo_gateway.fetch(
+        'option_expirations', ticker, _load,
+        coalesce_key=('options.expirations', ticker.upper()),
+    )
+    if exps is None:
         exps = []
-    _cache_set(_exp_cache, ticker, exps)
+    if not meta['stale'] and not meta['error']:
+        _cache_set(_exp_cache, ticker, exps)
     return exps
 
 
@@ -315,7 +379,14 @@ def _fetch_chain(ticker: str, expiration: str, session_ticker=None, chain=None) 
 
     t = session_ticker if session_ticker is not None else yf.Ticker(ticker)
     if chain is None:
-        chain = t.option_chain(expiration)
+        # Through the gateway so a throttled chain is retried with backoff, is
+        # counted toward the breaker, and is fetched once when several scanner
+        # threads want the same expiration. The exception still propagates on
+        # failure -- callers already turn that into "Yahoo may be rate-limiting".
+        chain = yahoo_gateway.coalesce(
+            ('options.chain', ticker.upper(), expiration),
+            lambda: yahoo_gateway.call(lambda: t.option_chain(expiration)),
+        )
 
     quote = _fetch_quote(ticker, session_ticker=session_ticker)
     spot = quote.get('last') or quote.get('ask') or 0.0

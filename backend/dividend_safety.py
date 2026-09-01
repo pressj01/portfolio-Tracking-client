@@ -2,6 +2,7 @@ import datetime as _dt
 import json
 import math
 import time
+import yahoo_gateway
 
 
 SAFETY_CACHE_TTL_HOURS = 24
@@ -257,7 +258,16 @@ def _nav_distribution_coverage(ticker_obj, benchmark_ticker=None, annual_yield_f
             import yfinance as yf
             component_returns = []
             for bench in _benchmark_parts(benchmark_ticker):
-                bench_hist = yf.Ticker(bench).history(period="1y", auto_adjust=True)
+                try:
+                    bench_hist = yahoo_gateway.call(
+                        lambda b=bench: yf.Ticker(b).history(period="1y", auto_adjust=True),
+                        lock=yahoo_gateway.DOWNLOAD_LOCK,
+                    )
+                except Exception:
+                    # A benchmark leg that cannot be priced must not silently
+                    # become a 0% return: drop it and let the parts that did
+                    # resolve carry the comparison.
+                    continue
                 if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns:
                     bench_close = bench_hist["Close"].dropna()
                     if len(bench_close) >= 2:
@@ -592,14 +602,15 @@ def _build_payload(ticker, holding):
 
     ticker = ticker.strip().upper()
     tk = yf.Ticker(ticker)
-    info = {}
-    dividends = None
+    # Persisted last-good: payout ratio, EPS and dividend rate move on an
+    # earnings cadence, so yesterday's values are a far better answer during a
+    # throttle than the all-blank payload that used to be scored and cached.
+    info, _info_meta = yahoo_gateway.fetch(
+        "dividend_safety_info", ticker, lambda: tk.info or {}
+    )
+    info = info or {}
     try:
-        info = tk.info or {}
-    except Exception:
-        info = {}
-    try:
-        dividends = tk.dividends
+        dividends = yahoo_gateway.call(lambda: tk.dividends)
     except Exception:
         dividends = None
 

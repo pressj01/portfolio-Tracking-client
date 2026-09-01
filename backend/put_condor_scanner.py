@@ -23,6 +23,8 @@ from __future__ import annotations
 from datetime import date, datetime
 
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from put_scanner import (
@@ -436,10 +438,14 @@ def run_put_condor_scan(payload: dict) -> dict:
             "as_of": datetime.now().isoformat(timespec="seconds"),
         }
 
-    try:
-        expirations = list(yf.Ticker(underlying).options or [])
-    except Exception:
-        expirations = []
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", underlying,
+        lambda: list(yf.Ticker(underlying).options or []),
+    )[0] or []
     ranked = _ranked_expirations(expirations, target_dte, min_dte, max_dte)
     if not ranked:
         return {

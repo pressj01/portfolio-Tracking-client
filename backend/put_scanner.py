@@ -35,6 +35,8 @@ from datetime import date, datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from config import get_connection
@@ -277,12 +279,21 @@ def _load_expirations(ticker: str, tk=None) -> list[str]:
     cached = _cache_get(_expirations_cache, ticker, _CHAIN_TTL)
     if cached is not None:
         return cached
-    try:
+
+    def _load():
         instrument = tk if tk is not None else yf.Ticker(ticker)
-        expirations = list(instrument.options or [])
-    except Exception:
-        expirations = []
-    _cache_set(_expirations_cache, ticker, expirations)
+        return list(instrument.options or [])
+
+    expirations, meta = yahoo_gateway.fetch(
+        "option_expirations", ticker, _load,
+        coalesce_key=("options.expirations", ticker.upper()),
+    )
+    expirations = expirations or []
+    # An empty catalog is a real answer for a ticker with no listed options and
+    # is worth caching. The same empty list produced by a throttle is not: it
+    # would report "no options" for the full TTL.
+    if not meta["stale"] and not meta["error"]:
+        _cache_set(_expirations_cache, ticker, expirations)
     return expirations
 
 
@@ -540,18 +551,30 @@ def window_stretch(log_ret: pd.Series, lookback_days: int) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def _chunked_download(tickers: list[str], period: str = "1y", chunk_size: int = 25):
-    """Batched yf.download. Yahoo silently drops tickers past ~50 per call."""
+    """Batched yf.download. Yahoo silently drops tickers past ~50 per call.
+
+    Each chunk goes through the shared gateway, so a throttled chunk is retried
+    with backoff and counted toward the breaker. Once the breaker shuts the
+    sweep stops: the remaining chunks would be refused locally anyway, and the
+    partial frame is exactly what the caller already handles when Yahoo drops
+    symbols.
+    """
     frames = []
     for i in range(0, len(tickers), chunk_size):
         if i > 0:
             time.sleep(0.6)
         chunk = tickers[i:i + chunk_size]
         try:
-            raw = yf.download(
-                chunk if len(chunk) > 1 else chunk[0],
-                period=period, interval="1d", progress=False,
-                auto_adjust=False, group_by="ticker", threads=True,
+            raw = yahoo_gateway.call(
+                lambda c=chunk: yf.download(
+                    c if len(c) > 1 else c[0],
+                    period=period, interval="1d", progress=False,
+                    auto_adjust=False, group_by="ticker", threads=True,
+                ),
+                lock=yahoo_gateway.DOWNLOAD_LOCK,
             )
+        except yahoo_gateway.YahooCooldown:
+            break
         except Exception:
             continue
         if raw is None or raw.empty:

@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from cash_flow import HOLDING_SCENARIO_PROFILES
+import yahoo_gateway
 
 
 SCENARIOS = ("bullish", "neutral", "bearish")
@@ -415,16 +416,24 @@ def download_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
     import yfinance as yf
 
     symbols = list(dict.fromkeys([*tickers, "SPY"]))
-    raw = yf.download(
-        symbols if len(symbols) > 1 else symbols[0],
-        period="10y",
-        interval="1d",
-        auto_adjust=False,
-        actions=True,
-        group_by="ticker",
-        progress=False,
-        threads=True,
-    )
+    # Ten years across every symbol is one of the heaviest single requests the
+    # app makes, so it is exactly the one worth retrying rather than dropping.
+    try:
+        raw = yahoo_gateway.call(
+            lambda: yf.download(
+                symbols if len(symbols) > 1 else symbols[0],
+                period="10y",
+                interval="1d",
+                auto_adjust=False,
+                actions=True,
+                group_by="ticker",
+                progress=False,
+                threads=True,
+            ),
+            lock=yahoo_gateway.DOWNLOAD_LOCK,
+        )
+    except Exception:
+        return {}
     return {
         ticker: frame
         for ticker in symbols

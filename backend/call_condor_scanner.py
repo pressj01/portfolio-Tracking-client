@@ -18,6 +18,8 @@ import math
 
 import yfinance as yf
 
+import yahoo_gateway
+
 from call_scanner import _load_call_chain
 from options_pricing import black_scholes
 from put_condor_scanner import (
@@ -601,10 +603,14 @@ def run_call_condor_scan(payload: dict) -> dict:
     spot = _num(close.iloc[-1]) if len(close) else None
     if not spot:
         return {"rows": [], "unavailable": [{"ticker": underlying, "option_side": "call", "reason": "Current underlying price is unavailable."}], "stats": {"expirations_checked": 0, "structures_found": 0, "actionable": 0, "near_matches": 0}, "as_of": datetime.now().isoformat(timespec="seconds")}
-    try:
-        expirations = list(yf.Ticker(underlying).options or [])
-    except Exception:
-        expirations = []
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", underlying,
+        lambda: list(yf.Ticker(underlying).options or []),
+    )[0] or []
     ranked = _ranked_expirations(expirations, target_dte, min_dte, max_dte)
     if not ranked:
         return {"rows": [], "unavailable": [{"ticker": underlying, "option_side": "call", "price": _round(spot), "reason": f"No listed expiration is between {min_dte} and {max_dte} DTE."}], "stats": {"expirations_checked": 0, "structures_found": 0, "actionable": 0, "near_matches": 0}, "as_of": datetime.now().isoformat(timespec="seconds")}

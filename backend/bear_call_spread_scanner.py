@@ -91,6 +91,8 @@ from statistics import NormalDist, median
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
@@ -798,10 +800,14 @@ def _suggest_bear_call_spread(
     covered call screen's cost-basis floor, applied to a technical level instead
     of a purchase price, and relaxed the same way when nothing clears it.
     """
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
-        return None
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", ticker,
+        lambda: list(yf.Ticker(ticker).options or []),
+    )[0] or []
 
     earnings_d = _parse_date(earnings_date)
     cutoff = (

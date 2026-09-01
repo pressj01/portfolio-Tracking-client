@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+import yahoo_gateway
+
 from market_symbols import yahoo_symbol_for_ticker
 from options_pricing import black_scholes, price_option
 
@@ -232,16 +234,28 @@ def fetch_backtest_history(ticker: str, start: date, end: date) -> pd.DataFrame:
     warmup_start = start - timedelta(days=420)
     download_end = end + timedelta(days=1)
     symbols = list(dict.fromkeys([yahoo_ticker, "SPY", "QQQ", "^VIX", "^VXN", "^IRX"]))
-    raw = yf.download(
-        " ".join(symbols),
-        start=warmup_start.isoformat(),
-        end=download_end.isoformat(),
-        auto_adjust=False,
-        actions=True,
-        progress=False,
-        threads=False,
-        group_by="ticker",
-    )
+    try:
+        raw = yahoo_gateway.call(
+            lambda: yf.download(
+                " ".join(symbols),
+                start=warmup_start.isoformat(),
+                end=download_end.isoformat(),
+                auto_adjust=False,
+                actions=True,
+                progress=False,
+                threads=False,
+                group_by="ticker",
+            ),
+            lock=yahoo_gateway.DOWNLOAD_LOCK,
+        )
+    except yahoo_gateway.YahooCooldown as exc:
+        # Named explicitly: "no historical data" would send the user hunting
+        # for a bad symbol when the real answer is to wait.
+        raise ValueError(
+            f"Yahoo Finance is rate limiting; retry in about {exc.retry_after:.0f}s."
+        ) from exc
+    except Exception as exc:
+        raise ValueError("Yahoo Finance returned no historical data for this symbol.") from exc
     if raw is None or raw.empty:
         raise ValueError("Yahoo Finance returned no historical data for this symbol.")
 

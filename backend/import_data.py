@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import date
 from config import get_connection
 from database import ensure_tables_exist
+import yahoo_gateway
 
 # ── Column mapping for the owner's Excel spreadsheet (All Accounts sheet) ─────
 COLUMN_MAP = {
@@ -222,9 +223,12 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
             _tickers = _dated["ticker"].unique().tolist()
             _ticker_str = " ".join(_tickers)
             try:
-                _raw = yf.download(
-                    _ticker_str, start=_earliest.strftime("%Y-%m-%d"),
-                    progress=False, auto_adjust=False, actions=True
+                _raw = yahoo_gateway.call(
+                    lambda: yf.download(
+                        _ticker_str, start=_earliest.strftime("%Y-%m-%d"),
+                        progress=False, auto_adjust=False, actions=True
+                    ),
+                    lock=yahoo_gateway.DOWNLOAD_LOCK,
                 )
                 if not _raw.empty:
                     _divs = None
@@ -784,7 +788,11 @@ def import_from_upload(df, profile_id):
     exdiv_map = {}
     freq_hist = {}
     try:
-        raw = yf.download(ticker_str, period='1y', progress=False, auto_adjust=False, actions=True)
+        raw = yahoo_gateway.call(
+            lambda: yf.download(ticker_str, period='1y', progress=False,
+                                auto_adjust=False, actions=True),
+            lock=yahoo_gateway.DOWNLOAD_LOCK,
+        )
         if not raw.empty:
             def _col(name):
                 if isinstance(raw.columns, pd.MultiIndex):
@@ -827,17 +835,31 @@ def import_from_upload(df, profile_id):
     info_map = {}
     _rename_map = {}  # old_ticker -> new_ticker
     for t in tickers_list:
+        if yahoo_gateway.is_cooling_down():
+            # Stop the sweep rather than issue one refused request per symbol.
+            # Tickers not reached keep whatever description they already have.
+            break
         try:
-            info = yf.Ticker(t).info or {}
+            info = yahoo_gateway.fetch(
+                "import_info", t, lambda s=t: yf.Ticker(s).info or {}
+            )[0] or {}
             new_sym = (info.get("symbol") or "").upper()
             if new_sym and new_sym != t:
                 _rename_map[t] = new_sym
                 # Re-fetch info under the new symbol for accurate data
-                info = yf.Ticker(new_sym).info or {}
+                info = yahoo_gateway.fetch(
+                    "import_info", new_sym,
+                    lambda s=new_sym: yf.Ticker(s).info or {}
+                )[0] or {}
                 # Also grab price/dividend data under new symbol if missing
                 if t not in price_map:
                     try:
-                        r2 = yf.download(new_sym, period='1y', progress=False, auto_adjust=False, actions=True)
+                        r2 = yahoo_gateway.call(
+                            lambda s=new_sym: yf.download(
+                                s, period='1y', progress=False,
+                                auto_adjust=False, actions=True),
+                            lock=yahoo_gateway.DOWNLOAD_LOCK,
+                        )
                         if not r2.empty:
                             c2 = r2["Close"].squeeze().dropna() if "Close" in r2.columns else None
                             if c2 is not None and len(c2):

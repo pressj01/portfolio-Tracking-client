@@ -24,6 +24,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+import yahoo_gateway
+
 try:
     from portfolio_tester import fetch_prices, validate_coverage, MIN_DAYS
 except ImportError:  # package-relative import when loaded as part of a package
@@ -527,6 +529,13 @@ def run_detail(ticker: str, start: str, end: str, *,
 
     close_df, divs_df = fetch_prices([sym], start, end)
     if sym not in close_df.columns:
+        # Distinguish a symbol Yahoo does not have from a Yahoo that is not
+        # answering: only one of the two is worth the user retrying.
+        cooling = yahoo_gateway.cooldown_remaining()
+        if cooling > 0:
+            raise ValueError(
+                f"Yahoo Finance is rate limiting; retry in about {cooling:.0f}s."
+            )
         raise ValueError(f"No data returned for {sym}.")
     series = close_df[sym].dropna()
     if series.empty:

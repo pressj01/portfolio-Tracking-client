@@ -67,6 +67,8 @@ from statistics import NormalDist
 import numpy as np
 import pandas as pd
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
@@ -589,10 +591,14 @@ def _suggest_spread(ticker: str, spot: float, div_yield: float, forecast_vol: fl
     further one — and which end of that trade-off is right depends on the chain's
     skew and liquidity, not on a rule of thumb.
     """
-    try:
-        expirations = list(yf.Ticker(ticker).options or [])
-    except Exception:
-        return None
+    # Through the gateway: a throttled catalog must not read as "this
+    # ticker has no options", and a cooldown must not be met with one
+    # more request per underlying. Falls back to the last catalog Yahoo
+    # did return, which is the same list from one day to the next.
+    expirations = yahoo_gateway.fetch(
+        "option_expirations", ticker,
+        lambda: list(yf.Ticker(ticker).options or []),
+    )[0] or []
 
     cutoff = None
     earnings_d = _parse_date(earnings_date)

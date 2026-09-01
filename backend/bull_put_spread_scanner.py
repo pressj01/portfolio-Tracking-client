@@ -28,6 +28,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 
 import yfinance as yf
+
+import yahoo_gateway
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
@@ -282,7 +284,7 @@ def _prime_option_ticker(ticker: str):
         fetch = getattr(tk, "option_chain", None)
         if callable(fetch):
             try:
-                default_chain = fetch()
+                default_chain = yahoo_gateway.call(fetch)
             except Exception:
                 default_chain = None
     expirations = _load_expirations(ticker, tk)

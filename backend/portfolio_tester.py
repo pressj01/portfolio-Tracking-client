@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
+import yahoo_gateway
+
 try:
     from market_symbols import yahoo_symbol_for_ticker
 except ImportError:
@@ -91,15 +93,21 @@ def fetch_prices(tickers: List[str], start: str, end: str
     # inclusive. Ask through the following day so every compared source can end
     # on the actual tracker series' final observation.
     download_end = (pd.Timestamp(end) + pd.Timedelta(days=1)).date().isoformat()
-    raw = yf.download(
-        " ".join(yahoo_tickers),
-        start=start,
-        end=download_end,
-        auto_adjust=False,
-        actions=True,
-        progress=False,
-        group_by="ticker" if len(yahoo_tickers) > 1 else "column",
-    )
+    try:
+        raw = yahoo_gateway.call(
+            lambda: yf.download(
+                " ".join(yahoo_tickers),
+                start=start,
+                end=download_end,
+                auto_adjust=False,
+                actions=True,
+                progress=False,
+                group_by="ticker" if len(yahoo_tickers) > 1 else "column",
+            ),
+            lock=yahoo_gateway.DOWNLOAD_LOCK,
+        )
+    except Exception:
+        raw = pd.DataFrame()
 
     close_by_ticker = {}
     divs_by_ticker = {}
@@ -115,21 +123,35 @@ def fetch_prices(tickers: List[str], start: str, end: str
     # Retry missing symbols individually before caching the response so a
     # transient batch gap cannot become a false "no data returned" result.
     missing = [ticker for ticker in tickers if ticker not in close_by_ticker]
+    # A batch where most symbols are missing is a throttled feed, not a set of
+    # dropped symbols, and one request per holding into a live rate limit is
+    # what turns a brief throttle into a long one. A one-off drop out of a
+    # small comparison is the opposite case and is exactly what this retry is
+    # for, so the test needs enough missing symbols to be meaningful.
+    if len(missing) >= 3 and len(missing) * 2 >= len(tickers):
+        missing = []
     retries = {}
     for ticker in missing:
         yahoo_ticker = yahoo_by_ticker.get(ticker, ticker)
         if yahoo_ticker not in retries:
             try:
-                retries[yahoo_ticker] = yf.download(
-                    yahoo_ticker,
-                    start=start,
-                    end=download_end,
-                    auto_adjust=False,
-                    actions=True,
-                    progress=False,
-                    group_by="column",
-                    threads=False,
+                retries[yahoo_ticker] = yahoo_gateway.call(
+                    lambda s=yahoo_ticker: yf.download(
+                        s,
+                        start=start,
+                        end=download_end,
+                        auto_adjust=False,
+                        actions=True,
+                        progress=False,
+                        group_by="column",
+                        threads=False,
+                    ),
+                    lock=yahoo_gateway.DOWNLOAD_LOCK,
                 )
+            except yahoo_gateway.YahooCooldown:
+                # The breaker shut partway through: stop asking rather than
+                # finish the list against a feed that is refusing requests.
+                break
             except Exception:
                 retries[yahoo_ticker] = pd.DataFrame()
 
@@ -953,9 +975,19 @@ def run_backtest(portfolios: List[dict], benchmark: Optional[str],
         ok, bad = [], []
 
     if bad:
+        # "Missing price history" is a statement about the tickers. When the
+        # feed is the thing that failed, that sends the user hunting for a bad
+        # symbol instead of waiting a minute and retrying.
+        cooling = yahoo_gateway.cooldown_remaining()
         return {
             "valid": False,
-            "reason": "Selected tickers are missing price history for the requested start date.",
+            "reason": (
+                f"Yahoo Finance is rate limiting; retry in about {cooling:.0f}s."
+                if cooling > 0 else
+                "Selected tickers are missing price history for the requested start date."
+            ),
+            "feed_cooling_down": cooling > 0,
+            "feed_retry_after_sec": round(cooling, 1),
             "missing": bad,
             "ok": ok,
         }

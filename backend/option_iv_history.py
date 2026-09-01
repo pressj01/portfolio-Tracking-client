@@ -24,6 +24,7 @@ import math
 from datetime import date, datetime, timedelta
 
 from config import get_connection
+import yahoo_gateway
 
 MIN_IV_RANK_OBSERVATIONS = 20
 MIN_PROVISIONAL_IV_RANK_OBSERVATIONS = 3
@@ -414,14 +415,16 @@ def fetch_yahoo_atm_iv(ticker, observed_on=None):
         return None
     try:
         instrument = yf.Ticker(symbol)
-        expirations = list(instrument.options or [])
+        expirations = yahoo_gateway.call(lambda: list(instrument.options or []))
     except Exception:
+        return None
+    if not expirations:
         return None
     expiration, dte = _pick_target_expiration(expirations, day)
     if not expiration:
         return None
     try:
-        chain = instrument.option_chain(expiration)
+        chain = yahoo_gateway.call(lambda: instrument.option_chain(expiration))
     except Exception:
         return None
     spot = None

@@ -28,6 +28,8 @@ import re
 from flask import jsonify, request
 import yfinance as yf
 
+import yahoo_gateway
+
 from call_scanner import _load_call_chain
 from option_probability import profit_probability_schedule
 from options_pricing import black_scholes
@@ -775,10 +777,14 @@ def run_iron_butterfly_scan(payload: dict) -> dict:
                 "reason": "Current underlying price is unavailable.",
                 "candidates": [],
             }
-        try:
-            expirations = list(yf.Ticker(ticker).options or [])
-        except Exception:
-            expirations = []
+        # Through the gateway: a throttled catalog must not read as "this
+        # ticker has no options", and a cooldown must not be met with one
+        # more request per underlying. Falls back to the last catalog Yahoo
+        # did return, which is the same list from one day to the next.
+        expirations = yahoo_gateway.fetch(
+            "option_expirations", ticker,
+            lambda: list(yf.Ticker(ticker).options or []),
+        )[0] or []
         eligible = _expirations_in_window(
             expirations,
             target_dte,

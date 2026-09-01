@@ -38,6 +38,7 @@ import requests
 from flask import jsonify, request
 
 from config import get_connection
+import yahoo_gateway
 
 HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 HTTP_TIMEOUT = 25
@@ -1301,10 +1302,16 @@ def _seed_issuers(conn):
 
 def _fund_family_text(ticker):
     """Fund family + name, used to work out who publishes a fund's holdings."""
-    try:
+    symbol = ticker.strip().upper()
+
+    def _load():
         import yfinance as yf
-        info = yf.Ticker(ticker.strip().upper()).info or {}
-    except Exception:
+        return yf.Ticker(symbol).info or {}
+
+    # Persisted: a fund's family and name do not change, so the last good
+    # answer is as good as a live one and costs nothing during a throttle.
+    info, _meta = yahoo_gateway.fetch("fund_family_info", symbol, _load)
+    if not info:
         return ""
     return " ".join(str(info.get(k) or "") for k in
                     ("fundFamily", "longName", "shortName")).strip()
@@ -1459,10 +1466,12 @@ def _fetch_yahoo_holdings(ticker, limit=None):
     for many option-income ETFs, but when an issuer endpoint is missing or
     blocked this beats reporting the whole position as Undisclosed.
     """
-    try:
+    def _load():
         import yfinance as yf
-        fund_data = yf.Ticker(ticker.strip().upper()).funds_data
-        holdings = fund_data.top_holdings
+        return yf.Ticker(ticker.strip().upper()).funds_data.top_holdings
+
+    try:
+        holdings = yahoo_gateway.call(_load)
     except Exception:
         return []
     if holdings is None or getattr(holdings, "empty", True):
@@ -1502,15 +1511,16 @@ def _security_type(ticker):
                 return "CEF"
         except Exception:
             pass
-    try:
+    def _load():
         import yfinance as yf
-        info = yf.Ticker(sym).info or {}
-        qt = (info.get("quoteType") or "").upper()
-        if qt:
-            return qt
-    except Exception:
-        pass
-    return ""
+        return yf.Ticker(sym).info or {}
+
+    # A quote type is a fixed property of the listing, so the stored answer
+    # stays correct; without the fallback a throttled sweep reclassifies every
+    # fund as unknown.
+    info, _meta = yahoo_gateway.fetch("quote_type_info", sym, _load)
+    qt = ((info or {}).get("quoteType") or "").upper()
+    return qt or ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

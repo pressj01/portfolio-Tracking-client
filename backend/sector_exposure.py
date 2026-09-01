@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from flask import jsonify, request
 
+import yahoo_gateway
 from config import get_connection
 from diversification import (
     _BILL_SYM_PAT,
@@ -300,7 +301,13 @@ def fetch_sector_profile(ticker):
     for candidate in _yahoo_symbol(sym):
         try:
             tk = yf.Ticker(candidate)
-            info = tk.info or {}
+            info = yahoo_gateway.call(lambda t=tk: t.info or {})
+        except yahoo_gateway.YahooCooldown as exc:
+            # Stop the alias sweep outright. Trying BRK-B after BRKB was
+            # refused only spends requests the breaker is going to refuse too.
+            last_err = f"rate limited, retry in {exc.retry_after:.0f}s"
+            info = {}
+            break
         except Exception as exc:
             last_err = f"{type(exc).__name__}"
             info = {}
