@@ -4,6 +4,16 @@ import { configureMoneyDisplay } from '../utils/money'
 
 const CurrencyContext = createContext(null)
 
+// `Number(null)` is 0, not NaN, so `Number.isFinite(Number(value))` answers
+// "yes, and it's zero" for a rate the backend deliberately sent as null. That
+// turned a cleared manual override into the number 0, which React then rendered
+// as a literal "0" next to the Use Override button.
+const finiteOrNull = value => {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 export function useCurrency() {
   const ctx = useContext(CurrencyContext)
   if (!ctx) throw new Error('useCurrency must be used within CurrencyProvider')
@@ -48,8 +58,8 @@ export default function CurrencyProvider({ children }) {
         stale: Boolean(data.stale),
         cached: Boolean(data.cached),
         mode: data.mode === 'manual' ? 'manual' : 'live',
-        liveRate: Number.isFinite(Number(data.live_rate)) ? Number(data.live_rate) : null,
-        manualRate: Number.isFinite(Number(data.manual_rate)) ? Number(data.manual_rate) : null,
+        liveRate: finiteOrNull(data.live_rate),
+        manualRate: finiteOrNull(data.manual_rate),
         liveUpdatedAt: data.live_updated_at || null,
         manualUpdatedAt: data.manual_updated_at || null,
         refreshError: data.refresh_error || null,

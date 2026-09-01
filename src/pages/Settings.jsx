@@ -34,6 +34,11 @@ export default function Settings() {
   const [navStatus, setNavStatus] = useState(null)
   const [navSaving, setNavSaving] = useState(false)
 
+  // Price reuse (fewer Yahoo requests, slightly older prices)
+  const [priceReuse, setPriceReuse] = useState({ enabled: false, ttl_sec: 600, requests_avoided: 0, entries: 0 })
+  const [priceReuseBusy, setPriceReuseBusy] = useState(false)
+  const [priceReuseStatus, setPriceReuseStatus] = useState(null)
+
   // Broker -> Yahoo symbol mapping
   const [symbolMap, setSymbolMap] = useState([])
   const [symbolStatus, setSymbolStatus] = useState(null)
@@ -56,6 +61,52 @@ export default function Settings() {
     'BIL', 'BND', 'TLT', 'NLR', 'ITA',
     'XLE', 'SOXX', 'XLF', 'XLV', 'XLU', 'VNQ',
   ]
+
+  const fetchPriceReuse = () => {
+    pf('/api/market-feed/price-reuse')
+      .then(r => r.json())
+      .then(d => { if (d && d.ok) setPriceReuse(d) })
+      .catch(() => {})
+  }
+
+  const savePriceReuse = (enabled, ttlMinutes) => {
+    setPriceReuseBusy(true)
+    setPriceReuseStatus(null)
+    const minutes = ttlMinutes ?? Math.round((priceReuse.ttl_sec || 600) / 60)
+    pf('/api/market-feed/price-reuse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, ttl_minutes: minutes }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.ok) {
+          setPriceReuse(d)
+          setPriceReuseStatus({
+            type: 'success',
+            msg: enabled
+              ? `Prices downloaded in the last ${minutes} minute${minutes === 1 ? '' : 's'} will be reused.`
+              : 'Every screen will download live prices from now on.',
+          })
+        } else {
+          setPriceReuseStatus({ type: 'error', msg: 'Could not save that setting.' })
+        }
+      })
+      .catch(() => setPriceReuseStatus({ type: 'error', msg: 'Could not save that setting.' }))
+      .finally(() => setPriceReuseBusy(false))
+  }
+
+  const clearPriceCache = () => {
+    setPriceReuseBusy(true)
+    pf('/api/market-feed/clear-price-cache', { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.ok) setPriceReuse(d)
+        setPriceReuseStatus({ type: 'info', msg: 'Cleared. The next screen you open downloads fresh prices.' })
+      })
+      .catch(() => setPriceReuseStatus({ type: 'error', msg: 'Could not clear the reused prices.' }))
+      .finally(() => setPriceReuseBusy(false))
+  }
 
   const fetchSymbolMap = () => {
     pf('/api/symbol-map')
@@ -290,7 +341,7 @@ export default function Settings() {
       .finally(() => setDeletingBackup(null))
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap() }, [selection])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -498,13 +549,113 @@ export default function Settings() {
                 onChange={e => setManualRateInput(e.target.value)} placeholder="e.g. 1.3750"
                 style={{ width: 150, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '0.45rem 0.55rem' }} />
               <button className="btn btn-primary" type="button" onClick={saveManualExchangeRate} disabled={rateBusy}>Use Override</button>
-              {rateInfo.manualRate && <button className="btn btn-secondary" type="button" onClick={clearManualExchangeRate} disabled={rateBusy}>Use Live Rate</button>}
+              {/* Ternary, not `&&`: a numeric 0 on the left of `&&` renders as
+                  a literal "0" rather than nothing. */}
+              {rateInfo.manualRate ? <button className="btn btn-secondary" type="button" onClick={clearManualExchangeRate} disabled={rateBusy}>Use Live Rate</button> : null}
             </div>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 5 }}>
               Overrides affect display and display-currency exports. The app still refreshes and retains the latest live rate for comparison.
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Price Data Freshness */}
+      <div className="card">
+        <h2>Price Data Freshness</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Yahoo Finance limits how many price requests this app may make, and blocks it for
+          a while once that limit is passed — which is what turns prices, grades and charts
+          into blanks. Switching date ranges or moving between screens often re-downloads
+          prices this app already has. Reusing those cuts the number of Yahoo requests, so
+          you hit the limit less often.
+        </p>
+
+        {priceReuseStatus && (
+          <div className={`alert alert-${priceReuseStatus.type}`} style={{ marginBottom: '0.75rem' }}>{priceReuseStatus.msg}</div>
+        )}
+
+        <div className="theme-toggle" role="group" aria-label="Price data freshness">
+          <button
+            type="button"
+            className={`theme-toggle-btn${!priceReuse.enabled ? ' active' : ''}`}
+            onClick={() => savePriceReuse(false)}
+            aria-pressed={!priceReuse.enabled}
+            disabled={priceReuseBusy}
+          >
+            Always Fetch Live
+          </button>
+          <button
+            type="button"
+            className={`theme-toggle-btn${priceReuse.enabled ? ' active' : ''}`}
+            onClick={() => savePriceReuse(true)}
+            aria-pressed={priceReuse.enabled}
+            disabled={priceReuseBusy}
+          >
+            Reuse Recent Prices
+          </button>
+        </div>
+
+        {/* Say plainly what each choice does, so the trade-off is not a guess. */}
+        <div style={{ marginTop: '0.9rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.65rem' }}>
+          <div style={{
+            padding: '0.7rem 0.8rem', borderRadius: 6, fontSize: '0.83rem',
+            background: 'var(--surface-sunken)',
+            border: `1px solid ${!priceReuse.enabled ? 'var(--accent-bright)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Always Fetch Live</div>
+            <div style={{ color: 'var(--text-dim)' }}>
+              Every screen downloads current prices. Prices are always up to the minute,
+              and the app makes the most Yahoo requests — so rate limiting is more likely.
+            </div>
+          </div>
+          <div style={{
+            padding: '0.7rem 0.8rem', borderRadius: 6, fontSize: '0.83rem',
+            background: 'var(--surface-sunken)',
+            border: `1px solid ${priceReuse.enabled ? 'var(--accent-bright)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Reuse Recent Prices</div>
+            <div style={{ color: 'var(--text-dim)' }}>
+              If this app already downloaded the exact same prices within the time below,
+              it reuses them instead of asking Yahoo again. Far fewer requests — but a
+              price can be up to that many minutes old.
+            </div>
+          </div>
+        </div>
+
+        {priceReuse.enabled && (
+          <div style={{ marginTop: '1rem', padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-sunken)' }}>
+            <label htmlFor="price-reuse-ttl" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+              Reuse prices for
+            </label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                id="price-reuse-ttl"
+                value={Math.round((priceReuse.ttl_sec || 600) / 60)}
+                onChange={e => savePriceReuse(true, Number(e.target.value))}
+                disabled={priceReuseBusy}
+                style={{ background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '0.45rem 0.55rem' }}
+              >
+                {[1, 2, 5, 10, 15, 30, 60].map(m => (
+                  <option key={m} value={m}>{m} minute{m === 1 ? '' : 's'}</option>
+                ))}
+              </select>
+              <button className="btn btn-secondary" type="button" onClick={clearPriceCache} disabled={priceReuseBusy}>
+                Clear Reused Prices Now
+              </button>
+            </div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.7rem' }}>
+              Holding {priceReuse.entries || 0} reused price set{priceReuse.entries === 1 ? '' : 's'}
+              {priceReuse.requests_avoided ? ` · ${priceReuse.requests_avoided} Yahoo request${priceReuse.requests_avoided === 1 ? '' : 's'} avoided this session` : ''}
+            </div>
+          </div>
+        )}
+
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.9rem', marginBottom: 0 }}>
+          This only changes how often <strong>market prices</strong> are re-downloaded. It never
+          affects your holdings, transactions, cost basis or dividend records. Reused prices are
+          dropped when you switch this off, change the time above, press Clear, or restart the app.
+        </p>
       </div>
 
       {/* Data Overview */}
