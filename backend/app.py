@@ -1155,7 +1155,31 @@ def _holding_market_value(row):
     return 0.0
 
 
-def _market_coverage_shortfall(missing_symbols, current_holdings):
+def _money_market_symbols(symbols, current_holdings):
+    """Return requested market symbols that can safely use a fixed $1 NAV."""
+    requested = {
+        str(symbol).strip().upper()
+        for symbol in (symbols or [])
+        if str(symbol or "").strip()
+    }
+    cash_symbols = {
+        symbol for symbol in requested
+        if _is_money_market_holding({"ticker": symbol})
+    }
+    for row in current_holdings or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
+        if symbol in requested and _is_money_market_holding(row):
+            cash_symbols.add(symbol)
+    return cash_symbols
+
+
+def _market_coverage_shortfall(
+    missing_symbols,
+    current_holdings,
+    cash_equivalent_symbols=None,
+):
     """Weigh the excluded symbols against the book they were excluded from.
 
     A list of dropped tickers cannot tell a reader whether the number built
@@ -1164,6 +1188,12 @@ def _market_coverage_shortfall(missing_symbols, current_holdings):
     left to whoever reads the note. Symbols that are missing but hold no
     current value — a position closed inside the window — carry no weight and
     correctly raise nothing.
+
+    A stable-NAV cash fund is different only after the replay has supplied its
+    known $1.00 price. Silencing the warning while also leaving that balance out
+    of Start and End Value overweights every risky asset in the portfolio. The
+    caller therefore passes cash_equivalent_symbols only for funds it actually
+    synthesized into the price frame; those balances count as covered here.
     """
     missing = {
         str(symbol).strip().upper()
@@ -1173,6 +1203,15 @@ def _market_coverage_shortfall(missing_symbols, current_holdings):
     excluded_value = 0.0
     total_value = 0.0
     excluded_positions = 0
+    cash_value = 0.0
+    cash_positions = 0
+    held_symbols = set()
+    cash_symbols = {
+        str(symbol).strip().upper()
+        for symbol in (cash_equivalent_symbols or [])
+        if str(symbol or "").strip()
+    }
+    held_unpriced = set()
     for row in current_holdings or []:
         if not isinstance(row, dict):
             continue
@@ -1181,20 +1220,30 @@ def _market_coverage_shortfall(missing_symbols, current_holdings):
             continue
         value = _holding_market_value(row)
         total_value += value
-        if symbol in missing:
-            excluded_value += value
-            excluded_positions += 1
+        held_symbols.add(symbol)
+        if symbol in cash_symbols:
+            cash_value += value
+            cash_positions += 1
+            continue
+        if symbol not in missing:
+            continue
+        excluded_value += value
+        excluded_positions += 1
+        held_unpriced.add(symbol)
     # No priced holdings means there is nothing to weigh against. Stay silent
     # rather than raising an alarm we cannot substantiate; the symbols are
     # still listed either way.
     weight = (excluded_value / total_value) if total_value > 0 else 0.0
-    is_material = bool(missing) and weight >= _MATERIAL_COVERAGE_SHORTFALL
+    is_material = bool(held_unpriced) and weight >= _MATERIAL_COVERAGE_SHORTFALL
     if not is_material:
         severity = "none"
     elif weight >= _SEVERE_COVERAGE_SHORTFALL:
         severity = "severe"
     else:
         severity = "material"
+    # Three reasons a symbol can be absent, and only one of them is a problem.
+    # Splitting them here means every screen tells the same story instead of
+    # each one re-deriving it from a flat list of tickers.
     return {
         "excluded_positions": excluded_positions,
         "excluded_value": round(excluded_value, 2),
@@ -1203,6 +1252,13 @@ def _market_coverage_shortfall(missing_symbols, current_holdings):
         "excluded_weight": round(weight, 6),
         "is_material": is_material,
         "severity": severity,
+        "cash_equivalent_positions": cash_positions,
+        "cash_equivalent_value": round(cash_value, 2),
+        "cash_equivalent_symbols": sorted(cash_symbols),
+        "held_unpriced_symbols": sorted(held_unpriced),
+        "closed_unpriced_symbols": sorted(
+            missing - cash_symbols - held_symbols,
+        ),
     }
 
 
@@ -1245,6 +1301,7 @@ def _build_transaction_aware_portfolio_series(
         "inferred_opening_positions": 0,
         "inferred_opening_detail": [],
         "inferred_closing_positions": 0,
+        "inferred_closing_detail": [],
         "split_adjusted_transactions": 0,
         "split_adjusted_positions": 0,
         "start_price": None,
@@ -1276,6 +1333,10 @@ def _build_transaction_aware_portfolio_series(
         if isinstance(row, dict)
         and str(row.get("market_symbol") or row.get("ticker") or "").strip()
     })
+    money_market_symbols = _money_market_symbols(
+        requested_market_symbols,
+        current_holdings,
+    )
 
     prices = close.copy()
     if prices.index.has_duplicates:
@@ -1309,6 +1370,21 @@ def _build_transaction_aware_portfolio_series(
             return bool(observed.iloc[0]) and bool(observed.iloc[-1])
         return int(observed.sum()) >= 2
 
+    # Yahoo commonly returns only today's $1 quote for money-market funds. A
+    # single bar is not historical coverage, but dropping the fund altogether
+    # is worse: it removes cash from both boundary values and overweights every
+    # remaining asset's return. Fill only positively identified stable-NAV
+    # funds, preserving any real observations in case a fund ever breaks $1.
+    synthetic_cash_equivalent_symbols = set()
+    for symbol in money_market_symbols:
+        if symbol in prices.columns and _has_return_coverage(symbol):
+            continue
+        if symbol in prices.columns:
+            prices[symbol] = prices[symbol].fillna(1.0)
+        else:
+            prices[symbol] = 1.0
+        synthetic_cash_equivalent_symbols.add(symbol)
+
     valid_price_columns = [
         column for column in prices.columns
         if _has_return_coverage(column)
@@ -1319,7 +1395,9 @@ def _build_transaction_aware_portfolio_series(
             **empty,
             "missing_market_symbols": requested_market_symbols,
             "coverage_shortfall": _market_coverage_shortfall(
-                requested_market_symbols, current_holdings,
+                requested_market_symbols,
+                current_holdings,
+                synthetic_cash_equivalent_symbols,
             ),
         }
     missing_market_symbols = sorted(
@@ -1328,7 +1406,9 @@ def _build_transaction_aware_portfolio_series(
         }
     )
     coverage_shortfall = _market_coverage_shortfall(
-        missing_market_symbols, current_holdings,
+        missing_market_symbols,
+        current_holdings,
+        synthetic_cash_equivalent_symbols,
     )
 
     def aligned_frame(frame, fill_value=None):
@@ -1544,6 +1624,7 @@ def _build_transaction_aware_portfolio_series(
     # two look the same in the clipped replay and only the full net tells
     # them apart.
     inferred_opening_detail = []
+    inferred_closing_detail = []
     for position_key, net_delta in transaction_deltas.items():
         symbol = transaction_symbols.get(position_key)
         if symbol not in prices.columns:
@@ -1602,6 +1683,46 @@ def _build_transaction_aware_portfolio_series(
             close_date = max(first_market_date, close_date)
             events.append((close_date, symbol, opening_quantity))
             inferred_closing_positions += 1
+            # A count alone cannot answer the only question a reader has:
+            # which positions, and is the ledger actually wrong? The clipped
+            # replay drops closed cycles, so it can run long for a position
+            # whose full ledger reconciles perfectly. Carrying the unclipped
+            # net beside the snapshot is what separates that harmless
+            # bookkeeping from a missing sale, purchase, or transfer.
+            full_net = unclipped_deltas.get(position_key, 0.0)
+            ledger_difference = full_net - snapshot_quantity
+            if ledger_difference > 1e-8:
+                ledger_gap_direction = "surplus"
+            elif ledger_difference < -1e-8:
+                ledger_gap_direction = "deficit"
+            else:
+                ledger_gap_direction = "none"
+            inferred_closing_detail.append({
+                "market_symbol": symbol,
+                "ticker": (
+                    position_key[1]
+                    if isinstance(position_key, (tuple, list)) and len(position_key) > 1
+                    else symbol
+                ),
+                "profile_id": (
+                    position_key[0]
+                    if isinstance(position_key, (tuple, list)) and position_key
+                    else None
+                ),
+                "shares": round(-opening_quantity, 6),
+                "close_date": close_date.isoformat(),
+                "replayed_net_shares": round(net_delta, 6),
+                "ledger_net_shares": round(full_net, 6),
+                "snapshot_quantity": round(snapshot_quantity, 6),
+                "ledger_difference_shares": round(ledger_difference, 6),
+                "ledger_gap": ledger_gap_direction != "none",
+                "ledger_gap_direction": ledger_gap_direction,
+                # Preserve the original field for older consumers while the
+                # signed direction distinguishes a missing sale from a missing
+                # purchase. Both require attention; neither is an earlier-lot
+                # reconciliation.
+                "ledger_surplus": ledger_gap_direction == "surplus",
+            })
 
     fallback_positions = 0
     fallback_date_sources = {
@@ -1833,6 +1954,7 @@ def _build_transaction_aware_portfolio_series(
         "inferred_opening_positions": inferred_opening_positions,
         "inferred_opening_detail": inferred_opening_detail,
         "inferred_closing_positions": inferred_closing_positions,
+        "inferred_closing_detail": inferred_closing_detail,
         "split_adjusted_transactions": split_adjusted_transactions,
         "split_adjusted_positions": len(split_adjusted_positions),
         "start_price": start_price,
@@ -1888,6 +2010,7 @@ def _portfolio_period_metrics(series_result):
         "inferred_opening_positions": int(series_result.get("inferred_opening_positions") or 0),
         "inferred_opening_detail": list(series_result.get("inferred_opening_detail") or []),
         "inferred_closing_positions": int(series_result.get("inferred_closing_positions") or 0),
+        "inferred_closing_detail": list(series_result.get("inferred_closing_detail") or []),
         "split_adjusted_transactions": int(series_result.get("split_adjusted_transactions") or 0),
         "split_adjusted_positions": int(series_result.get("split_adjusted_positions") or 0),
         "missing_market_symbols": list(series_result.get("missing_market_symbols") or []),
@@ -33009,7 +33132,9 @@ def total_return_compare():
                     "transaction_count": portfolio_result["transaction_count"],
                     "fallback_positions": portfolio_result["fallback_positions"],
                     "inferred_opening_positions": portfolio_result["inferred_opening_positions"],
+                    "inferred_opening_detail": portfolio_result.get("inferred_opening_detail") or [],
                     "inferred_closing_positions": portfolio_result["inferred_closing_positions"],
+                    "inferred_closing_detail": portfolio_result.get("inferred_closing_detail") or [],
                     "split_adjusted_transactions": portfolio_result["split_adjusted_transactions"],
                     "split_adjusted_positions": portfolio_result["split_adjusted_positions"],
                     "missing_market_symbols": portfolio_result["missing_market_symbols"],
@@ -54679,9 +54804,17 @@ def growth_2_data():
     avail = [t for t in active_tickers if t in close.columns and not close[t].dropna().empty]
     if not avail:
         return jsonify({"error": "No price data for selected holdings", "tickers": all_tickers}), 500
+    money_market_return_symbols = _money_market_symbols(
+        return_scope_tickers,
+        [dict(row) for row in active_rows],
+    )
     return_avail = [
         t for t in return_scope_tickers
-        if t in close.columns and len(close[t].dropna()) >= 2
+        if t in close.columns
+        and (
+            len(close[t].dropna()) >= 2
+            or (t in money_market_return_symbols and not close[t].dropna().empty)
+        )
     ]
 
     return_first_valid = close[return_avail].dropna(how="all").index[0]
@@ -54938,7 +55071,9 @@ def growth_2_data():
             "transaction_count": portfolio_return_result["transaction_count"],
             "fallback_positions": portfolio_return_result["fallback_positions"],
             "inferred_opening_positions": portfolio_return_result["inferred_opening_positions"],
+            "inferred_opening_detail": portfolio_return_result.get("inferred_opening_detail") or [],
             "inferred_closing_positions": portfolio_return_result["inferred_closing_positions"],
+            "inferred_closing_detail": portfolio_return_result.get("inferred_closing_detail") or [],
             "split_adjusted_transactions": portfolio_return_result["split_adjusted_transactions"],
             "split_adjusted_positions": portfolio_return_result["split_adjusted_positions"],
             "missing_market_symbols": portfolio_return_result["missing_market_symbols"],

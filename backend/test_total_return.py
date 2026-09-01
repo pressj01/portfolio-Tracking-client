@@ -18,6 +18,7 @@ from app import (
     _stock_split_history_for_period,
     _transactions_for_current_positions,
     _market_coverage_shortfall,
+    _money_market_symbols,
     _trim_to_last_bars,
 )
 from market_symbols import accounting_symbol_for_ticker, yahoo_symbol_for_ticker
@@ -705,6 +706,90 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(result["price_gain_dollar"], 10.0)
         self.assertEqual(result["inferred_closing_positions"], 1)
 
+    def test_closing_reconciliation_names_the_position_and_its_cause(self):
+        # "13 residual historical positions were closed" is unanswerable
+        # without the rows: which ones, and does anything need fixing.
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"CLOSED": [10.0, 11.0, 12.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "CLOSED",
+                "market_symbol": "CLOSED",
+                "position_key": (1, "CLOSED"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-02",
+                "shares": 10,
+            },
+            {
+                "ticker": "CLOSED",
+                "market_symbol": "CLOSED",
+                "position_key": (1, "CLOSED"),
+                "transaction_type": "SELL",
+                "transaction_date": "2026-01-05",
+                "shares": 5,
+            },
+        ]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, [],
+        )
+
+        detail = result["inferred_closing_detail"]
+        self.assertEqual(len(detail), 1)
+        self.assertEqual(detail[0]["ticker"], "CLOSED")
+        self.assertAlmostEqual(detail[0]["shares"], 5.0)
+        self.assertAlmostEqual(detail[0]["ledger_net_shares"], 5.0)
+        self.assertAlmostEqual(detail[0]["snapshot_quantity"], 0.0)
+        self.assertEqual(detail[0]["close_date"], "2026-01-05")
+        # The full ledger holds 5 shares the broker snapshot does not, so the
+        # export really is missing a sale. That is the row worth surfacing.
+        self.assertTrue(detail[0]["ledger_gap"])
+        self.assertEqual(detail[0]["ledger_gap_direction"], "surplus")
+        self.assertAlmostEqual(detail[0]["ledger_difference_shares"], 5.0)
+        self.assertTrue(detail[0]["ledger_surplus"])
+
+    def test_closing_reconciliation_flags_a_ledger_deficit_too(self):
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"])
+        close = pd.DataFrame({"GAP": [10.0, 11.0, 12.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [
+            {
+                "ticker": "GAP",
+                "market_symbol": "GAP",
+                "position_key": (1, "GAP"),
+                "transaction_type": "SELL",
+                "transaction_date": "2026-01-02",
+                "shares": 10,
+            },
+            {
+                "ticker": "GAP",
+                "market_symbol": "GAP",
+                "position_key": (1, "GAP"),
+                "transaction_type": "BUY",
+                "transaction_date": "2026-01-05",
+                "shares": 10,
+            },
+        ]
+        holdings = [{
+            "ticker": "GAP",
+            "market_symbol": "GAP",
+            "position_key": (1, "GAP"),
+            "quantity": 5,
+            "purchase_date": "2026-01-05",
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, holdings,
+        )
+
+        detail = result["inferred_closing_detail"]
+        self.assertEqual(len(detail), 1)
+        self.assertTrue(detail[0]["ledger_gap"])
+        self.assertEqual(detail[0]["ledger_gap_direction"], "deficit")
+        self.assertAlmostEqual(detail[0]["ledger_difference_shares"], -5.0)
+        self.assertFalse(detail[0]["ledger_surplus"])
+
     def test_missing_market_history_is_excluded_and_reported(self):
         dates = pd.to_datetime(["2026-01-02", "2026-01-05"])
         close = pd.DataFrame(
@@ -1389,6 +1474,135 @@ class CoverageShortfallTest(unittest.TestCase):
 
         self.assertFalse(shortfall["is_material"])
         self.assertEqual(shortfall["excluded_value"], 0.0)
+
+    def test_a_cash_fund_is_reported_but_never_raises_the_alarm(self):
+        # The replay supplied a fixed $1 NAV, so this balance is measured rather
+        # than silently dropped or mislabeled as unknown market history.
+        shortfall = _market_coverage_shortfall(
+            ["FSPXX", "FZEXX"],
+            self._holdings({"GOOD": 1648746, "FSPXX": 164660, "FZEXX": 28386}),
+            ["FSPXX", "FZEXX"],
+        )
+
+        self.assertFalse(shortfall["is_material"])
+        self.assertEqual(shortfall["excluded_value"], 0.0)
+        self.assertEqual(shortfall["excluded_positions"], 0)
+        self.assertEqual(shortfall["cash_equivalent_positions"], 2)
+        self.assertAlmostEqual(shortfall["cash_equivalent_value"], 193046.0)
+        self.assertEqual(
+            shortfall["cash_equivalent_symbols"], ["FSPXX", "FZEXX"],
+        )
+        self.assertAlmostEqual(shortfall["covered_value"], 1841792.0)
+
+    def test_a_cash_fund_named_off_pattern_is_caught_by_its_row(self):
+        # The *XX ticker shape is a heuristic; the holding row carries the
+        # broker's own classification and must win when they disagree.
+        holdings = [{
+            "ticker": "CASHFUND",
+            "market_symbol": "CASHFUND",
+            "quantity": 1,
+            "current_value": 500000,
+            "classification_type": "MONEYMARKET",
+        }, {
+            "ticker": "GOOD",
+            "market_symbol": "GOOD",
+            "quantity": 1,
+            "current_value": 100000,
+        }]
+
+        cash_symbols = _money_market_symbols(["CASHFUND"], holdings)
+        shortfall = _market_coverage_shortfall(
+            ["CASHFUND"], holdings, cash_symbols,
+        )
+
+        self.assertEqual(cash_symbols, {"CASHFUND"})
+        self.assertFalse(shortfall["is_material"])
+        self.assertEqual(shortfall["cash_equivalent_symbols"], ["CASHFUND"])
+
+    def test_an_unpriced_holding_still_raises_the_alarm_beside_cash(self):
+        # Cash standing down must not take a real gap down with it.
+        shortfall = _market_coverage_shortfall(
+            ["SPAXX", "BROKEN"],
+            self._holdings({"GOOD": 400000, "SPAXX": 150000, "BROKEN": 200000}),
+            ["SPAXX"],
+        )
+
+        self.assertTrue(shortfall["is_material"])
+        self.assertEqual(shortfall["held_unpriced_symbols"], ["BROKEN"])
+        self.assertEqual(shortfall["cash_equivalent_symbols"], ["SPAXX"])
+        self.assertAlmostEqual(shortfall["excluded_value"], 200000.0)
+        # Weighed against the whole book, cash included: the reader is asking
+        # how much of their account is unmeasured, not how much of a subset.
+        self.assertAlmostEqual(
+            shortfall["excluded_weight"], 200000 / 750000, places=6,
+        )
+
+    def test_missing_symbols_are_sorted_by_why_they_are_missing(self):
+        # One flat list cannot tell a delisting apart from a cash fund apart
+        # from a live hole, and the note has to say something different for
+        # each of the three.
+        shortfall = _market_coverage_shortfall(
+            ["SPAXX", "DELISTED", "BROKEN"],
+            self._holdings({"GOOD": 900000, "SPAXX": 50000, "BROKEN": 50000}),
+            ["SPAXX"],
+        )
+
+        self.assertEqual(shortfall["cash_equivalent_symbols"], ["SPAXX"])
+        self.assertEqual(shortfall["held_unpriced_symbols"], ["BROKEN"])
+        self.assertEqual(shortfall["closed_unpriced_symbols"], ["DELISTED"])
+
+    def test_a_synthetic_cash_nav_keeps_cash_in_the_return_weight(self):
+        dates = pd.to_datetime(["2026-01-02", "2026-01-05"])
+        close = pd.DataFrame({
+            "GOOD": [100.0, 110.0],
+            # Yahoo's common money-market shape: only the latest $1 quote.
+            "SPAXX": [float("nan"), 1.0],
+        }, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        transactions = [{
+            "ticker": "GOOD",
+            "market_symbol": "GOOD",
+            "position_key": (1, "GOOD"),
+            "transaction_type": "BUY",
+            "transaction_date": "2026-01-02",
+            "shares": 9,
+        }, {
+            "ticker": "SPAXX",
+            "market_symbol": "SPAXX",
+            "position_key": (1, "SPAXX"),
+            "transaction_type": "BUY",
+            "transaction_date": "2026-01-02",
+            "shares": 100,
+        }]
+        holdings = [{
+            "ticker": "GOOD",
+            "market_symbol": "GOOD",
+            "position_key": (1, "GOOD"),
+            "quantity": 9,
+            "current_value": 990,
+        }, {
+            "ticker": "SPAXX",
+            "market_symbol": "SPAXX",
+            "position_key": (1, "SPAXX"),
+            "quantity": 100,
+            "current_value": 100,
+            "classification_type": "MONEYMARKET",
+        }]
+
+        result = _build_transaction_aware_portfolio_series(
+            close, close, zeros, zeros, transactions, holdings,
+        )
+
+        self.assertEqual(result["missing_market_symbols"], [])
+        self.assertEqual(result["market_value"], [1000.0, 1090.0])
+        self.assertAlmostEqual(result["price"][-1], 109.0)
+        self.assertEqual(
+            result["coverage_shortfall"]["cash_equivalent_symbols"],
+            ["SPAXX"],
+        )
+        self.assertAlmostEqual(
+            result["coverage_shortfall"]["covered_value"], 1090.0,
+        )
 
     def test_an_unpriced_book_stays_silent_rather_than_guessing(self):
         # Nothing to weigh against, so no alarm can be substantiated. The

@@ -936,6 +936,63 @@ export default function TotalReturn() {
     .reduce((sum, lot) => sum + Number(lot.start_value_overstatement || 0), 0)
   const footerInferredTickers = [...new Set(footerInferredLots.map(lot => lot.ticker))]
 
+  // The coverage note can only report how many positions were reconciled. The
+  // question it always provokes — which ones, and is my ledger actually wrong —
+  // needs the rows themselves. Listing them here is the difference between a
+  // sentence the reader has to trust and one they can check.
+  const shares = (value) => Number(value || 0).toLocaleString(undefined, {
+    maximumFractionDigits: 4,
+  })
+  const openingReconciliations = (t.inferred_opening_detail || [])
+    .filter(lot => Number(lot?.shares || 0) > 0)
+    .slice()
+    .sort((left, right) => Number(right.shares || 0) - Number(left.shares || 0))
+  const closingLedgerDifference = (lot) => {
+    const explicit = Number(lot?.ledger_difference_shares)
+    if (lot?.ledger_difference_shares != null && Number.isFinite(explicit)) return explicit
+    const ledger = Number(lot?.ledger_net_shares)
+    const snapshot = Number(lot?.snapshot_quantity)
+    return Number.isFinite(ledger) && Number.isFinite(snapshot)
+      ? ledger - snapshot
+      : 0
+  }
+  const closingHasLedgerGap = (lot) => (
+    typeof lot?.ledger_gap === 'boolean'
+      ? lot.ledger_gap
+      : Math.abs(closingLedgerDifference(lot)) > 1e-8 || !!lot?.ledger_surplus
+  )
+  const closingCause = (lot) => {
+    if (!closingHasLedgerGap(lot)) return 'earlier lot, not replayed'
+    const direction = lot?.ledger_gap_direction
+      || (closingLedgerDifference(lot) < 0 ? 'deficit' : 'surplus')
+    return direction === 'deficit'
+      ? 'ledger deficit — check purchases or transfers in'
+      : 'ledger surplus — check sales or transfers out'
+  }
+  // A genuine ledger gap is the only row that asks the reader to do anything,
+  // so it sorts to the top of a list that can otherwise run long.
+  const closingReconciliations = (t.inferred_closing_detail || [])
+    .filter(lot => Number(lot?.shares || 0) > 0)
+    .slice()
+    .sort((left, right) => (
+      Number(closingHasLedgerGap(right)) - Number(closingHasLedgerGap(left))
+      || Number(right.shares || 0) - Number(left.shares || 0)
+    ))
+  const coverageDetail = t.coverage_shortfall || {}
+  const cashEquivalentSymbols = coverageDetail.cash_equivalent_symbols || []
+  const closedUnpricedSymbols = coverageDetail.closed_unpriced_symbols || []
+  const heldUnpricedSymbols = coverageDetail.held_unpriced_symbols || []
+  const hasReconciliationDetail = (
+    openingReconciliations.length > 0
+    || closingReconciliations.length > 0
+    || cashEquivalentSymbols.length > 0
+    || closedUnpricedSymbols.length > 0
+    || heldUnpricedSymbols.length > 0
+  )
+  const openTickerTransactions = (ticker) => (
+    navigate(`/holdings?txn=${encodeURIComponent(ticker)}&return=total-return`)
+  )
+
   // When positions drop out of the replay for want of price history, the cards
   // keep their normal shape and quietly describe a smaller portfolio than the
   // one being asked about. Carry the weight of what was dropped so the strip
@@ -1212,11 +1269,12 @@ export default function TotalReturn() {
                   : ''}
                 . Returns are cash-flow adjusted from dated transactions; purchases and sales are not counted as performance.
                 {t.inferred_opening_positions > 0
-                  ? ` ${t.inferred_opening_positions} pre-existing position${t.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled backward from current shares because the transaction export began after the opening lot.`
+                  ? ` ${t.inferred_opening_positions} position${t.inferred_opening_positions === 1 ? ' was' : 's were'} already open before the earliest imported trade, so ${t.inferred_opening_positions === 1 ? 'its' : 'their'} starting shares were worked backward from what you hold today.`
                   : ''}
                 {formatAccountingCoverage(t) ? ` ${formatAccountingCoverage(t)}` : ''}
-                {t.distribution_source ? ` Distribution dollars use ${t.distribution_source.toLowerCase()}.` : ''}
-                {' '}Because capital changes during the period, dollar return divided by start value may not equal the time-weighted return percentage.
+                {hasReconciliationDetail ? ' Position-level details are available below.' : ''}
+                {t.distribution_source ? ` Distribution dollars use ${t.distribution_source.toLowerCase()} — the broker's own payment records where they exist, Yahoo's dividend history only for tickers the broker never reported. Normal coverage, not an error.` : ''}
+                {' '}Return % here is time-weighted, so it deliberately ignores money you added or withdrew; dollar return divided by Start Value is money-weighted and will not match it in a range where capital moved. Neither is wrong — for the money-weighted answer, see the Dashboard&apos;s Portfolio IRR.
               </>
             )}
           </p>
@@ -1231,6 +1289,172 @@ export default function TotalReturn() {
               incomplete rather than that those positions changed — reload the range, and if it
               persists, refresh market data before trusting any figure on this page.
             </div>
+          )}
+          {!lifetimeView && hasReconciliationDetail && (
+            <details className="tracker-help" style={{ marginBottom: '1rem' }}>
+              <summary>Which positions were reconciled, and why some tickers are missing</summary>
+              <p className="tracker-help-footer">
+                Available adjustments from the note above, position by position. Click a ticker to open
+                its transactions.
+              </p>
+              {openingReconciliations.length > 0 && (
+                <>
+                  <h3 style={{ marginBottom: '0.25rem' }}>Opened before your transaction history starts</h3>
+                  <p style={{ color: 'var(--text-dim)', marginTop: 0 }}>
+                    Your broker&apos;s export begins on a certain date; these positions existed before it.
+                    With no opening purchase to replay, the shares you own today minus everything the
+                    ledger records leaves a remainder, and that remainder is added back as an opening lot
+                    dated the day before the first recorded trade — otherwise Start Value would be missing
+                    shares you really owned. <strong>Expected</strong> when you bought the position before the
+                    export window. <strong>A ledger problem</strong> when you did not: then the real cause is
+                    usually a purchase that never imported, or a sale recorded twice.
+                  </p>
+                  <div className="sticky-table-wrap">
+                    <table className="data-table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Ticker</th>
+                          <th style={{ textAlign: 'right' }}>Shares added back</th>
+                          <th style={{ textAlign: 'right' }}>Ledger nets to</th>
+                          <th style={{ textAlign: 'right' }}>You hold</th>
+                          <th style={{ textAlign: 'left' }}>Dated</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {openingReconciliations.map(lot => (
+                          <tr key={`open-${lot.ticker}-${lot.profile_id}`}>
+                            <td>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => openTickerTransactions(lot.ticker)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault()
+                                    openTickerTransactions(lot.ticker)
+                                  }
+                                }}
+                                style={{ color: 'var(--accent-bright)', cursor: 'pointer' }}
+                              >
+                                {lot.ticker}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right', color: 'var(--warn, #ffb86c)' }}>{shares(lot.shares)}</td>
+                            <td style={{ textAlign: 'right' }}>{shares(lot.ledger_net_shares)}</td>
+                            <td style={{ textAlign: 'right' }}>{shares(lot.snapshot_quantity)}</td>
+                            <td>{formatPerformanceDate(lot.seed_date) || lot.seed_date}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+              {closingReconciliations.length > 0 && (
+                <>
+                  <h3 style={{ marginBottom: '0.25rem' }}>Leftover shares closed out</h3>
+                  <p style={{ color: 'var(--text-dim)', marginTop: 0 }}>
+                    The opposite case: the imported history buys more shares than it sells, so replaying it
+                    would leave a position open that your broker says you no longer hold. Left alone those
+                    phantom shares would keep earning return through today, so they are sold off at the last
+                    recorded trade date. A row marked <strong>ledger surplus</strong> or <strong>ledger
+                    deficit</strong> is one where your full transaction history does not match the broker
+                    snapshot — worth fixing. A surplus usually means a missing sale or transfer out; a
+                    deficit usually means a missing purchase or transfer in.
+                    An <strong>earlier lot</strong> row is only bookkeeping: this view replays the lots you
+                    still hold, so trades belonging to a position you already closed and rebought fall
+                    outside it and net long. Nothing to fix there.
+                  </p>
+                  <div className="sticky-table-wrap">
+                    <table className="data-table" style={{ width: '100%' }}>
+                      <thead>
+                        <tr>
+                          <th style={{ textAlign: 'left' }}>Ticker</th>
+                          <th style={{ textAlign: 'right' }}>Shares closed</th>
+                          <th style={{ textAlign: 'right' }}>Full ledger nets to</th>
+                          <th style={{ textAlign: 'right' }}>You hold</th>
+                          <th style={{ textAlign: 'left' }}>Closed on</th>
+                          <th style={{ textAlign: 'left' }}>Cause</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {closingReconciliations.map(lot => (
+                          <tr key={`close-${lot.ticker}-${lot.profile_id}`}>
+                            <td>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => openTickerTransactions(lot.ticker)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault()
+                                    openTickerTransactions(lot.ticker)
+                                  }
+                                }}
+                                style={{ color: 'var(--accent-bright)', cursor: 'pointer' }}
+                              >
+                                {lot.ticker}
+                              </span>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>{shares(lot.shares)}</td>
+                            <td style={{ textAlign: 'right' }}>{shares(lot.ledger_net_shares)}</td>
+                            <td style={{ textAlign: 'right' }}>{shares(lot.snapshot_quantity)}</td>
+                            <td>{formatPerformanceDate(lot.close_date) || lot.close_date}</td>
+                            <td style={{ color: closingHasLedgerGap(lot) ? 'var(--warn, #ffb86c)' : 'var(--text-dim)' }}>
+                              {closingCause(lot)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+              {(cashEquivalentSymbols.length > 0
+                || closedUnpricedSymbols.length > 0
+                || heldUnpricedSymbols.length > 0) && (
+                <>
+                  <h3 style={{ marginBottom: '0.25rem' }}>Market-history handling</h3>
+                  <ul>
+                    {cashEquivalentSymbols.length > 0 && (
+                      <li>
+                        <strong>Cash funds — fixed NAV supplied.</strong>{' '}
+                        {cashEquivalentSymbols.join(', ')}. Yahoo returned too little history for
+                        {cashEquivalentSymbols.length === 1 ? ' this money-market fund' : ' these money-market funds'},
+                        so Tracker used the stable $1.00 NAV instead of dropping the balance.
+                        {Number(coverageDetail.cash_equivalent_value || 0) > 0
+                          ? ` The ${fmt(coverageDetail.cash_equivalent_value)} you currently hold in `
+                            + `${cashEquivalentSymbols.length === 1 ? 'it' : 'them'} is included in Start Value `
+                            + 'and End Value; recorded interest still lands as a distribution.'
+                          : ''}
+                        {' '}Nothing to fix.
+                      </li>
+                    )}
+                    {closedUnpricedSymbols.length > 0 && (
+                      <li>
+                        <strong>Closed and no longer quoted.</strong>{' '}
+                        {closedUnpricedSymbols.join(', ')}. These appear in your transactions but you
+                        do not hold them now, and no price history comes back for the symbol — typically
+                        a delisting, a bankruptcy, an acquisition, or a ticker that changed. Their market
+                        moves are not in Tracker Return, but the realized gain and the dividends already
+                        recorded against them are untouched, so Gains &amp; Losses still reports them in
+                        full. Re-importing will not bring back a price series that no longer exists.
+                      </li>
+                    )}
+                    {heldUnpricedSymbols.length > 0 && (
+                      <li>
+                        <strong>Still held, still unpriced.</strong>{' '}
+                        {heldUnpricedSymbols.join(', ')}. This is the one that matters: you own these
+                        and no price came back, so they are missing from Start Value, End Value, and the
+                        return. Reload the range first — a throttled download looks identical to a dead
+                        ticker. If it persists, refresh market data, then check the symbol against your
+                        broker.
+                      </li>
+                    )}
+                  </ul>
+                </>
+              )}
+            </details>
           )}
           {!lifetimeView && <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             <strong>Tracker performance standard:</strong> this page is the reference calculation for
@@ -1537,7 +1761,7 @@ export default function TotalReturn() {
                   ? ` ${cmpData.portfolio_coverage.fallback_positions} current position${cmpData.portfolio_coverage.fallback_positions === 1 ? '' : 's'} without transaction history begin on their saved purchase date, or their import/snapshot date when no purchase date is available.`
                   : ''}
                 {cmpData.portfolio_coverage?.inferred_opening_positions > 0
-                  ? ` ${cmpData.portfolio_coverage.inferred_opening_positions} pre-existing position${cmpData.portfolio_coverage.inferred_opening_positions === 1 ? ' was' : 's were'} reconciled from current shares because the transaction export began after the opening lot.`
+                  ? ` ${cmpData.portfolio_coverage.inferred_opening_positions} position${cmpData.portfolio_coverage.inferred_opening_positions === 1 ? ' was' : 's were'} already open before the earliest imported trade, so ${cmpData.portfolio_coverage.inferred_opening_positions === 1 ? 'its' : 'their'} starting shares were worked backward from what you hold today.`
                   : ''}
                 {formatAccountingCoverage(cmpData.portfolio_coverage)
                   ? ` ${formatAccountingCoverage(cmpData.portfolio_coverage)}`

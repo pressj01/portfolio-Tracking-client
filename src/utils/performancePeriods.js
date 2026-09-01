@@ -366,29 +366,98 @@ export const formatCoveragePartialTag = (metrics) => {
   return covered ? `Partial — measured on ${covered} only` : 'Partial reading'
 }
 
+// A reader who has to decode "residual historical positions were closed
+// against the current broker share snapshot" cannot tell whether their books
+// are fine or broken, which is the entire point of the note. Every sentence
+// below says what happened, to which positions, and whether anything needs
+// fixing — in that order.
+const listSymbols = (symbols) => symbols.join(', ')
+
+const hasLedgerGap = (lot) => {
+  if (typeof lot?.ledger_gap === 'boolean') return lot.ledger_gap
+  const ledger = Number(lot?.ledger_net_shares)
+  const snapshot = Number(lot?.snapshot_quantity)
+  if (Number.isFinite(ledger) && Number.isFinite(snapshot)) {
+    return Math.abs(ledger - snapshot) > 1e-8
+  }
+  return !!lot?.ledger_surplus
+}
+
 export const formatAccountingCoverage = (metrics) => {
   if (!metrics) return ''
   const parts = []
   const splitTransactions = Number(metrics.split_adjusted_transactions || 0)
   const splitPositions = Number(metrics.split_adjusted_positions || 0)
   const inferredClosings = Number(metrics.inferred_closing_positions || 0)
+  const closingDetail = Array.isArray(metrics.inferred_closing_detail)
+    ? metrics.inferred_closing_detail
+    : []
+  const ledgerGaps = closingDetail.filter(hasLedgerGap).length
+  const closingDetailComplete = closingDetail.length === inferredClosings
+  const shortfall = coverageShortfall(metrics) || {}
   const missingSymbols = Array.isArray(metrics.missing_market_symbols)
     ? metrics.missing_market_symbols.filter(Boolean)
     : []
+  // The backend sorts the absent symbols by *why* they are absent. Fall back to
+  // the flat list only for a payload built before it did.
+  const cashSymbols = Array.isArray(shortfall.cash_equivalent_symbols)
+    ? shortfall.cash_equivalent_symbols.filter(Boolean)
+    : []
+  const heldUnpriced = Array.isArray(shortfall.held_unpriced_symbols)
+    ? shortfall.held_unpriced_symbols.filter(Boolean)
+    : []
+  const closedUnpriced = Array.isArray(shortfall.closed_unpriced_symbols)
+    ? shortfall.closed_unpriced_symbols.filter(Boolean)
+    : []
+  const classified = cashSymbols.length + heldUnpriced.length + closedUnpriced.length
+  const classifiedSymbols = new Set([
+    ...cashSymbols,
+    ...heldUnpriced,
+    ...closedUnpriced,
+  ])
+  const unclassifiedMissing = missingSymbols.filter(symbol => !classifiedSymbols.has(symbol))
 
   if (splitTransactions > 0) {
     parts.push(
-      `${splitTransactions} historical trade${splitTransactions === 1 ? '' : 's'} across ${splitPositions} position${splitPositions === 1 ? '' : 's'} ${splitTransactions === 1 ? 'was' : 'were'} normalized for stock splits.`,
+      `${splitTransactions} imported trade${splitTransactions === 1 ? '' : 's'} across ${splitPositions} position${splitPositions === 1 ? '' : 's'} ${splitTransactions === 1 ? 'was' : 'were'} restated into today's split-adjusted shares.`,
     )
   }
   if (inferredClosings > 0) {
     parts.push(
-      `${inferredClosings} residual historical position${inferredClosings === 1 ? '' : 's'} ${inferredClosings === 1 ? 'was' : 'were'} closed against the current broker share snapshot.`,
+      `${inferredClosings} position${inferredClosings === 1 ? '' : 's'} had shares left over in the imported history that your broker no longer shows you owning; the leftovers were sold off at their last recorded trade date.`
+      + (!closingDetailComplete
+        ? ' Position-level reconciliation detail is unavailable, so this response cannot determine whether the full ledger needs correction.'
+        : ledgerGaps === 0
+        ? ' None of them indicate a missing transaction: the extra shares belong to earlier closed lots that this view does not replay.'
+        : ledgerGaps === inferredClosings
+          ? ` ${inferredClosings === 1 ? 'It comes' : 'All of them come'} from a genuine gap between the full transaction ledger and the broker snapshot.`
+          : ` ${ledgerGaps} of those come${ledgerGaps === 1 ? 's' : ''} from a genuine gap in the ledger; the rest are earlier closed lots this view does not replay.`),
     )
   }
-  if (missingSymbols.length > 0) {
+  if (classified > 0) {
+    if (cashSymbols.length > 0) {
+      const cashValue = wholeDollars(shortfall.cash_equivalent_value)
+      parts.push(
+        `${listSymbols(cashSymbols)} ${cashSymbols.length === 1 ? 'is a money-market cash fund' : 'are money-market cash funds'} with too little downloaded history, so Tracker used a fixed $1.00 NAV.`
+        + (Number(shortfall.cash_equivalent_value || 0) > 0 && cashValue
+          ? ` The ${cashValue} held in ${cashSymbols.length === 1 ? 'it is' : 'them is'} included in Start Value and End Value.`
+          : ''),
+      )
+    }
+    if (closedUnpriced.length > 0) {
+      parts.push(
+        `${listSymbols(closedUnpriced)} ${closedUnpriced.length === 1 ? 'has' : 'have'} no downloadable price history — delisted, renamed, or never quoted — and ${closedUnpriced.length === 1 ? 'is' : 'are'} no longer held, so ${closedUnpriced.length === 1 ? 'its' : 'their'} price moves are not in Tracker Return. Realized gains and dividends already recorded are unaffected.`,
+      )
+    }
+    if (heldUnpriced.length > 0) {
+      parts.push(
+        `${listSymbols(heldUnpriced)} ${heldUnpriced.length === 1 ? 'is' : 'are'} still held but ${heldUnpriced.length === 1 ? 'has' : 'have'} no usable price history for this range, so ${heldUnpriced.length === 1 ? 'that position is' : 'those positions are'} left out of Tracker Return entirely.`,
+      )
+    }
+  }
+  if (unclassifiedMissing.length > 0) {
     parts.push(
-      `Market history is unavailable for ${missingSymbols.join(', ')}; ${missingSymbols.length === 1 ? 'that symbol is' : 'those symbols are'} excluded from Tracker Return.`,
+      `Market history is unavailable for ${listSymbols(unclassifiedMissing)}; ${unclassifiedMissing.length === 1 ? 'that symbol is' : 'those symbols are'} excluded from Tracker Return.`,
     )
   }
   return parts.join(' ')

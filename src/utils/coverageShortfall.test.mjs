@@ -5,6 +5,7 @@ import {
   coverageSeverity,
   isCoverageMaterial,
   isCoverageSevere,
+  formatAccountingCoverage,
   formatCoverageShortfall,
   formatCoveragePartialTag,
 } from './performancePeriods.js'
@@ -104,4 +105,53 @@ test('small material weights keep a decimal so 2% does not read as 0%', () => {
   })
 
   assert.match(formatCoverageShortfall(small), /2\.3% of this portfolio/)
+})
+
+test('synthetic money-market NAV is described as included, not dropped', () => {
+  const label = formatAccountingCoverage({
+    coverage_shortfall: {
+      cash_equivalent_symbols: ['SPAXX'],
+      cash_equivalent_value: 100000,
+    },
+  })
+
+  assert.match(label, /fixed \$1\.00 NAV/i)
+  assert.match(label, /included in Start Value and End Value/i)
+  assert.doesNotMatch(label, /outside Start Value/i)
+})
+
+test('missing closing detail never claims the ledger is reconciled', () => {
+  const label = formatAccountingCoverage({
+    inferred_closing_positions: 2,
+  })
+
+  assert.match(label, /detail is unavailable/i)
+  assert.doesNotMatch(label, /None of them indicate/i)
+})
+
+test('a closing-side ledger deficit is still counted as a real gap', () => {
+  const label = formatAccountingCoverage({
+    inferred_closing_positions: 1,
+    inferred_closing_detail: [{
+      ledger_gap: true,
+      ledger_gap_direction: 'deficit',
+      ledger_net_shares: 5,
+      snapshot_quantity: 10,
+    }],
+  })
+
+  assert.match(label, /genuine gap between the full transaction ledger/i)
+  assert.doesNotMatch(label, /None of them indicate/i)
+})
+
+test('partially classified missing symbols retain the generic warning', () => {
+  const label = formatAccountingCoverage({
+    missing_market_symbols: ['SPAXX', 'BROKEN'],
+    coverage_shortfall: {
+      cash_equivalent_symbols: ['SPAXX'],
+    },
+  })
+
+  assert.match(label, /SPAXX.*fixed \$1\.00 NAV/i)
+  assert.match(label, /Market history is unavailable for BROKEN/i)
 })
