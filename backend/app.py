@@ -54250,16 +54250,28 @@ def _build_scan_fund_row(ticker, info, kind, hist):
 
 
 def _enrich_cef_scan_row(row, cef_row):
-    """Merge CEF Connect daily-pricing fields into a scan row so `gradeCEF` can
-    score discount + distribution. Leverage / z-score / NAV-return need the
-    per-fund detail call (too heavy for a batch scan) and are left absent — the
-    grader renders those as n/a and drops them from the composite. The risk-
-    ratio bundle (from price history) still applies and adds real signal here.
+    """Merge the authoritative CEF Connect fields into a fund-scan row.
+
+    A confirmed CEF does not need Yahoo metadata in order to be shown. Daily
+    pricing already supplies the identity, NAV, discount, distribution,
+    leverage, expense, return, and liquidity fields used by the CEF grader;
+    price history only adds the risk-ratio bundle.
     """
     if not cef_row:
         return row
-    for key in ("premium_discount", "distribution_rate_price", "distribution_rate_nav",
-                "distribution_frequency", "sponsor", "category", "strategy"):
+    for key in (
+        "name", "strategy", "category", "sponsor", "price", "nav",
+        "premium_discount", "distribution_rate_price", "distribution_rate_nav",
+        "distribution_amount", "distribution_frequency", "distribution_date",
+        "is_managed_distribution", "return_on_nav_1y", "return_on_price_1y",
+        "return_on_nav_3y", "return_on_price_3y", "return_on_nav_5y",
+        "return_on_price_5y", "return_on_nav_ytd", "return_on_price_ytd",
+        "leverage_ratio", "is_leveraged", "market_cap_usd_m",
+        "total_assets_usd_m", "expense_ratio", "z_score_1y", "z_score_3m",
+        "z_score_6m", "price_52wk_avg", "discount_52wk_avg",
+        "avg_daily_volume", "inception_date", "unii_per_share",
+        "earnings_per_share",
+    ):
         val = cef_row.get(key)
         if val not in (None, ""):
             row[key] = val
@@ -54271,8 +54283,6 @@ def _enrich_cef_scan_row(row, cef_row):
             row["yield_pct"] = round(float(dist), 4)
         except (TypeError, ValueError):
             pass
-    if cef_row.get("name"):
-        row["name"] = cef_row["name"]
     return row
 
 
@@ -54367,6 +54377,20 @@ def _run_fund_scan(kind):
     ordered, sources = _resolve_scan_tickers(payload, include_cef_universe=(kind == "cef"))
     if not ordered:
         return jsonify({"error": "No tickers to scan. Add holdings/watchlist entries or paste a ticker list."}), 400
+
+    # Identify authoritative CEFs before enforcing the batch limit. Holdings are
+    # resolved before the watchlist, so the old first-60 truncation could spend
+    # every slot on non-CEFs and silently drop a real CEF later in the combined
+    # list. Stable-partitioning confirmed CEFs to the front makes the limit apply
+    # to useful CEF candidates first while preserving source order within each
+    # group. It also gives confirmed CEFs a data source independent of Yahoo's
+    # frequently missing/misclassified `.info` response (notably ADX).
+    cef_rows = _cef_row_map()
+    if kind == "cef" and cef_rows:
+        ordered = (
+            [sym for sym in ordered if sym in cef_rows]
+            + [sym for sym in ordered if sym not in cef_rows]
+        )
     truncated = len(ordered) > _FUND_SCAN_LIMIT
     ordered = ordered[:_FUND_SCAN_LIMIT]
 
@@ -54377,10 +54401,15 @@ def _run_fund_scan(kind):
             return sym, None, str(exc)
         return sym, info, None
 
-    infos = {}
+    # CEF Connect already has enough data to display and grade a confirmed CEF,
+    # so do not make Yahoo metadata a prerequisite (or an extra network call).
+    confirmed_cefs = {
+        sym for sym in ordered if kind == "cef" and sym in cef_rows
+    }
+    infos = {sym: {} for sym in confirmed_cefs}
     errors = []
     with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_load_info, s) for s in ordered]
+        futures = [pool.submit(_load_info, s) for s in ordered if s not in confirmed_cefs]
         for fut in as_completed(futures):
             sym, info, err = fut.result()
             if err or not info or not (info.get("shortName") or info.get("longName")):
@@ -54388,18 +54417,16 @@ def _run_fund_scan(kind):
             else:
                 infos[sym] = info
 
-    # The CEF universe both confirms CEFs (Yahoo mislabels them) and lets the
-    # other two scanners correctly route those tickers to the CEF scanner. The
-    # rows also supply the discount/distribution data the CEF grader needs.
-    cef_rows = _cef_row_map()
-
     matched = []
     skipped = []
     for sym in ordered:
         info = infos.get(sym)
         if info is None:
             continue
-        name = info.get("longName") or info.get("shortName") or sym
+        name = (
+            info.get("longName") or info.get("shortName")
+            or (cef_rows.get(sym) or {}).get("name") or sym
+        )
         k = _classify_fund_kind(sym, info, name, cef_universe=cef_rows)
         if k == kind:
             matched.append(sym)
