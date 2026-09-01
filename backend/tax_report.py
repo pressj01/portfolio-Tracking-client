@@ -46,6 +46,15 @@ _DEFAULT_TREATMENT = {
 }
 
 
+def _transaction_order_expression(conn, alias=None):
+    """Use saved same-day order, with id fallback for legacy test schemas."""
+    prefix = f"{alias}." if alias else ""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(transactions)").fetchall()}
+    if "sort_order" in columns:
+        return f"COALESCE({prefix}sort_order, {prefix}id)"
+    return f"{prefix}id"
+
+
 def _is_transfer_note(notes):
     """True for the '[Transfer in]' / '[Transfer out]' tag the importers write."""
     return bool(notes) and "[transfer" in str(notes).lower()
@@ -350,14 +359,16 @@ def compute_realized_lots(conn, profile_id, year):
     """
     ids = _resolve_profile_ids(conn, profile_id)
     ph = _placeholders(ids)
+    sell_order = _transaction_order_expression(conn, "t")
     sells = conn.execute(
         f"""SELECT t.id, t.ticker, t.profile_id, t.transaction_date, t.shares,
-                   t.price_per_share, t.fees, t.realized_gain
+                   t.price_per_share, t.fees, t.realized_gain,
+                   {sell_order} AS replay_order
               FROM transactions t
              WHERE t.transaction_type = 'SELL'
                AND t.profile_id IN ({ph})
                AND substr(t.transaction_date, 1, 4) = ?
-             ORDER BY t.transaction_date, t.id""",
+             ORDER BY t.transaction_date, {sell_order}, t.id""",
         list(ids) + [str(year)],
     ).fetchall()
     sells = [dict(s) for s in sells]
@@ -411,12 +422,13 @@ def compute_realized_lots(conn, profile_id, year):
         if key in fifo_loaded:
             return
         fifo_loaded.add(key)
+        buy_order = _transaction_order_expression(conn)
         rows = conn.execute(
-            """SELECT id, transaction_date, acquired_date, price_per_share,
-                      fees, shares, notes
+            f"""SELECT id, transaction_date, acquired_date, price_per_share,
+                      fees, shares, notes, {buy_order} AS replay_order
                  FROM transactions
                 WHERE ticker = ? AND profile_id = ? AND transaction_type = 'BUY'
-                ORDER BY transaction_date, id""",
+                ORDER BY transaction_date, {buy_order}, id""",
             (ticker, sell_profile_id),
         ).fetchall()
         fifo_buys[key] = [dict(r) for r in rows]
@@ -512,9 +524,17 @@ def compute_realized_lots(conn, profile_id, year):
             for buy in queue:
                 if remaining <= 1e-9:
                     break
-                bd = _parse_date(buy.get("transaction_date"))
-                sd = _parse_date(sell_date)
-                if bd and sd and bd > sd:
+                buy_key = (
+                    str(buy.get("transaction_date") or ""),
+                    int(buy.get("replay_order") or buy.get("id") or 0),
+                    int(buy.get("id") or 0),
+                )
+                sell_key = (
+                    str(sell_date or ""),
+                    int(s.get("replay_order") or sid or 0),
+                    int(sid or 0),
+                )
+                if buy_key > sell_key:
                     continue
                 avail = float(buy.get("shares") or 0) - float(buy.get("_consumed", 0))
                 if avail <= 1e-9:

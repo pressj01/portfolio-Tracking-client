@@ -1172,6 +1172,7 @@ def ensure_tables_exist(conn=None):
             profile_id      INTEGER NOT NULL DEFAULT 1,
             transaction_type TEXT NOT NULL DEFAULT 'BUY',
             transaction_date TEXT,
+            sort_order      INTEGER,
             shares          REAL NOT NULL,
             price_per_share REAL,
             fees            REAL DEFAULT 0,
@@ -1188,6 +1189,28 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE transactions ADD COLUMN transaction_type TEXT NOT NULL DEFAULT 'BUY'")
     if "realized_gain" not in _txn_cols:
         cur.execute("ALTER TABLE transactions ADD COLUMN realized_gain REAL")
+    if "sort_order" not in _txn_cols:
+        cur.execute("ALTER TABLE transactions ADD COLUMN sort_order INTEGER")
+        _txn_cols.add("sort_order")
+        # Existing same-day rows have always been replayed by their database
+        # id. Preserve that behavior as the initial explicit order so merely
+        # upgrading cannot change anyone's cost basis.
+        current_key = None
+        next_order = 0
+        for txn_id, ticker, profile_id, txn_date in cur.execute(
+            "SELECT id, ticker, profile_id, transaction_date FROM transactions "
+            "ORDER BY profile_id, ticker, COALESCE(transaction_date, ''), id"
+        ).fetchall():
+            key = (profile_id, ticker, txn_date or "")
+            if key != current_key:
+                current_key = key
+                next_order = 1
+            else:
+                next_order += 1
+            cur.execute(
+                "UPDATE transactions SET sort_order = ? WHERE id = ?",
+                (next_order, txn_id),
+            )
     if "dedupe_hash" not in _txn_cols:
         cur.execute("ALTER TABLE transactions ADD COLUMN dedupe_hash TEXT")
         _txn_cols.add("dedupe_hash")
@@ -1210,6 +1233,10 @@ def ensure_tables_exist(conn=None):
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_transactions_ticker_profile
         ON transactions (ticker, profile_id)
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_transactions_replay_order
+        ON transactions (ticker, profile_id, transaction_date, sort_order, id)
     """)
 
     # ── transaction_lot_allocations ───────────────────────────────────────

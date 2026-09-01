@@ -117,6 +117,7 @@ def insert_equity_transaction(
     notes=None,
     realized_gain=None,
     acquired_date=None,
+    sort_order=None,
     dedupe_hash=None,
     occurrence=None,
 ):
@@ -131,11 +132,25 @@ def insert_equity_transaction(
             occurrence = next_equity_occurrence(conn, ident)
         dedupe_hash = stored_equity_hash(equity_identity_hash(ident), occurrence)
 
+    if "sort_order" in cols and sort_order is None:
+        row = conn.execute(
+            "SELECT COALESCE(MAX(COALESCE(sort_order, id)), 0) + 1 FROM transactions "
+            "WHERE profile_id = ? AND UPPER(TRIM(ticker)) = ? "
+            "AND COALESCE(SUBSTR(transaction_date, 1, 10), '') = ?",
+            (
+                profile_id,
+                str(ticker or "").strip().upper(),
+                str(transaction_date or "")[:10],
+            ),
+        ).fetchone()
+        sort_order = row[0] if row else 1
+
     wanted = [
         ("ticker", str(ticker or "").strip().upper()),
         ("profile_id", profile_id),
         ("transaction_type", str(transaction_type or "BUY").strip().upper()),
         ("transaction_date", transaction_date),
+        ("sort_order", sort_order),
         ("shares", shares),
         ("price_per_share", price_per_share),
         ("fees", fees or 0),

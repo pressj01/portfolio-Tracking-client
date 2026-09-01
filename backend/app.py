@@ -2021,7 +2021,7 @@ def _portfolio_irr_payload(conn, profile_ids, as_of_date=None, excluded_tickers=
                    shares, price_per_share, fees, notes
             FROM transactions
             WHERE profile_id IN ({placeholders})
-            ORDER BY transaction_date, id""",
+            ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         ids,
     ).fetchall()
     holding_rows = conn.execute(
@@ -7154,6 +7154,30 @@ def _table_columns(conn, table):
         return set()
 
 
+def _transaction_order_expression(conn, alias=None):
+    """Return the stable within-day replay expression for equity transactions.
+
+    Some focused tests and very old databases create a minimal transactions
+    table without ``sort_order``. Falling back to id keeps those fixtures and
+    pre-migration reads compatible with the historical behavior.
+    """
+    prefix = f"{alias}." if alias else ""
+    if "sort_order" in _table_columns(conn, "transactions"):
+        return f"COALESCE({prefix}sort_order, {prefix}id)"
+    return f"{prefix}id"
+
+
+def _transaction_order_by(conn, alias=None, descending=False):
+    """SQL terms for chronological transaction replay or its exact reverse."""
+    prefix = f"{alias}." if alias else ""
+    direction = " DESC" if descending else ""
+    return (
+        f"{prefix}transaction_date{direction}, "
+        f"{_transaction_order_expression(conn, alias)}{direction}, "
+        f"{prefix}id{direction}"
+    )
+
+
 def _ticker_rename_has_profile_conflict(conn, table, column, old_ticker, new_ticker, profile_ids):
     """Whether old and new symbols both have rows in any affected profile."""
     if not profile_ids:
@@ -8554,6 +8578,7 @@ def _parse_portfolio_export_workbook(path, filename=None):
                         "ticker": ticker,
                         "type": "DIVIDEND",
                         "date": transaction_date,
+                        "sort_order": None,
                         "shares": None,
                         "price_per_share": None,
                         "fees": 0,
@@ -8576,6 +8601,10 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     "ticker": ticker,
                     "type": txn_type,
                     "date": transaction_date,
+                    "sort_order": int(_combined_export_clean_float(
+                        row.get(colmap.get("same-day order"))
+                        if colmap.get("same-day order") else None
+                    ) or 0) or None,
                     "shares": abs(shares),
                     "price_per_share": _combined_export_clean_float(row.get(colmap.get("price/share"))),
                     "fees": _combined_export_clean_float(row.get(colmap.get("fees"))) or 0,
@@ -8751,6 +8780,7 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                 profile_id,
                 transaction_type=txn_type,
                 transaction_date=txn_date,
+                sort_order=txn.get("sort_order"),
                 shares=shares,
                 price_per_share=price,
                 fees=fees,
@@ -9457,13 +9487,13 @@ def _roll_forward_interactive_brokers_snapshot(conn, profile_id):
     profile_cutoff = max(snapshot_dates)
     query_cutoff = min(snapshot_dates)
     transaction_rows = conn.execute(
-        """SELECT ticker, transaction_type, transaction_date, shares,
+        f"""SELECT ticker, transaction_type, transaction_date, shares,
                   price_per_share, fees
            FROM transactions
            WHERE profile_id = ?
              AND UPPER(COALESCE(transaction_type, '')) IN ('BUY', 'SELL')
              AND date(transaction_date) > date(?)
-           ORDER BY date(transaction_date), id""",
+           ORDER BY date(transaction_date), {_transaction_order_expression(conn)}, id""",
         (profile_id, query_cutoff.isoformat()),
     ).fetchall()
 
@@ -10502,7 +10532,7 @@ def _compute_backfill_nav_rows(profile_id, existing_nav, anchor_to_current=False
         txns = conn.execute(
             "SELECT ticker, transaction_type, transaction_date, shares, price_per_share "
             "FROM transactions WHERE profile_id = ? AND transaction_type IN ('BUY', 'SELL') "
-            "ORDER BY transaction_date, id",
+            f"ORDER BY {_transaction_order_by(conn)}",
             (profile_id,),
         ).fetchall()
         current_positions = {}
@@ -19225,9 +19255,10 @@ def _transfer_in_cost_per_share(txn_type, price, notes, fallback_basis):
 
 def _refresh_transaction_realized_gains(ticker, profile_id, conn):
     """Recompute realized gains from transactions without changing holdings."""
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
         "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
-        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        f"FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
         (ticker, profile_id),
     ).fetchall()
     if not rows:
@@ -19313,9 +19344,10 @@ def _sync_preserved_position_purchase_date(ticker, profile_id, conn):
     if not holding:
         return None
 
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
         "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
-        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        f"FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
         (ticker, profile_id),
     ).fetchall()
     if not rows:
@@ -19449,9 +19481,10 @@ def _infer_reinvested_share_gap_basis(conn, ticker, profile_id, share_delta, hol
 def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     """Update original basis from transaction lots when they reconcile to broker shares."""
     _ensure_basis_columns(conn)
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
         "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
-        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        f"FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
         (ticker, profile_id),
     ).fetchall()
     if not rows:
@@ -19672,9 +19705,10 @@ def _rollup_transactions(ticker, profile_id, conn):
     purchase_value.  Realized gains are stored per-sell transaction and summed.
     """
     _ensure_basis_columns(conn)
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
         "SELECT id, transaction_type, shares, price_per_share, fees, transaction_date, notes "
-        "FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY transaction_date, id",
+        f"FROM transactions WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
         (ticker, profile_id),
     ).fetchall()
     if not rows:
@@ -20107,36 +20141,57 @@ def _validate_sell_quantity_available(
     sort_txn_id=None,
 ):
     """Reject a sell that would make the position negative at that point in time."""
+    replay_order_expr = _transaction_order_expression(conn)
     rows = conn.execute(
-        "SELECT id, transaction_type, transaction_date, shares "
+        "SELECT id, transaction_type, transaction_date, shares, "
+        f"{replay_order_expr} AS replay_order "
         "FROM transactions WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchall()
 
     max_id = 0
+    existing_order = None
+    existing_date = None
+    day_max_order = 0
     events = []
     for row in rows:
         txn_id = row["id"] if isinstance(row, dict) else row[0]
         max_id = max(max_id, int(txn_id or 0))
+        row_date = row["transaction_date"] if isinstance(row, dict) else row[2]
+        row_order = row["replay_order"] if isinstance(row, dict) else row[4]
+        if (row_date or "") == (transaction_date or ""):
+            day_max_order = max(day_max_order, int(row_order or 0))
+        if sort_txn_id is not None and txn_id == sort_txn_id:
+            existing_order = int(row_order or txn_id or 0)
+            existing_date = row_date
         if exclude_txn_id is not None and txn_id == exclude_txn_id:
             continue
         events.append({
             "id": txn_id,
             "type": ((row["transaction_type"] if isinstance(row, dict) else row[1]) or "BUY").upper(),
-            "date": row["transaction_date"] if isinstance(row, dict) else row[2],
+            "date": row_date,
+            "order": int(row_order or txn_id or 0),
             "shares": abs(float((row["shares"] if isinstance(row, dict) else row[3]) or 0)),
             "proposed": False,
         })
 
+    proposed_order = (
+        existing_order
+        if existing_order is not None and (existing_date or "") == (transaction_date or "")
+        else day_max_order + 1
+    )
     events.append({
         "id": sort_txn_id if sort_txn_id is not None else max_id + 1,
         "type": "SELL",
         "date": transaction_date,
+        "order": proposed_order,
         "shares": float(shares or 0),
         "proposed": True,
     })
 
-    events.sort(key=lambda e: ((e["date"] or ""), int(e["id"] or 0)))
+    events.sort(key=lambda e: (
+        (e["date"] or ""), int(e["order"] or 0), int(e["id"] or 0)
+    ))
     running_shares = 0.0
     seen_proposed = False
     for event in events:
@@ -20155,13 +20210,75 @@ def _validate_sell_quantity_available(
             seen_proposed = True
 
 
+def _transaction_sequence_floor(rows, transaction_date=None):
+    """Return the lowest running balance, optionally only during one date."""
+    running_shares = 0.0
+    floor = 0.0 if transaction_date is None else None
+    floor_event = None
+    for row in rows:
+        row_date = str(row.get("transaction_date") or "")
+        if transaction_date is not None and row_date > transaction_date:
+            break
+        if transaction_date is not None and row_date == transaction_date and floor is None:
+            floor = running_shares
+        txn_type = str(row.get("transaction_type") or "BUY").upper()
+        shares = abs(float(row.get("shares") or 0))
+        if txn_type == "BUY":
+            running_shares += shares
+        else:
+            running_shares -= shares
+        if transaction_date is not None and row_date != transaction_date:
+            continue
+        if floor is None or running_shares < floor:
+            floor = running_shares
+            floor_event = row
+    return (floor if floor is not None else running_shares), floor_event
+
+
+def _specific_lot_sequence_error(rows, alloc_map):
+    """Return an error when reordering makes a selected BUY lot unavailable."""
+    lots = []
+    for row in rows:
+        txn_id = int(row.get("id") or 0)
+        txn_type = str(row.get("transaction_type") or "BUY").upper()
+        shares = abs(float(row.get("shares") or 0))
+        if txn_type == "BUY":
+            lots.append({"id": txn_id, "shares": shares})
+            continue
+
+        allocations = alloc_map.get(txn_id) or []
+        if allocations:
+            for alloc in allocations:
+                buy_id = int(alloc["buy_txn_id"])
+                alloc_shares = float(alloc["shares"] or 0)
+                lot = next((item for item in lots if item["id"] == buy_id), None)
+                if lot is None or alloc_shares - lot["shares"] > 1e-6:
+                    return (
+                        f"SELL transaction {txn_id} uses specific BUY lot {buy_id}, "
+                        "so that BUY must remain above the sale with enough shares available."
+                    )
+                lot["shares"] -= alloc_shares
+        else:
+            remaining = shares
+            while remaining > 1e-9 and lots:
+                lot = lots[0]
+                take = min(remaining, lot["shares"])
+                lot["shares"] -= take
+                remaining -= take
+                if lot["shares"] <= 1e-9:
+                    lots.pop(0)
+        lots[:] = [lot for lot in lots if lot["shares"] > 1e-9]
+    return None
+
+
 def _get_open_lots(conn, ticker, profile_ids, exclude_txn_id=None):
     """Return open BUY lots for a ticker after applying sells and allocations."""
     placeholders = ",".join("?" * len(profile_ids))
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
         f"SELECT id, transaction_type, shares, price_per_share, fees, transaction_date "
         f"FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) "
-        f"ORDER BY transaction_date, id",
+        f"ORDER BY {order_by}",
         [ticker] + profile_ids,
     ).fetchall()
 
@@ -20380,7 +20497,7 @@ def _scan_cost_basis_gaps(conn, profile_ids):
                AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
                AND COALESCE(price_per_share, 0) <= 0
                AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') > 0
-             ORDER BY ticker, transaction_date""",
+             ORDER BY ticker, transaction_date, {_transaction_order_expression(conn)}, id""",
         ids,
     ).fetchall()
 
@@ -20402,13 +20519,13 @@ def _scan_cost_basis_gaps(conn, profile_ids):
             continue
         unresolved.append(entry)
         for s in conn.execute(
-            """SELECT id, transaction_date, shares, price_per_share, realized_gain
+            f"""SELECT id, transaction_date, shares, price_per_share, realized_gain
                  FROM transactions
                 WHERE ticker = ? AND profile_id = ?
                   AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
                   AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0
                   AND transaction_date >= ?
-                ORDER BY transaction_date""",
+                ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
             (row["ticker"], row["profile_id"], row["transaction_date"] or ""),
         ).fetchall():
             sell = dict(s)
@@ -20631,8 +20748,13 @@ def _transaction_event_sort_key(event):
     """Chronological ordering shared by ticker and full-ledger views."""
     type_order = {"BUY": 0, "DIVIDEND": 1, "SELL": 2}
     event_type = str(event.get("transaction_type") or "BUY").upper()
+    try:
+        same_day_order = int(event.get("sort_order") or 0)
+    except (TypeError, ValueError):
+        same_day_order = 0
     return (
         str(event.get("transaction_date") or ""),
+        same_day_order,
         type_order.get(event_type, 3),
         str(event.get("created_at") or ""),
         str(event.get("id") or ""),
@@ -20720,7 +20842,7 @@ def transaction_history():
         if ticker_filter:
             equity_query += " AND UPPER(ticker) = ?"
             equity_params.append(ticker_filter)
-        equity_query += " ORDER BY transaction_date, id"
+        equity_query += f" ORDER BY {_transaction_order_by(conn)}"
         equity_rows = conn.execute(equity_query, equity_params).fetchall()
         equity_events = []
         for row in equity_rows:
@@ -20784,8 +20906,9 @@ def list_transactions(ticker):
     conn = get_connection()
     read_pids, include_account_note = _get_transaction_read_scope(conn, is_agg, pids)
     placeholders = ",".join("?" * len(read_pids))
+    order_by = _transaction_order_by(conn)
     rows = conn.execute(
-        f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY transaction_date, id",
+        f"SELECT * FROM transactions WHERE ticker = ? AND profile_id IN ({placeholders}) ORDER BY {order_by}",
         [ticker] + read_pids,
     ).fetchall()
     sell_ids = [
@@ -20890,7 +21013,7 @@ def holding_basis_gap(ticker):
                  WHERE ticker = ? AND profile_id IN ({placeholders})
                    AND UPPER(COALESCE(transaction_type,'BUY'))='BUY'
                    AND COALESCE(price_per_share, 0) <= 0
-                 ORDER BY transaction_date""",
+                 ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
             args,
         ).fetchall():
             row = dict(r)
@@ -21337,6 +21460,113 @@ def add_transaction(ticker):
     return jsonify({"ticker": ticker, "message": f"Transaction added for {ticker}"}), 201
 
 
+@app.route("/api/holdings/<ticker>/transactions/order", methods=["PUT"])
+def reorder_transactions(ticker):
+    """Persist the execution order of every equity transaction on one date."""
+    is_agg, pids = get_profile_filter()
+    ticker = ticker.upper()
+    if is_agg:
+        profile_id = _resolve_aggregate_profile(ticker, pids)
+    else:
+        profile_id = pids[0]
+
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get("transaction_ids")
+    if not isinstance(raw_ids, list):
+        return jsonify({"error": "transaction_ids must be an ordered list"}), 400
+    try:
+        transaction_ids = [int(txn_id) for txn_id in raw_ids]
+    except (TypeError, ValueError):
+        return jsonify({"error": "Every transaction id must be a number"}), 400
+    if len(transaction_ids) < 2 or len(set(transaction_ids)) != len(transaction_ids):
+        return jsonify({"error": "Provide each same-day transaction exactly once"}), 400
+
+    conn = get_connection()
+    try:
+        if "sort_order" not in _table_columns(conn, "transactions"):
+            return jsonify({"error": "Transaction ordering is not available until the database migration runs"}), 409
+
+        order_by = _transaction_order_by(conn)
+        replay_order = _transaction_order_expression(conn)
+        rows = [
+            dict(row) for row in conn.execute(
+                "SELECT id, transaction_type, transaction_date, shares, "
+                f"{replay_order} AS replay_order FROM transactions "
+                f"WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
+                (ticker, profile_id),
+            ).fetchall()
+        ]
+        transaction_id_set = set(transaction_ids)
+        selected = [row for row in rows if int(row["id"]) in transaction_id_set]
+        if len(selected) != len(transaction_ids):
+            return jsonify({"error": "One or more transactions do not belong to this holding"}), 404
+
+        selected_dates = {str(row.get("transaction_date") or "") for row in selected}
+        if len(selected_dates) != 1:
+            return jsonify({"error": "Only transactions on the same date can be reordered"}), 400
+        transaction_date = next(iter(selected_dates))
+        day_ids = [
+            int(row["id"])
+            for row in rows
+            if str(row.get("transaction_date") or "") == transaction_date
+        ]
+        if set(day_ids) != transaction_id_set:
+            return jsonify({
+                "error": "Include every transaction for this ticker on the selected date",
+                "expected_transaction_ids": day_ids,
+            }), 409
+
+        proposed_index = {txn_id: index for index, txn_id in enumerate(transaction_ids, 1)}
+        proposed_rows = sorted(
+            rows,
+            key=lambda row: (
+                str(row.get("transaction_date") or ""),
+                proposed_index.get(int(row["id"]), int(row.get("replay_order") or row["id"])),
+                int(row["id"]),
+            ),
+        )
+
+        current_floor, _ = _transaction_sequence_floor(rows, transaction_date)
+        proposed_floor, floor_event = _transaction_sequence_floor(proposed_rows, transaction_date)
+        if proposed_floor < min(0.0, current_floor) - 1e-6:
+            sold = abs(float((floor_event or {}).get("shares") or 0))
+            available = max(0.0, sold + proposed_floor)
+            return jsonify({
+                "error": (
+                    f"That order places a sale of {sold:.6f} shares before enough shares "
+                    f"have been bought; only {available:.6f} are available at that point."
+                )
+            }), 409
+
+        sell_ids = [
+            int(row["id"])
+            for row in rows
+            if str(row.get("transaction_type") or "BUY").upper() == "SELL"
+        ]
+        alloc_map = _load_lot_alloc_map(conn, sell_ids)
+        current_alloc_error = _specific_lot_sequence_error(rows, alloc_map)
+        proposed_alloc_error = _specific_lot_sequence_error(proposed_rows, alloc_map)
+        if proposed_alloc_error and proposed_alloc_error != current_alloc_error:
+            return jsonify({"error": proposed_alloc_error}), 409
+
+        for sort_order, txn_id in enumerate(transaction_ids, 1):
+            conn.execute(
+                "UPDATE transactions SET sort_order = ? WHERE id = ?",
+                (sort_order, txn_id),
+            )
+        _rollup_transactions(ticker, profile_id, conn)
+        conn.commit()
+        _clear_total_return_caches()
+        return jsonify({
+            "ticker": ticker,
+            "transaction_date": transaction_date or None,
+            "transaction_ids": transaction_ids,
+            "message": "Transaction order updated and cost basis recalculated.",
+        })
+    finally:
+        conn.close()
+
+
 @app.route("/api/holdings/<ticker>/transactions/<int:txn_id>", methods=["PUT"])
 def update_transaction(ticker, txn_id):
     """Update an existing transaction."""
@@ -21434,6 +21664,20 @@ def update_transaction(ticker, txn_id):
                 vals.append(data[field] or None)
             else:
                 vals.append(data[field])
+
+    if (
+        "transaction_date" in data
+        and (data.get("transaction_date") or "") != (existing_date or "")
+        and "sort_order" in _table_columns(conn, "transactions")
+    ):
+        next_order_row = conn.execute(
+            "SELECT COALESCE(MAX(COALESCE(sort_order, id)), 0) + 1 FROM transactions "
+            "WHERE ticker = ? AND profile_id = ? AND id != ? "
+            "AND COALESCE(transaction_date, '') = ?",
+            (ticker, profile_id, txn_id, data.get("transaction_date") or ""),
+        ).fetchone()
+        updates.append("sort_order = ?")
+        vals.append(next_order_row[0] if next_order_row else 1)
 
     if not updates:
         conn.close()
@@ -22181,7 +22425,7 @@ def export_holdings_csv():
 
 
 _TRANSACTION_EXPORT_HEADERS = [
-    "Transaction ID", "Profile", "Ticker", "Type", "Date", "Shares",
+    "Transaction ID", "Profile", "Ticker", "Type", "Date", "Same-day Order", "Shares",
     "Price/Share", "Fees", "Realized Gain", "Dividend Amount", "Notes", "Created At",
 ]
 
@@ -22210,16 +22454,17 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
     realized_expr = "t.realized_gain" if "realized_gain" in txn_cols else "NULL AS realized_gain"
     notes_expr = "t.notes" if "notes" in txn_cols else "'' AS notes"
     created_expr = "t.created_at" if "created_at" in txn_cols else "'' AS created_at"
+    order_expr = _transaction_order_expression(conn, "t")
 
     rows = conn.execute(
         f"""
         SELECT t.id, t.profile_id, p.name AS profile_name, t.ticker, t.transaction_type,
                t.transaction_date, t.shares, t.price_per_share, t.fees,
-               {realized_expr}, {notes_expr}, {created_expr}
+               {realized_expr}, {notes_expr}, {created_expr}, {order_expr} AS sort_order
           FROM transactions t
           LEFT JOIN profiles p ON p.id = t.profile_id
          WHERE t.profile_id IN ({pid_placeholders})
-         ORDER BY p.name, UPPER(t.ticker), t.transaction_date, t.id
+         ORDER BY p.name, UPPER(t.ticker), t.transaction_date, {order_expr}, t.id
         """,
         read_pids,
     ).fetchall()
@@ -22237,6 +22482,7 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
             "Ticker": row["ticker"],
             "Type": row["transaction_type"] or "BUY",
             "Date": row["transaction_date"] or "",
+            "Same-day Order": row["sort_order"] if row["sort_order"] is not None else "",
             "Shares": row["shares"] if row["shares"] is not None else "",
             "Price/Share": row["price_per_share"] if row["price_per_share"] is not None else "",
             "Fees": row["fees"] if row["fees"] is not None else "",
@@ -22268,6 +22514,7 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
             "Ticker": row["ticker"],
             "Type": "DIVIDEND",
             "Date": row["payment_date"] or "",
+            "Same-day Order": "",
             "Shares": "",
             "Price/Share": "",
             "Fees": "",
@@ -22280,6 +22527,7 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
         str(r.get("Profile") or ""),
         str(r.get("Ticker") or "").upper(),
         str(r.get("Date") or ""),
+        float(r.get("Same-day Order") or 0),
         str(r.get("Type") or ""),
         str(r.get("Transaction ID") or ""),
     ))
@@ -23475,7 +23723,7 @@ def _ticker_research_holding(symbol):
                   AND UPPER(ticker) = ?
                   AND UPPER(COALESCE(transaction_type, '')) = 'BUY'
                   AND date(transaction_date) IS NOT NULL
-                ORDER BY date(transaction_date), id
+                ORDER BY date(transaction_date), {_transaction_order_expression(conn)}, id
                 LIMIT 1""",
             (*history_profile_ids, symbol),
         ).fetchone()
@@ -24082,7 +24330,7 @@ def portfolio_summary_data():
             FROM transactions
             WHERE profile_id IN ({placeholders})
               AND transaction_date IS NOT NULL
-            ORDER BY transaction_date, id""",
+            ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         pids,
     ).fetchall()
     if not rows:
@@ -24672,7 +24920,7 @@ def _ticker_return_holding_context(conn, ticker):
               AND shares > 0
               AND price_per_share > 0
               AND date(transaction_date) IS NOT NULL
-            ORDER BY date(transaction_date), id
+            ORDER BY date(transaction_date), {_transaction_order_expression(conn)}, id
             LIMIT 1""",
         list(ticker_aliases) + history_profile_ids,
     ).fetchone()
@@ -24720,7 +24968,7 @@ def ticker_return_chart(ticker):
                 WHERE ticker IN ({ticker_placeholders})
                   AND profile_id IN ({placeholders})
                   AND transaction_date IS NOT NULL
-                ORDER BY transaction_date, id""",
+                ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
             list(ticker_aliases) + profile_ids,
         ).fetchall()
     finally:
@@ -31479,7 +31727,7 @@ def _total_return_realized_rows(
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
-           ORDER BY t.transaction_date DESC, t.id DESC""",
+           ORDER BY t.transaction_date DESC, {_transaction_order_expression(conn, 't')} DESC, t.id DESC""",
         transaction_profile_ids,
     ).fetchall():
         row = dict(row)
@@ -32027,7 +32275,7 @@ def total_return_charts():
             FROM transactions
             WHERE profile_id IN ({position_placeholders})
               AND transaction_date IS NOT NULL
-            ORDER BY transaction_date, id""",
+            ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         position_profile_ids,
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
@@ -32541,7 +32789,7 @@ def total_return_compare():
                 FROM transactions
                 WHERE profile_id IN ({placeholders})
                   AND transaction_date IS NOT NULL
-                ORDER BY transaction_date, id""",
+                ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
             profile_ids,
         ).fetchall()
         holding_rows = conn.execute(
@@ -32878,7 +33126,7 @@ def _gains_losses_dividend_allocation(conn, profile_ids, window=None):
                 FROM transactions
                 WHERE profile_id IN ({placeholders})
                   AND transaction_type IN ('BUY', 'SELL')
-                ORDER BY ticker, profile_id, transaction_date, id""",
+                ORDER BY ticker, profile_id, transaction_date, {_transaction_order_expression(conn)}, id""",
             profile_ids,
         ).fetchall()
     ]
@@ -33294,7 +33542,7 @@ def gains_losses_summary():
            FROM transactions t
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
-           ORDER BY t.transaction_date DESC, t.id DESC""",
+           ORDER BY t.transaction_date DESC, {_transaction_order_expression(conn, 't')} DESC, t.id DESC""",
         transaction_profile_ids,
     ).fetchall()
     if txn_sell_rows:
@@ -33766,7 +34014,7 @@ def gains_losses_chart():
            WHERE t.transaction_type = 'SELL'
              AND t.profile_id IN ({txn_placeholders})
              AND t.transaction_date IS NOT NULL AND t.transaction_date != ''
-           ORDER BY t.transaction_date""",
+           ORDER BY t.transaction_date, {_transaction_order_expression(conn, 't')}, t.id""",
         transaction_profile_ids,
     ).fetchall()
 
@@ -34336,7 +34584,7 @@ def growth_data():
            FROM transactions
            WHERE profile_id IN ({position_placeholders})
              AND transaction_date IS NOT NULL
-           ORDER BY transaction_date, id""",
+           ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         position_profile_ids,
     ).fetchall()
     filtered_transactions = []
@@ -43421,7 +43669,7 @@ def _portfolio_tester_actual_history(
                   FROM transactions
                  WHERE profile_id IN ({placeholders})
                    AND transaction_date IS NOT NULL
-                 ORDER BY transaction_date, id""",
+                 ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
             position_profile_ids,
         ).fetchall()
     finally:
@@ -54185,7 +54433,7 @@ def growth_2_data():
                    price_per_share, fees, realized_gain
             FROM transactions
             WHERE profile_id IN ({position_placeholders})
-            ORDER BY transaction_date""",
+            ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         position_profile_ids,
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)

@@ -567,6 +567,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   const [openLots, setOpenLots] = useState([])
   const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
   const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
+  const [reorderingId, setReorderingId] = useState(null)
   const [basisGap, setBasisGap] = useState(null)
   // The shares the tracker invents when the ledger cannot account for the
   // position. Offering to record them turns a silent assumption into a row.
@@ -830,6 +831,39 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
     } catch (e) { setError(e.message) }
   }
 
+  const handleMoveTxn = async (txn, direction) => {
+    setError(null)
+    const transactionDate = txn.transaction_date || ''
+    const sameDay = transactions.filter(item => (
+      (item.transaction_date || '') === transactionDate
+      && item.profile_id === txn.profile_id
+    ))
+    const currentIndex = sameDay.findIndex(item => item.id === txn.id)
+    const targetIndex = currentIndex + direction
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= sameDay.length) return
+
+    const orderedIds = sameDay.map(item => item.id)
+    ;[orderedIds[currentIndex], orderedIds[targetIndex]] = [orderedIds[targetIndex], orderedIds[currentIndex]]
+    setReorderingId(txn.id)
+    try {
+      const res = await pf(`/api/holdings/${ticker}/transactions/order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_ids: orderedIds }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not update transaction order')
+      setSuccessMsg(data.message || 'Transaction order updated and cost basis recalculated.')
+      setTimeout(() => setSuccessMsg(null), 4000)
+      await fetchTxns()
+      onSaved()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setReorderingId(null)
+    }
+  }
+
   const fmt = (v, d = 2) => v != null ? Number(v).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d }) : '-'
   const fmtM = (v, d = 2) => formatMoney(v, { digits: d, fallback: '-' })
 
@@ -848,11 +882,18 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
         {/* Existing transactions list */}
         {!isNew && transactions.length > 0 && (
           <div style={{ marginBottom: '1rem' }}>
-            <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '900px' }}>
+            <div style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem', marginBottom: '0.45rem' }}>
+              Use the arrows to place same-day buys and sells in their real execution order. FIFO lot matching and cost basis recalculate after each move.
+            </div>
+            <table style={{ width: '100%', fontSize: '0.85rem', minWidth: '1020px' }}>
               <thead>
                 <tr>
                   <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Type</th>
                   <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Date</th>
+                  <th
+                    title="Execution order for buys and sells sharing this date. This order controls FIFO lot matching."
+                    style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}
+                  >Same-day Order</th>
                   <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Shares</th>
                   <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Price</th>
                   <th style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2 }}>Fees</th>
@@ -868,6 +909,11 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
               <tbody>
                 {transactions.map(txn => {
                   const isSell = (txn.transaction_type || 'BUY') === 'SELL'
+                  const sameDay = transactions.filter(item => (
+                    (item.transaction_date || '') === (txn.transaction_date || '')
+                    && item.profile_id === txn.profile_id
+                  ))
+                  const sameDayIndex = sameDay.findIndex(item => item.id === txn.id)
                   const amount = isSell
                     ? ((txn.shares || 0) * (txn.price_per_share || 0)) - (txn.fees || 0)
                     : ((txn.shares || 0) * (txn.price_per_share || 0)) + (txn.fees || 0)
@@ -883,6 +929,35 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
                         </div>
                       )}
                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                    </td>
+                    <td>
+                      {sameDay.length > 1 ? (
+                        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center', whiteSpace: 'nowrap' }}>
+                          <span style={{ minWidth: '1.5rem', textAlign: 'center', fontWeight: 700 }}>
+                            {sameDayIndex + 1}
+                          </span>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label={`Move transaction ${txn.id} earlier on ${txn.transaction_date || 'the undated group'}`}
+                            title="Move earlier on this date"
+                            disabled={sameDayIndex <= 0 || reorderingId != null}
+                            onClick={() => handleMoveTxn(txn, -1)}
+                            style={{ padding: '0.15rem 0.38rem', fontSize: '0.75rem' }}
+                          >↑</button>
+                          <button
+                            type="button"
+                            className="btn btn-secondary"
+                            aria-label={`Move transaction ${txn.id} later on ${txn.transaction_date || 'the undated group'}`}
+                            title="Move later on this date"
+                            disabled={sameDayIndex >= sameDay.length - 1 || reorderingId != null}
+                            onClick={() => handleMoveTxn(txn, 1)}
+                            style={{ padding: '0.15rem 0.38rem', fontSize: '0.75rem' }}
+                          >↓</button>
+                        </div>
+                      ) : (
+                        <span title="No other transaction for this ticker shares this date">-</span>
+                      )}
                     </td>
                     <td>{fmt(txn.shares, 3)}</td>
                     <td>

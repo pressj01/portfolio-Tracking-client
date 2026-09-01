@@ -169,6 +169,7 @@ class HoldingsTransactionTest(unittest.TestCase):
                 profile_id INTEGER,
                 transaction_type TEXT,
                 transaction_date TEXT,
+                sort_order INTEGER,
                 shares REAL,
                 price_per_share REAL,
                 fees REAL,
@@ -723,6 +724,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 profile_id INTEGER,
                 transaction_type TEXT,
                 transaction_date TEXT,
+                sort_order INTEGER,
                 shares REAL,
                 price_per_share REAL,
                 fees REAL,
@@ -848,6 +850,13 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         try:
             row = conn.execute(sql, params).fetchone()
             return row[0] if row else None
+        finally:
+            conn.close()
+
+    def _rows(self, sql, params=()):
+        conn = self._get_connection()
+        try:
+            return conn.execute(sql, params).fetchall()
         finally:
             conn.close()
 
@@ -2960,6 +2969,92 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             self._scalar("SELECT shares FROM transactions WHERE id = ?", (sell_id,)),
             5,
         )
+
+    def test_reorder_same_day_transactions_recalculates_fifo_cost_basis(self):
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('ABC', 1, 10, 30, 300, '2026-01-10')"
+        )
+        for txn_type, shares, price, sort_order in (
+            ("BUY", 10, 10, 1),
+            ("BUY", 10, 30, 2),
+            ("SELL", 10, 20, 3),
+        ):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, sort_order, shares, price_per_share, fees) "
+                "VALUES ('ABC', 1, ?, '2026-01-10', ?, ?, ?, 0)",
+                (txn_type, sort_order, shares, price),
+            )
+        conn = self._get_connection()
+        try:
+            _rollup_transactions("ABC", 1, conn)
+            conn.commit()
+        finally:
+            conn.close()
+        rows = self._rows("SELECT id FROM transactions ORDER BY sort_order, id")
+        buy_10_id, buy_30_id, sell_id = [row[0] for row in rows]
+
+        res = self.client.put(
+            "/api/holdings/ABC/transactions/order?profile_id=1",
+            json={"transaction_ids": [buy_30_id, buy_10_id, sell_id]},
+        )
+
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        self.assertAlmostEqual(
+            self._scalar("SELECT realized_gain FROM transactions WHERE id = ?", (sell_id,)),
+            -100.0,
+            places=2,
+        )
+        self.assertAlmostEqual(
+            self._scalar(
+                "SELECT purchase_value FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
+            ),
+            100.0,
+            places=2,
+        )
+        ordered_ids = [
+            row[0] for row in self._rows(
+                "SELECT id FROM transactions ORDER BY sort_order, id"
+            )
+        ]
+        self.assertEqual(ordered_ids, [buy_30_id, buy_10_id, sell_id])
+
+    def test_reorder_rejects_sale_before_same_day_purchase(self):
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('ABC', 1, 5, 12, 60, '2026-01-10')"
+        )
+        for txn_type, shares, price, sort_order in (
+            ("BUY", 10, 10, 1),
+            ("SELL", 10, 20, 2),
+            ("BUY", 5, 12, 3),
+        ):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, sort_order, shares, price_per_share, fees) "
+                "VALUES ('ABC', 1, ?, '2026-01-10', ?, ?, ?, 0)",
+                (txn_type, sort_order, shares, price),
+            )
+        ids = [
+            row[0] for row in self._rows(
+                "SELECT id FROM transactions ORDER BY sort_order, id"
+            )
+        ]
+
+        res = self.client.put(
+            "/api/holdings/ABC/transactions/order?profile_id=1",
+            json={"transaction_ids": [ids[1], ids[0], ids[2]]},
+        )
+
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("before enough shares have been bought", res.get_json()["error"])
+        saved_ids = [
+            row[0] for row in self._rows(
+                "SELECT id FROM transactions ORDER BY sort_order, id"
+            )
+        ]
+        self.assertEqual(saved_ids, ids)
 
     def test_delete_full_sale_restores_holding_from_remaining_buy_lot(self):
         self._execute(
