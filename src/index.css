@@ -3194,7 +3194,7 @@ th.col-drag-target {
 }
 .trs-decision {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
   gap: 0.7rem;
   margin-bottom: 0.9rem;
 }

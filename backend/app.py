@@ -15312,6 +15312,8 @@ def _distribution_frequency_code(value):
     text = re.sub(r"[^a-z]+", " ", str(value or "").lower()).strip()
     if "biweekly" in text or "bi weekly" in text:
         return "BW"
+    if "daily" in text or text == "day":
+        return "D"
     if "weekly" in text or text == "week":
         return "W"
     if "monthly" in text or text == "month":
@@ -25545,6 +25547,7 @@ def _research_expense_pct(*values):
 
 
 _RESEARCH_FREQUENCY_LABELS = {
+    "D": "Daily",
     "W": "Weekly",
     "M": "Monthly",
     "Q": "Quarterly",
@@ -25577,6 +25580,8 @@ def _research_dividend_frequency(dividends, ticker=None):
         for i in range(1, len(dates))
     )
     median_gap = gaps[len(gaps) // 2]
+    if median_gap <= 3:
+        return "Daily"
     if median_gap <= 10:
         return "Weekly"
     if median_gap <= 45:
@@ -26653,7 +26658,7 @@ def _fetch_xfunds_etf_profile(ticker, session=None, use_cache=True):
         "nav_label": "NAV",
         "inception_date": _xfunds_iso_date(_xfunds_map_value(fund_info, "fund inception", "inception")),
         "dividend_frequency": {
-            "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+            "D": "Daily", "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
             "SA": "Semi-Annual", "A": "Annual",
         }.get(frequency_code),
         "future_distribution_schedule": future_schedule,
@@ -27317,7 +27322,7 @@ def security_research(kind, ticker):
                 response["issuer"] = "Goldman Sachs"
             if official_snapshot.get("freq"):
                 response["dividend_frequency"] = {
-                    "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+                    "D": "Daily", "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
                     "SA": "Semi-Annual", "A": "Annual",
                 }.get(official_snapshot["freq"], response.get("dividend_frequency"))
             if official_snapshot.get("future_schedule"):
@@ -27338,7 +27343,7 @@ def security_research(kind, ticker):
                 dist_history_series = h
                 if official_snapshot.get("freq"):
                     response["dividend_frequency"] = {
-                        "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
+                        "D": "Daily", "W": "Weekly", "M": "Monthly", "Q": "Quarterly",
                         "SA": "Semi-Annual", "A": "Annual",
                     }.get(official_snapshot["freq"], response.get("dividend_frequency"))
                 try:

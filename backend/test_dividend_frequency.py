@@ -30,6 +30,17 @@ class DividendFrequencyTest(unittest.TestCase):
             "Annual/Irregular",
         )
 
+    def test_research_frequency_detects_daily_payments(self):
+        divs = _distributions([
+            "2026-08-24", "2026-08-25", "2026-08-26", "2026-08-27",
+            "2026-08-28", "2026-08-31", "2026-09-01",
+        ])
+
+        self.assertEqual(
+            app_module._research_dividend_frequency(divs, "DAIL"),
+            "Daily",
+        )
+
     def test_research_frequency_prefers_observed_spacing_after_launch(self):
         divs = _distributions([
             "2026-06-29", "2026-07-29", "2026-08-28",

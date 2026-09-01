@@ -3,6 +3,7 @@ import Plot from './ThemedPlot'
 import {
   distributionPeriodsPerYear,
   distributionYieldPeriodLabel,
+  formatDistributionFrequencyLabel,
 } from '../utils/distributionPeriod'
 import { annualDistributionEstimate } from '../utils/approxYield'
 import { getCurrencyLabel } from '../utils/money'
@@ -146,7 +147,8 @@ export default function DistributionHistoryChart({
     () => (showEstimatedYield ? estimateForwardYield(history, price, frequency) : null),
     [showEstimatedYield, history, price, frequency],
   )
-  const hasToolbar = toolbarStart || chart.canShowPct || source || showEstimatedYield
+  const frequencyLabel = formatDistributionFrequencyLabel(frequency, history)
+  const hasToolbar = toolbarStart || chart.canShowPct || source || showEstimatedYield || frequencyLabel
 
   return (
     <>
@@ -159,6 +161,11 @@ export default function DistributionHistoryChart({
               title={estimate ? `Estimated forward yield — ${estimate.basis}` : 'No distribution data'}
             >
               Est. Yield: <strong>{estimate ? `${estimate.yieldPct.toFixed(2)}%` : 'No data'}</strong>
+            </span>
+          )}
+          {frequencyLabel && (
+            <span className="etfc-est-yield" title="How often this security pays">
+              Frequency: <strong>{frequencyLabel}</strong>
             </span>
           )}
           {chart.canShowPct && (

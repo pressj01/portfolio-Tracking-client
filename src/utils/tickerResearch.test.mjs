@@ -6,6 +6,7 @@ import {
   closureCard,
   discountCard,
   distributionCoverageCard,
+  frequencyCard,
   navTrendCard,
 } from './tickerResearch.js'
 
@@ -53,6 +54,26 @@ test('distribution coverage prefers earnings cover, then NAV-return gap', () => 
   })
   assert.equal(gap.value, '+4.00 pp')
   assert.equal(gap.tone, 'bad')
+})
+
+test('distribution frequency card shows issuer cadence', () => {
+  const monthly = frequencyCard({ dividend_frequency: 'Monthly' })
+  assert.equal(monthly.value, 'Monthly')
+  assert.equal(monthly.label, 'Distribution frequency')
+
+  const daily = frequencyCard({ dividend_frequency: 'D' })
+  assert.equal(daily.value, 'Daily')
+
+  const inferred = frequencyCard({
+    distribution_history: [
+      { date: '2026-01-15', amount: 0.2 },
+      { date: '2026-02-14', amount: 0.2 },
+      { date: '2026-03-17', amount: 0.2 },
+    ],
+  })
+  assert.equal(inferred.value, 'Monthly')
+
+  assert.equal(frequencyCard(null, null).value, 'n/a')
 })
 
 test('closure risk maps ETF tiers', () => {

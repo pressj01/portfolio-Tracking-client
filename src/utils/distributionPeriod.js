@@ -11,13 +11,72 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
 }
 
+const FREQUENCY_DISPLAY_LABELS = {
+  d: 'Daily',
+  daily: 'Daily',
+  252: 'Daily',
+  w: 'Weekly',
+  weekly: 'Weekly',
+  52: 'Weekly',
+  m: 'Monthly',
+  monthly: 'Monthly',
+  12: 'Monthly',
+  q: 'Quarterly',
+  quarterly: 'Quarterly',
+  4: 'Quarterly',
+  sa: 'Semiannual',
+  'semi-annual': 'Semiannual',
+  'semi-annually': 'Semiannual',
+  semiannual: 'Semiannual',
+  semiannually: 'Semiannual',
+  2: 'Semiannual',
+  a: 'Annual',
+  annual: 'Annual',
+  annually: 'Annual',
+  yearly: 'Annual',
+  1: 'Annual',
+}
+
 const explicitPeriodLabel = (frequency) => {
   const value = String(frequency || '').trim().toLowerCase()
-  if (['w', 'weekly', '52', 'm', 'monthly', '12'].includes(value)) return 'Monthly'
+  // Daily and weekly funds still land in monthly buckets on the history chart.
+  if (['d', 'daily', '252', 'w', 'weekly', '52', 'm', 'monthly', '12'].includes(value)) return 'Monthly'
   if (['q', 'quarterly', '4'].includes(value)) return 'Quarterly'
   if (['sa', 'semiannual', 'semi-annually', 'semiannually', 'semi-annual', '2'].includes(value)) return 'Semiannual'
   if (['a', 'annual', 'annually', 'yearly', '1'].includes(value)) return 'Annual'
   return null
+}
+
+export const formatDistributionFrequencyLabel = (frequency, history = []) => {
+  const raw = String(frequency || '').trim()
+  if (raw) {
+    const key = raw.toLowerCase().replace(/[_]+/g, '-')
+    if (FREQUENCY_DISPLAY_LABELS[key]) return FREQUENCY_DISPLAY_LABELS[key]
+    if (key === 'annual/irregular' || key === 'annual / irregular') return 'Annual/Irregular'
+    return raw.replace(/\b\w/g, char => char.toUpperCase())
+  }
+
+  const dates = [...new Set(
+    (Array.isArray(history) ? history : [])
+      .map(item => Date.parse(item?.date))
+      .filter(Number.isFinite),
+  )].sort((a, b) => a - b)
+  if (dates.length < 2) return null
+
+  const gaps = []
+  for (let index = 1; index < dates.length; index += 1) {
+    const days = (dates[index] - dates[index - 1]) / 86400000
+    if (days > 0) gaps.push(days)
+  }
+  if (!gaps.length) return null
+
+  const medianGap = median(gaps)
+  if (medianGap <= 3) return 'Daily'
+  if (medianGap <= 10) return 'Weekly'
+  if (medianGap <= 45) return 'Monthly'
+  if (medianGap <= 115) return 'Quarterly'
+  if (medianGap <= 240) return 'Semiannual'
+  return 'Annual'
 }
 
 export const distributionPeriodsPerYear = (periodLabel) => ({

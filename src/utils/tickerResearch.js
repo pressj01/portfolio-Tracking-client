@@ -1,3 +1,5 @@
+import { formatDistributionFrequencyLabel } from './distributionPeriod.js'
+
 export const CHECKLIST_PATHS = {
   cef: '/cef-buying-checklist-evaluator',
   option_income: '/option-income-etf-evaluator',
@@ -105,6 +107,27 @@ export function navTrendCard(nav, loading = false) {
     value: overallScore == null ? (ratio == null ? (severity || 'n/a') : ratio.toFixed(2)) : `${overallSeverity} ${overallScore.toFixed(0)}`,
     detail: parts.join(' · ') || 'Benchmark-adjusted NAV coverage for this position.',
     tone,
+  }
+}
+
+export function frequencyCard(research, cef) {
+  const label = formatDistributionFrequencyLabel(
+    research?.dividend_frequency || cef?.distribution_frequency,
+    research?.distribution_history,
+  )
+  if (!label) {
+    return {
+      label: 'Distribution frequency',
+      value: 'n/a',
+      detail: 'No payment cadence is available yet.',
+      tone: 'muted',
+    }
+  }
+  return {
+    label: 'Distribution frequency',
+    value: label,
+    detail: `Pays on a ${label.toLowerCase()} schedule.`,
+    tone: 'muted',
   }
 }
 

@@ -33,6 +33,7 @@ import {
   closureCard,
   discountCard,
   distributionCoverageCard,
+  frequencyCard,
   navFromSeed,
   navTrendCard,
   num,
@@ -42,6 +43,7 @@ const METRIC_HELP = {
   'CEF discount': 'For closed-end funds, this is market price versus net asset value (NAV). A negative number means the fund trades below NAV at a discount; a positive number means a premium. It is not applicable to ordinary ETFs or stocks.',
   'NAV trend': 'When available, the large value is the Overall Verdict and 0–100 historical score, combining raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. It is not a forecast. The detail preserves each component: positive raw e means NAV ERODER regardless of benchmark, while benchmark coverage is lower-is-better with 0–0.25 Low, above 0.25–0.75 Medium, and above 0.75 High.',
   'Distribution coverage': 'Shows whether the payout is supported. CEFs use earnings coverage when available, otherwise distribution rate versus long-term NAV return. ETFs and stocks compare current yield with one-year total return. For percentage-point gaps, zero or negative is better.',
+  'Distribution frequency': 'How often this security pays: Daily, Weekly, Monthly, Quarterly, Semiannual, or Annual. Taken from the issuer when available, otherwise inferred from recent payment dates.',
   'Checklist score': 'The 0–100 composite from the buying checklist that matches this security type. Higher is better, but the detail also reports failed criteria so a strong average cannot hide a serious weak spot.',
   'Closure risk': 'An ETF viability estimate based on assets under management, expense ratio, estimated fee revenue, and fund age. It is a screening signal—not a closure announcement. This metric is not calculated for stocks or CEFs.',
 }
@@ -424,6 +426,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
     { card: discountCard(cef), href: kind === 'cef' ? links.closed_cef : null, hrefLabel: 'Closed CEF Information' },
     { card: navTrendCard(nav, navLoading), href: links.nav_erosion, hrefLabel: 'NAV Erosion' },
     { card: distributionCoverageCard(cef, researchWithReturn), href: kind === 'cef' ? links.closed_cef : links.research, hrefLabel: kind === 'cef' ? 'Closed CEF Information' : 'Security Research' },
+    { card: frequencyCard(researchWithReturn, cef), href: links.research, hrefLabel: 'Security Research' },
     { card: checklistCard(kind, checklist), href: links.checklist, hrefLabel: 'Open checklist' },
     { card: closureCard(research?.closure_risk || seed?.closure), href: links.research, hrefLabel: 'Security Research' },
   ]

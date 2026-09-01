@@ -7,6 +7,7 @@ import { returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { convertMoneyValue, formatMoney, formatMoneyCompact, getCurrencySymbol } from '../utils/money'
+import { formatDistributionFrequencyLabel } from '../utils/distributionPeriod'
 
 const fmtMoney = (v) => {
   if (v == null) return '-'
@@ -310,6 +311,10 @@ function ETFResult({ data, onOpenChart, return1y }) {
   const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
     ? `${data.target_yield_label || 'Estimated Yield'} (${data.yield_source})`
     : (data.target_yield_label || 'Estimated Yield')
+  const frequencyLabel = formatDistributionFrequencyLabel(
+    data.dividend_frequency,
+    data.distribution_history,
+  )
 
   const rvy = returnVsYield(return1y, data.estimated_yield_pct ?? data.sec_30_day_yield_pct)
 
@@ -321,7 +326,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
     [data.total_assets_label || 'Total Assets', fmtAssets(data.total_assets)],
     [data.nav_label || 'NAV', fmtMoney(data.nav_price)],
     ['Inception', fmtDate(data.inception_date)],
-    ['Dividend Frequency', data.dividend_frequency || '-'],
+    ['Distribution Frequency', frequencyLabel || '-'],
     [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
     ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvy?.color || 'var(--p-6f7890)' }} title={rvy ? `1Y Return ${rvy.totalReturnPct?.toFixed(2)}% vs Yield ${rvy.yieldOnCost?.toFixed(2)}% (spread ${rvy.spread?.toFixed(2)}%)` : undefined}>{rvy?.label || '-'}</span>],
@@ -425,9 +430,13 @@ function StockResult({ data, onOpenChart, return1y }) {
     ['Debt/Equity', fmtNum(data.debt_to_equity)],
   ]
   const rvyStock = returnVsYield(return1y, data.dividend_yield_pct)
+  const frequencyLabel = formatDistributionFrequencyLabel(
+    data.dividend_frequency,
+    data.distribution_history,
+  )
 
   const dividend = [
-    ['Dividend Frequency', data.dividend_frequency || '-'],
+    ['Distribution Frequency', frequencyLabel || '-'],
     ['Dividend Rate', fmtMoney(data.dividend_rate)],
     ['Dividend Yield', fmtPct(data.dividend_yield_pct)],
     ['1Y Ret vs Yield', return1y == null ? '-' : <span style={{ color: rvyStock?.color || 'var(--p-6f7890)' }} title={rvyStock ? `1Y Return ${rvyStock.totalReturnPct?.toFixed(2)}% vs Yield ${rvyStock.yieldOnCost?.toFixed(2)}% (spread ${rvyStock.spread?.toFixed(2)}%)` : undefined}>{rvyStock?.label || '-'}</span>],

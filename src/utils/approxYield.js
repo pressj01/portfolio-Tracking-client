@@ -5,6 +5,7 @@
 
 export function annualDistributionMultiplier(frequency, history) {
   const freq = String(frequency || '').trim().toLowerCase()
+  if (['d', 'daily', '252'].includes(freq)) return 252
   if (['w', 'weekly', '52'].includes(freq)) return 52
   if (['m', 'monthly', '12'].includes(freq)) return 12
   if (['q', 'quarterly', '4'].includes(freq)) return 4
@@ -17,6 +18,7 @@ export function annualDistributionMultiplier(frequency, history) {
     .sort((a, b) => b.dateValue - a.dateValue)
   if (dated.length < 2) return 4
   const gapDays = Math.abs(dated[0].dateValue - dated[1].dateValue) / (24 * 60 * 60 * 1000)
+  if (gapDays <= 3) return 252
   if (gapDays <= 10) return 52
   if (gapDays <= 45) return 12
   if (gapDays <= 115) return 4
@@ -44,8 +46,8 @@ export function annualDistributionEstimate(history, frequency) {
   // uninterrupted run at its current cadence; older quarterly payments would
   // otherwise dilute the estimate.
   let recentRun = distributions
-  if (multiplier === 52 || multiplier === 12) {
-    const [minGap, maxGap] = multiplier === 52 ? [3, 14] : [15, 45]
+  if (multiplier === 252 || multiplier === 52 || multiplier === 12) {
+    const [minGap, maxGap] = multiplier === 252 ? [0.5, 5] : multiplier === 52 ? [3, 14] : [15, 45]
     recentRun = [distributions[0]]
     for (let idx = 1; idx < distributions.length; idx += 1) {
       const gapDays = Math.abs(

@@ -3965,7 +3965,7 @@ function SecurityResearchHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>ETF Research Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Name &amp; Description</strong> summarizes the fund objective or description.</li>
-        <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, dividend frequency, estimated yield, SEC yield, <strong>1Y Ret vs Yield</strong>, TTM dividend per share, and source link when available.</li>
+        <li><strong>Metric grid</strong> shows issuer, category, legal type, expense ratio, total assets, NAV, inception date, <strong>Distribution Frequency</strong> (Daily, Weekly, Monthly, Quarterly, Semiannual, or Annual), estimated yield, SEC yield, <strong>1Y Ret vs Yield</strong>, TTM dividend per share, and source link when available.</li>
         <li><strong>Top Holdings</strong> lists the largest reported positions with weights.</li>
         <li><strong>Allocation</strong> displays sector or asset-class weights as horizontal bars.</li>
       </ul>
@@ -3975,7 +3975,7 @@ function SecurityResearchHelp() {
         <li><strong>Business Description</strong> gives a plain-language company summary.</li>
         <li><strong>Valuation</strong> includes price, market cap, enterprise value, beta, trailing and forward P/E, price/book, and price/sales.</li>
         <li><strong>Fundamentals</strong> includes revenue, revenue growth, margins, net income, free cash flow, and debt/equity.</li>
-        <li><strong>Dividends</strong> includes dividend frequency, rate, yield, <strong>1Y Ret vs Yield</strong>, payout ratio, TTM dividend per share, and last dividend when available.</li>
+        <li><strong>Dividends</strong> includes distribution frequency (Daily, Weekly, Monthly, Quarterly, Semiannual, or Annual), rate, yield, <strong>1Y Ret vs Yield</strong>, payout ratio, TTM dividend per share, and last dividend when available.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>1Y Return vs. Yield</h3>
@@ -4009,7 +4009,9 @@ function SecurityResearchHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Distribution History Chart</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Below the average return chart, a <strong>Distribution History</strong> bar chart shows recent dividend
-        or distribution payments for the looked-up ticker. When the chart is in <strong>Yield %</strong> mode,
+        or distribution payments for the looked-up ticker. The chart toolbar repeats the
+        <strong>Distribution Frequency</strong> (Daily, Weekly, Monthly, Quarterly, and so on) next to estimated yield.
+        When the chart is in <strong>Yield %</strong> mode,
         an <strong>Annual / Monthly</strong> toggle appears. <em>Monthly</em> shows the per-period yield
         (distribution ÷ price × 100). <em>Annual</em> uses the latest completed distribution cycle—such as
         four payments for a quarterly fund or twelve months for a monthly fund—so one unusually high or low
