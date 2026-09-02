@@ -25,8 +25,10 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
             CREATE TABLE categories (id INTEGER, name TEXT, profile_id INTEGER, sort_order INTEGER);
             CREATE TABLE ticker_categories (ticker TEXT, category_id INTEGER, profile_id INTEGER);
             CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker TEXT, transaction_type TEXT, transaction_date TEXT, shares REAL,
-                price_per_share REAL, fees REAL, realized_gain REAL, profile_id INTEGER
+                price_per_share REAL, fees REAL, realized_gain REAL, profile_id INTEGER,
+                sort_order INTEGER
             );
             CREATE TABLE dividend_payments (ticker TEXT, payment_date TEXT, amount REAL, profile_id INTEGER);
             INSERT INTO all_account_info VALUES ('AAA', 1, 8, 8, 12, '2024-01-02', NULL, 6);
@@ -146,8 +148,10 @@ class PortfolioGrowth2ApiTest(unittest.TestCase):
     def test_tracker_return_includes_fully_sold_historical_ticker(self):
         conn = sqlite3.connect(self.db_path)
         conn.executemany(
-            """INSERT INTO transactions
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO transactions (
+                   ticker, transaction_type, transaction_date, shares,
+                   price_per_share, fees, realized_gain, profile_id
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 ("SOLD", "BUY", "2023-01-02", 1, 100, 0, None, 6),
                 ("SOLD", "SELL", "2023-01-03", 1, 50, 0, -50, 6),

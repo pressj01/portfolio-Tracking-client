@@ -134,6 +134,10 @@ class TickerResearchApiTest(unittest.TestCase):
         conn.execute(
             "INSERT INTO profiles (id, name, include_in_owner) VALUES (6, 'Broker IRA', 1)"
         )
+        # Owner became opt-in, so a fresh database leaves profile 1 inactive and
+        # rolling nothing up. This case is about Owner reading through to a
+        # member's transaction, so it has to be switched on the way a user does.
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
         conn.execute(
             """INSERT INTO all_account_info (
                    ticker, profile_id, description, quantity, price_paid,
