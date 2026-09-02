@@ -9,6 +9,7 @@ let mainWindow
 let flaskProcess
 let backendInstanceToken
 let startupLogPath
+const backendOutputTail = []
 app.setAppUserModelId('com.press.portfolio.tracker.client')
 
 function initializeStartupLog() {
@@ -38,6 +39,16 @@ function logStartup(message, { error = false } = {}) {
     fs.appendFileSync(startupLogPath, `[${new Date().toISOString()}] ${text}\n`, 'utf8')
   } catch (logError) {
     console.error(`Unable to write startup log: ${logError.message}`)
+  }
+}
+
+function recordBackendOutput(chunk) {
+  // Keep a bounded tail of whatever the backend printed. When it dies during
+  // startup its last lines are the only evidence of why, and the failure
+  // dialog reads them to say something better than "exited with code 1".
+  backendOutputTail.push(String(chunk))
+  while (backendOutputTail.length > 60) {
+    backendOutputTail.shift()
   }
 }
 
@@ -136,8 +147,14 @@ function startFlask() {
     detached: process.platform !== 'win32',  // Create new process group on macOS/Linux for clean tree kill
   })
 
-  flaskProcess.stdout.on('data', (data) => logStartup(`Backend: ${data}`))
-  flaskProcess.stderr.on('data', (data) => logStartup(`Backend: ${data}`, { error: true }))
+  flaskProcess.stdout.on('data', (data) => {
+    recordBackendOutput(data)
+    logStartup(`Backend: ${data}`)
+  })
+  flaskProcess.stderr.on('data', (data) => {
+    recordBackendOutput(data)
+    logStartup(`Backend: ${data}`, { error: true })
+  })
   flaskProcess.on('error', (err) => logStartup(`Failed to start backend: ${err.message}`, { error: true }))
   flaskProcess.on('exit', (code) => logStartup(`Backend exited with code: ${code}`))
 }
@@ -242,6 +259,38 @@ function killFlask() {
   }
 }
 
+// Windows Code Integrity — Smart App Control on personal PCs, a WDAC policy on
+// managed ones — refuses to load binaries it has neither a trusted signature
+// nor a reputation for, and the backend's compiled Python extensions are the
+// first ones it meets. The block surfaces as an ordinary ImportError, so
+// without this the dialog blames the application for a decision Windows made.
+const APPLICATION_CONTROL_BLOCK = /Application Control policy|blocked this file/i
+
+function describeStartupFailure(message) {
+  if (!APPLICATION_CONTROL_BLOCK.test(backendOutputTail.join(''))) {
+    return message
+  }
+
+  return [
+    'Windows blocked part of this application from loading.',
+    '',
+    'Smart App Control, or an Application Control policy set by your IT',
+    'administrator, refused one of the backend files. The installation is not',
+    'damaged, and reinstalling will not change the decision.',
+    '',
+    'The blocked file is named in Event Viewer, under Applications and',
+    'Services Logs > Microsoft > Windows > CodeIntegrity > Operational.',
+    '',
+    'On a personal PC, Smart App Control can be turned off in Windows Security',
+    '> App & browser control. Be aware that Windows does not allow it to be',
+    'turned back on afterwards without reinstalling Windows.',
+    '',
+    'On a work PC, your IT administrator has to allow the application.',
+    '',
+    `Underlying error: ${message}`,
+  ].join('\n')
+}
+
 app.whenReady().then(async () => {
   initializeStartupLog()
   killStaleBackends()
@@ -257,7 +306,7 @@ app.whenReady().then(async () => {
     logStartup(err.message, { error: true })
     dialog.showErrorBox(
       'Portfolio Tracking Client could not start',
-      `${err.message}\n\nDiagnostic log:\n${logLocation}`,
+      `${describeStartupFailure(err.message)}\n\nDiagnostic log:\n${logLocation}`,
     )
     killFlask()
     app.quit()

@@ -80,6 +80,32 @@ jobs:
             Write-Host "$file signed by $($signature.SignerCertificate.Subject)"
           }
 
+          # Signing only the .exe files is not enough. Smart App Control and
+          # enterprise WDAC policies check every binary as it is loaded, and on
+          # a user's PC they blocked the backend's unsigned pandas extension:
+          # the signed backend.exe started, then died importing pandas. Every
+          # native module PyInstaller collects has to carry a signature too.
+          $backendDir = "release\win-unpacked\resources\flask-backend"
+          $natives = Get-ChildItem -Path $backendDir -Recurse -Include *.pyd, *.dll -File
+          if ($natives.Count -lt 50) {
+            throw "Expected the bundled backend to carry its native modules; found $($natives.Count) under $backendDir."
+          }
+
+          $unsigned = foreach ($native in $natives) {
+            $status = (Get-AuthenticodeSignature -FilePath $native.FullName).Status
+            if ($status -ne "Valid") {
+              "$($native.FullName) [$status]"
+            }
+          }
+
+          if ($unsigned) {
+            Write-Host "Bundled backend binaries without a valid signature:"
+            $unsigned | ForEach-Object { Write-Host "  $_" }
+            throw "$($unsigned.Count) bundled backend binaries are not validly signed."
+          }
+
+          Write-Host "All $($natives.Count) bundled backend binaries are signed."
+
       - name: Smoke test packaged Windows app
         shell: powershell
         run: |
