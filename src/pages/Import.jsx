@@ -16,6 +16,7 @@ import {
   formatImportDetail,
   formatLabel,
   isPinnableFormat,
+  isRollupImportTarget,
   isSnowballFormat,
   brokerById,
   brokerIdFromSource,
@@ -574,20 +575,21 @@ export default function Import() {
     return () => { cancelled = true }
   }, [selection, loadBackups, loadDataStats])
 
-  // A positions file describes one brokerage account, so it needs a regular
-  // account as its destination. Owner and aggregates are always rollups. Only
-  // an All-Accounts format is exempt because each file block names its own
-  // regular target.
+  // Owner can hold a single account in older databases. Only treat it as a
+  // rollup when other portfolios actually feed it, regardless of its name.
   const ownerSourceCount = useMemo(
-    () => profiles.filter(p => p.id !== 1 && p.include_in_owner).length,
+    () => profiles.filter(p => Number(p.id) !== 1 && p.include_in_owner).length,
     [profiles],
   )
   const currentProfile = useMemo(
     () => profiles.find(p => Number(p.id) === Number(profileId)) || null,
     [profiles, profileId],
   )
-  const isOwnerRollup = !isAggregate && !!currentProfile?.is_owner
-  const isRollupTarget = isAggregate || isOwnerRollup
+  const isRollupTarget = isRollupImportTarget({
+    profile: currentProfile,
+    ownerSourceCount,
+    isAggregate,
+  })
 
   const workflow = useMemo(() => describeWorkflow(txnFormat), [txnFormat])
   const txnIsMultiTransactionFormat = MULTI_ACCOUNT_FORMATS.has(txnFormat) && workflow.role === 'transactions'

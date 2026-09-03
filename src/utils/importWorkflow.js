@@ -224,6 +224,11 @@ export function formatForAccountSelection({
   return fallbackFormat
 }
 
+export function isRollupImportTarget({ profile, ownerSourceCount = 0, isAggregate = false } = {}) {
+  const isOwner = profile?.is_owner ?? Number(profile?.id) === 1
+  return isAggregate || (Boolean(isOwner) && ownerSourceCount > 0)
+}
+
 export function needsPositionsSnapshotFirst(format) {
   return TRANSACTION_FORMATS.has(String(format || '').trim())
 }

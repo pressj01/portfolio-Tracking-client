@@ -4,6 +4,7 @@ import { useDialog } from '../components/DialogProvider'
 import { API_BASE } from '../config'
 import { clearDashboardCacheForSelection } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
+import { isRollupImportTarget } from '../utils/importWorkflow'
 import { cashRowStamp, cashRowTitle, cashDriftLine, cashDriftTitle } from '../utils/cashSnapshot'
 
 const BROKER_OPTIONS = [
@@ -498,7 +499,7 @@ export default function ManagePortfolios() {
         <summary>What is the optional Owner account?</summary>
         <div className="tracker-help-footer">
           <p>
-            <strong>Owner is a rollup, not a broker.</strong> It combines the regular brokerage
+            <strong>Owner combines its member accounts.</strong> It combines the regular brokerage
             accounts you check in the Owner column and shows their holdings, income, cash, and
             supported history together. Schwab, Fidelity, E*TRADE, Interactive Brokers, Shear
             Group, and manual accounts can all be members.
@@ -506,7 +507,8 @@ export default function ManagePortfolios() {
           <ul>
             <li>Create each brokerage account normally and import only that account&apos;s files into it.</li>
             <li>Click <strong>Create Owner</strong> when you want the rollup, then check any user-owned accounts to include.</li>
-            <li>Owner is never an import destination and has no broker source or cash balance of its own.</li>
+            <li>When Owner has members, import each account&apos;s files into that account. Owner combines their balances.</li>
+            <li>If Owner has no members and holds your single account, set its broker source and use the single-account import. The portfolio name does not require an All Accounts file.</li>
             <li>The Show checkbox can hide Owner from the selector without deleting it.</li>
             <li>To delete Owner, first uncheck every member. Deleting Owner never deletes its brokerage accounts.</li>
           </ul>
@@ -619,7 +621,7 @@ export default function ManagePortfolios() {
           {summary.map((p, index) => (
             <tr key={p.id}>
               <td>
-                {p.is_owner ? (
+                {isRollupImportTarget({ profile: p, ownerSourceCount: ownerMemberCount }) ? (
                   <span title="Owner is a rollup identity and cannot be renamed">
                     <strong>Owner</strong>
                     {p.name !== 'Owner' && (
@@ -653,7 +655,7 @@ export default function ManagePortfolios() {
                 )}
               </td>
               <td>
-                {p.is_owner ? (
+                {isRollupImportTarget({ profile: p, ownerSourceCount: ownerMemberCount }) ? (
                   <span title="Owner combines brokerage accounts and is not tied to a broker">Rollup — no broker</span>
                 ) : <select
                   value={editingId === p.id ? editBrokerSource : (p.broker_source || '')}

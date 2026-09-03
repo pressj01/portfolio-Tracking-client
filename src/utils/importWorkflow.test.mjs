@@ -16,6 +16,7 @@ import {
   isSnowballFormat,
   workflowStepForFormat,
   isPinnableFormat,
+  isRollupImportTarget,
 } from './importWorkflow.js'
 
 test('keeps the 21 brokerage import formats', () => {
@@ -174,6 +175,47 @@ test('an untagged account never inherits an all-accounts destination', () => {
     brokerSource: '',
     fallbackFormat: 'fidelity_transactions',
   }), 'fidelity_transactions')
+})
+
+test('a standalone Owner or All Accounts portfolio can use every single-broker import', () => {
+  for (const name of ['Owner', 'All Accounts']) {
+    // Include the older API shape without is_owner as well.
+    for (const profile of [{ id: 1, name, is_owner: 1 }, { id: '1', name }]) {
+      const isRollup = isRollupImportTarget({ profile, ownerSourceCount: 0 })
+      assert.equal(isRollup, false)
+      for (const broker of IMPORT_BROKERS) {
+        assert.equal(formatForAccountSelection({
+          brokerSource: broker.source,
+          fallbackFormat: broker.positionsMultiFormat,
+          isRollup,
+        }), broker.positionsFormat)
+        assert.equal(formatForWorkflow({
+          brokerId: broker.id,
+          role: 'transactions',
+          schwabAllAccounts: isRollup,
+        }), broker.transactionsFormat)
+      }
+    }
+  }
+})
+
+test('Owner requires account routing only when it has member portfolios', () => {
+  const profile = { id: 1, name: 'All Accounts', is_owner: 1 }
+  for (const ownerSourceCount of [1, 2]) {
+    assert.equal(isRollupImportTarget({ profile, ownerSourceCount }), true)
+  }
+  assert.equal(isRollupImportTarget({
+    profile: { id: 2, name: 'Owner', is_owner: 0 },
+    ownerSourceCount: 2,
+  }), false)
+  assert.equal(isRollupImportTarget({
+    profile: { id: 3, name: 'All Accounts', is_owner: 0 },
+    ownerSourceCount: 2,
+  }), false)
+})
+
+test('an explicit aggregate selection still requires account routing', () => {
+  assert.equal(isRollupImportTarget({ isAggregate: true }), true)
 })
 
 test('transaction formats need a positions snapshot first', () => {

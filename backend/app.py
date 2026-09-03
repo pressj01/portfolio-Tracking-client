@@ -3063,7 +3063,7 @@ def _reject_rollup_import_target(action):
     """Block an import whose destination is a rollup rather than one account.
 
     Covers both rollup shapes: an explicit aggregate selection, and Owner when
-    Owner is fed by more than one account. A positions file describes a single
+    Owner is fed by any member accounts. A positions file describes a single
     brokerage account, so writing it to a rollup would load one account's
     holdings over the combined view. The exception is a multi-account format
     (such as `schwab_all_accounts` or `fidelity_all_accounts`), which names its
@@ -3075,14 +3075,12 @@ def _reject_rollup_import_target(action):
         return blocked
     if get_profile_id() != 1:
         return None
-    return jsonify({
-        "error": (
-            f"{action} needs a regular brokerage account, but Owner is a rollup. "
-            "Create or select the underlying brokerage portfolio instead, or use "
-            "a supported All Accounts file, which routes each account to its own "
-            "regular portfolio."
-        )
-    }), 400
+    conn = get_connection()
+    try:
+        error = _owner_import_target_error(1, conn)
+    finally:
+        conn.close()
+    return (jsonify({"error": error}), 400) if error else None
 
 
 def get_profile_filter():
@@ -5479,6 +5477,38 @@ def _snapshot_nav_after_multi_profile_update(profile_ids, nav_date=None):
         snapshot_nav(pid, nav_date=nav_date)
 
 
+def _owner_import_target_error(profile_id, conn):
+    """Allow standalone Owner imports, but never overwrite a member rollup."""
+    if profile_id != 1:
+        return None
+    if not _owner_profile_is_active(conn):
+        return "Owner has not been created. Select a brokerage portfolio first."
+    if _get_owner_source_profile_ids(conn):
+        return (
+            "Owner is a rollup of its member accounts. Select the underlying "
+            "brokerage portfolio for a single-account import, or use a supported "
+            "All Accounts file to route each account to its own portfolio."
+        )
+    return None
+
+
+def _preserve_standalone_owner_import(profile_id, conn=None):
+    """A direct import replaces any old rollup snapshot with standalone data."""
+    if profile_id != 1:
+        return
+    close = conn is None
+    if close:
+        conn = get_connection()
+    try:
+        if _owner_import_target_error(profile_id, conn) is None:
+            conn.execute("DELETE FROM settings WHERE key = 'owner_rollup_snapshot'")
+            if close:
+                conn.commit()
+    finally:
+        if close:
+            conn.close()
+
+
 def _broker_import_target_error(profile_id, fmt, conn):
     """Return an error message when broker/Snowball imports should be blocked."""
     if _request_aggregate_id() is not None:
@@ -5487,11 +5517,9 @@ def _broker_import_target_error(profile_id, fmt, conn):
             "Select a specific source portfolio first."
         )
 
-    if profile_id == 1:
-        return (
-            "Broker and Snowball imports cannot be imported into Owner. Owner is a rollup, "
-            "not a brokerage account. Create or select the underlying brokerage portfolio instead."
-        )
+    owner_error = _owner_import_target_error(profile_id, conn)
+    if owner_error:
+        return owner_error
 
     selected_broker = _profile_broker_source(profile_id, conn)
     import_broker = _broker_source_for_import(fmt)
@@ -7036,6 +7064,7 @@ def _import_snowball_categories(parsed, profile_id):
             elif result.get("assignment_preserved"):
                 stats["assignments_preserved"] += 1
 
+        _preserve_standalone_owner_import(profile_id, conn)
         conn.commit()
         summary = parsed.get("summary") or {}
         created = stats["categories_created"]
@@ -7192,8 +7221,8 @@ def holdings_dividend_growth():
 def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
-    Only runs if the Owner import has been used (owner_import_used setting).
-    Syncs quantities, prices, yield, and income fields while preserving
+    Runs for active Owner portfolios with member accounts. Syncs quantities,
+    prices, yield, and income fields while preserving
     Owner-only data (ytd_divs, total_divs_received, paid_for_itself,
     current_month_income).
     """
@@ -7213,25 +7242,22 @@ def _auto_reconcile_owner():
     rows = conn.execute("SELECT id FROM profiles WHERE id != ? AND include_in_owner = 1", (owner_id,)).fetchall()
     source_ids = [r["id"] if isinstance(r, dict) else r[0] for r in rows]
     if not source_ids:
-        owner_row = conn.execute(
-            "SELECT broker_source FROM profiles WHERE id = 1"
+        # No members does not mean the data is disposable: legacy single-account
+        # installations can store all holdings in Owner without a broker tag.
+        # Clear only a snapshot that this reconciliation actually produced.
+        rollup_snapshot = conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'owner_rollup_snapshot' AND value = 'true'"
         ).fetchone()
-        owner_broker = (
-            owner_row["broker_source"] if isinstance(owner_row, dict)
-            else owner_row[0] if owner_row
-            else ""
-        )
-        # A user-created Owner has no broker source and owns no direct data.
-        # Once its last member is removed, clear the now-invalid rollup snapshot
-        # so an empty Owner cannot continue displaying yesterday's members.
-        # Legacy profile-1 broker accounts are left alone until the user
-        # explicitly deletes or migrates them.
-        if not str(owner_broker or "").strip():
+        if rollup_snapshot:
             _clear_profile_data(conn, owner_id)
+            conn.execute("DELETE FROM settings WHERE key = 'owner_rollup_snapshot'")
             conn.commit()
         conn.close()
         return
 
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('owner_rollup_snapshot', 'true')"
+    )
     placeholders = ",".join("?" * len(source_ids))
 
     # Aggregate holdings from source portfolios
@@ -7481,15 +7507,15 @@ def update_profile(pid):
         if not _owner_profile_is_active(conn):
             conn.close()
             return jsonify({"error": "Owner has not been created"}), 404
-        # Owner is a rollup identity, never a brokerage destination. Keeping
-        # both fields fixed prevents it from masquerading as the first broker
-        # account again.
-        conn.execute(
-            "UPDATE profiles SET name = 'Owner', broker_source = '' WHERE id = 1"
-        )
-        conn.commit()
-        conn.close()
-        return jsonify({"id": 1, "name": "Owner", "broker_source": ""})
+        if _get_owner_source_profile_ids(conn):
+            # A member rollup has no broker of its own. A standalone legacy
+            # Owner can set its broker just like any other single account.
+            conn.execute(
+                "UPDATE profiles SET name = 'Owner', broker_source = '' WHERE id = 1"
+            )
+            conn.commit()
+            conn.close()
+            return jsonify({"id": 1, "name": "Owner", "broker_source": ""})
     if "broker_source" in data:
         broker_source = (data.get("broker_source") or "").strip()
         conn.execute(
@@ -7638,7 +7664,7 @@ def delete_profile(pid):
             )
             conn.execute(
                 "DELETE FROM settings WHERE key IN "
-                "('owner_import_used', 'schwab_import_default_destinations')"
+                "('owner_import_used', 'owner_rollup_snapshot', 'schwab_import_default_destinations')"
             )
         else:
             conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
@@ -8649,6 +8675,8 @@ def api_import_excel():
             # Mark owner import as used
             conn2 = get_connection()
             conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
+            if any(r["profile_id"] == 1 and r["rows"] > 0 for r in results):
+                _preserve_standalone_owner_import(1, conn2)
             conn2.commit()
             conn2.close()
             # Auto-reconcile Owner quantities from sub-profiles
@@ -8675,6 +8703,7 @@ def api_import_excel():
             # Mark owner import as used
             conn2 = get_connection()
             conn2.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ("owner_import_used", "true"))
+            _preserve_standalone_owner_import(profile_id, conn2)
             conn2.commit()
             conn2.close()
             # Auto-reconcile Owner quantities from sub-profiles
@@ -8730,6 +8759,8 @@ def api_import_generic():
                     if not as_txns:
                         _rerollup_after_import(pid)
             total = sum(r["rows"] for r in results)
+            if any(r["profile_id"] == 1 and r["rows"] > 0 for r in results):
+                _preserve_standalone_owner_import(1)
             # Auto-reconcile Owner quantities from sub-profiles
             _auto_reconcile_owner()
             _snapshot_nav_after_multi_profile_update(
@@ -8742,6 +8773,7 @@ def api_import_generic():
             pre_snap = _snapshot_positions(profile_id) if as_txns else None
             df = pd.read_excel(path, engine="openpyxl")
             count, msg = import_from_upload(df, profile_id)
+            _preserve_standalone_owner_import(profile_id)
             if as_txns:
                 _import_as_transactions(profile_id, pre_snap)
             populate_holdings(profile_id)
@@ -9455,6 +9487,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
                     (total, ytd, total, "portfolio_export", ticker, profile_id),
                 )
 
+        for pid in dict.fromkeys(imported_profiles):
+            _preserve_standalone_owner_import(pid, conn)
         conn.commit()
     finally:
         conn.close()
@@ -9800,6 +9834,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 source=parsed.get("source_format") or "positions_import",
             )
 
+        _preserve_standalone_owner_import(profile_id, conn)
         conn.commit()
 
         # Run normalize passes
@@ -10597,6 +10632,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                 (total, ytd, total, fmt, ticker, profile_id),
             )
 
+        _preserve_standalone_owner_import(profile_id, conn)
         conn.commit()
 
         # Run standard post-import chain
