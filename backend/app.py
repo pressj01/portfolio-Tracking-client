@@ -56188,7 +56188,7 @@ def _cef_normalize_row(row):
         "return_on_nav_ytd": _cef_value(row, "YTDRetOnNav"),
         "return_on_price_ytd": _cef_value(row, "YTDRetOnPrice"),
         "leverage_ratio": _cef_value(row, "LeverageRatioPercentage"),
-        "is_leveraged": bool(row.get("IsLeveraged")),
+        "is_leveraged": row.get("IsLeveraged") if isinstance(row.get("IsLeveraged"), bool) else None,
         "market_cap_usd_m": _cef_value(row, "MarketCapUSDm"),
         "total_assets_usd_m": _cef_value(row, "TotalAssetsUSDm"),
         "expense_ratio": _cef_value(row, "ExpenseRatio"),

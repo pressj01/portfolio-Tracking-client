@@ -6,15 +6,16 @@ import { formatMoney } from '../utils/money'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   DEFAULT_THRESHOLDS,
-  BEST_PRACTICE,
+  mergeThresholds,
+  leverageProfile,
+  MIN_COMPARABLE_PEERS,
+  MAX_LEVERAGE_GAP_PP,
   gradeFund,
   findAlternatives,
   verdictFromComposite,
-  detectFundTheme,
-  fundMatchesTheme,
 } from '../utils/cefGrading'
 
-const STORAGE_KEY = 'cefChecklistThresholds.v1'
+const STORAGE_KEY = 'cefChecklistThresholds.v2'
 
 const QUESTION_DETAILS = {
   1: [
@@ -33,11 +34,13 @@ const QUESTION_DETAILS = {
     'Premiums are warnings — you’re paying more than the portfolio is worth.',
   ],
   4: [
-    'Regulatory leverage is capped at 50% for bond funds, 33% for equity funds. Funds near those limits have less cushion.',
+    'The 30% / 35% defaults are application risk screens. Regulatory limits depend on the financing instrument, not simply whether a fund holds bonds or equities.',
     'Type of leverage (preferred shares vs. credit facility vs. reverse repos) behaves differently in stress.',
   ],
   5: [
     'Total expense ratio includes management fees, administration, and the interest cost of leverage.',
+    'The peer median uses the same category, strategy and similar leverage amounts. The average is shown separately for context.',
+    'A leverage pass concerns the amount borrowed; expenses concern its cost. Check borrowing terms and operating fees in the fund report.',
     'A higher-fee fund must deliver superior NAV total return to justify the cost.',
   ],
   6: [
@@ -52,16 +55,10 @@ const QUESTION_DETAILS = {
 
 function loadThresholds() {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(STORAGE_KEY) || window.localStorage.getItem('cefChecklistThresholds.v1')
     if (!raw) return DEFAULT_THRESHOLDS
     const parsed = JSON.parse(raw)
-    return {
-      sustainability: { ...DEFAULT_THRESHOLDS.sustainability, ...(parsed.sustainability || {}) },
-      discount:       { ...DEFAULT_THRESHOLDS.discount,       ...(parsed.discount || {}) },
-      leverage:       { ...DEFAULT_THRESHOLDS.leverage,       ...(parsed.leverage || {}) },
-      expense:        { ...DEFAULT_THRESHOLDS.expense,        ...(parsed.expense || {}) },
-      liquidity:      { ...DEFAULT_THRESHOLDS.liquidity,      ...(parsed.liquidity || {}) },
-    }
+    return mergeThresholds(parsed)
   } catch {
     return DEFAULT_THRESHOLDS
   }
@@ -79,7 +76,16 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
   const key = criterion.key
   const t = thresholds[key]
   const update = (patch) => {
-    const next = { ...thresholds, [key]: { ...t, ...patch } }
+    const value = Object.values(patch)[0]
+    if (!Number.isFinite(value) || (key !== 'discount' && value < 0)) return
+    const nextBand = { ...t, ...patch }
+    const [passKey, warnKey] = key === 'sustainability' ? ['passPp', 'warnPp']
+      : key === 'discount' ? ['passPremium', 'warnPremium']
+      : key === 'expense' ? ['passMultiple', 'warnMultiple']
+      : key === 'liquidity' ? ['passDollars', 'warnDollars'] : ['passPct', 'warnPct']
+    if (key === 'expense' && value === 0) return
+    if (key === 'liquidity' ? nextBand[passKey] < nextBand[warnKey] : nextBand[passKey] > nextBand[warnKey]) return
+    const next = { ...thresholds, [key]: nextBand }
     onChange(next)
   }
 
@@ -145,16 +151,16 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
     controls = (
       <>
         <div>
-          <label style={labelStyle}>Pass if ≤ (%)</label>
-          <input type="number" step="0.05" style={inputStyle}
-            value={t.passPct}
-            onChange={e => update({ passPct: Number(e.target.value) })} />
+          <label style={labelStyle}>Pass if ≤ (× peer median)</label>
+          <input aria-label="Expense pass multiple" type="number" min="0.05" step="0.05" style={inputStyle}
+            value={t.passMultiple}
+            onChange={e => update({ passMultiple: Number(e.target.value) })} />
         </div>
         <div>
-          <label style={labelStyle}>Fail if &gt; (%)</label>
-          <input type="number" step="0.05" style={inputStyle}
-            value={t.warnPct}
-            onChange={e => update({ warnPct: Number(e.target.value) })} />
+          <label style={labelStyle}>Fail if &gt; (× peer median)</label>
+          <input aria-label="Expense fail multiple" type="number" min="0.05" step="0.05" style={inputStyle}
+            value={t.warnMultiple}
+            onChange={e => update({ warnMultiple: Number(e.target.value) })} />
         </div>
       </>
     )
@@ -185,7 +191,7 @@ function ThresholdEditor({ criterion, thresholds, onChange }) {
     }}>
       {controls}
       <div style={{ flex: 1, minWidth: 220, color: 'var(--p-8aa0c8)', fontSize: '0.82rem', lineHeight: 1.5 }}>
-        <strong style={{ color: 'var(--teal-2)' }}>Best practice:</strong> {criterion.threshold.bestPractice}
+        <strong style={{ color: 'var(--teal-2)' }}>Default rationale:</strong> {criterion.threshold.bestPractice}
       </div>
     </div>
   )
@@ -199,7 +205,7 @@ function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span className="cef-guide-number">{c.id}</span>
           <span className="cef-guide-question" style={{ flex: 1 }}>{c.question}</span>
-          <span className={`stock-check-badge tone-${c.badge}`}>{c.badge}</span>
+          <span className={`stock-check-badge tone-${c.badge}`}>{c.badge === 'info' ? 'Not scored' : c.badge}</span>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.6rem 1.2rem', paddingLeft: 42, color: 'var(--p-b8c8e0)' }}>
@@ -214,6 +220,26 @@ function CriterionCard({ criterion, thresholds, onChangeThresholds }) {
         <div style={{ paddingLeft: 42, color: 'var(--p-cfd8e3)', fontSize: '0.9rem', lineHeight: 1.5 }}>
           {c.rationale}
         </div>
+
+        {c.comparison && (
+          <details style={{ paddingLeft: 42, color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
+            <summary style={{ cursor: 'pointer', color: 'var(--teal-2)' }}>Which peers were used?</summary>
+            <p>The selected fund is excluded. Only peers with the required metric contribute to this benchmark.</p>
+            {c.comparison.members.length ? (
+              <div className="stock-check-table-wrap">
+                <table className="stock-check-table" style={{ minWidth: 0, width: '100%' }}>
+                  <thead><tr><th>Peer</th><th>Leverage</th><th>{c.comparison.metric}</th></tr></thead>
+                  <tbody>{c.comparison.members.map(peer => (
+                    <tr key={peer.ticker}>
+                      <td><Link to={`/closed-cef-info/${peer.ticker}`}>{peer.ticker}</Link></td>
+                      <td>{fmtPct(peer.leverage)}</td><td>{fmtPct(peer.value)}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            ) : <p>No peers with usable data.</p>}
+          </details>
+        )}
 
         {(QUESTION_DETAILS[c.id] || []).length > 0 && (
           <details style={{ paddingLeft: 42, color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>
@@ -257,28 +283,74 @@ function HeaderCard({ fund }) {
   )
 }
 
-function AlternativesList({ alternatives, peerCount, groupLabel, themed }) {
-  if (!groupLabel) return null
-  const heading = themed
-    ? `Better ${groupLabel} alternatives`
-    : `Better alternatives in the ${groupLabel} category`
-  const blurb = themed
-    ? `Other ${groupLabel}s scoring higher on the composite of all 7 criteria. ${peerCount} same-sector peers screened.`
-    : `Funds in the same category scoring higher on the composite of all 7 criteria. ${peerCount} peers screened.`
-  const emptyMsg = themed
-    ? `No higher-scoring ${groupLabel}s found.`
-    : 'No higher-scoring alternatives found in this category.'
+function GradingHelp() {
+  return (
+    <details style={{ margin: '0.8rem 0 1rem', padding: '0.8rem 1rem', background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, color: 'var(--p-b8c8e0)', lineHeight: 1.6 }}>
+      <summary style={{ cursor: 'pointer', color: 'var(--teal-2)', fontWeight: 600 }}>How grading works and why these defaults?</summary>
+      <p>The defaults are application screening heuristics, not industry standards, regulatory limits, or a backtested prediction of returns.
+        They express preferences for distribution coverage, valuation, moderate leverage, comparable costs and trading capacity.
+        Edit the thresholds to reflect your goals; saved changes remain in this browser.</p>
+      <div className="stock-check-table-wrap">
+        <table className="stock-check-table" style={{ minWidth: 0, width: '100%' }}>
+          <thead><tr><th>Check</th><th>Default method and rationale</th></tr></thead>
+          <tbody>
+            <tr><td>Portfolio fit</td><td>Informational. Category, strategy and income needs require your judgment and contribute no points.</td></tr>
+            <tr><td>Distribution sustainability</td><td>Subtract annualized 5Y NAV total return (3Y if 5Y is missing) from the distribution rate on NAV. Pass through a 1 percentage point gap, warn through 3, fail above 3 before UNII adjustments. The gap screens for payouts outpacing past returns; it does not establish the source of distributions. Positive UNII adds 10 points; UNII below −$0.05/share subtracts 10. UNII is accumulated income, not proof of current coverage. Earnings/payment coverage is not scored because the feed does not align reporting periods.</td></tr>
+            <tr><td>Discount / premium</td><td>Pass at or below NAV (0% premium), warn through a 5% premium, fail above 5% before history adjustments. This expresses a preference for buying assets below NAV. A 1Y z-score ≤ −1 adds 10 points; ≥ 1 subtracts 15. The 52-week average is context only.</td></tr>
+            <tr><td>Leverage</td><td>Pass through 30%, warn through 35%, fail above 35%. Reported zero leverage scores 95; unknown leverage is not scored. This measures leverage exposure, not whether the borrowing cost is attractive or whether the fund will withstand stress.</td></tr>
+            <tr><td>Expenses</td><td>Use reported total expenses, including financing costs. Pass at or below 1.00× the comparable-peer median, warn through 1.25×, fail above 1.25×. The 25% margin allows some cost variation; it is a configurable app choice. The old 1.25%/1.50% absolute cutoffs were not peer averages and have been replaced. Other saved settings are retained.</td></tr>
+            <tr><td>Track record</td><td>Use the same 5Y NAV return period for every peer, or 3Y if the selected fund lacks 5Y. At/above the peer median scores 85 plus up to 15 points of outperformance; below median but at/above the lower quartile scores 55; below the lower quartile scores 25. Sponsor reputation is not graded.</td></tr>
+            <tr><td>Liquidity</td><td>Price × average daily share volume estimates daily traded value. Pass at $1 million/day or more, warn down to $250,000, fail below it. These are retail-trading screens; check order size and spreads separately.</td></tr>
+            <tr><td>Risk-adjusted returns</td><td>Scan a List adds one bundled score from Sharpe, Sortino, Calmar, Omega and Ulcer ratios when sufficient history is available. It gets the same weight as one other scored criterion. Deep Dive has no risk-ratio score.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>Peers and expenses:</strong> Require the same reported category and strategy, the same detected sector/theme,
+        and the same use of leverage. Leveraged peers must be within {MAX_LEVERAGE_GAP_PP} percentage points of the selected fund’s leverage ratio.
+        This tolerance is an application choice to limit differences in borrowing exposure.
+        Unleveraged funds are compared with unleveraged funds. Unknown classifications or leverage are excluded; small groups are never widened to unrelated funds.
+        These rules apply in Deep Dive and within the selected scan batch. Duplicate tickers and the selected fund are excluded.</p>
+      <p>Expense and track-record grades each require at least {MIN_COMPARABLE_PEERS} other peers with usable data for that metric.
+        The minimum sample is an application guard against relying on one or two funds, not a guarantee of statistical reliability.
+        The median is the middle value, averaging the two middle values for an even sample. The lower quartile is interpolated at 25% of the sorted sample.
+        The expense average is the arithmetic mean and is shown only for context. Expand “Which peers were used?” to inspect the actual tickers.</p>
+      <p>A fund can pass the leverage check while having relatively expensive financing or management fees.
+        Total expenses include borrowing costs; the daily feed does not provide a usable fee/interest breakdown, so the app does not estimate one.
+        Even similar leverage amounts can have different borrowing terms and expense reporting dates. NAV total return already reflects fund expenses and leverage effects;
+        it is not a return adjusted to remove leverage. Review the fund’s annual report for those details.</p>
+      <p><strong>Scores and verdicts:</strong> Ordinary threshold checks score 85–100 in the pass band, 50–79 in the warning band,
+        and below 50 in the fail band. Better values increase scores; UNII and z-score adjustments can move the final badge into a different band.
+        Final badges use pass ≥ 80, warn ≥ 50, fail below 50. Scores are clamped to 0–100; calculations use unrounded values.
+        The composite is the equal-weight average of available scored criteria; missing data contributes no points and no failure.
+        At least 3 scored criteria are needed. “Strong Buy” requires ≥ 70 and no failures; “Weak Buy” requires ≥ 60 and at most 1 failure;
+        otherwise the label is “Do Not Buy.” These are checklist labels, and unscored checks still need review.</p>
+      <p><strong>Alternatives:</strong> Candidates must pass the same peer filters, have exactly the same set of scored criteria,
+        and exceed the selected fund’s composite by more than 1 point. Show up to 5, ordered by composite.
+        Each fund’s peer benchmarks exclude itself. Lower leverage is shown as context rather than a standalone reason to recommend switching.
+        A higher score does not establish suitability or equal currency, credit, duration or portfolio risk.</p>
+      <p><strong>Background:</strong>{' '}
+        <a href="https://www.fidelity.com/learning-center/investment-products/closed-end-funds/leverage" target="_blank" rel="noreferrer">Leverage, expenses and NAV returns (Fidelity)</a>
+        {' · '}<a href="https://www.nuveen.com/en-us/insights/understanding-leverage" target="_blank" rel="noreferrer">Leverage structure and regulatory limits (Nuveen)</a>.
+        These sources explain the concepts; the numerical grading defaults are this app’s choices.</p>
+    </details>
+  )
+}
+
+function AlternativesList({ alternatives, peers, fund }) {
+  const leverage = leverageProfile(fund)
   return (
     <div style={{ marginTop: '1.5rem' }}>
       <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
-        {heading}
+        Higher-scoring comparable alternatives
       </h2>
       <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
-        {blurb}
+        {peers.length} other funds match {fund.category || 'the category'}, the strategy and theme, and
+        {' '}{leverage === null ? 'a known leverage profile' : leverage === 0 ? 'no leverage' : `leverage within ${MAX_LEVERAGE_GAP_PP} percentage points of ${fmtPct(leverage)}`}.
+        {' '}Rankings require the same scored criteria. Review each fund’s mandate and financing terms.
       </p>
       {alternatives.length === 0 ? (
         <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
-          {emptyMsg}
+          {peers.length ? 'No higher-scoring alternatives with matching data coverage were found in this comparison group.' : 'No comparable peers found. The search has not been broadened to a different asset class, strategy or leverage profile.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -300,6 +372,9 @@ function AlternativesList({ alternatives, peerCount, groupLabel, themed }) {
                 <span style={{ color: 'var(--text-dim-2)' }}>Why listed: </span>
                 {alt.reasons.join('; ')}.
               </div>
+              <div style={{ color: 'var(--text-dim-2)', fontSize: '0.84rem', marginTop: '0.35rem' }}>
+                {alt.fund.strategy} · Leverage {fmtPct(leverageProfile(alt.fund))} vs {fmtPct(leverage)} · Total expenses {fmtPct(alt.fund.expense_ratio)} vs {fmtPct(fund.expense_ratio)}
+              </div>
             </div>
           ))}
         </div>
@@ -314,7 +389,7 @@ export default function CEFBuyingChecklistEvaluator() {
   const [error, setError] = useState('')
   const [inputTicker, setInputTicker] = useState('')
   const [activeTicker, setActiveTicker] = useState('')
-  const [thresholds, setThresholds] = useState(loadThresholds())
+  const [thresholds, setThresholds] = useState(loadThresholds)
   const [tab, setTab] = useState('deep')
 
   const tabBtn = (key, label) => (
@@ -359,38 +434,15 @@ export default function CEFBuyingChecklistEvaluator() {
     return data.rows.find(r => String(r.ticker || '').toUpperCase() === activeTicker) || null
   }, [activeTicker, data])
 
-  const peers = useMemo(() => {
-    if (!fund || !data?.rows) return []
-    return data.rows.filter(r => r.category && r.category === fund.category)
-  }, [fund, data])
-
-  // Peer group for the "better alternatives" list. When the fund belongs to a
-  // recognizable sector/strategy theme (e.g. infrastructure), narrow to other
-  // funds sharing that theme so an infrastructure CEF only surfaces other
-  // infrastructure CEFs — not every fund in its broad Morningstar category.
-  // Falls back to the broad category when no theme is detected or too few
-  // themed peers exist to compare against.
-  const altPeerGroup = useMemo(() => {
-    if (!fund || !data?.rows) return { peers: [], label: fund?.category || '', themed: false }
-    const theme = detectFundTheme(fund)
-    if (theme) {
-      const themed = data.rows.filter(r => fundMatchesTheme(r, theme))
-      if (themed.length >= 3) {
-        return { peers: themed, label: `${theme.label} CEF`, themed: true }
-      }
-    }
-    return { peers, label: fund.category, themed: false }
-  }, [fund, data, peers])
-
   const result = useMemo(() => {
     if (!fund) return null
-    return gradeFund(fund, peers, thresholds)
-  }, [fund, peers, thresholds])
+    return gradeFund(fund, data?.rows || [], thresholds)
+  }, [fund, data, thresholds])
 
   const alternatives = useMemo(() => {
     if (!fund) return []
-    return findAlternatives(fund, altPeerGroup.peers, thresholds, 5)
-  }, [fund, altPeerGroup, thresholds])
+    return findAlternatives(fund, data?.rows || [], thresholds, 5)
+  }, [fund, data, thresholds])
 
   const verdict = useMemo(() => {
     if (!result) return null
@@ -402,9 +454,11 @@ export default function CEFBuyingChecklistEvaluator() {
       <div className="cef-title-row stock-check-title-row">
         <div>
           <h1>CEF Buying Checklist Evaluator</h1>
-          <p>Enter a CEF ticker. The 7 questions from the buying guide are scored against editable thresholds, and alternatives in the same category are surfaced.</p>
+          <p>Evaluate the buying-guide questions with editable thresholds and compare funds with similar strategies and leverage.</p>
         </div>
       </div>
+
+      <GradingHelp />
 
       <div className="stock-check-tabs" role="tablist" aria-label="CEF checklist mode">
         {tabBtn('deep', 'Deep Dive')}
@@ -419,6 +473,7 @@ export default function CEFBuyingChecklistEvaluator() {
           verdictFromComposite={verdictFromComposite}
           thresholds={thresholds}
           allowCefUniverse
+          getTickerHref={ticker => `/closed-cef-info/${encodeURIComponent(ticker)}`}
           extraColumns={[
             { key: 'premium_discount', label: 'Prem/Disc', fmt: (r) => (r.premium_discount == null ? '—' : `${Number(r.premium_discount).toFixed(2)}%`) },
           ]}
@@ -429,7 +484,7 @@ export default function CEFBuyingChecklistEvaluator() {
         <input
           value={inputTicker}
           onChange={e => setInputTicker(e.target.value.toUpperCase())}
-          placeholder="e.g. PDI, UTG, JEPI..."
+          placeholder="e.g. TEI, PDI, UTG..."
           className="stock-check-input stock-check-ticker-input"
           autoFocus
         />
@@ -465,7 +520,7 @@ export default function CEFBuyingChecklistEvaluator() {
               </span>
               <span style={{ color: 'var(--text-dim-2)' }}> / 100</span>
               <span style={{ color: 'var(--text-dim-2)', marginLeft: '0.7rem', fontSize: '0.85rem' }}>
-                (average of scored criteria 2–7)
+                ({result.criteria.filter(c => c.id >= 2 && c.id <= 7 && c.score !== null).length} of 6 criteria scored; average excludes missing grades)
               </span>
             </div>
             <button
@@ -521,9 +576,8 @@ export default function CEFBuyingChecklistEvaluator() {
 
           <AlternativesList
             alternatives={alternatives}
-            peerCount={altPeerGroup.peers.length}
-            groupLabel={altPeerGroup.label}
-            themed={altPeerGroup.themed}
+            peers={result.peers}
+            fund={fund}
           />
 
           <div style={{
@@ -531,9 +585,9 @@ export default function CEFBuyingChecklistEvaluator() {
             background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6,
             color: 'var(--text-dim-2)', fontSize: '0.84rem', lineHeight: 1.55,
           }}>
-            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Sustainability scoring uses distribution rate vs. long-term
-            NAV return as the primary proxy, enhanced by UNII per share and earnings-based coverage when CEF Connect
-            reports them (many funds return null for UNII). Custom thresholds you set persist in this browser.
+            <strong style={{ color: 'var(--teal-2)' }}>Notes:</strong> Sustainability is a proxy based on distribution rate vs. long-term
+            NAV return, with a UNII adjustment when available. Missing grades are excluded from the composite.
+            Custom thresholds persist in this browser. Open the grading help above for the defaults, formulas and limitations.
           </div>
         </>
       )}

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import { useProfile } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
@@ -43,6 +44,7 @@ export default function FundScanTab({
   thresholds,
   extraColumns = [],   // [{ key, label, fmt(row) }]
   allowCefUniverse = false,
+  getTickerHref,       // Optional (ticker) => fund detail route.
 }) {
   const { profileQueryString, currentProfileName } = useProfile()
   const [tickersText, setTickersText] = useState('')
@@ -268,7 +270,15 @@ export default function FundScanTab({
                       <tr key={r.ticker} style={{ borderBottom: '1px solid var(--p-1c2a48)' }}>
                         {columns.map(c => {
                           if (c.key === 'ticker') {
-                            return <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}><strong style={{ color: 'var(--teal-2)' }}>{r.ticker}</strong></td>
+                            return (
+                              <td key={c.key} style={{ padding: '0.5rem 0.6rem' }}>
+                                {getTickerHref ? (
+                                  <Link to={getTickerHref(r.ticker)} title={`View ${r.ticker} fund information`} style={{ color: 'var(--teal-2)', fontWeight: 700 }}>
+                                    {r.ticker}
+                                  </Link>
+                                ) : <strong style={{ color: 'var(--teal-2)' }}>{r.ticker}</strong>}
+                              </td>
+                            )
                           }
                           if (c.key === 'verdict') {
                             return <td key={c.key} className="fund-scan-verdict-cell" style={{ padding: '0.5rem 0.6rem' }}><span className={`stock-check-badge fund-scan-verdict-badge tone-${r.tone}`}>{r.verdict}</span></td>

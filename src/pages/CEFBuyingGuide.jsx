@@ -73,7 +73,7 @@ const QUESTIONS = [
         </p>
         <h4>What to check</h4>
         <ul>
-          <li><strong>Leverage ratio</strong> — Regulatory leverage is capped at 50% for bond funds and 33% for equity funds. Funds near those limits have less cushion.</li>
+          <li><strong>Leverage ratio</strong> — Limits depend on the financing instrument: generally 33⅓% of total assets for debt and 50% for preferred shares at issuance, rather than different limits for bond and equity portfolios. The evaluator’s 30% / 35% settings are application risk screens.</li>
           <li><strong>Cost of leverage</strong> — If a fund borrows at 5% to buy assets yielding 6%, the spread is thin. Rising rates can quickly make leverage a drag rather than a boost.</li>
           <li><strong>Type of leverage</strong> — Preferred shares (fixed cost, no forced deleveraging), bank credit facilities (variable rate, subject to covenants), and reverse repos all behave differently in stress.</li>
           <li><strong>Historical behavior in downturns</strong> — Review the fund's NAV and price history during past stress periods (2020, 2022). How severe were the drawdowns? Did the fund cut its distribution?</li>
@@ -94,7 +94,8 @@ const QUESTIONS = [
         </p>
         <h4>What to check</h4>
         <ul>
-          <li><strong>Total expense ratio</strong> — Includes management fees, administration, and the interest cost of leverage. Compare to peers in the same category and strategy.</li>
+          <li><strong>Total expense ratio</strong> — Includes management fees, administration, and the interest cost of leverage. Compare to peers in the same category and strategy with similar leverage amounts. The evaluator uses the peer median, with the arithmetic average shown for context; small samples are left unscored.</li>
+          <li><strong>Leverage and expense grades</strong> — A pass on the amount of leverage does not establish whether financing is cheap. Check operating fees and borrowing costs separately in the fund report; the daily feed does not separate them.</li>
           <li><strong>Management fee alone</strong> — Some sponsors charge high base fees on top of leverage costs. A 1.5% management fee on top of 1.5% leverage cost equals 3% of assets that must be earned before you see a return.</li>
           <li><strong>Is performance justifying the cost?</strong> — A higher-fee fund with consistently superior NAV total returns may be worth the cost. A higher-fee fund with mediocre performance is not.</li>
           <li><strong>Trend in expenses</strong> — Rising expense ratios over time can indicate increasing leverage costs or administrative bloat.</li>

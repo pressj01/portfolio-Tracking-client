@@ -1,27 +1,42 @@
 // Pure grading helpers for the CEF Buying Checklist Evaluator.
 // Each criterion returns a { badge, score, rationale, metrics, ... } record.
 // Composite score averages criteria 2-7 (criterion 1 is informational).
-import { formatMoney, formatMoneyCompact } from './money'
+import { formatMoney, formatMoneyCompact } from './money.js'
 
 export const DEFAULT_THRESHOLDS = {
   sustainability: { passPp: 1, warnPp: 3 },
   discount:       { passPremium: 0, warnPremium: 5 },
   leverage:       { passPct: 30, warnPct: 35 },
-  expense:        { passPct: 1.25, warnPct: 1.50 },
+  expense:        { passMultiple: 1, warnMultiple: 1.25 },
   liquidity:      { passDollars: 1_000_000, warnDollars: 250_000 },
 }
 
 export const BEST_PRACTICE = {
   sustainability: 'Distribution rate on NAV should not exceed the long-term (5Y) NAV total return by more than ~1 percentage point. Larger gaps suggest the payout is being funded by return-of-capital or asset sales.',
   discount:       'Buy at a discount, ideally below the fund’s 52-week average. Premiums above 5% leave little margin of safety.',
-  leverage:       'Effective leverage below 30% leaves cushion. 30–35% is moderate; above 35% is high.',
-  expense:        'Total expense ratio below 1.25% is competitive. Above 1.50% is high relative to peers.',
-  liquidity:      'Average daily traded value above $1,000,000 absorbs typical retail orders without moving the market.',
-  manager:        'NAV total return should meet or beat the category median over 3–5 years.',
+  leverage:       'The default risk screen passes leverage up to 30%, warns through 35%, and fails above 35%. These are application settings, not regulatory limits or a judgment about borrowing costs.',
+  expense:        'Compare reported total expenses with the median of at least 3 other comparable funds. Defaults: pass at or below the median, warn through 1.25× the median, fail above it. Financing costs remain included.',
+  liquidity:      'The $1,000,000/day default favors funds with more trading capacity. Check your order size and the bid-ask spread before trading.',
+  manager:        'Compare the same 5Y (or 3Y) NAV return period with at least 3 other funds in the same category, strategy and leverage profile. This does not measure sponsor reputation.',
+}
+
+export const MIN_COMPARABLE_PEERS = 3
+export const MAX_LEVERAGE_GAP_PP = 10
+
+// Old expense cutoffs were absolute percentages. Never reinterpret a saved
+// 1.25% cutoff as a multiple of the peer median; retain other user settings.
+export function mergeThresholds(saved = {}) {
+  return Object.fromEntries(Object.entries(DEFAULT_THRESHOLDS).map(([key, defaults]) => [
+    key,
+    Object.fromEntries(Object.entries(defaults).map(([field, fallback]) => {
+      const value = saved?.[key]?.[field]
+      return [field, typeof value === 'number' && Number.isFinite(value) ? value : fallback]
+    })),
+  ]))
 }
 
 const num = (v) => {
-  if (v === null || v === undefined || v === '') return null
+  if (v === null || v === undefined || (typeof v === 'string' && !v.trim()) || typeof v === 'boolean') return null
   const n = Number(v)
   return Number.isFinite(n) ? n : null
 }
@@ -33,10 +48,10 @@ function scoreBand(value, passAt, warnAt, lowerBetter = true) {
   const v = lowerBetter ? value : -value
   const p = lowerBetter ? passAt : -passAt
   const w = lowerBetter ? warnAt : -warnAt
-  if (v <= p) return Math.min(100, 85 + Math.max(0, p - v))
+  if (v <= p) return Math.min(100, 85 + 15 * (p - v) / Math.max(0.1, Math.abs(p)))
   if (v <= w) {
     const span = w - p
-    return span <= 0 ? 70 : 50 + 35 * (1 - (v - p) / span)
+    return span <= 0 ? 70 : 50 + 29 * (1 - (v - p) / span)
   }
   const overshoot = w === 0 ? Math.abs(v) : (v - w) / Math.max(0.1, Math.abs(w))
   return Math.max(0, 50 * (1 - overshoot))
@@ -54,6 +69,61 @@ const money = (n) => {
   return formatMoneyCompact(n, { fallback: 'n/a' })
 }
 
+const normalized = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ')
+const tickerOf = (fund) => normalized(fund?.ticker)
+
+export function leverageProfile(fund) {
+  const reported = num(fund?.leverage_ratio)
+  if (reported !== null) return reported >= 0 ? reported : null
+  // Missing and false are different: unknown leverage must not become a pass.
+  return fund?.is_leveraged === false ? 0 : null
+}
+
+// Category and strategy are mandatory: a name/theme must never override the
+// feed's distinction between emerging-market bonds and emerging-market equity.
+export function selectComparablePeers(fund, universe = []) {
+  const category = normalized(fund?.category)
+  const strategy = normalized(fund?.strategy)
+  const leverage = leverageProfile(fund)
+  if (!category || !strategy || leverage === null) return []
+  const theme = detectFundTheme(fund)
+  const seen = new Set([tickerOf(fund)])
+  return (universe || []).filter(peer => {
+    const ticker = tickerOf(peer)
+    if (!ticker || seen.has(ticker)) return false
+    if (normalized(peer.category) !== category || normalized(peer.strategy) !== strategy) return false
+    if (detectFundTheme(peer)?.key !== theme?.key) return false
+    const peerLeverage = leverageProfile(peer)
+    if (peerLeverage === null || (leverage === 0) !== (peerLeverage === 0)) return false
+    if (Math.abs(peerLeverage - leverage) > MAX_LEVERAGE_GAP_PP) return false
+    seen.add(ticker)
+    return true
+  })
+}
+
+function quantile(sorted, fraction) {
+  if (!sorted.length) return null
+  const index = (sorted.length - 1) * fraction
+  const lower = Math.floor(index)
+  const upper = Math.ceil(index)
+  return sorted[lower] + (sorted[upper] - sorted[lower]) * (index - lower)
+}
+
+function peerSummary(peers, field) {
+  const rows = peers.filter(p => num(p[field]) !== null && (field !== 'expense_ratio' || num(p[field]) > 0))
+  const values = rows.map(p => num(p[field])).sort((a, b) => a - b)
+  return {
+    count: rows.length,
+    tickers: rows.map(p => String(p.ticker).toUpperCase()).sort(),
+    members: rows.map(p => ({ ticker: String(p.ticker).toUpperCase(), leverage: leverageProfile(p), value: num(p[field]) }))
+      .sort((a, b) => a.ticker.localeCompare(b.ticker)),
+    metric: field === 'expense_ratio' ? 'Total expenses' : field === 'return_on_nav_5y' ? '5Y NAV return' : '3Y NAV return',
+    median: quantile(values, 0.5),
+    q1: quantile(values, 0.25),
+    mean: values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null,
+  }
+}
+
 // -- Criterion 1: Portfolio match (informational only) --
 function gradePortfolioMatch(fund) {
   return {
@@ -69,15 +139,15 @@ function gradePortfolioMatch(fund) {
       { label: 'Strategy', value: fund.strategy || 'n/a' },
       { label: 'Sponsor', value: fund.sponsor || 'n/a' },
       { label: 'Distribution frequency', value: fund.distribution_frequency || 'n/a' },
-      { label: 'Uses leverage', value: fund.is_leveraged ? 'Yes' : 'No' },
+      { label: 'Uses leverage', value: leverageProfile(fund) === null ? 'Unknown' : leverageProfile(fund) > 0 ? 'Yes' : 'No' },
       { label: 'Managed distribution', value: fund.is_managed_distribution ? 'Yes' : 'No' },
     ],
   }
 }
 
 // -- Criterion 2: Distribution sustainability --
-// Uses UNII per share and earnings-based coverage when available, otherwise
-// falls back to the proxy (distribution rate on NAV vs. long-term NAV return).
+// Uses the distribution/NAV-return gap as a proxy, with UNII as context.
+// The feed does not supply matching earnings/distribution reporting periods.
 function gradeSustainability(fund, thresholds) {
   const drNav = num(fund.distribution_rate_nav)
   const r5y = num(fund.return_on_nav_5y)
@@ -100,8 +170,8 @@ function gradeSustainability(fund, thresholds) {
     if (nav) metrics.push({ label: 'UNII as % of NAV', value: pct(unii / nav * 100, 3) })
   }
   if (eps !== null && distAmt !== null && distAmt > 0) {
-    const coverage = eps / distAmt
-    metrics.push({ label: 'Earnings / dist coverage', value: `${coverage.toFixed(2)}x` })
+    metrics.push({ label: 'Reported earnings per share', value: formatMoney(eps, { digits: 4 }) })
+    metrics.push({ label: 'Distribution per payment', value: formatMoney(distAmt, { digits: 4 }) })
   }
   metrics.push({ label: 'Managed distribution', value: fund.is_managed_distribution ? 'Yes' : 'No' })
 
@@ -114,7 +184,7 @@ function gradeSustainability(fund, thresholds) {
     score = scoreBand(gap, t.passPp, t.warnPp, true)
   }
 
-  // UNII adjustment — positive UNII means the fund is earning more than it pays out
+  // UNII is accumulated undistributed income, not current-period coverage.
   if (unii !== null && score !== null) {
     if (unii > 0) {
       score = Math.min(100, score + 10)
@@ -123,25 +193,17 @@ function gradeSustainability(fund, thresholds) {
     }
   }
 
-  // EPS-based coverage adjustment
-  if (eps !== null && distAmt !== null && distAmt > 0 && score !== null) {
-    const coverage = eps / distAmt
-    if (coverage >= 1.0) score = Math.min(100, score + 5)
-    else if (coverage < 0.5) score = Math.max(0, score - 5)
-  }
-
   // Build rationale
   if (score === null) {
     rationale = 'Insufficient data to score (need distribution rate on NAV and 3Y/5Y NAV return).'
     // But if we have UNII or coverage, at least mention it
     if (unii !== null) {
-      rationale += ` UNII per share is ${formatMoney(unii, { digits: 4 })} (${unii >= 0 ? 'positive — fund is earning more than it distributes' : 'negative — fund is distributing more than it earns'}).`
+      rationale += ` UNII per share is ${formatMoney(unii, { digits: 4 })}; accumulated income alone is not enough to score sustainability.`
     }
     return {
       id: 2, key: 'sustainability',
       question: 'Is the distribution sustainable?',
-      badge: unii !== null ? (unii >= 0 ? 'pass' : 'warn') : 'info',
-      score: unii !== null ? (unii >= 0 ? 75 : 40) : null,
+      badge: 'info', score: null,
       editable: true, rationale, metrics,
       threshold: { warnPp: t.warnPp, passPp: t.passPp, bestPractice: BEST_PRACTICE.sustainability },
     }
@@ -149,7 +211,7 @@ function gradeSustainability(fund, thresholds) {
 
   // Main rationale from proxy gap
   if (gap <= t.passPp) {
-    rationale = `Distribution rate (${pct(drNav)}) is within ${t.passPp.toFixed(1)}pp of long-term NAV return (${pct(longTerm)}) — sustainable.`
+    rationale = `Distribution rate (${pct(drNav)}) does not exceed long-term NAV return (${pct(longTerm)}) by more than ${t.passPp.toFixed(1)}pp — within the proxy pass band.`
   } else if (gap <= t.warnPp) {
     rationale = `Gap of ${gap.toFixed(2)}pp between distribution rate (${pct(drNav)}) and ${longTermLabel} (${pct(longTerm)}) is in the warning band.`
   } else {
@@ -157,12 +219,11 @@ function gradeSustainability(fund, thresholds) {
   }
   // Append UNII context
   if (unii !== null) {
-    rationale += ` UNII ${formatMoney(unii, { digits: 4 })} (${unii >= 0 ? 'positive — earning surplus' : 'negative — earning deficit'}).`
+    rationale += ` UNII ${formatMoney(unii, { digits: 4 })} (${unii > 0 ? '+10 score points for accumulated undistributed income' : unii < -0.05 ? '−10 score points for an accumulated income deficit' : 'no score adjustment'}).`
   }
   // Append EPS coverage context
   if (eps !== null && distAmt !== null && distAmt > 0) {
-    const coverage = eps / distAmt
-    rationale += ` Earnings cover ${coverage.toFixed(2)}x the distribution.`
+    rationale += ' Earnings and distribution amounts are shown for review; coverage is not scored because their reporting periods are not matched in this feed.'
   }
 
   if (gap !== null) {
@@ -200,8 +261,8 @@ function gradeDiscount(fund, thresholds) {
     if (z <= -1) score = Math.min(100, score + 10)
     else if (z >= 1) score = Math.max(0, score - 15)
   }
-  if (prem < t.passPremium) {
-    rationale = `Trading at a ${pct(Math.abs(prem))} discount`
+  if (prem <= t.passPremium) {
+    rationale = prem < 0 ? `Trading at a ${pct(Math.abs(prem))} discount` : `Premium of ${pct(prem)} is at or below your ${pct(t.passPremium)} pass line`
     if (avg52 !== null) rationale += `, vs. 52-wk avg ${pct(avg52, 2)}`
     if (z !== null) rationale += `. 1Y z-score ${z.toFixed(2)}${z <= -1 ? ' (attractive vs. own history)' : z >= 1 ? ' (expensive vs. own history)' : ''}`
     rationale += '.'
@@ -225,9 +286,9 @@ function gradeDiscount(fund, thresholds) {
 
 // -- Criterion 4: Leverage --
 function gradeLeverage(fund, thresholds) {
-  const lev = num(fund.leverage_ratio)
+  const lev = leverageProfile(fund)
   const t = thresholds.leverage
-  if (lev === null && !fund.is_leveraged) {
+  if (lev === 0) {
     return {
       id: 4, key: 'leverage',
       question: 'How much leverage is used, and how does it behave in stress?',
@@ -243,7 +304,7 @@ function gradeLeverage(fund, thresholds) {
       question: 'How much leverage is used, and how does it behave in stress?',
       badge: 'info', score: null, editable: true,
       rationale: 'Leverage ratio not reported in feed.',
-      metrics: [{ label: 'Uses leverage', value: 'Yes (ratio n/a)' }],
+      metrics: [{ label: 'Uses leverage', value: fund.is_leveraged === true ? 'Yes (ratio n/a)' : 'Unknown' }],
       threshold: { warnPct: t.warnPct, passPct: t.passPct, bestPractice: BEST_PRACTICE.leverage },
     }
   }
@@ -251,44 +312,53 @@ function gradeLeverage(fund, thresholds) {
   let rationale
   if (lev <= t.passPct) rationale = `Leverage of ${pct(lev, 1)} is within your acceptable max of ${t.passPct.toFixed(0)}%.`
   else if (lev <= t.warnPct) rationale = `Leverage of ${pct(lev, 1)} is in the warning band (${t.passPct.toFixed(0)}–${t.warnPct.toFixed(0)}%).`
-  else rationale = `Leverage of ${pct(lev, 1)} exceeds your fail threshold of ${t.warnPct.toFixed(0)}% — well above the 30% best-practice guideline.`
+  else rationale = `Leverage of ${pct(lev, 1)} exceeds your fail threshold of ${t.warnPct.toFixed(0)}%.`
+  rationale += ' This grades the amount of leverage; the expense check separately compares costs with similar funds.'
   return {
     id: 4, key: 'leverage',
     question: 'How much leverage is used, and how does it behave in stress?',
     badge: badgeFromScore(score), score, editable: true, rationale,
     metrics: [
       { label: 'Leverage ratio', value: pct(lev, 1) },
-      { label: 'Uses leverage', value: fund.is_leveraged ? 'Yes' : 'No' },
+      { label: 'Uses leverage', value: lev > 0 ? 'Yes' : 'No' },
     ],
     threshold: { warnPct: t.warnPct, passPct: t.passPct, bestPractice: BEST_PRACTICE.leverage },
   }
 }
 
 // -- Criterion 5: Expenses --
-function gradeExpenses(fund, thresholds) {
+function gradeExpenses(fund, peers, thresholds) {
   const exp = num(fund.expense_ratio)
   const t = thresholds.expense
-  if (exp === null) {
-    return {
-      id: 5, key: 'expense',
-      question: 'Are expenses reasonable relative to peers?',
-      badge: 'info', score: null, editable: true,
-      rationale: 'Expense ratio not reported in feed.',
-      metrics: [{ label: 'Expense ratio', value: 'n/a' }],
-      threshold: { warnPct: t.warnPct, passPct: t.passPct, bestPractice: BEST_PRACTICE.expense },
-    }
-  }
-  const score = scoreBand(exp, t.passPct, t.warnPct, true)
+  const comparison = peerSummary(peers, 'expense_ratio')
+  const metrics = [
+    { label: 'Total expense ratio (including financing costs)', value: pct(exp) },
+    { label: comparison.count >= MIN_COMPARABLE_PEERS ? 'Peer median (grading benchmark)' : 'Peer median (context only)', value: pct(comparison.median) },
+    { label: 'Peer average (mean, context only)', value: pct(comparison.mean) },
+    { label: 'Peers with expense data', value: comparison.count },
+  ]
+  let score = null
   let rationale
-  if (exp <= t.passPct) rationale = `Expense ratio of ${pct(exp, 2)} is at or below your ${t.passPct.toFixed(2)}% pass line.`
-  else if (exp <= t.warnPct) rationale = `Expense ratio of ${pct(exp, 2)} is in the warning band (above ${t.passPct.toFixed(2)}%).`
-  else rationale = `Expense ratio of ${pct(exp, 2)} exceeds your fail threshold of ${t.warnPct.toFixed(2)}%.`
+  if (exp === null || exp <= 0) {
+    rationale = 'A positive reported total expense ratio is needed to score expenses.'
+  } else if (comparison.count < MIN_COMPARABLE_PEERS) {
+    rationale = `Only ${comparison.count} comparable peers have expense data; at least ${MIN_COMPARABLE_PEERS} are required. Any displayed median or average is context only. Expenses are excluded from the composite, with no automatic failure against a flat expense cutoff.`
+  } else {
+    const multiple = exp / comparison.median
+    const passAt = comparison.median * t.passMultiple
+    const warnAt = comparison.median * t.warnMultiple
+    score = scoreBand(multiple, t.passMultiple, t.warnMultiple)
+    metrics.push({ label: 'Expense / peer median', value: `${multiple.toFixed(2)}×` })
+    metrics.push({ label: 'Pass / fail above', value: `${pct(passAt)} / ${pct(warnAt)}` })
+    rationale = `Total expenses of ${pct(exp)} are ${multiple.toFixed(2)}× the ${pct(comparison.median)} median of ${comparison.count} comparable peers. Your pass line is ${t.passMultiple.toFixed(2)}× the median; the fail line is above ${t.warnMultiple.toFixed(2)}×.`
+  }
+  rationale += ' The feed does not separate borrowing costs from operating fees. Similar leverage amounts improve comparability, but financing terms and reporting periods can differ.'
   return {
     id: 5, key: 'expense',
     question: 'Are expenses reasonable relative to peers?',
     badge: badgeFromScore(score), score, editable: true, rationale,
-    metrics: [{ label: 'Expense ratio', value: pct(exp, 2) }],
-    threshold: { warnPct: t.warnPct, passPct: t.passPct, bestPractice: BEST_PRACTICE.expense },
+    metrics, comparison,
+    threshold: { ...t, bestPractice: BEST_PRACTICE.expense },
   }
 }
 
@@ -298,15 +368,8 @@ function gradeManager(fund, peers) {
   const r3y = num(fund.return_on_nav_3y)
   const primary = r5y !== null ? r5y : r3y
   const primaryLabel = r5y !== null ? '5Y NAV return' : '3Y NAV return'
-  const peerReturns = (peers || [])
-    .map(p => num(r5y !== null ? p.return_on_nav_5y : p.return_on_nav_3y))
-    .filter(v => v !== null)
-    .sort((a, b) => a - b)
-  let median = null, q1 = null
-  if (peerReturns.length) {
-    median = peerReturns[Math.floor(peerReturns.length / 2)]
-    q1 = peerReturns[Math.floor(peerReturns.length / 4)]
-  }
+  const comparison = peerSummary(peers, r5y !== null ? 'return_on_nav_5y' : 'return_on_nav_3y')
+  const { median, q1 } = comparison
   if (primary === null) {
     return {
       id: 6, key: 'manager',
@@ -320,29 +383,30 @@ function gradeManager(fund, peers) {
       ],
     }
   }
-  let score = 60
+  let score = null
   let rationale
-  if (median === null) {
-    rationale = `${primaryLabel} ${pct(primary)} — no category peers found to compare against.`
+  if (comparison.count < MIN_COMPARABLE_PEERS) {
+    rationale = `${primaryLabel} ${pct(primary)} — only ${comparison.count} comparable peers report this same return period; at least ${MIN_COMPARABLE_PEERS} are required. Any displayed median is context only. Track record is excluded from the composite.`
   } else if (primary >= median) {
     score = 85 + Math.min(15, (primary - median))
-    rationale = `${primaryLabel} ${pct(primary)} meets or beats the ${fund.category || 'category'} median (${pct(median)}).`
+    rationale = `${primaryLabel} ${pct(primary)} meets or beats the comparable-peer median (${pct(median)}).`
   } else if (q1 !== null && primary >= q1) {
     score = 55
-    rationale = `${primaryLabel} ${pct(primary)} below ${fund.category || 'category'} median (${pct(median)}) but above the bottom quartile (${pct(q1)}).`
+    rationale = `${primaryLabel} ${pct(primary)} is below the comparable-peer median (${pct(median)}) but at or above the lower quartile (${pct(q1)}).`
   } else {
     score = 25
-    rationale = `${primaryLabel} ${pct(primary)} is in the bottom quartile for the ${fund.category || 'category'} category (median ${pct(median)}).`
+    rationale = `${primaryLabel} ${pct(primary)} is below the comparable-peer lower quartile (${pct(q1)}; median ${pct(median)}).`
   }
   return {
     id: 6, key: 'manager',
     question: 'Is the manager reputable with a strong track record?',
-    badge: badgeFromScore(score), score, editable: false, rationale,
+    badge: badgeFromScore(score), score, editable: false, rationale, comparison,
     metrics: [
       { label: 'Sponsor', value: fund.sponsor || 'n/a' },
       { label: '3Y NAV return', value: pct(r3y) },
       { label: '5Y NAV return', value: pct(r5y) },
-      { label: 'Category median (5Y if avail.)', value: pct(median) },
+      { label: `Peer median (${primaryLabel})`, value: pct(median) },
+      { label: 'Peers with matching return data', value: comparison.count },
     ],
     threshold: { bestPractice: BEST_PRACTICE.manager },
   }
@@ -454,7 +518,7 @@ export function verdictFromComposite(composite, criteria) {
   const fails = (criteria || []).filter(c => c.badge === 'fail').length
   const failPhrase = fails === 1 ? '1 failing criterion' : `${fails} failing criteria`
   if (composite >= 70 && fails === 0) {
-    return { label: 'Strong Buy', tone: 'pass', detail: `Composite ${composite.toFixed(1)}/100 with no failing criteria — it clears the checklist on every measure.` }
+    return { label: 'Strong Buy', tone: 'pass', detail: `Composite ${composite.toFixed(1)}/100 with no failing scored criteria. Unscored criteria still need review.` }
   }
   if (composite >= 60 && fails <= 1) {
     return { label: 'Weak Buy', tone: 'warn', detail: `Composite ${composite.toFixed(1)}/100${fails ? ` with ${failPhrase}` : ''} — investable, but address the weak areas flagged below before committing.` }
@@ -463,13 +527,15 @@ export function verdictFromComposite(composite, criteria) {
 }
 
 export function gradeFund(fund, peers, thresholds) {
+  const comparablePeers = selectComparablePeers(fund, peers)
+  thresholds = mergeThresholds(thresholds)
   const criteria = [
     gradePortfolioMatch(fund),
     gradeSustainability(fund, thresholds),
     gradeDiscount(fund, thresholds),
     gradeLeverage(fund, thresholds),
-    gradeExpenses(fund, thresholds),
-    gradeManager(fund, peers),
+    gradeExpenses(fund, comparablePeers, thresholds),
+    gradeManager(fund, comparablePeers),
     gradeLiquidity(fund, thresholds),
     gradeRiskRatios(fund, 8),
   ]
@@ -477,7 +543,7 @@ export function gradeFund(fund, peers, thresholds) {
   const composite = scored.length >= 3
     ? scored.reduce((s, c) => s + c.score, 0) / scored.length
     : null
-  return { fund, criteria, composite }
+  return { fund, criteria, composite, peers: comparablePeers }
 }
 
 function describeImprovement(label, altVal, curVal, isPctPoints, lowerBetter) {
@@ -504,7 +570,7 @@ const FUND_THEMES = [
   { key: 'utilities',      label: 'utilities & infrastructure',    patterns: [/utilit/] },
   { key: 'midstream',      label: 'energy / MLP / midstream',      patterns: [/midstream/, /\bmlp\b/, /pipeline/, /natural resources?/, /\benergy\b/, /oil\s*&?\s*gas/] },
   { key: 'real-estate',    label: 'real estate',                   patterns: [/real estate/, /\breits?\b/, /\bproperty\b/] },
-  { key: 'municipal',      label: 'municipal',                     patterns: [/municipal/, /\bmuni\b/, /tax[-\s]?free/, /tax[-\s]?advantaged/, /tax[-\s]?exempt/] },
+  { key: 'municipal',      label: 'municipal',                     patterns: [/municipal/, /\bmuni\b/, /tax[-\s]?free/, /tax[-\s]?exempt/] },
   { key: 'preferred',      label: 'preferred securities',          patterns: [/preferred/] },
   { key: 'senior-loan',    label: 'senior loan / floating rate',   patterns: [/senior loan/, /floating[-\s]?rate/, /bank loan/] },
   { key: 'convertible',    label: 'convertible',                   patterns: [/convertible/] },
@@ -518,8 +584,8 @@ function fundThemeText(fund) {
   return `${fund?.name || ''} ${fund?.strategy || ''} ${fund?.category || ''}`.toLowerCase()
 }
 
-// Identify the most specific sector/strategy theme for a fund, or null if none
-// of the known themes apply (in which case callers fall back to broad category).
+// Identify a sector/strategy theme to narrow a category, never to cross one.
+// Funds without a detected theme still require matching category and strategy.
 export function detectFundTheme(fund) {
   const text = fundThemeText(fund)
   if (!text.trim()) return null
@@ -537,23 +603,25 @@ export function fundMatchesTheme(fund, theme) {
 
 export function findAlternatives(currentFund, peers, thresholds, limit = 5) {
   if (!currentFund || !peers || !peers.length) return []
-  const currentTicker = String(currentFund.ticker || '').toUpperCase()
-  const graded = peers
-    .filter(p => String(p.ticker || '').toUpperCase() !== currentTicker)
-    .map(p => gradeFund(p, peers, thresholds))
-    .filter(r => typeof r.composite === 'number')
-  const currentGrade = gradeFund(currentFund, peers, thresholds)
+  const universe = peers.some(p => tickerOf(p) === tickerOf(currentFund)) ? peers : [currentFund, ...peers]
+  const currentGrade = gradeFund(currentFund, universe, thresholds)
+  if (currentGrade.composite === null) return []
+  const scoredKeys = result => result.criteria.filter(c => typeof c.score === 'number').map(c => c.key).join(',')
+  const graded = selectComparablePeers(currentFund, universe)
+    .map(p => gradeFund(p, universe, thresholds))
+    .filter(r => typeof r.composite === 'number' && scoredKeys(r) === scoredKeys(currentGrade))
   const better = graded
-    .filter(r => currentGrade.composite === null || r.composite > currentGrade.composite + 1)
+    .filter(r => r.composite > currentGrade.composite + 1)
     .sort((a, b) => b.composite - a.composite)
     .slice(0, limit)
   return better.map(r => {
     const alt = r.fund
     const cur = currentFund
     const reasons = [
-      describeImprovement('expense ratio', num(alt.expense_ratio), num(cur.expense_ratio), true, true),
-      describeImprovement('leverage', num(alt.leverage_ratio), num(cur.leverage_ratio), true, true),
       describeImprovement('5Y NAV return', num(alt.return_on_nav_5y), num(cur.return_on_nav_5y), true, false),
+      currentGrade.criteria.find(c => c.key === 'expense').score !== null
+        ? describeImprovement('total expense ratio (financing included)', num(alt.expense_ratio), num(cur.expense_ratio), true, true)
+        : null,
       (() => {
         // discount: more negative is better
         const a = num(alt.premium_discount), c = num(cur.premium_discount)
@@ -563,17 +631,17 @@ export function findAlternatives(currentFund, peers, thresholds, limit = 5) {
       })(),
       (() => {
         // liquidity
-        const a = num(alt.avg_daily_volume) * num(alt.price)
-        const c = num(cur.avg_daily_volume) * num(cur.price)
-        if (!Number.isFinite(a) || !Number.isFinite(c)) return null
+        const values = [alt.avg_daily_volume, alt.price, cur.avg_daily_volume, cur.price].map(num)
+        if (values.some(v => v === null)) return null
+        const a = values[0] * values[1], c = values[2] * values[3]
         if (a > c * 1.5) return `Better liquidity (${money(a)} vs ${money(c)} per day)`
         return null
       })(),
       (() => {
         // distribution sustainability proxy
-        const aGap = num(alt.distribution_rate_nav) - num(alt.return_on_nav_5y)
-        const cGap = num(cur.distribution_rate_nav) - num(cur.return_on_nav_5y)
-        if (!Number.isFinite(aGap) || !Number.isFinite(cGap)) return null
+        const values = [alt.distribution_rate_nav, alt.return_on_nav_5y, cur.distribution_rate_nav, cur.return_on_nav_5y].map(num)
+        if (values.some(v => v === null)) return null
+        const aGap = values[0] - values[1], cGap = values[2] - values[3]
         if (aGap < cGap - 1) return `Smaller distribution/return gap (${aGap.toFixed(2)}pp vs ${cGap.toFixed(2)}pp)`
         return null
       })(),
@@ -581,7 +649,7 @@ export function findAlternatives(currentFund, peers, thresholds, limit = 5) {
     return {
       fund: alt,
       composite: r.composite,
-      reasons: reasons.length ? reasons : ['Higher overall composite score across the 7 criteria'],
+      reasons: reasons.length ? reasons : ['Higher composite across the same scored criteria'],
     }
   })
 }

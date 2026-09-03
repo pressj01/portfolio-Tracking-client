@@ -28,6 +28,11 @@ def _cef_row(ticker="ADX"):
 
 
 class CefFundScanTest(unittest.TestCase):
+    def test_missing_leverage_flag_is_unknown_not_unleveraged(self):
+        for raw, expected in [({}, None), ({"IsLeveraged": None}, None),
+                              ({"IsLeveraged": False}, False), ({"IsLeveraged": True}, True)]:
+            self.assertIs(app_module._cef_normalize_row(raw)["is_leveraged"], expected)
+
     def _scan(self, ordered, cef_rows, ticker_factory):
         with (
             app_module.app.test_request_context(json={"sources": ["portfolio", "watchlist"]}),
