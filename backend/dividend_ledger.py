@@ -135,13 +135,20 @@ def fetch_payments(conn, profile_ids, start, end, include_estimates=True):
     return payments
 
 
-def fetch_holding_payment_floors(conn, profile_ids):
-    """Declared cash per ticker from current lots (shares × DPS).
+def fetch_holding_payment_floors(conn, profile_ids, include_estimates=True):
+    """Declared cash per ticker from current lots (shares × DPS), and the one
+    pay date that figure describes.
 
-    The dividend calendar already uses this figure for a pay date. A broker
-    import can miss cap-gain/ROC lines, or cash from an account that no longer
-    has the holding, so the ledger would otherwise show less than the calendar
-    on the same day.
+    The dividend calendar shows this figure for a pay date, so a day the price
+    refresh only projected — for one account out of several, say — would
+    otherwise read below the calendar on the same day. Filling that gap is what
+    the floor is for.
+
+    Current shares × current DPS only describes the *current* distribution, so
+    the floor carries the latest pay date on record and is applied to that date
+    alone. Every earlier payment was made against a different share count — a
+    reinvesting holding grows every period — and topping those up restated
+    months of history to today's run rate.
     """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if not ids:
@@ -157,19 +164,45 @@ def fetch_holding_payment_floors(conn, profile_ids):
             HAVING declared > 0""",
         ids,
     ).fetchall()
+
+    latest_sql = (
+        "SELECT UPPER(TRIM(ticker)) AS ticker, MAX(payment_date) AS latest "
+        f"FROM dividend_payments WHERE profile_id IN ({placeholders}) "
+    )
+    latest_params = list(ids)
+    if not include_estimates:
+        latest_sql += "AND LOWER(COALESCE(source, '')) != ? "
+        latest_params.append(ESTIMATE_SOURCE)
+    latest_sql += "GROUP BY UPPER(TRIM(ticker))"
+    latest_by_ticker = {
+        str(row["ticker"] or "").strip().upper(): str(row["latest"] or "")[:10]
+        for row in conn.execute(latest_sql, latest_params).fetchall()
+    }
+
     floors = {}
     for row in rows:
         try:
             declared = float(row["declared"] or 0)
         except (TypeError, ValueError):
             continue
-        if declared > 0:
-            floors[str(row["ticker"] or "").strip().upper()] = declared
+        ticker = str(row["ticker"] or "").strip().upper()
+        through = latest_by_ticker.get(ticker)
+        if declared > 0 and through:
+            floors[ticker] = {"declared": declared, "through": through}
     return floors
 
 
 def apply_holding_payment_floors(entries, floors):
-    """Raise a pay date's imported cash up to the calendar's declared amount."""
+    """Fill a projected pay date up to the calendar's declared amount.
+
+    Only the current distribution is eligible, and only while it is still a
+    projection. Once a broker has confirmed the day, that cash is the answer:
+    the declared figure is measured against today's shares and today's DPS, so
+    a buy or a changed payout after the pay date makes it larger than what was
+    actually paid — and filling that gap would invent money. A day left short
+    because only one account's file has been imported is squared by importing
+    the rest, not by topping up the account that did import.
+    """
     if not floors or not entries:
         return entries
     by_key = {}
@@ -180,19 +213,19 @@ def apply_holding_payment_floors(entries, floors):
             continue
         by_key.setdefault((ticker, date), []).append(index)
 
-    for (ticker, _date), indexes in by_key.items():
-        declared = floors.get(ticker)
-        if not declared:
+    for (ticker, date), indexes in by_key.items():
+        floor = floors.get(ticker)
+        if not floor or date != floor["through"]:
+            continue
+        if any(not entries[index].get("estimated") for index in indexes):
             continue
         cash = sum(float(entries[index]["amount"] or 0) for index in indexes)
-        extra = round(float(declared) - cash, 2)
+        extra = round(float(floor["declared"]) - cash, 2)
         if extra <= 0.009:
             continue
-        target = next(
-            (index for index in indexes if not entries[index].get("estimated")),
-            indexes[0],
+        entries[indexes[0]]["amount"] = round(
+            float(entries[indexes[0]]["amount"] or 0) + extra, 2
         )
-        entries[target]["amount"] = round(float(entries[target]["amount"] or 0) + extra, 2)
     return entries
 
 
@@ -611,7 +644,7 @@ def build_ledger(conn, profile_ids, month=None, today=None, week_start="mon",
     first_visible = week_start_for(month_first, week_start)
     last_visible = week_end_for(month_last, week_start)
 
-    floors = fetch_holding_payment_floors(conn, profile_ids)
+    floors = fetch_holding_payment_floors(conn, profile_ids, include_estimates)
     ledger_entries = apply_holding_payment_floors(
         fetch_payments(
             conn, profile_ids, first_visible, last_visible, include_estimates

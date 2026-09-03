@@ -514,16 +514,38 @@ class DividendLedgerTest(unittest.TestCase):
         conn.commit()
         conn.close()
 
-    def test_ledger_matches_calendar_declared_cash_without_the_other_holding(self):
-        # One Fidelity account imported $1,519.25. The calendar still shows
-        # $2,315.81 because remaining shares × DPS already cover both accounts'
-        # payout — even if the second account no longer has a GDXW lot.
+    def test_partially_imported_day_reports_only_the_cash_that_was_imported(self):
+        # One Fidelity account imported $1,519.25 while the holding's shares ×
+        # DPS declare $2,315.81 across both accounts. The ledger reports the
+        # $1,519.25 it has: a confirmed payment is what the broker paid, and
+        # the declared figure is measured against today's shares and today's
+        # DPS. Importing the second account's file squares the day — see
+        # test_second_fidelity_account_same_day_import_adds_without_a_holding.
         self._pay("2026-08-25", "GDXW", 1519.25, source="fidelity_transactions")
         self._holding("GDXW", 100, 23.1581)
         payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
         day = self._day(payload, "2026-08-25")
+        self.assertAlmostEqual(day["total"], 1519.25, places=2)
+        self.assertAlmostEqual(day["payments"][0]["amount"], 1519.25, places=2)
+
+    def test_a_projected_day_is_still_filled_up_to_the_declared_amount(self):
+        # Nothing is confirmed yet, so the ledger has only the refresh's
+        # projection for one account. Filling it to the declared amount keeps
+        # the day level with what the dividend calendar shows.
+        self._pay("2026-08-25", "GDXW", 1519.25, source="refresh_estimate")
+        self._holding("GDXW", 100, 23.1581)
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 27))
+        day = self._day(payload, "2026-08-25")
         self.assertAlmostEqual(day["total"], 2315.81, places=2)
-        self.assertAlmostEqual(day["payments"][0]["amount"], 2315.81, places=2)
+        self.assertAlmostEqual(day["estimated"], 2315.81, places=2)
+
+    def test_a_buy_after_the_pay_date_cannot_inflate_the_confirmed_day(self):
+        # 100 shares were paid $0.50 each on Aug 25; another 100 were bought on
+        # Aug 28. Today's lot declares $100, but Aug 25 paid $50.
+        self._pay("2026-08-25", "XYZ", 50.00)
+        self._holding("XYZ", 200, 0.50)
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 8, 31))
+        self.assertAlmostEqual(self._day(payload, "2026-08-25")["total"], 50.00, places=2)
 
     def test_ledger_does_not_stack_declared_floor_on_top_of_both_accounts(self):
         self._pay("2026-08-25", "GDXW", 1519.25, profile_id=1, source="fidelity_transactions")
@@ -588,6 +610,46 @@ class DividendLedgerTest(unittest.TestCase):
         )
         day = self._day(payload, "2026-08-25")
         self.assertAlmostEqual(day["total"], 2315.81, places=2)
+
+    def test_earlier_payments_report_the_broker_amount_not_todays_run_rate(self):
+        # A reinvesting weekly payer: the share count grows every Monday, so
+        # today's shares × today's DPS is larger than every earlier payment.
+        # Those days were confirmed by the broker and must read as imported.
+        paid = {
+            "2026-08-03": 8.10, "2026-08-10": 8.32, "2026-08-17": 7.88,
+            "2026-08-24": 7.70, "2026-08-31": 8.69,
+        }
+        for date, amount in paid.items():
+            self._pay(date, "BLOX", amount)
+        self._holding("BLOX", 89.4634, 0.0979)  # declares 8.76
+
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 9, 3))
+        for date, amount in paid.items():
+            self.assertAlmostEqual(self._day(payload, date)["total"], amount, places=2)
+        self.assertAlmostEqual(
+            payload["month_summary"]["total"], round(sum(paid.values()), 2), places=2,
+        )
+
+    def test_latest_day_short_by_one_reinvestment_keeps_the_broker_amount(self):
+        # 8.69 against a declared 8.76 is the shares bought by this very
+        # payment, not a missing account. Filling that gap would overwrite cash
+        # the broker already confirmed.
+        self._pay("2026-08-31", "BLOX", 8.69)
+        self._holding("BLOX", 89.4634, 0.0979)
+
+        payload = self._ledger(month="2026-08", today=datetime.date(2026, 9, 3))
+        self.assertAlmostEqual(self._day(payload, "2026-08-31")["total"], 8.69, places=2)
+
+    def test_an_older_short_day_is_not_filled_once_a_newer_payment_lands(self):
+        # The declared figure describes the newest distribution only. An older
+        # day that looks short against it stays as recorded.
+        self._pay("2026-07-28", "GDXW", 1519.25, source="fidelity_transactions")
+        self._pay("2026-08-25", "GDXW", 2315.81, source="fidelity_transactions")
+        self._holding("GDXW", 100, 23.1581)
+
+        payload = self._ledger(month="2026-07", today=datetime.date(2026, 8, 27))
+        day = self._day(payload, "2026-07-28")
+        self.assertAlmostEqual(day["total"], 1519.25, places=2)
 
 
 if __name__ == "__main__":
