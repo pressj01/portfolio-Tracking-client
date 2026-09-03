@@ -179,6 +179,16 @@ class TickerResearchApiTest(unittest.TestCase):
         self.assertEqual(app_module._combined_export_clean_date("20226-04-10"), "")
         self.assertEqual(app_module._combined_export_clean_date("04/10/2026"), "2026-04-10")
 
+    def test_portfolio_export_scope_falls_back_to_importing_both_halves(self):
+        self.assertEqual(app_module._portfolio_export_scope("positions"), "positions")
+        self.assertEqual(app_module._portfolio_export_scope(" TRANSACTIONS "), "transactions")
+        self.assertEqual(app_module._portfolio_export_scope("both"), "both")
+        # A missing or unknown scope must import the whole workbook rather than
+        # silently dropping one half of it.
+        self.assertEqual(app_module._portfolio_export_scope(None), "both")
+        self.assertEqual(app_module._portfolio_export_scope(""), "both")
+        self.assertEqual(app_module._portfolio_export_scope("holdings"), "both")
+
     def test_combined_export_does_not_turn_blank_cells_into_nan_text(self):
         self.assertEqual(app_module._combined_export_clean_text(float("nan")), "")
         self.assertEqual(app_module._combined_export_clean_text(None), "")

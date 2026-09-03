@@ -2742,6 +2742,146 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         finally:
             workbook_path.unlink(missing_ok=True)
 
+    def _write_combined_export_workbook(self, path):
+        """One app-export workbook: a portfolio sheet plus a Transactions sheet."""
+        import pandas as pd
+
+        with pd.ExcelWriter(path, engine="openpyxl") as writer:
+            pd.DataFrame([{
+                "Ticker": "ABC",
+                "Shares": 3,
+                "Price Paid": 10,
+                "Current Price": 12,
+                "Purchase Value": 30,
+                "Current Value": 36,
+            }]).to_excel(writer, sheet_name="Trust", index=False)
+            pd.DataFrame([{
+                "Transaction ID": 1,
+                "Profile": "Trust",
+                "Ticker": "ABC",
+                "Type": "BUY",
+                "Date": "2026-01-02",
+                "Shares": 3,
+                "Price/Share": 10,
+                "Fees": 0,
+                "Realized Gain": None,
+                "Notes": "exported transaction",
+                "Created At": "2026-01-02",
+            }, {
+                "Transaction ID": "DIV-1",
+                "Profile": "Trust",
+                "Ticker": "ABC",
+                "Type": "DIVIDEND",
+                "Date": "2026-02-15",
+                "Shares": None,
+                "Price/Share": None,
+                "Fees": None,
+                "Realized Gain": None,
+                "Dividend Amount": 4.25,
+                "Notes": "exported dividend",
+                "Created At": "2026-02-15",
+            }]).to_excel(writer, sheet_name="Transactions", index=False)
+
+    def _run_scoped_portfolio_export(self, workbook_path, scope):
+        parsed = app_module._parse_portfolio_export_workbook(
+            str(workbook_path), workbook_path.name,
+        )
+        imported_profiles = []
+        orig_import_from_upload = app_module.import_from_upload
+        orig_populate_income_tracking = app_module.populate_income_tracking
+        orig_snapshot_nav = app_module._snapshot_nav_after_profile_update
+        orig_auto_reconcile_owner = app_module._auto_reconcile_owner
+        try:
+            def fake_import_from_upload(df, profile_id):
+                imported_profiles.append(profile_id)
+                return len(df), f"Imported {len(df)} holdings for profile {profile_id}."
+
+            app_module.import_from_upload = fake_import_from_upload
+            app_module.populate_income_tracking = lambda profile_id: None
+            app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+            app_module._auto_reconcile_owner = lambda: None
+
+            with app_module.app.app_context():
+                res = app_module._import_portfolio_export_workbook(
+                    parsed, str(workbook_path), 20, scope=scope,
+                )
+                return imported_profiles, res.get_json()
+        finally:
+            app_module.import_from_upload = orig_import_from_upload
+            app_module.populate_income_tracking = orig_populate_income_tracking
+            app_module._snapshot_nav_after_profile_update = orig_snapshot_nav
+            app_module._auto_reconcile_owner = orig_auto_reconcile_owner
+
+    def test_portfolio_export_positions_only_skips_the_transactions_sheet(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Snowball_Studwell', 0)"
+        )
+        workbook = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        workbook.close()
+        workbook_path = Path(workbook.name)
+        try:
+            self._write_combined_export_workbook(workbook_path)
+            imported_profiles, data = self._run_scoped_portfolio_export(workbook_path, "positions")
+
+            self.assertEqual(imported_profiles, [20])
+            self.assertEqual(data["details"][0]["source_sheet"], "Trust")
+            # The ledger half of the workbook must stay out of the database.
+            self.assertEqual(self._scalar("SELECT COUNT(*) FROM transactions"), 0)
+            self.assertEqual(self._scalar("SELECT COUNT(*) FROM dividend_payments"), 0)
+            self.assertEqual(data["inserted_buys"], 0)
+            self.assertEqual(data["dividends_applied"], 0)
+            self.assertIn("Transactions sheet was skipped", data["message"])
+        finally:
+            workbook_path.unlink(missing_ok=True)
+
+    def test_portfolio_export_transactions_only_leaves_holdings_alone(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Snowball_Studwell', 0)"
+        )
+        workbook = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        workbook.close()
+        workbook_path = Path(workbook.name)
+        try:
+            self._write_combined_export_workbook(workbook_path)
+            imported_profiles, data = self._run_scoped_portfolio_export(workbook_path, "transactions")
+
+            # No holdings sheet is read, but the rows still route to the
+            # selected profile and the ledger is rebuilt for it.
+            self.assertEqual(imported_profiles, [])
+            self.assertEqual(data["details"], [])
+            self.assertEqual(data["inserted_buys"], 1)
+            self.assertEqual(data["dividends_applied"], 1)
+            self.assertEqual(
+                self._scalar("SELECT profile_id FROM transactions WHERE ticker = 'ABC'"), 20,
+            )
+            self.assertEqual(
+                self._scalar(
+                    "SELECT COUNT(*) FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 20"
+                ),
+                1,
+            )
+            self.assertIn("holdings were left untouched", data["message"])
+        finally:
+            workbook_path.unlink(missing_ok=True)
+
+    def test_portfolio_export_defaults_to_importing_both_halves(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Snowball_Studwell', 0)"
+        )
+        workbook = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+        workbook.close()
+        workbook_path = Path(workbook.name)
+        try:
+            self._write_combined_export_workbook(workbook_path)
+            # An unrecognized scope must not quietly import nothing.
+            imported_profiles, data = self._run_scoped_portfolio_export(workbook_path, "bogus")
+
+            self.assertEqual(imported_profiles, [20])
+            self.assertEqual(data["inserted_buys"], 1)
+            self.assertEqual(data["dividends_applied"], 1)
+        finally:
+            workbook_path.unlink(missing_ok=True)
+
     def test_snowball_parser_accepts_minute_precision_dates(self):
         csv_file = tempfile.NamedTemporaryFile(suffix=".csv", mode="w", newline="", delete=False)
         csv_path = Path(csv_file.name)

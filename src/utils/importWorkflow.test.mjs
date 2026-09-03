@@ -251,6 +251,26 @@ test('only completed imports advance the checklist', () => {
   assert.deepEqual(completedWorkflowSteps('schwab', { navOnly: true }), [])
 })
 
+test('a scoped app-export run only completes the half it imported', () => {
+  assert.deepEqual(
+    completedWorkflowSteps('portfolio_export', { exportScope: 'positions' }),
+    ['positions'],
+  )
+  assert.deepEqual(
+    completedWorkflowSteps('portfolio_export', { exportScope: 'transactions' }),
+    ['transactions'],
+  )
+  assert.deepEqual(
+    completedWorkflowSteps('portfolio_export', { exportScope: 'both' }),
+    ['positions', 'transactions'],
+  )
+  // An unknown scope must not silently drop a step from the checklist.
+  assert.deepEqual(
+    completedWorkflowSteps('portfolio_export', { exportScope: 'bogus' }),
+    ['positions', 'transactions'],
+  )
+})
+
 test('formats both multi-account and app-export result details', () => {
   assert.equal(formatImportDetail({
     ok: false,
@@ -285,4 +305,10 @@ test('generic transactions cannot be pinned as the brokerage default', () => {
   assert.equal(isPinnableFormat('generic_transactions'), false)
   assert.equal(isPinnableFormat('snowball_holdings'), false)
   assert.equal(isPinnableFormat('schwab'), true)
+})
+
+test('the app-export workbook owns a tab, so it cannot be the brokerage default', () => {
+  // Pinning it would make Broker Import open on a format that lights up the
+  // Positions + Transactions tab instead.
+  assert.equal(isPinnableFormat('portfolio_export'), false)
 })

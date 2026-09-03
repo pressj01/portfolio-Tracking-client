@@ -9294,9 +9294,30 @@ def _parse_portfolio_export_workbook(path, filename=None):
 
 TXN_PARSERS["portfolio_export"] = _parse_portfolio_export_workbook
 
+_PORTFOLIO_EXPORT_SCOPES = ("both", "positions", "transactions")
 
-def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_date=None):
-    """Import app-exported holdings sheets and their Transactions sheet together."""
+
+def _portfolio_export_scope(value):
+    """Normalize the half of an app-export workbook the caller asked to import."""
+    scope = str(value or "both").strip().lower()
+    return scope if scope in _PORTFOLIO_EXPORT_SCOPES else "both"
+
+
+def _requested_portfolio_export_scope():
+    return _portfolio_export_scope(request.form.get("export_scope"))
+
+
+def _import_portfolio_export_workbook(
+    parsed, path, fallback_profile_id, nav_date=None, scope="both",
+):
+    """Import app-exported holdings sheets and their Transactions sheet together.
+
+    ``scope`` narrows the workbook to one half so the two can be run as separate
+    steps: holdings first, transaction history second.
+    """
+    scope = _portfolio_export_scope(scope)
+    want_positions = scope in ("both", "positions")
+    want_transactions = scope in ("both", "transactions")
     profile_by_name = {}
     imported_profiles = []
     holding_messages = []
@@ -9306,6 +9327,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
 
     conn = get_connection()
     try:
+        # The sheet names are resolved in every scope: a transactions-only run
+        # still needs them to route each row back to its own portfolio.
         for sheet in portfolios:
             sheet_name = sheet["sheet_name"]
             if single_portfolio_export:
@@ -9319,6 +9342,8 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
             profile_by_name[str(target_profile_name).strip().lower()] = pid
             if single_portfolio_export:
                 transaction_profile_fallback = pid
+            if not want_positions:
+                continue
             df = pd.read_excel(path, sheet_name=sheet_name, engine="openpyxl")
             count, msg = import_from_upload(df, pid)
             imported_profiles.append(pid)
@@ -9345,8 +9370,9 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
 
     conn = get_connection()
     try:
-        non_div_txns = [txn for txn in parsed.get("transactions", []) if txn.get("type") != "DIVIDEND"]
-        div_txns = [txn for txn in parsed.get("transactions", []) if txn.get("type") == "DIVIDEND"]
+        workbook_txns = parsed.get("transactions", []) if want_transactions else []
+        non_div_txns = [txn for txn in workbook_txns if txn.get("type") != "DIVIDEND"]
+        div_txns = [txn for txn in workbook_txns if txn.get("type") == "DIVIDEND"]
 
         for txn in div_txns:
             profile_key = str(txn.get("profile") or "").strip().lower()
@@ -9493,27 +9519,44 @@ def _import_portfolio_export_workbook(parsed, path, fallback_profile_id, nav_dat
     finally:
         conn.close()
 
-    for pid in dict.fromkeys(imported_profiles):
+    # A transactions-only run touches no holdings sheet, so the profiles to
+    # rebuild are the ones the transaction rows actually landed in.
+    touched_profiles = list(dict.fromkeys([
+        *imported_profiles,
+        *transaction_tickers_by_profile,
+        *dividend_tickers_by_profile,
+    ]))
+    for pid in touched_profiles:
         populate_holdings(pid)
         populate_dividends(pid)
         populate_income_tracking(pid)
         _snapshot_nav_after_profile_update(pid, nav_date=nav_date)
-    if any(pid != 1 for pid in imported_profiles):
+    if any(pid != 1 for pid in touched_profiles):
         _auto_reconcile_owner()
 
     # Build a clear, plain-English summary of what happened.
     total_holdings = sum(d["rows"] for d in holding_messages)
     num_portfolios = len(holding_messages)
     total_new_txns = inserted_buys + inserted_sells + dividends_applied
-    parts = [
-        f"Imported {total_holdings} holding{'s' if total_holdings != 1 else ''} across "
-        f"{num_portfolios} portfolio{'s' if num_portfolios != 1 else ''}."
-    ]
+    parts = []
+    if want_positions:
+        parts.append(
+            f"Imported {total_holdings} holding{'s' if total_holdings != 1 else ''} across "
+            f"{num_portfolios} portfolio{'s' if num_portfolios != 1 else ''}."
+        )
+    else:
+        parts.append("Transactions only — holdings were left untouched.")
     if total_new_txns:
         parts.append(
             f"Added {inserted_buys} buy{'s' if inserted_buys != 1 else ''}, "
             f"{inserted_sells} sell{'s' if inserted_sells != 1 else ''}, and "
             f"{dividends_applied} dividend{'s' if dividends_applied != 1 else ''}."
+        )
+    elif not want_transactions:
+        skipped = len(parsed.get("transactions", []))
+        parts.append(
+            f"The Transactions sheet was skipped ({skipped} row{'s' if skipped != 1 else ''}) — "
+            "run the same file again as Transactions only to bring it in."
         )
     elif duplicates_skipped:
         parts.append("No new transactions were added — they are already in your records.")
@@ -9593,12 +9636,25 @@ def api_import_transactions_preview():
         if result.get("format_type") == "categories":
             result["target_profile_name"] = _get_profile_name(profile_id)
         elif result.get("format_type") == "combined_export":
+            scope = _requested_portfolio_export_scope()
             result["target_profile_name"] = _get_profile_name(profile_id)
+            result["export_scope"] = scope
             result["preserve_positions"] = True
-            result["preserve_positions_message"] = (
-                "This import restores holdings first, then imports transaction history for recordkeeping. "
-                "The imported holdings stay in control of current position values."
-            )
+            if scope == "positions":
+                result["preserve_positions_message"] = (
+                    "Positions only: the portfolio sheets will be imported and the Transactions "
+                    "sheet will be skipped. Run the same file again as Transactions only to add history."
+                )
+            elif scope == "transactions":
+                result["preserve_positions_message"] = (
+                    "Transactions only: transaction and dividend history will be imported for "
+                    "recordkeeping. Your current holdings are left untouched."
+                )
+            else:
+                result["preserve_positions_message"] = (
+                    "This import restores holdings first, then imports transaction history for recordkeeping. "
+                    "The imported holdings stay in control of current position values."
+                )
         elif result.get("format_type") != "positions":
             conn = get_connection()
             try:
@@ -10337,7 +10393,10 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
     if parsed.get("format_type") == "combined_export":
         try:
-            return _import_portfolio_export_workbook(parsed, path, profile_id, nav_date=nav_date)
+            return _import_portfolio_export_workbook(
+                parsed, path, profile_id, nav_date=nav_date,
+                scope=_requested_portfolio_export_scope(),
+            )
         finally:
             try:
                 if os.path.exists(path):

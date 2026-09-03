@@ -204,7 +204,7 @@ function ImportHelp() {
       <p style={{ marginBottom: '1rem' }}>
         The Import page opens on the <strong>Broker Import</strong> tab. The tabs, left to right, are
         <strong> Broker Import</strong>, <strong>Generic Positions</strong>, <strong>Generic Transactions</strong>,
-        and <strong>Snowball</strong>.
+        <strong> Positions + Transactions</strong>, and <strong>Snowball</strong>.
       </p>
       <p style={{ marginBottom: '1rem' }}>
         On Broker Import, pick a broker and follow the checklist: <strong>Positions</strong> first, then
@@ -214,8 +214,12 @@ function ImportHelp() {
         positions yet, a transaction import is blocked until you confirm that the file is complete history —
         a partial history file will otherwise rebuild share counts from those rows alone.
         <strong>Generic Positions</strong> and <strong>Generic Transactions</strong> are for spreadsheet uploads
-        that are not a broker export. The <strong>Snowball</strong> tab is only for migrating an old Snowball
-        export — skip it if you import from Schwab or another broker.
+        that are not a broker export. <strong>Positions + Transactions</strong> takes one workbook holding both —
+        the <code>portfolio_with_transactions_*.xlsx</code> file the Export page produces — and restores holdings
+        first, then transaction history. Its scope buttons (<strong>Both</strong>, <strong>Positions only</strong>,
+        <strong> Transactions only</strong>) let you run the two halves as separate steps from the same file, which
+        is the way to move a portfolio onto another computer. The <strong>Snowball</strong> tab is only for
+        migrating an old Snowball export — skip it if you import from Schwab or another broker.
         Position imports support merge mode — if the portfolio already has data, existing tickers are updated and new tickers are added,
         while app-only fields (like DRIP toggles or pay dates you edited manually) are preserved unless the spreadsheet provides them.
       </p>
@@ -242,7 +246,8 @@ function ImportHelp() {
       <div className="alert alert-info" style={{ marginTop: '0.75rem', marginBottom: '1.25rem' }}>
         <strong>Remembering your format:</strong> Broker Import opens on the broker tagged on the selected portfolio,
         or on the last format you pinned with <strong>Set as default</strong>. Preview stays disabled until a format
-        is chosen. <strong>Generic Transactions</strong> has its own tab and cannot be pinned as the brokerage default.
+        is chosen. <strong>Generic Transactions</strong> and <strong>Positions + Transactions</strong> have their own
+        tabs and cannot be pinned as the brokerage default.
         The saved default lives in this browser's local storage, not the database, so it does not follow you to another
         device or installation.
       </div>

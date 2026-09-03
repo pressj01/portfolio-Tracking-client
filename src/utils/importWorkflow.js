@@ -141,8 +141,11 @@ const formatIndex = Object.fromEntries(TXN_FORMATS.map((item) => [item.value, it
 
 export const formatLabel = (value) => formatIndex[value] || value
 
+// Only Broker Import can be pinned. The generic, app-export and Snowball
+// formats each own a tab, so pinning one would send Broker Import elsewhere.
 export const isPinnableFormat = (value) => (
   value !== 'generic_transactions'
+  && value !== 'portfolio_export'
   && !SNOWBALL_FORMATS.has(value)
   && TXN_FORMATS.some((item) => item.value === value)
 )
@@ -233,10 +236,15 @@ export function needsPositionsSnapshotFirst(format) {
   return TRANSACTION_FORMATS.has(String(format || '').trim())
 }
 
-export function completedWorkflowSteps(format, { navOnly = false } = {}) {
+export function completedWorkflowSteps(format, { navOnly = false, exportScope = 'both' } = {}) {
   if (navOnly) return []
   const value = String(format || '').trim()
-  if (value === 'portfolio_export') return ['positions', 'transactions']
+  if (value === 'portfolio_export') {
+    // A scoped app-export run only completes the half it actually imported.
+    if (exportScope === 'positions') return ['positions']
+    if (exportScope === 'transactions') return ['transactions']
+    return ['positions', 'transactions']
+  }
   const role = describeWorkflow(value).role
   return role === 'positions' || role === 'transactions' ? [role] : []
 }

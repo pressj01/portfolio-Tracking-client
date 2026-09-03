@@ -66,6 +66,13 @@ const multiAccountSummaryText = (summary = {}) => {
 
 const BROKER_FORMAT_KEY = 'portfolio_defaultBrokerImportFormat'
 
+// The Export page ships holdings and transactions in one workbook. Only the
+// filename is readable here, so this nudges rather than blocks.
+const looksLikeAppExportFile = (file) => {
+  const name = String(file?.name || '').toLowerCase()
+  return name.includes('portfolio_with_transactions')
+}
+
 const readDefaultBrokerFormat = () => {
   try {
     const saved = localStorage.getItem(BROKER_FORMAT_KEY)
@@ -391,7 +398,7 @@ function SnowballImportTypeSwitch({ format, onSelect }) {
   )
 }
 
-function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
+function GenericImportTypeSwitch({ activeType, onPositions, onTransactions, onCombined }) {
   return (
     <div
       className="alert alert-info"
@@ -414,6 +421,48 @@ function GenericImportTypeSwitch({ activeType, onPositions, onTransactions }) {
       >
         Transactions
       </button>
+      <button
+        type="button"
+        className={`btn ${activeType === 'combined' ? 'btn-primary' : 'btn-secondary'}`}
+        onClick={onCombined}
+        aria-pressed={activeType === 'combined'}
+        title="One workbook that holds both a portfolio sheet and a Transactions sheet"
+      >
+        Positions + Transactions
+      </button>
+    </div>
+  )
+}
+
+const PORTFOLIO_EXPORT_SCOPES = [
+  { value: 'both', label: 'Both', hint: 'Holdings first, then transaction history' },
+  { value: 'positions', label: 'Positions only', hint: 'Import the portfolio sheets, skip Transactions' },
+  { value: 'transactions', label: 'Transactions only', hint: 'Import the Transactions sheet, leave holdings alone' },
+]
+
+function PortfolioExportScopeSwitch({ scope, onSelect }) {
+  const active = PORTFOLIO_EXPORT_SCOPES.find((item) => item.value === scope)
+  return (
+    <div style={{ marginBottom: '1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+        <strong>Import from this workbook:</strong>
+        {PORTFOLIO_EXPORT_SCOPES.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            className={`btn ${scope === item.value ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => onSelect(item.value)}
+            aria-pressed={scope === item.value}
+            title={item.hint}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <p style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem', margin: '0.5rem 0 0' }}>
+        {active?.hint}
+        {scope !== 'both' && ' — the same file can be run again with the other scope.'}
+      </p>
     </div>
   )
 }
@@ -463,6 +512,7 @@ export default function Import() {
   const [savingDestDefaults, setSavingDestDefaults] = useState(false)
   const [workflowStep, setWorkflowStep] = useState(() => workflowStepForFormat(readDefaultBrokerFormat(), 'positions'))
   const [txnOrderAck, setTxnOrderAck] = useState(false)
+  const [exportScope, setExportScope] = useState('both')
   const [completedSteps, setCompletedSteps] = useState({})
   const [lastImportKind, setLastImportKind] = useState('')
 
@@ -690,7 +740,12 @@ export default function Import() {
     ? (txnIsMultiAccount
         ? txnMappedAccounts.length > 0
         : txnPreview.format_type === 'combined_export'
-        ? ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0)
+        // Each scope needs rows on its own side of the workbook to be worth running.
+        ? (exportScope === 'positions'
+            ? (txnPreview.summary?.holdings || 0) > 0
+            : exportScope === 'transactions'
+            ? (txnPreview.summary?.transactions || 0) > 0
+            : ((txnPreview.summary?.holdings || 0) > 0 || (txnPreview.summary?.transactions || 0) > 0))
         : txnPreview.format_type === 'categories'
         ? (txnPreview.summary?.categories || 0) > 0
         : txnPreview.format_type === 'positions'
@@ -862,6 +917,12 @@ export default function Import() {
     applyTxnFormat('generic_transactions', 'transactions')
   }
 
+  const handleAppExportTab = (scope = 'both') => {
+    handleTabChange('txnHistory')
+    applyTxnFormat('portfolio_export', 'positions')
+    setExportScope(scope)
+  }
+
   const handleSnowballTab = () => {
     handleTabChange('txnHistory')
     if (!isSnowballFormat(txnFormat)) applyTxnFormat('snowball_holdings', 'migration')
@@ -869,7 +930,7 @@ export default function Import() {
 
   const handleBrokerageImportTab = () => {
     handleTabChange('txnHistory')
-    if (txnFormat === 'generic_transactions' || isSnowballFormat(txnFormat)) {
+    if (txnFormat === 'generic_transactions' || txnFormat === 'portfolio_export' || isSnowballFormat(txnFormat)) {
       const fallback = defaultTxnFormat || formatForWorkflow({
         brokerId: brokerIdFromSource(currentProfile?.broker_source) || 'schwab',
         role: 'positions',
@@ -1144,7 +1205,7 @@ export default function Import() {
 
       <div className="tabs">
         <button
-          className={`tab ${activeTab === 'txnHistory' && txnFormat !== 'generic_transactions' && !isSnowballFormat(txnFormat) ? 'active' : ''}`}
+          className={`tab ${activeTab === 'txnHistory' && txnFormat !== 'generic_transactions' && txnFormat !== 'portfolio_export' && !isSnowballFormat(txnFormat) ? 'active' : ''}`}
           onClick={handleBrokerageImportTab}
         >
           Broker Import
@@ -1164,6 +1225,16 @@ export default function Import() {
           title={isRollupTarget ? 'Select a single account to use Generic Transactions' : undefined}
         >
           Generic Transactions
+        </button>
+        <button
+          className={`tab ${activeTab === 'txnHistory' && txnFormat === 'portfolio_export' ? 'active' : ''}`}
+          onClick={() => handleAppExportTab('both')}
+          disabled={isRollupTarget}
+          title={isRollupTarget
+            ? 'Select a single account to import a Positions + Transactions workbook'
+            : 'One workbook holding both a portfolio sheet and a Transactions sheet'}
+        >
+          Positions + Transactions
         </button>
         <button
           className={`tab ${activeTab === 'txnHistory' && isSnowballFormat(txnFormat) ? 'active' : ''}`}
@@ -1279,7 +1350,24 @@ export default function Import() {
           <GenericImportTypeSwitch
             activeType="positions"
             onTransactions={handleGenericTransactionsTab}
+            onCombined={() => handleAppExportTab('both')}
           />
+          {looksLikeAppExportFile(file) && (
+            <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
+              <strong>This looks like a Positions + Transactions workbook.</strong> This tab imports
+              the portfolio sheet only — the <em>Transactions</em> sheet would be ignored. Use{' '}
+              <strong>Positions + Transactions</strong> to bring in both, or to run them as two steps.
+              <div style={{ marginTop: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => handleAppExportTab('both')}
+                >
+                  Switch to Positions + Transactions
+                </button>
+              </div>
+            </div>
+          )}
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             Upload an Excel file with at minimum <strong>Ticker</strong> and <strong>Shares</strong> columns.
             Optional columns: Price Paid, Dividend, Frequency, Ex-Div Date, DRIP.
@@ -1395,6 +1483,8 @@ export default function Import() {
           <h2>
             {txnFormat === 'generic_transactions'
               ? 'Import Generic Transactions'
+              : txnFormat === 'portfolio_export'
+                ? 'Import Generic Positions + Transactions'
               : isSnowballFormat(txnFormat)
                 ? 'Import Snowball (Migration)'
                 : 'Broker Import'}
@@ -1412,7 +1502,7 @@ export default function Import() {
               />
             </>
           )}
-          {txnFormat !== 'generic_transactions' && !isSnowballFormat(txnFormat) && (
+          {txnFormat !== 'generic_transactions' && txnFormat !== 'portfolio_export' && !isSnowballFormat(txnFormat) && (
             <ImportWorkflowPicker
               format={txnFormat}
               step={workflowStep}
@@ -1446,7 +1536,28 @@ export default function Import() {
             <GenericImportTypeSwitch
               activeType="transactions"
               onPositions={() => handleTabChange('generic')}
+              onCombined={() => handleAppExportTab('both')}
             />
+          )}
+          {txnFormat === 'portfolio_export' && (
+            <>
+              <GenericImportTypeSwitch
+                activeType="combined"
+                onPositions={() => handleTabChange('generic')}
+                onTransactions={handleGenericTransactionsTab}
+              />
+              <PortfolioExportScopeSwitch
+                scope={exportScope}
+                onSelect={(value) => {
+                  setExportScope(value)
+                  // The preview banner spells out what the scope will do, so a
+                  // stale one would contradict the buttons.
+                  setTxnPreview(null)
+                  setResult(null)
+                  setError(null)
+                }}
+              />
+            </>
           )}
           {(txnFormat === 'generic_transactions' || isSnowballFormat(txnFormat)) && (
             <TransactionOrderWarning
@@ -1461,7 +1572,7 @@ export default function Import() {
           <>
           <p style={{ color: 'var(--text-dim-2)', marginBottom: '1rem' }}>
             {txnFormat === 'portfolio_export'
-              ? <>Import the app's <strong>Holdings + Transactions Excel export</strong>. Preview shows the portfolio sheets and the Transactions sheet, then import restores both together from one file.</>
+              ? <>Import one workbook that carries <strong>both</strong> a portfolio sheet and a <strong>Transactions</strong> sheet &mdash; the file the <em>Export</em> page produces as <code>portfolio_with_transactions_*.xlsx</code>. Preview lists what the file holds; import brings in holdings first, then transaction history. Use the scope buttons above to run the two halves as separate steps instead.</>
             : txnFormat === 'generic_transactions'
               ? <>Import broker-neutral transaction history from the app's <strong>Generic Transactions XLSX or CSV</strong> format. BUY, SELL, DIVIDEND, and DRIP rows use the same preview, duplicate protection, position rollup, dividend tracking, and realized-gain workflow as broker transaction imports.</>
             : txnFormat === 'snowball_categories'
@@ -1688,7 +1799,7 @@ export default function Import() {
             </div>
           )}
 
-          {txnFormat !== 'generic_transactions' && workflowStep !== 'refresh' && !isSnowballFormat(txnFormat) && (
+          {txnFormat !== 'generic_transactions' && txnFormat !== 'portfolio_export' && workflowStep !== 'refresh' && !isSnowballFormat(txnFormat) && (
             <div className="form-group" style={{ marginBottom: '1rem' }}>
               <label>Format</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1773,6 +1884,7 @@ export default function Import() {
                 const formData = new FormData()
                 formData.append('file', txnFile)
                 formData.append('format', txnFormat)
+                if (txnFormat === 'portfolio_export') formData.append('export_scope', exportScope)
                 try {
                   const res = await pf(`/api/import/transactions/preview`, { method: 'POST', body: formData })
                   const data = await res.json()
@@ -1823,6 +1935,7 @@ export default function Import() {
                   formData.append('file', txnFile)
                   formData.append('format', txnFormat)
                   formData.append('nav_date', navSnapshotDate)
+                  if (txnFormat === 'portfolio_export') formData.append('export_scope', exportScope)
                   if (txnNavOnly && (txnPreview?.format_type === 'positions' || txnIsMultiPositions)) formData.append('nav_only', 'true')
                   if (txnIsMultiAccount) formData.append('account_map', JSON.stringify(txnAccountMap))
                   try {
@@ -1830,7 +1943,10 @@ export default function Import() {
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
                     const data = await res.json()
                     if (!res.ok) throw new Error(data.error || 'Import failed')
-                    const completedKinds = completedWorkflowSteps(txnFormat, { navOnly: txnNavOnly })
+                    const completedKinds = completedWorkflowSteps(txnFormat, {
+                      navOnly: txnNavOnly,
+                      exportScope,
+                    })
                     const nextKind = completedKinds.includes('transactions')
                       ? 'transactions'
                       : completedKinds[0] || ''
@@ -1864,7 +1980,9 @@ export default function Import() {
                     ? <><span className="spinner" /> Importing...</>
                     : txnIsMultiAccount
                       ? `Import ${txnMappedAccounts.length} account${txnMappedAccounts.length === 1 ? '' : 's'}`
-                      : `Import into ${currentProfileName}`}
+                      : txnFormat === 'portfolio_export' && exportScope !== 'both'
+                        ? `Import ${exportScope} into ${currentProfileName}`
+                        : `Import into ${currentProfileName}`}
               </button>
             )}
           </div>
