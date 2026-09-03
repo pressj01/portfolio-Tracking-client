@@ -18,6 +18,7 @@ import numpy as np
 
 from flask import jsonify, request
 
+from asymmetrical_iron_condor_scanner import run_asymmetrical_iron_condor_scan
 from bear_call_spread_scanner import run_bear_call_spread_scan
 from bear_put_spread_scanner import run_spread_scan as run_bear_put_spread_scan
 from bull_put_spread_scanner import run_bull_put_spread_scan
@@ -72,6 +73,8 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "double-hedge-put-butterfly": {"label": "Double-Hedge Put Butterfly", "runner": run_488_scan, "family": "ticker"},
     "road-trip-butterfly": {"label": "Road Trip Butterfly", "runner": run_road_trip_butterfly_scan, "family": "ticker"},
     "sixty-forty-twenty-fly": {"label": "60/40/20 Fly", "runner": run_sixty_forty_twenty_fly_scan, "family": "ticker"},
+    "fourteen-day-aic": {"label": "14-Day AIC", "runner": run_asymmetrical_iron_condor_scan, "family": "ticker"},
+    "monthly-aic": {"label": "Monthly AIC", "runner": run_asymmetrical_iron_condor_scan, "family": "ticker"},
     "naked-call": {"label": "Naked Call", "runner": run_samurai_strategy_scan, "family": "generic"},
     "long-call": {"label": "Long Call", "runner": run_samurai_strategy_scan, "family": "generic"},
     "long-put": {"label": "Long Put", "runner": run_samurai_strategy_scan, "family": "generic"},
@@ -93,12 +96,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "put-ratio-spread": {"label": "Put Ratio Spread", "runner": run_samurai_strategy_scan, "family": "generic"},
 }
 
+AIC_STRATEGIES = frozenset({
+    "fourteen-day-aic",
+    "monthly-aic",
+})
 INDEX_ONLY_STRATEGIES = frozenset({
     "unbalanced-butterfly",
     "unbalanced-put-condor",
     "double-hedge-put-butterfly",
     "road-trip-butterfly",
     "sixty-forty-twenty-fly",
+    *AIC_STRATEGIES,
 })
 INDEX_ONLY_DEFAULT_TICKERS = ("SPY", "QQQ", "IWM", "VOO")
 RV_WINDOW = 21
@@ -282,19 +290,23 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
         invalid = [ticker for ticker in symbols if ticker not in INDEX_ETF_SET]
         if invalid:
             raise ValueError(
-                "This long-dated structure is limited to index ETFs; remove "
+                "This strategy is limited to index ETFs; remove "
                 f"stock symbols: {', '.join(invalid)}"
             )
+        if strategy in AIC_STRATEGIES:
+            credit_default = "any"
+        else:
+            credit_default = {
+                "risk_averse": "debit_or_flat",
+                "moderate": "flat_or_slight_credit",
+                "aggressive": "credit",
+            }.get(str(payload.get("risk_profile") or "open").lower(), "any")
         result.update({
             "include_stocks": False,
             "include_index_etfs": True,
             "include_sector_etfs": False,
             "include_commodity_etfs": False,
-            "entry_credit_mode": payload.get("entry_credit_mode") or {
-                "risk_averse": "debit_or_flat",
-                "moderate": "flat_or_slight_credit",
-                "aggressive": "credit",
-            }.get(str(payload.get("risk_profile") or "open").lower(), "any"),
+            "entry_credit_mode": payload.get("entry_credit_mode") or credit_default,
             "entry_credit_max_points": _num(payload.get("entry_credit_max_points")) or 0.5,
         })
 
@@ -394,6 +406,10 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
                 **scope,
             })
         result["tickers"] = ",".join(selected)
+    if strategy == "fourteen-day-aic":
+        result["campaign"] = "fourteen_day"
+    elif strategy == "monthly-aic":
+        result["campaign"] = "monthly"
     result.update(_quality_from_payload(payload))
     result.update(scope)
     return result

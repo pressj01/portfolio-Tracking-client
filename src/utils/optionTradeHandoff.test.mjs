@@ -195,6 +195,30 @@ test('six-leg variants can also be saved from the scanner', () => {
   assert.match(payload.notes, /recent-trade estimates/i)
 })
 
+test('builds the complete 14-day AIC for Strategy Lab', () => {
+  const row = {
+    ticker: 'IWM',
+    price: 220,
+    expiration,
+    legs: [
+      quote('put_long', 'put', 190, 4),
+      quote('put_short', 'put', 200, -4),
+      quote('hedge_short', 'put', 205, -1),
+      quote('hedge_long', 'put', 210, 1),
+      quote('call_short', 'call', 235, -1),
+      quote('call_long', 'call', 245, 1),
+    ],
+  }
+
+  const trade = buildScannerTrade('fourteen-day-aic', row)
+
+  assert.ok(trade)
+  assert.equal(trade.label, '14-day asymmetrical iron condor')
+  assert.equal(trade.legs.length, 6)
+  assert.deepEqual(trade.legs.map(leg => leg.side), ['BUY', 'SELL', 'SELL', 'BUY', 'SELL', 'BUY'])
+  assert.deepEqual(trade.legs.map(leg => leg.qty), [4, 4, 1, 1, 1, 1])
+})
+
 test('builds the complete 60/40/20 fly for Strategy Lab', () => {
   const row = {
     ticker: 'SPY',

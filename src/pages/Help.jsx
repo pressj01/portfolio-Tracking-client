@@ -9650,6 +9650,59 @@ function UnbalancedPutCondorScannerHelp() {
   )
 }
 
+function FourteenDayAicScannerHelp() {
+  return <AsymmetricalIronCondorScannerHelp campaign="fourteen_day" />
+}
+
+function MonthlyAicScannerHelp() {
+  return <AsymmetricalIronCondorScannerHelp campaign="monthly" />
+}
+
+function AsymmetricalIronCondorScannerHelp({ campaign = 'fourteen_day' }) {
+  const isFourteenDay = campaign === 'fourteen_day'
+  return (
+    <div>
+      <h2>{isFourteenDay ? '14-Day' : 'Monthly'} Asymmetrical Iron Condor Scanner</h2>
+      <p>
+        This scanner builds Amy Meissner’s <strong>asymmetrical iron condor</strong> (AIC / Weirdor)
+        from the SMB Capital video: a put-heavy credit condor with a put debit hedge on from
+        entry, a flatter T+0 line, slightly long delta, and less upside risk than a balanced condor.
+      </p>
+      {isFourteenDay ? (
+        <p>
+          The <strong>14-day</strong> campaign is a weekly trade. Enter 30–35 DTE, a little closer
+          to the money (about a 25-delta short put and a 12-delta short call), and be out in
+          14 days or less. The name is the hold, not 14-DTE options. Plan capital is about
+          $16,000–$18,000 per unit; take 2–4% of that and keep losses under 5%.
+        </p>
+      ) : (
+        <p>
+          The <strong>monthly</strong> campaign enters 40–50 DTE and plans to exit at 14 DTE
+          remaining, so a typical trade lasts about 30 days. Same plan capital; the profit
+          target is 7–8%. The original unit is 10 put credits, 2 call credits, and 1 put debit hedge.
+        </p>
+      )}
+      <h3>Structure</h3>
+      <ul>
+        <li>Sell the put credit spread farther out, more contracts than the call side.</li>
+        <li>Sell a smaller call credit spread around 12 delta so upside risk stays small.</li>
+        <li>Buy a closer put debit spread as the built-in downside hedge.</li>
+        <li>Net delta should be slightly long. Defined risk on both tails is required.</li>
+      </ul>
+      <h3>Reading the results</h3>
+      <ul>
+        <li><strong>Plan capital</strong> is the campaign margin the profit and stop percentages use.</li>
+        <li><strong>Day-6 review / 14-day hold</strong> (14-day) or <strong>14-DTE exit</strong> (monthly) are the management dates on the probability cards.</li>
+        <li>Expand a row for the six legs, risk graph, and Save trade into Strategy Lab.</li>
+      </ul>
+      <div className="alert alert-warning">
+        Modeled probabilities and early-close outcomes are estimates, not promised returns.
+        Verify strikes, quantities, quotes, buying power, and multi-leg execution before trading.
+      </div>
+    </div>
+  )
+}
+
 function SixtyFortyTwentyFlyScannerHelp() {
   return (
     <div>
@@ -12334,6 +12387,8 @@ const CONTENT_MAP = {
   'double-hedge-put-butterfly-scanner': DoubleHedgePutButterflyScannerHelp,
   'road-trip-butterfly-scanner': RoadTripButterflyScannerHelp,
   'sixty-forty-twenty-fly-scanner': SixtyFortyTwentyFlyScannerHelp,
+  'fourteen-day-aic-scanner': FourteenDayAicScannerHelp,
+  'monthly-aic-scanner': MonthlyAicScannerHelp,
   import: ImportHelp,
   'realized-gain-repair': RealizedGainRepairHelp,
   export: ExportHelp,

@@ -278,6 +278,30 @@ const BUILDERS = {
       optionLeg(row.lower_long_leg, 'BUY', 'PUT', row.expiration, row.lower_long_strike, row.lower_long_quantity),
     ])
   },
+
+  'fourteen-day-aic': row => {
+    if (!row?.expiration || !Array.isArray(row.legs) || !row.legs.length) return null
+    return trade(row, '14-day asymmetrical iron condor', row.legs.map(leg => optionLeg(
+      leg,
+      Number(leg.qty) > 0 ? 'BUY' : 'SELL',
+      String(leg.option_type || '').toUpperCase(),
+      row.expiration,
+      leg.strike,
+      Math.abs(Number(leg.qty) || 1),
+    )))
+  },
+
+  'monthly-aic': row => {
+    if (!row?.expiration || !Array.isArray(row.legs) || !row.legs.length) return null
+    return trade(row, 'monthly asymmetrical iron condor', row.legs.map(leg => optionLeg(
+      leg,
+      Number(leg.qty) > 0 ? 'BUY' : 'SELL',
+      String(leg.option_type || '').toUpperCase(),
+      row.expiration,
+      leg.strike,
+      Math.abs(Number(leg.qty) || 1),
+    )))
+  },
 }
 
 /** The suggested trade as risk-graph legs, or null when the row has no option trade. */
@@ -301,6 +325,8 @@ export function buildScannerTrade(kind, row) {
     'double-hedge-put-butterfly': 3,
     'road-trip-butterfly': 3,
     'sixty-forty-twenty-fly': 3,
+    'fourteen-day-aic': 6,
+    'monthly-aic': 6,
   }[kind]
   // Quantity-aware condor variants can contain four, six, or more actual legs.
   // Validate against the backend's complete leg list instead of rejecting every

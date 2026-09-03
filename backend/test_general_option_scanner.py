@@ -267,6 +267,14 @@ class GeneralOptionScannerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "index ETFs"):
             _runner_payload("unbalanced-put-condor", {"symbols": "SPY,AAPL"})
 
+        fourteen = _runner_payload("fourteen-day-aic", {})
+        self.assertEqual(fourteen["campaign"], "fourteen_day")
+        self.assertEqual(fourteen["tickers"], "SPY,QQQ,IWM,VOO")
+        monthly = _runner_payload("monthly-aic", {})
+        self.assertEqual(monthly["campaign"], "monthly")
+        with self.assertRaisesRegex(ValueError, "index ETFs"):
+            _runner_payload("fourteen-day-aic", {"symbols": "SPY,AAPL"})
+
     @patch("general_option_scanner.resolve_scan_universe", return_value=["GLD", "SLV", "DBC"])
     def test_ticker_strategy_uses_the_selected_shared_universe(self, resolve):
         payload = _runner_payload("iron-butterfly", {

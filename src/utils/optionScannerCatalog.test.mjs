@@ -22,10 +22,12 @@ const expectedRoutes = [
   '/double-hedge-put-butterfly-scanner',
   '/road-trip-butterfly-scanner',
   '/sixty-forty-twenty-fly-scanner',
+  '/fourteen-day-aic-scanner',
+  '/monthly-aic-scanner',
 ]
 
-test('catalog includes the 13 legacy screens and the complete 32-strategy menu', () => {
-  assert.equal(OPTION_SCANNERS.length, 32)
+test('catalog includes the 13 legacy screens and the complete strategy menu', () => {
+  assert.equal(OPTION_SCANNERS.length, 34)
   assert.deepEqual(
     [...OPTION_SCANNERS.map(scanner => scanner.route).filter(Boolean)].sort(),
     [...expectedRoutes].sort(),

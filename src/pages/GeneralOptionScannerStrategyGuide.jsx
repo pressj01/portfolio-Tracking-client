@@ -83,6 +83,8 @@ const ARCHETYPE_SHOT_BY_KEY = {
   'double-hedge-put-butterfly': 'general-scanner-strategy-double-hedge',
   'road-trip-butterfly': 'general-scanner-strategy-road-trip',
   'sixty-forty-twenty-fly': 'general-scanner-strategy-sixty-forty-twenty',
+  'fourteen-day-aic': 'general-scanner-strategy-iron-condor',
+  'monthly-aic': 'general-scanner-strategy-iron-condor',
 }
 
 // The grouping key: strategies that resolve to the identical sequence of

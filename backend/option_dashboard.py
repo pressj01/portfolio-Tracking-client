@@ -112,6 +112,20 @@ STRATEGIES = (
         "trend_range": (-15, 15), "macro_range": (-35, 35), "volatility": "medium",
         "thesis": "A delta-selected neutral fly whose delta/theta management rules matter more than a weak directional opinion.",
     },
+    {
+        "key": "fourteen_day_aic", "name": "14-Day Asymmetrical Iron Condor",
+        "scanner": "14-Day AIC Scanner",
+        "route": "/fourteen-day-aic-scanner", "stance": "Neutral, slightly long", "risk": "Defined multi-leg risk",
+        "trend_range": (-20, 20), "macro_range": (-40, 40), "volatility": "high",
+        "thesis": "A short-hold AIC: enter 30–35 DTE, take 2–4% of plan capital, and be out within 14 days.",
+    },
+    {
+        "key": "monthly_aic", "name": "Monthly Asymmetrical Iron Condor",
+        "scanner": "Monthly AIC Scanner",
+        "route": "/monthly-aic-scanner", "stance": "Neutral, slightly long", "risk": "Defined multi-leg risk",
+        "trend_range": (-20, 20), "macro_range": (-40, 40), "volatility": "medium",
+        "thesis": "The monthly AIC: enter 40–50 DTE, target 7–8% of plan capital, and plan to exit at 14 DTE remaining.",
+    },
 )
 
 _CACHE = {"data": None, "timestamp": 0.0, "ttl": 900}

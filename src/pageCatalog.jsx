@@ -228,6 +228,8 @@ const EXTRA_ROUTES = [
     ['/double-hedge-put-butterfly-scanner', 'double-hedge-put-butterfly'],
     ['/road-trip-butterfly-scanner', 'road-trip-butterfly'],
     ['/sixty-forty-twenty-fly-scanner', 'sixty-forty-twenty-fly'],
+    ['/fourteen-day-aic-scanner', 'fourteen-day-aic'],
+    ['/monthly-aic-scanner', 'monthly-aic'],
     ['/iron-butterfly-scanner', 'iron-butterfly'],
   ].map(([path, strategy]) => ({ path, element: <Navigate to={strategy ? generalScannerRoute(strategy) : '/general-option-scanner'} replace /> })),
   // Split view is reachable from the menu but deliberately not offered inside a

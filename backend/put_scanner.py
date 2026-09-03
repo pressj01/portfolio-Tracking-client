@@ -1618,7 +1618,7 @@ def _index_only_tickers(raw, defaults, limit: int = 50) -> list[str]:
     invalid = [ticker for ticker in tickers if ticker not in INDEX_ETF_SET]
     if invalid:
         raise ValueError(
-            "This long-dated structure is limited to index ETFs; remove stock "
+            "This strategy is limited to index ETFs; remove stock "
             f"symbols: {', '.join(invalid)}"
         )
     return (tickers or list(defaults))[:limit]

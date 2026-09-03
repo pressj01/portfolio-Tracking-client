@@ -191,8 +191,13 @@ export const INDEX_ONLY_STRATEGIES = new Set([
   'sixty-forty-twenty-fly',
 ])
 
+export const AIC_STRATEGIES = new Set([
+  'fourteen-day-aic',
+  'monthly-aic',
+])
+
 export function isIndexOnlyStrategy(strategy) {
-  return INDEX_ONLY_STRATEGIES.has(strategy)
+  return INDEX_ONLY_STRATEGIES.has(strategy) || AIC_STRATEGIES.has(strategy)
 }
 
 const BULLISH_PULLBACK_STRATEGIES = new Set([
@@ -209,6 +214,7 @@ const PREMIUM_SELLING_STRATEGIES = new Set([
   'bear-call-spread', 'short-strangle', 'short-straddle', 'collar',
   'call-ratio-spread', 'put-ratio-spread', 'iron-condor', 'iron-butterfly',
   'put-call-condor', 'call-butterfly', 'put-butterfly',
+  'fourteen-day-aic', 'monthly-aic',
 ])
 
 const PREMIUM_BUYING_STRATEGIES = new Set([
@@ -237,6 +243,7 @@ const PUT_BUYING_STRATEGIES = new Set(['long-put', 'married-put'])
 const CALL_BUYING_STRATEGIES = new Set(['long-call', 'married-call'])
 const TWO_SIDED_SELL_STRATEGIES = new Set([
   'iron-condor', 'iron-butterfly', 'short-strangle', 'short-straddle', 'put-call-condor',
+  'fourteen-day-aic', 'monthly-aic',
 ])
 const TWO_SIDED_BUY_STRATEGIES = new Set(['long-straddle', 'long-strangle'])
 
@@ -336,7 +343,7 @@ export function setupAppliesToStrategy(setupKey, strategy) {
   if (setupKey === 'high_iv') return PREMIUM_SELLING_STRATEGIES.has(strategy)
   if (setupKey === 'cheap_iv') return PREMIUM_BUYING_STRATEGIES.has(strategy)
   if (setupKey === 'weeklies') {
-    return !INDEX_ONLY_STRATEGIES.has(strategy)
+    return !isIndexOnlyStrategy(strategy)
       && !CALENDAR_OR_DIAGONAL.has(strategy)
       && strategy !== 'put-call-condor'
   }
@@ -506,6 +513,28 @@ const SIXTY_FORTY_TWENTY_FIELDS = [
   field('max_bid_ask_pct', 'Maximum bid/ask spread', { suffix: '%', step: 1, min: 0 }),
 ]
 
+const AIC_FIELDS = [
+  field('tranche_quantity', 'Tranche quantity', { step: 1, min: 1 }),
+  field('put_credit_qty', 'Put credit spreads', { step: 1, min: 1 }),
+  field('call_credit_qty', 'Call credit spreads', { step: 1, min: 1 }),
+  field('hedge_qty', 'Put debit hedge', { step: 1, min: 1 }),
+  field('put_short_delta', 'Short put delta', { step: 0.01, min: 0.05, max: 0.45 }),
+  field('call_short_delta', 'Short call delta', { step: 0.01, min: 0.04, max: 0.35 }),
+  field('put_long_delta', 'Long put delta', { step: 0.01, min: 0.02, max: 0.3 }),
+  field('call_long_delta', 'Long call delta', { step: 0.01, min: 0.02, max: 0.25 }),
+  field('hedge_long_delta', 'Hedge long-put delta', { step: 0.01, min: 0.15, max: 0.6 }),
+  field('delta_tolerance', 'Leg delta tolerance', { step: 0.005, min: 0.005, max: 0.2 }),
+  field('max_abs_net_delta', 'Maximum net delta ±', { step: 0.5, min: 0 }),
+  field('plan_capital_dollars', 'Plan capital', { prefix: '$', step: 1000, min: 1000 }),
+  field('profit_target_low_pct', 'Profit target from', { suffix: '%', step: 0.5, min: 0 }),
+  field('profit_target_high_pct', 'Profit target to', { suffix: '%', step: 0.5, min: 0 }),
+  field('max_loss_pct', 'Management max loss', { suffix: '%', step: 0.5, min: 0 }),
+  field('max_hold_days', 'Maximum days in trade', { suffix: 'days', step: 1, min: 0 }),
+  field('exit_remaining_dte', 'Exit remaining DTE', { suffix: 'DTE', step: 1, min: 0 }),
+  field('min_open_interest', 'Minimum open interest', { step: 10, min: 0 }),
+  field('max_bid_ask_pct', 'Maximum bid/ask spread', { suffix: '%', step: 1, min: 0 }),
+]
+
 export const GENERAL_FILTER_HELP = {
   min_reference_delta: 'Lowest allowed absolute delta for the strategy\'s primary option leg. For covered calls, cash-secured puts, credit spreads, condors, calendars, and ratio spreads this is the short leg. A value of 10 means 0.10 delta.',
   max_reference_delta: 'Highest allowed absolute delta for the strategy\'s primary option leg. Lower short-option deltas are generally farther out of the money and have a higher chance of expiring worthless, but probability estimates are not guarantees.',
@@ -583,6 +612,17 @@ export const GENERAL_FILTER_HELP = {
   delta_theta_exit_pct: 'Sets the planned exit threshold for the absolute delta-to-theta relationship.',
   exit_dte: 'Plans to exit when this many days remain before expiration.',
   max_bid_ask_pct: 'Rejects legs whose bid/ask width is larger than this percentage of the option mid price.',
+  put_credit_qty: 'Number of put credit spreads in one AIC unit. The 14-day simplified entry uses 4; the monthly original uses 10.',
+  call_credit_qty: 'Number of call credit spreads in one AIC unit. Fewer calls than puts is what keeps upside risk smaller.',
+  hedge_qty: 'Number of put debit spreads placed at entry as the built-in downside hedge. The 14-day simplified entry uses 1 debit per 4 credits; the monthly original uses 1 per 10.',
+  put_short_delta: 'Target absolute delta for the short put. The 14-day entry sits closer (~0.25); the monthly entry is farther (~0.16).',
+  call_short_delta: 'Target absolute delta for the short call, typically around 0.12 so the upside wing has more room.',
+  put_long_delta: 'Target absolute delta for the protective long put that defines the credit-spread wing.',
+  call_long_delta: 'Target absolute delta for the protective long call that caps upside loss.',
+  hedge_long_delta: 'Target absolute delta for the long put in the debit-spread hedge, closer to the money than the put credit short.',
+  plan_capital_dollars: 'Planned margin for one unit, about $16,000–$18,000 in the source campaign. Profit and stop percentages are measured against this number.',
+  max_hold_days: 'For the 14-day AIC, the maximum calendar days to stay in the trade. The name is this hold, not 14-DTE options. Entered 30–35 DTE.',
+  exit_remaining_dte: 'For the monthly AIC, the planned remaining days at exit. The source campaign enters 40–50 DTE and aims to be out at 14 DTE remaining.',
   far_target_dte: 'For calendars and diagonals, this is the preferred days to expiration for the long back-month option.',
   min_expiration_gap_days: 'Requires at least this many calendar days between the short front-month option and the long back-month option.',
 }
@@ -747,6 +787,8 @@ export const GENERAL_STRATEGY_CONFIG = {
   'double-hedge-put-butterfly': { bidAsk: 'Mid', defaults: { target_dte: 200, min_dte: 160, max_dte: 230, market_bias: 'neutral', tranche_quantity: 4, delta_tolerance: 0.02, min_theta_dollars: 10, min_t0_minus_20_dollars: -10000, uel_tolerance_dollars: 250, min_lower_wing_ratio: 1.05, min_open_interest: 0, price_signal: 'unconfirmed', concavity_signal: 'unconfirmed', skew_signal: 'unconfirmed', campaign_planned_capital_dollars: 150000, planned_capital_per_tranche_dollars: 12500, open_tranches: 0 }, fields: DOUBLE_HEDGE_FIELDS },
   'road-trip-butterfly': { bidAsk: 'Mid', defaults: { target_dte: 77, min_dte: 70, max_dte: 85, market_bias: 'neutral', tranche_quantity: 5, upper_offset_pct: 1.25, offset_tolerance_pct: 0.75, upper_wing_pct: 2.25, lower_wing_pct: 2.75, wing_tolerance_pct: 1, min_lower_wing_ratio: 1.05, max_debit_to_margin_pct: 5, min_theta_dollars: 1, profit_target_low_pct: 7, profit_target_high_pct: 15, max_loss_pct: 5, exit_days_before_expiration: 17, hands_off_days: 25, require_favorable_entry_timing: false, min_open_interest: 0 }, fields: ROAD_TRIP_FIELDS },
   'sixty-forty-twenty-fly': { bidAsk: 'Mid', defaults: { target_dte: 70, min_dte: 60, max_dte: 80, quantity: 1, delta_tolerance: 0.03, max_abs_net_delta: 5, delta_theta_caution_pct: 50, delta_theta_exit_pct: 60, exit_dte: 30, min_open_interest: 0, max_bid_ask_pct: 35 }, fields: SIXTY_FORTY_TWENTY_FIELDS },
+  'fourteen-day-aic': { bidAsk: 'Mid', defaults: { target_dte: 32, min_dte: 28, max_dte: 38, tranche_quantity: 1, put_credit_qty: 4, call_credit_qty: 1, hedge_qty: 1, put_short_delta: 0.25, call_short_delta: 0.12, put_long_delta: 0.10, call_long_delta: 0.05, hedge_long_delta: 0.40, delta_tolerance: 0.04, max_abs_net_delta: 8, plan_capital_dollars: 18000, profit_target_low_pct: 2, profit_target_high_pct: 4, max_loss_pct: 5, max_hold_days: 14, exit_remaining_dte: 0, min_open_interest: 0, max_bid_ask_pct: 35 }, fields: AIC_FIELDS },
+  'monthly-aic': { bidAsk: 'Mid', defaults: { target_dte: 45, min_dte: 40, max_dte: 55, tranche_quantity: 1, put_credit_qty: 10, call_credit_qty: 2, hedge_qty: 1, put_short_delta: 0.16, call_short_delta: 0.12, put_long_delta: 0.07, call_long_delta: 0.05, hedge_long_delta: 0.35, delta_tolerance: 0.04, max_abs_net_delta: 20, plan_capital_dollars: 18000, profit_target_low_pct: 7, profit_target_high_pct: 8, max_loss_pct: 5, max_hold_days: 0, exit_remaining_dte: 14, min_open_interest: 0, max_bid_ask_pct: 35 }, fields: AIC_FIELDS },
 }
 
 export function strategyDefaultsForGeneralStrategy(strategy) {
@@ -859,7 +901,9 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
   if (strategy === 'unbalanced-put-condor') result.delta_preset = ['15/5', '20/10', '25/15'][intensity]
   if (isIndexOnlyStrategy(strategy)) {
     Object.assign(result, {
-      entry_credit_mode: ['debit_or_flat', 'flat_or_slight_credit', 'credit'][intensity],
+      entry_credit_mode: AIC_STRATEGIES.has(strategy)
+        ? 'any'
+        : ['debit_or_flat', 'flat_or_slight_credit', 'credit'][intensity],
       entry_credit_max_points: 0.5,
     })
     if (fieldKeys.has('market_bias')) result.market_bias = ['bearish', 'neutral', 'bullish'][intensity]

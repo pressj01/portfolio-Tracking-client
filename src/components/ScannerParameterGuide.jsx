@@ -373,6 +373,53 @@ const GUIDES = {
       ],
     },
   ],
+  'fourteen-day-aic': [
+    {
+      title: 'Campaign and structure',
+      items: [
+        ['What this is', 'Amy Meissner’s asymmetrical iron condor (AIC / Weirdor): a put-heavy credit condor with a put debit hedge on from day one, a flatter T+0 line, slightly long delta, and less upside risk than a balanced condor.'],
+        ['14-Day vs Monthly', 'The 14-day campaign enters 30–35 DTE and is named for the hold: be out in 14 days or less. The monthly campaign enters 40–50 DTE and plans to exit at 14 DTE remaining.'],
+        ['Tickers', 'Index ETFs only. IWM stands in for RUT, the original underlying; SPY, QQQ, and VOO are also eligible.'],
+        ['Tranche quantity', 'Scales the whole unit. The 14-day unit is 4 put credits / 1 call credit / 1 put debit; the monthly unit is 10 / 2 / 1.'],
+        ['Short put / short call delta', '14-day defaults are 0.25 / 0.12, closer to the money because the hold is short. Monthly defaults are 0.16 / 0.12.'],
+        ['Hedge long delta', 'Places the long put of the debit-spread hedge closer to spot than the put credit short. That is the built-in downside hedge from the video.'],
+      ],
+    },
+    {
+      title: 'Capital, targets, and exits',
+      items: [
+        ['Plan capital', 'About $16,000–$18,000 per unit in the source campaign. Profit and stop percentages are measured against this number, not against max loss at expiration.'],
+        ['Profit target', '14-day: 2–4% of plan capital. Monthly: 7–8%. Take it when it is there; the video examples were often out in 5–6 days.'],
+        ['Management max loss', 'Keep losses smaller than 5% of plan capital.'],
+        ['Maximum days in trade', '14-day campaign only. The name is this hold, not 14-DTE options.'],
+        ['Exit remaining DTE', 'Monthly campaign only. Default 14 DTE remaining.'],
+        ['Net delta', 'The structure is built slightly long. A short net delta is marked review-only.'],
+      ],
+    },
+  ],
+  'monthly-aic': [
+    {
+      title: 'Campaign and structure',
+      items: [
+        ['What this is', 'The longer AIC campaign from the same video: same pieces as the 14-day trade, entered farther from expiration so there is more time to absorb adjustments.'],
+        ['Entry window', '40–50 DTE, typically a monthly cycle. Average time in the trade is about 30 days because the plan is to be out at 14 DTE remaining.'],
+        ['Tickers', 'Index ETFs only. IWM / RUT is the original home; SPY, QQQ, and VOO are also eligible.'],
+        ['Contract ratio', 'Original unit is 10 put credit spreads, 2 call credit spreads, and 1 put debit hedge. Scale with tranche quantity.'],
+        ['Short put / short call delta', 'Defaults 0.16 / 0.12, farther than the 14-day 0.25-delta put short.'],
+        ['Hedge long delta', 'Places the debit-spread long put near 0.35 delta as the built-in downside hedge.'],
+      ],
+    },
+    {
+      title: 'Capital, targets, and exits',
+      items: [
+        ['Plan capital', 'Same $16,000–$18,000 per unit as the 14-day campaign, with a $20,000 account cushion in the video.'],
+        ['Profit target', '7–8% of plan capital. Take it early when it is available rather than holding to the 14-DTE backstop.'],
+        ['Management max loss', 'Keep losses smaller than 5% of plan capital.'],
+        ['Exit remaining DTE', 'Planned backstop at 14 DTE remaining. Probability cards also show a halfway review.'],
+        ['Net delta', 'Slightly long by construction. A short net delta is marked review-only.'],
+      ],
+    },
+  ],
   'iron-butterfly': [
     {
       title: 'Expiration and strike search',

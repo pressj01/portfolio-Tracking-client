@@ -298,6 +298,23 @@ test('setup presets start from Moderate and overlay the named setup', () => {
   assert.equal(collarHoldings.require_shares_held, false)
 })
 
+test('AIC scans use index universes without debit-only opening-cash bands', () => {
+  assert.equal(isIndexOnlyStrategy('fourteen-day-aic'), true)
+  assert.equal(isIndexOnlyStrategy('monthly-aic'), true)
+  const fourteen = defaultsForGeneralStrategy('fourteen-day-aic')
+  const monthly = strategyDefaultsForGeneralStrategy('monthly-aic')
+  const cautious = riskProfileDefaultsForGeneralStrategy('fourteen-day-aic', 'risk_averse')
+  assert.equal(fourteen.include_stocks, false)
+  assert.equal(fourteen.target_dte, 32)
+  assert.equal(fourteen.put_credit_qty, 4)
+  assert.equal(monthly.target_dte, 45)
+  assert.equal(monthly.put_credit_qty, 10)
+  assert.equal(monthly.exit_remaining_dte, 14)
+  assert.equal(cautious.entry_credit_mode, 'any')
+  assert.equal(setupAppliesToStrategy('monthlies', 'monthly-aic'), true)
+  assert.equal(setupAppliesToStrategy('weeklies', 'fourteen-day-aic'), false)
+})
+
 test('long-dated unbalanced profiles use index universes and opening-cash bands', () => {
   assert.equal(isIndexOnlyStrategy('unbalanced-butterfly'), true)
   assert.equal(isIndexOnlyStrategy('iron-butterfly'), false)
