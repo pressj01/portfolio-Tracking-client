@@ -1786,6 +1786,71 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             app_module.populate_income_tracking = orig_income
             app_module._snapshot_nav_after_profile_update = orig_snapshot
 
+    def test_layered_snowball_then_fidelity_dedupes_drips_with_feed_price_differences(self):
+        """The same DRIP can carry a different effective price in each feed.
+
+        Snowball and Fidelity agree on the event date and fractional shares, but
+        the displayed price/cash amount can differ by more than normal rounding.
+        An overlapping Fidelity export must not add a second reinvestment row.
+        """
+        import io
+
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (46, 'Fidelity', 'fidelity', 0, 0)"
+        )
+        snowball = (
+            "Event,Symbol,Date,Quantity,Price,Note\n"
+            "DIVIDEND,AVDV,2026-03-12,9.37,,Quarterly dividend\n"
+            "BUY,AVDV,2026-03-12,0.092,101.85,DIVIDEND_REINVESTMENT\n"
+            "DIVIDEND,AVDV,2026-06-11,107.53,,Quarterly dividend\n"
+            "BUY,AVDV,2026-06-11,1.041,103.29,DIVIDEND_REINVESTMENT\n"
+        )
+        fidelity = (
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),"
+            "Commission ($),Fees ($),Amount ($)\n"
+            "03/12/2026,Fidelity,REINVESTMENT,AVDV,AVANTIS INTL SMALL CAP VALUE ETF,"
+            "Cash,0.092,102.40,0,0,-9.42\n"
+            "06/11/2026,Fidelity,REINVESTMENT,AVDV,AVANTIS INTL SMALL CAP VALUE ETF,"
+            "Cash,1.041,103.34,0,0,-107.58\n"
+        )
+
+        def post(fmt, filename, content):
+            return self.client.post(
+                "/api/import/transactions?profile_id=46",
+                data={"format": fmt, "file": (io.BytesIO(content.encode()), filename)},
+                content_type="multipart/form-data",
+            )
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        orig_backup = app_module._create_import_backup
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        app_module._create_import_backup = lambda profile_id: None
+        try:
+            first = post("snowball", "snowball.csv", snowball)
+            second = post("fidelity_transactions", "History.csv", fidelity)
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+            app_module._create_import_backup = orig_backup
+
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["duplicates_skipped"], 2)
+
+        rows = self._rows(
+            "SELECT transaction_date, shares, price_per_share, notes "
+            "FROM transactions WHERE profile_id = 46 AND ticker = 'AVDV' "
+            "ORDER BY transaction_date, id"
+        )
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            [(row["transaction_date"], row["shares"]) for row in rows],
+            [("2026-03-12", 0.092), ("2026-06-11", 1.041)],
+        )
+
     def test_generic_transactions_template_download_contains_expected_sheets_and_headers(self):
         import io
         import openpyxl

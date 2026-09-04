@@ -9985,6 +9985,29 @@ _LAYERED_DIV_WINDOW_DAYS = 3
 # Wider than any 2-decimal rounding gap, narrower than a real price change.
 _TXN_PRICE_MATCH_TOLERANCE = 0.01
 
+# Broker and portfolio-tracker feeds can calculate the displayed DRIP price
+# from slightly different cash figures.  Date + exact fractional shares + a
+# reinvestment marker are still a strong identity, so permit a small relative
+# price gap for those rows only.  Ordinary BUY/SELL fills retain the strict
+# absolute tolerance above.
+_LAYERED_DRIP_PRICE_MATCH_REL_TOLERANCE = 0.01
+
+
+def _is_drip_transaction_notes(notes):
+    text = str(notes or "").strip().casefold()
+    return "[drip]" in text or "reinvest" in text
+
+
+def _layered_drip_price_matches(existing_price, incoming_price):
+    existing = _num_or_zero(existing_price)
+    incoming = _num_or_zero(incoming_price)
+    difference = abs(existing - incoming)
+    tolerance = max(
+        _TXN_PRICE_MATCH_TOLERANCE,
+        max(abs(existing), abs(incoming)) * _LAYERED_DRIP_PRICE_MATCH_REL_TOLERANCE,
+    )
+    return difference <= tolerance
+
 
 # Half-width of the window that identifies "the same distribution" for a payout
 # frequency. Kept under half the payout period so two consecutive real
@@ -10580,20 +10603,53 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             # (same day/qty/price) are preserved while re-imports are deduped.
             # DB count includes uncommitted inserts from this batch (same conn).
             # See _TXN_PRICE_MATCH_TOLERANCE.
-            existing_count = conn.execute(
-                "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
-                "AND transaction_type = ? AND transaction_date = ? "
-                "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
-                (ticker, profile_id, txn["type"], txn["date"],
-                 txn["shares"], txn["price_per_share"] or 0, _TXN_PRICE_MATCH_TOLERANCE),
-            ).fetchone()[0]
-            import_count = sum(1 for t in non_div_txns
-                               if t["type"] == txn["type"] and t["ticker"] == ticker
-                               and t["date"] == txn["date"]
-                               and t["shares"] is not None
-                               and abs(t["shares"] - txn["shares"]) < 0.0001
-                               and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0))
-                               < _TXN_PRICE_MATCH_TOLERANCE)
+            layered_drip = (
+                preserve_positions
+                and txn["type"] == "BUY"
+                and _is_drip_transaction_notes(txn.get("notes"))
+            )
+            if layered_drip:
+                existing_candidates = conn.execute(
+                    "SELECT price_per_share, notes FROM transactions "
+                    "WHERE ticker = ? AND profile_id = ? "
+                    "AND transaction_type = ? AND transaction_date = ? "
+                    "AND ABS(shares - ?) < 0.0001",
+                    (ticker, profile_id, txn["type"], txn["date"], txn["shares"]),
+                ).fetchall()
+                existing_count = sum(
+                    1 for candidate in existing_candidates
+                    if _is_drip_transaction_notes(candidate["notes"])
+                    and _layered_drip_price_matches(
+                        candidate["price_per_share"], txn.get("price_per_share")
+                    )
+                )
+                import_count = sum(
+                    1 for candidate in non_div_txns
+                    if candidate["type"] == txn["type"]
+                    and candidate["ticker"] == ticker
+                    and candidate["date"] == txn["date"]
+                    and candidate["shares"] is not None
+                    and abs(candidate["shares"] - txn["shares"]) < 0.0001
+                    and _is_drip_transaction_notes(candidate.get("notes"))
+                    and _layered_drip_price_matches(
+                        candidate.get("price_per_share"), txn.get("price_per_share")
+                    )
+                )
+            else:
+                existing_count = conn.execute(
+                    "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
+                    "AND transaction_type = ? AND transaction_date = ? "
+                    "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
+                    (ticker, profile_id, txn["type"], txn["date"],
+                     txn["shares"], txn["price_per_share"] or 0, _TXN_PRICE_MATCH_TOLERANCE),
+                ).fetchone()[0]
+                import_count = sum(1 for t in non_div_txns
+                                   if t["type"] == txn["type"] and t["ticker"] == ticker
+                                   and t["date"] == txn["date"]
+                                   and t["shares"] is not None
+                                   and abs(t["shares"] - txn["shares"]) < 0.0001
+                                   and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0))
+                                   < _TXN_PRICE_MATCH_TOLERANCE)
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
