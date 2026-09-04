@@ -1681,6 +1681,7 @@ const COLUMNS = [
 const LOT_COLUMNS = [
   { key: 'transaction_type', label: 'Type', type: 'string', tip: 'BUY adds shares, SELL removes shares, and DIVIDEND records cash income.' },
   { key: 'transaction_date', label: 'Date', type: 'date', tip: 'The transaction date from the imported brokerage history.' },
+  { key: 'same_day_order', label: 'Same-day Order', sortable: false, tip: 'Use the arrows to put buys and sells from the same account and date into their real execution order.' },
   { key: 'shares', label: 'Shares', type: 'number', tip: 'Shares bought or sold. Cash dividend rows display 0.000 because the separate DRIP BUY adds the shares.' },
   { key: 'price_per_share', label: 'Price', type: 'number', tip: 'Purchase or sale price per share. Cash dividend rows display $0.00.' },
   { key: 'fees', label: 'Fees', type: 'number', tip: 'Brokerage fees recorded for this event. No recorded fee displays $0.00.' },
@@ -2111,6 +2112,8 @@ export default function ManageHoldings() {
   }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
+  const [reorderingLotId, setReorderingLotId] = useState(null)
+  const [lotOrderFeedback, setLotOrderFeedback] = useState(null)
   const [initialPerformanceRange] = useState(() => readSharedPerformanceRange())
   const [performancePeriod, setPerformancePeriod] = useState(initialPerformanceRange.period)
   const [customStart, setCustomStart] = useState(initialPerformanceRange.start)
@@ -2456,6 +2459,14 @@ export default function ManageHoldings() {
     }
   }
 
+  const fetchExpandedTransactions = async (ticker) => {
+    const res = await pf(`/api/holdings/${ticker}/transactions?include_dividends=true`)
+    const data = await res.json()
+    if (!res.ok) throw new Error(data?.error || `Could not load transactions for ${ticker}`)
+    setExpandedTickers(prev => ({ ...prev, [ticker]: data }))
+    return data
+  }
+
   const toggleExpand = async (ticker) => {
     if (expandedTickers[ticker]) {
       setExpandedTickers(prev => { const next = { ...prev }; delete next[ticker]; return next })
@@ -2463,11 +2474,60 @@ export default function ManageHoldings() {
     }
     setExpandedTickers(prev => ({ ...prev, [ticker]: 'loading' }))
     try {
-      const res = await pf(`/api/holdings/${ticker}/transactions?include_dividends=true`)
-      const data = await res.json()
-      setExpandedTickers(prev => ({ ...prev, [ticker]: data }))
-    } catch {
+      await fetchExpandedTransactions(ticker)
+    } catch (e) {
       setExpandedTickers(prev => ({ ...prev, [ticker]: [] }))
+      setLotOrderFeedback({ ticker, type: 'error', text: e.message })
+    }
+  }
+
+  const handleExpandedTxnMove = async (ticker, txn, direction) => {
+    const transactions = expandedTickers[ticker]
+    if (!Array.isArray(transactions) || txn.record_type === 'dividend') return
+    const sameDay = transactions.filter(item => (
+      item.record_type !== 'dividend'
+      && String(item.transaction_type || 'BUY').toUpperCase() !== 'DIVIDEND'
+      && (item.transaction_date || '') === (txn.transaction_date || '')
+      && item.profile_id === txn.profile_id
+    ))
+    const currentIndex = sameDay.findIndex(item => item.id === txn.id)
+    const targetIndex = currentIndex + direction
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= sameDay.length) return
+
+    const orderedIds = sameDay.map(item => item.id)
+    ;[orderedIds[currentIndex], orderedIds[targetIndex]] = [orderedIds[targetIndex], orderedIds[currentIndex]]
+    setReorderingLotId(txn.id)
+    setLotOrderFeedback(null)
+    // A manual column sort can conceal the saved execution order. Return this
+    // ticker to ledger order as soon as the user chooses to move an event.
+    setLotSorts(prev => {
+      if (!prev[ticker]) return prev
+      const next = { ...prev }
+      delete next[ticker]
+      return next
+    })
+    try {
+      const res = await pf(`/api/holdings/${ticker}/transactions/order`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_ids: orderedIds }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not update transaction order')
+      invalidateDashboardCache()
+      await Promise.all([
+        fetchExpandedTransactions(ticker),
+        fetchHoldings({ silent: true }),
+      ])
+      setLotOrderFeedback({
+        ticker,
+        type: 'success',
+        text: data.message || 'Transaction order updated and cost basis recalculated.',
+      })
+    } catch (e) {
+      setLotOrderFeedback({ ticker, type: 'error', text: e.message })
+    } finally {
+      setReorderingLotId(null)
     }
   }
 
@@ -3311,7 +3371,7 @@ export default function ManageHoldings() {
         </div>
       ) : (
         <div className="sticky-table-wrap manage-holdings-table-wrap">
-          <table style={{ minWidth: holdingsTableMinWidth, tableLayout: 'fixed' }}>
+          <table className="manage-holdings-table" style={{ minWidth: holdingsTableMinWidth, tableLayout: 'fixed' }}>
             <colgroup>
               {activeCols.map(col => (
                 <col key={col.key} style={{ width: columnWidth(col) }} />
@@ -3419,7 +3479,18 @@ export default function ManageHoldings() {
                               <div>Hover a value or column heading for additional help.</div>
                             </div>
                           </details>
-                          <table style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
+                          <div className="mh-lot-order-guide">
+                            <span>
+                              Same-day trades can be reordered here. Use <strong>↑</strong> and <strong>↓</strong> to match the broker&apos;s execution order; FIFO cost basis recalculates after each move.
+                              <strong> Only trade</strong> needs no ordering, and <strong>N/A</strong> marks a dividend that does not affect FIFO.
+                            </span>
+                            {lotOrderFeedback?.ticker === h.ticker && (
+                              <span className={`mh-lot-order-feedback is-${lotOrderFeedback.type}`} role={lotOrderFeedback.type === 'error' ? 'alert' : 'status'}>
+                                {lotOrderFeedback.text}
+                              </span>
+                            )}
+                          </div>
+                          <table className="mh-lot-table" style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
                                 {LOT_COLUMNS.map(col => {
@@ -3428,41 +3499,41 @@ export default function ManageHoldings() {
                                   return (
                                     <th
                                       key={col.key}
-                                      aria-sort={activeSort ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                                      aria-sort={col.sortable === false ? undefined : (activeSort ? (direction === 'asc' ? 'ascending' : 'descending') : 'none')}
                                       style={{
                                         padding: '0.3rem 0.75rem',
                                         fontWeight: 600,
                                         color: 'var(--text-dim-2)',
-                                        position: 'sticky',
-                                        top: 30,
-                                        background: 'var(--p-13203a)',
-                                        zIndex: 2,
                                         ...(col.divider ? { borderLeft: '1px solid var(--p-1a3a5c)' } : {}),
                                       }}
                                     >
-                                      <button
-                                        type="button"
-                                        onClick={() => handleLotSort(h.ticker, col.key)}
-                                        title={`${col.tip || col.label} Click to sort by ${col.label}.`}
-                                        style={{
-                                          alignItems: 'center',
-                                          background: 'transparent',
-                                          border: 0,
-                                          color: 'inherit',
-                                          cursor: 'pointer',
-                                          display: 'inline-flex',
-                                          font: 'inherit',
-                                          fontWeight: 'inherit',
-                                          gap: '0.25rem',
-                                          padding: 0,
-                                          whiteSpace: 'nowrap',
-                                        }}
-                                      >
-                                        {col.label}
-                                        <span aria-hidden="true" style={{ fontSize: '0.65rem', opacity: activeSort ? 1 : 0.55 }}>
-                                          {activeSort ? (direction === 'asc' ? '\u25B2' : '\u25BC') : '\u2195'}
-                                        </span>
-                                      </button>
+                                      {col.sortable === false ? (
+                                        <span title={col.tip} style={{ whiteSpace: 'nowrap' }}>{col.label}</span>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleLotSort(h.ticker, col.key)}
+                                          title={`${col.tip || col.label} Click to sort by ${col.label}.`}
+                                          style={{
+                                            alignItems: 'center',
+                                            background: 'transparent',
+                                            border: 0,
+                                            color: 'inherit',
+                                            cursor: 'pointer',
+                                            display: 'inline-flex',
+                                            font: 'inherit',
+                                            fontWeight: 'inherit',
+                                            gap: '0.25rem',
+                                            padding: 0,
+                                            whiteSpace: 'nowrap',
+                                          }}
+                                        >
+                                          {col.label}
+                                          <span aria-hidden="true" style={{ fontSize: '0.65rem', opacity: activeSort ? 1 : 0.55 }}>
+                                            {activeSort ? (direction === 'asc' ? '\u25B2' : '\u25BC') : '\u2195'}
+                                          </span>
+                                        </button>
+                                      )}
                                     </th>
                                   )
                                 })}
@@ -3476,6 +3547,13 @@ export default function ManageHoldings() {
                                 const isClosedBuy = isClosedBuyLot(txn)
                                 const lotCost = lotCostOrProceeds(txn)
                                 const lotGL = lotUnrealizedGain(txn, h)
+                                const sameDay = expandedTickers[h.ticker].filter(item => (
+                                  item.record_type !== 'dividend'
+                                  && String(item.transaction_type || 'BUY').toUpperCase() !== 'DIVIDEND'
+                                  && (item.transaction_date || '') === (txn.transaction_date || '')
+                                  && item.profile_id === txn.profile_id
+                                ))
+                                const sameDayIndex = sameDay.findIndex(item => item.id === txn.id)
                                 const unrealizedHelp = isClosedBuy
                                   ? 'This BUY lot has no remaining shares. Its gain or loss was realized on the related SELL transaction.'
                                   : isDividend
@@ -3517,6 +3595,36 @@ export default function ManageHoldings() {
                                     <td style={{ padding: '0.3rem 0.75rem' }}>
                                       <div>{txn.transaction_date || '-'}</div>
                                       {txn.created_at && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim-2)' }}>{new Date(txn.created_at + 'Z').toLocaleString()}</div>}
+                                    </td>
+                                    <td style={{ padding: '0.3rem 0.75rem' }}>
+                                      {!isDividend && sameDay.length > 1 ? (
+                                        <div className="mh-lot-order-controls">
+                                          <span title={`Execution position ${sameDayIndex + 1} of ${sameDay.length} for this account and date`}>
+                                            {sameDayIndex + 1}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            aria-label={`Move transaction ${txn.id} earlier on ${txn.transaction_date || 'the undated group'}`}
+                                            title="Move earlier on this date"
+                                            disabled={sameDayIndex <= 0 || reorderingLotId != null}
+                                            onClick={() => handleExpandedTxnMove(h.ticker, txn, -1)}
+                                          >↑</button>
+                                          <button
+                                            type="button"
+                                            aria-label={`Move transaction ${txn.id} later on ${txn.transaction_date || 'the undated group'}`}
+                                            title="Move later on this date"
+                                            disabled={sameDayIndex >= sameDay.length - 1 || reorderingLotId != null}
+                                            onClick={() => handleExpandedTxnMove(h.ticker, txn, 1)}
+                                          >↓</button>
+                                        </div>
+                                      ) : (
+                                        <span
+                                          className="mh-lot-order-na"
+                                          title={isDividend ? 'Dividend payments do not affect FIFO lot order' : 'No other trade for this account shares this date'}
+                                        >
+                                          {isDividend ? 'N/A' : 'Only trade'}
+                                        </span>
+                                      )}
                                     </td>
                                     <td title={isDividend ? 'This cash dividend did not directly add shares; the separate DRIP BUY did.' : undefined} style={{ padding: '0.3rem 0.75rem' }}>
                                       {fmt(isDividend ? 0 : txn.shares, 3)}

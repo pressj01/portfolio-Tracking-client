@@ -22187,10 +22187,6 @@ def reorder_transactions(ticker):
     """Persist the execution order of every equity transaction on one date."""
     is_agg, pids = get_profile_filter()
     ticker = ticker.upper()
-    if is_agg:
-        profile_id = _resolve_aggregate_profile(ticker, pids)
-    else:
-        profile_id = pids[0]
 
     data = request.get_json(silent=True) or {}
     raw_ids = data.get("transaction_ids")
@@ -22208,20 +22204,34 @@ def reorder_transactions(ticker):
         if "sort_order" not in _table_columns(conn, "transactions"):
             return jsonify({"error": "Transaction ordering is not available until the database migration runs"}), 409
 
+        # Aggregate and Owner transaction lists can contain the same ticker in
+        # several source accounts. The ids the user moved identify the account
+        # unambiguously; choosing the account with the largest current position
+        # instead made valid arrows fail (or target the wrong ledger).
+        read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        if not read_pids:
+            return jsonify({"error": "No transaction accounts are available in this portfolio"}), 404
+        profile_placeholders = ",".join("?" * len(read_pids))
         order_by = _transaction_order_by(conn)
         replay_order = _transaction_order_expression(conn)
-        rows = [
+        scoped_rows = [
             dict(row) for row in conn.execute(
                 "SELECT id, transaction_type, transaction_date, shares, "
-                f"{replay_order} AS replay_order FROM transactions "
-                f"WHERE ticker = ? AND profile_id = ? ORDER BY {order_by}",
-                (ticker, profile_id),
+                f"profile_id, {replay_order} AS replay_order FROM transactions "
+                f"WHERE ticker = ? AND profile_id IN ({profile_placeholders}) "
+                f"ORDER BY profile_id, {order_by}",
+                [ticker, *read_pids],
             ).fetchall()
         ]
         transaction_id_set = set(transaction_ids)
-        selected = [row for row in rows if int(row["id"]) in transaction_id_set]
+        selected = [row for row in scoped_rows if int(row["id"]) in transaction_id_set]
         if len(selected) != len(transaction_ids):
             return jsonify({"error": "One or more transactions do not belong to this holding"}), 404
+        selected_profile_ids = {int(row["profile_id"]) for row in selected}
+        if len(selected_profile_ids) != 1:
+            return jsonify({"error": "Only transactions from the same account can be reordered"}), 400
+        profile_id = next(iter(selected_profile_ids))
+        rows = [row for row in scoped_rows if int(row["profile_id"]) == profile_id]
 
         selected_dates = {str(row.get("transaction_date") or "") for row in selected}
         if len(selected_dates) != 1:

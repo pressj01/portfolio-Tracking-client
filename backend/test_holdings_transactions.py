@@ -3161,6 +3161,53 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         ]
         self.assertEqual(ordered_ids, [buy_30_id, buy_10_id, sell_id])
 
+    def test_reorder_aggregate_transaction_uses_account_from_selected_rows(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'IRA', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Roth IRA', 0)")
+        self._execute("INSERT INTO aggregates (id, name) VALUES (1, 'Combined')")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 2)")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 3)")
+        # The other account deliberately has the larger position. The old
+        # aggregate write resolver selected it and rejected the ids from IRA.
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('ABC', 2, 20, 15, 300, '2026-01-10')"
+        )
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('ABC', 3, 100, 30, 3000, '2026-01-10')"
+        )
+        for sort_order, price in ((1, 10), (2, 20)):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, sort_order, shares, price_per_share, fees) "
+                "VALUES ('ABC', 2, 'BUY', '2026-01-10', ?, 10, ?, 0)",
+                (sort_order, price),
+            )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, sort_order, shares, price_per_share, fees) "
+            "VALUES ('ABC', 3, 'BUY', '2026-01-10', 1, 100, 30, 0)"
+        )
+        ira_ids = [
+            row[0] for row in self._rows(
+                "SELECT id FROM transactions WHERE profile_id = 2 ORDER BY sort_order, id"
+            )
+        ]
+
+        res = self.client.put(
+            "/api/holdings/ABC/transactions/order?aggregate_id=1",
+            json={"transaction_ids": list(reversed(ira_ids))},
+        )
+
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        saved_ids = [
+            row[0] for row in self._rows(
+                "SELECT id FROM transactions WHERE profile_id = 2 ORDER BY sort_order, id"
+            )
+        ]
+        self.assertEqual(saved_ids, list(reversed(ira_ids)))
+
     def test_reorder_rejects_sale_before_same_day_purchase(self):
         self._execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
