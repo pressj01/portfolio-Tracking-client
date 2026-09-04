@@ -248,6 +248,57 @@ class ShearGroupAllAccountsImportTest(unittest.TestCase):
             "num:4950": 5,
         })
 
+    def test_near_date_refresh_estimates_yield_to_actual_activity(self):
+        positions = self._post(
+            "/api/import/transactions", nav_date=self.nav_date
+        )
+        self.assertEqual(positions.status_code, 200, positions.get_json())
+
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                "INSERT INTO dividend_payments "
+                "(ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES (?, ?, '2026-07-31', ?, 'refresh_estimate', 'projected')",
+                [
+                    (ticker, index + 1, 10 + index)
+                    for index, (_, _, ticker, _) in enumerate(SHEAR_ACCOUNTS, start=1)
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        activity = self._post(
+            "/api/import/transactions", kind="activity", nav_date=self.nav_date
+        )
+        self.assertEqual(activity.status_code, 200, activity.get_json())
+
+        conn = self._get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT ticker, profile_id, payment_date, amount, source "
+                "FROM dividend_payments ORDER BY profile_id"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row["payment_date"] for row in rows}, {"2026-08-01"})
+        self.assertEqual(
+            {row["source"] for row in rows},
+            {"shear_group_all_accounts_activity"},
+        )
+        self.assertEqual(
+            [(row["profile_id"], row["ticker"], row["amount"]) for row in rows],
+            [
+                (2, "CINDY2472", 11.0),
+                (3, "CINDY4734", 12.0),
+                (4, "CINDY7326", 13.0),
+                (5, "JAMES4950", 14.0),
+            ],
+        )
+
     def test_rejects_a_non_shear_destination(self):
         preview = self._post("/api/import/transactions/preview").get_json()
         key = preview["accounts"][0]["account_key"]

@@ -10149,14 +10149,21 @@ def _layered_dividend_duplicate(
         return False
     lo = (d - datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
     hi = (d + datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)).isoformat()
-    source_clause = ""
+    # Refresh estimates are projections, not a second actual-payment feed. If
+    # one is near the broker's payment date, the actual row must be inserted
+    # first and the estimate pruned afterward. Treating the estimate as the
+    # layered duplicate would skip the actual and then delete the estimate,
+    # leaving no payment at all.
+    source_clause = (
+        " AND LOWER(COALESCE(source, '')) != 'refresh_estimate'"
+    )
     params = [ticker, profile_id, lo, hi]
     if incoming_source:
         # Near-date matching exists for layering two different feeds. Rows
         # from this same feed can be legitimate repeated distributions (and
         # include rows inserted earlier in the current import), so only exact
         # ticker/date matching may deduplicate them.
-        source_clause = " AND LOWER(COALESCE(source, '')) != ?"
+        source_clause += " AND LOWER(COALESCE(source, '')) != ?"
         params.append(str(incoming_source).strip().lower())
     rows = conn.execute(
         "SELECT amount FROM dividend_payments WHERE ticker = ? AND profile_id = ? "
