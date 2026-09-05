@@ -3630,14 +3630,23 @@ export default function ManageHoldings() {
                             fontSize: '0.76rem', lineHeight: 1.45,
                           }}>
                             <summary style={{ cursor: 'pointer', color: 'var(--p-4fc3f7)', fontWeight: 700 }}>
-                              How to read this transaction table
+                              How to read and manage this transaction table
                             </summary>
-                            <div style={{ marginTop: '0.4rem', display: 'grid', gap: '0.2rem' }}>
+                            <div style={{ marginTop: '0.4rem', display: 'grid', gap: '0.45rem' }}>
+                              <div>
+                                <strong>Add or change a transaction.</strong> Select <strong>+ Add Transaction</strong> above this table to choose an account and add a buy, sell, or dividend payment. Use <strong>Edit</strong> on a row to change that event; saving recalculates the position, cost basis, and applicable gain/loss.
+                              </div>
+                              <div>
+                                <strong>Move a same-day trade.</strong> The <strong>↑</strong> and <strong>↓</strong> buttons only reorder BUY and SELL events from the <strong>same account on the same date</strong>. Use them to match your broker&apos;s execution order. FIFO lot matching and cost basis recalculate after each move. To place a trade on a different day, edit its Date instead.
+                              </div>
+                              <div>
+                                <strong>Remove a transaction.</strong> <strong>Delete</strong> removes that ledger event and recalculates the holding. It does not delete the whole holding; the holding&apos;s Actions column has its own Delete button.
+                              </div>
                               <div><strong>Closed · $0.00</strong> means a BUY lot was fully sold. Its result is included on the related SELL row.</div>
                               <div><strong>BUY Realized G/L $0.00</strong> means buying did not realize a gain or loss; realization happens when shares are sold.</div>
                               <div><strong>DIVIDEND $0.00 fields</strong> do not represent missing data. The cash income is in Amount, and the dividend itself has no shares or capital gain/loss.</div>
                               <div><strong>DIVIDEND + DRIP reinvestment</strong> are two related events: cash was received, then used by the separate BUY to acquire shares.</div>
-                              <div>Hover a value or column heading for additional help.</div>
+                              <div><strong>Only trade</strong> means no other BUY or SELL in that account shares the date. <strong>N/A</strong> marks a dividend, which does not participate in FIFO ordering. Hover a value or column heading for additional help.</div>
                             </div>
                           </details>
                           <div className="mh-lot-order-guide">

@@ -1454,11 +1454,11 @@ function HoldingsHelp() {
           </ul>
         </li>
         <li>
-          <strong>Click "Add via Transaction"</strong>. The ticker is created with the position calculated from this lot.
+          <strong>Click "Add Transaction"</strong>. The ticker is created with the position calculated from this lot.
           A success message confirms the action.
         </li>
         <li>
-          You can <strong>add more lots</strong> immediately by filling in the form again and clicking "Add via Transaction" —
+          You can <strong>add more lots</strong> immediately by filling in the form again and clicking "Add Transaction" —
           the position updates cumulatively.
         </li>
         <li><strong>Click "Close"</strong> when done.</li>
@@ -1547,6 +1547,48 @@ function HoldingsHelp() {
         <li>Click "Del" on the transaction row.</li>
         <li>The transaction is removed and the position recalculates immediately.</li>
       </ol>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Manage Transactions Without Leaving the Holdings Table</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The expanded transaction panel is the quickest way to maintain a holding&apos;s ledger. Click the small
+        triangle beside its ticker, then work directly in the panel that opens below the holding. This is the
+        same transaction history used to calculate the holding&apos;s shares, average cost, open lots, and realized gain/loss.
+      </p>
+
+      <HelpScreenshot
+        src="./help-screenshots/holdings/transaction-table-actions.png"
+        alt="Expanded BLOX transaction table highlighting the Edit and Delete buttons, the same-day order arrows, and the collapsible transaction-table help"
+        caption="Expanded transaction table: Edit and Delete are at the left of each row; the numbered ↑ and ↓ controls change the order of eligible same-day trades."
+      />
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Add a transaction from the expanded panel</h4>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Expand the ticker and click <strong>+ Add Transaction</strong> at the upper right of the panel.</li>
+        <li>Choose the account that owns the holding, then choose <strong>Buy / Sell</strong> or <strong>Dividend payment</strong>.</li>
+        <li>For a buy or sell, enter the date, shares, price per share, fees, and optional notes. A sell can use FIFO or specific open lots.</li>
+        <li>Save the entry. The expanded table refreshes and the Holding row recalculates automatically.</li>
+      </ol>
+      <p style={{ marginBottom: '0.75rem' }}>
+        A cash dividend and a reinvestment are separate events: record the cash as a dividend payment, then record the
+        reinvested shares as a BUY when you need the lot in the ledger.
+      </p>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Change or remove a transaction</h4>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
+        <li>Click <strong>Edit</strong> in the row&apos;s Actions column to open that exact transaction in the editor.</li>
+        <li>Change the date, shares, price, fees, notes, transaction type, or sell-lot allocation as needed, then save. The ledger and calculated position refresh.</li>
+        <li>Click <strong>Delete</strong> only when the ledger event should be removed. This deletes the selected transaction, not the entire holding.</li>
+      </ol>
+
+      <h4 style={{ marginBottom: '0.4rem' }}>Move a same-day trade into broker execution order</h4>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When two or more BUY or SELL events have the <strong>same account and date</strong>, their row shows a number
+        and <strong>↑</strong>/<strong>↓</strong> buttons in <strong>Same-day Order</strong>. Use the arrows to match the
+        order on the broker confirmation. Each move immediately reruns FIFO matching and cost-basis calculations.
+        The first row cannot move earlier and the last row cannot move later. <strong>Only trade</strong> means there is
+        nothing else on that date to reorder; <strong>N/A</strong> means the row is a dividend payment, which does not
+        change FIFO order. To move a trade to a different date, use <strong>Edit</strong> and change its Date rather than the arrows.
+      </p>
 
       {/* ── Deleting a Holding ─────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Deleting a Holding</h3>
