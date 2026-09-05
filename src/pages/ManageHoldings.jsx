@@ -3455,6 +3455,7 @@ export default function ManageHoldings() {
                 {expandedTickers[h.ticker] && (
                   <tr>
                     <td colSpan={activeCols.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
+                      <div className="mh-lot-panel">
                       {expandedTickers[h.ticker] === 'loading' ? (
                         <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
                       ) : expandedTickers[h.ticker].length === 0 ? (
@@ -3490,6 +3491,7 @@ export default function ManageHoldings() {
                               </span>
                             )}
                           </div>
+                          <div className="mh-lot-scroll" role="region" aria-label={`${h.ticker} transactions`} tabIndex={0}>
                           <table className="mh-lot-table" style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
@@ -3662,8 +3664,10 @@ export default function ManageHoldings() {
                               })}
                             </tbody>
                           </table>
+                          </div>
                         </div>
                       )}
+                      </div>
                     </td>
                   </tr>
                 )}

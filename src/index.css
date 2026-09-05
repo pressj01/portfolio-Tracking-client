@@ -2933,9 +2933,24 @@ th.col-drag-target {
   vertical-align: bottom;
   white-space: nowrap;
 }
-/* The expanded lot ledger has its own sticky header beneath the holdings
-   header. Keep both layers fully opaque, and paint the small offset seam so a
-   holding row cannot show through between them while the table scrolls. */
+/* Anchor expanded transactions to the visible Holdings viewport, even when
+   the wider parent table is scrolled to its rightmost columns. */
+.manage-holdings-table-wrap {
+  container-type: inline-size;
+}
+.mh-lot-panel {
+  box-sizing: border-box;
+  left: 0;
+  max-width: 100%;
+  position: sticky;
+  white-space: normal;
+  width: 100cqw;
+}
+.mh-lot-scroll {
+  max-height: 55vh;
+  overflow: auto;
+}
+/* Each table keeps an opaque header within its own scroll region. */
 .manage-holdings-table > thead > tr > th {
   background: var(--border);
   isolation: isolate;
@@ -2944,12 +2959,12 @@ th.col-drag-target {
 .manage-holdings-table > thead > tr > th.frozen-col {
   z-index: 12 !important;
 }
-.mh-lot-table > thead > tr > th {
+.manage-holdings-table-wrap .mh-lot-table > thead > tr > th {
   background: var(--p-13203a);
-  box-shadow: 0 -10px 0 var(--p-13203a), 0 1px 0 var(--p-1a3a6a);
+  box-shadow: 0 1px 0 var(--p-1a3a6a);
   isolation: isolate;
   position: sticky;
-  top: 30px;
+  top: 0;
   z-index: 6;
 }
 .mh-lot-order-guide {
