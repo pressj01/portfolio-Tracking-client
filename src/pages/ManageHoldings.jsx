@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { API_BASE } from '../config'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
@@ -549,7 +550,7 @@ function AddEditModal({ holding, onSave, onCancel, isEdit, pf }) {
   )
 }
 
-function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, isNew }) {
+function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, isNew, initialTransaction, editorOnly = false, accountName }) {
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(!isNew)
   const [form, setForm] = useState({
@@ -564,6 +565,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   const [editId, setEditId] = useState(null)
   const [error, setError] = useState(null)
   const [successMsg, setSuccessMsg] = useState(null)
+  const [saving, setSaving] = useState(false)
   const [openLots, setOpenLots] = useState([])
   const [lotAlloc, setLotAlloc] = useState({})   // {buy_txn_id: shares_to_sell}
   const [lotMode, setLotMode] = useState('FIFO') // 'FIFO' or 'SPECIFIC'
@@ -642,7 +644,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   // `pf` changes with the account selector. Keep an Owner-opened repair modal
   // in sync so selecting the named source account enables the same button
   // without making the user close and reopen the ticker.
-  useEffect(() => { if (ticker) fetchTxns() }, [ticker, pf])
+  useEffect(() => { if (ticker && !editorOnly) fetchTxns() }, [ticker, pf, editorOnly])
 
   const lookupTicker = async (t) => {
     t = t.trim().toUpperCase()
@@ -767,6 +769,8 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       }
     }
 
+    if (saving) return
+    setSaving(true)
     try {
       let res
       const isEdit = !!editId
@@ -785,6 +789,11 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       }
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
+      if (editorOnly) {
+        await onSaved()
+        onClose()
+        return
+      }
       const action = isEdit ? 'updated' : 'added'
       setSuccessMsg(`${payload.transaction_type} ${payload.shares} shares @ $${payload.price_per_share ?? 0} ${action} successfully`)
       setTimeout(() => setSuccessMsg(null), 4000)
@@ -792,6 +801,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       await fetchTxns()
       onSaved()
     } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
   }
 
   const handleEditTxn = async (txn) => {
@@ -800,8 +810,8 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       ...prev,
       transaction_type: txn.transaction_type || 'BUY',
       shares: txn.shares || '',
-      price_per_share: txn.price_per_share || '',
-      fees: txn.fees || '',
+      price_per_share: txn.price_per_share ?? '',
+      fees: txn.fees ?? '',
       transaction_date: txn.transaction_date || '',
       acquired_date: txn.acquired_date || '',
       notes: txn.raw_notes ?? txn.notes ?? '',
@@ -817,6 +827,10 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       setLotMode('FIFO')
     }
   }
+
+  useEffect(() => {
+    if (initialTransaction) handleEditTxn(initialTransaction)
+  }, [initialTransaction])
 
   const handleDeleteTxn = async (txnId) => {
     setError(null)
@@ -874,13 +888,14 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       zIndex: 1000,
     }}>
       <div className="card" style={{ width: '95vw', maxWidth: '1200px', maxHeight: '85vh', overflow: 'auto', paddingTop: 0 }}>
-        <h2 style={{ marginTop: '1.5rem' }}>{isNew ? 'Add Ticker via Transaction' : `Transactions — ${ticker}`}</h2>
+        <h2 style={{ marginTop: '1.5rem' }}>{editorOnly ? `${initialTransaction ? 'Edit' : 'Add'} Transaction — ${ticker}` : isNew ? 'Add Ticker via Transaction' : `Transactions — ${ticker}`}</h2>
+        {accountName && <p>Account: {accountName}</p>}
 
         {error && <div className="alert alert-error" style={{ marginBottom: '0.75rem' }}>{error}</div>}
         {successMsg && <div className="alert alert-success" style={{ marginBottom: '0.75rem' }}>{successMsg}</div>}
 
         {/* Existing transactions list */}
-        {!isNew && transactions.length > 0 && (
+        {!editorOnly && !isNew && transactions.length > 0 && (
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem', marginBottom: '0.45rem' }}>
               Use the arrows to place same-day buys and sells in their real execution order. FIFO lot matching and cost basis recalculate after each move.
@@ -999,7 +1014,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
             </table>
           </div>
         )}
-        {!isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
+        {!editorOnly && !isNew && loading && <div style={{ textAlign: 'center', padding: '1rem' }}><span className="spinner" /></div>}
 
         {/* Shares the tracker is assuming: offer to make them a real row. */}
         {!isNew && openingLot?.needed && (
@@ -1343,11 +1358,121 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
             </div>
           </div>
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
-            <button type="submit" className="btn btn-success">{editId ? 'Edit via Transaction' : 'Add via Transaction'}</button>
-            {editId && <button type="button" className="btn btn-secondary" onClick={resetTransactionEditor}>Cancel Edit</button>}
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
+            <button type="submit" className="btn btn-success" disabled={saving}>{saving ? 'Saving…' : editId ? 'Save Transaction' : 'Add Transaction'}</button>
+            {editId && !editorOnly && <button type="button" className="btn btn-secondary" onClick={resetTransactionEditor}>Cancel Edit</button>}
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>Close</button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, onClose }) {
+  const [accounts, setAccounts] = useState([])
+  const [accountId, setAccountId] = useState(transaction?.profile_id ? String(transaction.profile_id) : '')
+  const [kind, setKind] = useState(transaction?.record_type === 'dividend' ? 'dividend' : 'trade')
+  const [started, setStarted] = useState(!!transaction)
+  const [error, setError] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [form, setForm] = useState({
+    payment_date: transaction?.transaction_date || '',
+    amount: transaction?.dividend_amount ?? '',
+    notes: transaction?.raw_notes ?? transaction?.notes ?? '',
+  })
+  useEffect(() => {
+    const controller = new AbortController()
+    pf(`/api/holdings/${ticker}/transaction-accounts`, { signal: controller.signal })
+      .then(async res => {
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Could not load accounts')
+        setAccounts(data)
+        if (!transaction && data.length === 1) setAccountId(String(data[0].id))
+      })
+      .catch(e => { if (e.name !== 'AbortError') setError(e.message) })
+    return () => controller.abort()
+  }, [pf, ticker, transaction])
+  // Use the row's actual account, never an aggregate's inferred first holding.
+  const accountFetch = useMemo(() => (path, options) => {
+    const sep = path.includes('?') ? '&' : '?'
+    return fetch(`${API_BASE}${path}${sep}profile_id=${accountId}&basis_mode=${basisMode}`, options)
+  }, [accountId, basisMode])
+  const accountName = accounts.find(account => String(account.id) === accountId)?.name
+    || transaction?.source_account_name || `Account ${accountId}`
+  if (started && kind === 'trade') return (
+    <TransactionModal ticker={ticker} initialTransaction={transaction} editorOnly
+      accountName={accountName} pf={accountFetch} onSaved={onSaved} onClose={onClose} />
+  )
+  const saveDividend = async event => {
+    event.preventDefault()
+    if (saving) return
+    setError(null)
+    const amount = Number(form.amount)
+    if (!form.payment_date || form.amount === '' || !Number.isFinite(amount) || amount < 0) {
+      setError('Enter a payment date and a non-negative cash amount.')
+      return
+    }
+    setSaving(true)
+    try {
+      const suffix = transaction ? `/${transaction.dividend_payment_id}` : ''
+      const res = await accountFetch(`/api/holdings/${ticker}/dividend-payments${suffix}`, {
+        method: transaction ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, amount }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not save dividend')
+      await onSaved()
+      onClose()
+    } catch (e) { setError(e.message) }
+    finally { setSaving(false) }
+  }
+  return (
+    <div className="modal-overlay">
+      <div className="card" role="dialog" aria-modal="true" aria-label={`${transaction ? 'Edit' : 'Add'} transaction for ${ticker}`}
+        style={{ width: 540, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto' }}>
+        <h2>{transaction ? 'Edit Dividend' : 'Add Transaction'} — {ticker}</h2>
+        {error && <div className="alert alert-error" role="alert">{error}</div>}
+        {!started ? (
+          <form onSubmit={event => { event.preventDefault(); setStarted(true) }}>
+            <div className="form-group">
+              <label htmlFor="ledger-account">Account</label>
+              <select id="ledger-account" required value={accountId} onChange={event => setAccountId(event.target.value)}>
+                <option value="">Choose an account</option>
+                {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label htmlFor="ledger-kind">Transaction type</label>
+              <select id="ledger-kind" value={kind} onChange={event => setKind(event.target.value)}>
+                <option value="trade">Buy / Sell</option><option value="dividend">Dividend payment</option>
+              </select>
+            </div>
+            <button className="btn btn-primary" disabled={!accountId}>Continue</button>{' '}
+            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          </form>
+        ) : (
+          <form onSubmit={saveDividend}>
+            <p>Account: {accountName}</p>
+            <p>Record the cash payment here. Reinvested shares are a separate BUY transaction.</p>
+            <div className="form-group">
+              <label htmlFor="ledger-payment-date">Payment date</label>
+              <input id="ledger-payment-date" type="date" min="1900-01-01" max="2099-12-31" required value={form.payment_date}
+                onChange={event => setForm({ ...form, payment_date: event.target.value })} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="ledger-amount">Cash amount ($)</label>
+              <input id="ledger-amount" type="number" min="0" step="any" required value={form.amount}
+                onChange={event => setForm({ ...form, amount: event.target.value })} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="ledger-notes">Notes</label>
+              <input id="ledger-notes" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} />
+            </div>
+            <button className="btn btn-success" disabled={saving}>{saving ? 'Saving…' : 'Save Dividend'}</button>{' '}
+            <button type="button" className="btn btn-secondary" disabled={saving} onClick={onClose}>Cancel</button>
+          </form>
+        )}
       </div>
     </div>
   )
@@ -2060,7 +2185,7 @@ export default function ManageHoldings() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
   const { runMarketRefresh } = useMarketRefresh()
-  const { profileId, isAggregate, selection, basisMode, profileQueryString } = useProfile()
+  const { profileId, isAggregate, selection, basisMode, profileQueryString, profiles } = useProfile()
   const dialog = useDialog()
   const { openTickerResearch } = useTickerResearch()
   const holdingsRequestRef = useRef(0)
@@ -2111,6 +2236,12 @@ export default function ManageHoldings() {
     }
   }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
+  const [ledgerEditor, setLedgerEditor] = useState(null)
+  const [deletingLedgerId, setDeletingLedgerId] = useState(null)
+  useEffect(() => {
+    setLedgerEditor(null)
+    setExpandedTickers({})
+  }, [selection])
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
   const [reorderingLotId, setReorderingLotId] = useState(null)
   const [lotOrderFeedback, setLotOrderFeedback] = useState(null)
@@ -2479,6 +2610,31 @@ export default function ManageHoldings() {
       setExpandedTickers(prev => ({ ...prev, [ticker]: [] }))
       setLotOrderFeedback({ ticker, type: 'error', text: e.message })
     }
+  }
+
+  const refreshLedger = async ticker => {
+    invalidateDashboardCache()
+    try {
+      await Promise.all([fetchExpandedTransactions(ticker), fetchHoldings({ silent: true })])
+    } catch (e) {
+      setError(`Saved, but the view could not refresh: ${e.message}. Reload Holdings to see the latest records.`)
+    }
+  }
+
+  const deleteLedgerTransaction = async (ticker, txn) => {
+    const account = txn.source_account_name || profiles.find(p => p.id === txn.profile_id)?.name || `Account ${txn.profile_id}`
+    const dividend = txn.record_type === 'dividend'
+    if (!await dialog.confirm(`Delete ${txn.transaction_type || 'BUY'} for ${ticker} on ${txn.transaction_date || 'the undated group'} in ${account}? ${dividend ? 'This removes the cash payment; any DRIP BUY remains separate.' : 'Holdings and cost basis will be recalculated.'}`)) return
+    setDeletingLedgerId(txn.id)
+    try {
+      const path = dividend ? `dividend-payments/${txn.dividend_payment_id}` : `transactions/${txn.id}`
+      const res = await fetch(`${API_BASE}/api/holdings/${ticker}/${path}?profile_id=${txn.profile_id}&basis_mode=${basisMode}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not delete transaction')
+      await refreshLedger(ticker)
+      setMessage(`${ticker} ${txn.transaction_type || 'BUY'} deleted from ${account}.`)
+    } catch (e) { setError(e.message) }
+    finally { setDeletingLedgerId(null) }
   }
 
   const handleExpandedTxnMove = async (ticker, txn, direction) => {
@@ -3456,6 +3612,10 @@ export default function ManageHoldings() {
                   <tr>
                     <td colSpan={activeCols.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
                       <div className="mh-lot-panel">
+                      <div className="mh-lot-toolbar">
+                        <strong>{h.ticker} transactions</strong>
+                        <button className="btn btn-primary" onClick={() => setLedgerEditor({ ticker: h.ticker })}>+ Add Transaction</button>
+                      </div>
                       {expandedTickers[h.ticker] === 'loading' ? (
                         <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
                       ) : expandedTickers[h.ticker].length === 0 ? (
@@ -3495,6 +3655,7 @@ export default function ManageHoldings() {
                           <table className="mh-lot-table" style={{ width: 'auto', fontSize: '0.82rem', marginBottom: 0 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid var(--p-1a3a5c)' }}>
+                                <th className="mh-lot-actions">Actions</th>
                                 {LOT_COLUMNS.map(col => {
                                   const activeSort = lotSorts[h.ticker]?.key === col.key
                                   const direction = activeSort ? lotSorts[h.ticker].direction : null
@@ -3576,6 +3737,16 @@ export default function ManageHoldings() {
                                       background: (isDividend || isDripBuy) ? 'rgba(79, 195, 247, 0.025)' : undefined,
                                     }}
                                   >
+                                    <td className="mh-lot-actions">
+                                      <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                        <button type="button" className="btn btn-primary" aria-label={`Edit ${h.ticker} transaction ${txn.id}`}
+                                          disabled={deletingLedgerId != null} onClick={() => setLedgerEditor({ ticker: h.ticker, transaction: txn })}>Edit</button>
+                                        <button type="button" className="btn btn-danger" aria-label={`Delete ${h.ticker} transaction ${txn.id}`}
+                                          disabled={deletingLedgerId != null} onClick={() => deleteLedgerTransaction(h.ticker, txn)}>
+                                          {deletingLedgerId === txn.id ? 'Deleting…' : 'Delete'}
+                                        </button>
+                                      </div>
+                                    </td>
                                     <td
                                       title={isDividend
                                         ? 'Cash dividend received. A separate DRIP BUY may reinvest the same amount.'
@@ -3795,6 +3966,11 @@ export default function ManageHoldings() {
         />
       )}
 
+      {ledgerEditor && (
+        <LedgerTransactionEditor {...ledgerEditor} pf={pf} basisMode={basisMode}
+          onClose={() => setLedgerEditor(null)} onSaved={() => refreshLedger(ledgerEditor.ticker)} />
+      )}
+
       {(txnTicker !== null || txnIsNew) && (
         <TransactionModal
           ticker={txnTicker}
@@ -3803,6 +3979,7 @@ export default function ManageHoldings() {
           onSaved={() => {
             invalidateDashboardCache()
             fetchHoldings()
+            if (txnTicker && expandedTickers[txnTicker]) fetchExpandedTransactions(txnTicker).catch(e => setError(e.message))
           }}
           onOpeningLotRecorded={() => {
             if (transactionReturnPath) navigate(transactionReturnPath)

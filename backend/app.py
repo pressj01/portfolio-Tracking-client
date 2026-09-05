@@ -21720,6 +21720,118 @@ def list_transactions(ticker):
     return jsonify(_add_transaction_source_notes(transactions, profile_names, include_account_note))
 
 
+@app.route("/api/holdings/<ticker>/transaction-accounts", methods=["GET"])
+def transaction_accounts(ticker):
+    """Offer explicit source accounts when adding from an Owner/aggregate ledger."""
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        read_pids, _ = _get_transaction_read_scope(conn, is_agg, pids)
+        # Owner is a synthesized view while it has source accounts.
+        source_pids = _dividend_payment_profile_ids_for_read(conn, read_pids)
+        names = _load_profile_name_map(conn, source_pids)
+        return jsonify([{"id": pid, "name": name} for pid, name in names.items()])
+    finally:
+        conn.close()
+
+
+def _refresh_edited_dividend_totals(conn, ticker, profile_id):
+    """Rebuild this holding's actual cash totals without changing its share lots."""
+    holding = conn.execute(
+        "SELECT purchase_date, purchase_value FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not holding:
+        return
+    purchased = _date_from_value(holding["purchase_date"])
+    today = datetime.date.today()
+    payments = conn.execute(
+        "SELECT payment_date, amount, source FROM dividend_payments WHERE ticker = ? AND profile_id = ? "
+        "AND LOWER(COALESCE(source, '')) != 'refresh_estimate' ORDER BY payment_date, id",
+        (ticker, profile_id),
+    ).fetchall()
+    dated = [(date, float(row["amount"] or 0), row["source"]) for row in payments
+             if (date := _date_from_value(row["payment_date"])) is not None
+             and date <= today and (purchased is None or date >= purchased)]
+    total = sum(amount for _, amount, _ in dated)
+    ytd = sum(amount for date, amount, _ in dated if date.year == today.year)
+    month = sum(amount for date, amount, _ in dated if (date.year, date.month) == (today.year, today.month))
+    sources = {_normalise_dividend_payment_source(source) for _, _, source in dated}
+    source = next(iter(sources)) if len(sources) == 1 else "mixed" if sources else "none"
+    conn.execute(
+        "UPDATE all_account_info SET total_divs_received = ?, ytd_divs = ?, current_month_income = ?, "
+        "dividend_paid = ?, paid_for_itself = ?, dividend_actuals_source = ? WHERE ticker = ? AND profile_id = ?",
+        (total, ytd, month, dated[-1][1] if dated else 0,
+         total / float(holding["purchase_value"]) if float(holding["purchase_value"] or 0) > 0 else 0,
+         source, ticker, profile_id),
+    )
+    source_ids = _get_owner_source_profile_ids(conn)
+    if profile_id in source_ids:
+        _sync_owner_dividend_actuals_from_sources(conn, source_ids)
+
+
+@app.route("/api/holdings/<ticker>/dividend-payments", methods=["POST"])
+@app.route("/api/holdings/<ticker>/dividend-payments/<int:payment_id>", methods=["PUT", "DELETE"])
+def mutate_dividend_payment(ticker, payment_id=None):
+    """CRUD for actual cash payments, separate from share-changing transactions."""
+    is_agg, pids = get_profile_filter()
+    if is_agg or len(pids) != 1:
+        return jsonify({"error": "Choose a source account to change a dividend payment"}), 400
+    ticker = ticker.upper()
+    profile_id = pids[0]
+    data = request.get_json(silent=True) or {}
+    if request.method != "DELETE":
+        payment_date = data.get("payment_date")
+        date_error = _transaction_date_error(payment_date)
+        if not payment_date or date_error:
+            return jsonify({"error": date_error or "Payment date is required"}), 400
+        try:
+            amount = float(data.get("amount"))
+        except (TypeError, ValueError):
+            amount = float("nan")
+        if not math.isfinite(amount) or amount < 0:
+            return jsonify({"error": "Cash amount must be a finite, non-negative number"}), 400
+        if data.get("notes") is not None and not isinstance(data["notes"], str):
+            return jsonify({"error": "Notes must be text"}), 400
+    conn = get_connection()
+    try:
+        if payment_id is not None:
+            existing = conn.execute(
+                "SELECT id FROM dividend_payments WHERE id = ? AND ticker = ? AND profile_id = ? "
+                "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
+                (payment_id, ticker, profile_id),
+            ).fetchone()
+            if not existing:
+                return jsonify({"error": "Dividend payment does not belong to this holding/account"}), 404
+        elif not conn.execute(
+            "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?", (ticker, profile_id),
+        ).fetchone():
+            return jsonify({"error": "Add a holding in this account before recording its dividend"}), 400
+        if request.method == "DELETE":
+            conn.execute("DELETE FROM dividend_payments WHERE id = ?", (payment_id,))
+        elif payment_id is not None:
+            conn.execute(
+                "UPDATE dividend_payments SET payment_date = ?, amount = ?, notes = ? WHERE id = ?",
+                (payment_date, amount, data.get("notes"), payment_id),
+            )
+        else:
+            payment_id = conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES (?, ?, ?, ?, 'manual', ?)",
+                (ticker, profile_id, payment_date, amount, data.get("notes")),
+            ).lastrowid
+        _refresh_edited_dividend_totals(conn, ticker, profile_id)
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({"error": "A dividend payment already exists for this ticker, account and date. Edit that payment instead."}), 409
+    finally:
+        conn.close()
+    populate_dividends(profile_id)
+    _clear_total_return_caches()
+    return jsonify({"id": payment_id, "ticker": ticker, "message": "Dividend payment saved"}), 201 if request.method == "POST" else 200
+
+
 @app.route("/api/holdings/<ticker>/basis-gap", methods=["GET"])
 def holding_basis_gap(ticker):
     """Explain why a position's sells report no gain, and what would fix it.

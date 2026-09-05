@@ -2950,6 +2950,27 @@ th.col-drag-target {
   max-height: 55vh;
   overflow: auto;
 }
+.mh-lot-toolbar {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem 0;
+}
+.mh-lot-toolbar .btn,
+.mh-lot-actions .btn {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+}
+.mh-lot-table .mh-lot-actions {
+  position: sticky;
+  left: 0;
+  background: var(--p-13203a);
+  z-index: 1;
+}
+.manage-holdings-table-wrap .mh-lot-table > thead > tr > .mh-lot-actions {
+  z-index: 7;
+}
 /* Each table keeps an opaque header within its own scroll region. */
 .manage-holdings-table > thead > tr > th {
   background: var(--border);

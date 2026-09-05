@@ -3309,6 +3309,97 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         ]
         self.assertEqual(saved_ids, ids)
 
+    def _seed_editable_dividends(self):
+        for pid, name in ((1, 'Owner'), (2, 'IRA'), (3, 'Roth')):
+            self._execute(
+                "INSERT INTO profiles (id, name, include_in_owner) VALUES (?, ?, ?)",
+                (pid, name, int(pid != 1)),
+            )
+            self._execute(
+                "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, purchase_date) "
+                "VALUES ('ABC', ?, 10, 20, 200, '2020-01-01')", (pid,),
+            )
+        self._execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, shares, price_per_share) "
+            "VALUES ('ABC', 2, 'BUY', 10, 20)"
+        )
+
+    def test_dividend_crud_rebuilds_cash_totals_without_changing_shares(self):
+        self._seed_editable_dividends()
+        today = datetime.date.today().isoformat()
+        res = self.client.post('/api/holdings/ABC/dividend-payments?profile_id=2',
+                               json={'payment_date': today, 'amount': 12.5, 'notes': 'Cash payment'})
+        self.assertEqual(res.status_code, 201, res.get_json())
+        payment_id = res.get_json()['id']
+        event = self.client.get('/api/holdings/ABC/transactions?profile_id=2&include_dividends=true').get_json()[-1]
+        self.assertEqual(event['dividend_payment_id'], payment_id)
+        self.assertEqual(event['dividend_amount'], 12.5)
+        res = self.client.put(f'/api/holdings/ABC/dividend-payments/{payment_id}?profile_id=2',
+                              json={'payment_date': today, 'amount': 25, 'notes': 'Corrected'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        for pid in (1, 2):
+            row = self._rows('SELECT total_divs_received, ytd_divs, current_month_income FROM all_account_info WHERE profile_id = ?', (pid,))[0]
+            self.assertEqual(tuple(row), (25, 25, 25))
+        self.assertEqual(self._scalar('SELECT quantity FROM all_account_info WHERE profile_id = 2'), 10)
+        self.assertEqual(self._scalar('SELECT purchase_value FROM all_account_info WHERE profile_id = 2'), 200)
+        self.assertEqual(self._scalar('SELECT COUNT(*) FROM transactions'), 1)
+        res = self.client.delete(f'/api/holdings/ABC/dividend-payments/{payment_id}?profile_id=2')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(self._scalar('SELECT COUNT(*) FROM dividend_payments'), 0)
+        self.assertEqual(self._scalar('SELECT total_divs_received FROM all_account_info WHERE profile_id = 2'), 0)
+        self.assertEqual(self._scalar('SELECT total_divs_received FROM all_account_info WHERE profile_id = 1'), 0)
+        self.assertEqual(self._scalar('SELECT COUNT(*) FROM transactions'), 1)
+
+    def test_dividend_mutation_rejects_wrong_account_and_ticker(self):
+        self._seed_editable_dividends()
+        payment_id = self.client.post('/api/holdings/ABC/dividend-payments?profile_id=2',
+                                     json={'payment_date': '2025-01-10', 'amount': 10}).get_json()['id']
+        for path in (f'/api/holdings/ABC/dividend-payments/{payment_id}?profile_id=3',
+                     f'/api/holdings/XYZ/dividend-payments/{payment_id}?profile_id=2'):
+            self.assertEqual(self.client.delete(path).status_code, 404)
+            self.assertEqual(self.client.put(path, json={'payment_date': '2025-02-10', 'amount': 50}).status_code, 404)
+        self.assertEqual(self._scalar('SELECT amount FROM dividend_payments'), 10)
+
+    def test_dividend_duplicate_dates_roll_back_without_overwriting(self):
+        self._seed_editable_dividends()
+        url = '/api/holdings/ABC/dividend-payments?profile_id=2'
+        self.client.post(url, json={'payment_date': '2025-01-10', 'amount': 10})
+        self.assertEqual(self.client.post(url, json={'payment_date': '2025-01-10', 'amount': 99}).status_code, 409)
+        second = self.client.post(url, json={'payment_date': '2025-02-10', 'amount': 20}).get_json()['id']
+        res = self.client.put(f'/api/holdings/ABC/dividend-payments/{second}?profile_id=2',
+                              json={'payment_date': '2025-01-10', 'amount': 99})
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual([row[0] for row in self._rows('SELECT amount FROM dividend_payments ORDER BY id')], [10, 20])
+
+    def test_dividend_validation_and_aggregate_account_selection(self):
+        self._seed_editable_dividends()
+        for payload in ({'payment_date': '2025-02-30', 'amount': 10},
+                        {'payment_date': '', 'amount': 10},
+                        {'payment_date': '2025-01-10', 'amount': -1},
+                        {'payment_date': '2025-01-10', 'amount': 'nan'},
+                        {'payment_date': '2025-01-10', 'amount': 'inf'}):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.client.post('/api/holdings/ABC/dividend-payments?profile_id=2', json=payload).status_code, 400)
+        res = self.client.post('/api/holdings/ABC/dividend-payments?aggregate_id=1',
+                               json={'payment_date': '2025-01-10', 'amount': 10})
+        self.assertEqual(res.status_code, 400)
+        accounts = self.client.get('/api/holdings/ABC/transaction-accounts?profile_id=1').get_json()
+        self.assertEqual({row['id'] for row in accounts}, {2, 3})
+        self.assertEqual(self._scalar('SELECT COUNT(*) FROM dividend_payments'), 0)
+
+    def test_dividend_totals_exclude_old_lots_future_payments_and_estimates(self):
+        self._seed_editable_dividends()
+        self._execute("UPDATE all_account_info SET purchase_date = '2025-01-01' WHERE profile_id = 2")
+        for date, amount, source in (('2024-01-10', 100, 'schwab'), ('2099-01-01', 200, 'schwab'),
+                                     ('2025-02-10', 300, 'refresh_estimate')):
+            self._execute('INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) VALUES (?, ?, ?, ?, ?)',
+                          ('ABC', 2, date, amount, source))
+        self.client.post('/api/holdings/ABC/dividend-payments?profile_id=2',
+                         json={'payment_date': '2025-01-10', 'amount': 10})
+        self.assertEqual(self._scalar('SELECT total_divs_received FROM all_account_info WHERE profile_id = 2'), 10)
+        estimate_id = self._scalar("SELECT id FROM dividend_payments WHERE source = 'refresh_estimate'")
+        self.assertEqual(self.client.delete(f'/api/holdings/ABC/dividend-payments/{estimate_id}?profile_id=2').status_code, 404)
+
     def test_delete_full_sale_restores_holding_from_remaining_buy_lot(self):
         self._execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_date) "
