@@ -202,16 +202,24 @@ class PairSelectionTests(unittest.TestCase):
         picked = self._scan(min_credit_pct_of_width=80.0)
         self.assertTrue(picked["constraints_relaxed"])
 
-    def test_conservative_dollar_credit_floor_rejects_a_twenty_five_dollar_credit(self):
+    def test_sub_floor_credit_is_never_surfaced_even_as_a_near_match(self):
+        # A spread whose only constructible credit is below the hard floor is not
+        # a trade worth taking, so it is never returned — not as a full match and
+        # not as a relaxed near-match, whatever the requested dollar credit.
         self.chain = [
             leg(96, 0.39, 0.41, -0.25),
             leg(95, 0.15, 0.17, -0.10),
         ]
-        skinny = self._scan(min_credit_dollars=40.0, min_cushion_pct=1.0)
-        self.assertAlmostEqual(skinny["credit_dollars"], 24.0)
-        self.assertTrue(skinny["constraints_relaxed"])
-        generous = self._scan(min_credit_dollars=20.0, min_cushion_pct=1.0)
-        self.assertFalse(generous["constraints_relaxed"])
+        self.assertLess(24.0, bps.HARD_MIN_CREDIT_DOLLARS)  # this chain is sub-floor
+        self.assertIsNone(self._scan(min_credit_dollars=40.0, min_cushion_pct=1.0))
+        self.assertIsNone(self._scan(min_credit_dollars=20.0, min_cushion_pct=1.0))
+
+    def test_credit_at_or_above_floor_is_returned(self):
+        # The default chain clears the hard floor comfortably, so a spread is
+        # still returned; the floor only removes the not-worth-it thin credits.
+        picked = self._scan(min_credit_dollars=20.0)
+        self.assertIsNotNone(picked)
+        self.assertGreaterEqual(picked["credit_dollars"], bps.HARD_MIN_CREDIT_DOLLARS)
 
     def test_recent_trades_keep_after_hours_analysis_available(self):
         broken = [leg(95, 0, 2.0, -0.25), leg(90, 0.5, 0.4, -0.10)]

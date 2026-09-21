@@ -78,6 +78,13 @@ from bear_put_spread_scanner import vertical_fair_value
 
 CONTRACT_MULTIPLIER = 100.0
 
+# A bull put credit spread that collects almost nothing (or, once markets are
+# crossed, a net debit) is not a trade worth taking. When no pair clears every
+# rule the scanner falls back to the best constructible near-match, and that
+# relaxation must never surface a spread below this credit floor — otherwise the
+# results table fills with $30-credit "spreads" the user would never open.
+HARD_MIN_CREDIT_DOLLARS = 45.0
+
 
 def _band(value, low: float, full_low: float, full_high: float,
           high: float, points: float) -> float:
@@ -447,7 +454,7 @@ def _suggest_bull_put_spread(
                 continue
             if pair["credit_pct_of_width"] < min_credit_pct_of_width:
                 continue
-            if pair["credit_dollars"] < min_credit_dollars:
+            if pair["credit_dollars"] < max(min_credit_dollars, HARD_MIN_CREDIT_DOLLARS):
                 continue
             if (
                 pair["breakeven_cushion_pct"] is not None
@@ -463,7 +470,14 @@ def _suggest_bull_put_spread(
                 continue
             passing.append(pair)
 
-    pool = passing or all_pairs
+    # The near-match fallback still has to bring in a worthwhile credit: a spread
+    # below the hard floor (or a net debit, which fails the same check) is never
+    # surfaced, even when nothing clears every rule.
+    near_matches = [
+        pair for pair in all_pairs
+        if pair["credit_dollars"] >= HARD_MIN_CREDIT_DOLLARS
+    ]
+    pool = passing or near_matches
     if not pool:
         return None
     best = max(pool, key=lambda pair: selection_rank(pair, selection) if selection is not None else (_pair_quality(pair),))
