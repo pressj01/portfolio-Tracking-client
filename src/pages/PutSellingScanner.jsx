@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import OptionProbabilityCards from '../components/OptionProbabilityCards'
+import OptionSelectionControls from '../components/OptionSelectionControls'
+import { OPTION_SELECTION_DEFAULTS } from '../utils/optionSelection'
 import RiskGraphButton from '../components/RiskGraphButton'
 import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
@@ -50,6 +52,8 @@ const PRESETS = {
 }
 
 const DEFAULT_FILTERS = {
+  ...OPTION_SELECTION_DEFAULTS,
+  bid_ask_level: 'Conservative (use bid/ask values)',
   ...PRESETS.balanced.filters,
   custom_tickers: '',
   include_selected_funds: false,
@@ -640,7 +644,7 @@ export default function PutSellingScanner() {
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(null)
   const [chartTicker, setChartTicker] = useState(null)
-  const [sortCol, setSortCol] = useState('score')
+  const [sortCol, setSortCol] = useState('selection')
   const [sortAsc, setSortAsc] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [hasScanned, setHasScanned] = useState(Boolean(cachedScan))
@@ -726,6 +730,7 @@ export default function PutSellingScanner() {
   }
 
   const sortedRows = useMemo(() => {
+    if (sortCol === 'selection') return rows
     const accessor = SORT_ACCESSORS[sortCol] || (r => r[sortCol])
     return [...rows].sort((a, b) => {
       // A score computed without an option chain uses a smaller denominator, so
@@ -922,6 +927,7 @@ export default function PutSellingScanner() {
         </button>
       </div>
 
+      <OptionSelectionControls strategy="cash-secured-put" filters={filters} onChange={(key, value) => { set(key, value); setSortCol('selection') }} showPricing />
       {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
 
       {loading && (
@@ -1012,7 +1018,8 @@ export default function PutSellingScanner() {
                               exp {r.put.expiration}
                             </div>
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-                              {pct(r.put.otm_pct, 0)} below · {usd(r.put.mid)} {r.put.quote_source === 'last_trade_estimate' ? 'est.' : 'credit'}
+                              {pct(r.put.otm_pct, 0)} below · {usd(r.put.net_entry_price ?? r.put.mid)} {r.put.quote_source === 'last_trade_estimate' ? 'est.' : 'net credit'}
+                              {r.selection_reasons?.length > 0 && <div style={{ color: 'var(--warning)' }} title={r.selection_reasons.join('; ')}>Watchlist only · {r.selection_reasons.join('; ')}</div>}
                             </div>
                           </div>
                         ) : '—'}

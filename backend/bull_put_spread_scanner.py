@@ -33,6 +33,9 @@ import yahoo_gateway
 from flask import jsonify, request
 
 from option_probability import profit_probability_schedule
+from option_selection import (SELECTION_DEFAULTS, selection_settings, expiration_choices,
+                              price_leg, income_metrics, candidate_reasons, selection_rank,
+                              managed_probability, underlying_reasons)
 from option_strike_targets import strike_for_delta
 from put_scanner import (
     COMMODITY_ETF_SET,
@@ -113,7 +116,8 @@ def _delta_pool(legs: list[dict], target: float, tolerance: float) -> list[dict]
 
 
 def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
-                       forecast_vol: float | None) -> dict | None:
+                       forecast_vol: float | None, selection=None, expiration=None,
+                       div_yield=0) -> dict | None:
     """Calculate one short-higher/long-lower put spread."""
     short_strike = _num(short_leg.get("strike"))
     long_strike = _num(long_leg.get("strike"))
@@ -121,8 +125,13 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
         return None
 
     width = short_strike - long_strike
-    credit = (_num(short_leg.get("mid"), 0.0) or 0.0) - (
-        _num(long_leg.get("mid"), 0.0) or 0.0
+    if selection is not None:
+        short_leg = price_leg(short_leg, -1, selection)
+        long_leg = price_leg(long_leg, 1, selection)
+        if short_leg is None or long_leg is None:
+            return None
+    credit = (_num(short_leg.get("net_entry_price", short_leg.get("mid")), 0.0) or 0.0) - (
+        _num(long_leg.get("net_entry_price", long_leg.get("mid")), 0.0) or 0.0
     )
     if credit <= 0 or credit >= width:
         return None
@@ -209,6 +218,7 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
         "max_profit_dollars": credit * CONTRACT_MULTIPLIER,
         "max_loss_dollars": max_loss * CONTRACT_MULTIPLIER,
         "short_leg": {
+            **short_leg,
             "strike": short_strike,
             "bid": short_leg["bid"],
             "ask": short_leg["ask"],
@@ -220,6 +230,7 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
             "quote_source": short_leg.get("quote_source", "live_bid_ask"),
         },
         "long_leg": {
+            **long_leg,
             "strike": long_strike,
             "bid": long_leg["bid"],
             "ask": long_leg["ask"],
@@ -230,6 +241,8 @@ def _build_credit_pair(short_leg: dict, long_leg: dict, spot: float, dte: int,
             "volume": long_leg["volume"],
             "quote_source": long_leg.get("quote_source", "live_bid_ask"),
         },
+        **(income_metrics([short_leg, long_leg], spot, dte, expiration, selection,
+                          RISK_FREE, div_yield) if selection is not None else {}),
     }
 
 
@@ -266,7 +279,7 @@ def _pair_quality(pair: dict) -> float:
     return score
 
 
-def _prime_option_ticker(ticker: str):
+def _prime_option_ticker(ticker: str, outage: dict | None = None):
     """Open one yfinance session and keep the default chain Yahoo already sent.
 
     ``Ticker.options`` and a later ``Ticker.option_chain(date)`` on a *new*
@@ -276,7 +289,9 @@ def _prime_option_ticker(ticker: str):
     """
     try:
         tk = yf.Ticker(ticker)
-    except Exception:
+    except Exception as exc:
+        if outage is not None:
+            outage["reason"] = str(exc)
         return None, [], None
 
     default_chain = None
@@ -285,9 +300,13 @@ def _prime_option_ticker(ticker: str):
         if callable(fetch):
             try:
                 default_chain = yahoo_gateway.call(fetch)
-            except Exception:
+            except Exception as exc:
+                # A throttle here is the feed, not the symbol. Keep it: the
+                # catalog fetch below usually fails the same way and silently.
+                if outage is not None and yahoo_gateway.is_rate_limited(exc):
+                    outage["reason"] = str(exc)
                 default_chain = None
-    expirations = _load_expirations(ticker, tk)
+    expirations = _load_expirations(ticker, tk, outage)
     return tk, expirations, default_chain
 
 
@@ -311,9 +330,10 @@ def _suggest_bull_put_spread(
     max_exec_cost_pct: float = 30.0,
     earnings_date: str | None = None,
     earnings_buffer_days: int = 5,
+    selection=None, _session=None, _expiration=None, outage: dict | None = None,
 ) -> dict | None:
     """Select the best live, same-expiration bull put credit spread."""
-    tk, expirations, default_chain = _prime_option_ticker(ticker)
+    tk, expirations, default_chain = _session or _prime_option_ticker(ticker, outage)
     if tk is None or not expirations:
         return None
 
@@ -322,8 +342,28 @@ def _suggest_bull_put_spread(
         earnings_d - timedelta(days=max(0, earnings_buffer_days))
         if earnings_d else None
     )
+    if selection is not None and _expiration is None:
+        choices = expiration_choices(expirations, target_dte, min_dte, max_dte,
+                                     selection.get("expiration_candidates", 3),
+                                     cutoff if selection.get("exclude_earnings_before_expiry") else None)
+        candidates = []
+        for expiry in choices:
+            candidate = _suggest_bull_put_spread(
+                ticker, spot, div_yield, forecast_vol, target_dte, min_dte, max_dte,
+                short_delta, long_delta, delta_tolerance, min_width_pct, max_width_pct,
+                min_credit_pct_of_width, min_credit_dollars, min_cushion_pct,
+                min_open_interest, max_exec_cost_pct, earnings_date, earnings_buffer_days,
+                selection, (tk, expirations, default_chain), expiry)
+            if candidate:
+                candidates.append(candidate)
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda item: (
+            not item.get("constraints_relaxed"), -len(item.get("selection_reasons", [])),
+            *selection_rank(item, selection)))
+        return {**best, "expirations_considered": len(choices)}
     expiration, dte, cleared = _pick_expiration(
-        expirations, target_dte, min_dte, max_dte, expire_before=cutoff
+        [_expiration] if _expiration else expirations, target_dte, min_dte, max_dte, expire_before=cutoff
     )
     if not expiration:
         return None
@@ -389,11 +429,17 @@ def _suggest_bull_put_spread(
             if width < lo_width or width > hi_width:
                 continue
             pair = _build_credit_pair(
-                short_leg, long_leg, spot, dte or 1, forecast_vol
+                short_leg, long_leg, spot, dte or 1, forecast_vol,
+                selection, expiration, div_yield,
             )
             if pair is None:
                 continue
             all_pairs.append(pair)
+            pair["selection_reasons"] = candidate_reasons(
+                [pair["short_leg"], pair["long_leg"]], pair, selection,
+            ) if selection is not None else []
+            if pair["selection_reasons"]:
+                continue
             estimated = pair["uses_last_trade_prices"]
             if estimated:
                 continue
@@ -420,7 +466,7 @@ def _suggest_bull_put_spread(
     pool = passing or all_pairs
     if not pool:
         return None
-    best = max(pool, key=_pair_quality)
+    best = max(pool, key=lambda pair: selection_rank(pair, selection) if selection is not None else (_pair_quality(pair),))
 
     atm = min(prepared, key=lambda leg: abs(leg["strike"] - spot))
     atm_iv = atm["iv"] if atm["iv"] > 0 else best["short_leg"]["iv"]
@@ -670,6 +716,7 @@ def build_verdict(row: dict) -> str:
 
 
 DEFAULTS = {
+    **SELECTION_DEFAULTS,
     "universe": "large_cap",
     "include_stocks": True,
     "include_index_etfs": True,
@@ -715,10 +762,10 @@ DEFAULTS = {
 }
 
 
-def _partition_candidate_rows(rows: list[dict], max_results: int):
+def _partition_candidate_rows(rows: list[dict], max_results: int, selection=None):
     actionable = [row for row in rows if row.get("chain_status") == "actionable"]
     watchlist = [row for row in rows if row.get("chain_status") != "actionable"]
-    actionable.sort(key=lambda row: -(row.get("score") or 0))
+    actionable.sort(key=lambda row: selection_rank(row.get("spread") or {}, selection) if selection else (row.get("score") or 0,), reverse=True)
     order = {
         "underlying_filters_missed": -1,
         "earnings": 0,
@@ -983,8 +1030,9 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
         tech, fund, _ = pair
         div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
         forecast_vol = _num(tech.get("rv_30")) or _num(tech.get("rv_252"))
+        outage: dict = {}
         try:
-            return _suggest_bull_put_spread(
+            spread = _suggest_bull_put_spread(
                 tech["ticker"],
                 tech["price"],
                 div_yield,
@@ -1004,17 +1052,27 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
                 max_exec_cost_pct=max_exec,
                 earnings_date=fund.get("next_earnings"),
                 earnings_buffer_days=earnings_buffer,
+                selection={**selection_settings(p), **p.get("selection_filters", {}), "support_price": tech.get("support_price")},
+                outage=outage,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return None, str(exc)
+        if spread is None and not outage and yahoo_gateway.is_cooling_down():
+            outage["reason"] = (
+                f"Quote feed cooling down; {yahoo_gateway.cooldown_remaining():.0f}s remaining"
+            )
+        return spread, (outage.get("reason") if spread is None else None)
 
     spreads: dict[str, dict | None] = {}
+    chain_outages: list[dict] = []
     if chain_targets:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for pair, spread in zip(
+            for pair, (spread, reason) in zip(
                 chain_targets, pool.map(_chain_for, chain_targets)
             ):
                 spreads[pair[0]["ticker"]] = spread
+                if reason:
+                    chain_outages.append({"ticker": pair[0]["ticker"], "reason": reason})
 
     rows: list[dict] = []
     for tech, fund, lower_confidence in survivors:
@@ -1039,6 +1097,18 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if spread:
+            settings = {**selection_settings(p), **p.get("selection_filters", {})}
+            spread["selection_reasons"] = list(dict.fromkeys([
+                *spread.get("selection_reasons", []),
+                *underlying_reasons(tech, fund, settings, _is_fund(fund, tech["ticker"])),
+            ]))
+            if spread["selection_reasons"]:
+                spread["constraints_relaxed"] = True
+            if spread.get("net_credit") is not None:
+                spread["managed_probability"] = managed_probability(
+                    [spread["short_leg"], spread["long_leg"]], spread,
+                    tech["price"], spread["dte"], settings, RISK_FREE,
+                    dividend_yield_for_pricing(fund, tech.get("price")))
             management = recommend_management(spread, rating)
             div_yield = dividend_yield_for_pricing(fund, tech.get("price"))
             probability_schedule, profit_capture = profit_probability_schedule(
@@ -1166,12 +1236,14 @@ def run_bull_put_spread_scan(payload: dict) -> dict:
     return {
         "rows": actionable_rows,
         "watchlist_rows": watchlist_rows,
+        "unavailable": chain_outages,
         "stats": {
             "universe": len(tickers),
             "priced": priced,
             "passed_price": len(price_pass),
             "passed_fundamentals": passed_fundamentals,
             "chains_fetched": sum(1 for spread in spreads.values() if spread),
+            "chains_failed": len(chain_outages),
             "actionable": len(actionable_rows),
             "watchlist": len(watchlist_rows),
             "dropped_for_earnings": dropped_for_earnings,

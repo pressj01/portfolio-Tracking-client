@@ -757,6 +757,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [refreshStatus, setRefreshStatus] = useState(null)
   const [gradeStatus, setGradeStatus] = useState(null)
+  // Yahoo throttling otherwise shows up only as data that quietly goes missing:
+  // blank grades, '--' in NAV cells, a scanner reporting no candidates.
+  const [feedThrottle, setFeedThrottle] = useState(null)
   // Tickers the last grade run could not price at all. Kept apart from the
   // grades themselves so an outage is never written into the long-lived
   // Dashboard cache as if 'N/A' were this window's verdict.
@@ -893,6 +896,17 @@ export default function Dashboard() {
         .catch(() => {})
     fetchSp500()
     const interval = setInterval(fetchSp500, 60000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    const checkFeed = () =>
+      fetch(`${API_BASE}/api/market-feed/status`)
+        .then(safeJson)
+        .then(d => setFeedThrottle(d && d.cooling_down ? d : null))
+        .catch(() => {})
+    checkFeed()
+    const interval = setInterval(checkFeed, 20000)
     return () => clearInterval(interval)
   }, [])
 
@@ -1893,6 +1907,24 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {feedThrottle && (
+        <div className="alert alert-warning" style={{ marginBottom: '1rem' }} role="alert">
+          <strong>Market data is rate-limited right now — close the app for 10 minutes.</strong>
+          <div style={{ fontSize: '0.82rem', marginTop: '0.35rem' }}>
+            Yahoo is refusing requests from this computer, so prices, grades, NAV and the
+            option scanners will read blank or return nothing. This is the data feed, not your
+            data and not your filters.
+          </div>
+          <div style={{ fontSize: '0.82rem', marginTop: '0.35rem' }}>
+            <strong>Shut the app down and wait about 10 minutes before reopening it.</strong>{' '}
+            Every launch and every retry sends a fresh burst of requests, which extends the
+            block instead of clearing it{feedThrottle.retry_after_sec
+              ? ` (the app is holding requests for another ${Math.ceil(feedThrottle.retry_after_sec)}s)`
+              : ''}.
+          </div>
+        </div>
+      )}
 
       <div className="dashboard-headline-grid" aria-label="Portfolio headline metrics">
         <SummaryCard

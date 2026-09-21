@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import PriceChartModal from '../components/PriceChartModal'
 import OptionProbabilityCards from '../components/OptionProbabilityCards'
+import OptionSelectionControls from '../components/OptionSelectionControls'
+import { OPTION_SELECTION_DEFAULTS } from '../utils/optionSelection'
 import RiskGraphButton from '../components/RiskGraphButton'
 import ScannerParameterGuide from '../components/ScannerParameterGuide'
 import ScannerRiskNotice from '../components/ScannerRiskNotice'
@@ -62,6 +64,8 @@ const PRESETS = {
 }
 
 const DEFAULT_FILTERS = {
+  ...OPTION_SELECTION_DEFAULTS,
+  bid_ask_level: 'Conservative (use bid/ask values)',
   ...PRESETS.balanced.filters,
   custom_tickers: '',
   include_selected_funds: false,
@@ -311,7 +315,7 @@ export default function BullPutSpreadScanner() {
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(null)
   const [chartTicker, setChartTicker] = useState(null)
-  const [sortCol, setSortCol] = useState('score')
+  const [sortCol, setSortCol] = useState('selection')
   const [sortAsc, setSortAsc] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [hasScanned, setHasScanned] = useState(Boolean(cachedScan))
@@ -384,6 +388,7 @@ export default function BullPutSpreadScanner() {
   }, [pf, filters, saveScan])
 
   const sortedRows = useMemo(() => {
+    if (sortCol === 'selection') return rows
     const accessor = SORT_ACCESSORS[sortCol] || (row => row[sortCol])
     return [...rows].sort((a, b) => {
       const av = accessor(a), bv = accessor(b)
@@ -555,6 +560,7 @@ export default function BullPutSpreadScanner() {
         </button>
       </div>
 
+      <OptionSelectionControls strategy="bull-put-spread" filters={filters} onChange={(key, value) => { set(key, value); setSortCol('selection') }} showPricing />
       {error && <div className="alert alert-error">{error}</div>}
       {loading && <p style={{ color: 'var(--text-dim)' }}>
         Screening price and quality first, then evaluating every plausible two-leg spread for the finalists.

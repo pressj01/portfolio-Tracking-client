@@ -15,6 +15,10 @@ from general_option_scanner import (
     run_general_option_scan,
 )
 
+# A fixed date silently expires and turns every fixture into "Expired contract".
+EXPIRATION = (date.today() + timedelta(days=30)).isoformat()
+LATER_EXPIRATION = (date.today() + timedelta(days=37)).isoformat()
+
 
 class GeneralOptionScannerTests(unittest.TestCase):
     def test_general_metrics_exposes_pricing_inputs_for_compact_risk_graph(self):
@@ -179,11 +183,11 @@ class GeneralOptionScannerTests(unittest.TestCase):
         score_rows.side_effect = annotate
         rows = [
             {
-                "ticker": "EARN", "price": 100, "expiration": "2026-09-18",
+                "ticker": "EARN", "price": 100, "expiration": EXPIRATION,
                 "short_strike": 95, "long_strike": 90,
             },
             {
-                "ticker": "CLEAN", "price": 100, "expiration": "2026-09-18",
+                "ticker": "CLEAN", "price": 100, "expiration": EXPIRATION,
                 "short_strike": 95, "long_strike": 90,
             },
         ]
@@ -298,10 +302,10 @@ class GeneralOptionScannerTests(unittest.TestCase):
             row["_general"].update(stock_scores={}) for row in rows
         ]
         rows = [
-            {"ticker": "DEBIT", "price": 100, "entry_credit": -0.25, "expiration": "2026-09-18", "body_strike": 100},
-            {"ticker": "FLAT", "price": 100, "entry_credit": 0.0, "expiration": "2026-09-18", "body_strike": 100},
-            {"ticker": "SMALL", "price": 100, "entry_credit": 0.25, "expiration": "2026-09-18", "body_strike": 100},
-            {"ticker": "LARGE", "price": 100, "entry_credit": 0.75, "expiration": "2026-09-18", "body_strike": 100},
+            {"ticker": "DEBIT", "price": 100, "entry_credit": -0.25, "expiration": EXPIRATION, "body_strike": 100},
+            {"ticker": "FLAT", "price": 100, "entry_credit": 0.0, "expiration": EXPIRATION, "body_strike": 100},
+            {"ticker": "SMALL", "price": 100, "entry_credit": 0.25, "expiration": EXPIRATION, "body_strike": 100},
+            {"ticker": "LARGE", "price": 100, "entry_credit": 0.75, "expiration": EXPIRATION, "body_strike": 100},
         ]
         result = run_general_option_scan(
             {
@@ -334,7 +338,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
         source = {
             "ticker": "XYZ", "name": "Example", "price": 100,
             "spread": {
-                "expiration": "2026-09-18", "dte": 37,
+                "expiration": EXPIRATION, "dte": 37,
                 "short_strike": 95, "long_strike": 90,
                 "max_profit_dollars": 125, "max_loss_dollars": 375,
                 "expected_value_dollars": 22, "prob_max_profit": 68,
@@ -511,10 +515,72 @@ class GeneralOptionScannerTests(unittest.TestCase):
             {"strategy": "covered-call", "min_iv_rank": 80},
             runner=lambda _: {"rows": [{
                 "ticker": "XYZ", "price": 100,
-                "call": {"expiration": "2026-09-18", "strike": 105},
+                "call": {"expiration": EXPIRATION, "strike": 105},
             }]},
         )
         self.assertEqual(len(result["rows"]), 1)
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_unchecked_gates_label_a_row_instead_of_emptying_the_scan(
+        self, score_rows, iv_history
+    ):
+        """A strict preset over thin data must still return the trade.
+
+        IV/skew history and earnings dates are routinely missing.  Counting
+        those as rejections emptied every Risk Averse scan.
+        """
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}, is_etf=False) for row in rows
+        ]
+        result = run_general_option_scan(
+            {
+                "strategy": "cash-secured-put",
+                "min_iv_rank": 40,
+                "min_skew_rank": 40,
+                "min_market_cap": 10e9,
+                "require_positive_expected_value": True,
+                "earnings_in_trade": "skip",
+                "include_near_matches": False,
+            },
+            runner=lambda _: {"rows": [{
+                "ticker": "XYZ", "price": 100,
+                "put": {"expiration": EXPIRATION, "strike": 95},
+            }]},
+        )
+        self.assertEqual(len(result["rows"]), 1)
+        meta = result["rows"][0]["_general"]
+        self.assertEqual(meta["match_status"], "unverified")
+        self.assertEqual(meta["filter_reasons"], [])
+        self.assertIn("IV Rank unavailable", meta["unverified_reasons"])
+        self.assertIn("Market cap unavailable", meta["unverified_reasons"])
+        self.assertIn("Earnings date unavailable", meta["unverified_reasons"])
+        # Unchecked gates are not rejections, so they never inflate the funnel.
+        self.assertEqual(result["stats"]["filter_rejections"], {})
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_a_failed_rule_still_outranks_an_unchecked_one(self, score_rows, iv_history):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}, is_etf=False, iv_rank=10)
+            for row in rows
+        ]
+        result = run_general_option_scan(
+            {
+                "strategy": "cash-secured-put",
+                "min_iv_rank": 40,
+                "min_skew_rank": 40,
+                "include_near_matches": True,
+            },
+            runner=lambda _: {"rows": [{
+                "ticker": "XYZ", "price": 100,
+                "put": {"expiration": EXPIRATION, "strike": 95},
+            }]},
+        )
+        meta = result["rows"][0]["_general"]
+        self.assertEqual(meta["match_status"], "near_match")
+        self.assertEqual(meta["filter_reasons"], ["IV Rank"])
+        self.assertIn("Skew Rank unavailable", meta["unverified_reasons"])
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")
@@ -532,7 +598,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
             },
             runner=lambda _: {"rows": [{
                 "ticker": "XYZ", "price": 100,
-                "call": {"expiration": "2026-09-18", "strike": 105},
+                "call": {"expiration": EXPIRATION, "strike": 105},
             }]},
         )
         self.assertEqual(result["rows"], [])
@@ -562,7 +628,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
                     "price": 100,
                     "chain_status": "constraints_relaxed",
                     "spread": {
-                        "expiration": "2026-09-18",
+                        "expiration": EXPIRATION,
                         "short_strike": 95,
                         "long_strike": 90,
                         "max_profit_dollars": 75,
@@ -592,7 +658,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
                     "ticker": "NVDA",
                     "price": 218,
                     "spread": {
-                        "expiration": "2026-09-25",
+                        "expiration": LATER_EXPIRATION,
                         "short_strike": 195,
                         "long_strike": 170,
                         "max_loss_dollars": 2396,
@@ -623,8 +689,8 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 "stock_score_fundamental_max": 10,
             },
             runner=lambda _: {"rows": [
-                {"ticker": "GOOD", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
-                {"ticker": "LOW", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
+                {"ticker": "GOOD", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
+                {"ticker": "LOW", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
             ]},
         )
         self.assertEqual([row["ticker"] for row in result["rows"]], ["GOOD"])
@@ -647,11 +713,11 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 "stock_score_fundamental_max": 10,
             },
             runner=lambda _: {"rows": [
-                {"ticker": "SPY", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
-                {"ticker": "QQQ", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
-                {"ticker": "IWM", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
-                {"ticker": "XLK", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
-                {"ticker": "AAPL", "price": 100, "call": {"expiration": "2026-09-18", "strike": 105}},
+                {"ticker": "SPY", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
+                {"ticker": "QQQ", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
+                {"ticker": "IWM", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
+                {"ticker": "XLK", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
+                {"ticker": "AAPL", "price": 100, "call": {"expiration": EXPIRATION, "strike": 105}},
             ]},
         )
         self.assertEqual([row["ticker"] for row in result["rows"]], ["IWM", "QQQ", "SPY", "XLK"])
@@ -682,8 +748,8 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 "min_abs_recent_move_pct": 1,
             },
             runner=lambda _: {"rows": [
-                {"ticker": "PULLBACK", "price": 100, "put": {"expiration": "2026-09-18", "strike": 95}},
-                {"ticker": "RALLY", "price": 100, "put": {"expiration": "2026-09-18", "strike": 95}},
+                {"ticker": "PULLBACK", "price": 100, "put": {"expiration": EXPIRATION, "strike": 95}},
+                {"ticker": "RALLY", "price": 100, "put": {"expiration": EXPIRATION, "strike": 95}},
             ]},
         )
         self.assertEqual([row["ticker"] for row in result["rows"]], ["PULLBACK"])
@@ -699,7 +765,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
             runner=lambda _: {"rows": [{
                 "ticker": "XYZ", "price": 100,
                 "spread": {
-                    "expiration": "2026-09-18",
+                    "expiration": EXPIRATION,
                     "put_long_strike": 80, "put_short_strike": 90,
                     "call_short_strike": 105, "call_long_strike": 110,
                     "put_width": 10, "call_width": 5, "entry_credit": 5.25,
@@ -723,13 +789,13 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 "max_reference_delta": 15,
             },
             runner=lambda _: {"rows": [
-                {"ticker": "KEEP", "price": 100, "expiration": "2026-09-18", "legs": [
-                    {"option_type": "put", "qty": -1, "strike": 95, "delta": -0.10, "expiration": "2026-09-18"},
-                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": "2026-09-18"},
+                {"ticker": "KEEP", "price": 100, "expiration": EXPIRATION, "legs": [
+                    {"option_type": "put", "qty": -1, "strike": 95, "delta": -0.10, "expiration": EXPIRATION},
+                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": EXPIRATION},
                 ]},
-                {"ticker": "DROP", "price": 100, "expiration": "2026-09-18", "legs": [
-                    {"option_type": "put", "qty": -1, "strike": 98, "delta": -0.25, "expiration": "2026-09-18"},
-                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": "2026-09-18"},
+                {"ticker": "DROP", "price": 100, "expiration": EXPIRATION, "legs": [
+                    {"option_type": "put", "qty": -1, "strike": 98, "delta": -0.25, "expiration": EXPIRATION},
+                    {"option_type": "put", "qty": 1, "strike": 90, "delta": -0.04, "expiration": EXPIRATION},
                 ]},
             ]},
         )
@@ -754,7 +820,7 @@ class GeneralOptionScannerTests(unittest.TestCase):
             runner=lambda _: {"rows": [
                 {"ticker": "SHELL", "price": 100, "put": None, "score": 88},
                 {"ticker": "LIVE", "price": 100, "put": {
-                    "expiration": "2026-09-18", "strike": 95, "delta": -0.10,
+                    "expiration": EXPIRATION, "strike": 95, "delta": -0.10,
                 }},
             ]},
         )
@@ -890,7 +956,7 @@ class VolatilityMetricTests(unittest.TestCase):
         row = {"_general": {
             "ticker": "SPY",
             "atm_iv": 0.24,
-            "expiration": "2026-09-18",
+            "expiration": EXPIRATION,
             "iv_rank": None,
             "rv": 18.0,
             "_rv_by_date": {day: 0.18 for day in days},

@@ -26,7 +26,12 @@ def contract(strike, option_type):
     }
 
 
-def chain(expiration="2026-09-18"):
+# Fixed dates silently expire and drop every candidate as "Expired contract".
+NEAR_EXPIRATION = (date.today() + timedelta(days=35)).isoformat()
+FAR_EXPIRATION = (date.today() + timedelta(days=70)).isoformat()
+
+
+def chain(expiration=NEAR_EXPIRATION):
     strikes = list(range(80, 125, 5))
     return {
         "ticker": "XYZ", "expiration": expiration, "spot": 100,
@@ -53,7 +58,7 @@ class SamuraiStrategyScannerTests(unittest.TestCase):
         self.assertEqual(legs[1]["strike"] - legs[0]["strike"], legs[2]["strike"] - legs[1]["strike"])
 
     @patch("samurai_strategy_scanner._prime_option_ticker",
-           return_value=(object(), ["2026-09-18", "2026-10-16"], None, None))
+           return_value=(object(), [NEAR_EXPIRATION, FAR_EXPIRATION], None, None))
     @patch("samurai_strategy_scanner._fetch_quote", return_value={"last": 100, "name": "Example"})
     @patch("samurai_strategy_scanner._fetch_chain",
            side_effect=lambda ticker, expiration, **kwargs: chain(expiration))
@@ -65,14 +70,14 @@ class SamuraiStrategyScannerTests(unittest.TestCase):
         })
         self.assertGreaterEqual(len(result["rows"]), 1)
         expirations = {leg["expiration"] for leg in result["rows"][0]["legs"]}
-        self.assertEqual(expirations, {"2026-09-18", "2026-10-16"})
+        self.assertEqual(expirations, {NEAR_EXPIRATION, FAR_EXPIRATION})
 
     def test_naked_call_reports_unbounded_max_loss(self):
         legs = _same_expiration_legs("naked-call", chain(), {
             "min_moneyness_pct": 0, "max_moneyness_pct": 15,
             "bid_ask_level": "Mid",
         })
-        profile = _profile(legs, 100, "2026-09-18", 0.25)
+        profile = _profile(legs, 100, NEAR_EXPIRATION, 0.25)
         self.assertIsNone(profile["max_loss_dollars"])
         self.assertTrue(profile["max_loss_unbounded"])
         self.assertIsNone(profile["prob_max_loss"])

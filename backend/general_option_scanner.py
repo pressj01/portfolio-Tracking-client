@@ -33,7 +33,9 @@ from option_iv_history import (
     fetch_iv_observations,
     record_iv_snapshot,
 )
+import yahoo_gateway
 from option_probability import _expiration_payoff, expiration_payoff_profile
+from option_selection import SELECTION_DEFAULTS, selection_rank
 from put_condor_scanner import run_condor_scan
 from put_scanner import (
     BENCHMARK,
@@ -411,6 +413,9 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
     elif strategy == "monthly-aic":
         result["campaign"] = "monthly"
     result.update(_quality_from_payload(payload))
+    if strategy in {"cash-secured-put", "bull-put-spread"}:
+        result["selection_filters"] = dict(payload)
+        result.update({key: payload[key] for key in SELECTION_DEFAULTS if key in payload})
     result.update(scope)
     return result
 
@@ -504,7 +509,7 @@ def _position_leg(
         "strike": normalized_strike,
         "expiration": str(normalized_expiration),
         "entry_price": _first_num(
-            source.get("entry_price"), source.get("mid"), source.get("last"),
+            source.get("net_entry_price"), source.get("entry_price"), source.get("mid"), source.get("last"),
             source.get("ask"), source.get("bid"),
         ),
         "bid": _num(source.get("bid")),
@@ -746,7 +751,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
             atm_leg = min(iv_legs, key=lambda leg: abs((_num(leg.get("strike")) or price) - price))
             atm_iv = _num(atm_leg.get("iv"))
     profile = _position_profile(
-        position_legs, price, dte, atm_iv,
+        position_legs, price, dte, _first_num(_nested(row, "put.distribution_iv", "spread.distribution_iv"), atm_iv),
         _nested(row, "spread.risk_free_rate", "risk_free_rate"),
         _nested(row, "spread.dividend_yield", "dividend_yield"),
     )
@@ -795,7 +800,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         and (point.get("kind") == "expiration" or point.get("remaining_dte") == 0)
     ), {})
     prob_success = _num(_nested(
-        row, "spread.prob_success", "prob_success",
+        row, "spread.prob_success", "put.prob_profit", "prob_success",
         "spread.prob_profit", "prob_profit", "probability_profit_pct",
         "probability_of_profit", "probability_profit",
     ))
@@ -812,14 +817,14 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
     prob_otm = _num(_nested(row, "spread.prob_otm", "prob_otm"))
     prob_itm = 100.0 - prob_otm if prob_otm is not None else None
     prob_max_profit = _num(_nested(
-        row, "spread.prob_max_profit", "prob_max_profit"
+        row, "spread.prob_max_profit", "put.prob_max_profit", "prob_max_profit"
     ))
     if prob_max_profit is None and strategy in {"bull-put-spread", "bear-call-spread"}:
         prob_max_profit = prob_otm
     if prob_max_profit is None:
         prob_max_profit = profile["prob_max_profit"]
     prob_max_loss = _num(_nested(
-        row, "spread.prob_max_loss", "prob_max_loss", "probability_max_loss_pct"
+        row, "spread.prob_max_loss", "put.prob_max_loss", "prob_max_loss", "probability_max_loss_pct"
     ))
     if prob_max_loss is None:
         prob_max_loss = profile["prob_max_loss"]
@@ -880,7 +885,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
             for leg in position_legs
         )
     expected_value = _num(_nested(
-        row, "spread.expected_value_dollars", "spread.expected_value",
+        row, "spread.expected_value_dollars", "put.expected_value_dollars", "spread.expected_value",
         "expected_value_dollars", "expected_value",
     ))
     if expected_value is None:
@@ -988,6 +993,12 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "profit_capture": profit_capture,
         "price_scenarios": price_scenarios,
         "expected_value": expected_value,
+        "expected_return_on_capital_pct": _num(_nested(row, "put.expected_return_on_capital_pct", "spread.expected_return_on_capital_pct")),
+        "stress_loss_pct": _num(_nested(row, "put.stress_loss_pct", "spread.stress_loss_pct")),
+        "stress_pnl_dollars": _num(_nested(row, "put.stress_pnl_dollars", "spread.stress_pnl_dollars")),
+        "managed_probability": _nested(row, "put.managed_probability", "spread.managed_probability"),
+        "estimated_costs_dollars": _num(_nested(row, "put.estimated_costs_dollars", "spread.estimated_costs_dollars")),
+        "expirations_considered": _nested(row, "put.expirations_considered", "spread.expirations_considered"),
         "entry_credit": entry_credit,
         "entry_credit_dollars": entry_credit_dollars,
         "max_profit": max_profit,
@@ -1203,8 +1214,38 @@ def _iv_history(rows: list[dict]) -> None:
             meta["volatility_score_provisional"] = False
 
 
+# A rank or score filter left at its extreme asks nothing of the data.
+_OPEN_RANGE_EXEMPT = {"expected_value", "moneyness"}
+_RANK_FIELDS = {
+    "iv_rank", "iv_rv_rank", "rv_rank", "volatility_score", "prob_max_loss",
+    "skew_rank", "put_skew_rank", "call_skew_rank",
+}
+
+
+def _gate_is_open(field: str, limit: float, direction: str) -> bool:
+    if field == "iv_rv":
+        return limit <= -100 if direction == "min" else limit >= 100
+    if direction == "min":
+        return limit <= 0 and field not in _OPEN_RANGE_EXEMPT
+    return field in _RANK_FIELDS and limit >= 100
+
+
+def _is_unverified(reason: str) -> bool:
+    return reason.lower().endswith("unavailable")
+
+
 def _filter_reasons(meta: dict, payload: dict) -> list[str]:
+    return _gate_reasons(meta, payload)[0]
+
+
+def _gate_reasons(meta: dict, payload: dict) -> tuple[list[str], list[str]]:
+    """Split rules the row failed from rules the data could not answer.
+
+    A gate with no metric behind it cannot convict the row -- it only means the
+    scan could not check it, so it labels the row instead of hiding it.
+    """
     reasons = []
+    unverified = []
     checks = (
         ("dte", "min_dte", "Minimum DTE", "min"),
         ("dte", "max_dte", "Maximum DTE", "max"),
@@ -1220,6 +1261,7 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
         ("volatility_score", "min_volatility_score", "Volatility score", "min"),
         ("volatility_score", "max_volatility_score", "Volatility score", "max"),
         ("prob_max_profit", "min_prob_max_profit", "Probability of max profit", "min"),
+        ("prob_success", "min_prob_profit", "Probability of any profit", "min"),
         ("prob_max_loss", "max_prob_max_loss", "Probability of max loss", "max"),
         ("expected_value", "min_expected_value", "Expected value", "min"),
         ("max_loss", "min_max_loss_dollars", "Minimum loss bound", "min"),
@@ -1243,7 +1285,11 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
     )
     for field, filter_key, label, direction in checks:
         actual, limit = _num(meta.get(field)), _num(payload.get(filter_key))
-        if actual is None or limit is None:
+        if limit is None:
+            continue
+        if actual is None:
+            if not _gate_is_open(field, limit, direction):
+                unverified.append(f"{label} unavailable")
             continue
         if (direction == "min" and actual < limit) or (direction == "max" and actual > limit):
             reasons.append(label)
@@ -1340,25 +1386,33 @@ def _filter_reasons(meta: dict, payload: dict) -> list[str]:
             reasons.append("Reference option delta")
     if bool(payload.get("require_positive_expected_value")):
         expected = _num(meta.get("expected_value"))
-        if expected is not None and expected <= 0:
+        if expected is None:
+            unverified.append("Expected value unavailable")
+        elif expected <= 0:
             reasons.append("Expected value")
     min_cap = _num(payload.get("min_market_cap")) or 0.0
     if min_cap > 0 and not is_fund:
         cap = _num(meta.get("market_cap"))
-        if cap is not None and cap < min_cap:
+        if cap is None:
+            unverified.append("Market cap unavailable")
+        elif cap < min_cap:
             reasons.append("Market cap")
     min_aum = _num(payload.get("fund_min_aum")) or 0.0
     if min_aum > 0 and is_fund:
         aum = _num(meta.get("fund_aum"))
-        if aum is not None and aum < min_aum:
+        if aum is None:
+            unverified.append("Fund AUM unavailable")
+        elif aum < min_aum:
             reasons.append("Fund AUM")
     if not is_fund:
         earnings_mode = _earnings_in_trade(payload)
         if earnings_mode == "skip" and meta.get("earnings_before_expiry") is True:
             reasons.append("Earnings before expiry")
+        elif earnings_mode == "skip" and meta.get("earnings_before_expiry") is None:
+            unverified.append("Earnings date unavailable")
         elif earnings_mode == "require" and meta.get("earnings_before_expiry") is not True:
             reasons.append("Earnings inside the trade required")
-    return reasons
+    return reasons, unverified
 
 
 def _is_constructible_trade(row: dict) -> bool:
@@ -1401,8 +1455,11 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
     spec = STRATEGIES[strategy]
     params = _runner_payload(strategy, supplied)
     raw = (runner or spec["runner"])(params) or {}
+    # A throttled feed drops every option chain, which otherwise looks exactly
+    # like "nothing qualified today". Say which one it was.
+    feed_cooldown_sec = round(yahoo_gateway.cooldown_remaining(), 1)
     raw_rows = list(raw.get("rows") or [])
-    raw_rows.extend(_constructible_watchlist_rows(raw))
+    raw_rows.extend({**row, "_source_watchlist": True} for row in _constructible_watchlist_rows(raw))
     if strategy == "put-call-condor":
         raw_rows.extend(raw.get("combined_packages") or [])
     rows = []
@@ -1425,8 +1482,16 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
     candidates_evaluated = len(rows)
     rejection_counts: dict[str, int] = {}
     for row in rows:
-        reasons = _filter_reasons(row["_general"], supplied)
+        reasons, unverified = _gate_reasons(row["_general"], supplied)
+        for reason in _nested(row, "put.selection_reasons", "spread.selection_reasons") or []:
+            (unverified if _is_unverified(reason) else reasons).append(reason)
+        if (row.get("_source_watchlist")
+                or row.get("chain_status") in {"constraints_relaxed", "underlying_filters_missed"}
+                or row.get("candidate_status") == "lower_confidence"):
+            unverified.append(row.get("watchlist_reason") or "Source scanner requirements not met")
+        reasons = list(dict.fromkeys(reasons))
         row["_general"]["filter_reasons"] = reasons
+        row["_general"]["unverified_reasons"] = list(dict.fromkeys(unverified))
         for reason in set(reasons):
             rejection_counts[reason] = rejection_counts.get(reason, 0) + 1
     hard_reasons = {
@@ -1440,28 +1505,32 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
         if not (hard_reasons & set(row["_general"]["filter_reasons"]))
     ]
     exact_rows = [row for row in eligible_rows if not row["_general"]["filter_reasons"]]
-    exact_rows.sort(key=lambda row: (
-        -(_num(row["_general"].get("expected_value")) or -1e12),
-        -(_num(row.get("score")) or 0),
-        row["_general"]["ticker"],
-    ))
+    def rank(row):
+        meta = row["_general"]
+        capital = _num(meta.get("max_loss"))
+        expected = _num(meta.get("expected_value"))
+        metrics = {**meta, "prob_profit": meta.get("prob_success"), "expected_value_dollars": expected}
+        if metrics.get("expected_return_on_capital_pct") is None and expected is not None and capital and capital > 0 and not meta.get("max_loss_unbounded"):
+            metrics["expected_return_on_capital_pct"] = expected / capital * 100
+        return (*selection_rank(metrics, {"ranking_mode": supplied.get("ranking_mode", "return_on_capital")}), _num(row.get("score")) or 0)
+    # reverse=True keeps ties in input order, so seed the alphabetical tie-break.
+    exact_rows.sort(key=lambda row: row["_general"]["ticker"])
+    exact_rows.sort(key=rank, reverse=True)
     max_results = max(1, min(200, int(_num(supplied.get("max_results")) or 100)))
     showing_near_matches = bool(
         not exact_rows and eligible_rows and supplied.get("include_near_matches")
     )
     if showing_near_matches:
-        eligible_rows.sort(key=lambda row: (
-            len(row["_general"]["filter_reasons"]),
-            -(_num(row["_general"].get("expected_value")) or -1e12),
-            -(_num(row.get("score")) or 0),
-            row["_general"]["ticker"],
-        ))
+        eligible_rows.sort(key=lambda row: row["_general"]["ticker"])
+        eligible_rows.sort(key=lambda row: (-len(row["_general"]["filter_reasons"]), *rank(row)), reverse=True)
         returned_rows = eligible_rows[:max_results]
     else:
         returned_rows = exact_rows[:max_results]
     for row in returned_rows:
         row["_general"]["match_status"] = (
-            "near_match" if row["_general"]["filter_reasons"] else "match"
+            "near_match" if row["_general"]["filter_reasons"]
+            else "unverified" if row["_general"]["unverified_reasons"]
+            else "match"
         )
     return {
         "strategy": strategy,
@@ -1477,6 +1546,7 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
             "showing_near_matches": showing_near_matches,
             "candidates_evaluated": candidates_evaluated,
             "unpriced_dropped": unpriced_dropped,
+            "feed_cooldown_sec": feed_cooldown_sec,
             "filter_rejections": dict(sorted(
                 rejection_counts.items(), key=lambda item: (-item[1], item[0])
             )),

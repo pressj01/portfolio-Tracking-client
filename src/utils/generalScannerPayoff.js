@@ -85,5 +85,5 @@ export function scannerTradePayoff(
       dividendYield,
     )
     return total + sign * qty * 100 * (current - Number(leg.entry_price || 0))
-  }, 0)
+  }, -(Number(trade?.estimated_costs_dollars) || 0))
 }

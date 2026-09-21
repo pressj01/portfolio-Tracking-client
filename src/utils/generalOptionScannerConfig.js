@@ -1,3 +1,5 @@
+import { OPTION_SELECTION_DEFAULTS } from './optionSelection.js'
+
 export const MIN_OPTION_DTE = 0
 export const MAX_OPTION_DTE = 1095
 
@@ -69,6 +71,8 @@ const OPEN_SKEW_FILTERS = {
 }
 
 const COMMON = {
+  ...OPTION_SELECTION_DEFAULTS,
+  ranking_mode: 'return_on_capital',
   risk_profile: 'open',
   symbols: '',
   index_tickers: 'SPY,QQQ,IWM',
@@ -640,7 +644,7 @@ export const GENERAL_STRATEGY_CONFIG = {
   },
   'cash-secured-put': {
     bidAsk: 'Conservative (use bid/ask values)',
-    defaults: { market_trend: 'uptrend', underlying_trend: 'uptrend', recent_move_direction: 'down', min_moneyness_pct: -15, max_moneyness_pct: 15, max_bid_ask_spread: 0.5, min_return_pct: 1, min_annualized_return_pct: 5 },
+    defaults: { ranking_mode: 'probability', market_trend: 'uptrend', underlying_trend: 'uptrend', recent_move_direction: 'down', min_moneyness_pct: -15, max_moneyness_pct: 15, max_bid_ask_spread: 0.5, min_return_pct: 1, min_annualized_return_pct: 5 },
     fields: INCOME_FIELDS,
   },
   'naked-call': {
@@ -670,7 +674,7 @@ export const GENERAL_STRATEGY_CONFIG = {
   },
   'bull-put-spread': {
     bidAsk: '25% price improvement',
-    defaults: { market_trend: 'uptrend', underlying_trend: 'uptrend', recent_move_direction: 'down', min_iv_rank: 20, min_moneyness_pct: -25, max_moneyness_pct: 0, max_bid_ask_spread: 0.5, min_prob_max_profit: 60, max_prob_max_loss: 20, require_positive_expected_value: false, min_profit_ratio_pct: 20, max_profit_ratio_pct: 500, min_max_profit_dollars: 50, min_max_loss_dollars: 0, max_max_loss_dollars: 500 },
+    defaults: { ranking_mode: 'probability', market_trend: 'uptrend', underlying_trend: 'uptrend', recent_move_direction: 'down', min_iv_rank: 20, min_moneyness_pct: -25, max_moneyness_pct: 0, max_bid_ask_spread: 0.5, min_prob_max_profit: 60, max_prob_max_loss: 20, require_positive_expected_value: false, min_profit_ratio_pct: 20, max_profit_ratio_pct: 500, min_max_profit_dollars: 50, min_max_loss_dollars: 0, max_max_loss_dollars: 500 },
     fields: VERTICAL_FIELDS,
   },
   'bear-call-spread': {
@@ -860,6 +864,7 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey) {
   }
 
   if (BULLISH_PULLBACK_STRATEGIES.has(strategy)) {
+    if (['cash-secured-put', 'bull-put-spread'].includes(strategy)) result.require_stabilization = intensity === 0
     Object.assign(result, intensity === 0
       ? { market_trend: 'uptrend', underlying_trend: 'uptrend', recent_move_direction: 'down', min_abs_recent_move_pct: 0.5, technical_rsi_min: 35, technical_rsi_max: 60 }
       : intensity === 1

@@ -1353,6 +1353,8 @@ a:hover {
 .gos-table tbody tr:hover td, .gos-table tbody tr:hover td:first-child { background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }
 .gos-table tbody tr.selected td, .gos-table tbody tr.selected td:first-child { background: color-mix(in srgb, var(--pos) 10%, var(--surface)); }
 .gos-table tbody tr.near-match td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+/* Passed every checkable rule, so it reads as a match with a caveat. */
+.gos-table tbody tr.unverified-match td:first-child { box-shadow: inset 3px 0 0 var(--text-dim); }
 .gos-table td > small { color: var(--text-dim); display: block; font-size: 0.49rem; margin-top: 0.1rem; }
 .gos-scenario-cell { background: color-mix(in srgb, var(--accent) 5%, var(--surface)); min-width: 132px; }
 .gos-scenario-cell > b { font-variant-numeric: tabular-nums; }

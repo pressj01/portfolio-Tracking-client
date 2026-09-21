@@ -964,5 +964,45 @@ class PutProbabilityTests(unittest.TestCase):
         self.assertGreater(realistic["probability_failure_pct"], 8.0)
 
 
+class ChainOutageReportingTests(unittest.TestCase):
+    """A throttled chain lookup must be distinguishable from 'no options'.
+
+    Both used to end as an empty expiration list, so a feed outage reached the
+    user as "no candidates met your filters".
+    """
+
+    def setUp(self):
+        ps._expirations_cache.clear()
+
+    def test_throttled_catalog_is_reported_not_swallowed(self):
+        outage = {}
+        with patch.object(ps.yahoo_gateway, "fetch",
+                          return_value=([], {"stale": False, "error": "429 Too Many Requests"})):
+            expirations = ps._load_expirations("AAPL", object(), outage)
+        self.assertEqual(expirations, [])
+        self.assertIn("429", outage["reason"])
+
+    def test_ticker_with_no_listed_options_reports_nothing(self):
+        outage = {}
+        with patch.object(ps.yahoo_gateway, "fetch",
+                          return_value=([], {"stale": False, "error": None})):
+            expirations = ps._load_expirations("BRK-A", object(), outage)
+        self.assertEqual(expirations, [])
+        self.assertEqual(outage, {})
+
+    def test_priming_records_a_throttle_from_the_default_chain(self):
+        outage = {}
+
+        class Throttled:
+            def option_chain(self, *args, **kwargs):
+                raise RuntimeError("YFRateLimitError: Too Many Requests. Rate limited.")
+
+        with patch.object(ps.yf, "Ticker", return_value=Throttled()), \
+             patch.object(ps.yahoo_gateway, "fetch",
+                          return_value=([], {"stale": False, "error": None})):
+            ps._prime_option_ticker("AAPL", outage)
+        self.assertIn("Rate limited", outage["reason"])
+
+
 if __name__ == "__main__":
     unittest.main()

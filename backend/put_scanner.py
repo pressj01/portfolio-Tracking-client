@@ -41,6 +41,9 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_probability import profit_probability_schedule
+from option_selection import (SELECTION_DEFAULTS, selection_settings, expiration_choices,
+                              price_leg, income_metrics, candidate_reasons, selection_rank,
+                              managed_probability, underlying_reasons)
 from option_skew_history import calculate_skew_metrics, record_skew_snapshot
 from option_strike_targets import strike_for_delta
 from options_pricing import black_scholes, implied_vol
@@ -268,13 +271,17 @@ def _cache_set(cache: dict, key, value):
     cache[key] = (time.time(), value)
 
 
-def _load_expirations(ticker: str, tk=None) -> list[str]:
+def _load_expirations(ticker: str, tk=None, outage: dict | None = None) -> list[str]:
     """Expiration dates for a ticker, cached for the same window as option chains.
 
     Pass a primed yfinance Ticker as ``tk`` after ``option_chain()`` or
     ``.options`` so this does not open a second Yahoo session. Creating a
     fresh Ticker just to read ``.options`` forces yfinance to download a
     chain only to throw it away.
+
+    ``outage`` collects why the catalog was empty. Without it a throttled
+    lookup and a ticker with no listed options are the same empty list, and
+    the scan reports "nothing qualified" during a feed outage.
     """
     cached = _cache_get(_expirations_cache, ticker, _CHAIN_TTL)
     if cached is not None:
@@ -288,6 +295,8 @@ def _load_expirations(ticker: str, tk=None) -> list[str]:
         "option_expirations", ticker, _load,
         coalesce_key=("options.expirations", ticker.upper()),
     )
+    if outage is not None and meta.get("error"):
+        outage["reason"] = str(meta["error"])
     expirations = expirations or []
     # An empty catalog is a real answer for a ticker with no listed options and
     # is worth caching. The same empty list produced by a throttle is not: it
@@ -314,7 +323,7 @@ def _option_bundle_expiration(chain) -> str | None:
     return None
 
 
-def _prime_option_ticker(ticker: str):
+def _prime_option_ticker(ticker: str, outage: dict | None = None):
     """Open one yfinance session and keep the default chain Yahoo already sent.
 
     ``Ticker.options`` and a later ``Ticker.option_chain(date)`` on a *new*
@@ -324,7 +333,9 @@ def _prime_option_ticker(ticker: str):
     """
     try:
         tk = yf.Ticker(ticker)
-    except Exception:
+    except Exception as exc:
+        if outage is not None:
+            outage["reason"] = str(exc)
         return None, [], None
 
     default_chain = None
@@ -333,9 +344,13 @@ def _prime_option_ticker(ticker: str):
         if callable(fetch):
             try:
                 default_chain = fetch()
-            except Exception:
+            except Exception as exc:
+                # A throttle here is the feed, not the symbol. Keep it: the
+                # catalog fetch below usually fails the same way and silently.
+                if outage is not None and yahoo_gateway.is_rate_limited(exc):
+                    outage["reason"] = str(exc)
                 default_chain = None
-    expirations = _load_expirations(ticker, tk)
+    expirations = _load_expirations(ticker, tk, outage)
     return tk, expirations, default_chain
 
 
@@ -731,6 +746,7 @@ def _compute_technicals(sub: pd.DataFrame, bench_ret, lookback_days: int) -> dic
         "rv_30": rv_30,
         "rv_252": rv_252,
         "fresh_low": fresh_low,
+        "support_price": low_10,
         "bounce_off_low_pct": bounce_off_low_pct,
         "above_52w_low_pct": above_52w_low_pct,
         "decel_pp": decel_pp,
@@ -1086,13 +1102,14 @@ def _earnings_within_target_window(
 def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
                  target_delta: float, min_dte: int, max_dte: int,
                  earnings_date: str | None = None, earnings_buffer_days: int = 5,
-                 fallback_vol: float | None = None) -> dict | None:
+                 fallback_vol: float | None = None, selection=None, _session=None,
+                 _expiration=None, outage: dict | None = None) -> dict | None:
     """Best short-put candidate: nearest the target delta, with real quotes.
 
     Prefers an expiration that closes before the next earnings report (with a
     buffer), so the position is not held through the announcement.
     """
-    tk, expirations, default_chain = _prime_option_ticker(ticker)
+    tk, expirations, default_chain = _session or _prime_option_ticker(ticker, outage)
     if tk is None or not expirations:
         return None
 
@@ -1101,8 +1118,26 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     if earnings_d:
         cutoff = earnings_d - timedelta(days=max(0, earnings_buffer_days))
 
+    if selection is not None and _expiration is None:
+        choices = expiration_choices(expirations, target_dte, min_dte, max_dte,
+                                     selection.get("expiration_candidates", 3),
+                                     cutoff if selection.get("exclude_earnings_before_expiry") else None)
+        candidates = []
+        for expiry in choices:
+            candidate = _suggest_put(ticker, spot, div_yield, target_dte, target_delta,
+                                     min_dte, max_dte, earnings_date, earnings_buffer_days,
+                                     fallback_vol, selection, (tk, expirations, default_chain), expiry)
+            if candidate:
+                candidates.append(candidate)
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda item: (
+            not item.get("selection_reasons"), -len(item.get("selection_reasons", [])),
+            *selection_rank(item, selection)))
+        return {**best, "expirations_considered": len(choices)}
+
     expiration, dte, cleared = _pick_expiration(
-        expirations, target_dte, min_dte, max_dte, expire_before=cutoff,
+        [_expiration] if _expiration else expirations, target_dte, min_dte, max_dte, expire_before=cutoff,
     )
     if not expiration:
         return None
@@ -1156,8 +1191,30 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
     if not tradable:
         return None
 
+    evaluated = {}
+    if selection is not None:
+        for quote in tradable:
+            leg = price_leg(quote, -1, selection)
+            if leg is None:
+                continue
+            metrics = income_metrics([leg], spot, dte, expiration, selection, RISK_FREE, div_yield)
+            reasons = candidate_reasons([leg], metrics, selection)
+            # Dedicated screens still use their requested delta as a band.
+            if selection.get("reference_delta_mode") != "short" and (
+                leg.get("delta") is None or abs(abs(leg["delta"]) - target_delta) > 0.05
+            ):
+                reasons.append("Target delta")
+            evaluated[leg["strike"]] = (leg, metrics, reasons)
+        if not evaluated:
+            return None
+        pick, selection_metrics, selection_reasons = max(evaluated.values(), key=lambda item: (
+            not item[2], -len(item[2]), *selection_rank(item[1], selection),
+            -abs(abs(item[0].get("delta") or 0) - target_delta)))
+
     with_delta = [p for p in tradable if p["delta"] is not None]
-    if with_delta:
+    if selection is not None:
+        pass
+    elif with_delta:
         pick = min(with_delta, key=lambda p: abs(abs(p["delta"]) - target_delta))
     else:
         # Preserve the requested delta's time scaling even when the chain has
@@ -1172,16 +1229,21 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
 
     strike = pick["strike"]
     mid = pick["mid"]
+    net_credit = pick.get("net_entry_price", mid)
     dte_eff = max(dte or 1, 1)
-    premium_yield = mid / strike * 100.0
+    premium_yield = net_credit / strike * 100.0
     annualized = premium_yield * (365.0 / dte_eff)
-    effective_basis = strike - mid
+    effective_basis = strike - net_credit
     spread_pct = (
         _quoted_spread_pct(pick["bid"], pick["ask"], pick["mid"])
         if pick.get("quote_source") == "live_bid_ask" else None
     )
 
     return {
+        **(selection_metrics if selection is not None else {}),
+        "selection_reasons": selection_reasons if selection is not None else [],
+        "entry_price": pick.get("entry_price", mid),
+        "net_entry_price": net_credit,
         "expiration": expiration,
         "dte": dte,
         "strike": strike,
@@ -1203,7 +1265,7 @@ def _suggest_put(ticker: str, spot: float, div_yield: float, target_dte: int,
         "premium_yield_pct": premium_yield,
         "annualized_pct": annualized,
         "cash_required": strike * 100.0,
-        "premium_dollars": mid * 100.0,
+        "premium_dollars": net_credit * 100.0,
         "effective_basis": effective_basis,
         "discount_to_spot_pct": (spot - effective_basis) / spot * 100.0 if spot else None,
         "otm_pct": (spot - strike) / spot * 100.0 if spot else None,
@@ -1456,7 +1518,7 @@ def recommend_buyback(put: dict | None, rating: dict | None) -> dict | None:
     """
     if not put:
         return None
-    credit = _num(put.get("mid"))
+    credit = _num(put.get("net_entry_price", put.get("mid")))
     if credit is None or credit <= 0:
         return None
 
@@ -1706,6 +1768,7 @@ def resolve_scan_universe(p: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 
 DEFAULTS = {
+    **SELECTION_DEFAULTS,
     "universe": "large_cap",
     # Independent groups. An index-only scan skips the stock universe entirely
     # rather than downloading it and filtering afterwards.
@@ -1943,22 +2006,33 @@ def run_put_scan(payload: dict) -> dict:
     def _chain_for(pair):
         tech, fund, _ = pair
         div_y = dividend_yield_for_pricing(fund, tech.get("price"))
+        outage: dict = {}
         try:
-            return _suggest_put(
+            put = _suggest_put(
                 tech["ticker"], tech["price"], div_y,
                 target_dte, target_delta, min_dte, max_dte,
                 earnings_date=fund.get("next_earnings"),
                 earnings_buffer_days=earnings_buffer,
                 fallback_vol=_num(tech.get("rv_30")) or _num(tech.get("rv_252")),
+                selection={**selection_settings(p), **p.get("selection_filters", {}), "support_price": tech.get("support_price")},
+                outage=outage,
             )
-        except Exception:
-            return None
+        except Exception as exc:
+            return None, str(exc)
+        if put is None and not outage and yahoo_gateway.is_cooling_down():
+            outage["reason"] = (
+                f"Quote feed cooling down; {yahoo_gateway.cooldown_remaining():.0f}s remaining"
+            )
+        return put, (outage.get("reason") if put is None else None)
 
     puts: dict[str, dict | None] = {}
+    chain_outages: list[dict] = []
     if chain_targets:
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for pair, put in zip(chain_targets, pool.map(_chain_for, chain_targets)):
+            for pair, (put, reason) in zip(chain_targets, pool.map(_chain_for, chain_targets)):
                 puts[pair[0]["ticker"]] = put
+                if reason:
+                    chain_outages.append({"ticker": pair[0]["ticker"], "reason": reason})
 
     rows = []
     for tech, fund, lower_confidence in survivors:
@@ -1978,6 +2052,16 @@ def run_put_scan(payload: dict) -> dict:
             dropped_for_earnings += 1
             continue
         if put:
+            settings = {**selection_settings(p), **p.get("selection_filters", {})}
+            put["selection_reasons"] = list(dict.fromkeys([
+                *put.get("selection_reasons", []),
+                *underlying_reasons(tech, fund, settings, _is_fund(fund, tech["ticker"])),
+            ]))
+            if put.get("net_credit") is not None:
+                put["managed_probability"] = managed_probability(
+                    [{**put, "option_type": "put", "quantity": -1}], put,
+                    tech["price"], put["dte"], settings, RISK_FREE,
+                    dividend_yield_for_pricing(fund, tech.get("price")))
             skew_history = record_skew_snapshot(
                 tech["ticker"],
                 put,
@@ -2002,7 +2086,7 @@ def run_put_scan(payload: dict) -> dict:
                 dte=put.get("dte"),
                 expiration=put.get("expiration"),
                 distribution_iv=_put_distribution_iv(put),
-                entry_cashflow=put.get("mid"),
+                entry_cashflow=put.get("net_entry_price", put.get("mid")),
                 legs=[{
                     "option_type": "put",
                     "strike": put.get("strike"),
@@ -2064,6 +2148,7 @@ def run_put_scan(payload: dict) -> dict:
             "target_mean_price": _round(fund.get("target_mean_price")),
             "next_earnings": fund.get("next_earnings"),
             "put": _round_put(put),
+            "selection_reasons": (put or {}).get("selection_reasons", []),
             "candidate_status": (
                 "lower_confidence" if lower_confidence else "qualified"
             ),
@@ -2074,17 +2159,20 @@ def run_put_scan(payload: dict) -> dict:
 
     # Priced candidates first: a partial score is computed over a smaller
     # denominator, so it is not comparable to a fully scored one.
-    rows.sort(key=lambda r: (0 if r.get("put") else 1, -(r.get("score") or 0)))
+    rows.sort(key=lambda r: (bool(r.get("put")), not r.get("selection_reasons"),
+                            *selection_rank(r.get("put") or {}, p), r.get("score") or 0), reverse=True)
     rows = rows[:max_results]
 
     return {
         "rows": rows,
+        "unavailable": chain_outages,
         "stats": {
             "universe": len(tickers),
             "priced": priced,
             "passed_price": len(price_pass),
             "passed_fundamentals": passed_fundamentals,
             "chains_fetched": sum(1 for v in puts.values() if v),
+            "chains_failed": len(chain_outages),
             "dropped_for_earnings": dropped_for_earnings,
             "lower_confidence": sum(
                 1 for row in rows

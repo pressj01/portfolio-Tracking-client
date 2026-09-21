@@ -563,6 +563,7 @@ def _capture_probabilities(
     horizon_years,
     extra_spots=(),
     steps=_CAPTURE_TIME_STEPS,
+    stop_loss=None,
 ):
     """First-passage odds of reaching each threshold, by each horizon.
 
@@ -606,10 +607,13 @@ def _capture_probabilities(
         total_years * (1.0 - index / _CAPTURE_REGION_STEPS)
         for index in range(_CAPTURE_REGION_STEPS + 1)
     ]
+    region_thresholds = list(thresholds)
+    if stop_loss is not None and stop_loss > 0:
+        region_thresholds.append(-stop_loss)
     region_bounds = []
     for remaining_years in region_times:
         regions = _target_regions(
-            profit_at_spot, max(0.0, remaining_years), thresholds, scan_spots
+            profit_at_spot, max(0.0, remaining_years), region_thresholds, scan_spots
         )
         if regions is None:
             return None
@@ -620,7 +624,7 @@ def _capture_probabilities(
         lower = max(0, min(_CAPTURE_REGION_STEPS - 1, int(position)))
         weight = min(1.0, max(0.0, position - lower))
         blended = {}
-        for threshold in thresholds:
+        for threshold in region_thresholds:
             low_intervals = region_bounds[lower][threshold]
             high_intervals = region_bounds[lower + 1][threshold]
             if len(low_intervals) != len(high_intervals):
@@ -652,13 +656,19 @@ def _capture_probabilities(
     for step in range(1, steps + 1):
         remaining_years = max(0.0, total_years - step * step_years)
         regions = regions_at(remaining_years)
+        stopped = np.zeros(grid_spots.size, dtype=bool)
+        if stop_loss is not None and stop_loss > 0:
+            safe = np.zeros(grid_spots.size, dtype=bool)
+            for low, high in regions[-stop_loss]:
+                safe |= (grid_spots >= low) & (grid_spots <= high)
+            stopped = ~safe
         for threshold in thresholds:
             propagated = np.convolve(mass[threshold], kernel, mode="same")
             hit = np.zeros(grid_spots.size, dtype=bool)
             for low, high in regions[threshold]:
                 hit |= (grid_spots >= low) & (grid_spots <= high)
             touched[threshold] += float(propagated[hit].sum())
-            propagated[hit] = 0.0
+            propagated[hit | stopped] = 0.0
             mass[threshold] = propagated
 
         while pending and remaining_years <= pending[-1] + 1e-12:

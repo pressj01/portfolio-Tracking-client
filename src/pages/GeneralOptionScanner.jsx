@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
+import OptionSelectionControls from '../components/OptionSelectionControls'
 import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { OPTION_SCANNER_GROUPS, OPTION_SCANNERS } from '../utils/optionScannerCatalog'
@@ -307,10 +308,19 @@ function ResultTable({ rows, focusedTicker, setFocusedTicker, selected, setSelec
       const meta = row._general || {}
       const key = `${meta.ticker}:${meta.expiration}:${meta.strikes}:${index}`
       const active = selected === row
+      const missed = meta.filter_reasons || []
+      const unchecked = meta.unverified_reasons || []
       const nearMatch = meta.match_status === 'near_match'
+      const unverified = meta.match_status === 'unverified'
+      const plural = list => `${list.length} rule${list.length === 1 ? '' : 's'}`
+      const title = nearMatch
+        ? `Near match; missed: ${missed.join(', ')}${unchecked.length ? ` · could not check: ${unchecked.join(', ')}` : ''}`
+        : unverified
+          ? `Passed every rule that could be checked; no data to check: ${unchecked.join(', ')}`
+          : 'Matches every active filter'
       const scenarioResult = scenarioResults?.get(row)
-      return <tr key={key} className={`${active ? 'selected ' : ''}${nearMatch ? 'near-match' : ''}`.trim()} onClick={() => setSelected(row)} title={nearMatch ? `Near match; missed: ${(meta.filter_reasons || []).join(', ')}` : 'Matches every active filter'}>
-        <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small>{nearMatch && <em>{(meta.filter_reasons || []).length} rule{(meta.filter_reasons || []).length === 1 ? '' : 's'} missed</em>}</button></td>
+      return <tr key={key} className={`${active ? 'selected ' : ''}${nearMatch ? 'near-match' : unverified ? 'unverified-match' : ''}`.trim()} onClick={() => setSelected(row)} title={title}>
+        <td><button className="gos-ticker" onClick={event => { event.stopPropagation(); setFocusedTicker(meta.ticker); setSelected(row) }}><span>⊕</span><b>{meta.ticker}</b><small>{meta.name || (focusedTicker ? 'Candidate structure' : '')}</small>{nearMatch && <em>{plural(missed)} missed</em>}{unverified && <em>{plural(unchecked)} unchecked</em>}</button></td>
         <td>{money(meta.price)}</td>
         <td title={meta.iv_rank_source === 'history' ? `${meta.iv_rank_observations} locally collected Yahoo observations` : 'Yahoo IV history is still accumulating'}>{rankCell(meta.iv_rank, meta.iv_rank_observations, 'IV Rank needs about 20 daily observations', meta.iv_rank_source === 'provisional_history')}</td>
         <td title="Today’s at-the-money IV minus the past month’s realized volatility, in volatility points. Positive means options look expensive versus recent realized vol.">{signedPoints(meta.iv_rv)}</td>
@@ -592,13 +602,18 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   // much of the universe never got priced. A scan where *nothing* priced comes
   // back as a scanner error instead and is shown above this.
   const feedOutage = useMemo(() => {
-    const failures = (unavailable || []).filter(entry => /rate limit|too many requests|unavailable|timed out|timeout|connection|max retries|temporarily/i
+    const failures = (unavailable || []).filter(entry => /rate limit|too many requests|cooling down|unavailable|timed out|timeout|connection|max retries|temporarily/i
       .test(String(entry?.reason || '')))
-    if (!failures.length) return null
+    // A refused chain lookup leaves no `unavailable` entry, so a live cooldown
+    // is the only evidence that the feed -- not the filters -- emptied the scan.
+    const cooldownSec = Math.round(Number(stats?.feed_cooldown_sec) || 0)
+    const unpriced = Number(stats?.unpriced_dropped) || 0
+    if (!failures.length && !cooldownSec) return null
     return {
-      count: failures.length,
-      universe: Number(stats?.universe) || failures.length,
-      reason: failures[0].reason,
+      count: failures.length || unpriced,
+      universe: Number(stats?.universe) || failures.length || unpriced,
+      reason: failures[0]?.reason || '',
+      cooldownSec,
     }
   }, [unavailable, stats])
 
@@ -643,6 +658,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       )}>
         <p className="csf-single-source-note">{strategy ? 'Changing strategy replaces these values with that trade’s construction rules and defaults. Click any green value to edit it; there is no second set of conflicting inputs.' : 'Choose a strategy above. Its construction rules, filters, probability analysis, and payoff graph will load here.'}</p>
       </CompactScannerFilterPanel>
+      {strategy && <OptionSelectionControls strategy={strategy} filters={filters} onChange={setFilter} />}
 
       <section className="scanner-filter-results gos-results">
         <div className="gos-results-toolbar">
@@ -651,8 +667,12 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         </div>
         {error && <div className="error-message">{error}</div>}
         {!loading && !error && feedOutage && <div className="gos-near-match-note" role="alert">
-          <strong>{`${feedOutage.count.toLocaleString()} of ${feedOutage.universe.toLocaleString()} symbols could not be priced — this is the quote feed, not your filters.`}</strong>
-          <span>{`First reason: ${feedOutage.reason} Yahoo rate-limits bursts of chain requests, so those symbols were skipped rather than rejected. Wait a few minutes and run the scan again for full coverage.`}</span>
+          <strong>{feedOutage.cooldownSec
+            ? `The quote feed is rate-limited — this is not your filters. Option chains are being refused for about ${feedOutage.cooldownSec >= 60 ? `${Math.ceil(feedOutage.cooldownSec / 60)} more minute${Math.ceil(feedOutage.cooldownSec / 60) === 1 ? '' : 's'}` : `${feedOutage.cooldownSec} more seconds`}.`
+            : `${feedOutage.count.toLocaleString()} of ${feedOutage.universe.toLocaleString()} symbols could not be priced — this is the quote feed, not your filters.`}</strong>
+          <span>{feedOutage.cooldownSec
+            ? `${feedOutage.count.toLocaleString()} names were dropped because no contract could be priced. Yahoo throttles bursts of chain requests; wait for the cooldown to pass, then run the scan again. Narrowing the universe makes a repeat trip less likely.`
+            : `First reason: ${feedOutage.reason} Yahoo rate-limits bursts of chain requests, so those symbols were skipped rather than rejected. Wait a few minutes and run the scan again for full coverage.`}</span>
         </div>}
         {!loading && !error && !rows.length && !feedOutage && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
           ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated${Number(stats?.unpriced_dropped) ? `, and ${Number(stats.unpriced_dropped).toLocaleString()} names without a listed contract were omitted` : ''}. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`

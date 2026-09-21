@@ -335,7 +335,8 @@ export function buildScannerTrade(kind, row) {
     ? row.spread.legs.length
     : fixedExpected
   if (expected && built.legs.length !== expected) return null
-  return built
+  const estimatedCosts = num(row.put?.estimated_costs_dollars) ?? num(row.spread?.estimated_costs_dollars)
+  return estimatedCosts != null ? { ...built, estimated_costs_dollars: estimatedCosts } : built
 }
 
 export function hasScannerTrade(kind, row) {

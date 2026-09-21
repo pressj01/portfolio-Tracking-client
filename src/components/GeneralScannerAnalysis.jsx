@@ -252,10 +252,20 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
       <div>{(meta.filter_reasons || []).map(reason => <b key={reason}>{reason}</b>)}</div>
     </div>}
 
+    {meta.match_status === 'unverified' && <div className="gsa-near-match-explanation" role="note">
+      <strong>Passed every rule that could be checked.</strong>
+      <span>No data to check these rules:</span>
+      <div>{(meta.unverified_reasons || []).map(reason => <b key={reason}>{reason}</b>)}</div>
+    </div>}
+
     <div className="gsa-probability-strip" aria-label="Probability and risk analysis">
-      <article><span>Probability of success</span><strong>{percent(meta.prob_success)}</strong></article>
+      <article><span>Any profit at expiration (modeled)</span><strong>{percent(meta.prob_success)}</strong></article>
       <article><span>Probability of failure</span><strong>{percent(meta.prob_failure)}</strong></article>
       <article><span>Expected value</span><strong>{money(meta.expected_value)}</strong></article>
+      {meta.expected_return_on_capital_pct != null && <article><span>Expected return / capital</span><strong>{percent(meta.expected_return_on_capital_pct)}</strong></article>}
+      {meta.managed_probability && <article title={meta.managed_probability.monitoring}><span>Target before loss stop (modeled)</span><strong>{percent(meta.managed_probability.probability_pct)}</strong><small>Target {money(meta.managed_probability.profit_target_dollars)} · loss stop {money(meta.managed_probability.loss_stop_dollars)}</small></article>}
+      {meta.stress_pnl_dollars != null && <article><span>Stress P/L: −10% price, +25% IV</span><strong>{money(meta.stress_pnl_dollars)}</strong></article>}
+      {meta.estimated_costs_dollars != null && <article><span>Estimated round-trip costs included</span><strong>{money(meta.estimated_costs_dollars)}</strong><small>{meta.expirations_considered || 1} expiration(s) compared</small></article>}
       <article><span>Max profit</span><strong>{riskMoney(meta.max_profit, meta.max_profit_unbounded)}</strong></article>
       <article><span>Max loss</span><strong>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</strong></article>
       <article><span>Profit ratio</span><strong>{percent(meta.profit_ratio)}</strong></article>
