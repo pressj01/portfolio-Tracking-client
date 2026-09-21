@@ -658,32 +658,36 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       )}>
         <p className="csf-single-source-note">{strategy ? 'Changing strategy replaces these values with that trade’s construction rules and defaults. Click any green value to edit it; there is no second set of conflicting inputs.' : 'Choose a strategy above. Its construction rules, filters, probability analysis, and payoff graph will load here.'}</p>
       </CompactScannerFilterPanel>
-      {strategy && <OptionSelectionControls strategy={strategy} filters={filters} onChange={setFilter} />}
+      {/* The workspace grid has exactly two columns, so the ranking controls must
+          share the results column; a third grid child pushes the results under the filter panel. */}
+      <div className="gos-main">
+        {strategy && <OptionSelectionControls strategy={strategy} filters={filters} onChange={setFilter} style={{ marginTop: 0 }} />}
 
-      <section className="scanner-filter-results gos-results">
-        <div className="gos-results-toolbar">
-          <div>{focusedTicker ? <button className="btn btn-xs btn-outline" onClick={() => setFocusedTicker(null)}>← All tickers</button> : <strong>Best structure per ticker</strong>}<span>{focusedTicker ? `${displayedRows.length} ${focusedTicker} candidates` : `${displayedRows.length} tickers`}</span></div>
-          <small>{asOf ? `As of ${new Date(asOf).toLocaleString()}` : 'Run the scan to load current Yahoo chains'}</small>
-        </div>
-        {error && <div className="error-message">{error}</div>}
-        {!loading && !error && feedOutage && <div className="gos-near-match-note" role="alert">
-          <strong>{feedOutage.cooldownSec
-            ? `The quote feed is rate-limited — this is not your filters. Option chains are being refused for about ${feedOutage.cooldownSec >= 60 ? `${Math.ceil(feedOutage.cooldownSec / 60)} more minute${Math.ceil(feedOutage.cooldownSec / 60) === 1 ? '' : 's'}` : `${feedOutage.cooldownSec} more seconds`}.`
-            : `${feedOutage.count.toLocaleString()} of ${feedOutage.universe.toLocaleString()} symbols could not be priced — this is the quote feed, not your filters.`}</strong>
-          <span>{feedOutage.cooldownSec
-            ? `${feedOutage.count.toLocaleString()} names were dropped because no contract could be priced. Yahoo throttles bursts of chain requests; wait for the cooldown to pass, then run the scan again. Narrowing the universe makes a repeat trip less likely.`
-            : `First reason: ${feedOutage.reason} Yahoo rate-limits bursts of chain requests, so those symbols were skipped rather than rejected. Wait a few minutes and run the scan again for full coverage.`}</span>
-        </div>}
-        {!loading && !error && !rows.length && !feedOutage && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
-          ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated${Number(stats?.unpriced_dropped) ? `, and ${Number(stats.unpriced_dropped).toLocaleString()} names without a listed contract were omitted` : ''}. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
-          : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
-        {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
-        {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}
-        {!loading && !error && rows.length > 0 && displayedRows.length === 0 && expirationScenarioEnabled && <div className="gos-empty gos-scenario-empty"><strong>No trades passed Scenario #1</strong><span>Change the P/L on margin threshold, choose Any to keep all results, or remove the scenario.</span></div>}
-        {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={visibleSelected} setSelected={setSelected} scenario={expirationScenarioEnabled && expirationScenarioSupported ? expirationScenario : null} scenarioResults={scenarioResults} />}
-        {stats && <div className="gos-stats"><span>{stats.showing_near_matches ? `${stats.near_matches_returned || rows.length} near-match structures shown` : `${stats.general_results ?? rows.length} matching structures`}</span><span>{stats.chains_fetched ?? stats.expirations_priced ?? '—'} chains / expirations priced</span></div>}
-        <GeneralScannerAnalysis row={visibleSelected} strategyLabel={scanner?.label || strategy} />
-      </section>
+        <section className="scanner-filter-results gos-results">
+          <div className="gos-results-toolbar">
+            <div>{focusedTicker ? <button className="btn btn-xs btn-outline" onClick={() => setFocusedTicker(null)}>← All tickers</button> : <strong>Best structure per ticker</strong>}<span>{focusedTicker ? `${displayedRows.length} ${focusedTicker} candidates` : `${displayedRows.length} tickers`}</span></div>
+            <small>{asOf ? `As of ${new Date(asOf).toLocaleString()}` : 'Run the scan to load current Yahoo chains'}</small>
+          </div>
+          {error && <div className="error-message">{error}</div>}
+          {!loading && !error && feedOutage && <div className="gos-near-match-note" role="alert">
+            <strong>{feedOutage.cooldownSec
+              ? `The quote feed is rate-limited — this is not your filters. Option chains are being refused for about ${feedOutage.cooldownSec >= 60 ? `${Math.ceil(feedOutage.cooldownSec / 60)} more minute${Math.ceil(feedOutage.cooldownSec / 60) === 1 ? '' : 's'}` : `${feedOutage.cooldownSec} more seconds`}.`
+              : `${feedOutage.count.toLocaleString()} of ${feedOutage.universe.toLocaleString()} symbols could not be priced — this is the quote feed, not your filters.`}</strong>
+            <span>{feedOutage.cooldownSec
+              ? `${feedOutage.count.toLocaleString()} names were dropped because no contract could be priced. Yahoo throttles bursts of chain requests; wait for the cooldown to pass, then run the scan again. Narrowing the universe makes a repeat trip less likely.`
+              : `First reason: ${feedOutage.reason} Yahoo rate-limits bursts of chain requests, so those symbols were skipped rather than rejected. Wait a few minutes and run the scan again for full coverage.`}</span>
+          </div>}
+          {!loading && !error && !rows.length && !feedOutage && <div className="gos-empty"><strong>{!strategy ? 'Choose a strategy from the dropdown' : scanCompleted ? (Number(stats?.unpriced_dropped) && !Number(stats?.candidates_evaluated) ? 'No listed option contracts were found' : 'No candidates met every active filter') : 'Run the scan to find candidates'}</strong><span>{scanCompleted
+            ? `${Number(stats?.candidates_evaluated || 0).toLocaleString()} candidate structures were evaluated${Number(stats?.unpriced_dropped) ? `, and ${Number(stats.unpriced_dropped).toLocaleString()} names without a listed contract were omitted` : ''}. ${rejectionSummary.length ? `Most common blockers: ${rejectionSummary.map(([reason, count]) => `${reason} (${count})`).join(', ')}.` : 'The selected universe did not produce a constructible trade.'} Click the relevant green values to loosen only the rules you want to change.`
+            : 'Each selected result includes probability of profit and loss, expected value, maximum profit and loss, plus the interactive price/P&L graph.'}</span></div>}
+          {loading && <div className="gos-empty"><strong>Scanning current option chains…</strong><span>Pricing listed contracts and expirations against your filters. Broader stock and ETF universes take longer to evaluate.</span></div>}
+          {!loading && !error && stats?.showing_near_matches && <div className="gos-near-match-note"><strong>No exact preset match today; showing the best priced trades.</strong><span>These are constructible near matches, not trades that passed every rule. Each row shows how many rules it missed; select it to see the exact rules above the analysis.</span></div>}
+          {!loading && !error && rows.length > 0 && displayedRows.length === 0 && expirationScenarioEnabled && <div className="gos-empty gos-scenario-empty"><strong>No trades passed Scenario #1</strong><span>Change the P/L on margin threshold, choose Any to keep all results, or remove the scenario.</span></div>}
+          {!loading && displayedRows.length > 0 && <ResultTable rows={displayedRows} focusedTicker={focusedTicker} setFocusedTicker={setFocusedTicker} selected={visibleSelected} setSelected={setSelected} scenario={expirationScenarioEnabled && expirationScenarioSupported ? expirationScenario : null} scenarioResults={scenarioResults} />}
+          {stats && <div className="gos-stats"><span>{stats.showing_near_matches ? `${stats.near_matches_returned || rows.length} near-match structures shown` : `${stats.general_results ?? rows.length} matching structures`}</span><span>{stats.chains_fetched ?? stats.expirations_priced ?? '—'} chains / expirations priced</span></div>}
+          <GeneralScannerAnalysis row={visibleSelected} strategyLabel={scanner?.label || strategy} />
+        </section>
+      </div>
     </div>
   </main>
 }

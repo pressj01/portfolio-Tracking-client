@@ -1301,6 +1301,7 @@ a:hover {
 .gos-page .scanner-filter-workspace { grid-template-columns: 310px minmax(0, 1fr); }
 .gos-page .csf-panel { max-height: calc(100vh - 8.5rem); }
 .gos-page .csf-heading .btn { min-width: 88px; }
+.gos-main { min-width: 0; }
 .gos-strategy-picker { display: block; }
 .gos-strategy-picker select { background: var(--surface-inset); border: 1px solid var(--accent); border-radius: 5px; color: var(--text-strong); font-size: 0.7rem; padding: 0.45rem; width: 100%; }
 .gos-strategy-picker p { margin-top: 0.45rem; }

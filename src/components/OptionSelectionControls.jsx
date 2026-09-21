@@ -1,6 +1,6 @@
 const PUT_STRATEGIES = new Set(['cash-secured-put', 'bull-put-spread'])
 
-export default function OptionSelectionControls({ strategy, filters, onChange, showPricing = false }) {
+export default function OptionSelectionControls({ strategy, filters, onChange, showPricing = false, style }) {
   const isPut = PUT_STRATEGIES.has(strategy)
   const numeric = (key, label, min = 0, max, step = 1) => (
     <label style={{ display: 'grid', gap: 4 }}>
@@ -10,7 +10,7 @@ export default function OptionSelectionControls({ strategy, filters, onChange, s
     </label>
   )
   const check = (key, label) => <label><input type="checkbox" checked={!!filters[key]} onChange={event => onChange(key, event.target.checked)} /> {label}</label>
-  return <details style={{ margin: '0.75rem 0', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: 6 }}>
+  return <details style={{ margin: '0.75rem 0', padding: '0.75rem', border: '1px solid var(--border)', borderRadius: 6, ...style }}>
     <summary style={{ cursor: 'pointer' }}>Selection quality, ranking{isPut ? ', and trading costs' : ''}</summary>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.75rem', marginTop: '0.75rem', fontSize: '0.85rem' }}>
       <label style={{ display: 'grid', gap: 4 }}>Rank results by
