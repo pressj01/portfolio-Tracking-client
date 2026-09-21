@@ -1739,7 +1739,7 @@ export default function Dashboard() {
     const markerSize = denseHistory ? 4 : 8
     const valueTrace = {
       x: dates, y: values,
-      mode: singlePoint ? 'markers+text' : denseHistory ? 'lines' : 'lines+markers',
+      mode: singlePoint ? 'markers' : denseHistory ? 'lines' : 'lines+markers',
       name: isTotalReturn ? 'Total Return' : 'Price Return',
       line: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', width: 2 },
       marker: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', size: markerSize },
@@ -1749,14 +1749,40 @@ export default function Dashboard() {
         ? '%{x|%b %d, %Y}<br>Total return value: $%{y:,.2f}<br>Dividends added: $%{customdata:,.2f}<extra></extra>'
         : '%{x|%b %d, %Y}<br>Portfolio value: $%{y:,.2f}<extra></extra>',
     }
-    if (singlePoint) {
-      valueTrace.text = values.map(v => fmt(v))
-    }
     const traces = [valueTrace]
     const oneDayMs = 24 * 60 * 60 * 1000
     const spanMs = (maxDate - minDate) + 2 * datePadding
     const isLongRange = spanMs > 370 * oneDayMs
     const ct = chartTheme(isDark)
+    const dateTime = value => typeof value === 'number' ? value : new Date(
+      String(value).replace(' ', 'T').replace(/^(\d{4}-\d{2}-\d{2})$/, '$1T00:00:00'),
+    ).getTime()
+    const extremaAnnotations = (range = xRange) => {
+      const start = range ? dateTime(range[0]) : -Infinity
+      const end = range ? dateTime(range[1]) : Infinity
+      const visible = points.filter(point => {
+        const time = dateTime(point.date)
+        return time >= start && time <= end
+      })
+      if (!visible.length) return []
+      const high = visible.reduce((best, point) => point.value > best.value ? point : best)
+      const low = visible.reduce((best, point) => point.value < best.value ? point : best)
+      const extrema = high.value === low.value
+        ? [{ label: 'High / Low', point: high, color: ct.title, offset: -28 }]
+        : [
+            { label: 'High', point: high, color: isDark ? '#4dff91' : '#15803d', offset: -28 },
+            { label: 'Low', point: low, color: isDark ? '#ff8a8a' : '#b91c1c', offset: 28 },
+          ]
+      return extrema.map(({ label, point, color, offset }) => ({
+        x: point.date, y: point.value, xref: 'x', yref: 'y',
+        text: `<b>${label}: ${fmt(point.value)}</b>`,
+        showarrow: true, arrowhead: 2, arrowcolor: color,
+        ax: 0, ay: offset,
+        xanchor: dateTime(point.date) <= (start + end) / 2 ? 'left' : 'right',
+        font: { size: 12, color },
+        bgcolor: ct.paper, bordercolor: color, borderpad: 4,
+      }))
+    }
     const xaxis = {
       gridcolor: ct.grid,
       color: ct.font,
@@ -1791,15 +1817,31 @@ export default function Dashboard() {
       margin: { l: 90, r: 20, t: 70, b: 52 },
       height: 340,
       hovermode: 'x unified',
+      annotations: extremaAnnotations(),
+    }
+    let disposed = false
+    const updateExtrema = event => {
+      if (disposed || !Object.keys(event).some(key => key.startsWith('xaxis.range') || key === 'xaxis.autorange')) return
+      // Read the settled axis range so zoom, pan, and reset use only visible points.
+      window.Plotly.relayout(el, { annotations: extremaAnnotations(el.layout.xaxis.range) })
+        .catch(err => console.warn('Unable to update NAV history high/low labels', err))
     }
     try {
       window.Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false })
+        .then(() => {
+          if (!disposed) el.on('plotly_relayout', updateExtrema)
+        })
+        .catch(err => console.warn('Unable to render NAV history chart', err))
     } catch (err) {
       console.warn('Unable to render NAV history chart', err)
     }
     return () => {
+      disposed = true
       try {
-        if (el) window.Plotly.purge(el)
+        if (el) {
+          el.removeListener?.('plotly_relayout', updateExtrema)
+          window.Plotly.purge(el)
+        }
       } catch {
         // Plot cleanup should not affect dashboard rendering.
       }
