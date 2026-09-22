@@ -164,27 +164,47 @@ def _expirations_in_window(
     target_dte: int,
     min_dte: int,
     max_dte: int,
+    *,
+    include_nearest: bool = False,
 ) -> list[tuple[str, int, bool]]:
-    """Every listed expiration in range, nearest the requested DTE first.
+    """Listed expirations in range, or the single nearest future fallback.
 
     The road trip trade runs on SPX and ES weeklies, so weekly expirations are
     eligible here. The monthly flag is carried through only as a liquidity note.
+    The General scanner promises a priced near match when no exact preset match
+    exists.  Yahoo's farther-out catalog can jump directly from 69 to 87 DTE,
+    leaving the strategy's 70-85 DTE band empty even though a usable contract is
+    one day away.  In that mode, price only the closest future expiration; the
+    General scanner's DTE gate will label it as a near match.
     """
     today = date.today()
-    choices = []
+    future_choices = []
     for expiration in expirations:
         try:
             expiration_date = datetime.strptime(expiration, "%Y-%m-%d").date()
         except (TypeError, ValueError):
             continue
         dte = (expiration_date - today).days
-        if min_dte <= dte <= max_dte:
-            choices.append((expiration, dte, _is_standard_monthly(expiration)))
+        if dte >= 0:
+            future_choices.append((
+                expiration, dte, _is_standard_monthly(expiration),
+            ))
+    choices = [
+        choice for choice in future_choices
+        if min_dte <= choice[1] <= max_dte
+    ]
     choices.sort(key=lambda choice: (
         abs(choice[1] - target_dte),
         choice[1],
         choice[0],
     ))
+    if not choices and include_nearest and future_choices:
+        future_choices.sort(key=lambda choice: (
+            abs(choice[1] - target_dte),
+            choice[1],
+            choice[0],
+        ))
+        return future_choices[:1]
     return choices
 
 
@@ -972,6 +992,7 @@ def run_road_trip_butterfly_scan(payload: dict) -> dict:
         )[0] or []
         window = _expirations_in_window(
             expirations, target_dte, min_dte, max_dte,
+            include_nearest=_as_bool(p.get("include_near_matches")),
         )
         if not window:
             return {

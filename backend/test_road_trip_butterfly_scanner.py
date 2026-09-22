@@ -113,8 +113,9 @@ def price_frame(
     return pd.DataFrame({"Close": closes})
 
 
-def run_scan(chain=None, frame=None, dte=DTE, **payload):
-    expiration = expiration_for(dte)
+def run_scan(chain=None, frame=None, dte=DTE, expiration_dte=None, **payload):
+    chain_dte = dte if expiration_dte is None else expiration_dte
+    expiration = expiration_for(chain_dte)
 
     class FakeTicker:
         options = [expiration]
@@ -135,7 +136,7 @@ def run_scan(chain=None, frame=None, dte=DTE, **payload):
         patch.object(
             scanner,
             "_load_put_chain",
-            return_value=synthetic_chain(dte=dte) if chain is None else chain,
+            return_value=synthetic_chain(dte=chain_dte) if chain is None else chain,
         ),
     ):
         return scanner.run_road_trip_butterfly_scan({
@@ -449,6 +450,25 @@ class SelectionRules(unittest.TestCase):
         window = scanner._expirations_in_window(non_monthly, DTE, 70, 85)
         self.assertEqual(len(window), len(non_monthly))
         self.assertTrue(all(not is_monthly for _, _, is_monthly in window))
+
+    def test_general_scan_prices_nearest_expiration_when_window_is_empty(self):
+        strict = run_scan(
+            expiration_dte=69,
+            target_dte=77,
+            min_dte=70,
+            max_dte=85,
+        )
+        nearest = run_scan(
+            expiration_dte=69,
+            target_dte=77,
+            min_dte=70,
+            max_dte=85,
+            include_near_matches=True,
+        )
+
+        self.assertEqual(strict["rows"], [])
+        self.assertEqual(nearest["rows"][0]["dte"], 69)
+        self.assertEqual(nearest["stats"]["expirations_priced"], 1)
 
     def test_delta_band_scales_with_contract_count(self):
         one = run_scan(tranche_quantity=1)

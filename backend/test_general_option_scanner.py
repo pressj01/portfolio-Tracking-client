@@ -71,6 +71,14 @@ class GeneralOptionScannerTests(unittest.TestCase):
                 self.assertEqual(payload["target_dte"], 0)
                 self.assertEqual(payload["max_dte"], 1095)
 
+    def test_near_match_request_reaches_strategy_runner(self):
+        payload = _runner_payload("road-trip-butterfly", {
+            "symbols": "SPY",
+            "include_near_matches": True,
+        })
+
+        self.assertTrue(payload["include_near_matches"])
+
     def test_standard_strategy_uses_custom_symbols_and_broad_source_scan(self):
         payload = _runner_payload("covered-call", {
             "symbols": "spy, AAPL spy",

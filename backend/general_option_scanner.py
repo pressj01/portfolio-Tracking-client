@@ -284,7 +284,10 @@ def _runner_payload(strategy: str, payload: dict) -> dict:
         target_reference_delta = (low + high) / 200.0
     common = {
         key: payload.get(key)
-        for key in ("target_dte", "min_dte", "max_dte", "max_results")
+        for key in (
+            "target_dte", "min_dte", "max_dte", "max_results",
+            "include_near_matches",
+        )
         if payload.get(key) is not None
     }
     result = {**specific, **common}
