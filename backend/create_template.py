@@ -404,7 +404,7 @@ def create_etrade_template():
     rows = [
         ["Account Summary"],
         ["Account", "Net Account Value", "Day's Gain", "Day's Gain %", "Market Value", "Total Gain", "Total Gain %", "Cash Purchasing Power"],
-        ["<E*TRADE Account Name>", "37796.82", "0.00", "0.00%", "36963.37", "-3000.98", "-7.51%", "833.45"],
+        ["<E*TRADE Account Name>", "6553.45", "0.00", "0.00%", "5720.00", "170.00", "3.06%", "833.45"],
         [],
         ["View Summary - Dividends"],
         [
@@ -425,7 +425,7 @@ def create_etrade_template():
             "Total Cost",
         ],
         [
-            "<SYMBOL>",
+            "JEPI",
             "55.5000",
             "57.2000",
             "0.45%",
@@ -442,7 +442,7 @@ def create_etrade_template():
             "5550.00",
         ],
         ["CASH", "", "", "", "", "", "", "", "833.45", "", "", "", "", "", ""],
-        ["TOTAL", "", "", "", "", "", "", "", "37796.82", "", "", "", "", "", ""],
+        ["TOTAL", "", "", "", "", "", "", "", "6553.45", "", "", "", "", "", ""],
     ]
 
     with open(ETRADE_TEMPLATE_PATH, "w", newline="", encoding="utf-8") as fh:
@@ -640,7 +640,7 @@ def create_fidelity_template():
     ]
     sample_rows = [
         ["XXXXXXXXX", "<Fidelity Account Name>", "SPAXX**", "HELD IN MONEY MARKET", "", "", "", "", "", "", 386.87, "", "", 0.0031, "", "", "", "", "--", "--", 0.0326, "Apr-14-2026", "--", "", ""],
-        ["XXXXXXXXX", "<Fidelity Account Name>", "AAPL", "APPLE INC", 258.83, -0.37, -10.69, -0.0015, 6796.28, 10.0247, 7474.23, 677.95, 23.48, 0.0608, 28.877, "Feb-09-2026", 0.26, "Feb-12-2026", 0.004, "Apr-13-2026", "--", "--", 30.03, "", "Dec-03-2025"],
+        ["XXXXXXXXX", "<Fidelity Account Name>", "AAPL", "APPLE INC", 258.83, -0.37, -10.69, -0.0015, 677.95, 0.0997531, 7474.23, 6796.28, 235.3527, 0.0608, 28.877, "Feb-09-2026", 0.26, "Feb-12-2026", 0.004, "Apr-13-2026", "--", "--", 30.03, "", "Dec-03-2025"],
         ["XXXXXXXXX", "<Fidelity Account Name>", "AVGO", "BROADCOM INC COM", 380.78, 1.03, 11.87, 0.0027, 457.02, 0.1162, 4388.48, 3931.46, 341.12, 0.0357, 11.525, "Mar-23-2026", 0.65, "Mar-31-2026", 0.0068, "Apr-13-2026", "--", "--", 29.96, "", "Dec-10-2025"],
     ]
 

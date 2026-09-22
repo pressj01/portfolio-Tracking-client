@@ -105,6 +105,23 @@ class InteractiveBrokersImportTest(unittest.TestCase):
         self.assertEqual(sell["shares"], 10)
         self.assertAlmostEqual(sell["price_per_share"], 82.5)
 
+    def test_unpriced_trade_is_filtered_when_no_gross_amount_can_supply_price(self):
+        rows = [
+            ["Statement", "Header", "Field Name", "Field Value"],
+            ["Statement", "Data", "Title", "Transaction History"],
+            ["Transaction History", "Header", "Date", "Account", "Description", "Transaction Type", "Symbol", "Quantity", "Price", "Price Currency", "Gross Amount", "Commission", "Net Amount"],
+            ["Transaction History", "Data", "2026-04-15", "U1", "Unpriced buy", "Buy", "JEPI", "2", "-", "USD", "-", "0", "-"],
+            ["Transaction History", "Data", "2026-04-16", "U1", "Priced buy", "Buy", "JEPI", "2", "25", "USD", "-50", "0", "-50"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ib-unpriced.csv"
+            _write_csv(path, rows)
+            result = parse_interactive_brokers_transactions(str(path), path.name)
+
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["summary"]["buys"], 1)
+        self.assertEqual(result["transactions"][0]["price_per_share"], 25.0)
+
     def test_preferred_and_occ_option_symbols_are_normalized_or_skipped(self):
         rows = [
             ["Statement", "Header", "Field Name", "Field Value"],

@@ -9,10 +9,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
 from transaction_import import (
     parse_etrade_transactions_xlsx,
+    parse_etrade_csv,
     parse_fidelity_positions_xlsx,
     parse_fidelity_transactions_xlsx,
     parse_generic_transactions,
+    parse_robinhood_transactions_csv,
     parse_schwab_csv,
+    parse_schwab_transactions_csv,
     parse_shear_group_activity,
     parse_shear_group_positions,
     parse_snowball_holdings_csv,
@@ -154,6 +157,48 @@ class TransactionImportParserTest(unittest.TestCase):
 
         self._assert_etrade_all_transactions_result(result)
 
+    def test_etrade_downloadable_positions_template_imports_and_reconciles(self):
+        path = Path(__file__).resolve().parent.parent / "templates" / "etrade_positions_template.csv"
+        result = parse_etrade_csv(str(path), path.name)
+
+        self.assertEqual(result["summary"]["holdings"], 1)
+        self.assertEqual(result["positions"][0]["ticker"], "JEPI")
+        self.assertEqual(result["summary"]["account_value"], 6553.45)
+        self.assertEqual(result["positions"][0]["purchase_value"], 5550.0)
+        self.assertEqual(result["positions"][0]["gain_or_loss"], 170.0)
+
+    def test_etrade_dividend_correction_stays_negative_and_unpriced_trade_is_filtered(self):
+        content = "\n".join([
+            "Activity/Trade Date,Activity Type,Description,Symbol,Quantity #,Price $,Amount $,Commission",
+            "06/02/26,Dividend,Cash dividend correction,ISBG,,,-1.39,0",
+            "06/02/26,Bought,Unpriced buy,ISBG,2,,-20,0",
+            "06/02/26,Dividend,Cash dividend,ISBG,,,2.00,0",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "etrade.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_etrade_transactions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["summary"]["dividends"], 2)
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual([t["dividend_amount"] for t in result["transactions"]], [-1.39, 2.0])
+
+    def test_schwab_dividend_correction_stays_negative_and_unpriced_trade_is_filtered(self):
+        content = "\n".join([
+            "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",
+            "06/02/2026,Cash Dividend,SCHD,Correction,,,,-1.39",
+            "06/02/2026,Buy,SCHD,Unpriced buy,2,,0,-20",
+            "06/02/2026,Cash Dividend,SCHD,Payment,,,,2.00",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_schwab_transactions_csv(str(path), path.name)
+
+        self.assertEqual(result["summary"]["dividends"], 2)
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual([t["dividend_amount"] for t in result["transactions"]], [-1.39, 2.0])
+
     def test_schwab_positions_accepts_total_cost_basis_without_cost_per_share(self):
         content = "\n".join([
             '"Positions for account Custodial Brokerage ...843 as of 05:35 PM ET, 2026/05/26",,,,,,,,,,,,,,,,,,',
@@ -260,6 +305,29 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(fzdxx["quantity"], 5000)
         self.assertEqual(fzdxx["estim_payment_per_year"], 175.50)
 
+    def test_fidelity_positions_handles_named_cash_with_no_share_quantity(self):
+        content = "\n".join([
+            "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Quantity,Type",
+            "Z111,Fidelity IRA,CORE,CASH BALANCE,,$125.00,,,,Cash",
+            'Z111,Fidelity IRA,AVDV,AVANTIS ETF,$100.00,"$1,000.00",$900.00,$90.00,10,ETF',
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Positions.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_fidelity_positions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["summary"]["cash"], 125.0)
+        self.assertEqual(result["summary"]["holdings"], 1)
+        self.assertEqual(result["positions"][0]["ticker"], "AVDV")
+
+    def test_fidelity_downloadable_positions_sample_reconciles(self):
+        path = Path(__file__).resolve().parent.parent / "templates" / "fidelity_positions_template.xlsx"
+        result = parse_fidelity_positions_xlsx(str(path), path.name)
+        aapl = next(position for position in result["positions"] if position["ticker"] == "AAPL")
+        self.assertEqual(aapl["purchase_value"], 6796.28)
+        self.assertEqual(aapl["gain_or_loss"], 677.95)
+        self.assertAlmostEqual(aapl["current_value"] - aapl["purchase_value"], aapl["gain_or_loss"], places=2)
+
     def test_fidelity_positions_accepts_file_that_is_already_clean(self):
         content = "\n".join([
             "Account number,Account name,Symbol,Description,Last Price,Current value,Cost basis total,Average cost basis,Total gain/loss $,Quantity,Dist. yield",
@@ -341,6 +409,40 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["dividends"], 0)
         self.assertEqual(result["transactions"], [])
 
+    def test_fidelity_transactions_preserves_corrections_and_filters_unpriced_trades(self):
+        content = "\n".join([
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            "08/25/2026,Fidelity IRA,DIVIDEND RECEIVED,AVDV,AVANTIS ETF,Cash,,,0,0,-12.10",
+            "08/25/2026,Fidelity IRA,DIVIDEND RECEIVED,AVDV,AVANTIS ETF,Cash,,,0,0,0",
+            "08/25/2026,Fidelity IRA,DIVIDEND RECEIVED,AVDV,AVANTIS ETF,Cash,,,0,0,12.10",
+            "08/25/2026,Fidelity IRA,YOU BOUGHT,AVDV,AVANTIS ETF,Cash,2,,0,0,-200",
+            "08/25/2026,Fidelity IRA,REINVESTMENT,AVDV,AVANTIS ETF,Cash,0.1,,0,0,-10",
+            "08/25/2026,Fidelity IRA,YOU SOLD,AVDV,AVANTIS ETF,Cash,-1,105,-1,-0.25,103.75",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "History.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+
+        self.assertEqual(result["summary"]["dividends"], 2)
+        self.assertEqual(result["summary"]["sells"], 1)
+        self.assertEqual(result["summary"]["buys"], 0)
+        self.assertEqual(result["summary"]["filtered"], 3)
+        self.assertEqual([t["dividend_amount"] for t in result["transactions"][:2]], [-12.10, 12.10])
+        self.assertEqual(result["transactions"][2]["fees"], 1.25)
+
+    def test_generic_dividend_correction_stays_negative(self):
+        content = "\n".join([
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes",
+            "2026-02-03,DIVIDEND,SCHD,,,,-8.25,Correction",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic-transactions.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["transactions"][0]["dividend_amount"], -8.25)
+
     def test_generic_transactions_csv_parses_trades_dividends_and_drips(self):
         content = "\n".join([
             "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes",
@@ -392,6 +494,35 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(txn["type"], "DIVIDEND")
         self.assertEqual(txn["ticker"], "JEPI")
         self.assertEqual(txn["dividend_amount"], 12.34)
+
+    def test_robinhood_unpriced_trade_is_filtered_but_acat_transfer_is_kept(self):
+        content = "\n".join([
+            "Activity Date,Instrument,Description,Trans Code,Quantity,Price,Amount",
+            "06/02/2026,SCHD,Unpriced buy,BUY,2,,",
+            "06/02/2026,SCHD,Transfer in,ACATI,2,,",
+            "06/02/2026,SCHD,Priced buy,BUY,2,25,-50",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "robinhood.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_robinhood_transactions_csv(str(path), path.name)
+
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual([t["price_per_share"] for t in result["transactions"]], [0.0, 25.0])
+
+    def test_shear_group_unpriced_trade_is_filtered(self):
+        content = "\n".join([
+            "Date,Activity,Symbol,Description,Quantity,Unit Price,Value",
+            "06/02/2026,buy,SCHD,Unpriced buy,2,,",
+            "06/02/2026,buy,SCHD,Priced buy,2,$25,-$50",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "shear.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_shear_group_activity(str(path), path.name)
+
+        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["transactions"][0]["price_per_share"], 25.0)
 
     def test_shear_group_positions_accepts_csv_export(self):
         content = "\n".join([

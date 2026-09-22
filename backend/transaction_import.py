@@ -1305,7 +1305,7 @@ def parse_generic_transactions(file_path, filename):
                 "shares": None,
                 "price_per_share": None,
                 "fees": 0.0,
-                "dividend_amount": round(abs(dividend_amount), 2),
+                "dividend_amount": round(dividend_amount, 2),
                 "notes": notes or action.title(),
             })
             continue
@@ -1357,7 +1357,9 @@ def _fidelity_positions_from_records(records):
         # SPAXX** and unlabeled cash stay cash. A purchased money-market fund
         # such as FZDXX is labeled Cash in some Fidelity exports, but it pays
         # a monthly dividend and belongs in the holdings table / calendar.
-        if ticker.endswith("**") or (holding_type.lower() == "cash" and not ticker):
+        if ticker.endswith("**") or (
+            holding_type.lower() == "cash" and (not ticker or not quantity or quantity <= 0)
+        ):
             cash_value += current_value or 0.0
             cash_count += 1
             continue
@@ -1671,13 +1673,13 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         amount_val = _safe_float(record.get("Amount ($)"))
         commission = _safe_float(record.get("Commission ($)") or record.get("Commission") or record.get("Commissions")) or 0.0
         fees = _safe_float(record.get("Fees ($)") or record.get("Fees") or record.get("Fee")) or 0.0
-        total_fees = round(commission + fees, 2)
+        total_fees = round(abs(commission) + abs(fees), 2)
         action_upper = action.upper()
 
         # Share buys from a reinvested distribution — handled before the
         # cash-distribution check so "… CAP GAIN REINVESTMENT" stays a BUY.
         if "REINVESTMENT" in action_upper or "REINVEST" in action_upper:
-            if qty_val is None or qty_val == 0:
+            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1693,7 +1695,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if _fidelity_is_cash_distribution(action_upper):
-            if amount_val is None:
+            if amount_val is None or amount_val == 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1703,7 +1705,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "shares": None,
                 "price_per_share": None,
                 "fees": 0.0,
-                "dividend_amount": round(abs(amount_val), 2),
+                "dividend_amount": round(amount_val, 2),
                 "notes": _fidelity_distribution_note(
                     action_upper, record.get("Account"),
                 ),
@@ -1711,7 +1713,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if "YOU BOUGHT" in action_upper or action_upper in {"BUY", "BOUGHT"}:
-            if qty_val is None or qty_val == 0:
+            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1727,7 +1729,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if "YOU SOLD" in action_upper or action_upper in {"SELL", "SOLD"}:
-            if qty_val is None or qty_val == 0:
+            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1876,10 +1878,9 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Dividend / distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DIVIDEND_ACTIONS or action_key in {"dividend", "dividends", "cash dividend"}:
-            div_amount = abs(amount) if amount is not None else 0.0
-            # Div Adjustment can be negative (reversal)
-            if action == "Div Adjustment" and amount is not None and amount < 0:
-                div_amount = amount  # keep negative
+            if amount is None or amount == 0:
+                filtered_count += 1
+                continue
             kept.append({
                 "type": "DIVIDEND",
                 "ticker": symbol,
@@ -1887,14 +1888,14 @@ def parse_schwab_transactions_csv(file_path, filename):
                 "shares": None,
                 "price_per_share": None,
                 "fees": 0.0,
-                "dividend_amount": round(div_amount, 2),
+                "dividend_amount": round(amount, 2),
                 "notes": action,
             })
             continue
 
         # â”€â”€ DRIP reinvestment shares â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DRIP_ACTIONS or "reinvest" in action_key and "adj" not in action_key:
-            if qty is None or qty == 0:
+            if qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1930,7 +1931,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Buy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"buy", "bought", "you bought"}:
-            if qty is None or qty == 0:
+            if qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1947,7 +1948,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Sell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"sell", "sold", "you sold"}:
-            if qty is None or qty == 0:
+            if qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2274,6 +2275,9 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 continue
             if price is None and amount is not None:
                 price = abs(amount) / qty
+            if price is None or price <= 0:
+                filtered_count += 1
+                continue
             kept.append({
                 "type": "BUY",
                 "ticker": ticker,
@@ -2290,6 +2294,9 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 continue
             if price is None and amount is not None:
                 price = abs(amount) / qty
+            if price is None or price <= 0:
+                filtered_count += 1
+                continue
             kept.append({
                 "type": "SELL",
                 "ticker": ticker,
@@ -2681,7 +2688,7 @@ def parse_shear_group_activity(file_path, filename):
         price = _shear_group_price_from_amount(row.get("Unit Price"), row.get("Value"), row.get("Quantity"))
 
         if activity_key == "buy":
-            if quantity is None or quantity == 0:
+            if quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2698,7 +2705,7 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         elif activity_key == "sell":
-            if quantity is None or quantity == 0:
+            if quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2732,7 +2739,7 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         elif activity_key in drip_actions:
-            if quantity is None or quantity == 0:
+            if quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2944,7 +2951,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         )
 
         if activity_key in {"bought", "buy", "you bought"}:
-            if qty_val is None or qty_val == 0:
+            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2958,7 +2965,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "notes": "[DRIP] Dividend Reinvestment" if looks_like_reinvestment or looks_like_dividend else "",
             })
         elif activity_key in {"sold", "sell", "you sold"}:
-            if qty_val is None or qty_val == 0:
+            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2974,6 +2981,9 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         elif amount_val is None:
             filtered_count += 1
         elif amount_val < 0 and qty_val is not None and qty_val > 0 and looks_like_dividend:
+            if price_val is None or price_val <= 0:
+                filtered_count += 1
+                continue
             kept.append({
                 "type": "BUY",
                 "ticker": symbol,
@@ -2984,7 +2994,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "dividend_amount": None,
                 "notes": "[DRIP] Dividend Reinvestment",
             })
-        elif amount_val > 0 and looks_like_dividend:
+        elif amount_val != 0 and looks_like_dividend:
             kept.append({
                 "type": "DIVIDEND",
                 "ticker": symbol,
@@ -3418,7 +3428,7 @@ def parse_interactive_brokers_positions(file_path, filename):
 def _ib_append_trade(kept, filtered_count, ticker, date_str, qty, price, fees, notes, explicit_type=None):
     if not ticker or not date_str:
         return filtered_count + 1
-    if qty is None or qty == 0:
+    if qty is None or qty == 0 or price is None or price <= 0:
         return filtered_count + 1
     txn_type = explicit_type or ("BUY" if qty > 0 else "SELL")
     kept.append(_ib_txn_row(
