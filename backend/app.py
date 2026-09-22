@@ -4765,18 +4765,38 @@ def _ensure_basis_columns(conn):
     for col, col_type in needed.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {col} {col_type}")
-    conn.execute("UPDATE all_account_info SET div_frequency_locked = 0 WHERE div_frequency_locked IS NULL")
-    conn.execute("""
-        UPDATE all_account_info
-           SET original_price_paid = COALESCE(original_price_paid, price_paid),
-               original_purchase_value = COALESCE(original_purchase_value, purchase_value),
-               broker_price_paid = COALESCE(broker_price_paid, price_paid),
-               broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
-         WHERE original_price_paid IS NULL
-            OR original_purchase_value IS NULL
-            OR broker_price_paid IS NULL
-            OR broker_purchase_value IS NULL
-    """)
+    # Avoid opening SQLite's single writer transaction when the database is
+    # already normalized.  Read-only pages call this compatibility helper too;
+    # unconditional no-op UPDATEs made those pages wait behind long-running
+    # refresh writers and eventually surface a misleading "database is busy"
+    # error even though every value was already current.
+    if conn.execute(
+        "SELECT 1 FROM all_account_info WHERE div_frequency_locked IS NULL LIMIT 1"
+    ).fetchone():
+        conn.execute(
+            "UPDATE all_account_info SET div_frequency_locked = 0 "
+            "WHERE div_frequency_locked IS NULL"
+        )
+    if conn.execute(
+        """SELECT 1
+             FROM all_account_info
+            WHERE (original_price_paid IS NULL AND price_paid IS NOT NULL)
+               OR (original_purchase_value IS NULL AND purchase_value IS NOT NULL)
+               OR (broker_price_paid IS NULL AND price_paid IS NOT NULL)
+               OR (broker_purchase_value IS NULL AND purchase_value IS NOT NULL)
+            LIMIT 1"""
+    ).fetchone():
+        conn.execute("""
+            UPDATE all_account_info
+               SET original_price_paid = COALESCE(original_price_paid, price_paid),
+                   original_purchase_value = COALESCE(original_purchase_value, purchase_value),
+                   broker_price_paid = COALESCE(broker_price_paid, price_paid),
+                   broker_purchase_value = COALESCE(broker_purchase_value, purchase_value)
+             WHERE (original_price_paid IS NULL AND price_paid IS NOT NULL)
+                OR (original_purchase_value IS NULL AND purchase_value IS NOT NULL)
+                OR (broker_price_paid IS NULL AND price_paid IS NOT NULL)
+                OR (broker_purchase_value IS NULL AND purchase_value IS NOT NULL)
+        """)
     _repair_encoded_security_descriptions(conn)
     conn.commit()
 

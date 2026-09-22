@@ -717,6 +717,7 @@ def get_dividend_safety_for_holdings(conn, profile_id, holdings, refresh=False):
     del profile_id  # Cache is ticker-level because fundamentals are not profile-specific.
     ensure_dividend_safety_cache(conn)
     by_ticker = {}
+    cache_updates = []
     for holding in holdings or []:
         ticker = str(holding.get("ticker") or "").strip().upper()
         if not ticker or ticker in by_ticker:
@@ -744,8 +745,18 @@ def get_dividend_safety_for_holdings(conn, profile_id, holdings, refresh=False):
                 "current_yield_pct": None,
             }
         by_ticker[ticker] = payload
+        cache_updates.append((ticker, payload))
+
+    # Building a safety payload can make several slow provider calls.  Writing
+    # the first result immediately used to keep SQLite's writer lock open while
+    # every remaining ticker downloaded.  A second Dividend Analysis request
+    # (including React Strict Mode's development double-load) would then time
+    # out with "database is locked".  Fetch everything first and keep the cache
+    # transaction to this short local batch.
+    for ticker, payload in cache_updates:
         _cache_set(conn, ticker, payload)
-    conn.commit()
+    if cache_updates:
+        conn.commit()
     return by_ticker
 
 
