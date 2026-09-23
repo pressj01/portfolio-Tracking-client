@@ -36600,13 +36600,26 @@ def etf_screen_data():
         # barely notices the difference — but alpha is a mean, so comparing a
         # fund's reinvested return against a benchmark stripped of its dividends
         # would hand every fund roughly the benchmark's yield as free alpha.
-        bench_adj_df = _cache_get(_ETF_SCREEN_BENCH_ADJ_CACHE, _bench_key, _ETF_SCREEN_BENCH_TTL_SEC)
-        if bench_adj_df is None:
+        # Back-adjusted closes for the funds AND the benchmarks, in one call.
+        # Security Research regresses yfinance's back-adjusted series; the
+        # comparer's own DRIP blend is a different reinvestment convention
+        # (forward share accumulation vs retroactive factors), and on a
+        # high-payout fund the two disagree by enough to show: TDAQ read
+        # +1.57% from the blend against +1.49% back-adjusted. Both are
+        # defensible total-return models, but only one can be "Alpha", so the
+        # regression uses the back-adjusted series on every screen. The charts
+        # and the reinvestment slider keep the blend untouched.
+        _risk_adj_key = (tuple(sorted(yahoo_symbols)), _bench_key)
+        risk_adj_df = _cache_get(_ETF_SCREEN_BENCH_ADJ_CACHE, _risk_adj_key, _ETF_SCREEN_BENCH_TTL_SEC)
+        if risk_adj_df is None:
             try:
-                bench_adj_df = _chunked_yf_download(BETA_BENCHMARKS, interval="1d", auto_adjust=True, progress=False, **_range_kwargs())
+                risk_adj_df = _chunked_yf_download(
+                    " ".join(dict.fromkeys(list(yahoo_symbols) + BETA_BENCHMARKS)),
+                    interval="1d", auto_adjust=True, progress=False, **_range_kwargs(),
+                )
             except Exception:
-                bench_adj_df = pd.DataFrame()
-            _cache_set(_ETF_SCREEN_BENCH_ADJ_CACHE, _bench_key, bench_adj_df)
+                risk_adj_df = pd.DataFrame()
+            _cache_set(_ETF_SCREEN_BENCH_ADJ_CACHE, _risk_adj_key, risk_adj_df)
 
         result = {
             "mode": mode,
@@ -36705,9 +36718,9 @@ def etf_screen_data():
                 if not bc.empty:
                     bench_closes.append((bm, bc))
         bench_adj_closes = []
-        if bench_adj_df is not None and not bench_adj_df.empty:
+        if risk_adj_df is not None and not risk_adj_df.empty:
             for bm in BETA_BENCHMARKS:
-                bc = _extract_col(bench_adj_df, "Close", bm)
+                bc = _extract_col(risk_adj_df, "Close", bm)
                 if not bc.empty:
                     bench_adj_closes.append((bm, bc))
         # Without an adjusted benchmark there is nothing honest to regress a
@@ -36868,11 +36881,14 @@ def etf_screen_data():
             # ETFs), plus the alpha over that same benchmark and the approximate
             # effective delta (up-/down-day capture) that surfaces the
             # covered-call asymmetry beta can't show.
-            # Both sides total-return, matching Security Research, so the same
-            # fund cannot report two very different alphas on two screens. For
-            # QQQI the price-only basis read -17.32% against -2.33% here: a
-            # ~15-point gap that is entirely the distributions it pays out.
-            risk_series = _blend_price_drip(div_close, divs, 1.0, track_cash=True)                 if not div_close.empty else base
+            # Back-adjusted on both sides, identical to Security Research, so
+            # the same fund over the same window reports the same alpha on both
+            # screens rather than merely a close one. Falls back to the DRIP
+            # blend only when the adjusted download is missing this symbol —
+            # still total-return, just not bit-identical to the other screen.
+            risk_series = _extract_col(risk_adj_df, "Close", dl_sym) if risk_adj_df is not None else pd.Series(dtype=float)
+            if risk_series.empty:
+                risk_series = _blend_price_drip(div_close, divs, 1.0, track_cash=True)                     if not div_close.empty else base
             risk = _risk_profile(risk_series, risk_benchmarks)
             computed_beta = risk["beta"]
             beta_benchmark = risk["beta_benchmark"]

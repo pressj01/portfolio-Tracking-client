@@ -55,6 +55,9 @@ class ETFComparerRiskPayloadTest(unittest.TestCase):
         "delta_down": 1.14,
     }
 
+    def setUp(self):
+        _clear_comparer_caches()
+
     def _fetch(self, risk, info, refresh):
         idx, fund, spy, qqq = _market(n=60)
         zeros = pd.Series(0.0, index=idx)
@@ -102,6 +105,101 @@ class ETFComparerRiskPayloadTest(unittest.TestCase):
         self.assertEqual(row["beta"], 1.11, "Yahoo's beta should still fill in")
         self.assertIsNone(row["beta_benchmark"], row)
         self.assertIsNone(row["alpha"], row)
+
+
+def _clear_comparer_caches():
+    """The comparer memoizes its downloads per symbol+range, not per test.
+
+    `refresh` busts the response cache but not the market/benchmark frames, so
+    without this a later test reads the frame an earlier one's mock produced.
+    """
+    for name in (
+        "_ETF_SCREEN_DATA_CACHE",
+        "_ETF_SCREEN_MARKET_CACHE",
+        "_ETF_SCREEN_BENCH_CACHE",
+        "_ETF_SCREEN_BENCH_ADJ_CACHE",
+    ):
+        getattr(app_module, name, {}).clear()
+
+
+class ComparerRegressesBackAdjustedClosesTest(unittest.TestCase):
+    """The comparer must regress the SAME series construction as Research.
+
+    Its charts build total return by simulating DRIP forward (buy shares at the
+    ex-date close); Security Research uses yfinance's back-adjusted closes,
+    which apply dividend factors retroactively. Both are legitimate, but they
+    are not equal: on TDAQ the blend read +1.57% against +1.49% back-adjusted.
+    Alpha has to pick one, and it picks the back-adjusted series so the two
+    screens agree exactly. The charts keep the blend.
+    """
+
+    def setUp(self):
+        _clear_comparer_caches()
+
+    def test_the_regression_gets_the_adjusted_series_not_the_drip_blend(self):
+        idx, fund, spy, qqq = _market(n=120)
+        # A payout big enough that the two constructions cannot coincide.
+        divs = pd.Series(0.0, index=idx)
+        divs.iloc[::21] = 0.45
+        adjusted = fund * 0.5          # unmistakably distinct from the blend
+
+        def download(tickers, **kwargs):
+            wanted = tickers.split() if isinstance(tickers, str) else list(tickers)
+            pick = lambda m: {s: v for s, v in m.items() if s in wanted}
+            if kwargs.get("auto_adjust"):
+                cols = pick({"FUND": adjusted, "SPY": spy, "QQQ": qqq})
+                if not cols:
+                    return pd.DataFrame()
+                return pd.concat({"Close": pd.DataFrame(cols, index=idx)}, axis=1)
+            cols = pick({"FUND": fund, "SPY": spy, "QQQ": qqq})
+            if not cols:
+                return pd.DataFrame()
+            return pd.concat(
+                {
+                    "Close": pd.DataFrame(cols, index=idx),
+                    "Dividends": pd.DataFrame(
+                        {s: (divs if s == "FUND" else pd.Series(0.0, index=idx))
+                         for s in cols},
+                        index=idx,
+                    ),
+                },
+                axis=1,
+            )
+
+        seen = {}
+
+        def capture(series, benchmarks, **kwargs):
+            seen["series"] = series
+            return {"beta": 1.0, "alpha": 0.01, "beta_benchmark": "QQQ",
+                    "delta_up": None, "delta_down": None}
+
+        with (
+            patch("app._chunked_yf_download", side_effect=download),
+            patch("app._cached_yf_info", return_value={}),
+            patch("app._yf_ticker", return_value=_InertTicker()),
+            patch("app._risk_profile", side_effect=capture),
+        ):
+            response = app_module.app.test_client().get(
+                "/api/etf-screen/data?ticker=FUND&period=1y&mode=total&refresh=adj-basis-test"
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        got = seen.get("series")
+        self.assertIsNotNone(got, "_risk_profile was never called")
+
+        blend = app_module._blend_price_drip(fund, divs, 1.0, track_cash=True)
+        # The endpoint trims to the displayed boundary, so this is a subset of
+        # the fixture rather than all of it; enough bars to be conclusive.
+        shared = got.index.intersection(adjusted.index)
+        self.assertGreater(len(shared), 50)
+        # It is the adjusted download...
+        self.assertLess(
+            float((got.reindex(shared) - adjusted.reindex(shared)).abs().max()), 1e-9,
+        )
+        # ...and demonstrably not the DRIP blend.
+        self.assertGreater(
+            float((got.reindex(shared) - blend.reindex(shared)).abs().max()), 1.0,
+        )
 
 
 class SecurityResearchRiskProfileTest(unittest.TestCase):
