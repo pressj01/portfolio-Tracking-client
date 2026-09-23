@@ -62,7 +62,11 @@ class InteractiveBrokersImportTest(unittest.TestCase):
         self.assertEqual(result["summary"]["sells"], 1)
         self.assertEqual(result["summary"]["dividends"], 2)
         self.assertGreaterEqual(result["summary"]["drip_detected"], 1)
-        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(result["account_activity"][0]["activity_type"], "INTEREST")
+        self.assertEqual(result["account_activity"][0]["direction"], "OUT")
+        self.assertEqual(result["account_activity"][0]["performance_treatment"], "EXPENSE")
 
         by_key = {(row["type"], row["ticker"], row["notes"]): row for row in result["transactions"]}
         self.assertIn(("BUY", "JEPI", ""), by_key)
@@ -93,6 +97,14 @@ class InteractiveBrokersImportTest(unittest.TestCase):
             ["Dividends", "Header", "Currency", "Account", "Date", "Description", "Amount"],
             ["Dividends", "Data", "USD", "U1234567", "2026-07-01", "JEPI(US46641Q3320) Cash Dividend USD 0.45 per Share (Ordinary Dividend)", "45.00"],
             ["Dividends", "Data", "USD", "U1234567", "2026-07-06", "PBR A(US71654V1017) Payment in Lieu of Dividend (Ordinary Dividend)", "19.43"],
+            ["Deposits & Withdrawals", "Header", "Currency", "Account", "Date", "Description", "Amount"],
+            ["Deposits & Withdrawals", "Data", "USD", "U1234567", "2026-07-08", "Electronic Fund Transfer", "500.00"],
+            # IB's real withdrawal wording names no direction; the sign does.
+            ["Deposits & Withdrawals", "Data", "USD", "U1234567", "2026-07-10", "Disbursement Initiated by Jane Doe", "-1000.00"],
+            ["Deposits & Withdrawals", "Data", "Total", "", "", "", "-500.00"],
+            ["Withholding Tax", "Header", "Currency", "Account", "Date", "Description", "Amount"],
+            ["Withholding Tax", "Data", "USD", "U1234567", "2026-07-09", "JEPI withholding tax", "-4.50"],
+            ["Withholding Tax", "Data", "Total in USD", "", "", "", "-4.50"],
         ]
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "ib-activity.csv"
@@ -104,6 +116,48 @@ class InteractiveBrokersImportTest(unittest.TestCase):
         sell = next(row for row in result["transactions"] if row["type"] == "SELL")
         self.assertEqual(sell["shares"], 10)
         self.assertAlmostEqual(sell["price_per_share"], 82.5)
+        self.assertEqual(result["summary"]["account_activity"], 3)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(
+            [
+                (row["activity_type"], row["direction"], row["performance_treatment"], row["base_amount"])
+                for row in result["account_activity"]
+            ],
+            [
+                ("DEPOSIT", "IN", "EXTERNAL_FLOW", 500.0),
+                ("WITHDRAWAL", "OUT", "EXTERNAL_FLOW", -1000.0),
+                ("TAX", "OUT", "EXPENSE", -4.5),
+            ],
+        )
+
+    def test_transaction_history_cash_rows_carry_base_currency_amounts(self):
+        rows = [
+            ["Statement", "Header", "Field Name", "Field Value"],
+            ["Statement", "Data", "Title", "Transaction History"],
+            ["Summary", "Header", "Field Name", "Field Value"],
+            ["Summary", "Data", "Base Currency", "USD"],
+            ["Transaction History", "Header", "Date", "Account", "Description", "Transaction Type", "Symbol", "Quantity", "Price", "Price Currency", "Gross Amount", "Commission", "Net Amount"],
+            ["Transaction History", "Data", "2026-04-08", "U1", "Disbursement Initiated by Jane Doe", "Withdrawal", "-", "-", "-", "-", "-52500.0", "-", "-52500.0"],
+            # Already converted: IB states Net Amount in the base currency.
+            ["Transaction History", "Data", "2026-05-05", "U1", "CAD Debit Interest for Apr-2026", "Debit Interest", "-", "-", "-", "-", "-21.2559585", "-", "-21.2559585"],
+            ["Transaction History", "Data", "2026-08-25", "U1", "FX Translations P&L", "Adjustment", "-", "-", "-", "-", "78.41", "-", "78.41"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ib-history-cash.csv"
+            _write_csv(path, rows)
+            result = parse_interactive_brokers_transactions(str(path), path.name)
+
+        self.assertEqual(
+            [
+                (row["activity_type"], row["performance_treatment"], row["currency"], row["base_amount"])
+                for row in result["account_activity"]
+            ],
+            [
+                ("WITHDRAWAL", "EXTERNAL_FLOW", "USD", -52500.0),
+                ("INTEREST", "EXPENSE", "USD", -21.2559585),
+                ("ADJUSTMENT", "REVIEW", "USD", 78.41),
+            ],
+        )
 
     def test_unpriced_trade_is_filtered_when_no_gross_amount_can_supply_price(self):
         rows = [
@@ -119,8 +173,25 @@ class InteractiveBrokersImportTest(unittest.TestCase):
             result = parse_interactive_brokers_transactions(str(path), path.name)
 
         self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["summary"]["account_activity"], 0)
         self.assertEqual(result["summary"]["buys"], 1)
         self.assertEqual(result["transactions"][0]["price_per_share"], 25.0)
+
+    def test_cash_only_activity_statement_is_accepted(self):
+        rows = [
+            ["Statement", "Header", "Field Name", "Field Value"],
+            ["Statement", "Data", "BrokerName", "Interactive Brokers LLC"],
+            ["Deposits & Withdrawals", "Header", "Currency", "Account", "Date", "Description", "Amount"],
+            ["Deposits & Withdrawals", "Data", "USD", "U1", "2026-07-08", "Cash deposit", "500.00"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "ib-cash-only.csv"
+            _write_csv(path, rows)
+            result = parse_interactive_brokers_transactions(str(path), path.name)
+
+        self.assertEqual(result["transactions"], [])
+        self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(result["account_activity"][0]["activity_type"], "DEPOSIT")
 
     def test_preferred_and_occ_option_symbols_are_normalized_or_skipped(self):
         rows = [

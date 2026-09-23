@@ -61,7 +61,10 @@ const multiAccountSummaryText = (summary = {}) => {
     const cash = summary.cash > 0 ? ` including ${formatMoney(summary.cash)} cash` : ''
     return `${summary.holdings || 0} holdings, ${formatMoney(summary.account_value)}${cash}`
   }
-  return `${summary.transactions || 0} transactions, ${summary.buys || 0} buys, ${summary.sells || 0} sells, ${summary.dividends || 0} dividends`
+  const activity = summary.account_activity
+    ? `, ${summary.account_activity} account activity records`
+    : ''
+  return `${summary.transactions || 0} transactions, ${summary.buys || 0} buys, ${summary.sells || 0} sells, ${summary.dividends || 0} dividends${activity}`
 }
 
 const BROKER_FORMAT_KEY = 'portfolio_defaultBrokerImportFormat'
@@ -2144,6 +2147,7 @@ export default function Import() {
                     <strong>{txnPreview.summary.buys}</strong> buys,{' '}
                     <strong>{txnPreview.summary.sells}</strong> sells, and{' '}
                     <strong>{txnPreview.summary.dividends}</strong> dividends.
+                    {txnPreview.summary.account_activity > 0 && <> {txnPreview.summary.account_activity} account-level cash/activity records found.</>}
                     {txnPreview.summary.filtered > 0 && <> {txnPreview.summary.filtered} rows filtered out.</>}
                     {txnPreview.summary.drip_detected > 0 && <> {txnPreview.summary.drip_detected} DRIP reinvestments detected.</>}
                   </>
@@ -2312,6 +2316,9 @@ export default function Import() {
                 <strong>{txnPreview.summary.buys}</strong> buys,{' '}
                 <strong>{txnPreview.summary.sells}</strong> sells,{' '}
                 <strong>{txnPreview.summary.dividends}</strong> dividends found.{' '}
+                {txnPreview.summary.account_activity > 0 && (
+                  <>{txnPreview.summary.account_activity} account-level cash/activity records found. </>
+                )}
                 {txnPreview.summary.filtered > 0 && (
                   <>{txnPreview.summary.filtered} rows filtered out. </>
                 )}

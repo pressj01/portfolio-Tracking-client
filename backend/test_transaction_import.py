@@ -2,12 +2,15 @@ import tempfile
 import sys
 import unittest
 import csv
+import sqlite3
 from pathlib import Path
 import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
+from database import ensure_tables_exist
 from transaction_import import (
+    _classify_account_activity,
     parse_etrade_transactions_xlsx,
     parse_etrade_csv,
     parse_fidelity_positions_xlsx,
@@ -129,7 +132,8 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["buys"], 3)
         self.assertEqual(result["summary"]["sells"], 1)
         self.assertEqual(result["summary"]["dividends"], 1)
-        self.assertEqual(result["summary"]["filtered"], 1)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(result["summary"]["account_activity"], 1)
         self.assertEqual(result["summary"]["drip_detected"], 2)
 
         by_type = [(t["type"], t["ticker"], t["notes"]) for t in result["transactions"]]
@@ -138,6 +142,10 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertIn(("SELL", "ULTY", ""), by_type)
         drip_tickers = {t["ticker"] for t in result["transactions"] if "[DRIP]" in (t["notes"] or "")}
         self.assertEqual(drip_tickers, {"KQQQ", "TSPY"})
+
+        # Cash-to-margin moves stay inside the account: not an external flow.
+        self.assertEqual(result["account_activity"][0]["activity_type"], "INTERNAL_TRANSFER")
+        self.assertEqual(result["account_activity"][0]["performance_treatment"], "NEUTRAL")
 
     def test_etrade_all_transactions_csv_imports_trades_dividends_and_drips(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -198,6 +206,212 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["summary"]["dividends"], 2)
         self.assertEqual(result["summary"]["filtered"], 1)
         self.assertEqual([t["dividend_amount"] for t in result["transactions"]], [-1.39, 2.0])
+
+    def test_schwab_captures_optional_account_activity_without_changing_trades(self):
+        content = "\n".join([
+            "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",
+            "09/01/2026,MoneyLink Transfer,,Deposit from bank,,,,1000.00",
+            "09/02/2026,Service Fee,,Account maintenance fee,,,,-5.00",
+            "09/03/2026,Foreign Tax Paid,SCHD,Foreign tax withheld,,,,-2.50",
+            "09/04/2026,Electronic Transfer,,Withdrawal to bank,,,,-100.00",
+            "09/05/2026,Security Transfer,SCHD,Position transfer,5,,0,",
+            "09/06/2026,Buy,SCHD,Normal trade,2,25.00,0,-50.00",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab-activity.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_schwab_transactions_csv(str(path), path.name)
+
+        self.assertEqual(result["summary"]["buys"], 1)
+        self.assertEqual(result["summary"]["account_activity"], 5)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(
+            [row["activity_type"] for row in result["account_activity"]],
+            ["DEPOSIT", "FEE", "TAX", "WITHDRAWAL", "SECURITY_TRANSFER_IN"],
+        )
+        self.assertEqual(
+            [row["performance_treatment"] for row in result["account_activity"]],
+            ["EXTERNAL_FLOW", "EXPENSE", "EXPENSE", "EXTERNAL_FLOW", "EXTERNAL_FLOW"],
+        )
+
+    def test_account_activity_import_is_optional_and_idempotent(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            ensure_tables_exist(conn)
+            rows = [{
+                "date": "2026-09-01",
+                "activity_type": "DEPOSIT",
+                "direction": "IN",
+                "performance_treatment": "EXTERNAL_FLOW",
+                "amount": 1000.0,
+                "base_amount": 1000.0,
+                "currency": "USD",
+                "raw_type": "MoneyLink Transfer",
+                "description": "Deposit from bank",
+            }]
+            first = app_module._import_account_activity_rows(
+                conn, 1, rows, "schwab_transactions"
+            )
+            second = app_module._import_account_activity_rows(
+                conn, 1, rows, "schwab_transactions"
+            )
+            empty = app_module._import_account_activity_rows(
+                conn, 1, None, "schwab_transactions"
+            )
+            count = conn.execute("SELECT COUNT(*) FROM account_activity").fetchone()[0]
+        finally:
+            conn.close()
+
+        self.assertEqual(first, (1, 0))
+        self.assertEqual(second, (0, 1))
+        self.assertEqual(empty, (0, 0))
+        self.assertEqual(count, 1)
+
+    def test_schwab_real_cash_movements_are_signed_external_flows(self):
+        # Wording from real Schwab exports: none of the transfers say "in" or
+        # "out", so only the sign of the amount can give the direction.
+        content = "\n".join([
+            "Date,Action,Symbol,Description,Quantity,Price,Fees & Comm,Amount",
+            '04/01/2026,MoneyLink Transfer,,"Tfr BANK OF AMERICA, JANE DOE",,,,-$600.00',
+            '04/02/2026,MoneyLink Transfer,,"Tfr JPMORGAN CHASE BA, JANE DOE",,,,"$3,000.00"',
+            "04/03/2026,Journal,,JOURNAL TO ...123,,,,-$300.00",
+            "04/04/2026,Wire Sent,,JANE DOE DISBURSED,,,,-$100.00",
+            "04/05/2026,Tax Withholding,,FED INC TAX WHLD IRA,,,,-$76.20",
+            "04/06/2026,Journaled Shares,CATX,JOURNAL - TRANSFER SHARES OUT (CATX),-11300,,,",
+            "04/07/2026,Buy to Open,SPY 05/15/2026 500.00 P,PUT SPDR S&P500 ETF $500 EXP 05/15/26,1,$4.10,$0.66,-$410.66",
+            "04/08/2026,Futures MM Sweep,,Sweep to Futures,,,,-$544.96",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab-cash.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_schwab_transactions_csv(str(path), path.name)
+
+        self.assertEqual(
+            [
+                (row["activity_type"], row["direction"], row["performance_treatment"])
+                for row in result["account_activity"]
+            ],
+            [
+                ("TRANSFER_OUT", "OUT", "EXTERNAL_FLOW"),
+                ("TRANSFER_IN", "IN", "EXTERNAL_FLOW"),
+                ("TRANSFER_OUT", "OUT", "EXTERNAL_FLOW"),
+                ("WITHDRAWAL", "OUT", "EXTERNAL_FLOW"),
+                # Owner's income tax on an IRA distribution: a withdrawal.
+                ("TAX_WITHHOLDING", "OUT", "EXTERNAL_FLOW"),
+                ("SECURITY_TRANSFER_OUT", "OUT", "EXTERNAL_FLOW"),
+                # Options trade inside the account.
+                ("OPTION_TRADE", "OUT", "NEUTRAL"),
+                # A sweep to a separate futures account is left for a decision.
+                ("OTHER", "OUT", "REVIEW"),
+            ],
+        )
+        self.assertEqual(result["account_activity"][1]["base_amount"], 3000.0)
+
+    def test_robinhood_codes_classify_by_meaning(self):
+        content = "\n".join([
+            "Activity Date,Instrument,Description,Trans Code,Quantity,Price,Amount",
+            "06/03/2026,,Instant bank transfer - account ending in 1234,RTP,,,$723.89",
+            "06/04/2026,SPYI,Stock Lending,SLIP,,,$0.01",
+            "06/05/2026,,Aggregated Margin Rate,MINT,,,($6.34)",
+            "06/06/2026,,ACAT OUT FEE A/C 123456789,FEE,,,($100.00)",
+            # Robinhood reports transfer-out quantities as positive numbers.
+            "06/07/2026,SNOY,YieldMax SNOW Option Income Strategy ETF,ACATO,27,,",
+            "06/08/2026,OPEN,OPEN 10/31/2025 Call $9.00,BTO,1,$2.27,($227.04)",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "robinhood-activity.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_robinhood_transactions_csv(str(path), path.name)
+
+        self.assertEqual(
+            [
+                (row["activity_type"], row["direction"], row["performance_treatment"])
+                for row in result["account_activity"]
+            ],
+            [
+                ("TRANSFER_IN", "IN", "EXTERNAL_FLOW"),
+                ("DISTRIBUTION", "IN", "INCOME"),
+                ("INTEREST", "OUT", "EXPENSE"),
+                ("FEE", "OUT", "EXPENSE"),
+                ("SECURITY_TRANSFER_OUT", "OUT", "EXTERNAL_FLOW"),
+                ("OPTION_TRADE", "OUT", "NEUTRAL"),
+            ],
+        )
+
+    def test_account_activity_matches_whole_words_not_fund_names(self):
+        # Substring matching read these as an ATM withdrawal and a deposit.
+        self.assertEqual(
+            _classify_account_activity("Cash In Lieu", "ATMOS ENERGY CORP", ticker="ATO", amount=3.10),
+            ("CORPORATE_ACTION", "IN", "NEUTRAL"),
+        )
+        self.assertEqual(
+            _classify_account_activity(
+                "FOREIGN TAX WITHHELD",
+                "TAIWAN SEMICONDUCTOR MFG AMERICAN DEPOSITARY SHARES",
+                ticker="TSM",
+                amount=-12.10,
+            ),
+            ("TAX", "OUT", "EXPENSE"),
+        )
+        # On a security row the description is only the fund name.
+        self.assertEqual(
+            _classify_account_activity(
+                "Stock Plan Activity", "WISDOMTREE US QUALITY DIVIDEND GROWTH",
+                ticker="DGRW", quantity=5,
+            ),
+            ("OTHER", "UNKNOWN", "REVIEW"),
+        )
+        # An IRA distribution leaves the account; it is not income.
+        self.assertEqual(
+            _classify_account_activity("NORMAL DISTRIBUTION PARTIAL", "", amount=-2000.0),
+            ("WITHDRAWAL", "OUT", "EXTERNAL_FLOW"),
+        )
+        # A refunded fee keeps its expense treatment but moves money in.
+        self.assertEqual(
+            _classify_account_activity("Misc Cash Entry", "ADR MGMT FEE", amount=15.0),
+            ("FEE", "IN", "EXPENSE"),
+        )
+
+    def test_account_activity_reimport_refreshes_classification_without_duplicating(self):
+        conn = sqlite3.connect(":memory:")
+        try:
+            ensure_tables_exist(conn)
+            original = {
+                "date": "2026-04-08",
+                "activity_type": "TRANSFER",
+                "direction": "UNKNOWN",
+                "performance_treatment": "REVIEW",
+                "amount": -52500.0,
+                "currency": "USD",
+                "raw_type": "MoneyLink Transfer",
+                "description": "Tfr BANK OF AMERICA",
+            }
+            first = app_module._import_account_activity_rows(conn, 1, [original], "schwab_transactions")
+            improved = dict(
+                original,
+                activity_type="TRANSFER_OUT",
+                direction="OUT",
+                performance_treatment="EXTERNAL_FLOW",
+            )
+            second = app_module._import_account_activity_rows(conn, 1, [improved], "schwab_transactions")
+            # The same withdrawal read from another export's wording.
+            other_export = dict(
+                improved,
+                activity_type="WITHDRAWAL",
+                raw_type="Deposits & Withdrawals",
+                description="Disbursement Initiated by Jane Doe",
+            )
+            third = app_module._import_account_activity_rows(
+                conn, 1, [other_export], "interactive_brokers_transactions"
+            )
+            stored = conn.execute(
+                "SELECT activity_type, performance_treatment, raw_type FROM account_activity"
+            ).fetchall()
+        finally:
+            conn.close()
+
+        self.assertEqual((first, second, third), ((1, 0), (0, 1), (0, 1)))
+        self.assertEqual(stored, [("TRANSFER_OUT", "EXTERNAL_FLOW", "MoneyLink Transfer")])
 
     def test_schwab_positions_accepts_total_cost_basis_without_cost_per_share(self):
         content = "\n".join([
@@ -397,7 +611,7 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(drips[0]["notes"], "[DRIP] Reinvestment")
         self.assertEqual(drips[0]["shares"], 10)
 
-    def test_fidelity_transactions_skips_foreign_tax_withheld(self):
+    def test_fidelity_transactions_captures_foreign_tax_withheld(self):
         content = "\n".join([
             "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
             '08/25/2026,ROTH IRA,FOREIGN TAX WITHHELD as of 08/25/2026,GDXW,ROUNDHILL ETF TRUST,Cash,,,0,0,-12.10',
@@ -408,6 +622,9 @@ class TransactionImportParserTest(unittest.TestCase):
             result = parse_fidelity_transactions_xlsx(str(path), path.name)
         self.assertEqual(result["summary"]["dividends"], 0)
         self.assertEqual(result["transactions"], [])
+        self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(result["account_activity"][0]["activity_type"], "TAX")
+        self.assertEqual(result["account_activity"][0]["amount"], -12.10)
 
     def test_fidelity_transactions_preserves_corrections_and_filters_unpriced_trades(self):
         content = "\n".join([
@@ -509,12 +726,18 @@ class TransactionImportParserTest(unittest.TestCase):
 
         self.assertEqual(result["summary"]["filtered"], 1)
         self.assertEqual([t["price_per_share"] for t in result["transactions"]], [0.0, 25.0])
+        self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(
+            result["account_activity"][0]["activity_type"],
+            "SECURITY_TRANSFER_IN",
+        )
 
     def test_shear_group_unpriced_trade_is_filtered(self):
         content = "\n".join([
             "Date,Activity,Symbol,Description,Quantity,Unit Price,Value",
             "06/02/2026,buy,SCHD,Unpriced buy,2,,",
             "06/02/2026,buy,SCHD,Priced buy,2,$25,-$50",
+            "06/03/2026,withdrawal,,Cash withdrawal,,,-$100",
         ])
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "shear.csv"
@@ -523,6 +746,8 @@ class TransactionImportParserTest(unittest.TestCase):
 
         self.assertEqual(result["summary"]["filtered"], 1)
         self.assertEqual(result["transactions"][0]["price_per_share"], 25.0)
+        self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(result["account_activity"][0]["activity_type"], "WITHDRAWAL")
 
     def test_shear_group_positions_accepts_csv_export(self):
         content = "\n".join([

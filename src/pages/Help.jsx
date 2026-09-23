@@ -361,7 +361,9 @@ function ImportHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Transaction History Imports</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The import page includes several transaction-history importers. These are different from position imports:
-        they record individual BUY, SELL, and DIVIDEND events rather than setting current holdings directly.
+        they record individual BUY, SELL, and DIVIDEND events rather than setting current holdings directly. When
+        present, broker deposits, withdrawals, transfers, interest, fees, taxes, and adjustments are also retained
+        as separate account activity without changing the trade ledger.
       </p>
 
       <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
@@ -400,7 +402,7 @@ function ImportHelp() {
         <li>In E*TRADE, go to <strong>Accounts &gt; Transaction History</strong>, choose all transaction activity types, then download the XLSX or CSV.</li>
         <li>On Broker Import, choose <strong>E*TRADE</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY and SELL transactions, cash dividend payments, capital gain distributions, and DRIP reinvestment buys.</li>
-        <li>Transfers, interest, and cash-only rows are ignored.</li>
+        <li>Transfers, interest, fees, taxes, and other dated cash-only rows are retained separately as account activity when present.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 
@@ -455,7 +457,7 @@ function ImportHelp() {
         <li>In Interactive Brokers, go to <strong>Performance &amp; Reports &gt; Transaction History</strong> and download <strong>CSV</strong>. An Activity Statement CSV is also accepted for trades and dividends.</li>
         <li>On Broker Import, choose <strong>Interactive Brokers</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, option assignments as stock purchases, cash dividends, payment in lieu of dividends, and same-day DRIP reinvestment buys.</li>
-        <li>Interest, withholding tax, fees, withdrawals, FX adjustments, and option contract rows are skipped.</li>
+        <li>Interest, withholding tax, fees, deposits, withdrawals, and transfers are retained separately as account activity when present. Ambiguous adjustments are marked for review; option contract rows remain excluded from the equity ledger.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>
       </ul>
 

@@ -5926,7 +5926,10 @@ def _annotate_multi_account_import(parsed):
         )
         # An empty account block should never be routed by a guess. A positions
         # block could clear holdings; an activity block would simply do nothing.
-        if not account.get(content_field):
+        has_content = bool(account.get(content_field))
+        if content_field == "transactions":
+            has_content = has_content or bool(account.get("account_activity"))
+        if not has_content:
             suggestion = {
                 "reason": "no_transactions" if content_field == "transactions" else "no_holdings"
             }
@@ -6240,6 +6243,7 @@ def _import_transactions_multi(parsed, nav_date=None, account_map=None):
     for account, pid, label in targets:
         single = {
             "transactions": account.get("transactions") or [],
+            "account_activity": account.get("account_activity") or [],
             "summary": dict(account.get("summary") or {}),
             "source_format": source_format,
         }
@@ -6272,6 +6276,10 @@ def _import_transactions_multi(parsed, nav_date=None, account_map=None):
             "inserted_sells": payload.get("inserted_sells", 0),
             "dividends_applied": payload.get("dividends_applied", 0),
             "duplicates_skipped": payload.get("duplicates_skipped", 0),
+            "account_activity_inserted": payload.get("account_activity_inserted", 0),
+            "account_activity_duplicates_skipped": payload.get(
+                "account_activity_duplicates_skipped", 0
+            ),
         })
 
     conn = get_connection()
@@ -6398,9 +6406,11 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
         return parsed
 
     transactions = parsed.get("transactions") or []
+    account_activity = parsed.get("account_activity") or []
     account_labels = {
-        txn.get("_account_label") for txn in transactions
-        if txn.get("_account_label")
+        item.get("_account_label")
+        for item in [*transactions, *account_activity]
+        if item.get("_account_label")
     }
     if len(account_labels) > 1:
         matched_transactions = [
@@ -6411,25 +6421,37 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
                 txn.get("_account_number"),
             )
         ]
-        if not matched_transactions:
+        matched_account_activity = [
+            item for item in account_activity
+            if _shear_group_account_matches_profile(
+                profile_name,
+                item.get("_account_name") or item.get("_account_label"),
+                item.get("_account_number"),
+            )
+        ]
+        if not matched_transactions and not matched_account_activity:
             available = ", ".join(sorted(account_labels))
             raise ValueError(
                 "This Shear Group activity file contains multiple accounts, but none match "
                 f"'{profile_name}'. Available accounts: {available}"
             )
         parsed["transactions"] = matched_transactions
+        parsed["account_activity"] = matched_account_activity
         summary = parsed.setdefault("summary", {})
         summary["buys"] = sum(1 for txn in matched_transactions if txn.get("type") == "BUY")
         summary["sells"] = sum(1 for txn in matched_transactions if txn.get("type") == "SELL")
         summary["dividends"] = sum(1 for txn in matched_transactions if txn.get("type") == "DIVIDEND")
+        summary["account_activity"] = len(matched_account_activity)
         summary["account_count"] = len({
-            txn.get("_account_label") for txn in matched_transactions
-            if txn.get("_account_label")
+            item.get("_account_label")
+            for item in [*matched_transactions, *matched_account_activity]
+            if item.get("_account_label")
         })
         parsed["target_profile_name"] = profile_name
         parsed["account_match"] = {"matched": True, "reason": "shear_group_account_filter"}
 
     _strip_shear_group_account_fields(parsed.get("transactions"))
+    _strip_shear_group_account_fields(parsed.get("account_activity"))
     return parsed
 
 
@@ -7745,6 +7767,10 @@ def _delete_profile_ticker_records(conn, profile_id, ticker, include_transaction
             "DELETE FROM transactions WHERE ticker = ? AND profile_id = ?",
             (ticker, profile_id),
         )
+        conn.execute(
+            "DELETE FROM account_activity WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
 
 
 class _TickerRenameConflict(ValueError):
@@ -7759,6 +7785,7 @@ _HOLDING_TICKER_RENAME_TABLES = (
     ("income_tracking", "ticker"),
     # Position history.
     ("transactions", "ticker"),
+    ("account_activity", "ticker"),
     ("dividend_payments", "ticker"),
     ("dividend_schedule_history", "ticker"),
     # Portfolio configuration tied to the position.
@@ -7781,6 +7808,7 @@ _HOLDING_TICKER_RENAME_TABLES = (
 _HOLDING_TICKER_RENAME_MULTIROW_TABLES = {
     "income_tracking",
     "transactions",
+    "account_activity",
     "tax_loss_plan",
 }
 
@@ -7966,7 +7994,7 @@ _PROFILE_RESET_TABLES = (
     # Current positions and their derived mirrors.
     "all_account_info", "holdings", "dividends", "income_tracking",
     # Position history.
-    "transactions", "dividend_payments", "dividend_schedule_history", "option_trades",
+    "transactions", "account_activity", "dividend_payments", "dividend_schedule_history", "option_trades",
     # Payout tracking rebuilt from positions.
     "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
     # Per-holding configuration pointing at tickers the reset removes.
@@ -7982,7 +8010,7 @@ _PROFILE_CLEAR_TABLES = (
     # Current positions and their derived mirrors.
     "all_account_info", "holdings", "dividends", "income_tracking",
     # The ledger a Holdings + Transactions import replays.
-    "transactions", "dividend_payments", "dividend_schedule_history",
+    "transactions", "account_activity", "dividend_payments", "dividend_schedule_history",
     # Payout tracking rebuilt from positions.
     "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
     # Per-holding configuration pointing at tickers Clear removes.
@@ -10381,9 +10409,122 @@ def _roll_forward_interactive_brokers_snapshot(conn, profile_id):
     }
 
 
+def _account_activity_number(value, digits=8):
+    """Normalize optional numeric activity fields for stable deduplication."""
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(number, digits)
+
+
+# Only what the broker reported identifies a row. The derived classification
+# (type, direction, treatment) stays out so an improved classifier cannot turn
+# a re-import into a second copy of every deposit; the wording (raw_type,
+# description) stays out so one withdrawal read from both an IB Transaction
+# History and an Activity Statement remains a single external flow.
+_ACCOUNT_ACTIVITY_IDENTITY_KEYS = (
+    "profile_id", "date", "amount", "currency", "ticker", "quantity",
+)
+
+
+def _account_activity_values(profile_id, row):
+    """Normalize one parsed account activity row into its stored columns."""
+    amount = _account_activity_number(row.get("amount"), 2)
+    base_amount = _account_activity_number(row.get("base_amount"), 2)
+    currency = str(row.get("currency") or "USD").strip().upper()
+    if base_amount is None and currency == "USD":
+        base_amount = amount
+    return {
+        "profile_id": int(profile_id),
+        "date": str(row.get("date") or "").strip(),
+        "activity_type": str(row.get("activity_type") or "OTHER").strip().upper(),
+        "direction": str(row.get("direction") or "UNKNOWN").strip().upper(),
+        "performance_treatment": str(
+            row.get("performance_treatment") or "REVIEW"
+        ).strip().upper(),
+        "amount": amount,
+        "base_amount": base_amount,
+        "currency": currency,
+        "ticker": str(row.get("ticker") or "").strip().upper() or None,
+        "quantity": _account_activity_number(row.get("quantity")),
+        "price_per_share": _account_activity_number(row.get("price_per_share")),
+        "fees": abs(_account_activity_number(row.get("fees"), 2) or 0.0),
+        "raw_type": str(row.get("raw_type") or "").strip(),
+        "description": str(row.get("description") or "").strip(),
+    }
+
+
+def _import_account_activity_rows(conn, profile_id, rows, source_format):
+    """Insert optional account-level broker activity without affecting trades.
+
+    The occurrence suffix preserves legitimate repeated identical rows within a
+    file while making a later import of that same file idempotent.
+    """
+    inserted = 0
+    duplicates = 0
+    occurrences = {}
+    source = str(source_format or "").strip()
+    for raw_row in rows or []:
+        values = _account_activity_values(profile_id, raw_row)
+        if not values["date"]:
+            continue
+        identity_json = json.dumps(
+            {key: values[key] for key in _ACCOUNT_ACTIVITY_IDENTITY_KEYS},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        occurrences[identity_json] = occurrences.get(identity_json, 0) + 1
+        dedupe_hash = hashlib.sha256(
+            f"account_activity:v1:{identity_json}:{occurrences[identity_json]}".encode("utf-8")
+        ).hexdigest()
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO account_activity
+               (profile_id, activity_date, activity_type, direction,
+                performance_treatment, amount, base_amount, currency, ticker,
+                quantity, price_per_share, fees, raw_type, description,
+                source_format, dedupe_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                values["profile_id"], values["date"], values["activity_type"],
+                values["direction"], values["performance_treatment"],
+                values["amount"], values["base_amount"], values["currency"],
+                values["ticker"], values["quantity"], values["price_per_share"],
+                values["fees"], values["raw_type"], values["description"],
+                source, dedupe_hash,
+            ),
+        )
+        if cursor.rowcount:
+            inserted += 1
+            continue
+        duplicates += 1
+        # Re-reading the very same broker row (same wording) refreshes its
+        # classification, so rows imported before a classifier fix pick it
+        # up. A different row that merely shares date and amount is left alone.
+        conn.execute(
+            """UPDATE account_activity
+               SET activity_type = ?, direction = ?, performance_treatment = ?,
+                   base_amount = ?, price_per_share = ?, fees = ?
+               WHERE profile_id = ? AND dedupe_hash = ?
+                 AND raw_type = ? AND description = ?""",
+            (
+                values["activity_type"], values["direction"],
+                values["performance_treatment"], values["base_amount"],
+                values["price_per_share"], values["fees"],
+                values["profile_id"], dedupe_hash,
+                values["raw_type"], values["description"],
+            ),
+        )
+    return inserted, duplicates
+
+
 @app.route("/api/import/transactions", methods=["POST"])
 def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date=None):
-    """Import transaction history from a CSV into the transactions + dividend_payments tables."""
+    """Import trades, dividends, and optional account-level broker activity."""
     if _parsed is not None:
         profile_id = int(_profile_id)
         nav_date = _nav_date
@@ -10528,6 +10669,8 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
     inserted_sells = 0
     dividends_applied = 0
     duplicates_skipped = 0
+    account_activity_inserted = 0
+    account_activity_duplicates = 0
     tickers_with_txns = set()
     tickers_seen_txns = set()
     tickers_with_divs = set()
@@ -10719,6 +10862,14 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                 inserted_sells += 1
             tickers_with_txns.add(ticker)
 
+        account_activity_inserted, account_activity_duplicates = (
+            _import_account_activity_rows(
+                conn,
+                profile_id,
+                parsed.get("account_activity") or [],
+                parsed.get("source_format") or fmt,
+            )
+        )
         conn.commit()
 
         if preserve_positions and fmt == "interactive_brokers_transactions":
@@ -10795,13 +10946,17 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         conn.close()
 
     # Build a clear, plain-English summary of what happened.
-    total_new = inserted_buys + inserted_sells + dividends_applied
+    total_new = (
+        inserted_buys + inserted_sells + dividends_applied
+        + account_activity_inserted
+    )
+    total_duplicates = duplicates_skipped + account_activity_duplicates
     parts = []
-    if total_new == 0 and duplicates_skipped > 0:
+    if total_new == 0 and total_duplicates > 0:
         parts.append(
-            f"Nothing new to import — all {duplicates_skipped} transaction"
-            f"{'s' if duplicates_skipped != 1 else ''} in this file "
-            f"{'are' if duplicates_skipped != 1 else 'is'} already in your records, "
+            f"Nothing new to import — all {total_duplicates} record"
+            f"{'s' if total_duplicates != 1 else ''} in this file "
+            f"{'are' if total_duplicates != 1 else 'is'} already in your records, "
             f"so nothing was added. (This is normal when re-importing a file you've "
             f"imported before.)"
         )
@@ -10811,11 +10966,17 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             f"{inserted_sells} sell{'s' if inserted_sells != 1 else ''}, and "
             f"{dividends_applied} dividend{'s' if dividends_applied != 1 else ''}."
         )
-        if duplicates_skipped:
+        if account_activity_inserted:
             parts.append(
-                f"{duplicates_skipped} transaction"
-                f"{'s' if duplicates_skipped != 1 else ''} already in your records "
-                f"{'were' if duplicates_skipped != 1 else 'was'} skipped."
+                f"Captured {account_activity_inserted} account activity "
+                f"record{'s' if account_activity_inserted != 1 else ''} for "
+                "whole-account performance calculations."
+            )
+        if total_duplicates:
+            parts.append(
+                f"{total_duplicates} record"
+                f"{'s' if total_duplicates != 1 else ''} already in your records "
+                f"{'were' if total_duplicates != 1 else 'was'} skipped."
             )
 
     if preserve_positions:
@@ -10851,6 +11012,8 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         "inserted_sells": inserted_sells,
         "dividends_applied": dividends_applied,
         "duplicates_skipped": duplicates_skipped,
+        "account_activity_inserted": account_activity_inserted,
+        "account_activity_duplicates_skipped": account_activity_duplicates,
         "original_basis_updated": original_basis_updated,
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,

@@ -1205,6 +1205,40 @@ def ensure_tables_exist(conn=None):
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP
         )
     """)
+
+    # Account-level broker activity that is not an equity BUY/SELL or a
+    # security distribution.  Broker exports often include deposits,
+    # withdrawals, security transfers, interest, standalone fees, taxes, and
+    # adjustments in the same file as trades.  Keeping those rows separately
+    # preserves the cash-flow evidence needed for whole-account performance
+    # without changing the existing transaction replay contract.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS account_activity (
+            id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id            INTEGER NOT NULL DEFAULT 1,
+            activity_date         TEXT NOT NULL,
+            activity_type         TEXT NOT NULL,
+            direction             TEXT NOT NULL DEFAULT 'UNKNOWN',
+            performance_treatment TEXT NOT NULL DEFAULT 'REVIEW',
+            amount                REAL,
+            base_amount           REAL,
+            currency              TEXT,
+            ticker                TEXT,
+            quantity              REAL,
+            price_per_share       REAL,
+            fees                  REAL NOT NULL DEFAULT 0,
+            raw_type              TEXT,
+            description           TEXT,
+            source_format         TEXT,
+            dedupe_hash           TEXT NOT NULL,
+            created_at            TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (profile_id, dedupe_hash)
+        )
+    """)
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_account_activity_profile_date
+        ON account_activity (profile_id, activity_date, id)
+    """)
     # Migration: add transaction_type and realized_gain if missing
     _txn_cols = {r[1] for r in cur.execute("PRAGMA table_info(transactions)").fetchall()}
     if "transaction_type" not in _txn_cols:

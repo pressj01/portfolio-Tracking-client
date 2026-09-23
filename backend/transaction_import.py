@@ -23,6 +23,11 @@ Normalised transaction dict keys:
     fees            float
     dividend_amount float | None  (only for DIVIDEND)
     notes           str
+
+Parsers may also return an optional ``account_activity`` list.  Those rows are
+account-level events that the equity ledger cannot represent (deposits,
+withdrawals, transfers, standalone fees/taxes/interest, and adjustments).
+Their absence is valid and leaves the legacy import path unchanged.
 """
 
 import csv
@@ -34,6 +39,277 @@ from snowball_assign import parse_snowball_category_label
 
 TICKER_RE = re.compile(r"^[A-Z][A-Z0-9.\-/]{0,10}$")
 ADJUSTMENT_NOTE = "Automatically generated transaction to adjust"
+
+
+def _activity_words(value):
+    """Lower-case alphanumeric words of ``value``, space-padded for matching."""
+    words = re.sub(r"[^a-z0-9]+", " ", str(value or "").casefold()).strip()
+    return f" {words} " if words else ""
+
+
+def _activity_marker_re(*markers):
+    # Whole words only: substring matching read "Atmos Energy" as an ATM
+    # withdrawal and "American Depositary Shares" as a deposit. A short
+    # inflection suffix still lets "fee" match "fees" and "journal" "journaled".
+    alternatives = "|".join(re.escape(marker) for marker in markers)
+    return re.compile(rf"(?<![a-z0-9])(?:{alternatives})(?:s|es|ed|ing)?(?![a-z0-9])")
+
+
+# Terse broker action codes (Robinhood's Trans Code) spelled out so the
+# marker rules below can read them.
+_ACTIVITY_CODE_ALIASES = {
+    "bto": "buy to open", "sto": "sell to open",
+    "btc": "buy to close", "stc": "sell to close",
+    "oexp": "expired", "oasgn": "assigned", "oexcs": "exchange or exercise",
+    "int": "interest", "mint": "margin interest", "slip": "stock lending",
+    "dtax": "dividend tax withheld", "gold": "subscription fee",
+    "rtp": "instant bank transfer", "ach": "ach transfer", "xent cc": "transfer",
+    "acati": "acat transfer in", "acato": "acat transfer out",
+}
+
+_ACTIVITY_OPTION_RE = _activity_marker_re(
+    "buy to open", "sell to open", "buy to close", "sell to close",
+    "expired", "assigned", "exchange or exercise",
+)
+_ACTIVITY_TAX_RE = _activity_marker_re("tax", "withholding", "withheld", "whld", "w h")
+# Income tax withheld for the owner (IRA distributions, backup withholding)
+# leaves the account for the IRS on the owner's behalf: an external
+# withdrawal, not a portfolio expense like foreign tax on a dividend.
+_ACTIVITY_PERSONAL_TAX_RE = _activity_marker_re(
+    "ira", "fed", "federal", "state", "income tax", "backup",
+)
+_ACTIVITY_FOREIGN_TAX_RE = _activity_marker_re("foreign", "frgn", "nra")
+_ACTIVITY_FEE_RE = _activity_marker_re(
+    "fee", "commission", "service charge", "maintenance charge",
+)
+_ACTIVITY_INTEREST_RE = _activity_marker_re("interest", "margin rate")
+_ACTIVITY_RETIREMENT_WITHDRAWAL_RE = _activity_marker_re(
+    "normal distribution", "early distribution", "premature distribution",
+    "ira distribution", "roth distribution", "retirement distribution",
+    "required minimum distribution", "rmd",
+)
+_ACTIVITY_INCOME_RE = _activity_marker_re(
+    "dividend", "div", "distribution", "capital gain", "cap gain",
+    "return of capital", "stock lending", "securities lending", "syep",
+)
+_ACTIVITY_DEPOSIT_WITHDRAWAL_RE = _activity_marker_re(
+    "deposit", "withdrawal", "contribution", "contr", "disbursement", "disbursed",
+    "funds received", "direct credit", "check received", "check paid",
+    "bill pay", "visa debit", "debit card", "atm",
+)
+_ACTIVITY_TRANSFER_RE = _activity_marker_re(
+    "transfer", "transferred", "journal", "moneylink", "wire", "ach", "acat",
+)
+_ACTIVITY_CORPORATE_RE = _activity_marker_re(
+    "split", "merger", "spin off", "spinoff", "tender", "reorganization",
+    "name change", "corporate action", "exchange received", "exchange delivered",
+    "cash in lieu", "in lieu of frx", "in lieu of fractional",
+)
+_ACTIVITY_ADJUSTMENT_RE = _activity_marker_re("adjustment", "adjust", "correction")
+# Money moving between sub-ledgers of the same account (E*Trade's paired
+# "TRNSFR MARGIN TO CASH" rows, Fidelity's core-account sweep) never crosses
+# the account boundary, whatever the action column calls it.
+_ACTIVITY_INTERNAL_TRANSFER_RE = _activity_marker_re(
+    "cash to margin", "margin to cash", "cash to short", "short to cash",
+    "margin to short", "short to margin", "core account",
+)
+_ACTIVITY_DIRECTION_IN_RE = _activity_marker_re(
+    "transfer in", "transferred in", "incoming", "received", "receive",
+    "receipt", "delivered in",
+)
+_ACTIVITY_DIRECTION_OUT_RE = _activity_marker_re(
+    "transfer out", "transferred out", "outgoing", "delivered out", "out",
+)
+
+# Kinds that move money or securities across the account boundary.
+_ACTIVITY_FLOW_KINDS = {"FLOW", "PERSONAL_TAX"}
+
+
+def _activity_kind(text, *, has_ticker, amount):
+    """Return the rule family one normalized text matches, or ``None``.
+
+    Order matters: a fee or tax row often names the transfer it rode on
+    ("ACAT OUT FEE"), and an IRA "normal distribution" is a withdrawal even
+    though it says "distribution".
+    """
+    if not text:
+        return None
+    if _ACTIVITY_OPTION_RE.search(text):
+        return "OPTION_TRADE"
+    if _ACTIVITY_TAX_RE.search(text):
+        return "TAX"
+    if _ACTIVITY_FEE_RE.search(text):
+        return "FEE"
+    if _ACTIVITY_INTEREST_RE.search(text):
+        return "INTEREST"
+    if _ACTIVITY_RETIREMENT_WITHDRAWAL_RE.search(text):
+        return "FLOW"
+    if _ACTIVITY_INCOME_RE.search(text):
+        # A distribution paid *out* with no security attached is money
+        # leaving the account, not income arriving.
+        if not has_ticker and (amount or 0) < 0 and " distribution" in text:
+            return "FLOW"
+        return "DISTRIBUTION"
+    if _ACTIVITY_DEPOSIT_WITHDRAWAL_RE.search(text) or _ACTIVITY_TRANSFER_RE.search(text):
+        return "FLOW"
+    if _ACTIVITY_CORPORATE_RE.search(text):
+        return "CORPORATE_ACTION"
+    if _ACTIVITY_ADJUSTMENT_RE.search(text):
+        return "ADJUSTMENT"
+    return None
+
+
+def _classify_account_activity(
+    raw_type, description="", *, ticker=None, amount=None, quantity=None,
+):
+    """Return ``(activity_type, direction, performance_treatment)``.
+
+    The broker's action field is read first; the free-text description is a
+    fallback only for rows without a security, because on security rows it
+    is just the fund name ("... QUALITY DIVIDEND GROWTH", "... TAX EXEMPT").
+
+    Direction follows the numbers, not the words: a signed cash amount says
+    which way money moved, and a share quantity (or an explicit "in"/"out")
+    says which way securities moved. EXTERNAL_FLOW rows are what a
+    whole-account return treats as contributions/withdrawals; REVIEW rows
+    are genuinely ambiguous and must not be used without a decision.
+    """
+    code = _activity_words(raw_type).strip()
+    raw_words = _activity_words(_ACTIVITY_CODE_ALIASES.get(code, raw_type))
+    description_words = "" if ticker else _activity_words(description)
+    full_words = f"{raw_words} {description_words}"
+    has_ticker = bool(ticker)
+    if _ACTIVITY_INTERNAL_TRANSFER_RE.search(full_words):
+        kind = "INTERNAL_TRANSFER"
+    else:
+        kind = (
+            _activity_kind(raw_words, has_ticker=has_ticker, amount=amount)
+            or _activity_kind(description_words, has_ticker=has_ticker, amount=amount)
+        )
+    if (
+        kind == "TAX"
+        and not has_ticker
+        and _ACTIVITY_PERSONAL_TAX_RE.search(full_words)
+        and not _ACTIVITY_FOREIGN_TAX_RE.search(full_words)
+    ):
+        # "Tax Withholding" alone is ambiguous; "FED INC TAX WHLD IRA" in the
+        # description says it is the owner's income tax, not the fund's.
+        kind = "PERSONAL_TAX"
+
+    cash_direction = None
+    if amount:
+        cash_direction = "IN" if amount > 0 else "OUT"
+
+    if kind in _ACTIVITY_FLOW_KINDS:
+        if kind == "PERSONAL_TAX":
+            return "TAX_WITHHOLDING", cash_direction or "OUT", "EXTERNAL_FLOW"
+        if quantity:
+            if _ACTIVITY_DIRECTION_IN_RE.search(raw_words):
+                direction = "IN"
+            elif _ACTIVITY_DIRECTION_OUT_RE.search(raw_words):
+                direction = "OUT"
+            elif _ACTIVITY_DIRECTION_IN_RE.search(full_words):
+                direction = "IN"
+            elif _ACTIVITY_DIRECTION_OUT_RE.search(full_words):
+                direction = "OUT"
+            else:
+                direction = "IN" if quantity > 0 else "OUT"
+            if not has_ticker:
+                # Shares moved, but with no ticker they cannot be valued.
+                return "SECURITY_TRANSFER", direction, "REVIEW"
+            return f"SECURITY_TRANSFER_{direction}", direction, "EXTERNAL_FLOW"
+        if cash_direction is None:
+            return "TRANSFER", "UNKNOWN", "REVIEW"
+        if (
+            _ACTIVITY_DEPOSIT_WITHDRAWAL_RE.search(full_words)
+            or _ACTIVITY_RETIREMENT_WITHDRAWAL_RE.search(full_words)
+            or " distribution" in full_words
+        ):
+            activity_type = "DEPOSIT" if cash_direction == "IN" else "WITHDRAWAL"
+        else:
+            activity_type = f"TRANSFER_{cash_direction}"
+        return activity_type, cash_direction, "EXTERNAL_FLOW"
+
+    if kind in {"TAX", "FEE"}:
+        return kind, cash_direction or "OUT", "EXPENSE"
+    if kind == "INTEREST":
+        # Margin/debit interest arrives as a negative amount.
+        if cash_direction == "OUT":
+            return "INTEREST", "OUT", "EXPENSE"
+        return "INTEREST", "IN", "INCOME"
+    if kind == "DISTRIBUTION":
+        return "DISTRIBUTION", cash_direction or "IN", "INCOME"
+    if kind in {"OPTION_TRADE", "CORPORATE_ACTION", "INTERNAL_TRANSFER"}:
+        return kind, cash_direction or "NONE", "NEUTRAL"
+    if kind == "ADJUSTMENT":
+        return "ADJUSTMENT", cash_direction or "UNKNOWN", "REVIEW"
+    return "OTHER", cash_direction or "UNKNOWN", "REVIEW"
+
+
+def _account_activity_row(
+    raw_type,
+    date_str,
+    *,
+    amount=None,
+    base_amount=None,
+    currency="USD",
+    ticker=None,
+    quantity=None,
+    price_per_share=None,
+    fees=0.0,
+    description="",
+):
+    """Return a normalized optional account-activity row, or ``None``.
+
+    A dated amount is enough to retain an otherwise unknown broker action.
+    Security/corporate actions may instead carry a quantity that can be valued
+    later from market history.
+    """
+    if not date_str:
+        return None
+    numeric_amount = _safe_float(amount)
+    numeric_base_amount = _safe_float(base_amount)
+    numeric_quantity = _safe_float(quantity)
+    numeric_price = _safe_float(price_per_share)
+    numeric_fees = abs(_safe_float(fees) or 0.0)
+    # Brokers write "-" or leave the column blank on cash rows; only a real
+    # ISO code names a currency.
+    normalized_currency = str(currency or "").strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", normalized_currency):
+        normalized_currency = "USD"
+    if numeric_base_amount is None and normalized_currency == "USD":
+        numeric_base_amount = numeric_amount
+    has_value = any(
+        value is not None and value != 0
+        for value in (numeric_amount, numeric_base_amount, numeric_quantity, numeric_fees)
+    )
+    if not has_value:
+        return None
+    normalized_ticker = str(ticker or "").strip().upper() or None
+    if normalized_ticker and not TICKER_RE.match(normalized_ticker):
+        normalized_ticker = None
+    activity_type, direction, treatment = _classify_account_activity(
+        raw_type,
+        description,
+        ticker=normalized_ticker,
+        amount=numeric_amount,
+        quantity=numeric_quantity,
+    )
+    return {
+        "date": date_str,
+        "activity_type": activity_type,
+        "direction": direction,
+        "performance_treatment": treatment,
+        "amount": numeric_amount,
+        "base_amount": numeric_base_amount,
+        "currency": normalized_currency,
+        "ticker": normalized_ticker,
+        "quantity": numeric_quantity,
+        "price_per_share": numeric_price,
+        "fees": numeric_fees,
+        "raw_type": str(raw_type or "").strip(),
+        "description": clean_security_description(description),
+    }
 
 
 def clean_security_description(value):
@@ -1651,6 +1927,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         )
 
     kept = []
+    account_activity = []
     filtered_count = 0
 
     for row in rows[header_idx + 1:]:
@@ -1659,9 +1936,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         record = _fidelity_row_record(header, row)
         action = (str(record.get("Action") or "")).strip()
         symbol = (str(record.get("Symbol") or "")).strip().upper()
-        if not symbol or not TICKER_RE.match(symbol):
-            filtered_count += 1
-            continue
+        valid_symbol = bool(symbol and TICKER_RE.match(symbol))
 
         date_str = _parse_date_str(record.get("Run Date"))
         if not date_str:
@@ -1679,7 +1954,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         # Share buys from a reinvested distribution — handled before the
         # cash-distribution check so "… CAP GAIN REINVESTMENT" stays a BUY.
         if "REINVESTMENT" in action_upper or "REINVEST" in action_upper:
-            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
+            if not valid_symbol or qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1695,7 +1970,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if _fidelity_is_cash_distribution(action_upper):
-            if amount_val is None or amount_val == 0:
+            if not valid_symbol or amount_val is None or amount_val == 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1713,7 +1988,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if "YOU BOUGHT" in action_upper or action_upper in {"BUY", "BOUGHT"}:
-            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
+            if not valid_symbol or qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1729,7 +2004,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             continue
 
         if "YOU SOLD" in action_upper or action_upper in {"SELL", "SOLD"}:
-            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
+            if not valid_symbol or qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1744,7 +2019,20 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             })
             continue
 
-        filtered_count += 1
+        activity_row = _account_activity_row(
+            action,
+            date_str,
+            amount=amount_val,
+            ticker=symbol if valid_symbol else None,
+            quantity=qty_val,
+            price_per_share=price_val,
+            fees=total_fees,
+            description=record.get("Description"),
+        )
+        if activity_row is not None:
+            account_activity.append(activity_row)
+        else:
+            filtered_count += 1
 
     drip_count = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or ""))
     buys = sum(1 for t in kept if t["type"] == "BUY")
@@ -1753,10 +2041,13 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
 
     return {
         "transactions": kept,
+        "account_activity": account_activity,
+        "source_format": "fidelity_transactions",
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,
@@ -1849,6 +2140,7 @@ def parse_schwab_transactions_csv(file_path, filename):
         )
 
     kept = []
+    account_activity = []
     filtered_count = 0
 
     for row in reader:
@@ -1861,11 +2153,6 @@ def parse_schwab_transactions_csv(file_path, filename):
         raw_fees = row.get("Fees & Commissions") or row.get("Fees & Comm")
         raw_amount = row.get("Amount")
 
-        # Skip rows without a valid ticker
-        if not symbol or not TICKER_RE.match(symbol):
-            filtered_count += 1
-            continue
-
         date_str = _schwab_parse_date_field(raw_date)
         if not date_str:
             filtered_count += 1
@@ -1875,10 +2162,11 @@ def parse_schwab_transactions_csv(file_path, filename):
         qty = _safe_float(raw_qty)
         price = _safe_float(raw_price)
         fees = _safe_float(raw_fees) or 0.0
+        valid_symbol = bool(symbol and TICKER_RE.match(symbol))
 
         # â”€â”€ Dividend / distribution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DIVIDEND_ACTIONS or action_key in {"dividend", "dividends", "cash dividend"}:
-            if amount is None or amount == 0:
+            if not valid_symbol or amount is None or amount == 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1895,7 +2183,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ DRIP reinvestment shares â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_DRIP_ACTIONS or "reinvest" in action_key and "adj" not in action_key:
-            if qty is None or qty == 0 or price is None or price <= 0:
+            if not valid_symbol or qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1912,7 +2200,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Reinvestment adjustment (share correction) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action in _SCHWAB_REINVEST_ADJ_ACTIONS or "reinvestment adj" in action_key:
-            if qty is None or qty == 0:
+            if not valid_symbol or qty is None or qty == 0:
                 filtered_count += 1
                 continue
             # Positive qty = shares added back, negative = shares removed
@@ -1931,7 +2219,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Buy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"buy", "bought", "you bought"}:
-            if qty is None or qty == 0 or price is None or price <= 0:
+            if not valid_symbol or qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1948,7 +2236,7 @@ def parse_schwab_transactions_csv(file_path, filename):
 
         # â”€â”€ Sell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if action_key in {"sell", "sold", "you sold"}:
-            if qty is None or qty == 0 or price is None or price <= 0:
+            if not valid_symbol or qty is None or qty == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -1961,6 +2249,23 @@ def parse_schwab_transactions_csv(file_path, filename):
                 "dividend_amount": None,
                 "notes": "",
             })
+            continue
+
+        # Preserve dated account-level activity that the equity transaction
+        # ledger cannot represent. Unknown rows with no usable value still
+        # fall through to the legacy filtered count below.
+        activity_row = _account_activity_row(
+            action,
+            date_str,
+            amount=amount,
+            ticker=symbol if valid_symbol else None,
+            quantity=qty,
+            price_per_share=price,
+            fees=fees,
+            description=row.get("Description"),
+        )
+        if activity_row is not None:
+            account_activity.append(activity_row)
             continue
 
         # â”€â”€ Unknown action â€” skip â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -1978,10 +2283,13 @@ def parse_schwab_transactions_csv(file_path, filename):
 
     return {
         "transactions": kept,
+        "account_activity": account_activity,
+        "source_format": "schwab_transactions",
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,
@@ -2248,16 +2556,13 @@ def parse_robinhood_transactions_csv(file_path, filename):
         raise ValueError("The file is empty or has no data rows.")
 
     kept = []
+    account_activity = []
     filtered_count = 0
 
     for row in rows:
         code = (row.get("Trans Code") or "").strip().upper()
         ticker = (row.get("Instrument") or "").strip().upper()
         description = row.get("Description") or ""
-
-        if not ticker or not TICKER_RE.match(ticker):
-            filtered_count += 1
-            continue
 
         date_str = _parse_date_str(row.get("Activity Date"))
         if not date_str:
@@ -2268,9 +2573,10 @@ def parse_robinhood_transactions_csv(file_path, filename):
         price = _parse_money(row.get("Price"))
         amount = _parse_money(row.get("Amount"))
         note = _robinhood_clean_description(description) or code
+        valid_ticker = bool(ticker and TICKER_RE.match(ticker))
 
         if code == "BUY":
-            if qty is None or qty <= 0:
+            if not valid_ticker or qty is None or qty <= 0:
                 filtered_count += 1
                 continue
             if price is None and amount is not None:
@@ -2289,7 +2595,7 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 "notes": note,
             })
         elif code == "SELL":
-            if qty is None or qty <= 0:
+            if not valid_ticker or qty is None or qty <= 0:
                 filtered_count += 1
                 continue
             if price is None and amount is not None:
@@ -2308,7 +2614,7 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 "notes": note,
             })
         elif code in _ROBINHOOD_DIVIDEND_CODES:
-            if amount is None:
+            if not valid_ticker or amount is None:
                 filtered_count += 1
                 continue
             if str(description).lstrip().upper().startswith("REVERT:"):
@@ -2324,7 +2630,7 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 "notes": note,
             })
         elif code == "ACATI":
-            if qty is None or qty <= 0:
+            if not valid_ticker or qty is None or qty <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2337,8 +2643,17 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 "dividend_amount": None,
                 "notes": "[Transfer in] ACAT",
             })
+            account_activity.append(_account_activity_row(
+                code,
+                date_str,
+                amount=amount,
+                ticker=ticker,
+                quantity=qty,
+                price_per_share=price,
+                description=description,
+            ))
         elif code == "ACATO":
-            if qty is None or qty <= 0:
+            if not valid_ticker or qty is None or qty <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2351,8 +2666,29 @@ def parse_robinhood_transactions_csv(file_path, filename):
                 "dividend_amount": None,
                 "notes": "[Transfer out] ACAT",
             })
+            account_activity.append(_account_activity_row(
+                code,
+                date_str,
+                amount=amount,
+                ticker=ticker,
+                quantity=qty,
+                price_per_share=price,
+                description=description,
+            ))
         else:
-            filtered_count += 1
+            activity_row = _account_activity_row(
+                code,
+                date_str,
+                amount=amount,
+                ticker=ticker if valid_ticker else None,
+                quantity=qty,
+                price_per_share=price,
+                description=description,
+            )
+            if activity_row is not None:
+                account_activity.append(activity_row)
+            else:
+                filtered_count += 1
 
     buys = sum(1 for t in kept if t["type"] == "BUY")
     sells = sum(1 for t in kept if t["type"] == "SELL")
@@ -2360,10 +2696,13 @@ def parse_robinhood_transactions_csv(file_path, filename):
 
     return {
         "transactions": kept,
+        "account_activity": account_activity,
+        "source_format": "robinhood_transactions",
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": 0,
             "splits_applied": 0,
@@ -2661,6 +3000,7 @@ def parse_shear_group_activity(file_path, filename):
         )
 
     kept = []
+    account_activity = []
     filtered_count = 0
     account_names = set()
     dividend_actions = {"cash dividend", "interest", "long term cap gain", "short term cap gain"}
@@ -2674,9 +3014,7 @@ def parse_shear_group_activity(file_path, filename):
         activity = str(row.get("Activity") or "").strip()
         activity_key = activity.lower()
         ticker = str(row.get("Symbol") or "").strip().upper()
-        if not ticker or not TICKER_RE.match(ticker):
-            filtered_count += 1
-            continue
+        valid_ticker = bool(ticker and TICKER_RE.match(ticker))
 
         date_str = _parse_date_str(row.get("Date"))
         if not date_str:
@@ -2688,7 +3026,7 @@ def parse_shear_group_activity(file_path, filename):
         price = _shear_group_price_from_amount(row.get("Unit Price"), row.get("Value"), row.get("Quantity"))
 
         if activity_key == "buy":
-            if quantity is None or quantity == 0 or price is None or price <= 0:
+            if not valid_ticker or quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2705,7 +3043,7 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         elif activity_key == "sell":
-            if quantity is None or quantity == 0 or price is None or price <= 0:
+            if not valid_ticker or quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2722,7 +3060,7 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         elif activity_key in dividend_actions:
-            if amount is None:
+            if not valid_ticker or amount is None:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2739,7 +3077,7 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         elif activity_key in drip_actions:
-            if quantity is None or quantity == 0 or price is None or price <= 0:
+            if not valid_ticker or quantity is None or quantity == 0 or price is None or price <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2756,7 +3094,24 @@ def parse_shear_group_activity(file_path, filename):
                 "_account_number": account_number,
             })
         else:
-            filtered_count += 1
+            activity_row = _account_activity_row(
+                activity,
+                date_str,
+                amount=amount,
+                ticker=ticker if valid_ticker else None,
+                quantity=quantity,
+                price_per_share=price,
+                description=row.get("Description"),
+            )
+            if activity_row is not None:
+                activity_row.update({
+                    "_account_label": account_label,
+                    "_account_name": account_name,
+                    "_account_number": account_number,
+                })
+                account_activity.append(activity_row)
+            else:
+                filtered_count += 1
 
     buys = sum(1 for t in kept if t["type"] == "BUY")
     sells = sum(1 for t in kept if t["type"] == "SELL")
@@ -2765,10 +3120,12 @@ def parse_shear_group_activity(file_path, filename):
 
     result = {
         "transactions": kept,
+        "account_activity": account_activity,
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,
@@ -2796,6 +3153,7 @@ def parse_shear_group_all_accounts_activity(file_path, filename):
             "account_name": safe_name,
             "account_number": suffix,
             "transactions": [],
+            "account_activity": [],
         })
         clean_transaction = dict(transaction)
         clean_transaction.pop("_account_label", None)
@@ -2803,9 +3161,30 @@ def parse_shear_group_all_accounts_activity(file_path, filename):
         clean_transaction.pop("_account_number", None)
         account["transactions"].append(clean_transaction)
 
+    for activity_row in parsed.get("account_activity") or []:
+        safe_label, safe_name, suffix = _shear_group_multi_account_identity(
+            activity_row.get("_account_name"),
+            activity_row.get("_account_number"),
+            activity_row.get("_account_label"),
+        )
+        key = f"num:{suffix}" if suffix else f"label:{safe_label.casefold()}"
+        account = grouped.setdefault(key, {
+            "account_label": safe_label,
+            "account_name": safe_name,
+            "account_number": suffix,
+            "transactions": [],
+            "account_activity": [],
+        })
+        clean_activity = dict(activity_row)
+        clean_activity.pop("_account_label", None)
+        clean_activity.pop("_account_name", None)
+        clean_activity.pop("_account_number", None)
+        account["account_activity"].append(clean_activity)
+
     accounts = []
     for account in grouped.values():
         transactions = account["transactions"]
+        account_activity = account["account_activity"]
         buys = sum(1 for txn in transactions if txn.get("type") == "BUY")
         sells = sum(1 for txn in transactions if txn.get("type") == "SELL")
         dividends = sum(1 for txn in transactions if txn.get("type") == "DIVIDEND")
@@ -2814,6 +3193,7 @@ def parse_shear_group_all_accounts_activity(file_path, filename):
             "buys": buys,
             "sells": sells,
             "dividends": dividends,
+            "account_activity": len(account_activity),
             "drip_detected": sum(
                 1 for txn in transactions
                 if txn.get("type") == "BUY" and "[DRIP]" in (txn.get("notes") or "")
@@ -2826,6 +3206,9 @@ def parse_shear_group_all_accounts_activity(file_path, filename):
     summary.update({
         "accounts": len(accounts),
         "transactions": sum(account["summary"]["transactions"] for account in accounts),
+        "account_activity": sum(
+            account["summary"]["account_activity"] for account in accounts
+        ),
     })
     return {
         "accounts": accounts,
@@ -2910,6 +3293,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         raise ValueError("No transaction rows found in the E*Trade transactions file.")
 
     kept = []
+    account_activity = []
     filtered_count = 0
 
     for row in data_rows:
@@ -2922,10 +3306,6 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         commission = row.get("Commission") or row.get("Commissions") or row.get("Fee") or row.get("Fees")
         description = str(row.get("Description") or "").strip()
 
-        if not symbol or not TICKER_RE.match(symbol):
-            filtered_count += 1
-            continue
-
         date_str = _etrade_parse_date_str(raw_date)
         if not date_str:
             filtered_count += 1
@@ -2935,6 +3315,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         price_val = _safe_float(price)
         amount_val = _safe_float(amount)
         fees = _safe_float(commission) or 0.0
+        valid_symbol = bool(symbol and TICKER_RE.match(symbol))
 
         activity_key = activity.lower()
         activity_lower = activity.lower()
@@ -2951,7 +3332,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
         )
 
         if activity_key in {"bought", "buy", "you bought"}:
-            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
+            if not valid_symbol or qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2965,7 +3346,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "notes": "[DRIP] Dividend Reinvestment" if looks_like_reinvestment or looks_like_dividend else "",
             })
         elif activity_key in {"sold", "sell", "you sold"}:
-            if qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
+            if not valid_symbol or qty_val is None or qty_val == 0 or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2978,10 +3359,8 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "dividend_amount": None,
                 "notes": "",
             })
-        elif amount_val is None:
-            filtered_count += 1
-        elif amount_val < 0 and qty_val is not None and qty_val > 0 and looks_like_dividend:
-            if price_val is None or price_val <= 0:
+        elif amount_val is not None and amount_val < 0 and qty_val is not None and qty_val > 0 and looks_like_dividend:
+            if not valid_symbol or price_val is None or price_val <= 0:
                 filtered_count += 1
                 continue
             kept.append({
@@ -2994,7 +3373,7 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "dividend_amount": None,
                 "notes": "[DRIP] Dividend Reinvestment",
             })
-        elif amount_val != 0 and looks_like_dividend:
+        elif valid_symbol and amount_val is not None and amount_val != 0 and looks_like_dividend:
             kept.append({
                 "type": "DIVIDEND",
                 "ticker": symbol,
@@ -3006,7 +3385,20 @@ def parse_etrade_transactions_xlsx(file_path, filename):
                 "notes": activity or description or "Dividend",
             })
         else:
-            filtered_count += 1
+            activity_row = _account_activity_row(
+                activity,
+                date_str,
+                amount=amount_val,
+                ticker=symbol if valid_symbol else None,
+                quantity=qty_val,
+                price_per_share=price_val,
+                fees=fees,
+                description=description,
+            )
+            if activity_row is not None:
+                account_activity.append(activity_row)
+            else:
+                filtered_count += 1
 
     drip_count = sum(1 for t in kept if t["type"] == "BUY" and "[DRIP]" in (t["notes"] or ""))
     buys = sum(1 for t in kept if t["type"] == "BUY")
@@ -3016,10 +3408,13 @@ def parse_etrade_transactions_xlsx(file_path, filename):
     return {
         "account_name": account_name,
         "transactions": kept,
+        "account_activity": account_activity,
+        "source_format": "etrade_transactions",
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,
@@ -3049,6 +3444,15 @@ _IB_DIVIDEND_TYPES = {
     "payment in lieu of dividends",
     "payment in lieu of dividend",
 }
+_IB_ACCOUNT_ACTIVITY_SECTIONS = (
+    "Deposits & Withdrawals",
+    "Broker Interest Paid and Received",
+    "Interest",
+    "Fees",
+    "Other Fees",
+    "Transaction Fees",
+    "Withholding Tax",
+)
 
 
 def _ib_has_section(rows, section_name):
@@ -3462,7 +3866,14 @@ def _ib_append_dividend(kept, filtered_count, ticker, date_str, amount, notes):
 
 def _ib_parse_transaction_history(rows):
     kept = []
+    account_activity = []
     filtered_count = 0
+    # Gross/Net Amount are stated in the account's base currency: a "CAD Debit
+    # Interest" row already arrives converted. "Price Currency" describes the
+    # instrument and is "-" on every cash row.
+    base_currency = str(
+        _ib_kv_section(rows, "Summary").get("Base Currency") or "USD"
+    ).strip().upper() or "USD"
     for rec in _ib_section_records(rows, "Transaction History"):
         ttype = str(rec.get("Transaction Type") or "").strip()
         ttype_key = ttype.lower()
@@ -3510,13 +3921,30 @@ def _ib_parse_transaction_history(rows):
             )
             continue
 
-        filtered_count += 1
-    return kept, filtered_count
+        amount = net if net is not None else gross
+        activity_row = _account_activity_row(
+            ttype,
+            date_str,
+            amount=amount,
+            base_amount=amount,
+            currency=base_currency,
+            ticker=ticker,
+            quantity=qty,
+            price_per_share=price,
+            fees=fees,
+            description=description,
+        )
+        if activity_row is not None:
+            account_activity.append(activity_row)
+        else:
+            filtered_count += 1
+    return kept, account_activity, filtered_count
 
 
 def _ib_parse_statement_activity(rows):
-    """Read buys, sells, and dividends out of an Activity Statement."""
+    """Read trades, dividends, and account cash activity from a statement."""
     kept = []
+    account_activity = []
     filtered_count = 0
     fx_rates = _ib_fx_rates(rows)
     for rec in _ib_section_records(rows, "Trades"):
@@ -3559,7 +3987,45 @@ def _ib_parse_statement_activity(rows):
             filtered_count = _ib_append_dividend(
                 kept, filtered_count, ticker, date_str, amount, note,
             )
-    return kept, filtered_count
+
+    for section in _IB_ACCOUNT_ACTIVITY_SECTIONS:
+        for rec in _ib_section_records(rows, section):
+            # IB writes its "Total" / "Total in USD" roll-ups as Data rows.
+            lead = str(rec.get("Subtitle") or rec.get("Currency") or "").strip().lower()
+            if lead.startswith("total"):
+                continue
+            description = str(rec.get("Description") or "").strip()
+            date_str = _ib_parse_date(
+                rec.get("Date") or rec.get("Date/Time") or rec.get("Settle Date")
+            )
+            amount = _safe_float(
+                rec.get("Amount")
+                or rec.get("Net Amount")
+                or rec.get("Value")
+            )
+            currency = str(rec.get("Currency") or "USD").strip().upper() or "USD"
+            fx = fx_rates.get(currency)
+            base_amount = amount * fx if amount is not None and fx is not None else None
+            description_ticker = _ib_ticker_from_description(description)
+            ticker = _ib_normalize_ticker(rec.get("Symbol")) or description_ticker
+            # The section is the action. Every "Deposits & Withdrawals" row is
+            # an external flow whatever its description says ("Disbursement
+            # Initiated by ...", "Electronic Fund Transfer"); the sign of the
+            # amount says which way.
+            activity_row = _account_activity_row(
+                section,
+                date_str,
+                amount=amount,
+                base_amount=base_amount,
+                currency=currency,
+                ticker=ticker,
+                description=description,
+            )
+            if activity_row is not None:
+                account_activity.append(activity_row)
+            else:
+                filtered_count += 1
+    return kept, account_activity, filtered_count
 
 
 def parse_interactive_brokers_transactions(file_path, filename):
@@ -3567,20 +4033,25 @@ def parse_interactive_brokers_transactions(file_path, filename):
 
     The dedicated Transaction History CSV is preferred. An Activity Statement
     is accepted too: Trades become BUY/SELL and Dividends / payment-in-lieu
-    become DIVIDEND. Options, interest, fees, withholding, and cash movements
-    are skipped.
+    become DIVIDEND. Interest, fees, withholding, and cash movements are kept
+    in the optional account-activity ledger; unsupported option rows remain
+    excluded from the equity ledger.
     """
     rows = _read_table_rows(file_path, filename)
     if not rows:
         raise ValueError("The file is empty.")
 
     if _ib_has_section(rows, "Transaction History"):
-        kept, filtered_count = _ib_parse_transaction_history(rows)
-    elif _ib_has_section(rows, "Trades") or _ib_has_section(rows, "Dividends"):
-        kept, filtered_count = _ib_parse_statement_activity(rows)
+        kept, account_activity, filtered_count = _ib_parse_transaction_history(rows)
+    elif (
+        _ib_has_section(rows, "Trades")
+        or _ib_has_section(rows, "Dividends")
+        or any(_ib_has_section(rows, section) for section in _IB_ACCOUNT_ACTIVITY_SECTIONS)
+    ):
+        kept, account_activity, filtered_count = _ib_parse_statement_activity(rows)
     else:
         raise ValueError(
-            "Could not find a Transaction History, Trades, or Dividends section. "
+            "Could not find a Transaction History, Trades, Dividends, or account activity section. "
             "In Interactive Brokers, export Transaction History CSV, or import an "
             "Activity Statement CSV with 'Interactive Brokers (Transactions)'."
         )
@@ -3605,10 +4076,12 @@ def parse_interactive_brokers_transactions(file_path, filename):
         "account_name": account_name,
         "account_number": account_number,
         "transactions": kept,
+        "account_activity": account_activity,
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,
