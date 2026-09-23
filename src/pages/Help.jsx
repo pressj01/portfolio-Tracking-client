@@ -268,7 +268,7 @@ function ImportHelp() {
         <li><strong>Interactive Brokers (Transactions) template</strong> — a Transaction History CSV with Date, Transaction Type, Symbol, Quantity, Price, Gross Amount, and Commission.</li>
         <li><strong>Snowball Holdings template</strong> — on the Snowball tab, for a migration-style holdings snapshot when moving from Snowball into the app.</li>
         <li><strong>Generic template</strong> — use this when your source does not match a brokerage template and you want the broadest flexible import format.</li>
-        <li><strong>Generic Transactions template</strong> — use this broker-neutral XLSX for one-row-per-event BUY, SELL, DIVIDEND, and DRIP history.</li>
+        <li><strong>Generic Transactions template</strong> — use this broker-neutral XLSX for one-row-per-event BUY, SELL, DIVIDEND, and DRIP history, plus the DEPOSIT, WITHDRAWAL, and share TRANSFER rows the Dashboard&apos;s Account Alpha needs.</li>
       </ul>
 
       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1.5rem', marginTop: '0.5rem' }}>
@@ -363,7 +363,11 @@ function ImportHelp() {
         The import page includes several transaction-history importers. These are different from position imports:
         they record individual BUY, SELL, and DIVIDEND events rather than setting current holdings directly. When
         present, broker deposits, withdrawals, transfers, interest, fees, taxes, and adjustments are also retained
-        as separate account activity without changing the trade ledger.
+        as separate account activity without changing the trade ledger. That activity is what lets the Dashboard
+        show <strong>Account Alpha</strong>, so export every activity type for the full date range; a file filtered to
+        trades or dividends only cannot supply it. Deposits and withdrawals can also be entered by hand, and a
+        period with no money movements marked complete, under <strong>Deposits &amp; Withdrawals</strong> on the
+        Manage Holdings screen.
       </p>
 
       <div className="alert alert-warning" style={{ marginBottom: '1rem' }}>
@@ -377,9 +381,10 @@ function ImportHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Generic Transactions</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Open the <strong>Generic Transactions</strong> tab, then download the XLSX template and replace its sample rows.</li>
-        <li>Required on every row: <strong>Date</strong>, <strong>Type</strong>, and <strong>Ticker</strong>.</li>
-        <li>BUY, SELL, and DRIP rows also require <strong>Shares</strong> and <strong>Price Per Share</strong>. DIVIDEND rows require <strong>Dividend Amount</strong>.</li>
-        <li>Supported types are BUY, SELL, DIVIDEND, and DRIP. Fees and Notes are optional.</li>
+        <li>Required on every row: <strong>Date</strong> and <strong>Type</strong>. <strong>Ticker</strong> is required for every security row and left blank for DEPOSIT, WITHDRAWAL, FEE, and INTEREST.</li>
+        <li>BUY, SELL, and DRIP rows also require <strong>Shares</strong> and <strong>Price Per Share</strong>. DIVIDEND, DEPOSIT, WITHDRAWAL, FEE, and INTEREST rows require <strong>Amount</strong> (older files with a <strong>Dividend Amount</strong> column still work). TRANSFER IN and TRANSFER OUT rows need a Ticker and Shares; a blank price values them at that day&apos;s close.</li>
+        <li>Supported types are BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, and INTEREST. Enter amounts as positive numbers; the type decides whether money came in or went out. Fees and Notes are optional.</li>
+        <li>DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows feed the Dashboard&apos;s <strong>Account Alpha</strong>. When a file contains any of them, its first-to-last date is treated as a complete record of money in and out, so include every one for that stretch.</li>
         <li>The importer previews the normalized events, skips transactions already imported, rolls BUY/SELL/DRIP activity into positions when appropriate, and records dividend payments and realized gains.</li>
         <li>Import one selected portfolio at a time. The same headers are also accepted in a CSV file.</li>
       </ul>

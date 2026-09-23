@@ -1239,6 +1239,20 @@ def ensure_tables_exist(conn=None):
         CREATE INDEX IF NOT EXISTS idx_account_activity_profile_date
         ON account_activity (profile_id, activity_date, id)
     """)
+    # Date spans a broker activity file covered. An absent deposit is only
+    # evidence of "no deposit" inside a span some imported file actually
+    # reported on, so whole-account returns are measured only there.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS account_activity_coverage (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            profile_id    INTEGER NOT NULL DEFAULT 1,
+            start_date    TEXT NOT NULL,
+            end_date      TEXT NOT NULL,
+            source_format TEXT,
+            created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (profile_id, start_date, end_date, source_format)
+        )
+    """)
     # Migration: add transaction_type and realized_gain if missing
     _txn_cols = {r[1] for r in cur.execute("PRAGMA table_info(transactions)").fetchall()}
     if "transaction_type" not in _txn_cols:

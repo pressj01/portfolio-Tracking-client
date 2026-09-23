@@ -328,6 +328,36 @@ function BenchmarkBetaCard({ benchmark, onBenchmarkChange, beta, exposure }) {
   )
 }
 
+const ACCOUNT_ALPHA_BENCHMARK_LABELS = { SPY: 'S&P 500', QQQ: 'Nasdaq-100' }
+
+const signedPct = (fraction, digits = 2) => {
+  const value = Number(fraction) * 100
+  if (!Number.isFinite(value)) return '--'
+  return `${value > 0 ? '+' : ''}${value.toFixed(digits)}%`
+}
+
+// Rendered only when the backend says the data supports the number: the
+// account's alpha needs its deposits and withdrawals, so a portfolio without
+// an imported activity history shows nothing rather than a misleading figure.
+function AccountAlphaCard({ data }) {
+  const alpha = Number(data.alpha)
+  const benchmark = ACCOUNT_ALPHA_BENCHMARK_LABELS[data.benchmark] || data.benchmark
+  return (
+    <SummaryCard
+      className="summary-card-account-alpha"
+      label="Account Alpha"
+      value={`${signedPct(alpha)}/yr`}
+      color={alpha > 0 ? 'var(--pos)' : alpha < 0 ? 'var(--neg)' : undefined}
+      sub={`Account ${signedPct(data.account_return)} vs ${data.benchmark} ${signedPct(data.benchmark_return)}`}
+      note={`β ${Number(data.beta).toFixed(2)} vs ${benchmark} · ${formatPerformanceRange(data.start_date, data.end_date)}`}
+      title={
+        'Annualized return the whole account earned beyond what its market exposure (beta) explains, '
+        + 'after removing deposits and withdrawals. See "Understanding Account Alpha" below.'
+      }
+    />
+  )
+}
+
 function loadDashboardWeek(pf) {
   const localToday = isoDate(new Date())
   const firstMonth = localToday.slice(0, 7)
@@ -770,6 +800,7 @@ export default function Dashboard() {
   const [tickerClosureRisk, setTickerClosureRisk] = useState({})
   const [tickerRiskLoading, setTickerRiskLoading] = useState(false)
   const [portfolioGrade, setPortfolioGrade] = useState({})
+  const [accountAlpha, setAccountAlpha] = useState(null)
   const [gradeResultKey, setGradeResultKey] = useState(null)
   const [initialGradeCustomDates] = useState(() => readSharedPerformanceRange())
   const [gradePeriod, setGradePeriod] = useState(initialGradeCustomDates.period)
@@ -1308,6 +1339,48 @@ export default function Dashboard() {
     pf,
     selectedGradeDataKey,
   ])
+
+  // Account alpha follows the same window as the grade cards but has its own
+  // request: it reads recorded account values and imported deposits and
+  // withdrawals rather than the holdings' price histories. A result is only
+  // shown for the window it was computed for (windowKey), so switching periods
+  // or portfolios hides the old number without clearing state here.
+  const accountAlphaRequestKey = `${selectedGradeDataKey}|${gradeRefreshToken}`
+  useEffect(() => {
+    if (!hasHoldings || gradeRangeError || isLifetimePerformancePeriod(gradePeriod)) {
+      return undefined
+    }
+    const controller = new AbortController()
+    let active = true
+    const requestKey = accountAlphaRequestKey
+    const params = new URLSearchParams({ period: gradePeriod })
+    addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
+    pf(`/api/account-alpha?${params}`, { signal: controller.signal })
+      .then(response => (response.ok ? response.json() : null))
+      .then(payload => {
+        if (!active || !payload) return
+        setAccountAlpha({ ...payload, windowKey: selectedGradeDataKey, requestKey })
+      })
+      .catch(() => {
+        // A failed request just leaves the card hidden; it is optional.
+      })
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [
+    accountAlphaRequestKey,
+    gradePeriod,
+    gradeCustomStart,
+    gradeCustomEnd,
+    gradeRangeError,
+    hasHoldings,
+    pf,
+    selectedGradeDataKey,
+  ])
+  const accountAlphaShown = Boolean(
+    accountAlpha?.available && accountAlpha.windowKey === selectedGradeDataKey,
+  )
 
   useEffect(() => {
     if (loading || !holdings.length) return
@@ -2421,6 +2494,7 @@ export default function Dashboard() {
           beta={marketExposure.beta}
           exposure={marketExposure.betaAdjustedExposure}
         />
+        {accountAlphaShown && <AccountAlphaCard data={accountAlpha} />}
         <SummaryCard label="Ulcer Index" value={activePortfolioGrade.ulcer_index ?? '—'} />
         <SummaryCard label="Calmar Ratio" value={activePortfolioGrade.calmar ?? '—'} />
         <SummaryCard label="Omega Ratio" value={activePortfolioGrade.omega ?? '—'} />
@@ -2757,6 +2831,89 @@ export default function Dashboard() {
               <tr><td>Diversification</td><td>Effective # holdings</td><td>&ge;20</td><td>&ge;12</td><td>&ge;6</td><td>&ge;3</td><td>&lt;3</td><td>10%</td></tr>
             </tbody>
           </table>
+        </div>
+      </details>
+
+      {/* Account Alpha guide (collapsible) */}
+      <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
+        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>Understanding Account Alpha</summary>
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.5, marginTop: '0.75rem' }}>
+          <p style={{ margin: '0 0 0.65rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>What it is.</strong> Account Alpha is the yearly
+            return your whole account earned beyond what its market exposure explains. The app rebuilds the
+            account&apos;s day-by-day return from its recorded daily values, takes out your deposits,
+            withdrawals, and transfers (so adding money never counts as a gain), and compares that return with
+            the S&amp;P 500 (SPY) or the Nasdaq-100 (QQQ), whichever the account tracks more closely. Both sides
+            include distributions. It is annualized and measured against a 5% risk-free rate, the same definition
+            as the Alpha column on individual holdings.
+          </p>
+          <p style={{ margin: '0 0 0.35rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>How to read it.</strong>
+          </p>
+          <ul style={{ margin: '0 0 0.65rem', paddingLeft: '1.2rem' }}>
+            <li>
+              <strong style={{ color: 'var(--pos)' }}>Positive</strong> — the account did better than its
+              beta alone predicts. +3%/yr means roughly three percentage points a year that market exposure does
+              not explain, coming from what you hold, the income it pays, and when you bought or sold.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>Near zero</strong> — the return is about what the
+              account&apos;s exposure to the market would have produced on its own.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--neg)' }}>Negative</strong> — the account lagged what its exposure
+              predicts. Common causes are capped upside in covered-call funds during rallies, fund expenses,
+              margin interest, cash sitting idle, and poorly timed trades.
+            </li>
+          </ul>
+          <p style={{ margin: '0 0 0.65rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>Read it with the beta beside it.</strong> Alpha is
+            measured against that beta. &ldquo;β 0.75 vs Nasdaq-100&rdquo; with +4%/yr alpha means the account
+            moved about 75% as much as the Nasdaq-100 and still earned roughly 4% a year more than that exposure
+            implies. A low-beta income account can show positive alpha in a falling market just by losing less
+            than its beta predicts, so compare the account and benchmark returns on the card as well.
+          </p>
+          <ul style={{ margin: '0 0 0.65rem', paddingLeft: '1.2rem' }}>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>Short windows swing hard.</strong> A daily average
+              is scaled up to a full year, so a few weeks can read ±20%. Trust 6M or longer over 1M or 3M.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>The card shows its own dates.</strong> They can be
+              shorter than the selected period: the measurement starts no earlier than your first imported
+              transaction history and ends at the last one, because a deposit outside an imported history would
+              otherwise be counted as return.
+            </li>
+            <li>
+              <strong style={{ color: 'var(--text-strong)' }}>It is not the holdings&apos; Alpha column.</strong>{' '}
+              That column measures each fund&apos;s own price history. Account Alpha measures what your account
+              actually earned, including your trades, cash, fees, and interest. It is not part of the Portfolio
+              Grade.
+            </li>
+          </ul>
+          <p style={{ margin: '0 0 0.35rem' }}>
+            <strong style={{ color: 'var(--text-strong)' }}>When the card is hidden.</strong> It appears only
+            when there is enough data to calculate it honestly:
+          </p>
+          <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
+            <li>
+              A broker transaction history that includes deposits and withdrawals has been imported for this
+              account (for Owner or an aggregate, for every member account) and covers the period. Files filtered
+              to only trades or only dividends do not count.
+            </li>
+            <li>At least 16 recorded daily account values fall inside that history.</li>
+            <li>
+              Every transfer of shares in or out can be priced, and no day&apos;s value jumps more than 25%
+              without a recorded deposit or withdrawal to explain it.
+            </li>
+            <li>A market window is selected; Life has no daily series to measure.</li>
+          </ul>
+          {accountAlpha && !accountAlpha.available && accountAlpha.windowKey === selectedGradeDataKey && accountAlpha.message && (
+            <p style={{ margin: '0.65rem 0 0' }}>
+              <strong style={{ color: 'var(--text-strong)' }}>For this portfolio right now:</strong>{' '}
+              {accountAlpha.message}
+            </p>
+          )}
         </div>
       </details>
 

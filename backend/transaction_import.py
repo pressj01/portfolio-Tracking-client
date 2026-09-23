@@ -1527,8 +1527,18 @@ def parse_generic_transactions(file_path, filename):
         "drip", "reinvest", "reinvestment",
         "dividend reinvestment", "reinvest dividend",
     }
+    # Money in and out of the account, kept as account activity for the
+    # Dashboard's Account Alpha. The sign of the amount follows the type, so a
+    # withdrawal typed as 100 or -100 means the same thing.
+    cash_activity_signs = {
+        "deposit": 1, "contribution": 1, "withdrawal": -1, "fee": -1, "interest": None,
+    }
+    share_transfer_actions = {
+        "transfer in": "IN", "shares in": "IN", "transfer out": "OUT", "shares out": "OUT",
+    }
 
     kept = []
+    account_activity = []
     filtered_count = 0
 
     for row in rows[header_idx + 1:]:
@@ -1545,8 +1555,46 @@ def parse_generic_transactions(file_path, filename):
         fees = abs(_safe_float(record.get("Fees")) or 0.0)
         dividend_amount = _safe_float(record.get("Dividend Amount"))
         notes = str(record.get("Notes") or "").strip()
+        valid_ticker = bool(ticker and TICKER_RE.match(ticker))
 
-        if not ticker or not TICKER_RE.match(ticker) or not date_str:
+        if date_str and action_key in cash_activity_signs:
+            sign = cash_activity_signs[action_key]
+            if dividend_amount is None or dividend_amount == 0:
+                filtered_count += 1
+                continue
+            amount = dividend_amount if sign is None else sign * abs(dividend_amount)
+            activity_row = _account_activity_row(
+                action_key.title(),
+                date_str,
+                amount=round(amount, 2),
+                ticker=ticker if valid_ticker else None,
+                description=notes,
+            )
+            if activity_row is None:
+                filtered_count += 1
+            else:
+                account_activity.append(activity_row)
+            continue
+
+        if date_str and action_key in share_transfer_actions:
+            if not valid_ticker or shares is None or shares == 0:
+                filtered_count += 1
+                continue
+            activity_row = _account_activity_row(
+                f"Shares transferred {share_transfer_actions[action_key].lower()}",
+                date_str,
+                ticker=ticker,
+                quantity=abs(shares),
+                price_per_share=price if price and price > 0 else None,
+                description=notes,
+            )
+            if activity_row is None:
+                filtered_count += 1
+            else:
+                account_activity.append(activity_row)
+            continue
+
+        if not valid_ticker or not date_str:
             filtered_count += 1
             continue
 
@@ -1588,11 +1636,11 @@ def parse_generic_transactions(file_path, filename):
 
         filtered_count += 1
 
-    if not kept:
+    if not kept and not account_activity:
         raise ValueError(
             "No valid transactions were found. BUY, SELL, and DRIP rows require "
             "Date, Ticker, Shares, and Price Per Share; DIVIDEND rows require "
-            "Date, Ticker, and Dividend Amount."
+            "Date, Ticker, and Amount; DEPOSIT and WITHDRAWAL rows require Date and Amount."
         )
 
     buys = sum(1 for txn in kept if txn["type"] == "BUY")
@@ -1605,10 +1653,12 @@ def parse_generic_transactions(file_path, filename):
 
     return {
         "transactions": kept,
+        "account_activity": account_activity,
         "summary": {
             "buys": buys,
             "sells": sells,
             "dividends": dividends,
+            "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
             "splits_applied": 0,

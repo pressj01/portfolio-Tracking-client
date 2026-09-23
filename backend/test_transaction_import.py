@@ -338,6 +338,55 @@ class TransactionImportParserTest(unittest.TestCase):
             ],
         )
 
+    def test_generic_transactions_record_money_and_share_movements(self):
+        content = "\n".join([
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Amount,Notes",
+            "2026-01-14,DEPOSIT,,,,,5000,From checking",
+            "2026-01-15,BUY,SCHD,10,27.50,0,,Initial purchase",
+            "2026-02-20,TRANSFER IN,JEPI,20,,,,From another broker",
+            "2026-03-01,TRANSFER OUT,SCHD,2,29.00,,,To IRA",
+            # Typed with or without a minus sign, a withdrawal is money out.
+            "2026-03-12,WITHDRAWAL,,,,,250,To checking",
+            "2026-03-13,WITHDRAWAL,,,,,-100,To checking",
+            "2026-03-31,INTEREST,,,,,-4.20,Margin interest",
+            "2026-03-31,FEE,,,,,15,Account fee",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["summary"]["buys"], 1)
+        self.assertEqual(result["summary"]["filtered"], 0)
+        self.assertEqual(
+            [
+                (row["activity_type"], row["performance_treatment"], row["amount"], row["ticker"], row["quantity"])
+                for row in result["account_activity"]
+            ],
+            [
+                ("DEPOSIT", "EXTERNAL_FLOW", 5000.0, None, None),
+                ("SECURITY_TRANSFER_IN", "EXTERNAL_FLOW", None, "JEPI", 20.0),
+                ("SECURITY_TRANSFER_OUT", "EXTERNAL_FLOW", None, "SCHD", 2.0),
+                ("WITHDRAWAL", "EXTERNAL_FLOW", -250.0, None, None),
+                ("WITHDRAWAL", "EXTERNAL_FLOW", -100.0, None, None),
+                ("INTEREST", "EXPENSE", -4.2, None, None),
+                ("FEE", "EXPENSE", -15.0, None, None),
+            ],
+        )
+
+    def test_generic_file_of_only_deposits_imports_and_old_header_still_works(self):
+        content = "\n".join([
+            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes",
+            "2026-01-14,DEPOSIT,,,,,5000,From checking",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic-deposits.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["transactions"], [])
+        self.assertEqual(result["account_activity"][0]["amount"], 5000.0)
+
     def test_account_activity_matches_whole_words_not_fund_names(self):
         # Substring matching read these as an ATM withdrawal and a deposit.
         self.assertEqual(

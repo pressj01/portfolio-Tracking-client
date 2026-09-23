@@ -7,6 +7,7 @@ import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
+import AccountActivityManager from '../components/AccountActivityManager'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
 import {
@@ -2204,6 +2205,7 @@ export default function ManageHoldings() {
   const [sortDir, setSortDir] = useState('asc')
   const [syncingDrip, setSyncingDrip] = useState(false)
   const [showDripMatrix, setShowDripMatrix] = useState(false)
+  const [showAccountActivity, setShowAccountActivity] = useState(false)
   const [divSourceFilter, setDivSourceFilter] = useState('all')
   const [repairMode, setRepairMode] = useState('mixed')
   const [repairPreview, setRepairPreview] = useState(null)
@@ -3190,6 +3192,13 @@ export default function ManageHoldings() {
           <button className="btn btn-secondary" onClick={() => setShowTransactionHistory(true)}>
             Transaction History
           </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowAccountActivity(true)}
+            title="Deposits, withdrawals, and share transfers used by the Dashboard's Account Alpha"
+          >
+            Deposits &amp; Withdrawals
+          </button>
           <select
             value={divSourceFilter}
             onChange={(e) => setDivSourceFilter(e.target.value)}
@@ -4000,6 +4009,13 @@ export default function ManageHoldings() {
       {showTransactionHistory && (
         <TransactionHistoryModal
           onClose={() => setShowTransactionHistory(false)}
+          pf={pf}
+        />
+      )}
+
+      {showAccountActivity && (
+        <AccountActivityManager
+          onClose={() => setShowAccountActivity(false)}
           pf={pf}
         />
       )}

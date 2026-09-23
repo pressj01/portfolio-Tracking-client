@@ -7994,7 +7994,8 @@ _PROFILE_RESET_TABLES = (
     # Current positions and their derived mirrors.
     "all_account_info", "holdings", "dividends", "income_tracking",
     # Position history.
-    "transactions", "account_activity", "dividend_payments", "dividend_schedule_history", "option_trades",
+    "transactions", "account_activity", "account_activity_coverage",
+    "dividend_payments", "dividend_schedule_history", "option_trades",
     # Payout tracking rebuilt from positions.
     "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
     # Per-holding configuration pointing at tickers the reset removes.
@@ -8010,7 +8011,8 @@ _PROFILE_CLEAR_TABLES = (
     # Current positions and their derived mirrors.
     "all_account_info", "holdings", "dividends", "income_tracking",
     # The ledger a Holdings + Transactions import replays.
-    "transactions", "account_activity", "dividend_payments", "dividend_schedule_history",
+    "transactions", "account_activity", "account_activity_coverage",
+    "dividend_payments", "dividend_schedule_history",
     # Payout tracking rebuilt from positions.
     "weekly_payouts", "monthly_payouts", "weekly_payout_tickers", "monthly_payout_tickers",
     # Per-holding configuration pointing at tickers Clear removes.
@@ -9223,11 +9225,17 @@ def _parse_portfolio_export_workbook(path, filename=None):
     sheet_names = list(xl.sheet_names)
     xl.close()
     txn_sheet = next((s for s in sheet_names if s.strip().lower() == "transactions"), None)
+    activity_sheet = next(
+        (s for s in sheet_names if s.strip().lower() == _ACCOUNT_ACTIVITY_SHEET.lower()), None,
+    )
+    coverage_sheet = next(
+        (s for s in sheet_names if s.strip().lower() == _ACTIVITY_COVERAGE_SHEET.lower()), None,
+    )
     holding_sheets = []
     transactions = []
 
     for sheet in sheet_names:
-        if sheet == txn_sheet:
+        if sheet in (txn_sheet, activity_sheet, coverage_sheet):
             continue
         try:
             df = pd.read_excel(path, sheet_name=sheet, engine="openpyxl")
@@ -9325,6 +9333,10 @@ def _parse_portfolio_export_workbook(path, filename=None):
                     "created_at": _combined_export_clean_date(row.get(colmap.get("created at"))),
                 })
 
+    account_activity, activity_coverage = _parse_export_account_activity(
+        path, activity_sheet, coverage_sheet,
+    )
+
     buys = sum(1 for t in transactions if t["type"] == "BUY")
     sells = sum(1 for t in transactions if t["type"] == "SELL")
     divs = sum(1 for t in transactions if t["type"] == "DIVIDEND")
@@ -9334,6 +9346,8 @@ def _parse_portfolio_export_workbook(path, filename=None):
         "filename": filename or os.path.basename(path),
         "portfolios": holding_sheets,
         "transactions": transactions,
+        "account_activity": account_activity,
+        "activity_coverage": activity_coverage,
         "summary": {
             "portfolios": len(holding_sheets),
             "holdings": sum(s["rows"] for s in holding_sheets),
@@ -9341,8 +9355,68 @@ def _parse_portfolio_export_workbook(path, filename=None):
             "buys": buys,
             "sells": sells,
             "dividends": divs,
+            "account_activity": len(account_activity),
         },
     }
+
+
+def _parse_export_account_activity(path, activity_sheet, coverage_sheet):
+    """Read the workbook's Account Activity and Activity Coverage sheets."""
+    activity = []
+    coverage = []
+    if activity_sheet:
+        df = pd.read_excel(path, sheet_name=activity_sheet, engine="openpyxl")
+        if not df.empty and _combined_export_has_columns(df, ["Date", "Activity Type"]):
+            colmap = {str(c).strip().lower(): c for c in df.columns}
+
+            def cell(row, name):
+                column = colmap.get(name)
+                return row.get(column) if column is not None else None
+
+            for _, row in df.iterrows():
+                day = _combined_export_clean_date(cell(row, "date"))
+                activity_type = _combined_export_clean_text(cell(row, "activity type")).upper()
+                if not day or not activity_type:
+                    continue
+                activity.append({
+                    "profile": _combined_export_clean_text(cell(row, "profile")),
+                    "date": day,
+                    "activity_type": activity_type,
+                    "direction": _combined_export_clean_text(cell(row, "direction")).upper() or "UNKNOWN",
+                    "performance_treatment": (
+                        _combined_export_clean_text(cell(row, "treatment")).upper() or "REVIEW"
+                    ),
+                    "amount": _combined_export_clean_float(cell(row, "amount")),
+                    "base_amount": _combined_export_clean_float(cell(row, "base amount")),
+                    "currency": _combined_export_clean_text(cell(row, "currency")).upper() or "USD",
+                    "ticker": _combined_export_clean_text(cell(row, "ticker")).upper() or None,
+                    "quantity": _combined_export_clean_float(cell(row, "quantity")),
+                    "price_per_share": _combined_export_clean_float(cell(row, "price")),
+                    "fees": _combined_export_clean_float(cell(row, "fees")) or 0.0,
+                    "raw_type": _combined_export_clean_text(cell(row, "broker action")),
+                    "description": _combined_export_clean_text(cell(row, "description")),
+                    "source": _combined_export_clean_text(cell(row, "source")) or "portfolio_export",
+                })
+    if coverage_sheet:
+        df = pd.read_excel(path, sheet_name=coverage_sheet, engine="openpyxl")
+        if not df.empty and _combined_export_has_columns(df, ["Start Date", "End Date"]):
+            colmap = {str(c).strip().lower(): c for c in df.columns}
+            for _, row in df.iterrows():
+                start = _combined_export_clean_date(row.get(colmap["start date"]))
+                end = _combined_export_clean_date(row.get(colmap["end date"]))
+                if not start or not end:
+                    continue
+                coverage.append({
+                    "profile": _combined_export_clean_text(
+                        row.get(colmap["profile"]) if "profile" in colmap else None
+                    ),
+                    "start_date": start,
+                    "end_date": end,
+                    "source": _combined_export_clean_text(
+                        row.get(colmap["source"]) if "source" in colmap else None
+                    ) or "portfolio_export",
+                })
+    return activity, coverage
 
 
 TXN_PARSERS["portfolio_export"] = _parse_portfolio_export_workbook
@@ -9420,6 +9494,8 @@ def _import_portfolio_export_workbook(
     original_basis_updated = 0
     original_basis_skipped = 0
     original_basis_mismatches = []
+    account_activity_inserted = 0
+    account_activity_duplicates = 0
 
     conn = get_connection()
     try:
@@ -9566,6 +9642,28 @@ def _import_portfolio_export_workbook(
                     (total, ytd, total, "portfolio_export", ticker, profile_id),
                 )
 
+        # Deposits, withdrawals and completed periods ride with the ledger, and
+        # route to portfolios exactly the way Transactions rows do.
+        activity_groups = {}
+        for row in (parsed.get("account_activity") or []) if want_transactions else []:
+            profile_key = str(row.get("profile") or "").strip().lower()
+            profile_id = profile_by_name.get(profile_key, transaction_profile_fallback)
+            activity_groups.setdefault((profile_id, row.get("source")), []).append(row)
+        for (profile_id, source), rows in activity_groups.items():
+            inserted, skipped = _import_account_activity_rows(conn, profile_id, rows, source)
+            account_activity_inserted += inserted
+            account_activity_duplicates += skipped
+        for row in (parsed.get("activity_coverage") or []) if want_transactions else []:
+            profile_key = str(row.get("profile") or "").strip().lower()
+            conn.execute(
+                """INSERT OR IGNORE INTO account_activity_coverage
+                   (profile_id, start_date, end_date, source_format) VALUES (?, ?, ?, ?)""",
+                (
+                    profile_by_name.get(profile_key, transaction_profile_fallback),
+                    row["start_date"], row["end_date"], row.get("source"),
+                ),
+            )
+
         for pid in dict.fromkeys(imported_profiles):
             _preserve_standalone_owner_import(pid, conn)
         conn.commit()
@@ -9635,6 +9733,11 @@ def _import_portfolio_export_workbook(
             f"{'s' if original_basis_skipped != 1 else ''} — usually that means the "
             f"export doesn't go back far enough to cover the full position: {ticker_list}."
         )
+    if account_activity_inserted:
+        parts.append(
+            f"Restored {account_activity_inserted} deposit, withdrawal, and other account "
+            f"activity record{'s' if account_activity_inserted != 1 else ''}."
+        )
 
     _clear_dividend_event_caches()
     return jsonify({
@@ -9644,6 +9747,8 @@ def _import_portfolio_export_workbook(
         "inserted_sells": inserted_sells,
         "dividends_applied": dividends_applied,
         "duplicates_skipped": duplicates_skipped,
+        "account_activity_inserted": account_activity_inserted,
+        "account_activity_duplicates_skipped": account_activity_duplicates,
         "original_basis_updated": original_basis_updated,
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,
@@ -10459,6 +10564,39 @@ def _account_activity_values(profile_id, row):
     }
 
 
+def _account_activity_identity_json(values):
+    return json.dumps(
+        {key: values[key] for key in _ACCOUNT_ACTIVITY_IDENTITY_KEYS},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _account_activity_dedupe_hash(identity_json, occurrence):
+    return hashlib.sha256(
+        f"account_activity:v1:{identity_json}:{occurrence}".encode("utf-8")
+    ).hexdigest()
+
+
+def _insert_account_activity(conn, values, source, dedupe_hash):
+    return conn.execute(
+        """INSERT OR IGNORE INTO account_activity
+           (profile_id, activity_date, activity_type, direction,
+            performance_treatment, amount, base_amount, currency, ticker,
+            quantity, price_per_share, fees, raw_type, description,
+            source_format, dedupe_hash)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            values["profile_id"], values["date"], values["activity_type"],
+            values["direction"], values["performance_treatment"],
+            values["amount"], values["base_amount"], values["currency"],
+            values["ticker"], values["quantity"], values["price_per_share"],
+            values["fees"], values["raw_type"], values["description"],
+            source, dedupe_hash,
+        ),
+    )
+
+
 def _import_account_activity_rows(conn, profile_id, rows, source_format):
     """Insert optional account-level broker activity without affecting trades.
 
@@ -10473,31 +10611,10 @@ def _import_account_activity_rows(conn, profile_id, rows, source_format):
         values = _account_activity_values(profile_id, raw_row)
         if not values["date"]:
             continue
-        identity_json = json.dumps(
-            {key: values[key] for key in _ACCOUNT_ACTIVITY_IDENTITY_KEYS},
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        identity_json = _account_activity_identity_json(values)
         occurrences[identity_json] = occurrences.get(identity_json, 0) + 1
-        dedupe_hash = hashlib.sha256(
-            f"account_activity:v1:{identity_json}:{occurrences[identity_json]}".encode("utf-8")
-        ).hexdigest()
-        cursor = conn.execute(
-            """INSERT OR IGNORE INTO account_activity
-               (profile_id, activity_date, activity_type, direction,
-                performance_treatment, amount, base_amount, currency, ticker,
-                quantity, price_per_share, fees, raw_type, description,
-                source_format, dedupe_hash)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                values["profile_id"], values["date"], values["activity_type"],
-                values["direction"], values["performance_treatment"],
-                values["amount"], values["base_amount"], values["currency"],
-                values["ticker"], values["quantity"], values["price_per_share"],
-                values["fees"], values["raw_type"], values["description"],
-                source, dedupe_hash,
-            ),
-        )
+        dedupe_hash = _account_activity_dedupe_hash(identity_json, occurrences[identity_json])
+        cursor = _insert_account_activity(conn, values, source, dedupe_hash)
         if cursor.rowcount:
             inserted += 1
             continue
@@ -10520,6 +10637,270 @@ def _import_account_activity_rows(conn, profile_id, rows, source_format):
             ),
         )
     return inserted, duplicates
+
+
+def _record_account_activity_coverage(conn, profile_id, parsed, source_format):
+    """Remember the date span a broker activity file reported on.
+
+    Only a file that actually carried account activity counts. Brokers let a
+    user export just dividends or just trades, and such a file is silent about
+    deposits because it filtered them out, not because there were none;
+    treating its span as covered would read every unseen deposit as return.
+    """
+    activity = parsed.get("account_activity") or []
+    if not activity:
+        return
+    dates = [
+        str(row.get("date") or "")[:10]
+        for row in [*activity, *(parsed.get("transactions") or [])]
+        if row.get("date")
+    ]
+    if not dates:
+        return
+    conn.execute(
+        """INSERT OR IGNORE INTO account_activity_coverage
+           (profile_id, start_date, end_date, source_format)
+           VALUES (?, ?, ?, ?)""",
+        (int(profile_id), min(dates), max(dates), str(source_format or "").strip()),
+    )
+
+
+# Money and shares a user can record by hand on the Holdings screen. Only
+# external flows: interest, fees and trades already show up in the account's
+# recorded value, so they never need entering for account alpha.
+_MANUAL_ACTIVITY_KINDS = {
+    "deposit": ("DEPOSIT", "IN", "Deposit"),
+    "withdrawal": ("WITHDRAWAL", "OUT", "Withdrawal"),
+    "transfer_in": ("SECURITY_TRANSFER_IN", "IN", "Shares transferred in"),
+    "transfer_out": ("SECURITY_TRANSFER_OUT", "OUT", "Shares transferred out"),
+}
+
+
+def _account_activity_scope(conn):
+    """Profiles to read, the single profile a write targets (or None), and why not."""
+    is_aggregate, profile_ids = get_profile_filter()
+    read_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+    if is_aggregate:
+        return read_ids, None, (
+            "An aggregate combines several accounts. Select the account the money "
+            "moved in or out of to add or change its records."
+        )
+    profile_id = int(profile_ids[0])
+    if _owner_import_target_error(profile_id, conn):
+        return read_ids, None, (
+            "Owner combines its member accounts. Select the account the money "
+            "moved in or out of to add or change its records."
+        )
+    return read_ids, profile_id, None
+
+
+def _parse_activity_date(value, label):
+    try:
+        day = datetime.date.fromisoformat(str(value or "").strip()[:10])
+    except ValueError:
+        raise ValueError(f"{label} must be a date (YYYY-MM-DD).")
+    if day > datetime.date.today():
+        raise ValueError(f"{label} cannot be in the future.")
+    return day
+
+
+@app.route("/api/account-activity", methods=["GET"])
+def api_account_activity_list():
+    """External flows and covered periods behind the Dashboard's Account Alpha."""
+    import account_performance as ap
+
+    conn = get_connection()
+    try:
+        read_ids, write_id, reason = _account_activity_scope(conn)
+        names = _load_profile_name_map(conn, read_ids)
+        placeholders = ",".join("?" * len(read_ids))
+        flows = [
+            dict(row) for row in conn.execute(
+                f"""SELECT id, profile_id, activity_date, activity_type, direction,
+                           performance_treatment, amount, base_amount, currency, ticker,
+                           quantity, price_per_share, raw_type, description, source_format
+                    FROM account_activity
+                    WHERE profile_id IN ({placeholders})
+                      AND performance_treatment IN ('EXTERNAL_FLOW', 'REVIEW')
+                    ORDER BY activity_date DESC, id DESC
+                    LIMIT 2000""",
+                read_ids,
+            ).fetchall()
+        ]
+        coverage = [
+            dict(row) for row in conn.execute(
+                f"""SELECT id, profile_id, start_date, end_date, source_format
+                    FROM account_activity_coverage
+                    WHERE profile_id IN ({placeholders})
+                    ORDER BY start_date, end_date""",
+                read_ids,
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+
+    for row in [*flows, *coverage]:
+        row["profile_name"] = names.get(int(row["profile_id"]), "")
+    covered_runs = []
+    for pid in read_ids:
+        spans = [(row["start_date"], row["end_date"]) for row in coverage if row["profile_id"] == pid]
+        for start, end in ap.merge_coverage(spans):
+            covered_runs.append({
+                "profile_id": pid,
+                "profile_name": names.get(int(pid), ""),
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+            })
+    return jsonify({
+        "editable": write_id is not None,
+        "profile_id": write_id,
+        "reason": reason,
+        "flows": flows,
+        "coverage": coverage,
+        "covered_runs": covered_runs,
+    })
+
+
+@app.route("/api/account-activity", methods=["POST"])
+def api_account_activity_add():
+    """Record a deposit, withdrawal or share transfer by hand."""
+    blocked = _reject_rollup_import_target("Adding a deposit or withdrawal")
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True) or {}
+    kind = str(data.get("kind") or "").strip().lower()
+    if kind not in _MANUAL_ACTIVITY_KINDS:
+        return jsonify({"error": "Choose deposit, withdrawal, shares transferred in, or shares transferred out."}), 400
+    activity_type, direction, label = _MANUAL_ACTIVITY_KINDS[kind]
+    try:
+        day = _parse_activity_date(data.get("date"), "Date")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    note = str(data.get("note") or "").strip()[:200]
+    row = {
+        "date": day.isoformat(),
+        "activity_type": activity_type,
+        "direction": direction,
+        "performance_treatment": "EXTERNAL_FLOW",
+        "currency": "USD",
+        "raw_type": label,
+        "description": note,
+    }
+    if kind in ("deposit", "withdrawal"):
+        amount = _combined_export_clean_float(data.get("amount"))
+        if amount is None or amount <= 0:
+            return jsonify({"error": "Enter an amount greater than zero."}), 400
+        signed = round(amount if direction == "IN" else -amount, 2)
+        row.update({"amount": signed, "base_amount": signed})
+    else:
+        ticker = str(data.get("ticker") or "").strip().upper()
+        quantity = _combined_export_clean_float(data.get("quantity"))
+        price = _combined_export_clean_float(data.get("price"))
+        if not ticker:
+            return jsonify({"error": "Enter the ticker of the shares that moved."}), 400
+        if quantity is None or quantity <= 0:
+            return jsonify({"error": "Enter a share quantity greater than zero."}), 400
+        if price is not None and price <= 0:
+            return jsonify({"error": "Leave the price blank or enter one greater than zero."}), 400
+        # Without a price the shares are valued at that day's market close.
+        row.update({"ticker": ticker, "quantity": quantity, "price_per_share": price})
+
+    profile_id = get_profile_id()
+    conn = get_connection()
+    try:
+        values = _account_activity_values(profile_id, row)
+        identity_json = _account_activity_identity_json(values)
+        occurrence = 1
+        cursor = _insert_account_activity(
+            conn, values, "manual", _account_activity_dedupe_hash(identity_json, occurrence),
+        )
+        if not cursor.rowcount and not data.get("allow_duplicate"):
+            # The same money on the same day is already on file, most likely
+            # from a broker import; a second copy would double the flow.
+            return jsonify({
+                "error": "An identical entry on that date is already recorded.",
+                "duplicate": True,
+            }), 409
+        while not cursor.rowcount and occurrence < 1000:
+            occurrence += 1
+            cursor = _insert_account_activity(
+                conn, values, "manual", _account_activity_dedupe_hash(identity_json, occurrence),
+            )
+        conn.commit()
+        new_id = cursor.lastrowid
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "id": new_id})
+
+
+@app.route("/api/account-activity/<int:activity_id>", methods=["DELETE"])
+def api_account_activity_delete(activity_id):
+    blocked = _reject_rollup_import_target("Removing a deposit or withdrawal")
+    if blocked:
+        return blocked
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM account_activity WHERE id = ? AND profile_id = ?",
+            (activity_id, get_profile_id()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if not cursor.rowcount:
+        return jsonify({"error": "That record was not found in this account."}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/account-activity/coverage", methods=["POST"])
+def api_account_activity_coverage_add():
+    """Declare a period whose deposits and withdrawals are all on file.
+
+    This is how an account with no money movements at all, or one kept by hand,
+    tells Account Alpha that an empty stretch really means "nothing moved".
+    """
+    blocked = _reject_rollup_import_target("Marking a period complete")
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True) or {}
+    try:
+        start = _parse_activity_date(data.get("start_date"), "Start date")
+        end = _parse_activity_date(data.get("end_date"), "End date")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if start > end:
+        return jsonify({"error": "Start date must be on or before the end date."}), 400
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO account_activity_coverage
+               (profile_id, start_date, end_date, source_format)
+               VALUES (?, ?, ?, 'manual')""",
+            (get_profile_id(), start.isoformat(), end.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/account-activity/coverage/<int:coverage_id>", methods=["DELETE"])
+def api_account_activity_coverage_delete(coverage_id):
+    blocked = _reject_rollup_import_target("Removing a completed period")
+    if blocked:
+        return blocked
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM account_activity_coverage WHERE id = ? AND profile_id = ?",
+            (coverage_id, get_profile_id()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if not cursor.rowcount:
+        return jsonify({"error": "That period was not found in this account."}), 404
+    return jsonify({"ok": True})
 
 
 @app.route("/api/import/transactions", methods=["POST"])
@@ -10869,6 +11250,9 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                 parsed.get("account_activity") or [],
                 parsed.get("source_format") or fmt,
             )
+        )
+        _record_account_activity_coverage(
+            conn, profile_id, parsed, parsed.get("source_format") or fmt,
         )
         conn.commit()
 
@@ -23628,6 +24012,64 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
     return out_rows
 
 
+_ACCOUNT_ACTIVITY_SHEET = "Account Activity"
+_ACTIVITY_COVERAGE_SHEET = "Activity Coverage"
+# No "Shares" column on purpose: the workbook importer treats any sheet with
+# Ticker + Shares as a holdings sheet.
+_ACCOUNT_ACTIVITY_EXPORT_HEADERS = [
+    "Profile", "Date", "Activity Type", "Direction", "Treatment", "Amount",
+    "Base Amount", "Currency", "Ticker", "Quantity", "Price", "Fees",
+    "Broker Action", "Description", "Source",
+]
+_ACCOUNT_ACTIVITY_EXPORT_MONEY_HEADERS = {"Amount", "Base Amount", "Price", "Fees"}
+_ACTIVITY_COVERAGE_EXPORT_HEADERS = ["Profile", "Start Date", "End Date", "Source"]
+
+
+def _read_account_activity_export_rows(conn, profile_ids):
+    """Account activity and coverage rows for the export's portfolios."""
+    read_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+    names = _load_profile_name_map(conn, read_ids)
+    placeholders = ",".join("?" * len(read_ids))
+    activity = [
+        {
+            "Profile": names.get(int(row["profile_id"]), ""),
+            "Date": row["activity_date"],
+            "Activity Type": row["activity_type"],
+            "Direction": row["direction"],
+            "Treatment": row["performance_treatment"],
+            "Amount": row["amount"],
+            "Base Amount": row["base_amount"],
+            "Currency": row["currency"],
+            "Ticker": row["ticker"],
+            "Quantity": row["quantity"],
+            "Price": row["price_per_share"],
+            "Fees": row["fees"],
+            "Broker Action": row["raw_type"],
+            "Description": row["description"],
+            "Source": row["source_format"],
+        }
+        for row in conn.execute(
+            f"""SELECT * FROM account_activity WHERE profile_id IN ({placeholders})
+                ORDER BY profile_id, activity_date, id""",
+            read_ids,
+        ).fetchall()
+    ]
+    coverage = [
+        {
+            "Profile": names.get(int(row["profile_id"]), ""),
+            "Start Date": row["start_date"],
+            "End Date": row["end_date"],
+            "Source": row["source_format"],
+        }
+        for row in conn.execute(
+            f"""SELECT * FROM account_activity_coverage WHERE profile_id IN ({placeholders})
+                ORDER BY profile_id, start_date""",
+            read_ids,
+        ).fetchall()
+    ]
+    return activity, coverage
+
+
 @app.route("/api/export/holdings-transactions", methods=["GET"])
 def export_holdings_transactions():
     """Export holdings and their related transactions in one Excel workbook."""
@@ -23695,6 +24137,27 @@ def export_holdings_transactions():
     }
     for i, header in enumerate(_TRANSACTION_EXPORT_HEADERS, 1):
         tx_ws.column_dimensions[get_column_letter(i)].width = widths.get(header, 16)
+
+    # Deposits, withdrawals and the periods they are complete for: without
+    # them a portfolio moved through this workbook loses its Account Alpha.
+    activity_rows, coverage_rows = _read_account_activity_export_rows(conn, profile_ids)
+    activity_rows = _convert_export_rows(activity_rows, _ACCOUNT_ACTIVITY_EXPORT_MONEY_HEADERS, fx)
+    for title, export_headers, export_rows in (
+        (_ACCOUNT_ACTIVITY_SHEET, _ACCOUNT_ACTIVITY_EXPORT_HEADERS, activity_rows),
+        (_ACTIVITY_COVERAGE_SHEET, _ACTIVITY_COVERAGE_EXPORT_HEADERS, coverage_rows),
+    ):
+        if not export_rows:
+            continue
+        sheet = wb.create_sheet(title=_safe_excel_sheet_title(title, wb.sheetnames))
+        for ci, header in enumerate(export_headers, 1):
+            cell = sheet.cell(row=1, column=ci, value=header)
+            cell.font = header_font
+            cell.fill = txn_fill
+            cell.alignment = Alignment(horizontal="center")
+            sheet.column_dimensions[get_column_letter(ci)].width = max(len(header) + 4, 14)
+        for ri, row in enumerate(export_rows, 2):
+            for ci, header in enumerate(export_headers, 1):
+                sheet.cell(row=ri, column=ci, value=row.get(header)).border = thin_border
 
     conn.close()
     if fx["currency"] == "CAD":
@@ -36549,6 +37012,285 @@ def _risk_profile(fund_close, benchmarks, delta_min_days=10):
         }
     except Exception:
         return blank
+
+
+_ACCOUNT_ALPHA_BENCHMARKS = ("SPY", "QQQ")
+_ACCOUNT_ALPHA_CACHE = {}
+_ACCOUNT_ALPHA_TTL_SEC = 1800
+
+
+def _account_alpha_unavailable(reason, message, **extra):
+    return {"available": False, "reason": reason, "message": message, **extra}
+
+
+def _account_alpha_nav_points(conn, profile_ids, is_aggregate):
+    """Recorded account values for the scope, authoritative rows only.
+
+    Legacy and backfill rows are holdings-only (no cash), and a replayed row
+    turns every purchase into a gain because the cash that paid for it is not
+    modelled. Only 'snapshot' and 'close' rows are whole-account values.
+    """
+    placeholders = ",".join("?" * len(profile_ids))
+    query = (
+        "SELECT nav_date, SUM(total_value) AS total_value FROM portfolio_nav "
+        f"WHERE profile_id IN ({placeholders}) AND source IN ('snapshot', 'close') "
+        "GROUP BY nav_date"
+    )
+    params = list(profile_ids)
+    if is_aggregate:
+        # Sum a date only when every member recorded it; a missing member
+        # would read as that account's entire value being withdrawn.
+        query += " HAVING COUNT(DISTINCT profile_id) = ?"
+        params.append(len(profile_ids))
+    rows = conn.execute(query + " ORDER BY nav_date", params).fetchall()
+    points = []
+    for row in rows:
+        day = datetime.date.fromisoformat(str(row["nav_date"])[:10])
+        if is_nyse_trading_day(day):
+            points.append((day, float(row["total_value"] or 0)))
+    return points
+
+
+def _account_alpha_price_lookup(rows, start, end):
+    """``price_on(ticker, date)`` for security transfers that carry no price."""
+    tickers = sorted({
+        str(row["ticker"]).upper() for row in rows
+        if row.get("base_amount") is None and row.get("ticker")
+        and not (row.get("price_per_share") or 0) > 0
+    })
+    closes = {}
+    if tickers:
+        raw = _chunked_yf_download(
+            tickers,
+            start=(start - datetime.timedelta(days=10)).isoformat(),
+            end=(end + datetime.timedelta(days=1)).isoformat(),
+            # The recorded account values use traded prices, so transfers
+            # are valued at traded prices too, not dividend-adjusted ones.
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+        )
+        for ticker in tickers:
+            series = _yf_close_series(raw, ticker)
+            if series is not None:
+                series.index = pd.to_datetime(series.index).tz_localize(None)
+                closes[ticker] = series
+
+    def price_on(ticker, day):
+        series = closes.get(str(ticker).upper())
+        if series is None:
+            return None
+        known = series[series.index <= pd.Timestamp(day)]
+        return float(known.iloc[-1]) if len(known) else None
+
+    return price_on
+
+
+def _compute_account_alpha(conn, profile_ids, is_aggregate, period, custom_start, custom_end):
+    """Alpha and beta of the whole account's time-weighted return.
+
+    Returns a payload whose ``available`` flag says whether the data can
+    honestly support the number; when it cannot, ``reason``/``message`` say
+    what is missing so the Dashboard can explain the absence.
+    """
+    import account_performance as ap
+
+    if period == "lifetime":
+        return _account_alpha_unavailable(
+            "lifetime",
+            "Lifetime is cost-basis gain/loss, not a daily series; pick a market window.",
+        )
+
+    nav_points = _account_alpha_nav_points(conn, profile_ids, is_aggregate)
+    if len(nav_points) < 2:
+        return _account_alpha_unavailable(
+            "no_account_values",
+            "Not enough recorded daily account values yet.",
+        )
+    period_range = _resolve_total_return_period(
+        period,
+        start_date=custom_start or None,
+        end_date=custom_end or None,
+        inception_date=nav_points[0][0],
+    )
+    period_start = ap.as_date(period_range["start_date"] or nav_points[0][0])
+    period_end = ap.as_date(period_range["end_date"])
+    base = {
+        "period_key": period_range["key"],
+        "period_label": period_range["label"],
+    }
+
+    # Owner is a rollup: its deposits and withdrawals live on the member
+    # accounts. A transfer between two members nets to zero once both are read.
+    flow_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+    placeholders = ",".join("?" * len(flow_profile_ids))
+    coverage_rows = conn.execute(
+        f"""SELECT profile_id, start_date, end_date FROM account_activity_coverage
+            WHERE profile_id IN ({placeholders})""",
+        flow_profile_ids,
+    ).fetchall()
+    spans_by_profile = {pid: [] for pid in flow_profile_ids}
+    for row in coverage_rows:
+        spans_by_profile[int(row["profile_id"])].append((row["start_date"], row["end_date"]))
+    runs = [
+        ap.coverage_for_window(spans, period_start, period_end)
+        for spans in spans_by_profile.values()
+    ]
+    if any(run is None for run in runs):
+        return _account_alpha_unavailable(
+            "no_activity_history",
+            "Import this account's full broker transaction history (including deposits "
+            "and withdrawals) covering this period.",
+            **base,
+        )
+    covered = ap.intersect_runs(runs)
+    if covered is None:
+        return _account_alpha_unavailable(
+            "no_activity_history",
+            "The imported transaction histories of these accounts do not overlap in this period.",
+            **base,
+        )
+
+    window_start = max(period_start, covered[0])
+    window_end = min(period_end, covered[1])
+    points = [(day, value) for day, value in nav_points if window_start <= day <= window_end]
+    min_points = _REGRESSION_MIN_OBS + 1
+    if len(points) < min_points:
+        return _account_alpha_unavailable(
+            "short_history",
+            f"Only {len(points)} recorded daily account values fall inside the imported "
+            f"transaction history ({window_start.isoformat()} to {window_end.isoformat()}); "
+            f"at least {min_points} are needed.",
+            observations=max(0, len(points) - 1),
+            **base,
+        )
+    first_day, last_day = points[0][0], points[-1][0]
+
+    flow_rows = [
+        dict(row) for row in conn.execute(
+            f"""SELECT activity_date, direction, base_amount, ticker, quantity, price_per_share
+                FROM account_activity
+                WHERE profile_id IN ({placeholders})
+                  AND performance_treatment = 'EXTERNAL_FLOW'
+                  AND activity_date > ? AND activity_date <= ?
+                ORDER BY activity_date""",
+            [*flow_profile_ids, first_day.isoformat(), last_day.isoformat()],
+        ).fetchall()
+    ]
+    review = conn.execute(
+        f"""SELECT COUNT(*) AS n FROM account_activity
+            WHERE profile_id IN ({placeholders})
+              AND performance_treatment = 'REVIEW'
+              AND activity_date > ? AND activity_date <= ?""",
+        [*flow_profile_ids, first_day.isoformat(), last_day.isoformat()],
+    ).fetchone()
+
+    price_on = _account_alpha_price_lookup(flow_rows, first_day, last_day)
+    flows = []
+    for row in flow_rows:
+        value = ap.flow_value(row, price_on)
+        if value is None:
+            what = row.get("ticker") or "a transfer"
+            return _account_alpha_unavailable(
+                "unvalued_flow",
+                f"Could not value the {what} transfer on {row['activity_date']}.",
+                **base,
+            )
+        flows.append((row["activity_date"], value))
+
+    index, problem = ap.time_weighted_index(points, flows)
+    if index is None:
+        kind, day = problem[0], problem[1]
+        if kind == "unexplained_jump":
+            message = (
+                f"The account value moved {problem[2] * 100:+.1f}% on {day.isoformat()} with no "
+                "recorded deposit or withdrawal to explain it."
+            )
+        else:
+            message = f"A recorded account value on {day} is zero or negative."
+        return _account_alpha_unavailable(kind, message, **base)
+
+    cache_key = (
+        tuple(profile_ids), is_aggregate, first_day, last_day,
+        round(float(index.iloc[-1]), 10), len(index),
+    )
+    cached = _cache_get(_ACCOUNT_ALPHA_CACHE, cache_key, _ACCOUNT_ALPHA_TTL_SEC)
+    if cached is not None:
+        return cached
+
+    raw = _chunked_yf_download(
+        list(_ACCOUNT_ALPHA_BENCHMARKS),
+        start=(first_day - datetime.timedelta(days=10)).isoformat(),
+        end=(last_day + datetime.timedelta(days=1)).isoformat(),
+        # Total return on both sides: the account's recorded value keeps the
+        # distributions it was paid, so the benchmark must keep its own.
+        auto_adjust=True,
+        progress=False,
+        threads=False,
+    )
+    benchmarks = []
+    for symbol in _ACCOUNT_ALPHA_BENCHMARKS:
+        series = _yf_close_series(raw, symbol)
+        if series is not None:
+            series.index = pd.to_datetime(series.index).tz_localize(None)
+            benchmarks.append((symbol, series))
+    if len(benchmarks) < len(_ACCOUNT_ALPHA_BENCHMARKS):
+        return _account_alpha_unavailable(
+            "benchmark_unavailable",
+            "Benchmark prices could not be loaded; try again shortly.",
+            **base,
+        )
+
+    risk = _risk_profile(index, benchmarks)
+    if risk.get("alpha") is None:
+        return _account_alpha_unavailable(
+            "short_history",
+            "Too few recorded account values line up with market days to regress.",
+            **base,
+        )
+    bench_close = dict(benchmarks)[risk["beta_benchmark"]]
+    pair = _aligned_returns(index, bench_close)
+    payload = {
+        **base,
+        "available": True,
+        "alpha": risk["alpha"],
+        "beta": risk["beta"],
+        "benchmark": risk["beta_benchmark"],
+        "start_date": first_day.isoformat(),
+        "end_date": last_day.isoformat(),
+        "observations": len(pair[0]) if pair else None,
+        "account_return": round(float(index.iloc[-1]) - 1.0, 6),
+        "benchmark_return": (
+            round(float((1 + pair[1]).prod()) - 1.0, 6) if pair else None
+        ),
+        "external_flow_count": len(flows),
+        "net_external_flow": round(sum(value for _, value in flows), 2),
+        "review_count": int(review["n"] if review else 0),
+    }
+    _cache_set(_ACCOUNT_ALPHA_CACHE, cache_key, payload)
+    return payload
+
+
+@app.route("/api/account-alpha", methods=["GET"])
+def api_account_alpha():
+    """Whole-account alpha for the Dashboard, when the data supports it."""
+    is_aggregate, profile_ids = get_profile_filter()
+    period = request.args.get("period", "1y").strip().lower()
+    conn = get_connection()
+    try:
+        payload = _compute_account_alpha(
+            conn,
+            profile_ids,
+            is_aggregate,
+            period,
+            request.args.get("start_date", "").strip(),
+            request.args.get("end_date", "").strip(),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    finally:
+        conn.close()
+    return jsonify(payload)
 
 
 @app.route("/api/etf-screen/data")

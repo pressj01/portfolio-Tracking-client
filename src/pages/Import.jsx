@@ -1640,7 +1640,7 @@ export default function Import() {
 
           {txnFormat === 'generic_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Generic transactions template available:</strong> download the XLSX template, replace the sample rows, and keep one transaction per row. CSV files with the same headers are also supported.
+              <strong>Generic transactions template available:</strong> download the XLSX template, replace the sample rows, and keep one transaction per row. DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows record money and shares moving in or out for the Dashboard&apos;s Account Alpha. CSV files with the same headers are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadGenericTransactionsTemplate}>
                   Download Generic Transactions Template
@@ -1713,7 +1713,7 @@ export default function Import() {
 
           {txnFormat === 'schwab_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Schwab transactions template available:</strong> the downloadable template contains the exact transaction columns this importer reads for buys, sells, cash dividends, DRIP share purchases, and reinvestment adjustments. CSV and XLSX files with those fields are supported.
+              <strong>Schwab transactions template available:</strong> the downloadable template contains the exact transaction columns this importer reads for buys, sells, cash dividends, DRIP share purchases, and reinvestment adjustments. CSV and XLSX files with those fields are supported. Deposits, withdrawals, and transfers in the file are also kept for the Dashboard&apos;s Account Alpha, so export every activity type for the full date range.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadSchwabTransactionsTemplate}>
                   Download Schwab Transactions Template
@@ -1724,7 +1724,7 @@ export default function Import() {
 
           {txnFormat === 'etrade_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>E*TRADE transactions template available:</strong> the downloadable XLSX matches the all-transactions export this importer reads for buys, sells, cash dividends, and DRIP reinvestments. CSV files with the same headers are also supported.
+              <strong>E*TRADE transactions template available:</strong> the downloadable XLSX matches the all-transactions export this importer reads for buys, sells, cash dividends, and DRIP reinvestments. CSV files with the same headers are also supported. Deposits, withdrawals, and transfers in the file are also kept for the Dashboard&apos;s Account Alpha, so export every activity type for the full date range.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadEtradeTransactionsTemplate}>
                   Download E*TRADE Transactions Template
@@ -1746,7 +1746,7 @@ export default function Import() {
 
           {txnFormat === 'fidelity_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Fidelity transactions template available:</strong> the downloadable XLSX keeps the transaction header row where this parser expects it and only includes the fields this importer reads. CSV exports with the same fields are also supported.
+              <strong>Fidelity transactions template available:</strong> the downloadable XLSX keeps the transaction header row where this parser expects it and only includes the fields this importer reads. CSV exports with the same fields are also supported. Deposits, withdrawals, and transfers in the file are also kept for the Dashboard&apos;s Account Alpha, so export every activity type for the full date range.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadFidelityTransactionsTemplate}>
                   Download Fidelity Transactions Template
@@ -1768,7 +1768,7 @@ export default function Import() {
 
           {txnFormat === 'robinhood_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Robinhood transactions template available:</strong> the downloadable CSV contains the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers. XLSX files with those fields are also supported.
+              <strong>Robinhood transactions template available:</strong> the downloadable CSV contains the exact activity columns this importer reads for buys, sells, dividends, capital gains, and ACAT share transfers. XLSX files with those fields are also supported. Deposits, withdrawals, and transfers in the file are also kept for the Dashboard&apos;s Account Alpha, so export every activity type for the full date range.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadRobinhoodTransactionsTemplate}>
                   Download Robinhood Transactions Template
@@ -1793,7 +1793,7 @@ export default function Import() {
 
           {txnFormat === 'interactive_brokers_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Interactive Brokers transactions template available:</strong> the downloadable CSV matches the Transaction History export this importer reads for buys, sells, assignments, cash dividends, payment in lieu, and DRIP reinvestments. An Activity Statement CSV with Trades and Dividends sections is also accepted.
+              <strong>Interactive Brokers transactions template available:</strong> the downloadable CSV matches the Transaction History export this importer reads for buys, sells, assignments, cash dividends, payment in lieu, and DRIP reinvestments. An Activity Statement CSV with Trades and Dividends sections is also accepted. Deposits, withdrawals, and transfers in the file are also kept for the Dashboard&apos;s Account Alpha, so export every activity type for the full date range.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadInteractiveBrokersTransactionsTemplate}>
                   Download Interactive Brokers Transactions Template

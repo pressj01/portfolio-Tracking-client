@@ -272,14 +272,17 @@ def create_generic_transactions_template():
         "Shares",
         "Price Per Share",
         "Fees",
-        "Dividend Amount",
+        "Amount",
         "Notes",
     ]
     sample_rows = [
+        [date(2026, 1, 14), "DEPOSIT", None, None, None, None, 5000.00, "Transfer from checking"],
         [date(2026, 1, 15), "BUY", "SCHD", 10, 27.50, 0.00, None, "Initial purchase"],
         [date(2026, 2, 3), "DIVIDEND", "SCHD", None, None, None, 8.25, "Cash dividend received"],
         [date(2026, 2, 3), "DRIP", "SCHD", 0.30, 27.50, 0.00, None, "Dividend reinvestment shares"],
+        [date(2026, 2, 20), "TRANSFER IN", "JEPI", 20, None, None, None, "Shares moved from another broker"],
         [date(2026, 3, 10), "SELL", "SCHD", 2, 29.00, 0.05, None, "Partial sale"],
+        [date(2026, 3, 12), "WITHDRAWAL", None, None, None, None, 250.00, "Transfer to checking"],
     ]
 
     header_fill = PatternFill(start_color="0F3D63", end_color="0F3D63", fill_type="solid")
@@ -320,10 +323,13 @@ def create_generic_transactions_template():
 
     type_validation = DataValidation(
         type="list",
-        formula1='"BUY,SELL,DIVIDEND,DRIP"',
+        formula1='"BUY,SELL,DIVIDEND,DRIP,DEPOSIT,WITHDRAWAL,TRANSFER IN,TRANSFER OUT,FEE,INTEREST"',
         allow_blank=False,
     )
-    type_validation.error = "Choose BUY, SELL, DIVIDEND, or DRIP."
+    type_validation.error = (
+        "Choose BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, "
+        "TRANSFER OUT, FEE, or INTEREST."
+    )
     type_validation.errorTitle = "Invalid transaction type"
     type_validation.prompt = "Select the kind of transaction."
     type_validation.promptTitle = "Transaction type"
@@ -353,12 +359,33 @@ def create_generic_transactions_template():
     instruction_headers = ["Column", "Required", "How it is used", "Accepted values / example"]
     instruction_rows = [
         ["Date", "Yes", "Transaction, trade, or payment date.", "2026-01-15 or 01/15/2026"],
-        ["Type", "Yes", "Determines how the row affects holdings and income.", "BUY, SELL, DIVIDEND, or DRIP"],
-        ["Ticker", "Yes", "Security ticker. It is trimmed and converted to uppercase.", "SCHD"],
-        ["Shares", "Trades only", "Positive share quantity for BUY, SELL, and DRIP.", "10 or 0.3250"],
-        ["Price Per Share", "Trades only", "Execution price for BUY, SELL, and DRIP.", "27.50"],
+        [
+            "Type", "Yes", "Determines how the row affects holdings, income, and account cash flows.",
+            "BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, or INTEREST",
+        ],
+        [
+            "Ticker", "Securities only",
+            "Security ticker, trimmed and uppercased. Leave blank for DEPOSIT, WITHDRAWAL, FEE, and INTEREST.",
+            "SCHD",
+        ],
+        [
+            "Shares", "Trades and transfers",
+            "Positive share quantity for BUY, SELL, DRIP, TRANSFER IN, and TRANSFER OUT.",
+            "10 or 0.3250",
+        ],
+        [
+            "Price Per Share", "Trades only",
+            "Execution price for BUY, SELL, and DRIP. Optional for transfers; blank values them at that day's close.",
+            "27.50",
+        ],
         ["Fees", "No", "Commission or transaction fee; blank defaults to zero.", "0.00"],
-        ["Dividend Amount", "Dividends only", "Total cash received for a DIVIDEND row.", "8.25"],
+        [
+            "Amount", "Cash rows",
+            "Total cash for DIVIDEND, DEPOSIT, WITHDRAWAL, FEE, and INTEREST rows. Enter it as a "
+            "positive number; the type decides whether money came in or went out (INTEREST "
+            "keeps its sign, so margin interest charged can be negative).",
+            "8.25 or 5000",
+        ],
         ["Notes", "No", "Optional description saved with the transaction.", "Initial purchase"],
     ]
     for col_idx, value in enumerate(instruction_headers, 1):
@@ -387,6 +414,22 @@ def create_generic_transactions_template():
     )
     ins.cell(row=note_row, column=1).alignment = Alignment(wrap_text=True, vertical="top")
     ins.row_dimensions[note_row].height = 58
+
+    alpha_row = note_row + 2
+    ins.merge_cells(start_row=alpha_row, start_column=1, end_row=alpha_row, end_column=4)
+    ins.cell(row=alpha_row, column=1, value=(
+        "Account Alpha on the Dashboard: DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows "
+        "let the app separate money you added or took out from what the account earned. When a "
+        "file contains any of these rows, the app treats the file's first-to-last date as a "
+        "complete record of money in and out, so include every deposit and withdrawal for that "
+        "stretch. A period with no money movements can be marked complete on the Holdings "
+        "screen under Deposits & Withdrawals."
+    ))
+    ins.cell(row=alpha_row, column=1).fill = PatternFill(
+        start_color="E2EFDA", end_color="E2EFDA", fill_type="solid"
+    )
+    ins.cell(row=alpha_row, column=1).alignment = Alignment(wrap_text=True, vertical="top")
+    ins.row_dimensions[alpha_row].height = 72
 
     ins.column_dimensions["A"].width = 22
     ins.column_dimensions["B"].width = 16
@@ -747,12 +790,13 @@ def create_fidelity_transactions_template():
 
     instruction_rows = [
         ("Worksheet layout", "Required", "Keep the first two blank rows and the header row on row 3."),
-        ("Action", "Required", "The importer reads YOU BOUGHT, YOU SOLD, REINVESTMENT, DIVIDEND RECEIVED, LONG-TERM/SHORT-TERM CAP GAIN, and RETURN OF CAPITAL rows. Same-day distribution lines are summed into one payment."),
-        ("Symbol", "Required", "Invalid or blank symbols are skipped."),
+        ("Action", "Required", "The importer reads YOU BOUGHT, YOU SOLD, REINVESTMENT, DIVIDEND RECEIVED, LONG-TERM/SHORT-TERM CAP GAIN, and RETURN OF CAPITAL rows. Same-day distribution lines are summed into one payment. Other dated rows (ELECTRONIC FUNDS TRANSFER, CONTRIBUTION, FOREIGN TAX WITHHELD, INTEREST, FEES, TRANSFER OF ASSETS) are kept as account activity."),
+        ("Symbol", "Required for trades and dividends", "Trades and dividends need a valid symbol. Cash rows such as deposits and withdrawals usually have none and are still kept as account activity."),
         ("Run Date", "Required", "Imported as the transaction date."),
         ("Quantity / Price ($)", "Required for buys, sells, and DRIP", "Dividend cash rows can leave Price blank and Quantity at 0."),
         ("Commission ($) + Fees ($)", "Imported", "Combined into transaction fees."),
-        ("Amount ($)", "Imported for dividends", "Positive amounts become cash DIVIDEND history entries."),
+        ("Amount ($)", "Imported for dividends and cash activity", "Positive amounts become cash DIVIDEND history entries. Deposits, withdrawals, and transfers keep their sign, which tells money in from money out."),
+        ("Account Alpha", "Export everything", "Export all activity types for the full date range. The Dashboard's Account Alpha needs every deposit and withdrawal; a file filtered to trades or dividends only cannot supply them."),
     ]
     for row_idx, row in enumerate(instruction_rows, 2):
         for col_idx, value in enumerate(row, 1):
@@ -840,7 +884,9 @@ def create_etrade_transactions_template():
         "Use the All Transactions export from E*TRADE Transaction History.",
         "Bought rows import as BUY, Sold rows import as SELL, and positive Dividend or Capital Gain rows import as DIVIDEND.",
         "Dividend reinvestment rows with shares import as [DRIP] BUY entries.",
-        "Transfers, interest, and cash-only rows are ignored.",
+        "Online transfers, interest, fees, and other dated cash rows are kept as account activity "
+        "for the Dashboard's Account Alpha; TRNSFR CASH TO MARGIN moves stay inside the account "
+        "and are not counted as deposits or withdrawals.",
     ]
     return _create_etrade_transaction_template(
         ETRADE_TRANSACTIONS_TEMPLATE_PATH,
@@ -869,9 +915,11 @@ def create_robinhood_transactions_template():
         ["1/7/2026", "1/7/2026", "1/7/2026", "SHLD", "Cap Gains: R/D 2025-12-30 P/D 2026-01-07 - 6 shares at 0.0130", "LCAP", "", "", "$0.08"],
         # ACAT transfer in (shares transferred from another broker)
         ["7/25/2025", "7/25/2025", "7/25/2025", "O", "Realty Income Corp\nCUSIP: 756109104", "ACATI", "25", "", ""],
-        # --- rows below are skipped by the importer ---
+        # Kept as account activity for Account Alpha: margin interest is an
+        # expense, the ACH withdrawal is money leaving the account.
         ["4/7/2026", "4/7/2026", "4/7/2026", "", "Aggregated Margin Rate", "MINT", "", "", "($6.34)"],
         ["12/3/2025", "12/3/2025", "12/4/2025", "", "ACH Withdrawal", "ACH", "", "", "($31.40)"],
+        # The export's disclaimer footer is skipped.
         ["", "", "", "", "The data provided is for informational purposes only.", "", "", "", ""],
     ]
     return _write_csv_template(ROBINHOOD_TRANSACTIONS_TEMPLATE_PATH, rows)
