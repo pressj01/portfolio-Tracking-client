@@ -26909,20 +26909,46 @@ def _research_adjusted_close_series(ticker, force_refresh=False):
     return result
 
 
-def _research_risk_profile(ticker):
+RESEARCH_RISK_DEFAULT_PERIOD = "1y"
+
+
+def _research_trim_to_period(series, period):
+    """Clip a close series to a preset window, or return it whole.
+
+    Bounds come from _etf_screen_period_bounds, the ETF Comparer's own resolver,
+    so "1Y" means the identical span on both screens and their alphas agree
+    instead of merely being close.
+    """
+    key = str(period or "").strip().lower()
+    if key in ("", "max", "all", "lifetime", "inception"):
+        return series
+    bounds = _etf_screen_period_bounds(key)
+    if bounds is None:
+        return series
+    start_date, end_date = bounds
+    try:
+        return series.loc[
+            (series.index >= pd.Timestamp(start_date))
+            & (series.index <= pd.Timestamp(end_date))
+        ]
+    except Exception:
+        return series
+
+
+def _research_risk_profile(ticker, period=RESEARCH_RISK_DEFAULT_PERIOD):
     """Beta/alpha for the research screen, on the same regression as elsewhere.
 
     Sources every series through _research_adjusted_close_series, which is the
     screen's own cache — SPY and QQQ are hot after the first lookup, so this
     costs no extra Yahoo traffic per ticker.
 
-    Unlike the Dashboard columns, this regresses the FULL overlapping history
-    rather than a selected window: the research screen has no range control, and
-    a fund's whole life is the most stable read available here. The payload says
-    so in `risk_window` so the UI can label it rather than let it be mistaken
-    for the Dashboard's window-scoped figure.
+    `period` matches the ETF Comparer's presets and defaults to 1Y, so the same
+    fund reads the same on both screens at the same setting. MAX regresses the
+    full overlapping history. The payload always reports `risk_window` so the UI
+    can state the span instead of leaving two correct numbers looking
+    contradictory.
     """
-    blank = dict(_risk_profile(None, []), risk_window=None)
+    blank = dict(_risk_profile(None, []), risk_window=None, risk_period=period)
     symbol = (ticker or "").strip().upper()
     if not symbol:
         return blank
@@ -26931,6 +26957,9 @@ def _research_risk_profile(ticker):
     except Exception:
         return blank
     if series is None or getattr(series, "empty", True):
+        return blank
+    series = _research_trim_to_period(series, period)
+    if getattr(series, "empty", True):
         return blank
 
     benchmarks = []
@@ -26944,7 +26973,9 @@ def _research_risk_profile(ticker):
         except Exception:
             continue
         if benchmark_series is not None and not getattr(benchmark_series, "empty", True):
-            benchmarks.append((benchmark_symbol, benchmark_series))
+            benchmark_series = _research_trim_to_period(benchmark_series, period)
+            if not getattr(benchmark_series, "empty", True):
+                benchmarks.append((benchmark_symbol, benchmark_series))
 
     profile = _risk_profile(series, benchmarks)
     window = None
@@ -26961,7 +26992,7 @@ def _research_risk_profile(ticker):
                 }
         except Exception:
             window = None
-    return dict(profile, risk_window=window)
+    return dict(profile, risk_window=window, risk_period=period)
 
 
 def _research_with_yahoo_beta_fallback(profile, info):
@@ -27987,6 +28018,7 @@ def security_research(kind, ticker):
     kind = (kind or "").strip().lower()
     ticker = (ticker or "").strip().upper()
     lookup_symbol = _yahoo_symbol_for_ticker(ticker)
+    risk_period = (request.args.get("risk_period") or RESEARCH_RISK_DEFAULT_PERIOD).strip().lower()
     if kind not in {"etf", "stock"}:
         return jsonify({"error": "kind must be etf or stock"}), 400
     if not ticker:
@@ -28154,7 +28186,7 @@ def security_research(kind, ticker):
                 (preferred_official_profile or {}).get("top_holdings")
                 or _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}")
             ),
-            **_research_risk_profile(lookup_symbol),
+            **_research_risk_profile(lookup_symbol, risk_period),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
@@ -28275,7 +28307,7 @@ def security_research(kind, ticker):
         # Yahoo's own beta stays only as the fallback when the regression cannot
         # run: it is 5Y monthly vs the S&P, is 0.0/None for many funds, and
         # would not be comparable with the alpha shown beside it.
-        **_research_with_yahoo_beta_fallback(_research_risk_profile(lookup_symbol), info),
+        **_research_with_yahoo_beta_fallback(_research_risk_profile(lookup_symbol, risk_period), info),
         "trailing_pe": _research_clean_value(_research_info_value(info, "trailingPE")),
         "forward_pe": _research_clean_value(_research_info_value(info, "forwardPE")),
         "price_to_book": _research_clean_value(_research_info_value(info, "priceToBook")),
@@ -28335,6 +28367,21 @@ def security_research(kind, ticker):
 
 
 # ── Data Management ───────────────────────────────────────────────────────────
+
+@app.route("/api/security-research/risk/<ticker>", methods=["GET"])
+def security_research_risk(ticker):
+    """Just the beta/alpha bundle for one ticker over one window.
+
+    The full research payload scrapes issuer sites and Yahoo profile data, none
+    of which changes when the user only moves the period buttons — so the window
+    control calls this instead of re-running all of it.
+    """
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "ticker is required"}), 400
+    period = (request.args.get("period") or RESEARCH_RISK_DEFAULT_PERIOD).strip().lower()
+    return jsonify(_research_risk_profile(_yahoo_symbol_for_ticker(symbol), period))
+
 
 @app.route("/api/security-research/<kind>/<ticker>/average-return", methods=["GET"])
 def security_research_average_return(kind, ticker):

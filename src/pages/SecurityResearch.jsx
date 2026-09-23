@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
@@ -37,12 +37,54 @@ function riskWindowTitle(data, metric) {
   return `${metric} vs ${bm}, the best-fitting benchmark${span}. Full available history, not the Dashboard's selected range.`
 }
 
+const RISK_PERIODS = [
+  { value: '1mo', label: '1M' },
+  { value: '3mo', label: '3M' },
+  { value: '6mo', label: '6M' },
+  { value: 'ytd', label: 'YTD' },
+  { value: '1y', label: '1Y' },
+  { value: '2y', label: '2Y' },
+  { value: '3y', label: '3Y' },
+  { value: '5y', label: '5Y' },
+  { value: 'max', label: 'MAX' },
+]
+
+function RiskPeriodPicker({ value, onChange, busy }) {
+  return (
+    <div className="research-risk-periods">
+      <span>Risk window</span>
+      {RISK_PERIODS.map(p => (
+        <button
+          key={p.value}
+          type="button"
+          className={`btn btn-sm${value === p.value ? ' btn-active' : ''}`}
+          disabled={busy}
+          onClick={() => onChange(p.value)}
+          title={`Measure Beta and Alpha over ${p.label}. Matches the ETF Comparer's ${p.label} window exactly.`}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function RiskValue({ data, metric, children }) {
+  // The window is spelled out under the value, not just in the tooltip: this
+  // screen regresses the fund's whole history while the ETF Comparer uses the
+  // charted period, so the same fund legitimately reads differently on each.
+  // Two correct numbers with no visible window look like a contradiction.
+  const start = data.risk_window?.start
   return (
     <span title={riskWindowTitle(data, metric)}>
       {children}
       {data.beta_benchmark && (
         <span style={{ color: 'var(--text-dim)', fontSize: '0.8em', marginLeft: 4 }}>vs {data.beta_benchmark}</span>
+      )}
+      {start && (
+        <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.75em', fontWeight: 400 }}>
+          {start} → {data.risk_window?.end}
+        </span>
       )}
     </span>
   )
@@ -333,7 +375,7 @@ function UpcomingDistributionSchedule({ schedule, sourceUrl }) {
   )
 }
 
-function ETFResult({ data, onOpenChart, return1y }) {
+function ETFResult({ data, onOpenChart, return1y, riskPeriod, onRiskPeriodChange, riskBusy }) {
   const chartPrice = Number(data.price) > 0 ? data.price : data.nav_price
   const yieldLabel = data.yield_source && data.yield_source !== 'Yahoo Finance'
     ? `${data.target_yield_label || 'Estimated Yield'} (${data.yield_source})`
@@ -388,6 +430,8 @@ function ETFResult({ data, onOpenChart, return1y }) {
         <p>{data.description || data.objective || '-'}</p>
       </section>
 
+      <RiskPeriodPicker value={riskPeriod} onChange={onRiskPeriodChange} busy={riskBusy} />
+
       <section className="research-grid">
         {metrics.map(([label, value]) => <Field key={label} label={label} value={value} />)}
       </section>
@@ -439,7 +483,7 @@ function ETFResult({ data, onOpenChart, return1y }) {
   )
 }
 
-function StockResult({ data, onOpenChart, return1y }) {
+function StockResult({ data, onOpenChart, return1y, riskPeriod, onRiskPeriodChange, riskBusy }) {
   const valuation = [
     ['Price', fmtMoney(data.price)],
     ['Market Cap', fmtMoney(data.market_cap)],
@@ -494,6 +538,8 @@ function StockResult({ data, onOpenChart, return1y }) {
         <h3>Business Description</h3>
         <p>{data.business_summary || '-'}</p>
       </section>
+
+      <RiskPeriodPicker value={riskPeriod} onChange={onRiskPeriodChange} busy={riskBusy} />
 
       <section className="research-three-col">
         <div>
@@ -810,6 +856,26 @@ export default function SecurityResearch() {
   const [chartTicker, setChartTicker] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [riskPeriod, setRiskPeriod] = useState('1y')
+  const [riskBusy, setRiskBusy] = useState(false)
+
+  // Changing the window re-measures Beta/Alpha only. The rest of the payload
+  // comes from issuer sites and Yahoo profile data, none of which depends on
+  // the period, so re-running the whole lookup would be wasted scraping.
+  const changeRiskPeriod = useCallback((nextPeriod) => {
+    setRiskPeriod(nextPeriod)
+    const symbol = data?.ticker
+    if (!symbol) return
+    setRiskBusy(true)
+    pf(`/api/security-research/risk/${encodeURIComponent(symbol)}?period=${nextPeriod}&_=${Date.now()}`, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(d => {
+        if (d?.error) return
+        setData(prev => (prev && prev.ticker === symbol ? { ...prev, ...d } : prev))
+      })
+      .catch(() => {})
+      .finally(() => setRiskBusy(false))
+  }, [data?.ticker, pf])
 
   const normalizedTicker = useMemo(() => ticker.trim().toUpperCase(), [ticker])
   const normalizedBenchmark = useMemo(() => benchmark.trim().toUpperCase() || 'SPY', [benchmark])
@@ -834,7 +900,7 @@ export default function SecurityResearch() {
     setError('')
     setData(null)
     setChartTicker('')
-    const tryKind = (nextKind) => pf(`/api/security-research/${nextKind}/${encodeURIComponent(lookupTicker)}?_=${Date.now()}`, { cache: 'no-store' })
+    const tryKind = (nextKind) => pf(`/api/security-research/${nextKind}/${encodeURIComponent(lookupTicker)}?risk_period=${riskPeriod}&_=${Date.now()}`, { cache: 'no-store' })
       .then(r => r.json())
       .then(d => {
         if (d.error) throw new Error(d.error)
@@ -917,8 +983,8 @@ export default function SecurityResearch() {
           {loading && <div className="research-loading"><span className="spinner" /> Loading research data...</div>}
 
           {data?.kind && <AverageReturnChart kind={data.kind} ticker={data?.ticker || normalizedTicker} benchmark={normalizedBenchmark} />}
-          {data?.kind === 'etf' && <ETFResult data={data} onOpenChart={openChart} return1y={return1y} />}
-          {data?.kind === 'stock' && <StockResult data={data} onOpenChart={openChart} return1y={return1y} />}
+          {data?.kind === 'etf' && <ETFResult data={data} onOpenChart={openChart} return1y={return1y} riskPeriod={riskPeriod} onRiskPeriodChange={changeRiskPeriod} riskBusy={riskBusy} />}
+          {data?.kind === 'stock' && <StockResult data={data} onOpenChart={openChart} return1y={return1y} riskPeriod={riskPeriod} onRiskPeriodChange={changeRiskPeriod} riskBusy={riskBusy} />}
           {chartTicker && <ResearchChart ticker={chartTicker} />}
         </>
       )}

@@ -13,6 +13,10 @@ import { comparerActualCloses, comparerEndLabelAxisY, comparerLogHoverData, comp
 import ComparerTickerLibrary from '../components/ComparerTickerLibrary'
 import { uniqueTickers } from '../utils/comparerTickerLibrary'
 
+// Columns measured over the charted window rather than a fixed period. Their
+// header carries that window so they cannot be read as trailing-1Y figures.
+const WINDOWED_COLUMNS = new Set(['beta', 'alpha', 'sharpe', 'sortino', 'max_drawdown'])
+
 const PERIODS = [
   { value: '1mo', label: '1M' },
   { value: '3mo', label: '3M' },
@@ -803,6 +807,11 @@ export default function ETFComparer() {
     })
   }, [data, profiles, symbols])
 
+  const riskWindowLabel = useMemo(() => {
+    if (returnXRange[0] || returnXRange[1] || fetchRange) return 'custom range'
+    return PERIODS.find(p => p.value === period)?.label || period
+  }, [period, returnXRange, fetchRange])
+
   const activeColumns = COLUMNS.filter(col => col.locked || visibleColumns.includes(col.key))
   const filteredColumns = COLUMNS.filter(col => !search || col.label.toLowerCase().includes(search.toLowerCase()))
 
@@ -1143,7 +1152,18 @@ export default function ETFComparer() {
         <div className="etfc-table-wrap">
           <table className="etfc-table">
             <thead>
-              <tr>{activeColumns.map(col => <th key={col.key}>{col.label}</th>)}</tr>
+              <tr>{activeColumns.map(col => (
+                <th key={col.key} title={WINDOWED_COLUMNS.has(col.key)
+                  ? `Regressed over the charted window (${riskWindowLabel}), unlike CAGR 1Y which is always a trailing year`
+                  : undefined}>
+                  {col.label}
+                  {WINDOWED_COLUMNS.has(col.key) && (
+                    <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 3, fontWeight: 400 }}>
+                      ({riskWindowLabel})
+                    </span>
+                  )}
+                </th>
+              ))}</tr>
             </thead>
             <tbody>
               {rows.map(row => (

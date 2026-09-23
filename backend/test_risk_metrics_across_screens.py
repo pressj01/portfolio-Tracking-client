@@ -20,8 +20,12 @@ import app as app_module
 
 
 def _market(n=400, seed=7):
-    """A QQQ-driven fund plus both benchmarks, on one shared calendar."""
-    idx = pd.bdate_range("2024-01-02", periods=n)
+    """A QQQ-driven fund plus both benchmarks, on one shared calendar.
+
+    Anchored on today: the research helper defaults to a trailing 1Y window, so
+    a fixture ending in the past would trim to an empty series.
+    """
+    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
     rng = np.random.default_rng(seed)
     spy = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.010, n)), index=idx)
     qqq = pd.Series(400 * np.cumprod(1 + rng.normal(5e-4, 0.015, n)), index=idx)
@@ -111,7 +115,7 @@ class SecurityResearchRiskProfileTest(unittest.TestCase):
 
     def test_profile_carries_beta_alpha_and_a_labelled_window(self):
         with patch("app._research_adjusted_close_series", side_effect=self._loader):
-            profile = app_module._research_risk_profile("FUND")
+            profile = app_module._research_risk_profile("FUND", "max")
 
         self.assertEqual(profile["beta_benchmark"], "QQQ")
         self.assertIsNotNone(profile["beta"])
@@ -127,7 +131,7 @@ class SecurityResearchRiskProfileTest(unittest.TestCase):
 
     def test_a_benchmark_is_not_regressed_against_itself(self):
         with patch("app._research_adjusted_close_series", side_effect=self._loader):
-            profile = app_module._research_risk_profile("SPY")
+            profile = app_module._research_risk_profile("SPY", "max")
 
         # SPY vs SPY is a true but useless beta 1.00 / alpha 0.00, so it should
         # route to the other benchmark instead.
@@ -135,7 +139,7 @@ class SecurityResearchRiskProfileTest(unittest.TestCase):
 
     def test_missing_history_blanks_every_field_without_raising(self):
         with patch("app._research_adjusted_close_series", side_effect=self._loader):
-            profile = app_module._research_risk_profile("UNKNOWN")
+            profile = app_module._research_risk_profile("UNKNOWN", "max")
 
         self.assertIsNone(profile["beta"])
         self.assertIsNone(profile["alpha"])
@@ -149,7 +153,7 @@ class SecurityResearchRiskProfileTest(unittest.TestCase):
         self.assertIsNone(filled["beta_benchmark"])
 
         with patch("app._research_adjusted_close_series", side_effect=self._loader):
-            real = app_module._research_risk_profile("FUND")
+            real = app_module._research_risk_profile("FUND", "max")
         kept = app_module._research_with_yahoo_beta_fallback(real, {"beta": 0.87})
         self.assertEqual(kept["beta"], real["beta"], "regressed beta must win")
 
@@ -274,6 +278,87 @@ class ProviderMergeKeepsRiskKeysTest(unittest.TestCase):
         self.assertEqual(payload["beta_benchmark"], "QQQ", payload)
         self.assertIsNotNone(payload["beta"], payload)
         self.assertIsNotNone(payload["alpha"], payload)
+
+
+class ResearchRiskWindowTest(unittest.TestCase):
+    """Security Research's window control must line up with the comparer's.
+
+    Two screens showing the same fund a different alpha is defensible only if
+    the user can put them on the same window and see them agree. "1Y" therefore
+    has to mean the identical span on both, which is why both resolve it through
+    _etf_screen_period_bounds rather than each rolling their own.
+    """
+
+    def setUp(self):
+        idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=900)
+        rng = np.random.default_rng(23)
+        spy = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.010, 900)), index=idx)
+        qqq = pd.Series(400 * np.cumprod(1 + rng.normal(5e-4, 0.015, 900)), index=idx)
+        fund = pd.Series(
+            50 * np.cumprod(
+                1 + 2e-4 + 1.2 * qqq.pct_change().fillna(0).values
+                + rng.normal(0, 0.002, 900)
+            ),
+            index=idx,
+        )
+        self.series = {"FUND": fund, "SPY": spy, "QQQ": qqq}
+
+    def _loader(self, symbol, force_refresh=False):
+        return (self.series.get(symbol), symbol)
+
+    def test_the_window_honours_the_requested_period(self):
+        with patch("app._research_adjusted_close_series", side_effect=self._loader):
+            one_year = app_module._research_risk_profile("FUND", "1y")
+            full = app_module._research_risk_profile("FUND", "max")
+
+        self.assertEqual(one_year["risk_period"], "1y")
+        self.assertLess(
+            one_year["risk_window"]["observations"],
+            full["risk_window"]["observations"],
+            "1Y must measure fewer days than the full history",
+        )
+        self.assertNotAlmostEqual(one_year["alpha"], full["alpha"], places=6)
+
+    def test_one_year_spans_exactly_the_comparers_one_year(self):
+        bounds = app_module._etf_screen_period_bounds("1y")
+        with patch("app._research_adjusted_close_series", side_effect=self._loader):
+            profile = app_module._research_risk_profile("FUND", "1y")
+
+        window = profile["risk_window"]
+        self.assertGreaterEqual(window["start"], bounds[0].strftime("%Y-%m-%d"))
+        self.assertLessEqual(window["end"], bounds[1].strftime("%Y-%m-%d"))
+
+    def test_the_benchmark_is_trimmed_to_the_same_span_as_the_fund(self):
+        """Regressing a 1Y fund against a full-history benchmark is meaningless."""
+        with patch("app._research_adjusted_close_series", side_effect=self._loader):
+            profile = app_module._research_risk_profile("FUND", "1y")
+
+        trimmed_fund = app_module._research_trim_to_period(self.series["FUND"], "1y")
+        trimmed_bench = app_module._research_trim_to_period(self.series["QQQ"], "1y")
+        self.assertAlmostEqual(
+            profile["alpha"],
+            app_module._capm_alpha(trimmed_fund, trimmed_bench),
+            places=9,
+        )
+
+    def test_an_unknown_period_falls_back_to_full_history_not_an_error(self):
+        with patch("app._research_adjusted_close_series", side_effect=self._loader):
+            bogus = app_module._research_risk_profile("FUND", "not-a-period")
+            full = app_module._research_risk_profile("FUND", "max")
+        self.assertEqual(bogus["alpha"], full["alpha"])
+
+    def test_the_risk_endpoint_serves_one_window_without_the_full_payload(self):
+        with patch("app._research_adjusted_close_series", side_effect=self._loader):
+            response = app_module.app.test_client().get(
+                "/api/security-research/risk/FUND?period=1y"
+            )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertEqual(payload["risk_period"], "1y")
+        self.assertIsNotNone(payload["alpha"])
+        # Cheap by construction: no issuer scrape, no Yahoo profile fields.
+        self.assertNotIn("business_summary", payload)
+        self.assertNotIn("top_holdings", payload)
 
 
 class SharedHelperIsTheOnlyAssemblerTest(unittest.TestCase):
