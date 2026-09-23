@@ -20,6 +20,33 @@ const fmtMoney = (v) => {
 const fmtNum = (v, d = 2) => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: d })
 const fmtPct = (v) => v == null ? '-' : Number(v).toFixed(2) + '%'
 const fmtDate = (v) => v || '-'
+// Alpha arrives as a ratio (0.0432 = +4.32%) and can exceed 1.0 on a volatile
+// window, so it is always scaled rather than guessed at.
+const fmtAlpha = (v) => v == null ? '-' : `${v > 0 ? '+' : ''}${(Number(v) * 100).toFixed(2)}%`
+
+// Beta and alpha share one regression, so they share one label. The window is
+// the fund's full overlapping history here, not the Dashboard's selected range,
+// and the tooltip says so rather than letting the two be confused.
+function riskWindowTitle(data, metric) {
+  const bm = data.beta_benchmark
+  if (!bm) {
+    return `${metric} could not be regressed - not enough overlapping price history`
+  }
+  const w = data.risk_window
+  const span = w ? ` over ${w.start} to ${w.end} (${w.observations.toLocaleString()} trading days)` : ''
+  return `${metric} vs ${bm}, the best-fitting benchmark${span}. Full available history, not the Dashboard's selected range.`
+}
+
+function RiskValue({ data, metric, children }) {
+  return (
+    <span title={riskWindowTitle(data, metric)}>
+      {children}
+      {data.beta_benchmark && (
+        <span style={{ color: 'var(--text-dim)', fontSize: '0.8em', marginLeft: 4 }}>vs {data.beta_benchmark}</span>
+      )}
+    </span>
+  )
+}
 const fmt = (v) => {
   return formatMoney(v)
 }
@@ -326,6 +353,10 @@ function ETFResult({ data, onOpenChart, return1y }) {
     [data.total_assets_label || 'Total Assets', fmtAssets(data.total_assets)],
     [data.nav_label || 'NAV', fmtMoney(data.nav_price)],
     ['Inception', fmtDate(data.inception_date)],
+    ['Beta', <RiskValue data={data} metric="Beta">{fmtNum(data.beta)}</RiskValue>],
+    ['Alpha', <RiskValue data={data} metric="Annualized CAPM alpha">
+      <span style={{ color: data.alpha == null ? undefined : (data.alpha >= 0 ? 'var(--pos)' : 'var(--neg)') }}>{fmtAlpha(data.alpha)}</span>
+    </RiskValue>],
     ['Distribution Frequency', frequencyLabel || '-'],
     [yieldLabel, fmtPct(data.estimated_yield_pct)],
     ['30-Day SEC Yield', fmtPct(data.sec_30_day_yield_pct)],
@@ -413,7 +444,10 @@ function StockResult({ data, onOpenChart, return1y }) {
     ['Price', fmtMoney(data.price)],
     ['Market Cap', fmtMoney(data.market_cap)],
     ['Enterprise Value', fmtMoney(data.enterprise_value)],
-    ['Beta', fmtNum(data.beta)],
+    ['Beta', <RiskValue data={data} metric="Beta">{fmtNum(data.beta)}</RiskValue>],
+    ['Alpha', <RiskValue data={data} metric="Annualized CAPM alpha">
+      <span style={{ color: data.alpha == null ? undefined : (data.alpha >= 0 ? 'var(--pos)' : 'var(--neg)') }}>{fmtAlpha(data.alpha)}</span>
+    </RiskValue>],
     ['Trailing P/E', fmtNum(data.trailing_pe)],
     ['Forward P/E', fmtNum(data.forward_pe)],
     ['Price/Book', fmtNum(data.price_to_book)],

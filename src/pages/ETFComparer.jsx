@@ -65,6 +65,7 @@ const COLUMNS = [
   { key: 'open', label: 'Open' },
   { key: 'return_1y', label: 'CAGR 1Y' },
   { key: 'beta', label: 'Beta' },
+  { key: 'alpha', label: 'Alpha' },
   { key: 'approx_delta', label: 'Approx. Delta (↑/↓)' },
   { key: 'sharpe', label: 'Sharpe' },
   { key: 'sortino', label: 'Sortino' },
@@ -116,6 +117,15 @@ function ratioPct(value) {
   const n = Number(value)
   if (!Number.isFinite(n)) return '-'
   return `${(Math.abs(n) <= 1 ? n * 100 : n).toFixed(2)}%`
+}
+
+// Alpha is always a ratio, and a volatile short window can push it past 1.0
+// (+100%). ratioPct's "<= 1 means a ratio" heuristic is safe for expense ratios
+// and yields but would print a +150% alpha as "1.50%", so alpha gets its own.
+function alphaPct(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '-'
+  return `${n > 0 ? '+' : ''}${(n * 100).toFixed(2)}%`
 }
 
 function yieldPct(value) {
@@ -804,6 +814,7 @@ export default function ETFComparer() {
     if (key === 'volume') return compact(value)
     if (['expense_ratio', 'dividend_yield', 'expected_dividend_yield'].includes(key)) return ratioPct(value)
     if (['change_pct', 'return_1y', 'max_drawdown'].includes(key)) return pct(value)
+    if (key === 'alpha') return alphaPct(value)
     return value
   }
 
@@ -1153,6 +1164,20 @@ export default function ETFComparer() {
                         <td key={col.key} title={bm ? `Beta regressed against ${bm} (best-fitting benchmark)` : undefined}>
                           {format('beta', row.beta)}
                           {bm && row.beta != null && (
+                            <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
+                          )}
+                        </td>
+                      )
+                    }
+                    if (col.key === 'alpha') {
+                      const bm = row.beta_benchmark
+                      return (
+                        <td key={col.key} style={{ color: pctColor(row.alpha) }}
+                          title={bm
+                            ? `Annualized CAPM alpha over the charted window, against ${bm} — the same benchmark as Beta. Return above or below what this fund's beta predicts.`
+                            : 'Annualized CAPM alpha — unavailable until the window supports a regression'}>
+                          {format('alpha', row.alpha)}
+                          {bm && row.alpha != null && (
                             <span style={{ color: 'var(--p-6f7890)', fontSize: '0.8em', marginLeft: 4 }}>vs {bm}</span>
                           )}
                         </td>

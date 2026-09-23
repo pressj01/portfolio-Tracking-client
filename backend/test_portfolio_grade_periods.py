@@ -165,6 +165,51 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         self.assertEqual(payload["ticker_grades"]["AAA"]["grade"], "N/A")
 
     @patch("yfinance.Ticker")
+    def test_alpha_is_reported_beside_beta(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+        risk = payload["ticker_risk"]["AAA"]
+
+        self.assertIn("alpha", risk)
+        self.assertIsNotNone(risk["alpha"], risk)
+        self.assertIsInstance(risk["alpha"], float)
+        # Alpha must never be the blank half of a row whose beta computed: both
+        # clear the same 15-observation floor, so one without the other means
+        # the two columns are measuring different things.
+        self.assertIsNotNone(risk["beta"], risk)
+
+    @patch("yfinance.Ticker")
+    def test_alpha_uses_the_same_benchmark_as_beta(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=1y"
+        ).get_json()
+
+        for ticker, risk in payload["ticker_risk"].items():
+            if risk.get("alpha") is None:
+                continue
+            benchmark = risk["beta_benchmark"]
+            self.assertIsNotNone(benchmark, f"{ticker} reported alpha with no benchmark")
+            expected = app_module._capm_alpha(
+                self.market_data["Close"][ticker],
+                self.market_data["Close"][benchmark],
+            )
+            self.assertAlmostEqual(risk["alpha"], expected, places=4, msg=ticker)
+
+    def test_lifetime_blanks_alpha_with_the_rest_of_the_risk_row(self):
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=lifetime"
+        ).get_json()
+
+        for risk in payload["ticker_risk"].values():
+            self.assertIn("alpha", risk)
+            self.assertIsNone(risk["alpha"])
+
+    @patch("yfinance.Ticker")
     def test_grade_does_not_block_on_live_info_when_history_downloads(self, ticker_mock):
         ticker_mock.side_effect = AssertionError("live .info must not block grades")
 
@@ -460,6 +505,166 @@ class RateLimitedTickerRecoveryTest(unittest.TestCase):
         self.assertNotIn(
             "CCC", second["unresolved_symbols"],
             "a ticker with a real (even if backfilled) grade must not also be flagged unresolved",
+        )
+
+
+class RiskRegressionMathTest(unittest.TestCase):
+    """Alpha and beta are one regression; bad prices must sink both, not one."""
+
+    def _pair(self, seed=1, n=300, noise=0.003, beta=1.3, drift=2e-4):
+        idx = pd.bdate_range("2024-01-02", periods=n)
+        rng = np.random.default_rng(seed)
+        bench = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.01, n)), index=idx)
+        fund = pd.Series(
+            50 * np.cumprod(
+                1 + drift + beta * bench.pct_change().fillna(0).values
+                + rng.normal(0, noise, n)
+            ),
+            index=idx,
+        )
+        return fund, bench
+
+    def test_beta_is_the_ols_slope_and_alpha_the_intercept(self):
+        fund, bench = self._pair()
+        fr = fund.pct_change().dropna().values
+        br = bench.pct_change().dropna().values
+        rf_daily = 0.05 / 252
+        slope, intercept = np.polyfit(br - rf_daily, fr - rf_daily, 1)
+
+        self.assertEqual(app_module._beta_and_corr(fund, bench)[0], round(slope, 2))
+        # Alpha is stored to 6dp; the column renders 2dp of a percent.
+        self.assertAlmostEqual(
+            app_module._capm_alpha(fund, bench), intercept * 252, places=6
+        )
+
+    def test_identity_and_flat_series_behave_per_capm(self):
+        _, bench = self._pair()
+        self.assertAlmostEqual(app_module._capm_alpha(bench, bench), 0.0, places=9)
+        self.assertEqual(app_module._beta_and_corr(bench, bench)[0], 1.0)
+
+        flat = pd.Series([9.0] * len(bench), index=bench.index)
+        self.assertEqual(app_module._beta_and_corr(flat, bench)[0], 0.0)
+        # A zero-beta asset should earn the risk-free rate; earning nothing is
+        # exactly -rf of alpha, not 0.
+        self.assertAlmostEqual(app_module._capm_alpha(flat, bench), -0.05, places=6)
+
+    def test_non_positive_prices_are_refused_by_both(self):
+        """A single bad bar used to read beta -2.55 and alpha -1083%."""
+        fund, bench = self._pair()
+        for bad in (0.0, -5.0):
+            poisoned = fund.copy()
+            poisoned.iloc[100] = bad
+            self.assertIsNone(app_module._capm_alpha(poisoned, bench), bad)
+            self.assertIsNone(app_module._beta_and_corr(poisoned, bench), bad)
+            self.assertIsNone(
+                app_module._best_fit_beta(poisoned, [("SPY", bench)])[0], bad
+            )
+
+    def test_beta_never_returns_nan(self):
+        """NaN is not None, so a NaN beta slipped past the cache-fallback check."""
+        fund, bench = self._pair()
+        poisoned = fund.copy()
+        poisoned.iloc[100] = 0.0
+        beta, _benchmark = app_module._best_fit_beta(poisoned, [("SPY", bench)])
+        self.assertIsNone(beta)
+        self.assertFalse(isinstance(beta, float) and np.isnan(beta))
+
+    def test_alpha_and_beta_are_available_together_or_not_at_all(self):
+        rng = np.random.default_rng(3)
+        for _ in range(300):
+            n = int(rng.integers(5, 80))
+            idx = pd.bdate_range("2024-01-02", periods=n)
+            bench = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.01, n)), index=idx)
+            fund = pd.Series(42 * np.cumprod(1 + rng.normal(3e-4, 0.013, n)), index=idx)
+            if rng.random() < 0.15:
+                fund.iloc[int(rng.integers(0, n))] = float(rng.choice([0.0, -3.0]))
+            self.assertEqual(
+                app_module._capm_alpha(fund, bench) is None,
+                app_module._beta_and_corr(fund, bench) is None,
+                f"alpha/beta availability diverged on a {n}-bar window",
+            )
+
+    def test_result_does_not_depend_on_the_joined_frame_being_sorted(self):
+        """pandas is deprecating concat's default sort; pin the order ourselves."""
+        fund, bench = self._pair(seed=4)
+        expected_alpha = app_module._capm_alpha(fund, bench)
+        expected_beta = app_module._beta_and_corr(fund, bench)[0]
+
+        real_concat = pd.concat
+
+        def reversed_join(objs, **kwargs):
+            out = real_concat(objs, **kwargs)
+            return out.iloc[::-1] if kwargs.get("axis") == 1 else out
+
+        pd.concat = reversed_join
+        try:
+            self.assertEqual(app_module._capm_alpha(fund, bench), expected_alpha)
+            self.assertEqual(app_module._beta_and_corr(fund, bench)[0], expected_beta)
+        finally:
+            pd.concat = real_concat
+
+
+class SharedRiskProfileTest(unittest.TestCase):
+    """_risk_profile is the one place beta/alpha/deltas are assembled."""
+
+    def _series(self, n=300, seed=1, beta=1.2):
+        idx = pd.bdate_range("2024-01-02", periods=n)
+        rng = np.random.default_rng(seed)
+        spy = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.010, n)), index=idx)
+        qqq = pd.Series(400 * np.cumprod(1 + rng.normal(5e-4, 0.014, n)), index=idx)
+        fund = pd.Series(
+            50 * np.cumprod(
+                1 + 2e-4 + beta * qqq.pct_change().fillna(0).values
+                + rng.normal(0, 0.002, n)
+            ),
+            index=idx,
+        )
+        return fund, [("SPY", spy), ("QQQ", qqq)]
+
+    def test_returns_every_key_even_when_it_cannot_regress(self):
+        expected = {"beta", "alpha", "beta_benchmark", "delta_up", "delta_down"}
+        for fund, benchmarks in (
+            (None, []),
+            (pd.Series(dtype=float), []),
+            (self._series()[0], []),
+        ):
+            profile = app_module._risk_profile(fund, benchmarks)
+            self.assertEqual(set(profile), expected)
+            self.assertTrue(all(v is None for v in profile.values()), profile)
+
+    def test_alpha_and_beta_share_the_selected_benchmark(self):
+        fund, benchmarks = self._series()
+        profile = app_module._risk_profile(fund, benchmarks)
+
+        # A QQQ-driven fund must route to QQQ, and alpha must be measured there.
+        self.assertEqual(profile["beta_benchmark"], "QQQ")
+        self.assertIsNotNone(profile["beta"])
+        self.assertAlmostEqual(
+            profile["alpha"],
+            app_module._capm_alpha(fund, dict(benchmarks)["QQQ"]),
+            places=9,
+        )
+        self.assertNotAlmostEqual(
+            profile["alpha"],
+            app_module._capm_alpha(fund, dict(benchmarks)["SPY"]),
+            places=4,
+            msg="alpha must not silently fall back to SPY",
+        )
+
+    def test_a_poisoned_price_blanks_the_whole_bundle_not_half_of_it(self):
+        fund, benchmarks = self._series()
+        fund.iloc[100] = -5.0
+        profile = app_module._risk_profile(fund, benchmarks)
+        self.assertIsNone(profile["beta"])
+        self.assertIsNone(profile["alpha"])
+
+    def test_grades_endpoint_rows_match_the_shared_helper(self):
+        """The dashboard must not drift from _risk_profile's own output."""
+        fund, benchmarks = self._series(seed=5)
+        direct = app_module._risk_profile(fund, benchmarks, delta_min_days=10)
+        self.assertEqual(
+            set(direct),
+            {"beta", "alpha", "beta_benchmark", "delta_up", "delta_down"},
         )
 
 

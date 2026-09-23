@@ -2788,6 +2788,7 @@ export default function Dashboard() {
         onTickerClick={ticker => openTickerResearch(ticker)}
         onNavChange={refreshPortfolioCoverage}
         tickerGrades={activeTickerGrades}
+        tickerRisk={activeTickerRisk}
       />
 
 

@@ -19,6 +19,8 @@ const ADOPTED_COLUMNS = {
   general: [
     { key: 'unrealizedGain', after: 'currentValue' },
     { key: 'unrealizedPct', after: 'unrealizedGain' },
+    { key: 'beta', after: 'unrealizedPct' },
+    { key: 'alpha', after: 'beta' },
   ],
 }
 
@@ -30,7 +32,7 @@ const VIEW_COLUMNS = {
   general: [
     'holding', 'status', 'shares', 'category', 'subcategory', 'shareOfPortfolio',
     'avgCost', 'currentPrice', 'costBasis', 'currentValue', 'unrealizedGain', 'unrealizedPct',
-    'nav',
+    'beta', 'alpha', 'nav',
   ],
   dividends: [
     'holding', 'shares', 'category', 'subcategory', 'currentValue', 'dividends', 'dividendYield',
@@ -104,6 +106,8 @@ const COLUMN_HELP = {
   divsReceived: 'Column: lifetime dividends recorded for the holding or sold transaction group.',
   unrealizedGain: 'Column: price gain or loss on the shares still held — current value minus cost basis. Dividends and realized trims are not included. Sold rows show a dash because there is no open position.',
   unrealizedPct: 'Column: unrealized gain as a percent of cost basis. Sold rows show a dash because there is no open position.',
+  beta: 'Column: price-return beta over the Dashboard Shared Performance Date Range, measured against whichever of SPY or QQQ the ticker tracks most closely. 1.00 moves with that benchmark; above 1.00 amplifies it. Sold rows show a dash.',
+  alpha: 'Column: annualized CAPM alpha over the Dashboard Shared Performance Date Range — return above or below what the ticker beta predicts, against the same benchmark shown in the Beta column. Positive means it beat its own risk exposure. Sold rows show a dash.',
   capitalGain: 'Column: current value minus cost basis for open holdings; proceeds minus cost for sold rows.',
   realizedProfit: 'Column: profit or loss already locked in from shares that were sold.',
 }
@@ -135,6 +139,8 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Div. received', body: COLUMN_HELP.divsReceived.replace('Column: ', '') },
   { kind: 'Table column', label: 'Unrealized gain', body: COLUMN_HELP.unrealizedGain.replace('Column: ', '') },
   { kind: 'Table column', label: 'Unrealized %', body: COLUMN_HELP.unrealizedPct.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Beta', body: COLUMN_HELP.beta.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Alpha', body: COLUMN_HELP.alpha.replace('Column: ', '') },
   { kind: 'Table column', label: 'Capital gain', body: COLUMN_HELP.capitalGain.replace('Column: ', '') },
   { kind: 'Table column', label: 'Realized P&L', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
   { kind: 'Table column', label: 'NAV', body: COLUMN_HELP.nav.replace('Column: ', '') },
@@ -770,6 +776,45 @@ const COLUMN_DEFS = {
       ? <span className="ci-muted">--</span>
       : <span className={valueTone(row.capitalGain)}>{pct(row.capitalGainPct, { signed: true })}</span>),
   },
+  // Beta and alpha are window-scoped: both come from the grades request, which
+  // regresses over the Dashboard's shared performance date range. A sold row has
+  // no open position to regress, and the backend only grades held tickers, so it
+  // shows a dash rather than a stale figure from when it was still held.
+  beta: {
+    label: 'Beta',
+    align: 'right',
+    sortValue: row => (row.sold ? -999 : finite(row.beta) ?? -999),
+    render: row => (row.sold || finite(row.beta) === null
+      ? <span className="ci-muted">--</span>
+      : (
+        <span
+          style={{ whiteSpace: 'nowrap' }}
+          title={row.betaBenchmark ? `Beta vs ${row.betaBenchmark}` : 'Beta'}
+        >
+          {Number(row.beta).toFixed(2)}
+          {row.betaBenchmark && (
+            <span className="ci-bench-tag">vs {row.betaBenchmark}</span>
+          )}
+        </span>
+      )),
+  },
+  alpha: {
+    label: 'Alpha',
+    align: 'right',
+    sortValue: row => (row.sold ? -999 : finite(row.alpha) ?? -999),
+    render: row => (row.sold || finite(row.alpha) === null
+      ? <span className="ci-muted">--</span>
+      : (
+        <span
+          className={valueTone(row.alpha)}
+          title={row.betaBenchmark
+            ? `Annualized CAPM alpha vs ${row.betaBenchmark}`
+            : 'Annualized CAPM alpha'}
+        >
+          {pct(row.alpha, { signed: true })}
+        </span>
+      )),
+  },
   capitalGain: {
     label: 'Capital gain',
     align: 'right',
@@ -927,7 +972,13 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
   )
 }
 
-export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, tickerGrades = {} }) {
+export function CommonInfoPanel({
+  embedded = false,
+  onTickerClick,
+  onNavChange,
+  tickerGrades = {},
+  tickerRisk = {},
+}) {
   const pf = useProfileFetch()
   const { selection, basisMode } = useProfile()
   const [holdings, setHoldings] = useState([])
@@ -1086,10 +1137,14 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
     const withNav = (row) => {
       const ticker = row.ticker
       const meta = coverageMeta[ticker] || {}
+      const risk = tickerRisk[ticker] || {}
       return {
         ...row,
         onTickerClick,
         grade: tickerGrades[ticker]?.grade || null,
+        beta: risk.beta ?? null,
+        alpha: risk.alpha ?? null,
+        betaBenchmark: risk.beta_benchmark || null,
         navScope: row.sold ? 'skip' : (row.nav_erosion_scope || meta.nav_erosion_scope || 'auto'),
         navBenchmark: row.nav_benchmark_override || meta.nav_benchmark_override || '',
         navBenchmarkInput: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
@@ -1101,7 +1156,7 @@ export function CommonInfoPanel({ embedded = false, onTickerClick, onNavChange, 
     }
     const rows = showSold ? [...openRows, ...closedRows] : openRows
     return rows.map(withNav)
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, tickerGrades, updateNavScope, draftNavBenchmark])
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, tickerGrades, tickerRisk, updateNavScope, draftNavBenchmark])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null

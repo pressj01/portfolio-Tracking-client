@@ -2795,6 +2795,10 @@ _ETF_SCREEN_DATA_TTL_SEC = 10 * 60
 _ETF_SCREEN_MARKET_CACHE = {}
 _ETF_SCREEN_MARKET_TTL_SEC = 10 * 60
 _ETF_SCREEN_BENCH_CACHE = {}
+# Dividend-adjusted twin of the frame above, used only for alpha (see the
+# comparer's risk block). Kept separate so the charts never pick it up by
+# accident — they rebuild distributions from the unadjusted closes themselves.
+_ETF_SCREEN_BENCH_ADJ_CACHE = {}
 _ETF_SCREEN_BENCH_TTL_SEC = 10 * 60
 _YF_INFO_CACHE = {}
 _YF_INFO_TTL_SEC = 30 * 60
@@ -25278,6 +25282,7 @@ def portfolio_summary_data():
         tickers = [r["ticker"] for r in rows]
         blank_risk = {
             "beta": None,
+            "alpha": None,
             "beta_benchmark": None,
             "delta_up": None,
             "delta_down": None,
@@ -25320,7 +25325,7 @@ def portfolio_summary_data():
     # is acceptable for grade/ratio display; a buy/sell changes the ticker set and
     # naturally invalidates.
     cache_key = (
-        "summary-beta-v4-no-blocking-info",
+        "summary-beta-v5-ticker-alpha",
         tuple(pids),
         tuple(sorted(r["ticker"] for r in rows)),
         period_range["key"],
@@ -25430,7 +25435,13 @@ def portfolio_summary_data():
     effective_min_obs = min_obs if min_obs is not None else 10 ** 9
 
     def _blank_risk():
-        return {"beta": None, "beta_benchmark": None, "delta_up": None, "delta_down": None}
+        return {
+            "beta": None,
+            "alpha": None,
+            "beta_benchmark": None,
+            "delta_up": None,
+            "delta_down": None,
+        }
 
     def _compute_ticker_metrics(t, tc):
         """Grade + best-fit beta/deltas for one ticker's close series.
@@ -25450,21 +25461,10 @@ def portfolio_summary_data():
             # _best_fit_beta already regresses on a 15-observation floor, which
             # is exactly the shortest window this endpoint will grade, so it
             # needs no scaling of its own.
-            computed_beta, beta_benchmark = _best_fit_beta(tc, benchmark_closes)
-            delta_up = delta_down = None
-            if beta_benchmark:
-                beta_close = dict(benchmark_closes).get(beta_benchmark)
-                if beta_close is not None:
-                    delta_up, delta_down = _capture_deltas(
-                        tc, beta_close,
-                        min_days=min(10, max(3, effective_min_obs // 3)),
-                    )
-            ticker_risk[t] = {
-                "beta": computed_beta,
-                "beta_benchmark": beta_benchmark,
-                "delta_up": delta_up,
-                "delta_down": delta_down,
-            }
+            ticker_risk[t] = _risk_profile(
+                tc, benchmark_closes,
+                delta_min_days=min(10, max(3, effective_min_obs // 3)),
+            )
             return True
         except Exception:
             ticker_grades[t] = {"grade": "N/A", "score": None}
@@ -26909,6 +26909,74 @@ def _research_adjusted_close_series(ticker, force_refresh=False):
     return result
 
 
+def _research_risk_profile(ticker):
+    """Beta/alpha for the research screen, on the same regression as elsewhere.
+
+    Sources every series through _research_adjusted_close_series, which is the
+    screen's own cache — SPY and QQQ are hot after the first lookup, so this
+    costs no extra Yahoo traffic per ticker.
+
+    Unlike the Dashboard columns, this regresses the FULL overlapping history
+    rather than a selected window: the research screen has no range control, and
+    a fund's whole life is the most stable read available here. The payload says
+    so in `risk_window` so the UI can label it rather than let it be mistaken
+    for the Dashboard's window-scoped figure.
+    """
+    blank = dict(_risk_profile(None, []), risk_window=None)
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        return blank
+    try:
+        series, _description = _research_adjusted_close_series(symbol)
+    except Exception:
+        return blank
+    if series is None or getattr(series, "empty", True):
+        return blank
+
+    benchmarks = []
+    for benchmark_symbol in ("SPY", "QQQ"):
+        # Regressing SPY on SPY is a true but useless beta 1.00 / alpha 0.00;
+        # leave the benchmark itself out so it falls through to the other one.
+        if benchmark_symbol == symbol:
+            continue
+        try:
+            benchmark_series, _ = _research_adjusted_close_series(benchmark_symbol)
+        except Exception:
+            continue
+        if benchmark_series is not None and not getattr(benchmark_series, "empty", True):
+            benchmarks.append((benchmark_symbol, benchmark_series))
+
+    profile = _risk_profile(series, benchmarks)
+    window = None
+    if profile.get("beta_benchmark"):
+        try:
+            overlap = series.index.intersection(
+                dict(benchmarks)[profile["beta_benchmark"]].index
+            )
+            if len(overlap):
+                window = {
+                    "start": pd.Timestamp(overlap[0]).strftime("%Y-%m-%d"),
+                    "end": pd.Timestamp(overlap[-1]).strftime("%Y-%m-%d"),
+                    "observations": int(len(overlap)),
+                }
+        except Exception:
+            window = None
+    return dict(profile, risk_window=window)
+
+
+def _research_with_yahoo_beta_fallback(profile, info):
+    """Keep Yahoo's beta as a last resort, but never pair it with our alpha.
+
+    If the regression could not run there is no benchmark and no alpha, so a
+    surviving Yahoo beta is reported on its own with beta_benchmark left None —
+    which is how the ETF screen already labels an unregressed beta.
+    """
+    if profile.get("beta") is not None:
+        return profile
+    fallback = _research_clean_value(_research_info_value(info, "beta"))
+    return dict(profile, beta=fallback)
+
+
 def _research_window_return(series, start_dt, annualize=False):
     if series is None or series.empty:
         return None
@@ -28086,6 +28154,7 @@ def security_research(kind, ticker):
                 (preferred_official_profile or {}).get("top_holdings")
                 or _research_top_holdings(fund_data, ticker=lookup_symbol, description=f"{name} {summary}")
             ),
+            **_research_risk_profile(lookup_symbol),
             "sector_weightings": _research_weight_map(getattr(fund_data, "sector_weightings", None)) if fund_data is not None else [],
             "asset_classes": _research_weight_map(getattr(fund_data, "asset_classes", None)) if fund_data is not None else [],
             "data_source": "Yahoo Finance",
@@ -28202,7 +28271,11 @@ def security_research(kind, ticker):
         "price": market_price,
         "market_cap": _research_money(_research_info_value(info, "marketCap")),
         "enterprise_value": _research_money(_research_info_value(info, "enterpriseValue")),
-        "beta": _research_clean_value(_research_info_value(info, "beta")),
+        # Regressed beta/alpha, same helper the Dashboard and ETF Comparer use.
+        # Yahoo's own beta stays only as the fallback when the regression cannot
+        # run: it is 5Y monthly vs the S&P, is 0.0/None for many funds, and
+        # would not be comparable with the alpha shown beside it.
+        **_research_with_yahoo_beta_fallback(_research_risk_profile(lookup_symbol), info),
         "trailing_pe": _research_clean_value(_research_info_value(info, "trailingPE")),
         "forward_pe": _research_clean_value(_research_info_value(info, "forwardPE")),
         "price_to_book": _research_clean_value(_research_info_value(info, "priceToBook")),
@@ -36052,6 +36125,49 @@ def _normalized_drawdown(values):
     return round(float(drawdown.min()), 2)
 
 
+# Daily return observations a fund/benchmark regression needs before its beta
+# or alpha means anything. Both helpers below share it so the Beta and Alpha
+# columns are never available one without the other.
+_REGRESSION_MIN_OBS = 15
+
+
+def _aligned_returns(fund_close, bench_close, min_obs=_REGRESSION_MIN_OBS):
+    """Paired daily returns for a fund and a benchmark, or None if unusable.
+
+    Aligns the two close series on their common dates FIRST and takes returns
+    afterwards, so every return pairs the fund and benchmark over the identical
+    span. The joined frame is sorted explicitly before pct_change: today the
+    union index comes back sorted because concat sorts it, but pandas has
+    deprecated that default, and under `sort=False` a fund and benchmark whose
+    histories start on different dates would be walked out of order and every
+    return would be wrong.
+
+    A non-positive close makes pct_change meaningless — one zero turns the next
+    bar into an infinite return, and one negative price produces a finite but
+    absurd one (a single -5.00 close measured beta -2.55 and alpha -1083% on a
+    series whose honest values were 1.31 and -1.09%). A bad bar poisons a mean
+    far more than a covariance, so the window is rejected rather than measured
+    around: reporting nothing is honest, reporting -1083% is not.
+    """
+    try:
+        f = pd.Series(fund_close).dropna()
+        b = pd.Series(bench_close).dropna()
+        if f.empty or b.empty:
+            return None
+        aligned = pd.concat({"f": f, "b": b}, axis=1).dropna().sort_index()
+        if aligned.empty or not bool((aligned > 0).all().all()):
+            return None
+        rets = pd.concat(
+            {"f": aligned["f"].pct_change(), "b": aligned["b"].pct_change()},
+            axis=1,
+        ).dropna()
+        if len(rets) < min_obs:
+            return None
+        return rets["f"], rets["b"]
+    except Exception:
+        return None
+
+
 def _beta_and_corr(fund_close, bench_close):
     """Beta and correlation of a fund vs a benchmark from aligned periodic returns.
 
@@ -36062,27 +36178,27 @@ def _beta_and_corr(fund_close, bench_close):
     """
     try:
         import numpy as np
-        f = pd.Series(fund_close).dropna()
-        b = pd.Series(bench_close).dropna()
-        if f.empty or b.empty:
+        pair = _aligned_returns(fund_close, bench_close)
+        if pair is None:
             return None
-        # Align on common dates first, then take returns so each return pairs
-        # the fund and benchmark over the identical span.
-        aligned = pd.concat({"f": f, "b": b}, axis=1).dropna()
-        fr = aligned["f"].pct_change().dropna()
-        br = aligned["b"].pct_change().dropna()
-        common = fr.index.intersection(br.index)
-        fr, br = fr.loc[common], br.loc[common]
-        if len(fr) < 15:
-            return None
+        fr, br = pair
         var_b = float(np.var(br.values, ddof=1))
         if var_b <= 0:
             return None
         cov = float(np.cov(fr.values, br.values, ddof=1)[0][1])
         sd_f = float(np.std(fr.values, ddof=1))
         sd_b = float(np.std(br.values, ddof=1))
+        beta = cov / var_b
+        # grading._beta already refuses to return a NaN/inf beta; this one did
+        # not, and NaN is not None — so it slipped past the caller's
+        # `beta is None` check and blocked that ticker from falling back to its
+        # last good cached beta.
+        if not np.isfinite(beta):
+            return None
         corr = cov / (sd_f * sd_b) if sd_f > 0 and sd_b > 0 else 0.0
-        return round(cov / var_b, 2), corr
+        if not np.isfinite(corr):
+            corr = 0.0
+        return round(beta, 2), corr
     except Exception:
         return None
 
@@ -36144,6 +36260,85 @@ def _capture_deltas(fund_close, bench_close, min_days=10):
         return _slope(rets[rets["b"] > 0]), _slope(rets[rets["b"] < 0])
     except Exception:
         return None, None
+
+
+def _capm_alpha(fund_close, bench_close, risk_free_annual=0.05,
+                min_obs=_REGRESSION_MIN_OBS):
+    """Annualized CAPM (Jensen's) alpha of a fund versus one benchmark.
+
+    alpha = (mean(fund) - rf_daily - beta * (mean(bench) - rf_daily)) * 252,
+    matching the definition the Portfolio Tester already reports so the two
+    screens cannot disagree about what "alpha" means.
+
+    Beta is re-regressed here on the same aligned daily returns rather than
+    reusing the value _best_fit_beta returned: that one is rounded to two
+    decimals, and on a volatile benchmark two decimals of beta move annualized
+    alpha by tens of basis points. Pass the benchmark _best_fit_beta selected
+    so the alpha and beta columns describe the same regression, and keep the
+    15-observation floor it uses so alpha is never blank beside a live beta.
+    Returns None when the window is too short to regress.
+    """
+    try:
+        import numpy as np
+        pair = _aligned_returns(fund_close, bench_close, min_obs=min_obs)
+        if pair is None:
+            return None
+        fr, br = pair
+        var_b = float(np.var(br.values, ddof=1))
+        if var_b <= 0:
+            return None
+        beta = float(np.cov(fr.values, br.values, ddof=1)[0][1]) / var_b
+        rf_daily = risk_free_annual / 252
+        alpha = (
+            float(fr.mean()) - rf_daily - beta * (float(br.mean()) - rf_daily)
+        ) * 252
+        if not np.isfinite(alpha):
+            return None
+        # Six decimals, not four: the column renders alpha as a percent with two
+        # decimals, so rounding at four would quantize the last digit shown.
+        return round(alpha, 6)
+    except Exception:
+        return None
+
+
+def _risk_profile(fund_close, benchmarks, delta_min_days=10):
+    """Beta, alpha and up/down deltas for one fund, all against ONE benchmark.
+
+    The benchmark is chosen once, by best fit, and everything is then measured
+    against that same choice. Screens must not assemble this themselves: a beta
+    picked vs QQQ next to an alpha computed vs SPY would read as a Nasdaq fund
+    generating excess return when it only tracked a different index.
+
+    `benchmarks` is the [(name, close_series)] list _best_fit_beta takes. Every
+    value is None when the window cannot support the regression, and the keys
+    are always present so a caller can splice the dict straight into a payload.
+    """
+    blank = {
+        "beta": None,
+        "alpha": None,
+        "beta_benchmark": None,
+        "delta_up": None,
+        "delta_down": None,
+    }
+    if fund_close is None or not len(benchmarks or []):
+        return blank
+    try:
+        beta, benchmark = _best_fit_beta(fund_close, benchmarks)
+        bench_close = dict(benchmarks).get(benchmark) if benchmark else None
+        if bench_close is None:
+            return blank
+        delta_up, delta_down = _capture_deltas(
+            fund_close, bench_close, min_days=delta_min_days
+        )
+        return {
+            "beta": beta,
+            "alpha": _capm_alpha(fund_close, bench_close),
+            "beta_benchmark": benchmark,
+            "delta_up": delta_up,
+            "delta_down": delta_down,
+        }
+    except Exception:
+        return blank
 
 
 @app.route("/api/etf-screen/data")
@@ -36353,6 +36548,18 @@ def etf_screen_data():
             except Exception:
                 bench_df = pd.DataFrame()
             _cache_set(_ETF_SCREEN_BENCH_CACHE, _bench_key, bench_df)
+        # Alpha needs a TOTAL-RETURN benchmark. The frame above is deliberately
+        # unadjusted (the charts rebuild distributions themselves), and beta
+        # barely notices the difference — but alpha is a mean, so comparing a
+        # fund's reinvested return against a benchmark stripped of its dividends
+        # would hand every fund roughly the benchmark's yield as free alpha.
+        bench_adj_df = _cache_get(_ETF_SCREEN_BENCH_ADJ_CACHE, _bench_key, _ETF_SCREEN_BENCH_TTL_SEC)
+        if bench_adj_df is None:
+            try:
+                bench_adj_df = _chunked_yf_download(BETA_BENCHMARKS, interval="1d", auto_adjust=True, progress=False, **_range_kwargs())
+            except Exception:
+                bench_adj_df = pd.DataFrame()
+            _cache_set(_ETF_SCREEN_BENCH_ADJ_CACHE, _bench_key, bench_adj_df)
 
         result = {
             "mode": mode,
@@ -36450,6 +36657,16 @@ def etf_screen_data():
                 bc = _extract_col(bench_df, "Close", bm)
                 if not bc.empty:
                     bench_closes.append((bm, bc))
+        bench_adj_closes = []
+        if bench_adj_df is not None and not bench_adj_df.empty:
+            for bm in BETA_BENCHMARKS:
+                bc = _extract_col(bench_adj_df, "Close", bm)
+                if not bc.empty:
+                    bench_adj_closes.append((bm, bc))
+        # Without an adjusted benchmark there is nothing honest to regress a
+        # total-return series against, so fall back to the unadjusted pair —
+        # both sides price-only is at least internally consistent.
+        risk_benchmarks = bench_adj_closes or bench_closes
 
         for sym in symbols:
             dl_sym = yahoo_by_symbol.get(sym, sym)
@@ -36600,15 +36817,19 @@ def etf_screen_data():
             sharpe = _sharpe(risk_basis)
             sortino = _sortino(risk_basis)
             # Regress the fund's price returns against the best-fitting benchmark
-            # for a real beta (Yahoo returns 0.0/None for many option-income ETFs).
-            computed_beta, beta_benchmark = _best_fit_beta(base, bench_closes)
-            # Approximate effective delta (up-/down-day capture) vs that same
-            # underlying — surfaces the covered-call asymmetry beta can't show.
-            delta_up = delta_down = None
-            if beta_benchmark:
-                _bclose = dict(bench_closes).get(beta_benchmark)
-                if _bclose is not None:
-                    delta_up, delta_down = _capture_deltas(base, _bclose)
+            # for a real beta (Yahoo returns 0.0/None for many option-income
+            # ETFs), plus the alpha over that same benchmark and the approximate
+            # effective delta (up-/down-day capture) that surfaces the
+            # covered-call asymmetry beta can't show.
+            # Both sides total-return, matching Security Research, so the same
+            # fund cannot report two very different alphas on two screens. For
+            # QQQI the price-only basis read -17.32% against -2.33% here: a
+            # ~15-point gap that is entirely the distributions it pays out.
+            risk_series = _blend_price_drip(div_close, divs, 1.0, track_cash=True)                 if not div_close.empty else base
+            risk = _risk_profile(risk_series, risk_benchmarks)
+            computed_beta = risk["beta"]
+            beta_benchmark = risk["beta_benchmark"]
+            delta_up, delta_down = risk["delta_up"], risk["delta_down"]
 
             # Un-normalized closes so the comparer can chart actual share
             # price instead of a 100-at-start relative return.
@@ -36809,6 +37030,10 @@ def etf_screen_data():
                 "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
                 "beta": computed_beta if computed_beta is not None else (info.get("beta") or info.get("beta3Year")),
                 "beta_benchmark": beta_benchmark if computed_beta is not None else None,
+                # No Yahoo fallback for alpha: Yahoo does not publish one, and a
+                # figure derived from a different benchmark than the beta beside
+                # it would not be comparable.
+                "alpha": risk["alpha"],
                 "delta_up": delta_up,
                 "delta_down": delta_down,
                 "category": saved.get("etf_category") or saved.get("etf_strategy") or info.get("category"),
