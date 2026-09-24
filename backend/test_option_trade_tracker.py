@@ -45,7 +45,7 @@ class OptionTradeImportParserTest(unittest.TestCase):
         hedge = next(row for row in parsed["executions"] if row["strike"] == 593)
         core = [row for row in parsed["executions"] if row["strike"] != 593]
         self.assertEqual((hedge["strategy_type"], hedge["purpose"]), ("Long Put", "Hedge"))
-        self.assertEqual({row["strategy_type"] for row in core}, {"Unbalanced Butterfly"})
+        self.assertEqual({row["strategy_type"] for row in core}, {"Unbalanced Put Butterfly"})
         self.assertEqual(len({row["group_key"] for row in core}), 1)
         self.assertNotEqual(hedge["group_key"], core[0]["group_key"])
 
