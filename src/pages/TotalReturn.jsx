@@ -265,7 +265,9 @@ export default function TotalReturn() {
 
   // Render Plotly charts with consistent colors across bar + line charts
   useEffect(() => {
-    if (!chartData || !window.Plotly) return
+    // The chart element is mounted only after loading clears. The data can
+    // arrive in an earlier render, so wait until its container exists.
+    if (!chartData || chartLoading || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
     const ids = []
@@ -359,11 +361,11 @@ export default function TotalReturn() {
         if (el) Plotly.purge(el)
       })
     }
-  }, [chartData, isDark, dashboardPeriod])
+  }, [chartData, chartLoading, isDark, dashboardPeriod])
 
   // Render scatter chart
   useEffect(() => {
-    if (!dashboardRows.length || !window.Plotly) return
+    if (chartLoading || !dashboardRows.length || !window.Plotly) return
     const Plotly = window.Plotly
     const el = document.getElementById('tr-chart-scatter')
     if (!el) return
@@ -453,7 +455,7 @@ export default function TotalReturn() {
 
     Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), { responsive: true })
     return () => { if (el) Plotly.purge(el) }
-  }, [dashboardRows, chartData, scatterReturnMode, isDark])
+  }, [dashboardRows, chartData, chartLoading, scatterReturnMode, isDark])
 
   // Fetch comparison chart data
   useEffect(() => {
@@ -1574,26 +1576,44 @@ export default function TotalReturn() {
               )}
               <div className="summary-sub">{lifetimeView ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
-            <MetricCard label={lifetimeView ? 'Life Total Return' : 'Tracker Total Return'} range={dashboardCardRange}
+            {!lifetimeView && (
+              <MetricCard label="Tracker Total Return" range={dashboardCardRange}
+                value={partialValue(
+                  <span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>,
+                )}>
+                {partialNote}
+                <div className="summary-sub">
+                  Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
+                  {Number(t.realized_return_dollar || 0) !== 0
+                    ? ` + realized trims ${fmtInt(t.realized_return_dollar)}`
+                    : ''}
+                </div>
+                <div className="summary-sub">Includes positions fully closed during this range</div>
+              </MetricCard>
+            )}
+            <MetricCard label={lifetimeView ? 'Life Total Return' : 'Tracker Total Return %'} range={dashboardCardRange}
               value={partialValue(
-                <span style={{ color: (t.total_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.total_return_dollar)}</span>,
-              )}>
-              {partialNote}
-              <div className="summary-sub">
-                Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
-                {Number(t.realized_return_dollar || 0) !== 0
-                  ? ` + realized trims ${fmtInt(t.realized_return_dollar)}`
-                  : ''}
-              </div>
-              {!lifetimeView && <div className="summary-sub">Includes positions fully closed during this range</div>}
-            </MetricCard>
-            <MetricCard label={lifetimeView ? 'Life Total Return %' : 'Tracker Total Return %'} range={dashboardCardRange}
-              value={partialValue(
-                <span style={{ color: (t.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.total_return_pct)}</span>,
+                <span style={{ color: ((lifetimeView ? t.total_return_dollar : t.total_return_pct) || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+                  {lifetimeView
+                    ? `${fmtInt(t.total_return_dollar)} (${fmtPct(t.total_return_pct)})`
+                    : fmtPct(t.total_return_pct)}
+                </span>,
               )}>
               {partialNote}
               {coverageIsSevere && (
-                <div className="summary-sub">{fmtPct(t.total_return_pct)} on the positions that priced</div>
+                <div className="summary-sub">
+                  {lifetimeView
+                    ? `${fmtInt(t.total_return_dollar)} (${fmtPct(t.total_return_pct)})`
+                    : fmtPct(t.total_return_pct)} on the positions that priced
+                </div>
+              )}
+              {lifetimeView && (
+                <div className="summary-sub">
+                  Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
+                  {Number(t.realized_return_dollar || 0) !== 0
+                    ? ` + realized trims ${fmtInt(t.realized_return_dollar)}`
+                    : ''}
+                </div>
               )}
               <div className="summary-sub">{lifetimeView ? 'Cost-basis total return, not time-weighted' : 'Time-weighted — timing-neutral performance'}</div>
               <div className="summary-sub">Same calculation as Dashboard, Growth &amp; Gains/Losses{lifetimeView ? '' : '; separately read live quotes can differ until close'}</div>

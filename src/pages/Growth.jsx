@@ -67,13 +67,17 @@ function lastIndexReturn(series) {
 
 // Portfolio return large, benchmark comparison on the sub-line, so neither
 // number needs a trip to the chart.
-function ReturnCard({ label, value, benchLabel, benchValue, range, sub }) {
+function ReturnCard({ label, value, dollarValue, benchLabel, benchValue, range, sub }) {
   const diff = value != null && benchValue != null ? value - benchValue : null
+  const returnValue = dollarValue == null
+    ? fmtPct(value)
+    : `${fmtInt(dollarValue)} (${fmtPct(value)})`
+  const returnTone = dollarValue == null ? value : dollarValue
   return (
     <div className="summary-card">
       <div className="summary-label">{label}</div>
-      <div className="summary-value" style={{ color: (value ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
-        {fmtPct(value)}
+      <div className="summary-value" style={{ color: (returnTone ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
+        {returnValue}
       </div>
       {sub && <div className="summary-sub">{sub}</div>}
       {benchLabel && (
@@ -861,11 +865,12 @@ export default function Growth({ embedded = false }) {
               />
             )}
             <ReturnCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'}
+              label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return %'}
               value={data.portfolio_metrics?.total_return_pct}
+              dollarValue={isLifetimePerformancePeriod(period) ? data.portfolio_metrics?.total_return_dollar : null}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}
-              sub={isLifetimePerformancePeriod(period) ? 'Cost-basis total return for open holdings' : 'Includes positions fully closed during this range'}
+              sub={isLifetimePerformancePeriod(period) ? 'Price gain/loss plus lifetime distributions paid' : 'Includes positions fully closed during this range'}
               range={cardRange}
             />
             {!isLifetimePerformancePeriod(period) && (

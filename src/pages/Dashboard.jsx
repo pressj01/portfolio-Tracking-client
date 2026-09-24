@@ -1734,6 +1734,14 @@ export default function Dashboard() {
   const fullTrackerTotalReturn = trackerPortfolioMetrics.total_return_pct == null
     ? null
     : Number(trackerPortfolioMetrics.total_return_pct) / 100
+  const fullTrackerTotalReturnDollar = trackerPortfolioMetrics.total_return_dollar == null
+    ? null
+    : Number(trackerPortfolioMetrics.total_return_dollar)
+  const trackerTotalReturnValue = (
+    isLifetimePerformancePeriod(gradePeriod) && fullTrackerTotalReturnDollar != null
+      ? `${fmt(fullTrackerTotalReturnDollar)} (${pct(fullTrackerTotalReturn)})`
+      : pct(fullTrackerTotalReturn)
+  )
   const refreshPortfolioCoverage = useCallback(() => {
     return pf('/api/portfolio-coverage')
       .then(safeJson)
@@ -2086,12 +2094,14 @@ export default function Dashboard() {
         <SummaryCard
           className="dashboard-headline-card"
           label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker Total Return %'}
-          value={trackerPerformanceLoading ? 'Loading...' : pct(fullTrackerTotalReturn)}
+          value={trackerPerformanceLoading ? 'Loading...' : trackerTotalReturnValue}
           color={gradeColor(fullTrackerTotalReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
-          note={isLifetimePerformancePeriod(gradePeriod) ? undefined : 'Includes positions fully closed during this range'}
+          note={isLifetimePerformancePeriod(gradePeriod)
+            ? 'Price gain/loss plus lifetime distributions paid'
+            : 'Includes positions fully closed during this range'}
           title={isLifetimePerformancePeriod(gradePeriod)
-            ? 'Cost-basis total return using the same lifetime components as the other tracking screens.'
+            ? 'Cost-basis total return in dollars and percent, including lifetime distributions paid.'
             : 'The same transaction-aware Total Return shown on the Total Return, Growth, and Gains & Losses pages. Includes positions fully closed during this range.'}
         />
       </div>
