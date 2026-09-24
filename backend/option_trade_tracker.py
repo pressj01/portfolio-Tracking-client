@@ -955,14 +955,31 @@ def _execution_identity(row):
 def _existing_execution_counts(conn, profile_id):
     rows = conn.execute(
         """SELECT e.executed_at, e.action, t.underlying, l.option_type,
-                  l.expiration, l.strike, e.contracts, e.price, e.fees
+                  l.expiration, l.strike, e.contracts, e.price, e.fees,
+                  e.dedupe_hash, e.source
              FROM option_executions e
              JOIN option_trade_legs l ON l.id = e.leg_id
              JOIN option_trades t ON t.id = e.trade_id
             WHERE t.profile_id = ?""",
         (profile_id,),
     ).fetchall()
-    return Counter(_execution_identity(row) for row in rows)
+    counts = Counter()
+    split_rows = defaultdict(list)
+    for row in rows:
+        # A broker row can close contracts spread across several trades. Its
+        # ledger executions share the prefix of their dedupe hashes and must
+        # count as one source row when that file is imported again.
+        dedupe_hash = row["dedupe_hash"] or ""
+        if row["source"] == "broker_import" and ":" in dedupe_hash:
+            split_rows[dedupe_hash.split(":", 1)[0]].append(row)
+        else:
+            counts[_execution_identity(row)] += 1
+    for parts in split_rows.values():
+        combined = dict(parts[0])
+        combined["contracts"] = sum(int(part["contracts"]) for part in parts)
+        combined["fees"] = round(sum(float(part["fees"] or 0) for part in parts), 2)
+        counts[_execution_identity(combined)] += 1
+    return counts
 
 
 def _assert_import_source_allowed(conn, profile_id, source_format):
@@ -992,27 +1009,32 @@ def _stored_import_hash(profile_id, parsed_hash, occurrence):
 
 
 def _find_matching_open_leg(conn, profile_id, execution, preferred_trade_id=None):
+    candidates = _matching_open_legs(conn, profile_id, execution, preferred_trade_id)
+    for candidate, _ in candidates:
+        if preferred_trade_id is None or candidate["matched_trade_id"] == preferred_trade_id:
+            return candidate
+    return None
+
+
+def _matching_open_legs(conn, profile_id, execution, preferred_trade_id=None):
     sides = _position_sides_for_action(execution["action"])
     side_placeholders = ",".join("?" for _ in sides)
     params = [profile_id, execution["underlying"], execution["option_type"], execution["expiration"], execution["strike"], *sides]
-    trade_clause = ""
-    if preferred_trade_id:
-        trade_clause = " AND t.id = ?"
-        params.append(preferred_trade_id)
     candidates = conn.execute(
         """SELECT l.*, t.id AS matched_trade_id
              FROM option_trade_legs l
              JOIN option_trades t ON t.id = l.trade_id
             WHERE t.profile_id = ? AND t.status = 'OPEN'
               AND t.underlying = ? AND l.option_type = ? AND l.expiration = ?
-              AND ABS(l.strike - ?) < 0.0001 AND l.position_side IN (""" + side_placeholders + ")" + trade_clause +
+              AND ABS(l.strike - ?) < 0.0001 AND l.position_side IN (""" + side_placeholders + ")" +
         " ORDER BY COALESCE(t.opened_at, t.created_at), t.id",
         params,
     ).fetchall()
-    for candidate in candidates:
-        if _open_contracts_for_leg(conn, int(candidate["id"])) > 0:
-            return candidate
-    return None
+    available = [(candidate, _open_contracts_for_leg(conn, int(candidate["id"]))) for candidate in candidates]
+    available = [(candidate, quantity) for candidate, quantity in available if quantity > 0]
+    if preferred_trade_id:
+        available.sort(key=lambda item: item[0]["matched_trade_id"] != preferred_trade_id)
+    return available
 
 
 def import_option_executions(conn, profile_id, parsed):
@@ -1092,34 +1114,45 @@ def import_option_executions(conn, profile_id, parsed):
                 )
                 leg_id = int(cursor.lastrowid)
         else:
-            leg = _find_matching_open_leg(conn, profile_id, execution, preferred_trade_id=trade_id)
-            if not leg and trade_id:
-                leg = _find_matching_open_leg(conn, profile_id, execution)
-            if not leg:
+            candidates = _matching_open_legs(conn, profile_id, execution, preferred_trade_id=trade_id)
+            if sum(quantity for _, quantity in candidates) < execution["contracts"]:
                 unmatched += 1
-                errors.append({"row": execution["source_row"], "reason": "No matching open option leg was found"})
+                errors.append({"row": execution["source_row"], "reason": "Not enough matching open option contracts were found"})
                 continue
-            leg_id = int(leg["id"])
-            trade_id = int(leg["matched_trade_id"])
-            remaining = _open_contracts_for_leg(conn, leg_id)
-            if execution["contracts"] > remaining:
-                unmatched += 1
-                errors.append({"row": execution["source_row"], "reason": f"Close quantity exceeds {remaining} open contract(s)"})
-                continue
+            allocations = []
+            unallocated = execution["contracts"]
+            for candidate, quantity in candidates:
+                take = min(unallocated, quantity)
+                allocations.append((int(candidate["matched_trade_id"]), int(candidate["id"]), take))
+                unallocated -= take
+                if not unallocated:
+                    break
 
-        conn.execute(
-            """INSERT INTO option_executions
-                  (trade_id, leg_id, action, executed_at, contracts, price, fees,
-                   external_id, dedupe_hash, source, notes)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'broker_import', ?)""",
-            (
-                trade_id, leg_id, execution["action"], execution["executed_at"],
-                execution["contracts"], execution["price"], execution["fees"],
-                execution.get("external_id"), stored_hash, execution.get("notes"),
-            ),
-        )
+        if execution["action"] in OPEN_ACTIONS:
+            allocations = [(trade_id, leg_id, execution["contracts"])]
+        fee_cents = round(execution["fees"] * 100)
+        allocated_fee_cents = 0
+        for index, (matched_trade_id, matched_leg_id, quantity) in enumerate(allocations):
+            part_fee_cents = (
+                fee_cents - allocated_fee_cents if index == len(allocations) - 1
+                else fee_cents * quantity // execution["contracts"]
+            )
+            allocated_fee_cents += part_fee_cents
+            conn.execute(
+                """INSERT INTO option_executions
+                      (trade_id, leg_id, action, executed_at, contracts, price, fees,
+                       external_id, dedupe_hash, source, notes)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'broker_import', ?)""",
+                (
+                    matched_trade_id, matched_leg_id, execution["action"], execution["executed_at"],
+                    quantity, execution["price"], part_fee_cents / 100,
+                    execution.get("external_id"),
+                    stored_hash if len(allocations) == 1 else f"{stored_hash}:{matched_leg_id}",
+                    execution.get("notes"),
+                ),
+            )
+            touched.add(matched_trade_id)
         inserted += 1
-        touched.add(trade_id)
 
     for trade_id in touched:
         _refresh_trade_status(conn, trade_id)
@@ -1131,7 +1164,16 @@ def annotate_import_preview(conn, profile_id, parsed):
     _assert_import_source_allowed(conn, profile_id, parsed["source_format"])
     existing_counts = _existing_execution_counts(conn, profile_id)
     incoming_counts = Counter()
-    opening_keys = {_contract_key(row) for row in parsed["executions"] if row["action"] in OPEN_ACTIONS}
+    capacity = defaultdict(int)
+    open_legs = conn.execute(
+        """SELECT t.underlying, l.option_type, l.expiration, l.strike,
+                  l.position_side, l.id
+             FROM option_trade_legs l JOIN option_trades t ON t.id = l.trade_id
+            WHERE t.profile_id = ? AND t.status = 'OPEN'""",
+        (profile_id,),
+    ).fetchall()
+    for leg in open_legs:
+        capacity[_contract_key(dict(leg))] += _open_contracts_for_leg(conn, int(leg["id"]))
     duplicate_count = unmatched_count = 0
     rows = []
     for raw in parsed["executions"]:
@@ -1143,15 +1185,22 @@ def annotate_import_preview(conn, profile_id, parsed):
             duplicate_count += 1
             row["match_status"] = "duplicate"
         elif row["action"] in CLOSE_ACTIONS:
-            match = any(
-                _contract_key(row, side) in opening_keys
-                for side in _position_sides_for_action(row["action"])
-            ) or _find_matching_open_leg(conn, profile_id, row) is not None
+            keys = [_contract_key(row, side) for side in _position_sides_for_action(row["action"])]
+            match = sum(capacity[key] for key in keys) >= row["contracts"]
             row["match_status"] = "matched" if match else "unmatched"
-            if not match:
+            if match:
+                remaining = row["contracts"]
+                for key in keys:
+                    used = min(remaining, capacity[key])
+                    capacity[key] -= used
+                    remaining -= used
+                    if not remaining:
+                        break
+            else:
                 unmatched_count += 1
         else:
             row["match_status"] = "opening"
+            capacity[_contract_key(row)] += row["contracts"]
         rows.append(row)
     result = dict(parsed)
     result["executions"] = rows

@@ -52,6 +52,21 @@ class OptionTradeImportParserTest(unittest.TestCase):
         self.assertEqual({row["strategy_type"] for row in result["executions"]}, {"Iron Condor"})
         self.assertEqual({row["purpose"] for row in result["executions"]}, {"Income"})
 
+    def test_schwab_expiration_uses_as_of_date(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["09/21/2026 as of 09/18/2026", "Expired", "AMD 09/18/2026 580.00 C", -1, "", ""],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        self.assertEqual(parsed["summary"]["recognized"], 1)
+        self.assertEqual(parsed["executions"][0]["executed_at"], "2026-09-18")
+        self.assertEqual(parsed["executions"][0]["action"], "EXPIRE")
+        self.assertEqual(parsed["executions"][0]["price"], 0)
+
 
 class OptionTradeLedgerTest(unittest.TestCase):
     def setUp(self):
@@ -122,6 +137,61 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(second["duplicates"], 2)
         self.assertEqual(trade["status"], "CLOSED")
         self.assertEqual(trade["realized_pnl"], 98)
+
+    def test_schwab_bulk_close_spans_two_trades_and_reimports_cleanly(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/18/2026", "Sell to Open", "GLW 09/25/2026 200.00 C", 1, "$3.42", "$0.67"],
+            ["08/18/2026", "Buy to Open", "GLW 09/25/2026 205.00 C", 1, "$2.92", "$0.66"],
+            ["08/19/2026", "Buy to Open", "GLW 09/25/2026 205.00 C", 1, "$2.31", "$0.66"],
+            ["08/19/2026", "Sell to Open", "GLW 09/25/2026 200.00 C", 1, "$2.62", "$0.67"],
+            ["08/24/2026", "Sell to Close", "GLW 09/25/2026 205.00 C", 2, "$0.66", "$1.34"],
+            ["08/24/2026", "Buy to Close", "GLW 09/25/2026 200.00 C", 2, "$0.85", "$1.33"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        preview = tracker.annotate_import_preview(self.conn, 1, parsed)
+        self.assertEqual(preview["summary"]["unmatched_closes"], 0)
+        first = tracker.import_option_executions(self.conn, 1, parsed)
+        trades = tracker.load_trades(self.conn, [1])
+        self.assertEqual(first["inserted"], 6)
+        self.assertEqual(first["unmatched"], 0)
+        self.assertEqual(len(trades), 2)
+        self.assertTrue(all(trade["status"] == "CLOSED" for trade in trades))
+        self.assertEqual(sum(trade["realized_pnl"] for trade in trades), 37.67)
+        self.assertEqual(
+            sorted(sum(execution["fees"] for leg in trade["legs"] for execution in leg["executions"]
+                       if execution["action"] in {"STC", "BTC"}) for trade in trades),
+            [1.33, 1.34],
+        )
+        again = tracker.annotate_import_preview(self.conn, 1, parsed)
+        self.assertEqual(again["summary"]["duplicates"], 6)
+        second = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(second["inserted"], 0)
+        self.assertEqual(second["duplicates"], 6)
+
+    def test_close_quantity_must_fit_all_matching_open_legs(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/18/2026", "Sell to Open", "GLW 09/25/2026 200.00 C", 1, "$3.42", "$0.67"],
+            ["08/19/2026", "Sell to Open", "GLW 09/25/2026 200.00 C", 1, "$2.62", "$0.67"],
+            ["08/24/2026", "Buy to Close", "GLW 09/25/2026 200.00 C", 3, "$0.85", "$2.00"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        preview = tracker.annotate_import_preview(self.conn, 1, parsed)
+        self.assertEqual(preview["summary"]["unmatched_closes"], 1)
+        result = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(result["unmatched"], 1)
+        self.assertEqual(result["inserted"], 2)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1], status="OPEN")), 2)
 
     def test_transaction_import_deduplicates_across_broker_source_formats(self):
         rows = [

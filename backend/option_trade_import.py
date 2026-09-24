@@ -127,6 +127,12 @@ def _date_string(value):
     if isinstance(value, date):
         return value.isoformat()
     text = str(value or "").strip()
+    # Schwab posts expiration on the next business day, for example
+    # "09/21/2026 as of 09/18/2026". The as-of date is the actual outcome
+    # date and belongs in realized P/L, rather than the posting date.
+    as_of = re.fullmatch(r"\d{1,2}/\d{1,2}/\d{4}\s+as of\s+(\d{1,2}/\d{1,2}/\d{4})", text, re.IGNORECASE)
+    if as_of:
+        text = as_of.group(1)
     for fmt in (
         "%Y-%m-%d",
         "%Y-%m-%d %H:%M:%S",
