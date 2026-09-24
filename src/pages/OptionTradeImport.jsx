@@ -116,6 +116,7 @@ export default function OptionTradeImport() {
           {result.corrected > 0 && ` Corrected ${result.corrected} previously misdated expiration${result.corrected === 1 ? '' : 's'} from the broker dates.`}
           {result.auto_expiry_corrections > 0 && ` Replaced ${result.auto_expiry_corrections} automatic expiration${result.auto_expiry_corrections === 1 ? '' : 's'} with broker closes.`}
           {result.trades_grouped > 0 && ` Combined ${result.trades_grouped} staged put/call spread pair${result.trades_grouped === 1 ? '' : 's'} into iron condors.`}
+          {result.trades_split > 0 && ` Separated ${result.trades_split} protective put hedge${result.trades_split === 1 ? '' : 's'} from butterfly trades.`}
           {result.trades_classified > 0 && ` Matched ${result.trades_classified} trade${result.trades_classified === 1 ? '' : 's'} to scanner patterns.`}
           {result.duplicates > 0 && ` ${result.duplicates} duplicate row${result.duplicates === 1 ? ' was' : 's were'} skipped.`}
           {result.unmatched > 0 && ` ${result.unmatched} unmatched close${result.unmatched === 1 ? ' was' : 's were'} skipped for review.`}

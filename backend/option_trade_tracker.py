@@ -15,7 +15,7 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_trade_import import (
-    SUPPORTED_FORMATS, _default_purpose, _strategy_for_legs,
+    SUPPORTED_FORMATS, _default_purpose, _separate_put_hedge, _strategy_for_legs,
     is_generated_strategy_label, parse_option_transactions, scanner_strategy_key,
 )
 
@@ -1321,6 +1321,50 @@ def infer_imported_trade_strategies(conn, profile_id):
     return classified
 
 
+def reconcile_imported_put_hedges(conn, profile_id):
+    """Move a distinct open protective put out of a broker grouped butterfly."""
+    split = 0
+    for trade in load_trades(conn, [profile_id], status="OPEN"):
+        if (trade["source"] != "broker_import"
+                or not str(trade.get("external_group_id") or "").startswith("auto:")
+                or len(trade["legs"]) != 4):
+            continue
+        hedge = _separate_put_hedge(trade["legs"])
+        if hedge is None or hedge["open_contracts"] != hedge["contracts"]:
+            continue
+        if any(row["action"] in CLOSE_ACTIONS for row in hedge["executions"]):
+            continue
+        opening_dates = {
+            row["executed_at"] for leg in trade["legs"] for row in leg["executions"]
+            if row["action"] in OPEN_ACTIONS
+        }
+        if opening_dates != {trade["opened_at"]}:
+            continue
+        hedge_group = f"{trade['external_group_id']}:hedge:{hedge['strike']:.4f}P"
+        cursor = conn.execute(
+            """INSERT INTO option_trades
+                  (profile_id, underlying, strategy_type, purpose, status,
+                   opened_at, source, source_format, external_group_id, notes)
+               VALUES (?, ?, 'Long Put', 'Hedge', 'OPEN', ?,
+                       'broker_import', ?, ?, ?)""",
+            (profile_id, trade["underlying"], trade["opened_at"],
+             trade["source_format"], hedge_group, "Protective put imported from broker transactions"),
+        )
+        hedge_trade_id = int(cursor.lastrowid)
+        conn.execute(
+            "UPDATE option_trade_legs SET trade_id = ?, sort_order = 0 WHERE id = ?",
+            (hedge_trade_id, hedge["id"]),
+        )
+        conn.execute(
+            "UPDATE option_executions SET trade_id = ? WHERE leg_id = ?",
+            (hedge_trade_id, hedge["id"]),
+        )
+        _refresh_trade_status(conn, int(trade["id"]))
+        _refresh_trade_status(conn, hedge_trade_id)
+        split += 1
+    return split
+
+
 def import_option_executions(conn, profile_id, parsed):
     source_format = parsed["source_format"]
     # Serialize the read/count/write sequence so two rapid import requests cannot
@@ -1477,12 +1521,14 @@ def import_option_executions(conn, profile_id, parsed):
 
     for trade_id in touched:
         _refresh_trade_status(conn, trade_id)
+    trades_split = reconcile_imported_put_hedges(conn, profile_id)
     trades_grouped = reconcile_staged_iron_condors(conn, profile_id)
     trades_classified = infer_imported_trade_strategies(conn, profile_id)
     conn.commit()
     return {"inserted": inserted, "duplicates": duplicates, "unmatched": unmatched,
             "corrected": corrected, "auto_expiry_corrections": auto_expiry_corrections,
             "errors": errors, "trades_touched": len(touched), "trades_grouped": trades_grouped,
+            "trades_split": trades_split,
             "trades_classified": trades_classified}
 
 

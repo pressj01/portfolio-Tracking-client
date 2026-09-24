@@ -587,6 +587,27 @@ def _dedupe_hash(row, source_format):
     return hashlib.sha256("|".join(str(value or "") for value in parts).encode("utf-8")).hexdigest()
 
 
+def _separate_put_hedge(legs):
+    """Identify one small long put outside a three-leg put butterfly."""
+    if (len(legs) != 4 or any(row["option_type"] != "PUT" for row in legs)
+            or len({row["expiration"] for row in legs}) != 1):
+        return None
+    shorts = [row for row in legs if row["position_side"] == "SHORT"]
+    longs = [row for row in legs if row["position_side"] == "LONG"]
+    if len(shorts) != 1 or len(longs) != 3 or shorts[0]["contracts"] % 2:
+        return None
+    wing_size = shorts[0]["contracts"] // 2
+    wings = [row for row in longs if row["contracts"] == wing_size]
+    hedges = [row for row in longs if row["contracts"] < wing_size]
+    if len(wings) != 2 or len(hedges) != 1:
+        return None
+    low, high = sorted(wings, key=lambda row: row["strike"])
+    hedge = hedges[0]
+    if not (hedge["strike"] < low["strike"] < shorts[0]["strike"] < high["strike"]):
+        return None
+    return hedge
+
+
 def parse_option_transactions(file_path, filename, source_format="generic"):
     """Return normalized executions, review warnings, and import counts."""
     source_format = str(source_format or "generic").strip().lower()
@@ -677,10 +698,22 @@ def parse_option_transactions(file_path, filename, source_format="generic"):
     for execution in executions:
         if execution["action"] in {"BTO", "STO"}:
             opening_groups[execution["group_key"]].append(execution)
+    for group_key, group in list(opening_groups.items()):
+        if any(row["strategy_type"] or row["purpose"] for row in group):
+            continue
+        hedge = _separate_put_hedge(group)
+        if hedge is None:
+            continue
+        hedge["group_key"] = f"{group_key}:hedge:{hedge['strike']:.4f}P"
+        opening_groups[group_key].remove(hedge)
+        opening_groups[hedge["group_key"]] = [hedge]
     for group in opening_groups.values():
         specified = next((row["strategy_type"] for row in group if row["strategy_type"]), None)
         strategy = specified or _strategy_for_legs(group)
-        purpose = next((row["purpose"] for row in group if row["purpose"]), None) or _default_purpose(strategy)
+        purpose = next((row["purpose"] for row in group if row["purpose"]), None) or (
+            "Hedge" if len(group) == 1 and group[0]["group_key"].endswith(
+                f":hedge:{group[0]['strike']:.4f}P") else _default_purpose(strategy)
+        )
         for row in group:
             row["strategy_type"] = strategy
             row["purpose"] = purpose

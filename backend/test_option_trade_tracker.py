@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +28,27 @@ def memory_database():
 
 
 class OptionTradeImportParserTest(unittest.TestCase):
+    def test_small_far_put_is_separate_hedge_from_butterfly(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 593.00 P", 1, "$0.86", "$0.66"],
+            ["09/22/2026", "Sell to Open", "SPY 11/30/2026 741.00 P", 10, "$7.17", "$6.80"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 715.00 P", 5, "$4.33", "$3.31"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 758.00 P", 5, "$10.48", "$3.31"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        self.assertEqual(parsed["summary"]["groups"], 2)
+        hedge = next(row for row in parsed["executions"] if row["strike"] == 593)
+        core = [row for row in parsed["executions"] if row["strike"] != 593]
+        self.assertEqual((hedge["strategy_type"], hedge["purpose"]), ("Long Put", "Hedge"))
+        self.assertEqual({row["strategy_type"] for row in core}, {"Unbalanced Butterfly"})
+        self.assertEqual(len({row["group_key"] for row in core}), 1)
+        self.assertNotEqual(hedge["group_key"], core[0]["group_key"])
+
     def test_scanner_shapes_use_strikes_expirations_sides_and_ratios(self):
         def leg(kind, side, strike, quantity=1, expiration="2026-09-25"):
             return {"option_type": kind, "position_side": side, "strike": strike,
@@ -122,6 +144,43 @@ class OptionTradeLedgerTest(unittest.TestCase):
 
     def tearDown(self):
         self.conn.close()
+
+    def test_existing_grouped_spy_hedge_is_split_and_reimport_stays_duplicate(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 593.00 P", 1, "$0.86", "$0.66"],
+            ["09/22/2026", "Sell to Open", "SPY 11/30/2026 741.00 P", 10, "$7.17", "$6.80"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 715.00 P", 5, "$4.33", "$3.31"],
+            ["09/22/2026", "Buy to Open", "SPY 11/30/2026 758.00 P", 5, "$10.48", "$3.31"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        legacy = deepcopy(parsed)
+        for execution in legacy["executions"]:
+            execution["group_key"] = "auto:SPY:2026-09-22:OPEN"
+            execution["strategy_type"] = "Road Trip Butterfly"
+            execution["purpose"] = "Income"
+        imported = tracker.import_option_executions(self.conn, 1, legacy)
+        self.assertEqual(imported["trades_split"], 1)
+        trades = tracker.load_trades(self.conn, [1], status="OPEN")
+        self.assertEqual(len(trades), 2)
+        hedge = next(trade for trade in trades if trade["purpose"] == "Hedge")
+        butterfly = next(trade for trade in trades if trade["purpose"] == "Income")
+        self.assertEqual(hedge["strategy_type"], "Long Put")
+        self.assertEqual(hedge["entry_net_amount"], -86.66)
+        self.assertEqual(hedge["max_risk"], 86.66)
+        self.assertEqual([leg["strike"] for leg in hedge["legs"]], [593])
+        self.assertEqual(butterfly["strategy_type"], "Road Trip Butterfly")
+        self.assertEqual(butterfly["entry_net_amount"], -248.42)
+        self.assertEqual(butterfly["max_risk"], 4748.42)
+        self.assertEqual(len(butterfly["legs"]), 3)
+        again = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(again["duplicates"], 4)
+        self.assertEqual(again["trades_split"], 0)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1], status="OPEN")), 2)
 
     def test_manual_trade_preserves_legs_and_calculates_realized_pnl(self):
         trade_id = tracker.create_trade(self.conn, 1, {
