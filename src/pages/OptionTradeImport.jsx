@@ -115,6 +115,7 @@ export default function OptionTradeImport() {
           <strong>Import complete.</strong> Added {result.inserted} execution{result.inserted === 1 ? '' : 's'} across {result.trades_touched} trade{result.trades_touched === 1 ? '' : 's'}.
           {result.corrected > 0 && ` Corrected ${result.corrected} previously misdated expiration${result.corrected === 1 ? '' : 's'} from the broker dates.`}
           {result.trades_grouped > 0 && ` Combined ${result.trades_grouped} staged put/call spread pair${result.trades_grouped === 1 ? '' : 's'} into iron condors.`}
+          {result.trades_classified > 0 && ` Matched ${result.trades_classified} trade${result.trades_classified === 1 ? '' : 's'} to scanner patterns.`}
           {result.duplicates > 0 && ` ${result.duplicates} duplicate row${result.duplicates === 1 ? ' was' : 's were'} skipped.`}
           {result.unmatched > 0 && ` ${result.unmatched} unmatched close${result.unmatched === 1 ? ' was' : 's were'} skipped for review.`}
         </div>
@@ -185,7 +186,7 @@ export default function OptionTradeImport() {
                   <td>{row.contracts}</td>
                   <td>{money(row.price)}<small>Fees {money(row.fees)}</small></td>
                   <td><code>{row.group_key}</code></td>
-                  <td>{row.strategy_type || 'Match existing trade'}<small>{row.purpose || '—'}</small></td>
+                  <td>{row.strategy_type || 'Match existing trade'}<small>{row.purpose || '—'}{row.scanner_strategy_key ? ' · scanner pattern' : ''}</small></td>
                   <td><span className={`oti-match oti-match-${row.match_status}`}>{row.duplicate ? 'duplicate' : row.match_status}</span></td>
                   <td>{row.warnings.length ? row.warnings.join(' ') : '—'}</td>
                 </tr>

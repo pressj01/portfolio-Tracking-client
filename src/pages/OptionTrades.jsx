@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { stageTrackedTrade } from '../utils/optionTradeHandoff'
+import { generalScannerRoute } from '../utils/optionScannerCatalog'
 
 const PURPOSES = ['Income', 'Directional', 'Hedge', 'Adjustment', 'Other']
 const CUSTOM_STRATEGY = '__custom_strategy__'
@@ -456,6 +457,7 @@ function TradeDetails({ trade }) {
         <span><small>Total fees</small>{money(trade.total_fees)}</span>
         <span><small>Net cash flow</small>{money(trade.net_cash_flow)}</span>
         <span><small>Risk method</small>{trade.max_risk_source || 'Not available'}</span>
+        {trade.scanner_strategy_key && <span><small>Scanner pattern</small><NavLink to={generalScannerRoute(trade.scanner_strategy_key)}>{trade.strategy_type} scanner</NavLink></span>}
         {stock && <span><small>Stock coverage</small>{stock.portfolio_shares} held / {stock.required_shares} required ({percent(stock.coverage_pct)})</span>}
         {trade.notes && <span className="ot-detail-notes"><small>Notes</small>{trade.notes}</span>}
       </div>

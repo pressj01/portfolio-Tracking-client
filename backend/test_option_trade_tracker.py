@@ -11,7 +11,7 @@ from flask import Flask, request
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from database import ensure_tables_exist
-from option_trade_import import parse_occ_symbol, parse_option_transactions
+from option_trade_import import _strategy_for_legs, parse_occ_symbol, parse_option_transactions
 import option_trade_tracker as tracker
 
 
@@ -26,6 +26,53 @@ def memory_database():
 
 
 class OptionTradeImportParserTest(unittest.TestCase):
+    def test_scanner_shapes_use_strikes_expirations_sides_and_ratios(self):
+        def leg(kind, side, strike, quantity=1, expiration="2026-09-25"):
+            return {"option_type": kind, "position_side": side, "strike": strike,
+                    "contracts": quantity, "expiration": expiration}
+
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 120, 2), leg("PUT", "SHORT", 130, 2),
+            leg("PUT", "SHORT", 180), leg("PUT", "LONG", 190),
+        ]), "Unbalanced Put Condor")
+        self.assertEqual(_strategy_for_legs([
+            leg("CALL", "SHORT", 200, expiration="2026-09-25"),
+            leg("CALL", "LONG", 200, expiration="2026-11-20"),
+        ]), "Long Call Calendar")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "SHORT", 150, expiration="2026-09-25"),
+            leg("PUT", "LONG", 140, expiration="2026-11-20"),
+        ]), "Long Put Diagonal")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 120, 8), leg("PUT", "SHORT", 160, 8),
+            leg("PUT", "LONG", 180, 4),
+        ]), "Double-Hedge Put Butterfly")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 593), leg("PUT", "SHORT", 741, 10),
+            leg("PUT", "LONG", 715, 5), leg("PUT", "LONG", 758, 5),
+        ]), "Custom")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 120), leg("PUT", "SHORT", 130),
+            leg("CALL", "LONG", 185), leg("CALL", "SHORT", 195),
+        ]), "Custom")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 120, expiration="2027-03-19"),
+            leg("PUT", "SHORT", 130, expiration="2027-03-19"),
+            leg("CALL", "SHORT", 180, expiration="2027-03-19"),
+            leg("CALL", "LONG", 190, expiration="2027-03-19"),
+        ]), "Iron Condor")
+        for expiration in ("2026-10-16", "2027-03-19"):
+            self.assertEqual(_strategy_for_legs([
+                leg("PUT", "LONG", 120, 2, expiration),
+                leg("PUT", "SHORT", 130, 2, expiration),
+                leg("CALL", "SHORT", 180, 1, expiration),
+                leg("CALL", "LONG", 195, 1, expiration),
+            ]), "Unbalanced Iron Condor")
+        self.assertEqual(_strategy_for_legs([
+            leg("PUT", "LONG", 120), leg("PUT", "SHORT", 130),
+            leg("CALL", "SHORT", 180), leg("CALL", "LONG", 190, 2),
+        ]), "Custom")
+
     def test_occ_symbol_decodes_contract(self):
         parsed = parse_occ_symbol("SPY   260821C00600000")
         self.assertEqual(parsed["underlying"], "SPY")
@@ -117,6 +164,53 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(closed["outcome"], "WIN")
         self.assertEqual(tracker.realized_option_income(self.conn, [1], "2026-08-01", "2026-08-31"), 127)
 
+    def test_custom_spy_put_package_has_bounded_payoff_risk(self):
+        tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY", "strategy_type": "Road Trip Butterfly",
+            "purpose": "Directional", "opened_at": "2026-09-22",
+            "legs": [
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-11-30", "strike": 593, "contracts": 1, "price": 0.86, "fees": 0.66},
+                {"position_side": "SHORT", "option_type": "PUT", "expiration": "2026-11-30", "strike": 741, "contracts": 10, "price": 7.17, "fees": 6.8},
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-11-30", "strike": 715, "contracts": 5, "price": 4.33, "fees": 3.31},
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-11-30", "strike": 758, "contracts": 5, "price": 10.48, "fees": 3.31},
+            ],
+        })
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["entry_net_amount"], -335.08)
+        self.assertEqual(trade["max_risk"], 4835.08)
+        self.assertEqual(trade["max_risk_source"], "derived expiration payoff")
+        self.assertEqual(trade["status"], "OPEN")
+
+    def test_uncovered_short_call_has_no_finite_maximum_risk(self):
+        tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY", "strategy_type": "Short Call",
+            "purpose": "Income", "opened_at": "2026-09-22",
+            "legs": [{"position_side": "SHORT", "option_type": "CALL",
+                      "expiration": "2026-11-30", "strike": 800,
+                      "contracts": 1, "price": 1, "fees": 0}],
+        })
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertIsNone(trade["max_risk"])
+
+    def test_repeated_condor_legs_count_all_contracts_in_risk(self):
+        tracker.create_trade(self.conn, 1, {
+            "underlying": "IWM", "strategy_type": "Unbalanced Iron Condor",
+            "purpose": "Income", "opened_at": "2026-08-10",
+            "legs": [
+                {"position_side": "LONG", "option_type": "PUT", "expiration": "2026-09-18", "strike": 270, "contracts": 1, "price": 0.63, "fees": 0.66},
+                {"position_side": "SHORT", "option_type": "PUT", "expiration": "2026-09-18", "strike": 280, "contracts": 1, "price": 1.30, "fees": 0.66},
+                {"position_side": "LONG", "option_type": "CALL", "expiration": "2026-09-18", "strike": 321, "contracts": 1, "price": 0.67, "fees": 0.66},
+                {"position_side": "SHORT", "option_type": "CALL", "expiration": "2026-09-18", "strike": 313, "contracts": 1, "price": 1.89, "fees": 0.66},
+                {"position_side": "LONG", "option_type": "CALL", "expiration": "2026-09-18", "strike": 321, "contracts": 1, "price": 0.67, "fees": 0.66},
+                {"position_side": "SHORT", "option_type": "CALL", "expiration": "2026-09-18", "strike": 313, "contracts": 1, "price": 1.89, "fees": 0.66},
+            ],
+        })
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["entry_net_amount"], 307.04)
+        self.assertEqual(trade["max_risk"], 1292.96)
+        self.assertEqual(trade["max_risk_source"], "derived expiration payoff")
+        self.assertEqual(trade["scanner_strategy_key"], "iron-condor")
+
     def test_transaction_import_matches_close_and_deduplicates_repeat_file(self):
         rows = [
             ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees", "Order ID"],
@@ -137,6 +231,27 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(second["duplicates"], 2)
         self.assertEqual(trade["status"], "CLOSED")
         self.assertEqual(trade["realized_pnl"], 98)
+
+    def test_owner_rejects_export_already_imported_in_included_portfolio(self):
+        self.conn.execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (6, 'Pressj04', 1)")
+        self.conn.commit()
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/18/2026", "Sell to Open", "GLW 09/25/2026 200.00 C", 1, "$3.42", "$0.67"],
+            ["08/18/2026", "Buy to Open", "GLW 09/25/2026 205.00 C", 1, "$2.92", "$0.66"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        tracker.import_option_executions(self.conn, 6, parsed)
+        with self.assertRaisesRegex(ValueError, "Import this export into Pressj04"):
+            tracker.annotate_import_preview(self.conn, 1, parsed)
+        with self.assertRaisesRegex(ValueError, "Import this export into Pressj04"):
+            tracker.import_option_executions(self.conn, 1, parsed)
+        self.conn.rollback()
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])), 0)
 
     def test_schwab_bulk_close_spans_two_trades_and_reimports_cleanly(self):
         rows = [
@@ -217,6 +332,7 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(len(trades), 1)
         condor = trades[0]
         self.assertEqual(condor["strategy_type"], "Iron Condor")
+        self.assertEqual(condor["scanner_strategy_key"], "iron-condor")
         self.assertEqual(condor["opened_at"], "2026-08-13")
         self.assertEqual(condor["closed_at"], "2026-09-03")
         self.assertEqual(len(condor["legs"]), 4)
@@ -231,6 +347,65 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(condor["realized_annualized_return_pct"], round(43.71 / expected_realized_years * 100, 2))
         self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["duplicates"], 8)
         self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
+
+    def test_staged_unbalanced_condor_uses_larger_side_for_risk(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/13/2026", "Buy to Open", "GLW 10/16/2026 120.00 P", 2, "$1.00", "$0.00"],
+            ["08/13/2026", "Sell to Open", "GLW 10/16/2026 130.00 P", 2, "$2.00", "$0.00"],
+            ["08/26/2026", "Sell to Open", "GLW 10/16/2026 180.00 C", 1, "$2.00", "$0.00"],
+            ["08/26/2026", "Buy to Open", "GLW 10/16/2026 195.00 C", 1, "$1.00", "$0.00"],
+            ["09/03/2026", "Sell to Close", "GLW 10/16/2026 120.00 P", 2, "$0.50", "$0.00"],
+            ["09/03/2026", "Buy to Close", "GLW 10/16/2026 130.00 P", 2, "$1.00", "$0.00"],
+            ["09/03/2026", "Buy to Close", "GLW 10/16/2026 180.00 C", 1, "$0.50", "$0.00"],
+            ["09/03/2026", "Sell to Close", "GLW 10/16/2026 195.00 C", 1, "$0.20", "$0.00"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        imported = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(imported["trades_grouped"], 1)
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["strategy_type"], "Unbalanced Iron Condor")
+        self.assertEqual(trade["scanner_strategy_key"], "iron-condor")
+        self.assertEqual(trade["entry_net_amount"], 300)
+        self.assertEqual(trade["realized_pnl"], 170)
+        self.assertEqual(trade["max_risk"], 1700)
+        expected_years = (1800 * 13 + 1700 * 51) / 365
+        self.assertAlmostEqual(trade["entry_risk_years"], expected_years)
+        self.conn.execute("UPDATE option_trades SET strategy_type = 'Iron Condor' WHERE id = ?", (trade["id"],))
+        self.conn.commit()
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["trades_classified"], 1)
+        self.assertEqual(tracker.load_trades(self.conn, [1])[0]["strategy_type"], "Unbalanced Iron Condor")
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["duplicates"], 8)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
+
+    def test_reimport_identifies_a_legacy_custom_put_condor(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/18/2026", "Buy to Open", "SPY 09/25/2026 500.00 P", 1, "$0.20", "$0.66"],
+            ["08/18/2026", "Sell to Open", "SPY 09/25/2026 510.00 P", 1, "$0.50", "$0.67"],
+            ["08/18/2026", "Sell to Open", "SPY 09/25/2026 540.00 P", 1, "$1.00", "$0.67"],
+            ["08/18/2026", "Buy to Open", "SPY 09/25/2026 550.00 P", 1, "$1.50", "$0.66"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        self.assertEqual({row["strategy_type"] for row in parsed["executions"]}, {"Put Condor"})
+        tracker.import_option_executions(self.conn, 1, parsed)
+        trade_id = tracker.load_trades(self.conn, [1])[0]["id"]
+        self.conn.execute("UPDATE option_trades SET strategy_type = 'Custom' WHERE id = ?", (trade_id,))
+        self.conn.commit()
+        again = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(again["inserted"], 0)
+        self.assertEqual(again["trades_classified"], 1)
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["strategy_type"], "Put Condor")
+        self.assertEqual(trade["scanner_strategy_key"], "put-call-condor")
 
     def test_broker_expiration_corrects_a_late_manual_expiration_date(self):
         trade_id = tracker.create_trade(self.conn, 1, {

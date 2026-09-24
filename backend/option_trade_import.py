@@ -245,9 +245,21 @@ def _normalize_action(value):
 
 
 def _strategy_for_legs(legs):
-    positions = [(row["option_type"], row["position_side"], float(row["strike"])) for row in legs]
+    """Match fill geometry to the scanner's named option structures.
+
+    A broker's order group is only evidence of which fills arrived together.
+    It does not identify the strategy. Aggregate identical fills first, then
+    require the scanner pattern's sides, strikes, expirations and quantities.
+    Ambiguous packages remain Custom for review.
+    """
+    quantities = defaultdict(int)
+    for row in legs:
+        key = (row["option_type"], row["position_side"],
+               row["expiration"], float(row["strike"]))
+        quantities[key] += int(row["contracts"])
+    positions = [(*key, quantity) for key, quantity in quantities.items()]
     if len(positions) == 1:
-        option_type, side, _ = positions[0]
+        option_type, side, _, _, _ = positions[0]
         if side == "SHORT":
             return "Short Call" if option_type == "CALL" else "Short Put"
         return "Long Call" if option_type == "CALL" else "Long Put"
@@ -256,33 +268,104 @@ def _strategy_for_legs(legs):
         first, second = positions
         types = {first[0], second[0]}
         sides = {first[1], second[1]}
+        same_expiration = first[2] == second[2]
         if len(types) == 1 and sides == {"LONG", "SHORT"}:
             option_type = first[0]
-            long_strike = next(strike for kind, side, strike in positions if side == "LONG")
-            short_strike = next(strike for kind, side, strike in positions if side == "SHORT")
-            if option_type == "CALL":
-                return "Bull Call Spread" if long_strike < short_strike else "Bear Call Spread"
-            return "Bear Put Spread" if long_strike > short_strike else "Bull Put Spread"
-        if types == {"CALL", "PUT"} and len(sides) == 1:
-            same_strike = first[2] == second[2]
+            long_leg = next(row for row in positions if row[1] == "LONG")
+            short_leg = next(row for row in positions if row[1] == "SHORT")
+            long_strike, short_strike = long_leg[3], short_leg[3]
+            if not same_expiration:
+                if long_leg[2] > short_leg[2] and long_leg[4] == short_leg[4]:
+                    pattern = "Calendar" if long_strike == short_strike else "Diagonal"
+                    return f"Long {option_type.title()} {pattern}"
+                return "Custom"
+            if long_leg[4] == short_leg[4] and long_strike != short_strike:
+                if option_type == "CALL":
+                    return "Bull Call Spread" if long_strike < short_strike else "Bear Call Spread"
+                return "Bear Put Spread" if long_strike > short_strike else "Bull Put Spread"
+            if long_leg[4] < short_leg[4] and (
+                (option_type == "CALL" and long_strike < short_strike)
+                or (option_type == "PUT" and long_strike > short_strike)
+            ):
+                return f"{option_type.title()} Ratio Spread"
+        if types == {"CALL", "PUT"} and len(sides) == 1 and same_expiration and first[4] == second[4]:
+            same_strike = first[3] == second[3]
             prefix = "Long" if first[1] == "LONG" else "Short"
             return f"{prefix} {'Straddle' if same_strike else 'Strangle'}"
 
-    if len(positions) == 4:
-        calls = sorted([item for item in positions if item[0] == "CALL"], key=lambda item: item[2])
-        puts = sorted([item for item in positions if item[0] == "PUT"], key=lambda item: item[2])
-        if len(calls) == 2 and len(puts) == 2 and {item[1] for item in calls} == {"LONG", "SHORT"} and {item[1] for item in puts} == {"LONG", "SHORT"}:
-            short_strikes = [item[2] for item in positions if item[1] == "SHORT"]
-            return "Iron Butterfly" if len(set(short_strikes)) == 1 else "Iron Condor"
     if len(positions) == 3:
-        return "Butterfly / Custom"
+        types = {row[0] for row in positions}
+        expirations = {row[2] for row in positions}
+        if len(types) == len(expirations) == 1 and len({row[3] for row in positions}) == 3:
+            low, body, high = sorted(positions, key=lambda row: row[3])
+            if (low[1], body[1], high[1]) == ("LONG", "SHORT", "LONG"):
+                if low[4] == high[4] and body[4] == low[4] * 2:
+                    if body[3] - low[3] == high[3] - body[3]:
+                        return f"{low[0].title()} Butterfly"
+                    return "Unbalanced Butterfly"
+                if (low[0] == "PUT" and low[4] == high[4] * 2
+                        and body[4] == high[4] * 2
+                        and body[3] - low[3] > high[3] - body[3]):
+                    return "Double-Hedge Put Butterfly"
+        return "Custom"
+
+    if len(positions) == 4 and len({row[2] for row in positions}) == 1:
+        calls = [row for row in positions if row[0] == "CALL"]
+        puts = [row for row in positions if row[0] == "PUT"]
+        if len(calls) == len(puts) == 2:
+            by_leg = {(row[0], row[1]): row for row in positions}
+            if len(by_leg) == 4:
+                long_put = by_leg[("PUT", "LONG")]
+                short_put = by_leg[("PUT", "SHORT")]
+                short_call = by_leg[("CALL", "SHORT")]
+                long_call = by_leg[("CALL", "LONG")]
+                paired_sides = (long_put[4] == short_put[4]
+                                and short_call[4] == long_call[4])
+                if paired_sides and long_put[3] < short_put[3] <= short_call[3] < long_call[3]:
+                    equal_size = long_put[4] == long_call[4]
+                    equal_width = abs((short_put[3] - long_put[3])
+                                      - (long_call[3] - short_call[3])) < 0.000001
+                    if short_put[3] == short_call[3]:
+                        return "Iron Butterfly" if equal_size and equal_width else "Custom"
+                    return "Iron Condor" if equal_size and equal_width else "Unbalanced Iron Condor"
+        if len(calls) == 4 or len(puts) == 4:
+            ordered = sorted(positions, key=lambda row: row[3])
+            if (len({row[3] for row in ordered}) == 4
+                    and [row[1] for row in ordered] == ["LONG", "SHORT", "SHORT", "LONG"]
+                    and ordered[0][4] == ordered[1][4]
+                    and ordered[2][4] == ordered[3][4]):
+                kind = ordered[0][0].title()
+                if ordered[0][4] == ordered[2][4]:
+                    return f"{kind} Condor"
+                if kind == "Put":
+                    return "Unbalanced Put Condor"
     return "Custom"
+
+
+SCANNER_STRATEGY_KEYS = {
+    "Bull Put Spread": "bull-put-spread", "Bear Call Spread": "bear-call-spread",
+    "Bull Call Spread": "bull-call-spread", "Bear Put Spread": "bear-put-spread",
+    "Iron Condor": "iron-condor", "Unbalanced Iron Condor": "iron-condor",
+    "Iron Butterfly": "iron-butterfly",
+    "Put Condor": "put-call-condor", "Call Condor": "put-call-condor",
+    "Unbalanced Put Condor": "unbalanced-put-condor",
+    "Put Butterfly": "put-butterfly", "Call Butterfly": "call-butterfly",
+    "Unbalanced Butterfly": "unbalanced-butterfly",
+    "Double-Hedge Put Butterfly": "double-hedge-put-butterfly",
+    "Long Call Calendar": "long-call-calendar", "Long Put Calendar": "long-put-calendar",
+    "Long Call Diagonal": "long-call-diagonal", "Long Put Diagonal": "long-put-diagonal",
+    "Call Ratio Spread": "call-ratio-spread", "Put Ratio Spread": "put-ratio-spread",
+    "Long Call": "long-call", "Long Put": "long-put",
+    "Long Straddle": "long-straddle", "Long Strangle": "long-strangle",
+    "Short Straddle": "short-straddle", "Short Strangle": "short-strangle",
+}
 
 
 def _default_purpose(strategy):
     income_strategies = {
         "Short Call", "Short Put", "Bull Put Spread", "Bear Call Spread",
-        "Iron Condor", "Iron Butterfly", "Short Straddle", "Short Strangle",
+        "Iron Condor", "Unbalanced Iron Condor", "Iron Butterfly",
+        "Short Straddle", "Short Strangle",
     }
     return "Income" if strategy in income_strategies else "Directional"
 
@@ -402,6 +485,7 @@ def parse_option_transactions(file_path, filename, source_format="generic"):
         for row in group:
             row["strategy_type"] = strategy
             row["purpose"] = purpose
+            row["scanner_strategy_key"] = SCANNER_STRATEGY_KEYS.get(strategy)
 
     executions.sort(key=lambda row: (row["executed_at"], row["source_row"]))
     warning_count = sum(bool(row["warnings"]) for row in executions)

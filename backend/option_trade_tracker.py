@@ -14,7 +14,10 @@ from datetime import date, datetime
 from flask import jsonify, request
 
 from config import get_connection
-from option_trade_import import SUPPORTED_FORMATS, parse_option_transactions
+from option_trade_import import (
+    SCANNER_STRATEGY_KEYS, SUPPORTED_FORMATS, _strategy_for_legs,
+    parse_option_transactions,
+)
 
 
 OPEN_ACTIONS = {"BTO", "STO"}
@@ -112,21 +115,54 @@ def _derived_max_risk(trade, legs):
         gross_width = width * int(legs[0]["contracts"]) * int(legs[0]["multiplier"])
         risk = gross_width - max(0, entry_net) if entry_net >= 0 else abs(entry_net)
         return round(max(0, risk), 2), "derived spread width"
-    if len(legs) == 4 and option_types == {"CALL", "PUT"} and len(expirations) == 1 and equal_contracts:
-        widths = []
+    if len(legs) == 4 and _strategy_for_legs(legs) in {
+        "Iron Condor", "Unbalanced Iron Condor", "Iron Butterfly",
+    }:
+        side_exposures = []
         for option_type in ("CALL", "PUT"):
-            strikes = sorted(float(leg["strike"]) for leg in legs if leg["option_type"] == option_type)
-            if len(strikes) == 2:
-                widths.append(strikes[1] - strikes[0])
-        if widths:
-            gross_width = max(widths) * int(legs[0]["contracts"]) * int(legs[0]["multiplier"])
-            return round(max(0, gross_width - max(0, entry_net)), 2), "derived condor width"
+            side_legs = [leg for leg in legs if leg["option_type"] == option_type]
+            strikes = [float(leg["strike"]) for leg in side_legs]
+            side_exposures.append(
+                abs(strikes[0] - strikes[1])
+                * int(side_legs[0]["contracts"])
+                * int(side_legs[0]["multiplier"])
+            )
+        return round(max(0, max(side_exposures) - entry_net), 2), "derived condor width"
+    # Any same-expiration option package has a piecewise-linear expiration
+    # payoff. Its minimum occurs at the stock-price floor or at a strike,
+    # unless uncovered short calls make the high-price tail unbounded.
+    if (len(expirations) == 1
+            and all(leg["option_type"] in {"PUT", "CALL"}
+                    and leg["position_side"] in {"LONG", "SHORT"}
+                    and int(leg["contracts"]) > 0
+                    and int(leg["multiplier"]) > 0
+                    and float(leg["strike"]) >= 0 for leg in legs)):
+        high_price_call_slope = sum(
+            (1 if leg["position_side"] == "LONG" else -1)
+            * int(leg["contracts"]) * int(leg["multiplier"])
+            for leg in legs if leg["option_type"] == "CALL"
+        )
+        if high_price_call_slope < 0:
+            return None, None
+        prices = {0.0, *(float(leg["strike"]) for leg in legs)}
+        worst_pnl = min(
+            entry_net + sum(
+                (1 if leg["position_side"] == "LONG" else -1)
+                * int(leg["contracts"]) * int(leg["multiplier"])
+                * (max(0, price - float(leg["strike"]))
+                   if leg["option_type"] == "CALL"
+                   else max(0, float(leg["strike"]) - price))
+                for leg in legs
+            )
+            for price in prices
+        )
+        return round(max(0, -worst_pnl), 2), "derived expiration payoff"
     return None, None
 
 
 def _staged_condor_risk_years(trade, legs, combined_risk):
     """Capital time for a vertical spread that later became an iron condor."""
-    if trade.get("strategy_type") != "Iron Condor" or len(legs) != 4 or not combined_risk:
+    if trade.get("strategy_type") not in {"Iron Condor", "Unbalanced Iron Condor"} or len(legs) != 4 or not combined_risk:
         return None
     stages = []
     for option_type in ("PUT", "CALL"):
@@ -287,6 +323,10 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         "entry_risk_years": entry_risk_years,
         "realized_risk_years": realized_risk_years,
         "staged_entry": bool(stage_years),
+        "scanner_strategy_key": (
+            SCANNER_STRATEGY_KEYS.get(trade["strategy_type"])
+            if _strategy_for_legs(legs) == trade["strategy_type"] else None
+        ),
         "opening_dte": opening_dte,
         "realized_annualized_return_pct": realized_annualized_return_pct,
         "days_held": days_held,
@@ -1030,6 +1070,25 @@ def _existing_execution_counts(conn, profile_id):
     return counts
 
 
+def _assert_owner_import_not_mirrored(conn, profile_id, parsed):
+    """Keep a source-account export out of the Owner rollup account."""
+    if int(profile_id) != 1 or not parsed.get("executions"):
+        return
+    sources = conn.execute(
+        "SELECT id, name FROM profiles WHERE id != 1 AND include_in_owner = 1"
+    ).fetchall()
+    incoming = Counter(_execution_identity(row) for row in parsed["executions"])
+    total = sum(incoming.values())
+    for source in sources:
+        existing = _existing_execution_counts(conn, int(source["id"]))
+        matched = sum(min(count, existing[identity]) for identity, count in incoming.items())
+        if matched >= 2 and matched * 2 >= total:
+            raise ValueError(
+                f"These option transactions already match {source['name']}. "
+                f"Import this export into {source['name']}; Owner includes that portfolio automatically."
+            )
+
+
 def _assert_import_source_allowed(conn, profile_id, source_format):
     if source_format != "generic":
         return
@@ -1163,13 +1222,12 @@ def reconcile_staged_iron_condors(conn, profile_id):
         if len(group["PUT"]) != 1 or len(group["CALL"]) != 1:
             continue
         put, call = group["PUT"][0], group["CALL"][0]
-        if (
-            float(next(leg["strike"] for leg in put["legs"] if leg["position_side"] == "SHORT"))
-            >= float(next(leg["strike"] for leg in call["legs"] if leg["position_side"] == "SHORT"))
-            or put["legs"][0]["contracts"] != call["legs"][0]["contracts"]
-            or put["opened_at"] == call["opened_at"]
-        ):
+        if (put["opened_at"] == call["opened_at"]
+                or _strategy_for_legs([*put["legs"], *call["legs"]]) not in {
+                    "Iron Condor", "Unbalanced Iron Condor",
+                }):
             continue
+        strategy = _strategy_for_legs([*put["legs"], *call["legs"]])
         first, added = sorted((put, call), key=lambda trade: (trade["opened_at"], trade["id"]))
         if added["opened_at"] >= first["closed_at"]:
             continue
@@ -1184,13 +1242,32 @@ def reconcile_staged_iron_condors(conn, profile_id):
         conn.execute("DELETE FROM option_trades WHERE id = ?", (added_id,))
         conn.execute(
             """UPDATE option_trades
-                  SET strategy_type = 'Iron Condor', updated_at = CURRENT_TIMESTAMP
+                  SET strategy_type = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?""",
-            (first_id,),
+            (strategy, first_id),
         )
         _refresh_trade_status(conn, first_id)
         merged += 1
     return merged
+
+
+def infer_imported_trade_strategies(conn, profile_id):
+    """Upgrade ambiguous broker-import labels when the scanner shape is exact."""
+    classified = 0
+    for trade in load_trades(conn, [profile_id]):
+        if trade["source"] != "broker_import" or trade["strategy_type"] not in {
+            "Custom", "Butterfly / Custom", "Iron Condor", "Unbalanced Iron Condor",
+        }:
+            continue
+        inferred = _strategy_for_legs(trade["legs"])
+        if inferred not in SCANNER_STRATEGY_KEYS or inferred == trade["strategy_type"]:
+            continue
+        conn.execute(
+            "UPDATE option_trades SET strategy_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (inferred, trade["id"]),
+        )
+        classified += 1
+    return classified
 
 
 def import_option_executions(conn, profile_id, parsed):
@@ -1200,6 +1277,7 @@ def import_option_executions(conn, profile_id, parsed):
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     _assert_import_source_allowed(conn, profile_id, source_format)
+    _assert_owner_import_not_mirrored(conn, profile_id, parsed)
     existing_counts = _existing_execution_counts(conn, profile_id)
     incoming_counts = Counter()
     hash_occurrences = Counter()
@@ -1326,14 +1404,17 @@ def import_option_executions(conn, profile_id, parsed):
     for trade_id in touched:
         _refresh_trade_status(conn, trade_id)
     trades_grouped = reconcile_staged_iron_condors(conn, profile_id)
+    trades_classified = infer_imported_trade_strategies(conn, profile_id)
     conn.commit()
     return {"inserted": inserted, "duplicates": duplicates, "unmatched": unmatched,
             "corrected": corrected,
-            "errors": errors, "trades_touched": len(touched), "trades_grouped": trades_grouped}
+            "errors": errors, "trades_touched": len(touched), "trades_grouped": trades_grouped,
+            "trades_classified": trades_classified}
 
 
 def annotate_import_preview(conn, profile_id, parsed):
     _assert_import_source_allowed(conn, profile_id, parsed["source_format"])
+    _assert_owner_import_not_mirrored(conn, profile_id, parsed)
     existing_counts = _existing_execution_counts(conn, profile_id)
     incoming_counts = Counter()
     capacity = defaultdict(int)
