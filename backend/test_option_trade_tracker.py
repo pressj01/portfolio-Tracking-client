@@ -3,6 +3,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -288,6 +289,51 @@ class OptionTradeLedgerTest(unittest.TestCase):
         second = tracker.import_option_executions(self.conn, 1, parsed)
         self.assertEqual(second["inserted"], 0)
         self.assertEqual(second["duplicates"], 6)
+
+    def test_broker_bulk_close_replaces_later_auto_expirations_across_trades(self):
+        opening_rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["11/06/2025", "Sell to Open", "SPY 03/20/2026 565.00 P", 6, "$6.00", "$3.96"],
+            ["11/06/2025", "Buy to Open", "SPY 03/20/2026 555.00 P", 6, "$5.00", "$3.96"],
+            ["11/14/2025", "Sell to Open", "SPY 03/20/2026 565.00 P", 1, "$5.00", "$0.66"],
+            ["11/14/2025", "Buy to Open", "SPY 03/20/2026 555.00 P", 1, "$4.00", "$0.66"],
+            ["12/02/2025", "Sell to Open", "SPY 03/20/2026 565.00 P", 1, "$4.00", "$0.66"],
+            ["12/02/2025", "Buy to Open", "SPY 03/20/2026 555.00 P", 1, "$3.00", "$0.66"],
+        ]
+        closing_rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["03/12/2026", "Sell to Close", "SPY 03/20/2026 555.00 P", 8, "$0.29", "$5.33"],
+            ["03/12/2026", "Buy to Close", "SPY 03/20/2026 565.00 P", 8, "$0.33", "$5.30"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(opening_rows)
+            openings = parse_option_transactions(str(path), path.name, "schwab")
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(closing_rows)
+            closes = parse_option_transactions(str(path), path.name, "schwab")
+        tracker.import_option_executions(self.conn, 1, openings)
+        tracker.settle_expired_legs(self.conn, [1], today=date(2026, 3, 21))
+        before = tracker.load_trades(self.conn, [1])
+        self.assertEqual(len(before), 3)
+        self.assertTrue(all(t["closed_at"] == "2026-03-20" for t in before))
+        preview = tracker.annotate_import_preview(self.conn, 1, closes)
+        self.assertEqual(preview["summary"]["auto_expiry_corrections"], 2)
+        self.assertEqual(preview["summary"]["unmatched_closes"], 0)
+        result = tracker.import_option_executions(self.conn, 1, closes)
+        self.assertEqual(result["inserted"], 2)
+        self.assertEqual(result["auto_expiry_corrections"], 2)
+        after = tracker.load_trades(self.conn, [1])
+        self.assertTrue(all(t["closed_at"] == "2026-03-12" for t in after))
+        self.assertEqual(
+            round(sum(t["realized_pnl"] for t in after) - sum(t["realized_pnl"] for t in before), 2),
+            -42.63,
+        )
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM option_executions WHERE source = 'auto_expire'"
+        ).fetchone()[0], 0)
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, closes)["duplicates"], 2)
 
     def test_close_quantity_must_fit_all_matching_open_legs(self):
         rows = [

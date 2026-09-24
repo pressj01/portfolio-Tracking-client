@@ -114,6 +114,7 @@ export default function OptionTradeImport() {
         <div className="ot-alert ot-alert-success">
           <strong>Import complete.</strong> Added {result.inserted} execution{result.inserted === 1 ? '' : 's'} across {result.trades_touched} trade{result.trades_touched === 1 ? '' : 's'}.
           {result.corrected > 0 && ` Corrected ${result.corrected} previously misdated expiration${result.corrected === 1 ? '' : 's'} from the broker dates.`}
+          {result.auto_expiry_corrections > 0 && ` Replaced ${result.auto_expiry_corrections} automatic expiration${result.auto_expiry_corrections === 1 ? '' : 's'} with broker closes.`}
           {result.trades_grouped > 0 && ` Combined ${result.trades_grouped} staged put/call spread pair${result.trades_grouped === 1 ? '' : 's'} into iron condors.`}
           {result.trades_classified > 0 && ` Matched ${result.trades_classified} trade${result.trades_classified === 1 ? '' : 's'} to scanner patterns.`}
           {result.duplicates > 0 && ` ${result.duplicates} duplicate row${result.duplicates === 1 ? ' was' : 's were'} skipped.`}
@@ -168,6 +169,7 @@ export default function OptionTradeImport() {
             <span className={summary.needs_review ? 'oti-warning' : ''}><small>Needs review</small><strong>{summary.needs_review}</strong></span>
             <span><small>Duplicates</small><strong>{summary.duplicates}</strong></span>
             {summary.date_corrections > 0 && <span><small>Date corrections</small><strong>{summary.date_corrections}</strong></span>}
+            {summary.auto_expiry_corrections > 0 && <span><small>Auto expirations to replace</small><strong>{summary.auto_expiry_corrections}</strong></span>}
             <span className={summary.unmatched_closes ? 'oti-warning' : ''}><small>Unmatched closes</small><strong>{summary.unmatched_closes}</strong></span>
             <span><small>Filtered rows</small><strong>{summary.filtered}</strong></span>
           </div>

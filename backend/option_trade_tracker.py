@@ -1144,6 +1144,33 @@ def _matching_open_legs(conn, profile_id, execution, preferred_trade_id=None):
     return available
 
 
+def _matching_auto_expired_legs(conn, profile_id, execution, preferred_trade_id=None):
+    """Broker closes can replace a later synthetic zero-value expiration."""
+    sides = _position_sides_for_action(execution["action"])
+    placeholders = ",".join("?" for _ in sides)
+    rows = conn.execute(
+        """SELECT l.*, t.id AS matched_trade_id, e.id AS auto_execution_id,
+                  e.contracts AS auto_contracts
+             FROM option_executions e
+             JOIN option_trade_legs l ON l.id = e.leg_id
+             JOIN option_trades t ON t.id = l.trade_id
+            WHERE t.profile_id = ? AND t.underlying = ?
+              AND l.option_type = ? AND l.expiration = ?
+              AND ABS(l.strike - ?) < 0.0001
+              AND l.position_side IN (""" + placeholders + ")" +
+        " AND e.action = 'EXPIRE' AND e.source = 'auto_expire'" +
+        " AND e.executed_at >= ? AND t.opened_at <= ?" +
+        " AND e.price = 0 AND e.fees = 0" +
+        " ORDER BY t.opened_at, t.id, l.id, e.id",
+        [profile_id, execution["underlying"], execution["option_type"],
+         execution["expiration"], execution["strike"], *sides,
+         execution["executed_at"], execution["executed_at"]],
+    ).fetchall()
+    if preferred_trade_id:
+        rows = sorted(rows, key=lambda row: row["matched_trade_id"] != preferred_trade_id)
+    return rows
+
+
 def _misdated_manual_expiration(conn, profile_id, execution):
     """Find one already-closed manual expiration confirmed by this broker row."""
     if execution["action"] != "EXPIRE" or execution["executed_at"] != execution["expiration"]:
@@ -1283,7 +1310,7 @@ def import_option_executions(conn, profile_id, parsed):
     hash_occurrences = Counter()
     group_trades = {}
     touched = set()
-    inserted = duplicates = unmatched = corrected = 0
+    inserted = duplicates = unmatched = corrected = auto_expiry_corrections = 0
     errors = []
     for execution in parsed["executions"]:
         identity = _execution_identity(execution)
@@ -1349,7 +1376,12 @@ def import_option_executions(conn, profile_id, parsed):
                 leg_id = int(cursor.lastrowid)
         else:
             candidates = _matching_open_legs(conn, profile_id, execution, preferred_trade_id=trade_id)
-            if sum(quantity for _, quantity in candidates) < execution["contracts"]:
+            open_quantity = sum(quantity for _, quantity in candidates)
+            auto_candidates = (
+                _matching_auto_expired_legs(conn, profile_id, execution, preferred_trade_id=trade_id)
+                if open_quantity < execution["contracts"] else []
+            )
+            if open_quantity + sum(int(row["auto_contracts"]) for row in auto_candidates) < execution["contracts"]:
                 mistaken = _misdated_manual_expiration(conn, profile_id, execution)
                 if mistaken:
                     conn.execute(
@@ -1370,16 +1402,34 @@ def import_option_executions(conn, profile_id, parsed):
             unallocated = execution["contracts"]
             for candidate, quantity in candidates:
                 take = min(unallocated, quantity)
-                allocations.append((int(candidate["matched_trade_id"]), int(candidate["id"]), take))
+                allocations.append((int(candidate["matched_trade_id"]), int(candidate["id"]), take, None))
                 unallocated -= take
                 if not unallocated:
                     break
+            for candidate in auto_candidates:
+                if not unallocated:
+                    break
+                take = min(unallocated, int(candidate["auto_contracts"]))
+                allocations.append((int(candidate["matched_trade_id"]), int(candidate["id"]),
+                                    take, int(candidate["auto_execution_id"])))
+                unallocated -= take
+            if auto_candidates and any(auto_id is not None for _, _, _, auto_id in allocations):
+                auto_expiry_corrections += 1
 
         if execution["action"] in OPEN_ACTIONS:
-            allocations = [(trade_id, leg_id, execution["contracts"])]
+            allocations = [(trade_id, leg_id, execution["contracts"], None)]
         fee_cents = round(execution["fees"] * 100)
         allocated_fee_cents = 0
-        for index, (matched_trade_id, matched_leg_id, quantity) in enumerate(allocations):
+        for index, (matched_trade_id, matched_leg_id, quantity, auto_id) in enumerate(allocations):
+            if auto_id is not None:
+                remaining = conn.execute(
+                    "SELECT contracts - ? AS remaining FROM option_executions WHERE id = ?",
+                    (quantity, auto_id),
+                ).fetchone()["remaining"]
+                if remaining:
+                    conn.execute("UPDATE option_executions SET contracts = ? WHERE id = ?", (remaining, auto_id))
+                else:
+                    conn.execute("DELETE FROM option_executions WHERE id = ?", (auto_id,))
             part_fee_cents = (
                 fee_cents - allocated_fee_cents if index == len(allocations) - 1
                 else fee_cents * quantity // execution["contracts"]
@@ -1407,7 +1457,7 @@ def import_option_executions(conn, profile_id, parsed):
     trades_classified = infer_imported_trade_strategies(conn, profile_id)
     conn.commit()
     return {"inserted": inserted, "duplicates": duplicates, "unmatched": unmatched,
-            "corrected": corrected,
+            "corrected": corrected, "auto_expiry_corrections": auto_expiry_corrections,
             "errors": errors, "trades_touched": len(touched), "trades_grouped": trades_grouped,
             "trades_classified": trades_classified}
 
@@ -1427,7 +1477,20 @@ def annotate_import_preview(conn, profile_id, parsed):
     ).fetchall()
     for leg in open_legs:
         capacity[_contract_key(dict(leg))] += _open_contracts_for_leg(conn, int(leg["id"]))
-    duplicate_count = unmatched_count = correction_count = 0
+    auto_legs = conn.execute(
+        """SELECT t.underlying, l.option_type, l.expiration, l.strike,
+                  l.position_side, t.opened_at, e.executed_at AS auto_executed_at,
+                  e.contracts
+             FROM option_executions e
+             JOIN option_trade_legs l ON l.id = e.leg_id
+             JOIN option_trades t ON t.id = l.trade_id
+            WHERE t.profile_id = ? AND e.action = 'EXPIRE'
+              AND e.source = 'auto_expire' AND e.price = 0 AND e.fees = 0
+            ORDER BY t.opened_at, t.id, l.id, e.id""",
+        (profile_id,),
+    ).fetchall()
+    auto_events = [{**dict(leg), "available": int(leg["contracts"])} for leg in auto_legs]
+    duplicate_count = unmatched_count = correction_count = auto_correction_count = 0
     rows = []
     for raw in parsed["executions"]:
         row = dict(raw)
@@ -1439,9 +1502,17 @@ def annotate_import_preview(conn, profile_id, parsed):
             row["match_status"] = "duplicate"
         elif row["action"] in CLOSE_ACTIONS:
             keys = [_contract_key(row, side) for side in _position_sides_for_action(row["action"])]
-            match = sum(capacity[key] for key in keys) >= row["contracts"]
+            open_total = sum(capacity[key] for key in keys)
+            eligible_auto = [
+                event for event in auto_events
+                if _contract_key(event) in keys
+                and event["opened_at"] <= row["executed_at"] <= event["auto_executed_at"]
+            ]
+            auto_total = sum(event["available"] for event in eligible_auto)
+            match = open_total + auto_total >= row["contracts"]
             correction = not match and _misdated_manual_expiration(conn, profile_id, row) is not None
-            row["match_status"] = "matched" if match else "date correction" if correction else "unmatched"
+            uses_auto = match and open_total < row["contracts"]
+            row["match_status"] = "auto-expiry" if uses_auto else "matched" if match else "date correction" if correction else "unmatched"
             if match:
                 remaining = row["contracts"]
                 for key in keys:
@@ -1450,6 +1521,15 @@ def annotate_import_preview(conn, profile_id, parsed):
                     remaining -= used
                     if not remaining:
                         break
+                if remaining:
+                    for event in eligible_auto:
+                        used = min(remaining, event["available"])
+                        event["available"] -= used
+                        remaining -= used
+                        if not remaining:
+                            break
+                if uses_auto:
+                    auto_correction_count += 1
             elif correction:
                 correction_count += 1
             else:
@@ -1461,7 +1541,9 @@ def annotate_import_preview(conn, profile_id, parsed):
     result = dict(parsed)
     result["executions"] = rows
     result["summary"] = {**parsed["summary"], "duplicates": duplicate_count,
-                         "date_corrections": correction_count, "unmatched_closes": unmatched_count}
+                         "date_corrections": correction_count,
+                         "auto_expiry_corrections": auto_correction_count,
+                         "unmatched_closes": unmatched_count}
     return result
 
 

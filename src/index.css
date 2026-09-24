@@ -11790,6 +11790,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .oti-row-duplicate { opacity: .58; }
 .oti-match-opening { background: color-mix(in srgb, var(--accent-bright) 14%, var(--surface-inset)); color: var(--accent-bright); }
 .oti-match-matched { background: color-mix(in srgb, var(--pos) 14%, var(--surface-inset)); color: var(--pos); }
+.oti-match-auto-expiry { background: color-mix(in srgb, var(--pos) 14%, var(--surface-inset)); color: var(--pos); }
 .oti-match-unmatched { background: color-mix(in srgb, var(--neg) 14%, var(--surface-inset)); color: var(--neg); }
 .oti-filtered { color: var(--text-dim); font-size: .7rem; margin-top: .7rem; }
 .oti-filtered summary { color: var(--text-strong); cursor: pointer; font-weight: 700; margin-bottom: .35rem; }
