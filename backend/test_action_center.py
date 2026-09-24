@@ -306,6 +306,34 @@ class ActionCenterCompletionApiTest(unittest.TestCase):
         self.assertIn("ZZAC1", closure["detail"])
         self.assertEqual(closure["route"], "/")
 
+    def test_issuer_aum_clears_a_stale_catalog_closure_alert(self):
+        conn = self._get_connection()
+        conn.execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, description, quantity, current_value, classification_type)
+               VALUES ('MLPI', 1, 'NEOS MLP High Income ETF', 15, 800, 'ETF')"""
+        )
+        conn.execute(
+            "INSERT INTO etf_providers (provider, total_assets, num_funds, avg_expense) "
+            "VALUES ('ActionCenterNeos', 0, 1, 0)"
+        )
+        provider_id = conn.execute(
+            "SELECT id FROM etf_providers WHERE provider = 'ActionCenterNeos'"
+        ).fetchone()[0]
+        conn.execute("DELETE FROM etf_provider_funds WHERE UPPER(symbol) = 'MLPI'")
+        conn.execute(
+            "INSERT INTO etf_provider_funds (provider_id, symbol, fund_name, assets, exp_ratio) "
+            "VALUES (?, 'MLPI', 'NEOS MLP High Income ETF', 46380000, 0.68)",
+            (provider_id,),
+        )
+        conn.commit()
+        conn.close()
+
+        official = {"MLPI": {"assets": 942_596_775.0, "source": "NEOS Investments"}}
+        with patch.object(app_module, "_neos_fund_facts_batch", return_value=official):
+            payload = self._action_center()
+        self.assertNotIn("etf-closure-risk", self._ids(payload))
+
     def test_unknown_etf_aum_does_not_create_a_false_closure_alert(self):
         conn = self._get_connection()
         conn.execute(

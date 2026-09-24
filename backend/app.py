@@ -2812,6 +2812,13 @@ _XFUNDS_RESEARCH_TTL_SEC = 15 * 60
 _TAPPALPHA_PUBLIC_CACHE = {}
 _TAPPALPHA_RESEARCH_CACHE = {}
 _TAPPALPHA_RESEARCH_TTL_SEC = 15 * 60
+# neosfunds.com Net Assets / expense ratio / inception. NEOS republishes Net
+# Assets once a day, so a few hours is fresh. A failed fetch is remembered
+# briefly so a site outage doesn't refetch every NEOS page on each dashboard load.
+_NEOS_FUND_FACTS_CACHE = {}
+_NEOS_FUND_FACTS_TTL_SEC = 6 * 60 * 60
+_NEOS_FUND_FACTS_MISSES = {}
+_NEOS_FUND_FACTS_MISS_TTL_SEC = 15 * 60
 _YF_DIVIDENDS_CACHE = {}
 _YF_DIVIDENDS_TTL_SEC = 30 * 60
 _OFFICIAL_DISTRIBUTION_CACHE = {}
@@ -2950,6 +2957,8 @@ def _clear_market_data_memory_caches():
     _XFUNDS_RESEARCH_CACHE.clear()
     _TAPPALPHA_PUBLIC_CACHE.clear()
     _TAPPALPHA_RESEARCH_CACHE.clear()
+    _NEOS_FUND_FACTS_CACHE.clear()
+    _NEOS_FUND_FACTS_MISSES.clear()
     _OFFICIAL_DISTRIBUTION_CACHE.clear()
     _FUND_FAMILY_DISCOVERY_CACHE.clear()
 
@@ -15981,13 +15990,13 @@ def _is_neos_fund(ticker, description=""):
     explicit_family = {
         # Equity High Income
         "SPYI", "QQQI", "IWMI", "NIHI",
-        # Enhanced Fixed Income
+        # Boosted High Income
         "XSPI", "XQQI", "XBCI",
         # High Income Alternatives
         "BTCI", "NEHI", "IYRI", "IAUI", "MLPI",
         # Hedged Equity Income
         "QQQH", "SPYH", "NLSI",
-        # Enhanced Income / Treasuries
+        # Enhanced Fixed Income
         "CSHI", "TLTI", "BNDI", "HYBI",
     }
     return ticker in explicit_family
@@ -19080,7 +19089,7 @@ def _action_center_unconfirmed_estimates(conn, pids, today):
 
 
 def _action_center_etf_closure_rows(conn, holdings):
-    """Flag held ETFs whose seed AUM is small enough to carry closure risk."""
+    """Flag held ETFs whose AUM is small enough to carry closure risk."""
     tickers = sorted({str(h.get("ticker") or "").strip().upper() for h in holdings if h.get("ticker")})
     if not tickers:
         return []
@@ -19095,12 +19104,17 @@ def _action_center_etf_closure_rows(conn, holdings):
         ).fetchall()
     except sqlite3.OperationalError:
         return []
+    # The seed catalog's NEOS AUM is a months-old snapshot; the issuer's own
+    # Net Assets replaces it (and adds NEOS funds the catalog left blank).
+    assets_by_ticker = {row["ticker"]: row["assets"] for row in rows}
+    for ticker, facts in _neos_fund_facts_batch(tickers).items():
+        assets_by_ticker[ticker] = facts["assets"]
     flagged = []
-    for row in rows:
-        if row["assets"] is None:
+    for ticker, assets in sorted(assets_by_ticker.items()):
+        if assets is None:
             continue
         try:
-            aum = float(row["assets"])
+            aum = float(assets)
         except (TypeError, ValueError):
             continue
         if not math.isfinite(aum) or aum <= 0:
@@ -19114,7 +19128,7 @@ def _action_center_etf_closure_rows(conn, holdings):
         else:
             continue
         flagged.append({
-            "ticker": row["ticker"],
+            "ticker": ticker,
             "aum": aum,
             "tier": tier,
         })
@@ -25929,9 +25943,14 @@ def _ticker_closure_risk_from_local_sources(tickers, fund_facts=None):
             risk = _assess_etf_closure_risk_with_fallback(info, {
                 "total_assets": facts.get("assets"),
                 "expense_ratio_pct": facts.get("exp_ratio"),
+                "inception_date": facts.get("inception_date"),
                 "fund_type": "ETF",
-                "data_source": "ETF provider catalog",
+                "data_source": facts.get("source") or "ETF provider catalog",
             })
+            if risk is not None and facts.get("source"):
+                risk = dict(risk)
+                risk["aum_source"] = facts["source"]
+                risk["reason"] = f"{risk.get('reason') or ''} AUM from {facts['source']}.".strip()
         else:
             risk = _assess_etf_closure_risk(info) if info else None
         if risk is not None:
@@ -26082,8 +26101,11 @@ def portfolio_summary_data():
     # download. quoteSummary is much slower than history and rate-limits the
     # subsequent Close download, which is what the grade / Sharpe / beta cards
     # actually need. Renames are resolved only for symbols the batch omitted.
-    # Closure-risk badges come from the local provider catalog + info cache.
+    # Closure-risk badges come from the local provider catalog + info cache,
+    # except NEOS funds, whose catalog AUM is a stale snapshot; those read the
+    # issuer's cached Net Assets (parallel, time-bounded, warm after one load).
     rename_map = {}
+    ticker_fund_facts = _overlay_neos_fund_facts(ticker_fund_facts, tickers)
     ticker_closure_risk = _ticker_closure_risk_from_local_sources(tickers, ticker_fund_facts)
 
     try:
@@ -28503,9 +28525,13 @@ def _fetch_income_blast_etf_profile(ticker):
 
 
 def _neos_detail_value(html, label):
-    """Value cell for a label row in the neosfunds.com fund-details table."""
+    """Value cell for a label row in the neosfunds.com fund-details table.
+
+    Some fund pages footnote their labels ("Total Annual Fund Operating
+    Expenses*" on HYBI), so a trailing asterisk still matches.
+    """
     m = re.search(
-        r">\s*" + re.escape(label) + r"\s*</td>\s*"
+        r">\s*" + re.escape(label) + r"\s*\**\s*</td>\s*"
         r"<td class=\"fund-details-table-sizing\"[^>]*>\s*(.*?)\s*</td>",
         html,
         flags=re.IGNORECASE | re.DOTALL,
@@ -28609,6 +28635,115 @@ def _fetch_neos_etf_profile(ticker):
         "source_url": url,
         "data_source": "NEOS Investments",
     }
+
+
+def _neos_official_fund_facts(ticker, use_cache=True):
+    """Current Net Assets, expense ratio, and inception for one NEOS fund.
+
+    The bundled ETF provider catalog is a point-in-time StockAnalysis snapshot,
+    so fast-growing NEOS funds read months-old AUM there -- MLPI showed $46M
+    against NEOS's $943M, and the Boosted XSPI/XQQI/XBCI a fifth to a third of
+    their size -- which tripped the closure warning. The issuer's page is
+    authoritative. A failed fetch falls back to the last good figures, and
+    returns None only when there never were any (the caller keeps its own).
+    """
+    ticker = (ticker or "").strip().upper()
+    if not ticker or not _is_neos_fund(ticker):
+        return None
+
+    if use_cache:
+        cached = _cache_get(_NEOS_FUND_FACTS_CACHE, ticker, _NEOS_FUND_FACTS_TTL_SEC)
+        if cached is not None:
+            return dict(cached)
+        persisted = _load_persisted_market_payload(
+            "neos", ticker, "fund_facts", ttl=_NEOS_FUND_FACTS_TTL_SEC
+        )
+        if persisted is not None:
+            _cache_set(_NEOS_FUND_FACTS_CACHE, ticker, dict(persisted))
+            return dict(persisted)
+        if _cache_get(_NEOS_FUND_FACTS_MISSES, ticker, _NEOS_FUND_FACTS_MISS_TTL_SEC):
+            stale = _load_persisted_market_payload("neos", ticker, "fund_facts")
+            return dict(stale) if stale is not None else None
+
+    try:
+        profile = _fetch_neos_etf_profile(ticker) or {}
+    except Exception:
+        profile = {}
+    assets = _json_float(profile.get("total_assets"))
+    if assets is None or assets <= 0:
+        _cache_set(_NEOS_FUND_FACTS_MISSES, ticker, True)
+        stale = _load_persisted_market_payload("neos", ticker, "fund_facts")
+        return dict(stale) if stale is not None else None
+
+    facts = {
+        "assets": assets,
+        "exp_ratio": profile.get("expense_ratio_pct"),
+        "inception_date": profile.get("inception_date"),
+        "source": "NEOS Investments",
+        "source_url": profile.get("source_url"),
+        "as_of": datetime.date.today().isoformat(),
+    }
+    _NEOS_FUND_FACTS_MISSES.pop(ticker, None)
+    _cache_set(_NEOS_FUND_FACTS_CACHE, ticker, dict(facts))
+    _persist_market_payload("neos", ticker, "fund_facts", dict(facts))
+    return facts
+
+
+def _neos_fund_facts_batch(tickers, timeout_sec=8):
+    """``_neos_official_fund_facts`` for every NEOS ticker, fetched in parallel.
+
+    Warm calls are dictionary reads. A cold call is one page per fund, bounded
+    by ``timeout_sec`` so a slow issuer site can't stall the caller; any fund
+    that doesn't answer in time is simply absent and keeps its existing figure.
+    """
+    from concurrent.futures import (
+        ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout,
+    )
+
+    symbols = sorted({
+        str(t or "").strip().upper()
+        for t in (tickers or [])
+        if _is_neos_fund(str(t or ""))
+    })
+    if not symbols:
+        return {}
+    out = {}
+    pool = ThreadPoolExecutor(max_workers=min(6, len(symbols)))
+    try:
+        futures = {pool.submit(_neos_official_fund_facts, s): s for s in symbols}
+        try:
+            for fut in as_completed(futures, timeout=timeout_sec):
+                try:
+                    facts = fut.result()
+                except Exception:
+                    facts = None
+                if facts and facts.get("assets"):
+                    out[futures[fut]] = facts
+        except FuturesTimeout:
+            pass
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return out
+
+
+def _overlay_neos_fund_facts(fund_facts, tickers):
+    """Put neosfunds.com AUM / expense / inception over catalog fund facts.
+
+    ``fund_facts`` is the ``{ticker: {"assets", "exp_ratio"}}`` shape from
+    ``_etf_provider_fund_facts``. NEOS rows gain ``inception_date`` and a
+    ``source`` so the closure rating can apply its new-fund grace period and
+    say where the AUM came from.
+    """
+    merged = dict(fund_facts or {})
+    for ticker, official in _neos_fund_facts_batch(tickers).items():
+        row = dict(merged.get(ticker) or {})
+        row["assets"] = official["assets"]
+        if official.get("exp_ratio") is not None:
+            row["exp_ratio"] = official["exp_ratio"]
+        row["inception_date"] = official.get("inception_date")
+        row["source"] = official.get("source")
+        merged[ticker] = row
+    return merged
 
 
 def _fetch_tappalpha_etf_profile(ticker, use_cache=True):
@@ -37743,6 +37878,8 @@ def etf_screen_data():
         # total-return series against, so fall back to the unadjusted pair —
         # both sides price-only is at least internally consistent.
         risk_benchmarks = bench_adj_closes or bench_closes
+        # NEOS publishes its own Net Assets; prefer it to Yahoo's totalAssets.
+        neos_facts = _neos_fund_facts_batch(symbols)
 
         for sym in symbols:
             dl_sym = yahoo_by_symbol.get(sym, sym)
@@ -37944,7 +38081,10 @@ def etf_screen_data():
                 except Exception:
                     day_change_pct = None
 
-            assets = info.get("totalAssets") or info.get("totalNetAssets")
+            assets = (
+                (neos_facts.get(str(sym).upper()) or {}).get("assets")
+                or info.get("totalAssets") or info.get("totalNetAssets")
+            )
             volume = info.get("volume") or info.get("regularMarketVolume")
             dollar_volume = None
             if volume and last_price:
@@ -42052,6 +42192,9 @@ def watchlist_data():
         empty = pd.Series([], dtype=float)
         ticker_info = {}
 
+        # NEOS publishes its own Net Assets; prefer it to Yahoo's totalAssets.
+        neos_facts = _neos_fund_facts_batch(watching_tickers)
+
         for ticker in watching_tickers:
             yf_ticker_obj = _yf_ticker(ticker)
             description = _watchlist_security_description(
@@ -42065,6 +42208,8 @@ def watchlist_data():
                 aum = float(aum) if aum is not None else None
             except Exception:
                 aum = None
+            if (neos_facts.get(str(ticker).upper()) or {}).get("assets"):
+                aum = float(neos_facts[str(ticker).upper()]["assets"])
             has_data = (ticker in close_df.columns and
                         ticker in high_df.columns and
                         ticker in low_df.columns)
@@ -57622,8 +57767,16 @@ def etf_funds_search():
          'assets': r[3], 'div_yield': r[4], 'exp_ratio': r[5], 'change_1y': r[6], 'source': 'db'}
         for r in rows
     ]
+    # The seed catalog's NEOS AUM is a months-old snapshot; show the issuer's.
+    neos_facts = _neos_fund_facts_batch([f['symbol'] for f in funds])
+    for f in funds:
+        facts = neos_facts.get(str(f.get('symbol') or '').upper())
+        if facts:
+            f['assets'] = facts['assets']
+            if facts.get('exp_ratio') is not None:
+                f['exp_ratio'] = facts['exp_ratio']
 
-    exact_symbol_found = any(str(f.get('symbol') or '').upper() == search_q for f in funds)
+    exact_symbol_found =any(str(f.get('symbol') or '').upper() == search_q for f in funds)
     looks_like_ticker = bool(re.fullmatch(r"[A-Z0-9.\-]{1,10}", search_q or ""))
 
     # If a ticker-like query has no exact DB symbol match, try Yahoo Finance.

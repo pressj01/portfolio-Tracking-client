@@ -246,6 +246,40 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
         self.assertEqual(payload["ticker_closure_risk"]["AAA"]["tier"], "high")
         ticker_mock.assert_not_called()
 
+    @patch("yfinance.Ticker")
+    def test_closure_risk_prefers_issuer_aum_over_the_catalog(self, ticker_mock):
+        # NEOS's own Net Assets replace the seed catalog's months-old AUM.
+        ticker_mock.side_effect = AssertionError("live .info must not block grades")
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """CREATE TABLE etf_provider_funds (
+                provider_id INTEGER, symbol TEXT, fund_name TEXT,
+                assets REAL, exp_ratio REAL
+            )"""
+        )
+        conn.execute(
+            "INSERT INTO etf_provider_funds VALUES (1, 'AAA', 'Alpha', 8000000, 0.99)"
+        )
+        conn.commit()
+        conn.close()
+        official = {"AAA": {
+            "assets": 900_000_000.0,
+            "exp_ratio": 0.99,
+            "inception_date": "2022-01-03",
+            "source": "NEOS Investments",
+        }}
+
+        with patch.object(app_module, "_neos_fund_facts_batch", return_value=official):
+            response = self.client.get("/api/portfolio-summary/data?profile_id=6&period=1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        risk = payload["ticker_closure_risk"]["AAA"]
+        self.assertEqual(risk["tier"], "ok", risk)
+        self.assertEqual(risk["aum"], 900_000_000.0)
+        self.assertEqual(risk["aum_source"], "NEOS Investments")
+        ticker_mock.assert_not_called()
+
     def test_close_series_keeps_the_requested_ticker_column(self):
         dates = pd.bdate_range("2024-01-02", periods=3)
         raw = pd.concat(
