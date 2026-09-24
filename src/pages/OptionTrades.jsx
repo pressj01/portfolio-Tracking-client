@@ -10,10 +10,15 @@ const STRATEGIES = [
   'Covered Call', 'Cash-Secured Put', 'Short Call', 'Short Put',
   'Bull Put Spread', 'Bear Call Spread', 'Bull Call Spread', 'Bear Put Spread',
   'Iron Condor', 'Put Condor', 'Call Condor', 'Put / Call Condor', 'Unbalanced Iron Condor', 'Unbalanced Put Condor',
-  'Iron Butterfly', 'Butterfly', 'Unbalanced Butterfly', 'Double-Hedge Put Butterfly',
+  'Unbalanced Call Condor', 'Asymmetrical Iron Condor',
+  'Iron Butterfly', 'Butterfly', 'Put Butterfly', 'Call Butterfly', 'Unbalanced Butterfly',
+  'Unbalanced Put Butterfly', 'Unbalanced Call Butterfly', 'Double-Hedge Put Butterfly', 'Double-Hedge Call Butterfly',
   'Road Trip Butterfly', '60/40/20 Butterfly', 'Calendar', 'Diagonal',
+  'Long Call Calendar', 'Long Put Calendar', 'Long Call Diagonal', 'Long Put Diagonal',
+  'Call Ratio Spread', 'Put Ratio Spread', 'Call Backspread', 'Put Backspread',
   'Long Call', 'Long Put', 'Long Straddle', 'Long Strangle',
-  'Short Straddle', 'Short Strangle', 'Collar', 'Protective Put',
+  'Short Straddle', 'Short Strangle', 'Synthetic Long Stock', 'Synthetic Short Stock',
+  'Collar', 'Protective Put',
 ]
 
 const money = (value, fallback = '—') => {

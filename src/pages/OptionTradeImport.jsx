@@ -189,7 +189,7 @@ export default function OptionTradeImport() {
                   <td>{money(row.price)}<small>Fees {money(row.fees)}</small></td>
                   <td><code>{row.group_key}</code></td>
                   <td>{row.strategy_type || 'Match existing trade'}<small>{row.purpose || '—'}{row.scanner_strategy_key ? ' · scanner pattern' : ''}</small></td>
-                  <td><span className={`oti-match oti-match-${row.match_status}`}>{row.duplicate ? 'duplicate' : row.match_status}</span></td>
+                  <td><span className={`oti-match oti-match-${String(row.match_status).replace(/\s+/g, '-')}`}>{row.duplicate ? 'duplicate' : row.match_status}</span></td>
                   <td>{row.warnings.length ? row.warnings.join(' ') : '—'}</td>
                 </tr>
               ))}</tbody>

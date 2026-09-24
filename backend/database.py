@@ -1866,6 +1866,15 @@ def ensure_tables_exist(conn=None):
             FOREIGN KEY (linked_strategy_id) REFERENCES option_strategies(id) ON DELETE SET NULL
         )
     """)
+    option_trade_cols = {
+        row[1] for row in cur.execute("PRAGMA table_info(option_trades)").fetchall()
+    }
+    # Set when the user picks a strategy label, so re-running the import's
+    # structure classifier never overwrites a deliberate choice.
+    if "strategy_locked" not in option_trade_cols:
+        cur.execute(
+            "ALTER TABLE option_trades ADD COLUMN strategy_locked INTEGER NOT NULL DEFAULT 0"
+        )
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_option_trades_profile_status
         ON option_trades (profile_id, status, opened_at)

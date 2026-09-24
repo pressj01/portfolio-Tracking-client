@@ -15,8 +15,8 @@ from flask import jsonify, request
 
 from config import get_connection
 from option_trade_import import (
-    SCANNER_STRATEGY_KEYS, SUPPORTED_FORMATS, _strategy_for_legs,
-    parse_option_transactions,
+    SUPPORTED_FORMATS, _default_purpose, _strategy_for_legs,
+    is_generated_strategy_label, parse_option_transactions, scanner_strategy_key,
 )
 
 
@@ -170,7 +170,7 @@ def _staged_condor_risk_years(trade, legs, combined_risk):
         if len(side_legs) != 2:
             return None
         dates = {
-            execution["executed_at"]
+            str(execution["executed_at"] or "")[:10]
             for leg in side_legs for execution in leg["executions"]
             if execution["action"] in OPEN_ACTIONS
         }
@@ -179,11 +179,17 @@ def _staged_condor_risk_years(trade, legs, combined_risk):
         side_risk, _ = _derived_max_risk({}, side_legs)
         if not side_risk:
             return None
-        stages.append((date.fromisoformat(next(iter(dates))), side_risk))
+        try:
+            stages.append((date.fromisoformat(next(iter(dates))), side_risk))
+        except ValueError:
+            return None
     stages.sort()
     if stages[0][0] >= stages[1][0]:
         return None
-    expiration = date.fromisoformat(str(legs[0]["expiration"])[:10])
+    try:
+        expiration = date.fromisoformat(str(legs[0]["expiration"])[:10])
+    except ValueError:
+        return None
     if expiration <= stages[1][0]:
         return None
     first_stage = stages[0][1] * (stages[1][0] - stages[0][0]).days
@@ -191,8 +197,11 @@ def _staged_condor_risk_years(trade, legs, combined_risk):
     close_date = trade.get("closed_at")
     realized_years = None
     if close_date:
-        close = date.fromisoformat(str(close_date)[:10])
-        if close > stages[1][0]:
+        try:
+            close = date.fromisoformat(str(close_date)[:10])
+        except ValueError:
+            close = None
+        if close and close > stages[1][0]:
             realized_years = (first_stage + combined_risk * (close - stages[1][0]).days) / 365
     return entry_years, realized_years
 
@@ -324,7 +333,7 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         "realized_risk_years": realized_risk_years,
         "staged_entry": bool(stage_years),
         "scanner_strategy_key": (
-            SCANNER_STRATEGY_KEYS.get(trade["strategy_type"])
+            scanner_strategy_key(trade["strategy_type"], opening_dte)
             if _strategy_for_legs(legs) == trade["strategy_type"] else None
         ),
         "opening_dte": opening_dte,
@@ -1198,6 +1207,7 @@ def _staged_condor_side(trade):
     if (
         trade["status"] != "CLOSED"
         or trade["source"] != "broker_import"
+        or trade.get("strategy_locked")
         or not str(trade.get("external_group_id") or "").startswith("auto:")
         or trade["strategy_type"] not in {"Bull Put Spread", "Bear Call Spread"}
         or len(trade["legs"]) != 2
@@ -1279,19 +1289,33 @@ def reconcile_staged_iron_condors(conn, profile_id):
 
 
 def infer_imported_trade_strategies(conn, profile_id):
-    """Upgrade ambiguous broker-import labels when the scanner shape is exact."""
+    """Re-derive broker-import labels that the classifier itself wrote.
+
+    Earlier importer versions labelled by leg count ("Butterfly / Custom", or
+    "Iron Condor" for a bear call and bull put on different expirations), so
+    a stored generated label can simply be wrong. Any label the classifier
+    could have produced is re-derived from the legs; a label the user chose
+    (strategy_locked) or typed themselves is never touched. The purpose moves
+    with it only while it is still the importer's default for the old label.
+    """
     classified = 0
     for trade in load_trades(conn, [profile_id]):
-        if trade["source"] != "broker_import" or trade["strategy_type"] not in {
-            "Custom", "Butterfly / Custom", "Iron Condor", "Unbalanced Iron Condor",
-        }:
+        current = trade["strategy_type"]
+        if (trade["source"] != "broker_import"
+                or trade.get("strategy_locked")
+                or not is_generated_strategy_label(current)):
             continue
         inferred = _strategy_for_legs(trade["legs"])
-        if inferred not in SCANNER_STRATEGY_KEYS or inferred == trade["strategy_type"]:
+        if inferred == current:
             continue
+        purpose = trade["purpose"]
+        if purpose == _default_purpose(current):
+            purpose = _default_purpose(inferred)
         conn.execute(
-            "UPDATE option_trades SET strategy_type = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (inferred, trade["id"]),
+            """UPDATE option_trades
+                  SET strategy_type = ?, purpose = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?""",
+            (inferred, purpose, trade["id"]),
         )
         classified += 1
     return classified
@@ -1604,11 +1628,18 @@ def register_routes(app, get_profile_filter, get_profile_id):
             return jsonify({"error": "Invalid trade purpose"}), 400
         conn = get_connection()
         try:
-            row = conn.execute("SELECT id FROM option_trades WHERE id = ? AND profile_id = ?", (trade_id, get_profile_id())).fetchone()
+            row = conn.execute("SELECT id, strategy_type FROM option_trades WHERE id = ? AND profile_id = ?", (trade_id, get_profile_id())).fetchone()
             if not row:
                 return jsonify({"error": "Option trade not found"}), 404
             fields = []
             values = []
+            # The edit form always sends the strategy. Only an actual change is
+            # the user's choice, and that must survive later re-classification.
+            new_strategy = str(payload.get("strategy_type") or "").strip()
+            if "strategy_type" in payload and not new_strategy:
+                return jsonify({"error": "Strategy is required"}), 400
+            if new_strategy and new_strategy != row["strategy_type"]:
+                fields.append("strategy_locked = 1")
             for key, column in (("strategy_type", "strategy_type"), ("notes", "notes")):
                 if key in payload:
                     fields.append(f"{column} = ?")

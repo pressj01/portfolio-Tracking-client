@@ -11,7 +11,9 @@ from __future__ import annotations
 import csv
 import hashlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
+from functools import lru_cache
+from itertools import combinations
 from datetime import date, datetime
 
 
@@ -244,20 +246,47 @@ def _normalize_action(value):
     return None, "Unrecognized option action."
 
 
+def _aggregate_positions(legs):
+    """Net identical fills into sorted (type, side, expiration, strike, contracts)."""
+    quantities = defaultdict(int)
+    for row in legs:
+        key = (str(row["option_type"]).upper(), str(row["position_side"]).upper(),
+               str(row["expiration"])[:10], float(row["strike"]))
+        quantities[key] += int(row["contracts"])
+    return tuple(sorted((*key, quantity) for key, quantity in quantities.items() if quantity > 0))
+
+
 def _strategy_for_legs(legs):
     """Match fill geometry to the scanner's named option structures.
 
     A broker's order group is only evidence of which fills arrived together.
     It does not identify the strategy. Aggregate identical fills first, then
     require the scanner pattern's sides, strikes, expirations and quantities.
-    Ambiguous packages remain Custom for review.
+
+    The importer groups every opening fill for an underlying on one day, so a
+    package is often two structures placed together -- a double-hedge put
+    butterfly with its bear call spread, or bear call spreads on two
+    expirations. Those are named by their parts ("Double-Hedge Put Butterfly
+    + Bear Call Spread") rather than hidden as Custom. Custom is left for
+    packages that do not break into a few named structures.
     """
-    quantities = defaultdict(int)
-    for row in legs:
-        key = (row["option_type"], row["position_side"],
-               row["expiration"], float(row["strike"]))
-        quantities[key] += int(row["contracts"])
-    positions = [(*key, quantity) for key, quantity in quantities.items()]
+    return _classify_positions(_aggregate_positions(legs))
+
+
+@lru_cache(maxsize=4096)
+def _classify_positions(positions):
+    if not positions:
+        return "Custom"
+    named = _named_structure(positions)
+    if named != "Custom":
+        return named
+    parts = _decompose_positions(positions)
+    return _composite_label(parts) if parts else "Custom"
+
+
+@lru_cache(maxsize=65536)
+def _named_structure(positions):
+    """One named structure for these aggregated positions, else Custom."""
     if len(positions) == 1:
         option_type, side, _, _, _ = positions[0]
         if side == "SHORT":
@@ -288,10 +317,20 @@ def _strategy_for_legs(legs):
                 or (option_type == "PUT" and long_strike > short_strike)
             ):
                 return f"{option_type.title()} Ratio Spread"
-        if types == {"CALL", "PUT"} and len(sides) == 1 and same_expiration and first[4] == second[4]:
-            same_strike = first[3] == second[3]
-            prefix = "Long" if first[1] == "LONG" else "Short"
-            return f"{prefix} {'Straddle' if same_strike else 'Strangle'}"
+            # More long contracts, further out of the money than the short.
+            if long_leg[4] > short_leg[4] and (
+                (option_type == "CALL" and long_strike > short_strike)
+                or (option_type == "PUT" and long_strike < short_strike)
+            ):
+                return f"{option_type.title()} Backspread"
+        if types == {"CALL", "PUT"} and same_expiration and first[4] == second[4]:
+            if len(sides) == 1:
+                same_strike = first[3] == second[3]
+                prefix = "Long" if first[1] == "LONG" else "Short"
+                return f"{prefix} {'Straddle' if same_strike else 'Strangle'}"
+            if first[3] == second[3]:
+                call = first if first[0] == "CALL" else second
+                return "Synthetic Long Stock" if call[1] == "LONG" else "Synthetic Short Stock"
 
     if len(positions) == 3:
         types = {row[0] for row in positions}
@@ -302,11 +341,16 @@ def _strategy_for_legs(legs):
                 if low[4] == high[4] and body[4] == low[4] * 2:
                     if body[3] - low[3] == high[3] - body[3]:
                         return f"{low[0].title()} Butterfly"
-                    return "Unbalanced Butterfly"
+                    return f"Unbalanced {low[0].title()} Butterfly"
                 if (low[0] == "PUT" and low[4] == high[4] * 2
                         and body[4] == high[4] * 2
                         and body[3] - low[3] > high[3] - body[3]):
                     return "Double-Hedge Put Butterfly"
+                # The call-side mirror: the doubled wing is the far upper one.
+                if (low[0] == "CALL" and high[4] == low[4] * 2
+                        and body[4] == low[4] * 2
+                        and high[3] - body[3] > body[3] - low[3]):
+                    return "Double-Hedge Call Butterfly"
         return "Custom"
 
     if len(positions) == 4 and len({row[2] for row in positions}) == 1:
@@ -337,9 +381,141 @@ def _strategy_for_legs(legs):
                 kind = ordered[0][0].title()
                 if ordered[0][4] == ordered[2][4]:
                     return f"{kind} Condor"
-                if kind == "Put":
-                    return "Unbalanced Put Condor"
+                return f"Unbalanced {kind} Condor"
+
+    # Asymmetrical iron condor (AIC / Weirdor): a put credit spread, a smaller
+    # put debit spread above it as the hedge, and a smaller call credit spread.
+    if len(positions) == 6 and len({row[2] for row in positions}) == 1:
+        puts = sorted((row for row in positions if row[0] == "PUT"), key=lambda row: row[3])
+        calls = sorted((row for row in positions if row[0] == "CALL"), key=lambda row: row[3])
+        if len(puts) == 4 and len(calls) == 2:
+            put_long, put_short, hedge_short, hedge_long = puts
+            call_short, call_long = calls
+            if ([row[1] for row in puts] == ["LONG", "SHORT", "SHORT", "LONG"]
+                    and [row[1] for row in calls] == ["SHORT", "LONG"]
+                    and put_long[3] < put_short[3] < hedge_short[3] < hedge_long[3]
+                    < call_short[3] < call_long[3]
+                    and put_long[4] == put_short[4]
+                    and hedge_short[4] == hedge_long[4]
+                    and call_short[4] == call_long[4]
+                    and hedge_short[4] < put_short[4]
+                    # The scanner's call side is 1:4 or 2:10 of the put side.
+                    # A near-equal call condor is two unbalanced condors.
+                    and call_short[4] * 2 <= put_short[4]):
+                return "Asymmetrical Iron Condor"
     return "Custom"
+
+
+# Sizes of the structures _named_structure can name, largest first.
+_STRUCTURE_SIZES = (6, 4, 3, 2, 1)
+# Beyond this a label stops describing the trade; leave it Custom for review.
+_MAX_COMPOSITE_PARTS = 4
+_MAX_COMPOSITE_GROUP = 10
+
+
+def _decompose_positions(positions):
+    """Fewest named structures that exactly cover the positions, or None.
+
+    Structures only combine legs of one expiration (a calendar or diagonal is
+    recognized only as a whole two-leg package), so each expiration is split
+    on its own. Among equally short splits, fewer single-leg parts win, so a
+    butterfly plus a call spread beats an unbalanced condor plus a stray put.
+    """
+    by_expiration = defaultdict(list)
+    for position in positions:
+        by_expiration[position[2]].append(position)
+    parts = []
+    for expiration in sorted(by_expiration):
+        group = tuple(by_expiration[expiration])
+        if len(group) > _MAX_COMPOSITE_GROUP:
+            return None
+        split = _best_partition(group)
+        if split is None:
+            return None
+        parts.extend((name, size) for name, size, _ in split)
+    if len(parts) < 2 or len(parts) > _MAX_COMPOSITE_PARTS:
+        return None
+    return parts
+
+
+def _best_partition(group):
+    # Fewest parts, then fewest single legs, then fewest "Unbalanced" parts,
+    # then fewest parts mixing calls and puts: a 4x10 call condor beside a
+    # 1-lot put spread reads as that, not as a lopsided iron condor.
+    def score(parts):
+        return (
+            len(parts),
+            sum(size == 1 for _, size, _ in parts),
+            sum(name.startswith("Unbalanced") for name, _, _ in parts),
+            sum(mixed for _, _, mixed in parts),
+            sorted(parts),
+        )
+
+    @lru_cache(maxsize=None)
+    def solve(mask):
+        if not mask:
+            return ()
+        first = (mask & -mask).bit_length() - 1
+        others = [index for index in range(len(group)) if mask >> index & 1 and index != first]
+        best = None
+        for size in _STRUCTURE_SIZES:
+            if size - 1 > len(others):
+                continue
+            for combo in combinations(others, size - 1):
+                subset = (first, *combo)
+                name = _named_structure(tuple(group[index] for index in subset))
+                if name == "Custom":
+                    continue
+                rest = solve(mask & ~sum(1 << index for index in subset))
+                if rest is None:
+                    continue
+                mixed = len({group[index][0] for index in subset}) > 1
+                candidate = ((name, size, mixed), *rest)
+                if best is None or score(candidate) < score(best):
+                    best = candidate
+        return best
+
+    return solve((1 << len(group)) - 1)
+
+
+def _composite_label(parts):
+    counts = Counter(name for name, _ in parts)
+    sizes = {name: size for name, size in parts}
+    ordered = sorted(counts, key=lambda name: (-sizes[name], name))
+    return " + ".join(
+        f"{counts[name]}x {name}" if counts[name] > 1 else name for name in ordered
+    )
+
+
+STRUCTURE_NAMES = frozenset({
+    "Long Call", "Long Put", "Short Call", "Short Put",
+    "Bull Call Spread", "Bear Call Spread", "Bull Put Spread", "Bear Put Spread",
+    "Call Ratio Spread", "Put Ratio Spread", "Call Backspread", "Put Backspread",
+    "Long Call Calendar", "Long Put Calendar", "Long Call Diagonal", "Long Put Diagonal",
+    "Long Straddle", "Short Straddle", "Long Strangle", "Short Strangle",
+    "Synthetic Long Stock", "Synthetic Short Stock",
+    "Call Butterfly", "Put Butterfly",
+    "Unbalanced Call Butterfly", "Unbalanced Put Butterfly",
+    "Double-Hedge Put Butterfly", "Double-Hedge Call Butterfly",
+    "Iron Butterfly", "Iron Condor", "Unbalanced Iron Condor",
+    "Call Condor", "Put Condor", "Unbalanced Call Condor", "Unbalanced Put Condor",
+    "Asymmetrical Iron Condor",
+})
+# Labels earlier importer versions wrote before the current classifier.
+_LEGACY_IMPORT_LABELS = frozenset({"Custom", "Butterfly / Custom", "Unbalanced Butterfly"})
+
+
+def strategy_parts(label):
+    """Structure names in a label, without the "2x " multiplicity prefix."""
+    return [re.sub(r"^\d+x ", "", part.strip()) for part in str(label or "").split(" + ")]
+
+
+def is_generated_strategy_label(label):
+    """True when the classifier (current or legacy) could have written label."""
+    if label in _LEGACY_IMPORT_LABELS:
+        return True
+    parts = strategy_parts(label)
+    return bool(parts) and all(part in STRUCTURE_NAMES for part in parts)
 
 
 SCANNER_STRATEGY_KEYS = {
@@ -350,7 +526,8 @@ SCANNER_STRATEGY_KEYS = {
     "Put Condor": "put-call-condor", "Call Condor": "put-call-condor",
     "Unbalanced Put Condor": "unbalanced-put-condor",
     "Put Butterfly": "put-butterfly", "Call Butterfly": "call-butterfly",
-    "Unbalanced Butterfly": "unbalanced-butterfly",
+    "Unbalanced Call Butterfly": "unbalanced-butterfly",
+    "Unbalanced Put Butterfly": "unbalanced-butterfly",
     "Double-Hedge Put Butterfly": "double-hedge-put-butterfly",
     "Long Call Calendar": "long-call-calendar", "Long Put Calendar": "long-put-calendar",
     "Long Call Diagonal": "long-call-diagonal", "Long Put Diagonal": "long-put-diagonal",
@@ -361,13 +538,35 @@ SCANNER_STRATEGY_KEYS = {
 }
 
 
+def scanner_strategy_key(strategy, opening_dte=None):
+    """General-scanner key for a single named structure, else None."""
+    if strategy == "Asymmetrical Iron Condor":
+        if opening_dte is None:
+            return None
+        # The 14-Day AIC enters at 30-35 DTE and the Monthly at 40-50.
+        return "fourteen-day-aic" if opening_dte < 38 else "monthly-aic"
+    return SCANNER_STRATEGY_KEYS.get(strategy)
+
+
+def _opening_dte(rows):
+    try:
+        opened = min(date.fromisoformat(str(row["executed_at"])[:10]) for row in rows)
+        expiration = min(date.fromisoformat(str(row["expiration"])[:10]) for row in rows)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (expiration - opened).days
+
+
+_INCOME_STRUCTURES = frozenset({
+    "Short Call", "Short Put", "Bull Put Spread", "Bear Call Spread",
+    "Iron Condor", "Unbalanced Iron Condor", "Iron Butterfly",
+    "Short Straddle", "Short Strangle", "Asymmetrical Iron Condor",
+})
+
+
 def _default_purpose(strategy):
-    income_strategies = {
-        "Short Call", "Short Put", "Bull Put Spread", "Bear Call Spread",
-        "Iron Condor", "Unbalanced Iron Condor", "Iron Butterfly",
-        "Short Straddle", "Short Strangle",
-    }
-    return "Income" if strategy in income_strategies else "Directional"
+    parts = strategy_parts(strategy)
+    return "Income" if all(part in _INCOME_STRUCTURES for part in parts) else "Directional"
 
 
 def _dedupe_hash(row, source_format):
@@ -485,7 +684,7 @@ def parse_option_transactions(file_path, filename, source_format="generic"):
         for row in group:
             row["strategy_type"] = strategy
             row["purpose"] = purpose
-            row["scanner_strategy_key"] = SCANNER_STRATEGY_KEYS.get(strategy)
+            row["scanner_strategy_key"] = scanner_strategy_key(strategy, _opening_dte(group))
 
     executions.sort(key=lambda row: (row["executed_at"], row["source_row"]))
     warning_count = sum(bool(row["warnings"]) for row in executions)

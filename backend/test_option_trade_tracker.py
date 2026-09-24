@@ -51,11 +51,11 @@ class OptionTradeImportParserTest(unittest.TestCase):
         self.assertEqual(_strategy_for_legs([
             leg("PUT", "LONG", 593), leg("PUT", "SHORT", 741, 10),
             leg("PUT", "LONG", 715, 5), leg("PUT", "LONG", 758, 5),
-        ]), "Custom")
+        ]), "Unbalanced Put Butterfly + Long Put")
         self.assertEqual(_strategy_for_legs([
             leg("PUT", "LONG", 120), leg("PUT", "SHORT", 130),
             leg("CALL", "LONG", 185), leg("CALL", "SHORT", 195),
-        ]), "Custom")
+        ]), "Bull Call Spread + Bull Put Spread")
         self.assertEqual(_strategy_for_legs([
             leg("PUT", "LONG", 120, expiration="2027-03-19"),
             leg("PUT", "SHORT", 130, expiration="2027-03-19"),
@@ -72,7 +72,7 @@ class OptionTradeImportParserTest(unittest.TestCase):
         self.assertEqual(_strategy_for_legs([
             leg("PUT", "LONG", 120), leg("PUT", "SHORT", 130),
             leg("CALL", "SHORT", 180), leg("CALL", "LONG", 190, 2),
-        ]), "Custom")
+        ]), "Bull Put Spread + Call Backspread")
 
     def test_occ_symbol_decodes_contract(self):
         parsed = parse_occ_symbol("SPY   260821C00600000")
@@ -1060,6 +1060,246 @@ class OpenOptionLiquidatingValueTest(unittest.TestCase):
 
         self.assertEqual(snapshot["priced_legs"], 1)
         self.assertEqual(snapshot["unpriced_legs"], ["SPY 2026-09-18 540P"])
+
+
+def _leg(kind, side, strike, quantity=1, expiration="2026-10-16"):
+    return {"option_type": kind, "position_side": side, "strike": strike,
+            "contracts": quantity, "expiration": expiration}
+
+
+class StrategyClassificationTest(unittest.TestCase):
+    """Real shapes from the ledger: SPX/RUT index trades placed as packages."""
+
+    def test_asymmetrical_iron_condor_needs_a_small_call_side(self):
+        aic = [
+            _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),
+            _leg("PUT", "LONG", 3350, 10), _leg("PUT", "SHORT", 3450, 10),
+            _leg("PUT", "SHORT", 3925, 5), _leg("PUT", "LONG", 3975, 5),
+        ]
+        self.assertEqual(_strategy_for_legs(aic), "Asymmetrical Iron Condor")
+        # A call condor nearly the size of the put condor is two condors, not
+        # an AIC with a small call credit.
+        near_equal = [
+            _leg("CALL", "LONG", 455, 6), _leg("CALL", "SHORT", 460, 6),
+            _leg("CALL", "SHORT", 475, 10), _leg("CALL", "LONG", 490, 10),
+            _leg("PUT", "LONG", 305, 11), _leg("PUT", "SHORT", 315, 11),
+            _leg("PUT", "SHORT", 349, 5), _leg("PUT", "LONG", 354, 5),
+        ]
+        self.assertEqual(
+            _strategy_for_legs(near_equal),
+            "Unbalanced Call Condor + Unbalanced Put Condor",
+        )
+
+    def test_call_side_mirrors_and_two_leg_structures(self):
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "LONG", 540, 5), _leg("CALL", "SHORT", 545, 5),
+            _leg("CALL", "SHORT", 575, 10), _leg("CALL", "LONG", 585, 10),
+        ]), "Unbalanced Call Condor")
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "LONG", 527, 3), _leg("CALL", "SHORT", 536, 6),
+            _leg("CALL", "LONG", 570, 6),
+        ]), "Double-Hedge Call Butterfly")
+        self.assertEqual(_strategy_for_legs([
+            _leg("PUT", "LONG", 1600, 10), _leg("PUT", "SHORT", 1700, 6),
+        ]), "Put Backspread")
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "LONG", 12.5), _leg("PUT", "SHORT", 12.5),
+        ]), "Synthetic Long Stock")
+
+    def test_unbalanced_butterflies_name_their_option_type(self):
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "LONG", 417, 8), _leg("CALL", "SHORT", 428, 16),
+            _leg("CALL", "LONG", 453, 8),
+            _leg("PUT", "LONG", 285, 8), _leg("PUT", "SHORT", 330, 16),
+            _leg("PUT", "LONG", 345, 8),
+        ]), "Unbalanced Call Butterfly + Unbalanced Put Butterfly")
+
+    def test_packages_are_named_by_their_parts(self):
+        # A double-hedge put butterfly placed with its bear call spread.
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "SHORT", 6000), _leg("CALL", "LONG", 6100),
+            _leg("PUT", "LONG", 2950, 4), _leg("PUT", "SHORT", 4325, 4),
+            _leg("PUT", "LONG", 4650, 2),
+        ]), "Double-Hedge Put Butterfly + Bear Call Spread")
+        # Bear call spreads on two expirations.
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "SHORT", 6600, expiration="2026-10-16"),
+            _leg("CALL", "LONG", 6650, expiration="2026-10-16"),
+            _leg("CALL", "SHORT", 6550, expiration="2026-11-20"),
+            _leg("CALL", "LONG", 6600, expiration="2026-11-20"),
+        ]), "2x Bear Call Spread")
+        # An iron condor shape split across two expirations is not one.
+        self.assertEqual(_strategy_for_legs([
+            _leg("CALL", "SHORT", 6425, expiration="2026-10-16"),
+            _leg("CALL", "LONG", 6450, expiration="2026-10-16"),
+            _leg("PUT", "LONG", 4800, expiration="2026-11-20"),
+            _leg("PUT", "SHORT", 4900, expiration="2026-11-20"),
+        ]), "Bear Call Spread + Bull Put Spread")
+
+    def test_a_package_of_many_parts_stays_custom(self):
+        legs = [
+            _leg("CALL", "LONG", 4575, 3), _leg("CALL", "SHORT", 4625, 3),
+            _leg("CALL", "SHORT", 4700, 3), _leg("CALL", "LONG", 4775, 3),
+            _leg("CALL", "LONG", 5275), _leg("PUT", "LONG", 2500),
+            _leg("PUT", "SHORT", 2600),
+            _leg("CALL", "LONG", 4625, 3, "2026-11-20"),
+            _leg("CALL", "SHORT", 4675, 3, "2026-11-20"),
+            _leg("CALL", "SHORT", 4950, 3, "2026-11-20"),
+            _leg("CALL", "LONG", 5150, 3, "2026-11-20"),
+            _leg("CALL", "LONG", 5500, 3, "2026-11-20"),
+        ]
+        self.assertEqual(_strategy_for_legs(legs), "Custom")
+
+    def test_aic_links_the_scanner_campaign_by_entry_dte(self):
+        from option_trade_import import _default_purpose, scanner_strategy_key
+        self.assertEqual(scanner_strategy_key("Asymmetrical Iron Condor", 33), "fourteen-day-aic")
+        self.assertEqual(scanner_strategy_key("Asymmetrical Iron Condor", 45), "monthly-aic")
+        self.assertIsNone(scanner_strategy_key("Asymmetrical Iron Condor"))
+        self.assertIsNone(scanner_strategy_key("Double-Hedge Put Butterfly + Bear Call Spread"))
+        self.assertEqual(_default_purpose("Asymmetrical Iron Condor"), "Income")
+        self.assertEqual(_default_purpose("2x Bear Call Spread"), "Income")
+        self.assertEqual(_default_purpose("Bull Put Spread + Long Call"), "Directional")
+
+
+class ImportedStrategyRelabelTest(unittest.TestCase):
+    def setUp(self):
+        self.conn = memory_database()
+
+    def tearDown(self):
+        self.conn.close()
+
+    def _trade(self, strategy, legs, source="broker_import", purpose=None):
+        payload = {
+            "underlying": "SPX", "strategy_type": strategy,
+            "purpose": purpose or tracker._default_purpose(strategy),
+            "opened_at": "2026-09-01",
+            "legs": [{**leg, "price": 1, "fees": 0} for leg in legs],
+        }
+        return tracker.create_trade(
+            self.conn, 1, payload, source=source,
+            source_format="schwab" if source == "broker_import" else None,
+        )
+
+    def _row(self, trade_id):
+        return self.conn.execute(
+            "SELECT strategy_type, purpose FROM option_trades WHERE id = ?", (trade_id,)
+        ).fetchone()
+
+    def test_generated_labels_are_rederived_and_user_labels_kept(self):
+        split = [
+            _leg("CALL", "SHORT", 6425, expiration="2026-10-16"),
+            _leg("CALL", "LONG", 6450, expiration="2026-10-16"),
+            _leg("PUT", "LONG", 4800, expiration="2026-11-20"),
+            _leg("PUT", "SHORT", 4900, expiration="2026-11-20"),
+        ]
+        aic = [
+            _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),
+            _leg("PUT", "LONG", 3350, 10), _leg("PUT", "SHORT", 3450, 10),
+            _leg("PUT", "SHORT", 3925, 5), _leg("PUT", "LONG", 3975, 5),
+        ]
+        road_trip = [
+            _leg("PUT", "LONG", 593), _leg("PUT", "LONG", 715, 5),
+            _leg("PUT", "SHORT", 741, 10), _leg("PUT", "LONG", 758, 5),
+        ]
+        stale_condor = self._trade("Iron Condor", split)
+        stale_butterfly = self._trade("Butterfly / Custom", [
+            _leg("CALL", "LONG", 2400, 3), _leg("PUT", "LONG", 1150, 2),
+            _leg("PUT", "SHORT", 1250, 2),
+        ])
+        custom_aic = self._trade("Custom", aic)
+        user_named = self._trade("Road Trip Butterfly", road_trip)
+        locked = self._trade("Iron Condor", split)
+        self.conn.execute("UPDATE option_trades SET strategy_locked = 1 WHERE id = ?", (locked,))
+        manual = self._trade("Custom", aic, source="manual")
+
+        changed = tracker.infer_imported_trade_strategies(self.conn, 1)
+
+        self.assertEqual(changed, 3)
+        self.assertEqual(tuple(self._row(stale_condor)), ("Bear Call Spread + Bull Put Spread", "Income"))
+        self.assertEqual(tuple(self._row(stale_butterfly)), ("Bull Put Spread + Long Call", "Directional"))
+        self.assertEqual(tuple(self._row(custom_aic)), ("Asymmetrical Iron Condor", "Income"))
+        self.assertEqual(self._row(user_named)["strategy_type"], "Road Trip Butterfly")
+        self.assertEqual(self._row(locked)["strategy_type"], "Iron Condor")
+        self.assertEqual(self._row(manual)["strategy_type"], "Custom")
+
+    def test_a_purpose_the_user_changed_is_kept(self):
+        trade_id = self._trade("Custom", [
+            _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),
+            _leg("PUT", "LONG", 3350, 10), _leg("PUT", "SHORT", 3450, 10),
+            _leg("PUT", "SHORT", 3925, 5), _leg("PUT", "LONG", 3975, 5),
+        ], purpose="Hedge")
+        tracker.infer_imported_trade_strategies(self.conn, 1)
+        self.assertEqual(tuple(self._row(trade_id)), ("Asymmetrical Iron Condor", "Hedge"))
+
+    def test_aic_payload_links_its_campaign_scanner(self):
+        self._trade("Asymmetrical Iron Condor", [
+            _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),
+            _leg("PUT", "LONG", 3350, 10), _leg("PUT", "SHORT", 3450, 10),
+            _leg("PUT", "SHORT", 3925, 5), _leg("PUT", "LONG", 3975, 5),
+        ])
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["opening_dte"], 45)
+        self.assertEqual(trade["scanner_strategy_key"], "monthly-aic")
+
+
+class StrategyLockApiTest(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "trades.db"
+        conn = self.connection()
+        ensure_tables_exist(conn)
+        conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'API Portfolio')")
+        conn.commit()
+        self.trade_id = tracker.create_trade(conn, 1, {
+            "underlying": "SPX", "strategy_type": "Custom", "purpose": "Directional",
+            "opened_at": "2026-09-01",
+            "legs": [{**leg, "price": 1, "fees": 0} for leg in (
+                _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),
+            )],
+        }, source="broker_import", source_format="schwab")
+        conn.close()
+        self.original_connection = tracker.get_connection
+        tracker.get_connection = self.connection
+        self.app = Flask(__name__)
+        tracker.register_routes(
+            self.app,
+            get_profile_filter=lambda: (False, [1]),
+            get_profile_id=lambda: 1,
+        )
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        tracker.get_connection = self.original_connection
+        self.temp_dir.cleanup()
+
+    def connection(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _locked(self):
+        conn = self.connection()
+        try:
+            return conn.execute(
+                "SELECT strategy_locked FROM option_trades WHERE id = ?", (self.trade_id,)
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_only_a_changed_strategy_locks_the_label(self):
+        url = f"/api/option-trades/{self.trade_id}"
+        # The edit form always resends the strategy; a notes-only save is not
+        # a classification decision.
+        response = self.client.put(url, json={"strategy_type": "Custom", "notes": "watch the call side"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._locked(), 0)
+
+        response = self.client.put(url, json={"strategy_type": "Hedge Wrapper"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._locked(), 1)
+
+        response = self.client.put(url, json={"strategy_type": "  "})
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":
