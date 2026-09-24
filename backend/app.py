@@ -137,6 +137,11 @@ from market_calendar import (
     market_has_closed,
 )
 from nav_history import build_nav_history_payload
+from refresh_sessions import (
+    QUOTE_URL as _YAHOO_QUOTE_URL,
+    align_to_sessions,
+    closes_by_session,
+)
 from dividend_ledger import build_ledger as build_dividend_ledger
 from dividend_safety import (
     apply_nav_coverage_overlay,
@@ -11697,14 +11702,15 @@ def api_nav_snapshot():
 def _refresh_payload_complete_for_close(payload):
     """True only when every holding received a fresh price this refresh.
 
-    A partial Yahoo download leaves yesterday's price on the failed tickers.
-    Stamping source='close' on that mix would record an official NAV that is not
-    today's close.
+    A partial Yahoo download leaves yesterday's price on the failed tickers, and
+    a chart with no bar for today does the same to the ones it priced
+    (`price_stale`). Stamping source='close' on that mix would record an
+    official NAV that is not today's close.
     """
     if not isinstance(payload, dict):
         return False
     failures = payload.get("price_failures")
-    if failures:
+    if failures or payload.get("price_stale"):
         return False
     if payload.get("price_complete") is not True:
         return False
@@ -11830,6 +11836,7 @@ def api_nav_auto_capture():
         })
     if not _refresh_payload_complete_for_close(refresh_payload):
         failures = list(refresh_payload.get("price_failures") or [])
+        failures += sorted(refresh_payload.get("price_stale") or {})
         shown = ", ".join(failures[:8])
         extra = len(failures) - 8
         detail = shown + (f", +{extra} more" if extra > 0 else "")
@@ -17415,25 +17422,44 @@ def _reinvest_history(ticker):
 
 # ── Refresh Market Data ─────────────────────────────────────────────────────────
 
+# Below this share of the book's value priced on both sessions, the day change
+# is withheld rather than shown as if it described the account.
+DAILY_CHANGE_MIN_COVERAGE = 0.9
+
+
+def _sessions_from_close_history(close_history, tickers):
+    """(prior, latest) weekday sessions seen across the given tickers' bars."""
+    days = set()
+    for ticker in tickers:
+        days.update(d for d in closes_by_session(close_history.get(ticker)) if d.weekday() < 5)
+    ordered = sorted(days)
+    if len(ordered) < 2:
+        return None
+    return ordered[-2], ordered[-1]
+
+
 def _portfolio_daily_price_change(
     holding_map,
     close_history,
     profile_ids,
     account_current_value=None,
+    sessions=None,
 ):
-    """Aggregate the latest session's price move using current share counts.
+    """Aggregate one session's price move using current share counts.
+
+    Every holding is measured between the same two sessions, ``sessions`` =
+    (prior, latest), or the last two seen in the bars when not given. A holding
+    missing a close on either one is left out and named, not diffed across
+    whichever two bars it happens to have: that is how a Friday-to-Monday move
+    was once shown as "Sep 22 to Sep 23". When holdings left out carry more
+    than a tenth of the book's value, ``amount`` is None and the gap is
+    reported instead.
 
     When the full account value is known, use it for the percentage denominator
     so idle cash and temporarily uncovered holdings do not overstate the return.
     """
     included_profiles = set(profile_ids or [])
-    current_value = 0.0
-    previous_value = 0.0
-    holdings_total = 0
-    holdings_covered = 0
-    as_of_dates = []
-    previous_dates = []
-
+    held = []
     for (profile_id, ticker), holding in holding_map.items():
         if profile_id not in included_profiles:
             continue
@@ -17441,35 +17467,74 @@ def _portfolio_daily_price_change(
             quantity = float(holding.get("qty") or 0)
         except (TypeError, ValueError):
             continue
-        if quantity <= 0:
-            continue
+        if quantity > 0:
+            held.append((ticker, quantity, holding))
+    if not held:
+        return None
+    if sessions is None:
+        sessions = _sessions_from_close_history(close_history, {t for t, _, _ in held})
+        if sessions is None:
+            return None
+    previous_date, as_of_date = sessions
 
-        holdings_total += 1
-        series = close_history.get(ticker)
-        if series is None:
+    current_value = 0.0
+    previous_value = 0.0
+    covered_book = 0.0
+    total_book = 0.0
+    holdings_covered = 0
+    closes_by_ticker = {}
+    missing = {}
+    for ticker, quantity, holding in held:
+        if ticker not in closes_by_ticker:
+            closes_by_ticker[ticker] = closes_by_session(close_history.get(ticker))
+        closes = closes_by_ticker[ticker]
+        latest_price = closes.get(as_of_date)
+        previous_price = closes.get(previous_date)
+        if latest_price is not None:
+            book = quantity * latest_price
+        elif closes:
+            book = quantity * closes[max(closes)]
+        else:
+            try:
+                book = float(holding.get("current_value") or 0)
+            except (TypeError, ValueError):
+                book = 0.0
+        total_book += max(book, 0.0)
+        if latest_price is None or previous_price is None:
+            missing[ticker] = [
+                day.isoformat()
+                for day, price in ((previous_date, previous_price), (as_of_date, latest_price))
+                if price is None
+            ]
             continue
-        try:
-            prices = series.dropna()
-            if len(prices) < 2:
-                continue
-            latest_price = float(prices.iloc[-1])
-            previous_price = float(prices.iloc[-2])
-        except (TypeError, ValueError, IndexError):
-            continue
-        if latest_price <= 0 or previous_price <= 0:
-            continue
-
         holdings_covered += 1
+        covered_book += book
         current_value += quantity * latest_price
         previous_value += quantity * previous_price
-        try:
-            as_of_dates.append(pd.Timestamp(prices.index[-1]).date().isoformat())
-            previous_dates.append(pd.Timestamp(prices.index[-2]).date().isoformat())
-        except (TypeError, ValueError):
-            pass
 
-    if holdings_covered == 0 or previous_value <= 0:
-        return None
+    missing_by_session = {}
+    for days in missing.values():
+        for day in days:
+            missing_by_session[day] = missing_by_session.get(day, 0) + 1
+    coverage = covered_book / total_book if total_book > 0 else 0.0
+    result = {
+        "amount": None,
+        "percent": None,
+        "current_value": round(current_value, 2),
+        "previous_value": round(previous_value, 2),
+        "account_current_value": None,
+        "account_previous_value": None,
+        "holdings_covered": holdings_covered,
+        "holdings_total": len(held),
+        "tickers_total": len(closes_by_ticker),
+        "missing_tickers": sorted(missing),
+        "missing_by_session": dict(sorted(missing_by_session.items())),
+        "coverage_pct": round(coverage * 100, 1),
+        "as_of_date": as_of_date.isoformat(),
+        "previous_date": previous_date.isoformat(),
+    }
+    if holdings_covered == 0 or previous_value <= 0 or coverage < DAILY_CHANGE_MIN_COVERAGE:
+        return result
 
     amount = current_value - previous_value
     account_previous_value = None
@@ -17483,22 +17548,49 @@ def _portfolio_daily_price_change(
     except (TypeError, ValueError):
         full_current_value = None
 
-    return {
+    result.update({
         "amount": round(amount, 2),
         "percent": round((amount / percent_base) * 100, 4),
-        "current_value": round(current_value, 2),
-        "previous_value": round(previous_value, 2),
         "account_current_value": round(full_current_value, 2) if full_current_value else None,
         "account_previous_value": (
             round(account_previous_value, 2)
             if account_previous_value is not None
             else None
         ),
-        "holdings_covered": holdings_covered,
-        "holdings_total": holdings_total,
-        "as_of_date": max(as_of_dates) if as_of_dates else None,
-        "previous_date": max(previous_dates) if previous_dates else None,
-    }
+    })
+    return result
+
+
+# Dashboard loads each run a refresh; a quote this fresh answers the same hole.
+_SESSION_QUOTE_TTL_SEC = 300
+
+
+def _align_refresh_sessions(close_history, rename_map):
+    """Fill a refresh's missing session bars from one batched Yahoo quote call.
+
+    Returns the `refresh_sessions.align_to_sessions` report, or None when the
+    alignment itself fails, in which case the refresh behaves as it used to.
+    """
+    from yfinance.data import YfData
+
+    def _request(params):
+        return yahoo_gateway.call(
+            lambda: YfData().get_raw_json(_YAHOO_QUOTE_URL, params=params)
+        )
+
+    symbols = {t: _yahoo_symbol(rename_map.get(t, t)) for t in close_history}
+    try:
+        return align_to_sessions(
+            close_history,
+            symbols,
+            _request,
+            recall=lambda s: yahoo_gateway.recall(
+                "session_quote", s, max_age_sec=_SESSION_QUOTE_TTL_SEC
+            ),
+            remember=lambda s, quote: yahoo_gateway.remember("session_quote", s, quote),
+        )
+    except Exception:
+        return None
 
 
 @app.route("/api/refresh", methods=["POST"])
@@ -17730,6 +17822,13 @@ def refresh_market_data():
                             pass
             except Exception:
                 pass
+
+    # Yahoo's daily bars can trail its quotes by a session or two, and the last
+    # bar is read as the current price below. Fill the holes first.
+    session_report = _align_refresh_sessions(close_history, rename_map) or {}
+    for t in session_report.get("repriced", []):
+        price_map[t] = float(close_history[t].iloc[-1])
+    price_stale = session_report.get("stale") or {}
 
     price_failures = sorted(t for t in tickers if t not in price_map)
 
@@ -18614,6 +18713,7 @@ def refresh_market_data():
         close_history,
         source_pids,
         account_current_value=account_current_value,
+        sessions=session_report.get("sessions"),
     )
     conn.close()
     _clear_dividend_event_caches()
@@ -18630,6 +18730,16 @@ def refresh_market_data():
         msg = f"Refreshed {refreshed_rows} holdings across {len(source_pids)} Aggregate member portfolios."
     else:
         msg = f"Refreshed {refreshed_rows} holdings in {_get_profile_name(selected_profile_id)}."
+    if price_stale:
+        latest_session = session_report["sessions"][1]
+        stale_names = sorted(price_stale)
+        shown = ", ".join(stale_names[:5])
+        more = len(stale_names) - 5
+        msg += (
+            f" {len(stale_names)} holding{'' if len(stale_names) == 1 else 's'} kept an "
+            f"earlier close because Yahoo has no {latest_session:%b} {latest_session.day} "
+            f"price yet: {shown}{f', +{more} more' if more > 0 else ''}."
+        )
     dividend_update_accounts = [
         {
             "profile_id": pid,
@@ -18658,7 +18768,8 @@ def refresh_market_data():
         "refresh_date": refresh_date.isoformat(),
         "message": msg,
         "price_failures": price_failures,
-        "price_complete": not price_failures,
+        "price_stale": price_stale,
+        "price_complete": not price_failures and not price_stale,
     })
 
 

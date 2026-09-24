@@ -1616,8 +1616,10 @@ export default function Dashboard() {
   const portfolioOverallScore = portfolioNavAccounting.overallScore
   const portfolioOverallSeverity = portfolioNavAccounting.overallSeverity
   const portfolioRawPayoutGap = portfolioNavAccounting.rawPayoutGapRatio
-  const dailyChangeAmount = Number(dailyChange?.amount)
-  const dailyChangePercent = Number(dailyChange?.percent)
+  // A withheld change arrives as amount: null, and Number(null) is 0 — which
+  // would print "+$0.00" instead of saying the closes are missing.
+  const dailyChangeAmount = dailyChange?.amount == null ? NaN : Number(dailyChange.amount)
+  const dailyChangePercent = dailyChange?.percent == null ? NaN : Number(dailyChange.percent)
   const hasDailyChange = Number.isFinite(dailyChangeAmount) && Number.isFinite(dailyChangePercent)
   const dailyChangeColor = !hasDailyChange
     ? 'var(--text-dim)'
@@ -1634,9 +1636,23 @@ export default function Dashboard() {
   const dailyChangeSub = dailyChange?.previous_date && dailyChange?.as_of_date
     ? `${shortDate(dailyChange.previous_date)} to ${shortDate(dailyChange.as_of_date)}`
     : null
-  const dailyChangeTitle = dailyChange?.holdings_total > dailyChange?.holdings_covered
-    ? `Price move from the previous market close. Based on ${dailyChange.holdings_covered} of ${dailyChange.holdings_total} holdings with available prices.`
-    : 'Price move from the previous market close, based on current share counts.'
+  const dailyChangeMissingTickers = Array.isArray(dailyChange?.missing_tickers) ? dailyChange.missing_tickers : []
+  const dailyChangeMissingDays = Object.keys(dailyChange?.missing_by_session || {})
+    .map(shortDate)
+    .filter(Boolean)
+    .join(' or ')
+  const dailyChangeNote = dailyChangeMissingTickers.length === 0
+    ? undefined
+    : hasDailyChange
+      ? `Leaves out ${dailyChangeMissingTickers.length} holding${dailyChangeMissingTickers.length === 1 ? '' : 's'} with no ${dailyChangeMissingDays} close`
+      : `Yahoo has no ${dailyChangeMissingDays} close for ${dailyChangeMissingTickers.length} of ${dailyChange?.tickers_total || dailyChangeMissingTickers.length} holdings`
+  const dailyChangeTitle = dailyChangeMissingTickers.length > 0
+    ? 'Price move between the last two market closes, based on current share counts. '
+      + 'Holdings without a close on both days are left out rather than compared across other dates'
+      + `${hasDailyChange ? '' : ', and too few have both closes for an account figure'}. `
+      + `Missing: ${dailyChangeMissingTickers.slice(0, 12).join(', ')}`
+      + `${dailyChangeMissingTickers.length > 12 ? `, +${dailyChangeMissingTickers.length - 12} more` : ''}.`
+    : 'Price move between the last two market closes, based on current share counts.'
   const irrDetails = portfolioValue?.irr_details || null
   const portfolioIrr = portfolioValue?.irr == null ? null : Number(portfolioValue.irr)
   const hasPortfolioIrr = Number.isFinite(portfolioIrr)
@@ -2033,6 +2049,7 @@ export default function Dashboard() {
           value={dailyChangeValue}
           color={dailyChangeColor}
           sub={dailyChangeSub}
+          note={dailyChangeNote}
           title={dailyChangeTitle}
         />
         <SummaryCard
