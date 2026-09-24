@@ -1281,6 +1281,27 @@ class ImportedStrategyRelabelTest(unittest.TestCase):
         self.assertEqual(self._row(locked)["strategy_type"], "Iron Condor")
         self.assertEqual(self._row(manual)["strategy_type"], "Custom")
 
+    def test_a_locked_package_keeps_its_protective_put(self):
+        legs = [
+            _leg("PUT", "LONG", 593, expiration="2026-11-30"),
+            _leg("PUT", "SHORT", 741, 10, "2026-11-30"),
+            _leg("PUT", "LONG", 715, 5, "2026-11-30"),
+            _leg("PUT", "LONG", 758, 5, "2026-11-30"),
+        ]
+        trade_id = tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY", "strategy_type": "Road Trip Butterfly",
+            "purpose": "Income", "opened_at": "2026-09-22",
+            "legs": [{**leg, "price": 1, "fees": 0} for leg in legs],
+        }, source="broker_import", source_format="schwab",
+            external_group_id="auto:SPY:2026-09-22:OPEN")
+        self.conn.execute("UPDATE option_trades SET strategy_locked = 1 WHERE id = ?", (trade_id,))
+
+        self.assertEqual(tracker.reconcile_imported_put_hedges(self.conn, 1), 0)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])[0]["legs"]), 4)
+
+        self.conn.execute("UPDATE option_trades SET strategy_locked = 0 WHERE id = ?", (trade_id,))
+        self.assertEqual(tracker.reconcile_imported_put_hedges(self.conn, 1), 1)
+
     def test_a_purpose_the_user_changed_is_kept(self):
         trade_id = self._trade("Custom", [
             _leg("CALL", "SHORT", 5200), _leg("CALL", "LONG", 5300),

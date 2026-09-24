@@ -1325,7 +1325,9 @@ def reconcile_imported_put_hedges(conn, profile_id):
     """Move a distinct open protective put out of a broker grouped butterfly."""
     split = 0
     for trade in load_trades(conn, [profile_id], status="OPEN"):
+        # A trade whose strategy the user set is theirs to regroup, not ours.
         if (trade["source"] != "broker_import"
+                or trade.get("strategy_locked")
                 or not str(trade.get("external_group_id") or "").startswith("auto:")
                 or len(trade["legs"]) != 4):
             continue
