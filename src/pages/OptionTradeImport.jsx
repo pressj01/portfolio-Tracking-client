@@ -113,6 +113,8 @@ export default function OptionTradeImport() {
       {result && (
         <div className="ot-alert ot-alert-success">
           <strong>Import complete.</strong> Added {result.inserted} execution{result.inserted === 1 ? '' : 's'} across {result.trades_touched} trade{result.trades_touched === 1 ? '' : 's'}.
+          {result.corrected > 0 && ` Corrected ${result.corrected} previously misdated expiration${result.corrected === 1 ? '' : 's'} from the broker dates.`}
+          {result.trades_grouped > 0 && ` Combined ${result.trades_grouped} staged put/call spread pair${result.trades_grouped === 1 ? '' : 's'} into iron condors.`}
           {result.duplicates > 0 && ` ${result.duplicates} duplicate row${result.duplicates === 1 ? ' was' : 's were'} skipped.`}
           {result.unmatched > 0 && ` ${result.unmatched} unmatched close${result.unmatched === 1 ? ' was' : 's were'} skipped for review.`}
         </div>
@@ -164,6 +166,7 @@ export default function OptionTradeImport() {
             <span><small>Closing events</small><strong>{summary.closing}</strong></span>
             <span className={summary.needs_review ? 'oti-warning' : ''}><small>Needs review</small><strong>{summary.needs_review}</strong></span>
             <span><small>Duplicates</small><strong>{summary.duplicates}</strong></span>
+            {summary.date_corrections > 0 && <span><small>Date corrections</small><strong>{summary.date_corrections}</strong></span>}
             <span className={summary.unmatched_closes ? 'oti-warning' : ''}><small>Unmatched closes</small><strong>{summary.unmatched_closes}</strong></span>
             <span><small>Filtered rows</small><strong>{summary.filtered}</strong></span>
           </div>

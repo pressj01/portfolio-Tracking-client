@@ -124,6 +124,43 @@ def _derived_max_risk(trade, legs):
     return None, None
 
 
+def _staged_condor_risk_years(trade, legs, combined_risk):
+    """Capital time for a vertical spread that later became an iron condor."""
+    if trade.get("strategy_type") != "Iron Condor" or len(legs) != 4 or not combined_risk:
+        return None
+    stages = []
+    for option_type in ("PUT", "CALL"):
+        side_legs = [leg for leg in legs if leg["option_type"] == option_type]
+        if len(side_legs) != 2:
+            return None
+        dates = {
+            execution["executed_at"]
+            for leg in side_legs for execution in leg["executions"]
+            if execution["action"] in OPEN_ACTIONS
+        }
+        if len(dates) != 1:
+            return None
+        side_risk, _ = _derived_max_risk({}, side_legs)
+        if not side_risk:
+            return None
+        stages.append((date.fromisoformat(next(iter(dates))), side_risk))
+    stages.sort()
+    if stages[0][0] >= stages[1][0]:
+        return None
+    expiration = date.fromisoformat(str(legs[0]["expiration"])[:10])
+    if expiration <= stages[1][0]:
+        return None
+    first_stage = stages[0][1] * (stages[1][0] - stages[0][0]).days
+    entry_years = (first_stage + combined_risk * (expiration - stages[1][0]).days) / 365
+    close_date = trade.get("closed_at")
+    realized_years = None
+    if close_date:
+        close = date.fromisoformat(str(close_date)[:10])
+        if close > stages[1][0]:
+            realized_years = (first_stage + combined_risk * (close - stages[1][0]).days) / 365
+    return entry_years, realized_years
+
+
 def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
     trade = dict(trade_row)
     today = today or date.today()
@@ -178,13 +215,17 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
             opening_dte = (min(expiration_dates) - opened_date).days
     except ValueError:
         opening_dte = None
+    entry_risk_years = max_risk * opening_dte / 365 if max_risk and opening_dte and opening_dte > 0 else None
+    stage_years = _staged_condor_risk_years(trade, legs, max_risk)
+    if stage_years:
+        entry_risk_years = stage_years[0]
     annualized_return_pct = (
-        round(entry_net / max_risk * 365 / opening_dte * 100, 2)
-        if entry_net > 0 and max_risk and opening_dte and opening_dte > 0
-        else None
+        round(entry_net / entry_risk_years * 100, 2)
+        if entry_net > 0 and entry_risk_years else None
     )
     days_held = None
     realized_annualized_return_pct = None
+    realized_risk_years = None
     if is_closed:
         try:
             opened_date = date.fromisoformat(str(trade.get("opened_at") or "")[:10])
@@ -193,8 +234,12 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         except ValueError:
             days_held = None
         if max_risk and days_held and days_held > 0:
+            realized_risk_years = max_risk * days_held / 365
+        if stage_years and stage_years[1]:
+            realized_risk_years = stage_years[1]
+        if realized_risk_years:
             realized_annualized_return_pct = round(
-                realized / max_risk * 365 / days_held * 100,
+                realized / realized_risk_years * 100,
                 2,
             )
     open_expirations = []
@@ -239,6 +284,9 @@ def _trade_payload(trade_row, leg_rows, execution_rows, today=None):
         "max_risk_source": risk_source,
         "return_on_risk_pct": round(realized / max_risk * 100, 2) if is_closed and max_risk else None,
         "annualized_return_pct": annualized_return_pct,
+        "entry_risk_years": entry_risk_years,
+        "realized_risk_years": realized_risk_years,
+        "staged_entry": bool(stage_years),
         "opening_dte": opening_dte,
         "realized_annualized_return_pct": realized_annualized_return_pct,
         "days_held": days_held,
@@ -1027,7 +1075,7 @@ def _matching_open_legs(conn, profile_id, execution, preferred_trade_id=None):
             WHERE t.profile_id = ? AND t.status = 'OPEN'
               AND t.underlying = ? AND l.option_type = ? AND l.expiration = ?
               AND ABS(l.strike - ?) < 0.0001 AND l.position_side IN (""" + side_placeholders + ")" +
-        " ORDER BY COALESCE(t.opened_at, t.created_at), t.id",
+        " ORDER BY COALESCE(t.opened_at, t.created_at), t.id, l.id",
         params,
     ).fetchall()
     available = [(candidate, _open_contracts_for_leg(conn, int(candidate["id"]))) for candidate in candidates]
@@ -1035,6 +1083,114 @@ def _matching_open_legs(conn, profile_id, execution, preferred_trade_id=None):
     if preferred_trade_id:
         available.sort(key=lambda item: item[0]["matched_trade_id"] != preferred_trade_id)
     return available
+
+
+def _misdated_manual_expiration(conn, profile_id, execution):
+    """Find one already-closed manual expiration confirmed by this broker row."""
+    if execution["action"] != "EXPIRE" or execution["executed_at"] != execution["expiration"]:
+        return None
+    rows = conn.execute(
+        """SELECT e.id, e.trade_id
+             FROM option_executions e
+             JOIN option_trade_legs l ON l.id = e.leg_id
+             JOIN option_trades t ON t.id = e.trade_id
+            WHERE t.profile_id = ? AND t.underlying = ?
+              AND l.option_type = ? AND l.expiration = ?
+              AND ABS(l.strike - ?) < 0.0001
+              AND e.action = 'EXPIRE' AND e.source IN ('manual', 'auto_expire')
+              AND e.executed_at != ? AND e.contracts = ?
+              AND e.price = 0 AND e.fees = 0""",
+        (profile_id, execution["underlying"], execution["option_type"],
+         execution["expiration"], execution["strike"], execution["executed_at"],
+         execution["contracts"]),
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+def _staged_condor_side(trade):
+    """Identify one fully closed, broker-imported vertical spread."""
+    if (
+        trade["status"] != "CLOSED"
+        or trade["source"] != "broker_import"
+        or not str(trade.get("external_group_id") or "").startswith("auto:")
+        or trade["strategy_type"] not in {"Bull Put Spread", "Bear Call Spread"}
+        or len(trade["legs"]) != 2
+    ):
+        return None
+    legs = trade["legs"]
+    if len({leg["expiration"] for leg in legs}) != 1 or len({leg["contracts"] for leg in legs}) != 1:
+        return None
+    by_side = {leg["position_side"]: leg for leg in legs}
+    if set(by_side) != {"LONG", "SHORT"}:
+        return None
+    kind = "PUT" if trade["strategy_type"] == "Bull Put Spread" else "CALL"
+    if any(leg["option_type"] != kind for leg in legs):
+        return None
+    long_strike = float(by_side["LONG"]["strike"])
+    short_strike = float(by_side["SHORT"]["strike"])
+    if (kind == "PUT" and long_strike >= short_strike) or (kind == "CALL" and short_strike >= long_strike):
+        return None
+    # A common expiration alone is weak evidence: independent spreads can
+    # expire on the same day. Both sides must have actual closing fills on one
+    # earlier date, with no partial closes on other dates.
+    close_events = [
+        execution
+        for leg in legs for execution in leg["executions"]
+        if execution["action"] in CLOSE_ACTIONS
+    ]
+    if (
+        len(close_events) != 2
+        or any(execution["action"] not in {"BTC", "STC"} for execution in close_events)
+        or {execution["executed_at"] for execution in close_events} != {trade["closed_at"]}
+        or trade["closed_at"] >= legs[0]["expiration"]
+    ):
+        return None
+    return kind
+
+
+def reconcile_staged_iron_condors(conn, profile_id):
+    """Join uniquely paired put/call spreads opened in stages and closed together."""
+    groups = defaultdict(lambda: {"PUT": [], "CALL": []})
+    for trade in load_trades(conn, [profile_id], status="CLOSED"):
+        kind = _staged_condor_side(trade)
+        if kind:
+            key = (trade["underlying"], trade["legs"][0]["expiration"],
+                   trade["closed_at"], trade["source_format"])
+            groups[key][kind].append(trade)
+
+    merged = 0
+    for group in groups.values():
+        if len(group["PUT"]) != 1 or len(group["CALL"]) != 1:
+            continue
+        put, call = group["PUT"][0], group["CALL"][0]
+        if (
+            float(next(leg["strike"] for leg in put["legs"] if leg["position_side"] == "SHORT"))
+            >= float(next(leg["strike"] for leg in call["legs"] if leg["position_side"] == "SHORT"))
+            or put["legs"][0]["contracts"] != call["legs"][0]["contracts"]
+            or put["opened_at"] == call["opened_at"]
+        ):
+            continue
+        first, added = sorted((put, call), key=lambda trade: (trade["opened_at"], trade["id"]))
+        if added["opened_at"] >= first["closed_at"]:
+            continue
+        first_id, added_id = int(first["id"]), int(added["id"])
+        offset = len(first["legs"])
+        for index, leg in enumerate(added["legs"]):
+            conn.execute(
+                "UPDATE option_trade_legs SET trade_id = ?, sort_order = ? WHERE id = ?",
+                (first_id, offset + index, leg["id"]),
+            )
+        conn.execute("UPDATE option_executions SET trade_id = ? WHERE trade_id = ?", (first_id, added_id))
+        conn.execute("DELETE FROM option_trades WHERE id = ?", (added_id,))
+        conn.execute(
+            """UPDATE option_trades
+                  SET strategy_type = 'Iron Condor', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?""",
+            (first_id,),
+        )
+        _refresh_trade_status(conn, first_id)
+        merged += 1
+    return merged
 
 
 def import_option_executions(conn, profile_id, parsed):
@@ -1049,7 +1205,7 @@ def import_option_executions(conn, profile_id, parsed):
     hash_occurrences = Counter()
     group_trades = {}
     touched = set()
-    inserted = duplicates = unmatched = 0
+    inserted = duplicates = unmatched = corrected = 0
     errors = []
     for execution in parsed["executions"]:
         identity = _execution_identity(execution)
@@ -1116,6 +1272,19 @@ def import_option_executions(conn, profile_id, parsed):
         else:
             candidates = _matching_open_legs(conn, profile_id, execution, preferred_trade_id=trade_id)
             if sum(quantity for _, quantity in candidates) < execution["contracts"]:
+                mistaken = _misdated_manual_expiration(conn, profile_id, execution)
+                if mistaken:
+                    conn.execute(
+                        """UPDATE option_executions
+                              SET executed_at = ?, source = 'broker_import',
+                                  external_id = ?, dedupe_hash = ?, notes = ?
+                            WHERE id = ?""",
+                        (execution["executed_at"], execution.get("external_id"), stored_hash,
+                         execution.get("notes"), mistaken["id"]),
+                    )
+                    touched.add(int(mistaken["trade_id"]))
+                    corrected += 1
+                    continue
                 unmatched += 1
                 errors.append({"row": execution["source_row"], "reason": "Not enough matching open option contracts were found"})
                 continue
@@ -1156,8 +1325,11 @@ def import_option_executions(conn, profile_id, parsed):
 
     for trade_id in touched:
         _refresh_trade_status(conn, trade_id)
+    trades_grouped = reconcile_staged_iron_condors(conn, profile_id)
     conn.commit()
-    return {"inserted": inserted, "duplicates": duplicates, "unmatched": unmatched, "errors": errors, "trades_touched": len(touched)}
+    return {"inserted": inserted, "duplicates": duplicates, "unmatched": unmatched,
+            "corrected": corrected,
+            "errors": errors, "trades_touched": len(touched), "trades_grouped": trades_grouped}
 
 
 def annotate_import_preview(conn, profile_id, parsed):
@@ -1174,7 +1346,7 @@ def annotate_import_preview(conn, profile_id, parsed):
     ).fetchall()
     for leg in open_legs:
         capacity[_contract_key(dict(leg))] += _open_contracts_for_leg(conn, int(leg["id"]))
-    duplicate_count = unmatched_count = 0
+    duplicate_count = unmatched_count = correction_count = 0
     rows = []
     for raw in parsed["executions"]:
         row = dict(raw)
@@ -1187,7 +1359,8 @@ def annotate_import_preview(conn, profile_id, parsed):
         elif row["action"] in CLOSE_ACTIONS:
             keys = [_contract_key(row, side) for side in _position_sides_for_action(row["action"])]
             match = sum(capacity[key] for key in keys) >= row["contracts"]
-            row["match_status"] = "matched" if match else "unmatched"
+            correction = not match and _misdated_manual_expiration(conn, profile_id, row) is not None
+            row["match_status"] = "matched" if match else "date correction" if correction else "unmatched"
             if match:
                 remaining = row["contracts"]
                 for key in keys:
@@ -1196,6 +1369,8 @@ def annotate_import_preview(conn, profile_id, parsed):
                     remaining -= used
                     if not remaining:
                         break
+            elif correction:
+                correction_count += 1
             else:
                 unmatched_count += 1
         else:
@@ -1204,7 +1379,8 @@ def annotate_import_preview(conn, profile_id, parsed):
         rows.append(row)
     result = dict(parsed)
     result["executions"] = rows
-    result["summary"] = {**parsed["summary"], "duplicates": duplicate_count, "unmatched_closes": unmatched_count}
+    result["summary"] = {**parsed["summary"], "duplicates": duplicate_count,
+                         "date_corrections": correction_count, "unmatched_closes": unmatched_count}
     return result
 
 

@@ -193,6 +193,78 @@ class OptionTradeLedgerTest(unittest.TestCase):
         self.assertEqual(result["inserted"], 2)
         self.assertEqual(len(tracker.load_trades(self.conn, [1], status="OPEN")), 2)
 
+    def test_staged_put_and_call_spreads_closed_together_become_one_iron_condor(self):
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["08/13/2026", "Buy to Open", "GLW 09/25/2026 120.00 P", 1, "$1.30", "$0.66"],
+            ["08/13/2026", "Sell to Open", "GLW 09/25/2026 130.00 P", 1, "$2.50", "$0.67"],
+            ["08/26/2026", "Buy to Open", "GLW 09/25/2026 195.00 C", 1, "$1.25", "$0.66"],
+            ["08/26/2026", "Sell to Open", "GLW 09/25/2026 185.00 C", 1, "$2.14", "$0.66"],
+            ["09/03/2026", "Sell to Close", "GLW 09/25/2026 120.00 P", 1, "$0.73", "$0.66"],
+            ["09/03/2026", "Sell to Close", "GLW 09/25/2026 195.00 C", 1, "$0.43", "$0.66"],
+            ["09/03/2026", "Buy to Close", "GLW 09/25/2026 130.00 P", 1, "$2.28", "$0.66"],
+            ["09/03/2026", "Buy to Close", "GLW 09/25/2026 185.00 C", 1, "$0.48", "$0.66"],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+
+        imported = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(imported["trades_grouped"], 1)
+        trades = tracker.load_trades(self.conn, [1])
+        self.assertEqual(len(trades), 1)
+        condor = trades[0]
+        self.assertEqual(condor["strategy_type"], "Iron Condor")
+        self.assertEqual(condor["opened_at"], "2026-08-13")
+        self.assertEqual(condor["closed_at"], "2026-09-03")
+        self.assertEqual(len(condor["legs"]), 4)
+        self.assertEqual(condor["entry_net_amount"], 206.35)
+        self.assertEqual(condor["realized_pnl"], 43.71)
+        self.assertEqual(condor["max_risk"], 793.65)
+        expected_entry_years = (881.33 * 13 + 793.65 * 30) / 365
+        expected_realized_years = (881.33 * 13 + 793.65 * 8) / 365
+        self.assertAlmostEqual(condor["entry_risk_years"], expected_entry_years)
+        self.assertAlmostEqual(condor["realized_risk_years"], expected_realized_years)
+        self.assertEqual(condor["annualized_return_pct"], round(206.35 / expected_entry_years * 100, 2))
+        self.assertEqual(condor["realized_annualized_return_pct"], round(43.71 / expected_realized_years * 100, 2))
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["duplicates"], 8)
+        self.assertEqual(len(tracker.load_trades(self.conn, [1])), 1)
+
+    def test_broker_expiration_corrects_a_late_manual_expiration_date(self):
+        trade_id = tracker.create_trade(self.conn, 1, {
+            "underlying": "SPY", "strategy_type": "Long Put", "purpose": "Directional",
+            "opened_at": "2026-03-30",
+            "legs": [{"position_side": "LONG", "option_type": "PUT",
+                      "expiration": "2026-06-18", "strike": 430,
+                      "contracts": 1, "price": 1.98, "fees": 0.66}],
+        })
+        leg_id = tracker.load_trades(self.conn, [1])[0]["legs"][0]["id"]
+        tracker.close_trade(self.conn, 1, trade_id, {
+            "closed_at": "2026-08-03",
+            "executions": [{"leg_id": leg_id, "action": "EXPIRE", "price": 0, "fees": 0}],
+        })
+        rows = [
+            ["Date", "Action", "Symbol", "Quantity", "Price", "Fees & Comm"],
+            ["06/22/2026 as of 06/18/2026", "Expired", "SPY 06/18/2026 430.00 P", -1, "", ""],
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "schwab.csv"
+            with path.open("w", newline="", encoding="utf-8") as handle:
+                csv.writer(handle).writerows(rows)
+            parsed = parse_option_transactions(str(path), path.name, "schwab")
+        preview = tracker.annotate_import_preview(self.conn, 1, parsed)
+        self.assertEqual(preview["summary"]["date_corrections"], 1)
+        result = tracker.import_option_executions(self.conn, 1, parsed)
+        self.assertEqual(result["inserted"], 0)
+        self.assertEqual(result["corrected"], 1)
+        trade = tracker.load_trades(self.conn, [1])[0]
+        self.assertEqual(trade["closed_at"], "2026-06-18")
+        self.assertEqual(trade["realized_events"][0]["date"], "2026-06-18")
+        self.assertEqual(trade["realized_pnl"], -198.66)
+        self.assertEqual(tracker.import_option_executions(self.conn, 1, parsed)["duplicates"], 1)
+
     def test_transaction_import_deduplicates_across_broker_source_formats(self):
         rows = [
             ["Date", "Action", "Option Symbol", "Contracts", "Price", "Fees"],

@@ -77,13 +77,13 @@ const ledgerTotals = (trades) => {
     const openingDte = finite(trade.opening_dte)
     if (finite(trade.annualized_return_pct) != null && risk && openingDte) {
       entryPremium += entry ?? 0
-      entryRiskYears += risk * (openingDte / 365)
+      entryRiskYears += finite(trade.entry_risk_years) ?? risk * (openingDte / 365)
       totals.entryAnnualizedRows += 1
     }
     const daysHeld = finite(trade.days_held)
     if (finite(trade.realized_annualized_return_pct) != null && risk && daysHeld) {
       realizedOnRisk += realized ?? 0
-      realizedRiskYears += risk * (daysHeld / 365)
+      realizedRiskYears += finite(trade.realized_risk_years) ?? risk * (daysHeld / 365)
       totals.realizedAnnualizedRows += 1
     }
   }
@@ -846,7 +846,7 @@ export default function OptionTrades() {
         ) : (
           <div className="table-scroll ot-ledger-scroll">
             <table className="ot-trade-table" ref={tradeTableRef}>
-              <thead><tr><th /><th>Underlying</th><th>Strategy / purpose</th><th>Opened</th><th>Expiration / DTE</th><th>Entry</th><th>Max risk</th><th>Realized P/L</th><th>Return on risk</th><th title="Entry Annualized Return = (Premium ÷ Capital at Risk) × (365 ÷ opening Days to Expiration)">Entry annualized</th><th title="Realized Annualized Return = (Realized P/L ÷ Capital at Risk) × (365 ÷ Actual Days Held)">Realized annualized</th><th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th /><th>Underlying</th><th>Strategy / purpose</th><th>Opened</th><th>Expiration / DTE</th><th>Entry</th><th>Max risk</th><th>Realized P/L</th><th>Return on risk</th><th title="Opening premium divided by risk-years through expiration. Staged condors use each spread's actual time at risk.">Entry annualized</th><th title="Realized P/L divided by risk-years through close. Staged condors use each spread's actual time at risk.">Realized annualized</th><th>Status</th><th>Actions</th></tr></thead>
               <tbody>{filteredTrades.map(trade => {
                 const openExpirations = trade.legs.filter(leg => leg.open_contracts > 0).map(leg => leg.expiration).sort()
                 const expiration = openExpirations[0] || trade.legs.map(leg => leg.expiration).sort().at(-1)
@@ -865,8 +865,8 @@ export default function OptionTrades() {
                     <td>{money(trade.max_risk)}<small>{trade.max_risk_source || ''}</small></td>
                     <td className={trade.realized_pnl >= 0 ? 'ot-positive' : 'ot-negative'}>{trade.status === 'CLOSED' || trade.realized_pnl ? money(trade.realized_pnl) : '—'}{trade.outcome && <small>{trade.outcome}</small>}</td>
                     <td>{percent(trade.return_on_risk_pct)}</td>
-                    <td>{percent(trade.annualized_return_pct)}{trade.annualized_return_pct != null && <small>{trade.opening_dte} opening DTE</small>}</td>
-                    <td>{percent(trade.realized_annualized_return_pct)}{trade.realized_annualized_return_pct != null && <small>{trade.days_held} days held</small>}</td>
+                    <td>{percent(trade.annualized_return_pct)}{trade.annualized_return_pct != null && <small>{trade.staged_entry ? 'staged entry' : `${trade.opening_dte} opening DTE`}</small>}</td>
+                    <td>{percent(trade.realized_annualized_return_pct)}{trade.realized_annualized_return_pct != null && <small>{trade.staged_entry ? 'staged risk' : `${trade.days_held} days held`}</small>}</td>
                     <td><span className={`ot-status ot-status-${trade.status.toLowerCase()}`}>{trade.status}</span></td>
                     <td>
                       <div className="ot-row-actions">
@@ -895,8 +895,8 @@ export default function OptionTrades() {
                   <td title="Sum of maximum risk over the rows that have one. Trades with unlimited or unrecorded risk contribute nothing.">{money(totals.maxRisk, '$0.00')}<small>{totals.riskRows} of {totals.count} with known risk</small></td>
                   <td className={signClass(totals.realized)} title="Sum of realized P/L across the rows shown, including completed legs of trades that are still open.">{money(totals.realized, '$0.00')}<small>realized to date</small></td>
                   <td title="Total realized P/L divided by total maximum risk, over the rows that show a return on risk.">{percent(totals.returnOnRiskPct)}<small>P/L ÷ risk over {totals.returnOnRiskRows}</small></td>
-                  <td title="Total premium divided by total risk-years (risk × opening DTE ÷ 365). Pooling instead of averaging keeps one short-dated trade from dominating the figure.">{percent(totals.entryAnnualizedPct)}<small>pooled over {totals.entryAnnualizedRows}</small></td>
-                  <td title="Total realized P/L divided by total risk-years (risk × days held ÷ 365). Pooling instead of averaging keeps one trade closed after a day from dominating the figure.">{percent(totals.realizedAnnualizedPct)}<small>pooled over {totals.realizedAnnualizedRows}</small></td>
+                  <td title="Total premium divided by total risk-years through expiration. Staged condors use each spread's actual time at risk.">{percent(totals.entryAnnualizedPct)}<small>pooled over {totals.entryAnnualizedRows}</small></td>
+                  <td title="Total realized P/L divided by total risk-years through close. Staged condors use each spread's actual time at risk.">{percent(totals.realizedAnnualizedPct)}<small>pooled over {totals.realizedAnnualizedRows}</small></td>
                   <td>{totals.open} open<small>{totals.closed} closed</small></td>
                   <td />
                 </tr>
