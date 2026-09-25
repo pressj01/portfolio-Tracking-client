@@ -40765,7 +40765,7 @@ BSS_WATCHLIST_NAMES = {
 }
 
 
-def _bss_ao(high, low):
+def _bss_ao(high, low, zero_buffer=0.0):
     if len(high) < 34:
         return "NEUTRAL", None, ""
     mid = (high + low) / 2
@@ -40774,14 +40774,15 @@ def _bss_ao(high, low):
         return "NEUTRAL", None, ""
     cur, prv = float(ao_v.iloc[-1]), float(ao_v.iloc[-2])
     direction = "Rising" if cur > prv else ("Falling" if cur < prv else "Flat")
-    if cur > 0 and cur > prv:
+    buffer = max(0.0, float(zero_buffer or 0.0))
+    if cur > buffer and cur > prv:
         return "BUY", cur, direction
-    if cur < 0 and cur < prv:
+    if cur < -buffer and cur < prv:
         return "SELL", cur, direction
     return "NEUTRAL", cur, direction
 
 
-def _bss_rsi(close, period=14):
+def _bss_rsi(close, period=14, buy_below=30.0, sell_above=70.0):
     if len(close) < period + 1:
         return "NEUTRAL", None
     delta = close.diff()
@@ -40791,9 +40792,9 @@ def _bss_rsi(close, period=14):
     val = float((100 - 100 / (1 + rs)).iloc[-1])
     if pd.isna(val):
         return "NEUTRAL", None
-    if val < 30:
+    if val < float(buy_below):
         return "BUY", val
-    if val > 70:
+    if val > float(sell_above):
         return "SELL", val
     return "NEUTRAL", val
 
@@ -40809,7 +40810,7 @@ def _bss_macd(close):
     return "BUY" if m > s else "SELL"
 
 
-def _bss_sma(close, period):
+def _bss_sma(close, period, buffer_pct=1.0):
     if len(close) < period:
         return "NEUTRAL", None, None
     sma_val = close.rolling(period).mean().iloc[-1]
@@ -40818,9 +40819,10 @@ def _bss_sma(close, period):
         return "NEUTRAL", None, None
     sma_f, price_f = float(sma_val), float(price)
     pct = (price_f - sma_f) / sma_f * 100
-    if price_f > sma_f * 1.01:
+    buffer_frac = max(0.0, float(buffer_pct or 0.0)) / 100.0
+    if price_f > sma_f * (1.0 + buffer_frac):
         return "BUY", sma_f, pct
-    if price_f < sma_f * 0.99:
+    if price_f < sma_f * (1.0 - buffer_frac):
         return "SELL", sma_f, pct
     return "NEUTRAL", sma_f, pct
 
@@ -40842,24 +40844,38 @@ def _slow_stochastic(high, low, close, k_period=14, k_smooth=3, d_period=3):
     return k_val, d_val
 
 
-def _bss_vote(signals):
-    """Majority-vote: need >50% of valid (non-None) signals to agree."""
-    valid = [s for s in signals if s is not None]
-    if not valid:
+def _bss_vote(signals, weights=None, required_pct=50.0):
+    """Weighted vote: BUY or SELL must exceed required_pct of active weight."""
+    if weights is None:
+        weights = [1.0] * len(signals)
+    valid = [
+        (signal, max(0.0, float(weight or 0.0)))
+        for signal, weight in zip(signals, weights)
+        if signal is not None and float(weight or 0.0) > 0
+    ]
+    total_weight = sum(weight for _, weight in valid)
+    if total_weight <= 0:
         return "NEUTRAL"
-    threshold = len(valid) / 2
-    if valid.count("BUY") > threshold:
+    threshold = total_weight * max(0.0, min(100.0, float(required_pct))) / 100.0
+    if sum(weight for signal, weight in valid if signal == "BUY") > threshold:
         return "BUY"
-    if valid.count("SELL") > threshold:
+    if sum(weight for signal, weight in valid if signal == "SELL") > threshold:
         return "SELL"
     return "NEUTRAL"
 
 
-def _bss_coverage(close, divs_series, benchmark_close=None):
+def _bss_coverage(
+    close,
+    divs_series,
+    benchmark_close=None,
+    low_ratio=0.25,
+    high_ratio=0.75,
+    hard_decline_pct=50.0,
+):
     """Compute benchmark-adjusted NAV erosion ratio for Buy/Sell Signals.
 
     ratio = fund price decline / TTM distribution yield, only when benchmark is flat/up
-    Lower is better: <=0.25 Low, <=0.75 Medium, >0.75 High.
+    Lower is better. Ratio bands and the hard price-decline override are adjustable.
     Returns (ratio, signal, nav_erosion_label).
     """
     ratio = _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close if benchmark_close is not None else close)
@@ -40870,11 +40886,21 @@ def _bss_coverage(close, divs_series, benchmark_close=None):
             price_change_pct = (float(clean.iloc[-1]) - float(clean.iloc[0])) / float(clean.iloc[0]) * 100
     except Exception:
         price_change_pct = None
-    return (
-        ratio,
-        _nav_signal_from_adjusted_ratio(ratio, price_change_pct=price_change_pct),
-        _nav_erosion_from_adjusted_ratio(ratio, price_change_pct=price_change_pct),
-    )
+    low_ratio = max(0.0, float(low_ratio))
+    high_ratio = max(low_ratio, float(high_ratio))
+    hard_decline_pct = max(0.0, float(hard_decline_pct))
+    if price_change_pct is not None and price_change_pct <= -hard_decline_pct:
+        erosion = "High"
+    elif ratio is None:
+        erosion = None
+    elif ratio <= low_ratio:
+        erosion = "Low"
+    elif ratio <= high_ratio:
+        erosion = "Medium"
+    else:
+        erosion = "High"
+    signal = "BUY" if erosion == "Low" else "SELL" if erosion == "High" else "NEUTRAL" if erosion == "Medium" else None
+    return ratio, signal, erosion
 
 
 def _bss_sharpe(close, risk_free_annual=0.05):
@@ -41642,6 +41668,37 @@ def buy_sell_signals_data():
 
     WATCHLIST_SIZE = 1000
 
+    def _formula_arg(name, default, minimum=0.0, maximum=100.0):
+        try:
+            value = float(request.args.get(name, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(minimum, min(maximum, value))
+
+    formula = {
+        "ao_zero_buffer": _formula_arg("ao_zero_buffer", 0.0),
+        "rsi_buy_below": _formula_arg("rsi_buy_below", 30.0),
+        "rsi_sell_above": _formula_arg("rsi_sell_above", 70.0),
+        "sma_buffer_pct": _formula_arg("sma_buffer_pct", 1.0),
+        "majority_pct": _formula_arg("majority_pct", 50.0, 1.0, 100.0),
+        "nav_buy_max_ratio": _formula_arg("nav_buy_max_ratio", 0.25, 0.0, 100.0),
+        "nav_sell_above_ratio": _formula_arg("nav_sell_above_ratio", 0.75, 0.0, 100.0),
+        "nav_hard_decline_pct": _formula_arg("nav_hard_decline_pct", 50.0, 0.0, 100.0),
+        "weights": {
+            "ao": _formula_arg("weight_ao", 1.0, 0.0, 10.0),
+            "rsi": _formula_arg("weight_rsi", 1.0, 0.0, 10.0),
+            "macd": _formula_arg("weight_macd", 1.0, 0.0, 10.0),
+            "sma50": _formula_arg("weight_sma50", 1.0, 0.0, 10.0),
+            "sma200": _formula_arg("weight_sma200", 1.0, 0.0, 10.0),
+            "nav": _formula_arg("weight_nav", 1.0, 0.0, 10.0),
+        },
+    }
+    if formula["rsi_buy_below"] >= formula["rsi_sell_above"]:
+        formula["rsi_buy_below"], formula["rsi_sell_above"] = 30.0, 70.0
+    formula["nav_sell_above_ratio"] = max(
+        formula["nav_buy_max_ratio"], formula["nav_sell_above_ratio"]
+    )
+
     def _fmt_pct(v):
         if v is None:
             return "\u2014"
@@ -41749,11 +41806,15 @@ def buy_sell_signals_data():
                     else:
                         close = high = low = empty
 
-                    ao_sig, ao_val, ao_dir = _bss_ao(high, low)
-                    rsi_sig, rsi_val = _bss_rsi(close)
+                    ao_sig, ao_val, ao_dir = _bss_ao(high, low, formula["ao_zero_buffer"])
+                    rsi_sig, rsi_val = _bss_rsi(
+                        close,
+                        buy_below=formula["rsi_buy_below"],
+                        sell_above=formula["rsi_sell_above"],
+                    )
                     macd_sig = _bss_macd(close)
-                    sma50_sig, sma50_v, sma50_pct = _bss_sma(close, 50)
-                    sma200_sig, sma200_v, sma200_pct = _bss_sma(close, 200)
+                    sma50_sig, sma50_v, sma50_pct = _bss_sma(close, 50, formula["sma_buffer_pct"])
+                    sma200_sig, sma200_v, sma200_pct = _bss_sma(close, 200, formula["sma_buffer_pct"])
                     sharpe_val = _bss_sharpe(close)
                     sortino_val = _bss_sortino(close)
 
@@ -41770,11 +41831,29 @@ def buy_sell_signals_data():
                         bench_ticker = _nav_benchmark_for_ticker(ticker, nav_name, nav_type)
                         nav_close = nav_close_df[ticker].dropna() if ticker in nav_close_df.columns else close
                         bench_close = _nav_benchmark_close_from_df(close_df, bench_ticker, close)
-                        cov_ratio, cov_sig, nav_erosion = _bss_coverage(nav_close, tk_divs, bench_close)
+                        cov_ratio, cov_sig, nav_erosion = _bss_coverage(
+                            nav_close,
+                            tk_divs,
+                            bench_close,
+                            low_ratio=formula["nav_buy_max_ratio"],
+                            high_ratio=formula["nav_sell_above_ratio"],
+                            hard_decline_pct=formula["nav_hard_decline_pct"],
+                        )
                     else:
                         cov_ratio, cov_sig, nav_erosion = None, None, None
 
-                    signal = _bss_vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig])
+                    signal = _bss_vote(
+                        [ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig],
+                        [
+                            formula["weights"]["ao"],
+                            formula["weights"]["rsi"],
+                            formula["weights"]["macd"],
+                            formula["weights"]["sma50"],
+                            formula["weights"]["sma200"],
+                            formula["weights"]["nav"],
+                        ],
+                        formula["majority_pct"],
+                    )
 
                     is_portfolio = ticker in port_sizes
                     is_sector = ticker in SECTOR_SET and not is_portfolio
@@ -41892,7 +41971,7 @@ def buy_sell_signals_data():
         return obj
 
     table_rows = _scrub(table_rows)
-    return jsonify(fig_json=fig_json, error=error, table_rows=table_rows)
+    return jsonify(fig_json=fig_json, error=error, table_rows=table_rows, formula=formula)
 
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────

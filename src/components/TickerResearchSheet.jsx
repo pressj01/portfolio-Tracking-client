@@ -28,6 +28,7 @@ import {
   verdictFromComposite as etfVerdict,
 } from '../utils/etfGrading'
 import { gradeStock } from '../utils/stockGrading'
+import { loadGradingPreferences } from '../utils/gradingPreferences'
 import {
   checklistCard,
   closureCard,
@@ -128,7 +129,7 @@ function scoreChecklist(kind, payload) {
       kindLabel: 'ETF',
     }
   }
-  const graded = gradeStock(payload)
+  const graded = gradeStock(payload, { settings: loadGradingPreferences().stock })
   return {
     composite: graded?.verdict?.combined,
     verdict: graded?.verdict?.label,

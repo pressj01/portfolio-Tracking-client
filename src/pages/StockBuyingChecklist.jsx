@@ -1,13 +1,17 @@
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
 import { useProfile } from '../context/ProfileContext'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   gradeStock,
   computeSectorStats,
-  SCORE_WEIGHTS,
 } from '../utils/stockGrading'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import {
+  GRADING_PREFERENCES_EVENT,
+  loadGradingPreferences,
+} from '../utils/gradingPreferences'
 
 const QUESTION_DETAILS = {
   1: [
@@ -36,10 +40,10 @@ const QUESTION_DETAILS = {
   ],
   6: [
     'MACD line above its signal line is bullish momentum; below is bearish.',
-    'RSI below 30 is oversold, while above 70 is overbought.',
+    'RSI below your BUY threshold is oversold, while above your SELL threshold is overbought.',
   ],
   7: [
-    'Slow stochastic below 20 is oversold; above 80 is overbought.',
+    'Slow stochastic below your BUY threshold is oversold; above your SELL threshold is overbought.',
     'The awesome oscillator above zero and rising confirms building bullish momentum.',
   ],
   8: [
@@ -94,11 +98,18 @@ function CriterionCard({ criterion }) {
             <strong className={`stock-check-metric-value tone-${toneClass(m.badge)}`}>
               {m.value}
             </strong>
+            {m.benchmark && <small style={{ marginLeft: 5, color: 'var(--text-dim)' }}>(benchmark {m.benchmark})</small>}
           </div>
         ))}
       </div>
 
       {c.rationale && <p className="stock-check-rationale">{c.rationale}</p>}
+
+      {c.formula && (
+        <p className="stock-check-rationale">
+          <strong>How calculated:</strong> {c.formula}
+        </p>
+      )}
 
       {(QUESTION_DETAILS[c.id] || []).length > 0 && (
         <details className="stock-check-details">
@@ -127,6 +138,7 @@ function CompositePill({ label, value }) {
 }
 
 function SecurityHeader({ metrics, result }) {
+  const weights = result.verdict.weights || { fundamental: 0.6, technical: 0.4 }
   return (
     <section className="stock-check-card stock-check-security-card">
       <div className="stock-check-security-title">
@@ -154,7 +166,7 @@ function SecurityHeader({ metrics, result }) {
         <CompositePill label="Fundamental" value={result.fundamental.composite} />
         <CompositePill label="Technical" value={result.technical.composite} />
         <CompositePill
-          label={`Blended (${Math.round(SCORE_WEIGHTS.fundamental * 100)}/${Math.round(SCORE_WEIGHTS.technical * 100)})`}
+          label={`Blended (${Math.round(weights.fundamental * 100)}/${Math.round(weights.technical * 100)})`}
           value={result.verdict.combined}
         />
       </div>
@@ -168,7 +180,7 @@ function SecurityHeader({ metrics, result }) {
   )
 }
 
-function DeepDive() {
+function DeepDive({ settings }) {
   const [inputTicker, setInputTicker] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -201,7 +213,7 @@ function DeepDive() {
     if (t) evaluate(t)
   }
 
-  const result = useMemo(() => (metrics ? gradeStock(metrics) : null), [metrics])
+  const result = useMemo(() => (metrics ? gradeStock(metrics, { settings }) : null), [metrics, settings])
 
   return (
     <>
@@ -259,7 +271,7 @@ function DeepDive() {
   )
 }
 
-function ScanTab() {
+function ScanTab({ settings }) {
   // The portfolio source is scoped to the account the page is on, so the scan
   // has to carry the profile/aggregate selection. The watchlist is one list
   // shared by every account and stays unscoped.
@@ -305,7 +317,7 @@ function ScanTab() {
     if (!data?.results?.length) return []
     const sectorStats = computeSectorStats(data.results)
     const graded = data.results.map(m => {
-      const g = gradeStock(m, { sectorStats })
+      const g = gradeStock(m, { sectorStats, settings })
       return {
         ticker: m.ticker,
         name: m.name,
@@ -333,7 +345,7 @@ function ScanTab() {
       if (typeof av === 'string' || typeof bv === 'string') return dir * String(av).localeCompare(String(bv))
       return dir * (av - bv)
     })
-  }, [data, sortKey, sortDir])
+  }, [data, sortKey, sortDir, settings])
 
   const toggleSort = (key) => {
     if (sortKey === key) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
@@ -439,6 +451,14 @@ function ScanTab() {
 
 export default function StockBuyingChecklist() {
   const [tab, setTab] = useState('deep')
+  const [preferences, setPreferences] = useState(loadGradingPreferences)
+  const settings = preferences.stock
+
+  useEffect(() => {
+    const refresh = event => setPreferences(event.detail || loadGradingPreferences())
+    window.addEventListener(GRADING_PREFERENCES_EVENT, refresh)
+    return () => window.removeEventListener(GRADING_PREFERENCES_EVENT, refresh)
+  }, [])
   const tabBtn = (key, label) => (
     <button
       type="button"
@@ -470,7 +490,8 @@ export default function StockBuyingChecklist() {
             <p>
               Four fundamental groups (valuation, profitability, growth, balance-sheet health) and
               four technical groups (trend, momentum, oscillators, volume) are each scored 0–100 and
-              averaged within their side. The blended score weights Fundamental 60% / Technical 40%.
+              combined using your criterion weights. The blended score currently weights Fundamental{' '}
+              {settings.blendWeights.fundamental} / Technical {settings.blendWeights.technical} before normalization.
             </p>
           </section>
           <section>
@@ -488,18 +509,19 @@ export default function StockBuyingChecklist() {
               Trend compares price with the 50-/200-day averages and the golden cross; Momentum
               blends MACD and RSI; Oscillators blend the slow stochastic and awesome oscillator;
               Volume blends on-balance volume with 52-week range position. Each BUY / SELL / NEUTRAL
-              signal scores 90 / 25 / 60 before averaging into its group.
+              signal scores {settings.signalScores.buy} / {settings.signalScores.sell} / {settings.signalScores.neutral} before averaging into its group.
             </p>
           </section>
           <section className="stock-check-help-full">
             <h3>Verdict bands</h3>
             <ul>
-              <li><strong>Strong Buy:</strong> blended score ≥ 75, and the fundamental composite is ≥ 70 (or unavailable).</li>
-              <li><strong>Buy:</strong> blended score ≥ 60.</li>
-              <li><strong>Hold:</strong> blended score ≥ 45.</li>
-              <li><strong>Avoid:</strong> blended score below 45.</li>
+              <li><strong>Strong Buy:</strong> blended score ≥ {settings.verdictBands.strongBuy}, and the fundamental composite is ≥ {settings.verdictBands.strongFundamental} (or unavailable).</li>
+              <li><strong>Buy:</strong> blended score ≥ {settings.verdictBands.buy}.</li>
+              <li><strong>Hold:</strong> blended score ≥ {settings.verdictBands.hold}.</li>
+              <li><strong>Avoid:</strong> blended score below {settings.verdictBands.hold}.</li>
               <li><strong>Insufficient Data:</strong> neither the fundamental nor technical side has enough data to score.</li>
             </ul>
+            <p><Link to="/settings#grading-formulas">View or change every stock grading input in Settings.</Link></p>
           </section>
         </div>
       </details>
@@ -509,7 +531,7 @@ export default function StockBuyingChecklist() {
         {tabBtn('scan', 'Scan a List')}
       </div>
 
-      {tab === 'deep' ? <DeepDive /> : <ScanTab />}
+      {tab === 'deep' ? <DeepDive settings={settings} /> : <ScanTab settings={settings} />}
     </div>
   )
 }

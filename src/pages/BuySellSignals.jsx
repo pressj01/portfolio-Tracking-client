@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
+import {
+  GRADING_PREFERENCES_EVENT,
+  loadGradingPreferences,
+} from '../utils/gradingPreferences'
 
 function Sig({ signal }) {
   if (!signal) return <span>{'\u2014'}</span>
@@ -35,30 +40,30 @@ function pctCls(s) {
   return ''
 }
 
-const signalHelpItems = [
+const signalHelpItems = settings => [
   {
     label: 'AO',
-    text: 'Awesome Oscillator compares 5-day and 34-day midpoint averages. BUY means AO is above zero and rising; SELL means it is below zero and falling.',
+    text: `Awesome Oscillator compares 5-day and 34-day midpoint averages. BUY means AO is above +${settings.thresholds.aoZeroBuffer} and rising; SELL means it is below -${settings.thresholds.aoZeroBuffer} and falling. Vote weight: ${settings.weights.ao}.`,
   },
   {
     label: 'RSI',
-    text: 'RSI uses a 14-day relative strength reading. Below 30 is treated as oversold/BUY, above 70 as overbought/SELL, and the middle range is NEUTRAL.',
+    text: `RSI uses a 14-day relative strength reading. Below ${settings.thresholds.rsiBuyBelow} is BUY, above ${settings.thresholds.rsiSellAbove} is SELL, and the middle range is NEUTRAL. Vote weight: ${settings.weights.rsi}.`,
   },
   {
     label: 'MACD',
-    text: 'MACD uses the standard 12/26/9 setup. BUY means the MACD line is above its signal line; SELL means it is below.',
+    text: `MACD uses the standard 12/26/9 setup. BUY means the MACD line is above its signal line; SELL means it is below. Vote weight: ${settings.weights.macd}.`,
   },
   {
     label: 'SMA 50',
-    text: 'BUY when price is more than 1% above the 50-day moving average, SELL when more than 1% below it, otherwise NEUTRAL.',
+    text: `BUY when price is more than ${settings.thresholds.smaBufferPct}% above the 50-day moving average, SELL when more than ${settings.thresholds.smaBufferPct}% below it, otherwise NEUTRAL. Vote weight: ${settings.weights.sma50}.`,
   },
   {
     label: 'SMA 200',
-    text: 'The same 1% band is applied to the 200-day moving average. This is the longer-term trend vote.',
+    text: `The same ${settings.thresholds.smaBufferPct}% band is applied to the 200-day moving average. This is the longer-term trend vote. Vote weight: ${settings.weights.sma200}.`,
   },
   {
     label: 'NAV',
-    text: 'Only used for NAV-erosion candidates such as option-income, covered-call, leveraged, synthetic, or similar high-income funds. Low erosion is BUY, medium is NEUTRAL, high is SELL.',
+    text: `Only used for NAV-erosion candidates. BUY at a ratio ≤${settings.thresholds.navBuyMaxRatio}, NEUTRAL through ${settings.thresholds.navSellAboveRatio}, and SELL above it or after a price decline of ${settings.thresholds.navHardDeclinePct}%+. Vote weight: ${settings.weights.nav}.`,
   },
 ]
 
@@ -73,11 +78,35 @@ export default function BuySellSignals() {
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [timestamp, setTimestamp] = useState(null)
+  const [preferences, setPreferences] = useState(loadGradingPreferences)
+  const formula = preferences.signals
+
+  useEffect(() => {
+    const refresh = event => setPreferences(event.detail || loadGradingPreferences())
+    window.addEventListener(GRADING_PREFERENCES_EVENT, refresh)
+    return () => window.removeEventListener(GRADING_PREFERENCES_EVENT, refresh)
+  }, [])
 
   const loadData = useCallback(() => {
     setLoading(true)
     setError(null)
-    pf('/api/buy-sell-signals')
+    const params = new URLSearchParams({
+      ao_zero_buffer: formula.thresholds.aoZeroBuffer,
+      rsi_buy_below: formula.thresholds.rsiBuyBelow,
+      rsi_sell_above: formula.thresholds.rsiSellAbove,
+      sma_buffer_pct: formula.thresholds.smaBufferPct,
+      majority_pct: formula.thresholds.majorityPct,
+      nav_buy_max_ratio: formula.thresholds.navBuyMaxRatio,
+      nav_sell_above_ratio: formula.thresholds.navSellAboveRatio,
+      nav_hard_decline_pct: formula.thresholds.navHardDeclinePct,
+      weight_ao: formula.weights.ao,
+      weight_rsi: formula.weights.rsi,
+      weight_macd: formula.weights.macd,
+      weight_sma50: formula.weights.sma50,
+      weight_sma200: formula.weights.sma200,
+      weight_nav: formula.weights.nav,
+    })
+    pf(`/api/buy-sell-signals?${params}`)
       .then(r => r.json())
       .then(data => {
         setLoading(false)
@@ -96,7 +125,7 @@ export default function BuySellSignals() {
         setLoading(false)
         setError('Failed to load data: ' + err.message)
       })
-  }, [pf, selection])
+  }, [pf, selection, formula])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -139,19 +168,19 @@ export default function BuySellSignals() {
     { label: 'Name' },
     { label: 'Type' },
     { label: 'Source', tip: 'Where the ticker originates (Portfolio or Watchlist)' },
-    { label: 'Overall', tip: 'Majority-vote signal across AO, RSI, MACD, SMA50, SMA200, and eligible NAV Signal' },
+    { label: 'Overall', tip: `Weighted vote across AO, RSI, MACD, SMA50, SMA200, and eligible NAV Signal; one side must exceed ${formula.thresholds.majorityPct}% of active weight` },
     { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
     { label: 'AO Value', tip: 'Raw Awesome Oscillator value' },
     { label: 'AO Dir', tip: 'Awesome Oscillator direction (rising or falling)' },
-    { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
+    { label: 'RSI', tip: `Relative Strength Index signal — SELL above ${formula.thresholds.rsiSellAbove}, BUY below ${formula.thresholds.rsiBuyBelow}` },
     { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
-    { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
-    { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
+    { label: 'SMA 50', tip: `Simple Moving Average 50-day with a ±${formula.thresholds.smaBufferPct}% neutral band` },
+    { label: 'SMA 200', tip: `Simple Moving Average 200-day with a ±${formula.thresholds.smaBufferPct}% neutral band` },
     { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
     { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
     { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
-    { label: 'NAV Signal', tip: 'Signal from NAV severity: SELL when ratio is high or price decline is 50%+, otherwise NEUTRAL/BUY from the ratio.' },
-    { label: 'NAV Erosion', tip: 'High if ratio > 0.75, price decline is 50%+, or ending share deficit is 5%+. Medium is ratio 0.25-0.75; Low is <= 0.25.' },
+    { label: 'NAV Signal', tip: `BUY at ratio ≤${formula.thresholds.navBuyMaxRatio}; SELL above ${formula.thresholds.navSellAboveRatio} or after a ${formula.thresholds.navHardDeclinePct}%+ price decline; otherwise NEUTRAL.` },
+    { label: 'NAV Erosion', tip: `High above ratio ${formula.thresholds.navSellAboveRatio} or after the hard-decline override; Medium above ${formula.thresholds.navBuyMaxRatio}; Low at or below ${formula.thresholds.navBuyMaxRatio}.` },
     { label: 'Div Safety', tip: 'Dividend safety score and cut-risk level for portfolio holdings' },
     { label: 'Cut Risk', tip: 'Flags portfolio holdings with elevated or high dividend cut risk' },
     { label: 'Portfolio Value', tip: 'Current market value of this position in portfolio' },
@@ -172,13 +201,13 @@ export default function BuySellSignals() {
         <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
         <span style={{ color: 'var(--neg-strong)', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
         <span style={{ color: 'var(--warning)', fontWeight: 600 }}>&#9632; NEUTRAL</span>
-        &nbsp;&middot;&nbsp; Overall signal = majority vote across AO, RSI, MACD, SMA50, SMA200, plus NAV Signal when applicable
+        &nbsp;&middot;&nbsp; Overall signal = weighted vote; BUY or SELL must exceed {formula.thresholds.majorityPct}% of active weight
       </p>
 
       <details className="bss-help">
         <summary>How the signals are created</summary>
         <div className="bss-help-grid">
-          {signalHelpItems.map(item => (
+          {signalHelpItems(formula).map(item => (
             <div className="bss-help-item" key={item.label}>
               <strong>{item.label}</strong>
               <span>{item.text}</span>
@@ -190,6 +219,7 @@ export default function BuySellSignals() {
           Their Overall score is driven by the technical votes; the NAV erosion vote is skipped unless the holding matches an
           income-fund structure where destructive NAV decay is plausible.
         </p>
+        <p className="bss-help-note"><Link to="/settings#grading-formulas">View or change these thresholds and vote weights in Settings.</Link></p>
       </details>
 
       {/* Counts */}

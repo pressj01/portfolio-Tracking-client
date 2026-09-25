@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
 import OptionSelectionControls from '../components/OptionSelectionControls'
 import GeneralScannerAnalysis from '../components/GeneralScannerAnalysis'
+import ScannerRiskNotice from '../components/ScannerRiskNotice'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { OPTION_SCANNER_GROUPS, OPTION_SCANNERS } from '../utils/optionScannerCatalog'
 import {
@@ -639,6 +640,8 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
         </div>
       </div>
     </header>
+
+    <ScannerRiskNotice />
 
     <div className="scanner-filter-workspace">
       <CompactScannerFilterPanel title={scanner?.label || 'Choose a scan'} strategyControl={strategyPicker} groups={summaryGroups} onRun={runScan} loading={loading} disabled={!strategy} toolbar={strategy && (

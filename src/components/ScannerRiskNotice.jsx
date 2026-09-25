@@ -14,10 +14,11 @@ export default function ScannerRiskNotice() {
         lineHeight: 1.45,
       }}
     >
-      <strong style={{ color: 'var(--amber)' }}>Trade at your own risk.</strong>{' '}
-      Scanner results, quotes, probabilities, and modeled outcomes are educational estimates—not
-      guarantees or investment advice. Verify every leg, price, quantity, expiration, liquidity,
-      and maximum loss before placing an order.
+      <strong style={{ color: 'var(--amber)' }}>Educational purposes only.</strong>{' '}
+      Trade scans, quotes, probabilities, scores, and modeled outcomes are educational information,
+      not financial, investment, or trading advice. They do not promise or guarantee profits, win
+      rates, or returns. Verify every leg, price, quantity, expiration, liquidity, and maximum loss
+      before placing an order.
     </div>
   )
 }

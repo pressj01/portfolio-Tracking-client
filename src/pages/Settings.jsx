@@ -2,6 +2,39 @@ import React, { useState, useEffect } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { useCurrency } from '../context/CurrencyContext'
+import {
+  loadGradingPreferences,
+  resetGradingPreferences,
+  saveGradingPreferences,
+} from '../utils/gradingPreferences'
+
+function FormulaNumberField({ label, value, onChange, min = 0, max = 100, step = 1, suffix = '' }) {
+  return (
+    <label style={{ display: 'grid', gap: 4, minWidth: 145 }}>
+      <span style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem' }}>{label}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={event => onChange(Number(event.target.value))}
+          style={{ width: 95 }}
+        />
+        {suffix && <small style={{ color: 'var(--text-dim-2)' }}>{suffix}</small>}
+      </span>
+    </label>
+  )
+}
+
+function FormulaFieldGrid({ children }) {
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: '0.7rem', marginTop: '0.7rem' }}>
+      {children}
+    </div>
+  )
+}
 
 export default function Settings() {
   const pf = useProfileFetch()
@@ -16,6 +49,8 @@ export default function Settings() {
   const [currencyStatus, setCurrencyStatus] = useState(null)
   const [rateBusy, setRateBusy] = useState(false)
   const [manualRateInput, setManualRateInput] = useState('')
+  const [gradingPreferences, setGradingPreferences] = useState(loadGradingPreferences)
+  const [gradingStatus, setGradingStatus] = useState(null)
 
   // Tax-loss harvesting rates
   const [taxRates, setTaxRates] = useState({ short: '32', long: '15', state: '0' })
@@ -460,6 +495,67 @@ export default function Settings() {
       : (removable ? '1px solid #90caf9' : '1px solid #b0bec5'),
   })
 
+  const updateGradingPreference = (section, group, key, value) => {
+    setGradingPreferences(current => ({
+      ...current,
+      [section]: {
+        ...current[section],
+        [group]: { ...current[section][group], [key]: value },
+      },
+    }))
+    setGradingStatus(null)
+  }
+
+  const saveFormulaSettings = () => {
+    const stock = gradingPreferences.stock
+    const signals = gradingPreferences.signals
+    const increasing = values => values.every((value, index) => index === 0 || value >= values[index - 1])
+    const decreasing = values => values.every((value, index) => index === 0 || value <= values[index - 1])
+    const valid = (
+      stock.blendWeights.fundamental + stock.blendWeights.technical > 0
+      && Object.values(stock.groupWeights).some(weight => weight > 0)
+      && stock.badgeBands.pass > stock.badgeBands.warn
+      && stock.technicalThresholds.rsiBuyBelow < stock.technicalThresholds.rsiSellAbove
+      && stock.technicalThresholds.stochasticBuyBelow < stock.technicalThresholds.stochasticSellAbove
+      && increasing(Object.values(stock.rangeBands))
+      && increasing([
+        stock.fundamentalBands.lowerExcellent,
+        stock.fundamentalBands.lowerGood,
+        stock.fundamentalBands.lowerFair,
+        stock.fundamentalBands.lowerWeak,
+      ])
+      && decreasing([
+        stock.fundamentalBands.higherExcellent,
+        stock.fundamentalBands.higherGood,
+        stock.fundamentalBands.higherFair,
+        stock.fundamentalBands.higherWeak,
+      ])
+      && decreasing([
+        stock.verdictBands.strongBuy,
+        stock.verdictBands.buy,
+        stock.verdictBands.hold,
+      ])
+      && signals.thresholds.rsiBuyBelow < signals.thresholds.rsiSellAbove
+      && signals.thresholds.navBuyMaxRatio < signals.thresholds.navSellAboveRatio
+      && Object.values(signals.weights).some(weight => weight > 0)
+    )
+    if (!valid) {
+      setGradingStatus({ type: 'error', msg: 'Some formula bands overlap or are out of order. Check the values and try again.' })
+      return
+    }
+    const saved = saveGradingPreferences(gradingPreferences)
+    setGradingPreferences(saved)
+    setGradingStatus({ type: 'success', msg: 'Grading and signal formulas saved on this device.' })
+  }
+
+  const resetFormulaSettings = () => {
+    setGradingPreferences(resetGradingPreferences())
+    setGradingStatus({ type: 'success', msg: 'Grading and signal formulas reset to the application defaults.' })
+  }
+
+  const stockFormula = gradingPreferences.stock
+  const signalFormula = gradingPreferences.signals
+
   return (
     <div className="page" style={{ maxWidth: 900 }}>
       <h1>Settings</h1>
@@ -487,6 +583,120 @@ export default function Settings() {
           >
             ☀️ Light
           </button>
+        </div>
+      </div>
+
+      {/* Grading and signal formulas */}
+      <div className="card" id="grading-formulas">
+        <h2>Grading &amp; Signal Formulas</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          These are the exact user-controlled inputs behind the Stock Buying Checklist and Buy / Sell Signal Dashboard.
+          Weights are relative: a weight of 2 counts twice as much as a weight of 1, and 0 excludes that item.
+          ETF and CEF thresholds remain editable directly on their evaluator cards.
+        </p>
+        {gradingStatus && (
+          <div className={`alert alert-${gradingStatus.type}`} style={{ marginBottom: '0.75rem' }}>{gradingStatus.msg}</div>
+        )}
+
+        <details open style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Stock grade blend and criterion weights</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            Each side is a weighted average of its available criteria. The final score blends the Fundamental and Technical sides after normalizing their two weights.
+          </p>
+          <FormulaFieldGrid>
+            <FormulaNumberField label="Fundamental blend weight" value={stockFormula.blendWeights.fundamental} onChange={value => updateGradingPreference('stock', 'blendWeights', 'fundamental', value)} />
+            <FormulaNumberField label="Technical blend weight" value={stockFormula.blendWeights.technical} onChange={value => updateGradingPreference('stock', 'blendWeights', 'technical', value)} />
+            {Object.entries({
+              valuation: 'Valuation weight', profitability: 'Profitability weight', growth: 'Growth weight', health: 'Balance-sheet weight',
+              trend: 'Trend weight', momentum: 'Momentum weight', oscillators: 'Oscillators weight', volume: 'Volume/range weight',
+            }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={stockFormula.groupWeights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('stock', 'groupWeights', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Fundamental sector-comparison formula</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            Each available metric is divided by its sector benchmark. Lower-is-better metrics pass as the ratio falls; margins, returns and growth pass as the ratio rises.
+          </p>
+          <FormulaFieldGrid>
+            {Object.entries({
+              lowerExcellent: 'Lower: excellent through', lowerGood: 'Lower: good through', lowerFair: 'Lower: fair through', lowerWeak: 'Lower: weak through',
+              higherExcellent: 'Higher: excellent from', higherGood: 'Higher: good from', higherFair: 'Higher: fair from', higherWeak: 'Higher: weak from',
+            }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={stockFormula.fundamentalBands[key]} max={10} step={0.05} suffix="× benchmark" onChange={value => updateGradingPreference('stock', 'fundamentalBands', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+          <FormulaFieldGrid>
+            {Object.entries({
+              excellent: 'Excellent points', good: 'Good points', lowerFair: 'Lower/fair points', lowerWeak: 'Lower/weak points',
+              higherFair: 'Higher/fair points', higherWeak: 'Higher/weak points', poor: 'Poor points',
+            }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={stockFormula.metricScores[key]} onChange={value => updateGradingPreference('stock', 'metricScores', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Stock technical thresholds and signal points</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            Trend, RSI, stochastic and OBV are reclassified with these thresholds before the technical groups are scored.
+          </p>
+          <FormulaFieldGrid>
+            <FormulaNumberField label="Trend neutral band" value={stockFormula.technicalThresholds.trendBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'trendBufferPct', value)} />
+            <FormulaNumberField label="RSI BUY below" value={stockFormula.technicalThresholds.rsiBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI SELL above" value={stockFormula.technicalThresholds.rsiSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="Stochastic BUY below" value={stockFormula.technicalThresholds.stochasticBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticBuyBelow', value)} />
+            <FormulaNumberField label="Stochastic SELL above" value={stockFormula.technicalThresholds.stochasticSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticSellAbove', value)} />
+            <FormulaNumberField label="OBV neutral band" value={stockFormula.technicalThresholds.obvNeutralBandPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'obvNeutralBandPct', value)} />
+            <FormulaNumberField label="BUY signal points" value={stockFormula.signalScores.buy} onChange={value => updateGradingPreference('stock', 'signalScores', 'buy', value)} />
+            <FormulaNumberField label="NEUTRAL signal points" value={stockFormula.signalScores.neutral} onChange={value => updateGradingPreference('stock', 'signalScores', 'neutral', value)} />
+            <FormulaNumberField label="SELL signal points" value={stockFormula.signalScores.sell} onChange={value => updateGradingPreference('stock', 'signalScores', 'sell', value)} />
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>52-week range, badges, and verdict bands</summary>
+          <FormulaFieldGrid>
+            {Object.entries({ best: 'Range best through', good: 'Range good through', fair: 'Range fair through', weak: 'Range weak through' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={stockFormula.rangeBands[key]} suffix="% of range" onChange={value => updateGradingPreference('stock', 'rangeBands', key, value)} />
+            ))}
+            {Object.entries({ best: 'Range best points', good: 'Range good points', fair: 'Range fair points', weak: 'Range weak points', poor: 'Range poor points' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={stockFormula.rangeScores[key]} onChange={value => updateGradingPreference('stock', 'rangeScores', key, value)} />
+            ))}
+            <FormulaNumberField label="Pass badge from" value={stockFormula.badgeBands.pass} onChange={value => updateGradingPreference('stock', 'badgeBands', 'pass', value)} />
+            <FormulaNumberField label="Warn badge from" value={stockFormula.badgeBands.warn} onChange={value => updateGradingPreference('stock', 'badgeBands', 'warn', value)} />
+            <FormulaNumberField label="Strong Buy from" value={stockFormula.verdictBands.strongBuy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongBuy', value)} />
+            <FormulaNumberField label="Strong Buy min fundamental" value={stockFormula.verdictBands.strongFundamental} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongFundamental', value)} />
+            <FormulaNumberField label="Buy from" value={stockFormula.verdictBands.buy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'buy', value)} />
+            <FormulaNumberField label="Hold from" value={stockFormula.verdictBands.hold} onChange={value => updateGradingPreference('stock', 'verdictBands', 'hold', value)} />
+          </FormulaFieldGrid>
+        </details>
+
+        <details open style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Buy / Sell Signal Dashboard formula</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            AO, RSI, MACD, SMA 50, SMA 200 and eligible NAV signals cast weighted votes. BUY or SELL must exceed the selected percentage of all active vote weight; otherwise the result is NEUTRAL.
+          </p>
+          <FormulaFieldGrid>
+            <FormulaNumberField label="AO zero-line buffer" value={signalFormula.thresholds.aoZeroBuffer} step={0.01} onChange={value => updateGradingPreference('signals', 'thresholds', 'aoZeroBuffer', value)} />
+            <FormulaNumberField label="RSI BUY below" value={signalFormula.thresholds.rsiBuyBelow} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI SELL above" value={signalFormula.thresholds.rsiSellAbove} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="SMA neutral band" value={signalFormula.thresholds.smaBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('signals', 'thresholds', 'smaBufferPct', value)} />
+            <FormulaNumberField label="Required vote share" value={signalFormula.thresholds.majorityPct} min={1} max={100} suffix="%" onChange={value => updateGradingPreference('signals', 'thresholds', 'majorityPct', value)} />
+            <FormulaNumberField label="NAV BUY ratio through" value={signalFormula.thresholds.navBuyMaxRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navBuyMaxRatio', value)} />
+            <FormulaNumberField label="NAV SELL ratio above" value={signalFormula.thresholds.navSellAboveRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navSellAboveRatio', value)} />
+            <FormulaNumberField label="NAV hard-decline SELL" value={signalFormula.thresholds.navHardDeclinePct} step={1} suffix="% decline" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeclinePct', value)} />
+            {Object.entries({ ao: 'AO vote weight', rsi: 'RSI vote weight', macd: 'MACD vote weight', sma50: 'SMA 50 vote weight', sma200: 'SMA 200 vote weight', nav: 'NAV vote weight' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={label} value={signalFormula.weights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('signals', 'weights', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+        </details>
+
+        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '1rem' }}>
+          <button type="button" className="btn btn-primary" onClick={saveFormulaSettings}>Save grading formulas</button>
+          <button type="button" className="btn" onClick={resetFormulaSettings}>Reset formulas to defaults</button>
         </div>
       </div>
 

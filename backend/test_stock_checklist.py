@@ -41,6 +41,24 @@ class StockChecklistIndicatorTest(unittest.TestCase):
         short = _series([1, 2, 3])
         self.assertEqual(app_module._awesome_oscillator(short, short), (None, "NEUTRAL"))
 
+    def test_buy_sell_ao_zero_buffer_is_adjustable(self):
+        accelerating = pd.Series(
+            100 + np.linspace(0, 1, len(self.idx)) ** 2 * 40,
+            index=self.idx,
+        )
+        signal, value, _ = app_module._bss_ao(accelerating + 0.5, accelerating - 0.5)
+        self.assertEqual(signal, "BUY")
+        buffered_signal, _, _ = app_module._bss_ao(
+            accelerating + 0.5, accelerating - 0.5, zero_buffer=abs(value) + 1
+        )
+        self.assertEqual(buffered_signal, "NEUTRAL")
+
+    def test_buy_sell_vote_weights_and_required_share_are_adjustable(self):
+        signals = ["BUY", "SELL", "SELL"]
+        self.assertEqual(app_module._bss_vote(signals), "SELL")
+        self.assertEqual(app_module._bss_vote(signals, [5, 1, 1]), "BUY")
+        self.assertEqual(app_module._bss_vote(signals, [5, 1, 1], required_pct=80), "NEUTRAL")
+
     def test_obv_volume_signal_confirms_direction(self):
         up = app_module._obv_volume_signal(self.up_close, self.up_vol)
         self.assertEqual(up["signal"], "BUY")

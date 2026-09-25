@@ -9,6 +9,9 @@
 // blended verdict, so a great business with poor entry timing reads differently
 // from a weak business on a hot chart.
 
+import { formatMoney } from './money.js'
+import { normalizeGradingPreferences } from './gradingPreferences.js'
+
 export const SCORE_WEIGHTS = { fundamental: 0.6, technical: 0.4 }
 
 const num = (v) => {
@@ -53,35 +56,42 @@ const LOWER_BETTER = new Set([
 // vs. lower-better metrics where zero is simply excellent (debt, payout).
 const NEGATIVE_IS_BAD = new Set(['trailing_pe', 'forward_pe', 'peg_ratio', 'ev_to_ebitda'])
 
-function band(score) {
-  return { score, badge: score >= 80 ? 'pass' : score >= 50 ? 'warn' : 'fail' }
+function band(score, settings) {
+  return {
+    score,
+    badge: score >= settings.badgeBands.pass
+      ? 'pass'
+      : score >= settings.badgeBands.warn ? 'warn' : 'fail',
+  }
 }
 
 // Grade one fundamental metric against its sector benchmark.
-function gradeMetric(key, value, benchmark) {
+function gradeMetric(key, value, benchmark, settings) {
   const v = num(value)
   if (v === null) return { score: null, badge: 'info' }
   const b = num(benchmark)
+  const bands = settings.fundamentalBands
+  const scores = settings.metricScores
   const lowerBetter = LOWER_BETTER.has(key)
   if (lowerBetter) {
-    if (NEGATIVE_IS_BAD.has(key) && v <= 0) return band(22) // negative earnings, etc.
-    if (b === null || b <= 0) return { score: 60, badge: 'warn' }
+    if (NEGATIVE_IS_BAD.has(key) && v <= 0) return band(22, settings) // negative earnings, etc.
+    if (b === null || b <= 0) return band(60, settings)
     const r = v / b
-    if (r <= 0.8) return band(100)
-    if (r <= 1.0) return band(85)
-    if (r <= 1.3) return band(64)
-    if (r <= 1.6) return band(46)
-    return band(28)
+    if (r <= bands.lowerExcellent) return band(scores.excellent, settings)
+    if (r <= bands.lowerGood) return band(scores.good, settings)
+    if (r <= bands.lowerFair) return band(scores.lowerFair, settings)
+    if (r <= bands.lowerWeak) return band(scores.lowerWeak, settings)
+    return band(scores.poor, settings)
   }
   // higher better
-  if (v < 0) return band(22)
-  if (b === null) return { score: 60, badge: 'warn' }
-  const r = b <= 0 ? (v > 0 ? 1.2 : 0) : v / b
-  if (r >= 1.2) return band(100)
-  if (r >= 1.0) return band(85)
-  if (r >= 0.7) return band(62)
-  if (r >= 0.4) return band(44)
-  return band(28)
+  if (v < 0) return band(22, settings)
+  if (b === null) return band(60, settings)
+  const r = b <= 0 ? (v > 0 ? bands.higherExcellent : 0) : v / b
+  if (r >= bands.higherExcellent) return band(scores.excellent, settings)
+  if (r >= bands.higherGood) return band(scores.good, settings)
+  if (r >= bands.higherFair) return band(scores.higherFair, settings)
+  if (r >= bands.higherWeak) return band(scores.higherWeak, settings)
+  return band(scores.poor, settings)
 }
 
 const fmtX = (n) => (num(n) === null ? 'n/a' : `${Number(n).toFixed(2)}×`)
@@ -128,14 +138,14 @@ const FUND_GROUPS = [
   },
 ]
 
-function gradeFundamentalGroup(group, fundamentals, benchmark, earnings) {
+function gradeFundamentalGroup(group, fundamentals, benchmark, earnings, settings) {
   const metrics = []
   const scores = []
   for (const [key, label, fmt] of group.items) {
     const value = fundamentals[key]
-    const { score, badge } = gradeMetric(key, value, benchmark[key])
+    const { score, badge } = gradeMetric(key, value, benchmark[key], settings)
     if (score !== null) scores.push(score)
-    metrics.push({ label, value: fmt(value), badge, benchmark: benchmark[key] })
+    metrics.push({ label, value: fmt(value), badge, benchmark: fmt(benchmark[key]) })
   }
   // EPS / earnings-quality nudges
   if (group.key === 'growth') {
@@ -147,11 +157,13 @@ function gradeFundamentalGroup(group, fundamentals, benchmark, earnings) {
     }
   }
   const score = scores.length ? Math.round(scores.reduce((s, v) => s + v, 0) / scores.length) : null
-  const badge = score === null ? 'info' : score >= 80 ? 'pass' : score >= 50 ? 'warn' : 'fail'
+  const badge = score === null ? 'info' : band(score, settings).badge
+  const fb = settings.fundamentalBands
   return {
     id: group.id, key: group.key, question: group.question,
     group: 'fundamental', badge, score, metrics,
     rationale: fundamentalRationale(group.key, score, badge),
+    formula: `Available metrics are averaged after comparison with the sector benchmark. Lower-is-better bands are ≤${fb.lowerExcellent}×, ≤${fb.lowerGood}×, ≤${fb.lowerFair}× and ≤${fb.lowerWeak}×; higher-is-better bands are ≥${fb.higherExcellent}×, ≥${fb.higherGood}×, ≥${fb.higherFair}× and ≥${fb.higherWeak}×. Group weight: ${settings.groupWeights[group.key]}.`,
   }
 }
 
@@ -167,28 +179,71 @@ function fundamentalRationale(key, score, badge) {
   return map[key] || ''
 }
 
-const signalScore = (state) => (state === 'BUY' ? 90 : state === 'SELL' ? 25 : 60)
+const signalScore = (state, settings) => (
+  state === 'BUY'
+    ? settings.signalScores.buy
+    : state === 'SELL' ? settings.signalScores.sell : settings.signalScores.neutral
+)
 const signalBadge = (state) => (state === 'BUY' ? 'pass' : state === 'SELL' ? 'fail' : 'warn')
 
-function rangeScore(position) {
+function rangeScore(position, settings) {
   const p = num(position)
   if (p === null) return null
-  if (p <= 30) return 90
-  if (p <= 50) return 75
-  if (p <= 70) return 55
-  if (p <= 85) return 40
-  return 28
+  if (p <= settings.rangeBands.best) return settings.rangeScores.best
+  if (p <= settings.rangeBands.good) return settings.rangeScores.good
+  if (p <= settings.rangeBands.fair) return settings.rangeScores.fair
+  if (p <= settings.rangeBands.weak) return settings.rangeScores.weak
+  return settings.rangeScores.poor
 }
 
-function gradeTechnicals(t) {
+function trendState(t, settings) {
+  const pct = num(t.sma200) !== null ? num(t.pct_vs_sma200) : num(t.pct_vs_sma50)
+  if (pct === null) return t.trend_state || 'NEUTRAL'
+  if (pct > settings.technicalThresholds.trendBufferPct) return 'BUY'
+  if (pct < -settings.technicalThresholds.trendBufferPct) return 'SELL'
+  return 'NEUTRAL'
+}
+
+function rsiState(t, settings) {
+  const value = num(t.rsi14)
+  if (value === null) return t.rsi_state || 'NEUTRAL'
+  if (value < settings.technicalThresholds.rsiBuyBelow) return 'BUY'
+  if (value > settings.technicalThresholds.rsiSellAbove) return 'SELL'
+  return 'NEUTRAL'
+}
+
+function stochasticState(t, settings) {
+  const k = num(t.stoch_k)
+  const d = num(t.stoch_d)
+  if (k === null || d === null) return t.stoch_state || 'NEUTRAL'
+  if (k < settings.technicalThresholds.stochasticBuyBelow && d < settings.technicalThresholds.stochasticBuyBelow) return 'BUY'
+  if (k > settings.technicalThresholds.stochasticSellAbove && d > settings.technicalThresholds.stochasticSellAbove) return 'SELL'
+  return 'NEUTRAL'
+}
+
+function volumeState(t, settings) {
+  const trend = num(t.obv_trend_pct)
+  if (trend === null) return t.volume_state || 'NEUTRAL'
+  const neutral = settings.technicalThresholds.obvNeutralBandPct
+  if (trend > neutral) return 'BUY'
+  if (trend < -neutral) return 'SELL'
+  return 'NEUTRAL'
+}
+
+function scoreBadge(score, settings) {
+  return score === null ? 'info' : band(score, settings).badge
+}
+
+function gradeTechnicals(t, settings) {
   const groups = []
 
   // Trend
-  const trendScore = signalScore(t.trend_state)
+  const trend = trendState(t, settings)
+  const trendScore = signalScore(trend, settings)
   groups.push({
     id: 5, key: 'trend', group: 'technical',
     question: 'Is the price trend constructive?',
-    badge: signalBadge(t.trend_state), score: trendScore,
+    badge: scoreBadge(trendScore, settings), score: trendScore,
     metrics: [
       { label: 'Price', value: num(t.price) === null ? 'n/a' : formatMoney(t.price) },
       { label: '50-day SMA', value: num(t.sma50) === null ? 'n/a' : formatMoney(t.sma50) },
@@ -197,86 +252,102 @@ function gradeTechnicals(t) {
       { label: 'vs 200-day', value: fmtPct(t.pct_vs_sma200) },
       { label: 'Golden cross', value: t.golden_cross === null || t.golden_cross === undefined ? 'n/a' : (t.golden_cross ? 'Yes (50 > 200)' : 'No (50 < 200)') },
     ],
-    rationale: t.trend_state === 'BUY' ? 'Price is above its major moving averages — an uptrend.'
-      : t.trend_state === 'SELL' ? 'Price is below its major moving averages — a downtrend.'
+    rationale: trend === 'BUY' ? 'Price is above its major moving averages — an uptrend.'
+      : trend === 'SELL' ? 'Price is below its major moving averages — a downtrend.'
       : 'Price is hovering around its moving averages — no clear trend.',
+    formula: `Uses the 200-day average when available, otherwise the 50-day average. BUY above +${settings.technicalThresholds.trendBufferPct}%, SELL below -${settings.technicalThresholds.trendBufferPct}%, otherwise NEUTRAL. Group weight: ${settings.groupWeights.trend}.`,
   })
 
   // Momentum: MACD + RSI
-  const momScores = [signalScore(t.macd_state), signalScore(t.rsi_state)]
+  const rsi = rsiState(t, settings)
+  const momScores = [signalScore(t.macd_state, settings), signalScore(rsi, settings)]
   const momScore = Math.round((momScores[0] + momScores[1]) / 2)
   groups.push({
     id: 6, key: 'momentum', group: 'technical',
     question: 'Does momentum support an entry?',
-    badge: momScore >= 80 ? 'pass' : momScore >= 50 ? 'warn' : 'fail', score: momScore,
+    badge: scoreBadge(momScore, settings), score: momScore,
     metrics: [
       { label: 'MACD', value: fmtNum(t.macd, 3), badge: signalBadge(t.macd_state) },
       { label: 'Signal line', value: fmtNum(t.macd_signal_line, 3) },
       { label: 'Histogram', value: fmtNum(t.macd_histogram, 3) },
-      { label: 'RSI (14)', value: fmtNum(t.rsi14, 1), badge: signalBadge(t.rsi_state) },
+      { label: 'RSI (14)', value: fmtNum(t.rsi14, 1), badge: signalBadge(rsi) },
     ],
     rationale: `MACD is ${t.macd_state === 'BUY' ? 'bullish (line above signal)' : t.macd_state === 'SELL' ? 'bearish (line below signal)' : 'flat'}; `
-      + `RSI ${num(t.rsi14) === null ? 'n/a' : Number(t.rsi14).toFixed(0)} is ${t.rsi_state === 'BUY' ? 'oversold' : t.rsi_state === 'SELL' ? 'overbought' : 'neutral'}.`,
+      + `RSI ${num(t.rsi14) === null ? 'n/a' : Number(t.rsi14).toFixed(0)} is ${rsi === 'BUY' ? 'oversold' : rsi === 'SELL' ? 'overbought' : 'neutral'}.`,
+    formula: `Averages MACD and RSI signal scores. RSI is BUY below ${settings.technicalThresholds.rsiBuyBelow}, SELL above ${settings.technicalThresholds.rsiSellAbove}; MACD is BUY when its line is above the signal line. Group weight: ${settings.groupWeights.momentum}.`,
   })
 
   // Oscillators: Stochastic + Awesome Oscillator
-  const oscScores = [signalScore(t.stoch_state), signalScore(t.ao_state)]
+  const stochastic = stochasticState(t, settings)
+  const oscScores = [signalScore(stochastic, settings), signalScore(t.ao_state, settings)]
   const oscScore = Math.round((oscScores[0] + oscScores[1]) / 2)
   groups.push({
     id: 7, key: 'oscillators', group: 'technical',
     question: 'What do the oscillators say?',
-    badge: oscScore >= 80 ? 'pass' : oscScore >= 50 ? 'warn' : 'fail', score: oscScore,
+    badge: scoreBadge(oscScore, settings), score: oscScore,
     metrics: [
-      { label: 'Stochastic %K', value: fmtNum(t.stoch_k, 1), badge: signalBadge(t.stoch_state) },
+      { label: 'Stochastic %K', value: fmtNum(t.stoch_k, 1), badge: signalBadge(stochastic) },
       { label: 'Stochastic %D', value: fmtNum(t.stoch_d, 1) },
       { label: 'Awesome Oscillator', value: fmtNum(t.awesome_oscillator, 3), badge: signalBadge(t.ao_state) },
     ],
-    rationale: `Slow stochastic is ${t.stoch_state === 'BUY' ? 'oversold' : t.stoch_state === 'SELL' ? 'overbought' : 'mid-range'}; `
+    rationale: `Slow stochastic is ${stochastic === 'BUY' ? 'oversold' : stochastic === 'SELL' ? 'overbought' : 'mid-range'}; `
       + `the awesome oscillator is ${t.ao_state === 'BUY' ? 'bullish' : t.ao_state === 'SELL' ? 'bearish' : 'flat'}.`,
+    formula: `Averages slow-stochastic and Awesome Oscillator signal scores. Stochastic is BUY when K and D are below ${settings.technicalThresholds.stochasticBuyBelow}, SELL when both exceed ${settings.technicalThresholds.stochasticSellAbove}. Group weight: ${settings.groupWeights.oscillators}.`,
   })
 
   // Volume & 52-week range
-  const rScore = rangeScore(t.range_position_pct)
-  const volScores = [signalScore(t.volume_state)]
+  const volume = volumeState(t, settings)
+  const rScore = rangeScore(t.range_position_pct, settings)
+  const volScores = [signalScore(volume, settings)]
   if (rScore !== null) volScores.push(rScore)
   const volScore = Math.round(volScores.reduce((s, v) => s + v, 0) / volScores.length)
   groups.push({
     id: 8, key: 'volume', group: 'technical',
     question: 'Do volume and price location confirm?',
-    badge: volScore >= 80 ? 'pass' : volScore >= 50 ? 'warn' : 'fail', score: volScore,
+    badge: scoreBadge(volScore, settings), score: volScore,
     metrics: [
-      { label: 'OBV trend (20d)', value: fmtPct(t.obv_trend_pct), badge: signalBadge(t.volume_state) },
+      { label: 'OBV trend (20d)', value: fmtPct(t.obv_trend_pct), badge: signalBadge(volume) },
       { label: 'Volume vs 20d avg', value: num(t.volume_vs_avg) === null ? 'n/a' : `${Number(t.volume_vs_avg).toFixed(2)}×` },
-      { label: '52-wk range position', value: num(t.range_position_pct) === null ? 'n/a' : `${Number(t.range_position_pct).toFixed(0)}%`, badge: rScore === null ? 'info' : rScore >= 80 ? 'pass' : rScore >= 50 ? 'warn' : 'fail' },
+      { label: '52-wk range position', value: num(t.range_position_pct) === null ? 'n/a' : `${Number(t.range_position_pct).toFixed(0)}%`, badge: scoreBadge(rScore, settings) },
       { label: '52-wk low / high', value: `${num(t.fifty_two_week_low) === null ? 'n/a' : formatMoney(t.fifty_two_week_low)} / ${num(t.fifty_two_week_high) === null ? 'n/a' : formatMoney(t.fifty_two_week_high)}` },
     ],
-    rationale: `On-balance volume is ${t.volume_state === 'BUY' ? 'rising (accumulation)' : t.volume_state === 'SELL' ? 'falling (distribution)' : 'flat'}`
+    rationale: `On-balance volume is ${volume === 'BUY' ? 'rising (accumulation)' : volume === 'SELL' ? 'falling (distribution)' : 'flat'}`
       + (num(t.range_position_pct) === null ? '.' : `; price sits at ${Number(t.range_position_pct).toFixed(0)}% of its 52-week range (lower is a better entry).`),
+    formula: `Averages the OBV signal with the 52-week range score. OBV is neutral inside ±${settings.technicalThresholds.obvNeutralBandPct}%; range bands end at ${settings.rangeBands.best}%, ${settings.rangeBands.good}%, ${settings.rangeBands.fair}% and ${settings.rangeBands.weak}%. Group weight: ${settings.groupWeights.volume}.`,
   })
 
   return groups
 }
 
-function compositeOf(criteria) {
+function compositeOf(criteria, weights) {
   const scored = criteria.filter(c => typeof c.score === 'number')
-  return scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null
+  const totalWeight = scored.reduce((sum, c) => sum + Math.max(0, Number(weights[c.key]) || 0), 0)
+  if (!scored.length || totalWeight <= 0) return null
+  return scored.reduce((sum, c) => sum + c.score * Math.max(0, Number(weights[c.key]) || 0), 0) / totalWeight
 }
 
-export function stockVerdict(fundComposite, techComposite) {
+export function stockVerdict(fundComposite, techComposite, rawSettings) {
+  const settings = normalizeGradingPreferences({ stock: rawSettings }).stock
   const f = num(fundComposite)
   const t = num(techComposite)
   if (f === null && t === null) {
     return { label: 'Insufficient Data', tone: 'info', combined: null, detail: 'Not enough data to evaluate this ticker.' }
   }
-  const w = SCORE_WEIGHTS
+  const rawFundWeight = settings.blendWeights.fundamental
+  const rawTechWeight = settings.blendWeights.technical
+  const totalWeight = rawFundWeight + rawTechWeight
+  const w = totalWeight > 0
+    ? { fundamental: rawFundWeight / totalWeight, technical: rawTechWeight / totalWeight }
+    : SCORE_WEIGHTS
   let combined
   if (f === null) combined = t
   else if (t === null) combined = f
   else combined = f * w.fundamental + t * w.technical
   let label, tone
-  if (combined >= 75 && (f === null || f >= 70)) { label = 'Strong Buy'; tone = 'pass' }
-  else if (combined >= 60) { label = 'Buy'; tone = 'pass' }
-  else if (combined >= 45) { label = 'Hold'; tone = 'warn' }
+  const verdictBands = settings.verdictBands
+  if (combined >= verdictBands.strongBuy && (f === null || f >= verdictBands.strongFundamental)) { label = 'Strong Buy'; tone = 'pass' }
+  else if (combined >= verdictBands.buy) { label = 'Buy'; tone = 'pass' }
+  else if (combined >= verdictBands.hold) { label = 'Hold'; tone = 'warn' }
   else { label = 'Avoid'; tone = 'fail' }
 
   let detail = `Fundamental ${f === null ? 'n/a' : f.toFixed(0)}/100, technical ${t === null ? 'n/a' : t.toFixed(0)}/100 → blended ${combined.toFixed(0)}/100.`
@@ -285,7 +356,7 @@ export function stockVerdict(fundComposite, techComposite) {
     else if (f < 50 && t >= 65) detail += ' The chart looks strong, but the underlying business scores poorly — momentum without quality.'
     else if (f >= 65 && t >= 65) detail += ' Quality business and a constructive chart line up.'
   }
-  return { label, tone, combined, detail }
+  return { label, tone, combined, detail, weights: w }
 }
 
 // Compute per-sector medians for the metrics we grade, from a scanned cohort.
@@ -328,17 +399,18 @@ export function resolveBenchmark(sector, sectorStats, minCohort = 3) {
 }
 
 export function gradeStock(metrics, opts = {}) {
+  const settings = normalizeGradingPreferences({ stock: opts.settings }).stock
   const fundamentals = metrics.fundamentals || {}
   const technicals = metrics.technicals || {}
   const earnings = metrics.earnings || {}
   const { benchmark, source } = resolveBenchmark(metrics.sector, opts.sectorStats)
 
-  const fundamentalCriteria = FUND_GROUPS.map(g => gradeFundamentalGroup(g, fundamentals, benchmark, earnings))
-  const technicalCriteria = gradeTechnicals(technicals)
+  const fundamentalCriteria = FUND_GROUPS.map(g => gradeFundamentalGroup(g, fundamentals, benchmark, earnings, settings))
+  const technicalCriteria = gradeTechnicals(technicals, settings)
 
-  const fundComposite = compositeOf(fundamentalCriteria)
-  const techComposite = compositeOf(technicalCriteria)
-  const verdict = stockVerdict(fundComposite, techComposite)
+  const fundComposite = compositeOf(fundamentalCriteria, settings.groupWeights)
+  const techComposite = compositeOf(technicalCriteria, settings.groupWeights)
+  const verdict = stockVerdict(fundComposite, techComposite, settings)
 
   return {
     metrics,
@@ -346,6 +418,6 @@ export function gradeStock(metrics, opts = {}) {
     fundamental: { criteria: fundamentalCriteria, composite: fundComposite },
     technical: { criteria: technicalCriteria, composite: techComposite },
     verdict,
+    settings,
   }
 }
-import { formatMoney } from './money'
