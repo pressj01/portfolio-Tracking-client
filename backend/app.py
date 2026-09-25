@@ -25994,6 +25994,25 @@ def _yf_close_series(raw, symbol=None):
     return None if series.empty else series
 
 
+def _request_grading_settings(payload=None):
+    """The user's saved risk-grade formula (Settings > Grading & Signal Formulas).
+
+    GET routes receive it as a JSON ``grading_settings`` query parameter and
+    POST routes as a ``grading_settings`` body field. Missing or malformed
+    input normalizes to the defaults, so older clients grade exactly as before.
+    """
+    from grading import normalize_grading_settings
+    raw = payload.get("grading_settings") if isinstance(payload, dict) else None
+    if raw is None:
+        raw = request.args.get("grading_settings")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            raw = None
+    return normalize_grading_settings(raw)
+
+
 @app.route("/api/portfolio-summary/data", methods=["GET"])
 def portfolio_summary_data():
     """Compute period-aware ticker and portfolio grades via yfinance."""
@@ -26046,6 +26065,7 @@ def portfolio_summary_data():
     period = request.args.get("period", "1y").strip().lower()
     custom_start = request.args.get("start_date", "").strip()
     custom_end = request.args.get("end_date", "").strip()
+    grading_settings = _request_grading_settings()
     # Life is cost-basis G/L, not a daily-return window. Grade/Sharpe/beta
     # need a price series, so do not resolve `lifetime` through the market
     # calendar (that raises 400) and do not pretend cost basis is a grade.
@@ -26102,6 +26122,7 @@ def portfolio_summary_data():
         period_range["key"],
         period_range["start_date"],
         period_range["end_date"],
+        json.dumps(grading_settings, sort_keys=True),
     )
     default_ticker_grades = {t: {"grade": "N/A", "score": None} for t in tickers}
     cache_entry = _PORTFOLIO_SUMMARY_CACHE.get(cache_key)
@@ -26230,8 +26251,11 @@ def portfolio_summary_data():
             return False
         try:
             tr = tc.pct_change().dropna()
-            score, *_ = ticker_score(tc, tr, bench_ret, min_obs=effective_min_obs)
-            ticker_grades[t] = {"grade": letter_grade(score), "score": score}
+            score, *_ = ticker_score(
+                tc, tr, bench_ret, min_obs=effective_min_obs,
+                grading_settings=grading_settings,
+            )
+            ticker_grades[t] = {"grade": letter_grade(score, grading_settings), "score": score}
             # _best_fit_beta already regresses on a 15-observation floor, which
             # is exactly the shortest window this endpoint will grade, so it
             # needs no scaling of its own.
@@ -26405,7 +26429,10 @@ def portfolio_summary_data():
             returns_df = close[available].pct_change().fillna(0)
             val_map = {r["ticker"]: float(r["current_value"] or 0) for r in rows}
             weights_arr = np.array([val_map.get(t, 0.0) for t in available])
-            pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs)
+            pm = grade_portfolio(
+                returns_df, weights_arr, bench_ret, min_obs=effective_min_obs,
+                grading_settings=grading_settings,
+            )
             portfolio_grade_info = pm.get("grade", {})
             portfolio_grade_info["sharpe"] = pm.get("sharpe")
             portfolio_grade_info["sortino"] = pm.get("sortino")
@@ -32170,7 +32197,10 @@ def dividend_analysis_data():
             if len(live) >= 2:
                 returns_df = close[live].pct_change().fillna(0)
                 weights_arr = np.array([values_map.get(t, 0.0) for t in live])
-                pm = grade_portfolio(returns_df, weights_arr, bench_ret)
+                pm = grade_portfolio(
+                    returns_df, weights_arr, bench_ret,
+                    grading_settings=_request_grading_settings(),
+                )
                 g = pm.get("grade", {})
                 grade_info = {
                     "overall": g.get("overall", "N/A"),
@@ -36870,7 +36900,10 @@ def growth_data():
                 if benchmark in grade_adjusted.columns
                 else None
             )
-            pm = grade_portfolio(returns_for_grade, weights_arr, bench_ret)
+            pm = grade_portfolio(
+                returns_for_grade, weights_arr, bench_ret,
+                grading_settings=_request_grading_settings(),
+            )
             g = pm.get("grade", {})
             grade_info = {
                 "overall": g.get("overall", "N/A"),
@@ -44804,7 +44837,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
                               current_weights=None, coverage_map=None,
                               available_tickers=None,
                               grade_returns_df=None, grade_tickers=None,
-                              min_obs=None):
+                              min_obs=None, grading_settings=None):
     """Compute before/after grade, income, coverage, and key metrics.
     Uses already-computed port_metrics and income values from the optimization branch
     so numbers match exactly what's shown in the optimization summary.
@@ -44864,9 +44897,13 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         sub_w = sub_w / s if s > 0 else np.ones(len(grade_tickers)) / max(len(grade_tickers), 1)
         pm_after = grade_portfolio(
             grade_returns_df[grade_tickers], sub_w, bench_ret, min_obs=grade_min_obs,
+            grading_settings=grading_settings,
         )
     else:
-        pm_after = grade_portfolio(returns_df, opt_weights, bench_ret, min_obs=grade_min_obs)
+        pm_after = grade_portfolio(
+            returns_df, opt_weights, bench_ret, min_obs=grade_min_obs,
+            grading_settings=grading_settings,
+        )
     return {
         "before": before,
         "after": {
@@ -45108,6 +45145,7 @@ def analytics_data():
     warnings.filterwarnings("ignore")
 
     data = request.get_json(force=True, silent=True) or {}
+    grading_settings = _request_grading_settings(data)
     tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
     benchmark = str(data.get("benchmark", "SPY")).strip().upper()
     period = str(data.get("period", "1y") or "1y").strip().lower()
@@ -45254,6 +45292,7 @@ def analytics_data():
         tr = tc.pct_change().dropna()
         score, sharpe_v, sortino_v, calmar_v, omega_v, mdd_v, dc_v, ulcer_v = ticker_score(
             tc, tr, bench_ret, min_obs=effective_min_obs,
+            grading_settings=grading_settings,
         )
         uc_v, _ = (
             _capture_ratios(tr, bench_ret, min_obs=effective_min_obs)
@@ -45277,7 +45316,7 @@ def analytics_data():
             "annual_total_ret": annual_total_ret,
             "annual_vol": annual_vol,
             "score": round(score, 1),
-            "grade": letter_grade(score),
+            "grade": letter_grade(score, grading_settings),
             "annual_income": round(income_map.get(t, 0), 2),
         })
 
@@ -45298,7 +45337,8 @@ def analytics_data():
         # Raw current-value dollars, same as Dashboard; grade_portfolio renormalizes.
         weights_arr = np.array([value_map.get(t, 0.0) for t in grade_tickers])
 
-        pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs)
+        pm = grade_portfolio(returns_df, weights_arr, bench_ret, min_obs=effective_min_obs,
+                             grading_settings=grading_settings)
         port_metrics = {
             "sharpe": pm.get("sharpe"),
             "sortino": pm.get("sortino"),
@@ -45513,6 +45553,7 @@ def analytics_data():
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
+                                                                   grading_settings=grading_settings,
                                                                    min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
@@ -45530,7 +45571,8 @@ def analytics_data():
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
             # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
-            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs)
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs,
+                                     grading_settings=grading_settings)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
@@ -45567,6 +45609,7 @@ def analytics_data():
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
+                                                                   grading_settings=grading_settings,
                                                                    min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
@@ -45605,7 +45648,8 @@ def analytics_data():
             opt_yield = float(opt_w.dot(np.array(yields_list)))
             curr_yield = float(current_weights.dot(np.array(yields_list)))
             # Use port_metrics for current (matches Impact Analysis "before"), grade_portfolio for optimized
-            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs)
+            opt_gp = grade_portfolio(returns_df, opt_w, bench_ret, min_obs=effective_min_obs,
+                                     grading_settings=grading_settings)
             opt_income = opt_yield * total_val
             curr_income = curr_yield * total_val
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
@@ -45645,6 +45689,7 @@ def analytics_data():
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
+                                                                   grading_settings=grading_settings,
                                                                    min_obs=effective_min_obs)
             result["optimization"] = opt_dict
 
@@ -47767,6 +47812,7 @@ def builder_analyze(port_id):
                          _is_stale_or_dead)
 
     data = request.get_json() or {}
+    grading_settings = _request_grading_settings(data)
     benchmark = (data.get("benchmark") or "SPY").strip().upper()
     period = data.get("period", "1y")
 
@@ -47867,9 +47913,11 @@ def builder_analyze(port_id):
         row["annual_total_ret"] = row["annual_ret"]
 
         # Ticker score (includes ulcer index)
-        score, sharpe, sortino, calmar, omega, mdd, dc, ulcer = ticker_score(tc, daily_ret, bench_ret)
+        score, sharpe, sortino, calmar, omega, mdd, dc, ulcer = ticker_score(
+            tc, daily_ret, bench_ret, grading_settings=grading_settings,
+        )
         row["score"] = score
-        row["grade"] = letter_grade(score)
+        row["grade"] = letter_grade(score, grading_settings)
         row["sharpe"] = sharpe
         row["sortino"] = sortino
         row["calmar"] = calmar
@@ -47972,36 +48020,20 @@ def builder_analyze(port_id):
         avail_weights = np.array([weights_list[tickers.index(t)] for t in available])
         if avail_weights.sum() > 0:
             avail_weights = avail_weights / avail_weights.sum()
-        port_grade = grade_portfolio(returns_df[available], avail_weights, bench_ret)
+        # NAV Health is a portfolio-grade factor: the weighted NAV erosion of
+        # the graded holdings, scored by the user's NAV Health formula.
+        weighted_nav = sum(
+            avail_weights[i] * nav_erosion.get(available[i], 0)
+            for i in range(len(available))
+        ) if available else None
+        port_grade = grade_portfolio(
+            returns_df[available], avail_weights, bench_ret,
+            grading_settings=grading_settings, nav_erosion=weighted_nav,
+        )
     else:
         port_grade = {"grade": {"overall": "N/A", "score": 0, "breakdown": []}}
         returns_df = pd.DataFrame()
         available = []
-
-    # NAV Health factor — add to grade breakdown
-    if returns_cols and available:
-        weighted_nav = sum(
-            avail_weights[i] * nav_erosion.get(available[i], 0)
-            for i in range(len(available))
-        )
-        if weighted_nav < 0:
-            nav_health_score = max(0.0, 100.0 + weighted_nav * 200.0)
-        else:
-            nav_health_score = 100.0
-
-        port_grade["grade"]["breakdown"].append({
-            "category": "NAV Health",
-            "score": round(nav_health_score, 1),
-            "weight": 10,
-            "grade": letter_grade(nav_health_score),
-        })
-        # Recalculate overall
-        total_w = sum(b["weight"] for b in port_grade["grade"]["breakdown"])
-        total_s = sum(b["score"] * b["weight"] for b in port_grade["grade"]["breakdown"])
-        new_score = round(total_s / total_w, 1) if total_w > 0 else 0.0
-        port_grade["grade"]["score"] = new_score
-        port_grade["grade"]["overall"] = letter_grade(new_score)
-        port_grade["nav_erosion_avg_pct"] = round(weighted_nav * 100, 2)
 
     port_grade["n_holdings"] = len(tickers)
     port_grade["total_value"] = round(total_value, 2)
@@ -48058,6 +48090,7 @@ def builder_compare():
     from grading import grade_portfolio, letter_grade, _is_stale_or_dead
 
     data = request.get_json() or {}
+    grading_settings = _request_grading_settings(data)
     port_ids = data.get("portfolio_ids", [])
     period = data.get("period", "1y")
     benchmark = (data.get("benchmark") or "SPY").strip().upper()
@@ -48134,26 +48167,16 @@ def builder_compare():
         weights = np.array([next(h["dollar_amount"] for h in holdings if h["ticker"] == t) for t in used_tickers])
         weights = weights / weights.sum()
 
-        pg = grade_portfolio(returns_df[used_tickers], weights, bench_ret)
-
-        # Add NAV Health to match analyze endpoint grading
+        # NAV Health is included to match the analyze endpoint's grading.
         nav_erosion = _compute_nav_erosion(close_df, used_tickers)
         weighted_nav = sum(
             weights[i] * nav_erosion.get(used_tickers[i], 0)
             for i in range(len(used_tickers))
         )
-        nav_health_score = max(0.0, 100.0 + weighted_nav * 200.0) if weighted_nav < 0 else 100.0
-        pg["grade"]["breakdown"].append({
-            "category": "NAV Health",
-            "score": round(nav_health_score, 1),
-            "weight": 10,
-            "grade": letter_grade(nav_health_score),
-        })
-        total_w = sum(b["weight"] for b in pg["grade"]["breakdown"])
-        total_s = sum(b["score"] * b["weight"] for b in pg["grade"]["breakdown"])
-        new_score = round(total_s / total_w, 1) if total_w > 0 else 0.0
-        pg["grade"]["score"] = new_score
-        pg["grade"]["overall"] = letter_grade(new_score)
+        pg = grade_portfolio(
+            returns_df[used_tickers], weights, bench_ret,
+            grading_settings=grading_settings, nav_erosion=weighted_nav,
+        )
 
         ann_income = 0
         for h in holdings:

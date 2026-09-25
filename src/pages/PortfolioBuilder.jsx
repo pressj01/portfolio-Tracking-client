@@ -4,6 +4,7 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
+import { gradingSettingsPayload } from '../utils/gradingPreferences'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -121,7 +122,7 @@ export default function PortfolioBuilder() {
     try {
       const res = await pf(`/api/builder/portfolios/${pid}/analyze`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ benchmark, period }),
+        body: JSON.stringify({ benchmark, period, grading_settings: gradingSettingsPayload() }),
       })
       const data = await res.json()
       if (data.error) { setError(data.error); setAnalysisResult(null) }
@@ -296,7 +297,7 @@ export default function PortfolioBuilder() {
     try {
       const res = await pf(`/api/builder/portfolios/${activeId}/analyze`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ benchmark, period }),
+        body: JSON.stringify({ benchmark, period, grading_settings: gradingSettingsPayload() }),
       })
       const data = await res.json()
       if (data.error) { setError(data.error); setAnalysisResult(null) }
@@ -389,7 +390,7 @@ export default function PortfolioBuilder() {
     try {
       const res = await pf(`/api/builder/compare`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ portfolio_ids: compareIds, period, benchmark }),
+        body: JSON.stringify({ portfolio_ids: compareIds, period, benchmark, grading_settings: gradingSettingsPayload() }),
       })
       const data = await res.json()
       if (data.error) await dialog.alert(data.error)
@@ -772,7 +773,7 @@ export default function PortfolioBuilder() {
                             <div className="pb-breakdown-bar" style={{ width: `${barW}%`, background: barColor }} />
                           </div>
                           <div className="pb-breakdown-grade" style={{ color: barColor }}>{b.grade}</div>
-                          <div className="pb-breakdown-weight">{b.weight}%</div>
+                          <div className="pb-breakdown-weight">{b.weight_pct ?? b.weight}%</div>
                         </div>
                       )
                     })}

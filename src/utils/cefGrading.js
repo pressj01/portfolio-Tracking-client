@@ -2,6 +2,7 @@
 // Each criterion returns a { badge, score, rationale, metrics, ... } record.
 // Composite score averages criteria 2-7 (criterion 1 is informational).
 import { formatMoney, formatMoneyCompact } from './money.js'
+import { fundVerdictBands } from './gradingPreferences.js'
 
 export const DEFAULT_THRESHOLDS = {
   sustainability: { passPp: 1, warnPp: 3 },
@@ -495,7 +496,8 @@ export function gradeRiskRatios(fund, id = 8) {
 }
 
 // Translate a composite (0-100) plus any hard fails into a buy / pass verdict.
-export function verdictFromComposite(composite, criteria) {
+// The bands default to the user's saved Settings > Grading & Signal Formulas.
+export function verdictFromComposite(composite, criteria, bands = fundVerdictBands()) {
   const scoredCount = (criteria || []).filter(c => typeof c.score === 'number').length
   const keys = new Set((criteria || []).map(c => c.key))
   const isEtfChecklist = keys.has('categoryFit') || keys.has('strategyFit')
@@ -517,10 +519,10 @@ export function verdictFromComposite(composite, criteria) {
   }
   const fails = (criteria || []).filter(c => c.badge === 'fail').length
   const failPhrase = fails === 1 ? '1 failing criterion' : `${fails} failing criteria`
-  if (composite >= 70 && fails === 0) {
-    return { label: 'Strong Buy', tone: 'pass', detail: `Composite ${composite.toFixed(1)}/100 with no failing scored criteria. Unscored criteria still need review.` }
+  if (composite >= bands.strongScore && fails <= bands.strongMaxFails) {
+    return { label: 'Strong Buy', tone: 'pass', detail: `Composite ${composite.toFixed(1)}/100 with ${fails ? failPhrase : 'no failing scored criteria'}. Unscored criteria still need review.` }
   }
-  if (composite >= 60 && fails <= 1) {
+  if (composite >= bands.moderateScore && fails <= bands.moderateMaxFails) {
     return { label: 'Weak Buy', tone: 'warn', detail: `Composite ${composite.toFixed(1)}/100${fails ? ` with ${failPhrase}` : ''} — investable, but address the weak areas flagged below before committing.` }
   }
   return { label: 'Do Not Buy', tone: 'fail', detail: `Composite ${composite.toFixed(1)}/100${fails ? ` with ${failPhrase}` : ''} — fails the checklist. Review the low-scoring criteria below and consider the better-scoring alternatives instead.` }

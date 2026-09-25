@@ -9,6 +9,7 @@ import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
 import ToolsPanel from './analytics/ToolsPanel'
 import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
+import { gradingSettingsPayload } from '../utils/gradingPreferences'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -100,7 +101,7 @@ export default function Analytics() {
     if (tickers.length < 1) { setError('Enter at least 1 ticker.'); return }
     setError(null); setResult(null); setLoading(true)
     lastAnalyzedPeriod.current = period
-    const body = { tickers, benchmark, period, mode: runMode || mode }
+    const body = { tickers, benchmark, period, mode: runMode || mode, grading_settings: gradingSettingsPayload() }
     if (runMode === 'optimize_balanced') body.balance = balance / 100
     pf('/api/analytics/data', {
       method: 'POST',
@@ -439,7 +440,7 @@ export default function Analytics() {
                   {(grade.breakdown || []).map((b, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
                       <span style={{ width: 130, fontSize: '0.78rem', color: 'var(--text-dim-2)', textAlign: 'right' }}>
-                        {b.category} ({b.weight}%)
+                        {b.category} ({b.weight_pct ?? b.weight}%)
                       </span>
                       <div style={{ flex: 1, background: 'var(--bg)', borderRadius: 4, height: 16, position: 'relative' }}>
                         <div style={{

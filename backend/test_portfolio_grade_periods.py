@@ -1,9 +1,11 @@
+import json
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
@@ -141,6 +143,32 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
             dashboard["portfolio_grade"]["sortino"],
             growth["grade"]["sortino"],
         )
+
+    @patch("yfinance.Ticker")
+    def test_dashboard_grades_with_the_saved_formula(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        url = "/api/portfolio-summary/data?profile_id=6&period=all"
+
+        default = self.client.get(url).get_json()
+        # Every letter needs a perfect 100, so anything less is an F. The
+        # cached default response must not be served for the stricter formula.
+        strict = json.dumps({"letterCutoffs": {k: 100 for k in (
+            "aPlus", "a", "aMinus", "bPlus", "b", "bMinus",
+            "cPlus", "c", "cMinus", "dPlus", "d", "dMinus",
+        )}})
+        custom = self.client.get(
+            f"{url}&grading_settings={quote(strict)}"
+        ).get_json()
+
+        self.assertEqual(default["portfolio_grade"]["score"], custom["portfolio_grade"]["score"])
+        self.assertLess(custom["portfolio_grade"]["score"], 100)
+        self.assertNotEqual(default["portfolio_grade"]["overall"], "F")
+        self.assertEqual(custom["portfolio_grade"]["overall"], "F")
+        for ticker, info in custom["ticker_grades"].items():
+            if info.get("score") is None:
+                continue
+            expected = "A+" if info["score"] >= 100 else "F"
+            self.assertEqual(info["grade"], expected, ticker)
 
     def test_dashboard_custom_range_validation_is_visible(self):
         response = self.client.get(

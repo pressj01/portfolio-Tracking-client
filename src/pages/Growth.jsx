@@ -29,6 +29,7 @@ import {
   lifetimeGrowthPayload,
 } from '../utils/lifetimePerformance'
 import GradePeriodHelp from '../components/GradePeriodHelp'
+import { gradingSettingsQuery } from '../utils/gradingPreferences'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -163,6 +164,7 @@ export default function Growth({ embedded = false }) {
     addCustomRangeParams(params, period, customStart, customEnd)
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
+    params.set('grading_settings', gradingSettingsQuery())
     pf(`/api/growth/data?${params}`, { signal: controller.signal })
       .then(async r => {
         const d = await r.json().catch(() => ({}))

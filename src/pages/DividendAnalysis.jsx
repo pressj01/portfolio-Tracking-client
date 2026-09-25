@@ -5,6 +5,7 @@ import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
+import { gradingSettingsQuery } from '../utils/gradingPreferences'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -784,6 +785,7 @@ export default function DividendAnalysis() {
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
+    params.set('grading_settings', gradingSettingsQuery())
     pf(`/api/dividend-analysis/data?${params}`)
       .then(r => r.json())
       .then(d => {

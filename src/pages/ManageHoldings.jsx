@@ -34,6 +34,7 @@ import {
 } from '../utils/holdingsTableTotals'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTickerResearch } from '../context/TickerResearchContext'
+import { gradingSettingsQuery } from '../utils/gradingPreferences'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -2283,6 +2284,7 @@ export default function ManageHoldings() {
     const controller = new AbortController()
     const params = new URLSearchParams({ period: performancePeriod })
     addCustomRangeParams(params, performancePeriod, customStart, customEnd)
+    params.set('grading_settings', gradingSettingsQuery())
     pf(`/api/portfolio-summary/data?${params}`, { signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}))

@@ -48,6 +48,7 @@ import {
   navHistoryCallouts,
   resampleNavHistory,
 } from '../utils/navHistoryInterval'
+import { gradingSettingsQuery } from '../utils/gradingPreferences'
 
 const DASHBOARD_CACHE_TTL_MS = 60 * 60 * 1000
 const SP500_CACHE_KEY = 'portfolio_dashboard_sp500'
@@ -1257,6 +1258,7 @@ export default function Dashboard() {
     let active = true
     const params = new URLSearchParams({ period: gradePeriod })
     addCustomRangeParams(params, gradePeriod, gradeCustomStart, gradeCustomEnd)
+    params.set('grading_settings', gradingSettingsQuery())
     setGradeStatus('Loading risk grades...')
     setTickerRiskLoading(true)
     // Drop the displayed grade only when it belongs to a different window —

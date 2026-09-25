@@ -506,13 +506,36 @@ export default function Settings() {
     setGradingStatus(null)
   }
 
+  const updateNestedGradingPreference = (section, group, subgroup, key, value) => {
+    setGradingPreferences(current => ({
+      ...current,
+      [section]: {
+        ...current[section],
+        [group]: {
+          ...current[section][group],
+          [subgroup]: { ...current[section][group][subgroup], [key]: value },
+        },
+      },
+    }))
+    setGradingStatus(null)
+  }
+
   const saveFormulaSettings = () => {
+    const portfolioRisk = gradingPreferences.portfolioRisk
+    const fundVerdicts = gradingPreferences.fundVerdicts
     const stock = gradingPreferences.stock
     const signals = gradingPreferences.signals
     const increasing = values => values.every((value, index) => index === 0 || value >= values[index - 1])
     const decreasing = values => values.every((value, index) => index === 0 || value <= values[index - 1])
     const valid = (
-      stock.blendWeights.fundamental + stock.blendWeights.technical > 0
+      decreasing(Object.values(portfolioRisk.letterCutoffs))
+      && Object.values(portfolioRisk.holdingWeights).some(weight => weight > 0)
+      && Object.values(portfolioRisk.portfolioWeights).some(weight => weight > 0)
+      && Object.values(portfolioRisk.higherBands).every(bands => decreasing(Object.values(bands)))
+      && Object.values(portfolioRisk.lowerBands).every(bands => increasing(Object.values(bands)))
+      && fundVerdicts.strongScore > fundVerdicts.moderateScore
+      && fundVerdicts.strongMaxFails <= fundVerdicts.moderateMaxFails
+      && stock.blendWeights.fundamental + stock.blendWeights.technical > 0
       && Object.values(stock.groupWeights).some(weight => weight > 0)
       && stock.badgeBands.pass > stock.badgeBands.warn
       && stock.technicalThresholds.rsiBuyBelow < stock.technicalThresholds.rsiSellAbove
@@ -555,6 +578,8 @@ export default function Settings() {
 
   const stockFormula = gradingPreferences.stock
   const signalFormula = gradingPreferences.signals
+  const portfolioRiskFormula = gradingPreferences.portfolioRisk
+  const fundVerdictFormula = gradingPreferences.fundVerdicts
 
   return (
     <div className="page" style={{ maxWidth: 900 }}>
@@ -590,15 +615,91 @@ export default function Settings() {
       <div className="card" id="grading-formulas">
         <h2>Grading &amp; Signal Formulas</h2>
         <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-          These are the exact user-controlled inputs behind the Stock Buying Checklist and Buy / Sell Signal Dashboard.
+          These are the exact user-controlled inputs behind portfolio, holding, stock, fund, and market-signal grades.
           Weights are relative: a weight of 2 counts twice as much as a weight of 1, and 0 excludes that item.
-          ETF and CEF thresholds remain editable directly on their evaluator cards.
+          ETF and CEF criterion thresholds remain editable directly on their evaluator cards; their final grade bands are below.
         </p>
         {gradingStatus && (
           <div className={`alert alert-${gradingStatus.type}`} style={{ marginBottom: '0.75rem' }}>{gradingStatus.msg}</div>
         )}
 
         <details open style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Portfolio and holding risk-grade weights</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            Each available metric receives a 0–100 score from the bands below. Holding and portfolio grades use separate relative weights. NAV Health is included in a portfolio only when NAV erosion data is available.
+          </p>
+          <h4 style={{ marginBottom: 0 }}>Holding weights</h4>
+          <FormulaFieldGrid>
+            {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={`${label} weight`} value={portfolioRiskFormula.holdingWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'holdingWeights', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+          <h4 style={{ marginBottom: 0 }}>Portfolio weights</h4>
+          <FormulaFieldGrid>
+            {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture', diversification: 'Diversification', navHealth: 'NAV Health' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={`${label} weight`} value={portfolioRiskFormula.portfolioWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'portfolioWeights', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '0.8rem' }}>
+            NAV Health score = full score − (portfolio-weighted NAV decline percentage points × penalty per point). Positive or flat NAV receives the full score.
+          </p>
+          <FormulaFieldGrid>
+            <FormulaNumberField label="NAV Health full score" value={portfolioRiskFormula.navHealth.fullScore} onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'fullScore', value)} />
+            <FormulaNumberField label="Penalty per 1% decline" value={portfolioRiskFormula.navHealth.penaltyPerDeclinePct} max={1000} step={0.1} suffix="points" onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'penaltyPerDeclinePct', value)} />
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Portfolio and holding scoring bands</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+            Higher-is-better metrics use descending cutoffs; lower-is-better metrics use ascending cutoffs. Values between cutoffs are interpolated to a 0–100 score.
+          </p>
+          {Object.entries({
+            calmar: 'Calmar ratio', omega: 'Omega ratio', sortino: 'Sortino ratio', sharpe: 'Sharpe ratio', diversification: 'Effective holdings',
+          }).map(([metric, label]) => (
+            <div key={metric} style={{ marginTop: '0.8rem' }}>
+              <strong style={{ fontSize: '0.82rem' }}>{label} · higher is better</strong>
+              <FormulaFieldGrid>
+                {Object.entries({ excellent: 'Excellent from', good: 'Good from', fair: 'Fair from', poor: 'Poor from' }).map(([key, fieldLabel]) => (
+                  <FormulaNumberField key={key} label={fieldLabel} value={portfolioRiskFormula.higherBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'higherBands', metric, key, value)} />
+                ))}
+              </FormulaFieldGrid>
+            </div>
+          ))}
+          {Object.entries({ ulcerIndex: 'Ulcer Index', maxDrawdown: 'Max drawdown %', downCapture: 'Downside capture %' }).map(([metric, label]) => (
+            <div key={metric} style={{ marginTop: '0.8rem' }}>
+              <strong style={{ fontSize: '0.82rem' }}>{label} · lower is better</strong>
+              <FormulaFieldGrid>
+                {Object.entries({ excellent: 'Excellent through', good: 'Good through', fair: 'Fair through', poor: 'Poor through' }).map(([key, fieldLabel]) => (
+                  <FormulaNumberField key={key} label={fieldLabel} value={portfolioRiskFormula.lowerBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'lowerBands', metric, key, value)} />
+                ))}
+              </FormulaFieldGrid>
+            </div>
+          ))}
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Letter-grade cutoffs</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>A score at or above a cutoff receives that letter. Scores below D− receive F.</p>
+          <FormulaFieldGrid>
+            {Object.entries({ aPlus: 'A+', a: 'A', aMinus: 'A−', bPlus: 'B+', b: 'B', bMinus: 'B−', cPlus: 'C+', c: 'C', cMinus: 'C−', dPlus: 'D+', d: 'D', dMinus: 'D−' }).map(([key, label]) => (
+              <FormulaNumberField key={key} label={`${label} from`} value={portfolioRiskFormula.letterCutoffs[key]} onChange={value => updateGradingPreference('portfolioRisk', 'letterCutoffs', key, value)} />
+            ))}
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>ETF, CEF, and option-income final grade bands</summary>
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>These final labels summarize a checklist; they are research grades, not instructions to trade.</p>
+          <FormulaFieldGrid>
+            <FormulaNumberField label="Strong grade from" value={fundVerdictFormula.strongScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongScore: value } }))} />
+            <FormulaNumberField label="Moderate grade from" value={fundVerdictFormula.moderateScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateScore: value } }))} />
+            <FormulaNumberField label="Strong grade max weak criteria" value={fundVerdictFormula.strongMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongMaxFails: value } }))} />
+            <FormulaNumberField label="Moderate grade max weak criteria" value={fundVerdictFormula.moderateMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateMaxFails: value } }))} />
+          </FormulaFieldGrid>
+        </details>
+
+        <details style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
           <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Stock grade blend and criterion weights</summary>
           <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
             Each side is a weighted average of its available criteria. The final score blends the Fundamental and Technical sides after normalizing their two weights.

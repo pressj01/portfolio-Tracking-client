@@ -6,6 +6,7 @@ import {
   gradeFund,
   mergeThresholds,
   selectComparablePeers,
+  verdictFromComposite,
 } from './cefGrading.js'
 
 const fund = (ticker, overrides = {}) => ({
@@ -146,4 +147,18 @@ test('a mixed scan batch cannot contaminate CEF expense or return benchmarks', (
   const bonds = ['A', 'B', 'C'].map(t => fund(t))
   const equities = ['X', 'Y', 'Z'].map(t => fund(t, { category: 'Equity', strategy: 'Equity', expense_ratio: 0.1, return_on_nav_5y: 50 }))
   assert.deepEqual(gradeFund(subject, [...bonds, ...equities], DEFAULT_THRESHOLDS), gradeFund(subject, bonds, DEFAULT_THRESHOLDS))
+})
+
+test('fund verdicts follow the saved grade bands', () => {
+  const criteria = [
+    { key: 'performance', score: 80, badge: 'pass' },
+    { key: 'navErosion', score: 70, badge: 'pass' },
+    { key: 'riskRatios', score: 40, badge: 'fail' },
+  ]
+  // One failing criterion caps the default rule at Weak Buy.
+  assert.equal(verdictFromComposite(75, criteria).label, 'Weak Buy')
+  const lenient = { strongScore: 70, moderateScore: 60, strongMaxFails: 1, moderateMaxFails: 1 }
+  assert.equal(verdictFromComposite(75, criteria, lenient).label, 'Strong Buy')
+  const strict = { strongScore: 90, moderateScore: 80, strongMaxFails: 0, moderateMaxFails: 0 }
+  assert.equal(verdictFromComposite(75, criteria, strict).label, 'Do Not Buy')
 })

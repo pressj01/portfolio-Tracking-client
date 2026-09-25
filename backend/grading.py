@@ -18,6 +18,97 @@ MIN_RATIO_OBSERVATIONS = 30
 ABSOLUTE_MIN_RATIO_OBSERVATIONS = 15
 
 
+# These defaults are mirrored by src/utils/gradingPreferences.js. The browser
+# sends the user's saved copy with grade requests; keeping a complete default
+# here preserves the API for older clients and command-line/test callers.
+DEFAULT_GRADING_SETTINGS = {
+    "letterCutoffs": {
+        "aPlus": 97, "a": 93, "aMinus": 90,
+        "bPlus": 87, "b": 83, "bMinus": 80,
+        "cPlus": 77, "c": 73, "cMinus": 70,
+        "dPlus": 67, "d": 63, "dMinus": 60,
+    },
+    "holdingWeights": {
+        "ulcerIndex": 25, "calmar": 20, "omega": 15, "sortino": 15,
+        "sharpe": 10, "maxDrawdown": 10, "downCapture": 5,
+    },
+    "portfolioWeights": {
+        "ulcerIndex": 20, "calmar": 20, "omega": 15, "sortino": 12,
+        "sharpe": 8, "maxDrawdown": 10, "downCapture": 5,
+        "diversification": 10, "navHealth": 10,
+    },
+    "higherBands": {
+        "calmar": {"excellent": 1.5, "good": 1.0, "fair": 0.5, "poor": 0.2},
+        "omega": {"excellent": 2.0, "good": 1.5, "fair": 1.2, "poor": 1.0},
+        "sortino": {"excellent": 2.0, "good": 1.5, "fair": 1.0, "poor": 0.5},
+        "sharpe": {"excellent": 1.5, "good": 1.0, "fair": 0.5, "poor": 0.0},
+        "diversification": {"excellent": 20, "good": 12, "fair": 6, "poor": 3},
+    },
+    "lowerBands": {
+        "ulcerIndex": {"excellent": 3, "good": 7, "fair": 12, "poor": 20},
+        "maxDrawdown": {"excellent": 10, "good": 20, "fair": 30, "poor": 40},
+        "downCapture": {"excellent": 80, "good": 90, "fair": 100, "poor": 120},
+    },
+    "navHealth": {"fullScore": 100, "penaltyPerDeclinePct": 2},
+}
+
+
+def _finite_setting(value, fallback, minimum=-1000.0, maximum=1000.0):
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(fallback)
+    if not math.isfinite(parsed):
+        return float(fallback)
+    return max(minimum, min(maximum, parsed))
+
+
+def normalize_grading_settings(saved=None):
+    """Return a bounded, complete risk-grading formula configuration."""
+    saved = saved if isinstance(saved, dict) else {}
+    out = {}
+    for group in ("letterCutoffs", "holdingWeights", "portfolioWeights", "navHealth"):
+        defaults = DEFAULT_GRADING_SETTINGS[group]
+        incoming = saved.get(group) if isinstance(saved.get(group), dict) else {}
+        maximum = 100.0 if group != "navHealth" else 1000.0
+        out[group] = {
+            key: _finite_setting(incoming.get(key), fallback, 0.0, maximum)
+            for key, fallback in defaults.items()
+        }
+
+    for group in ("higherBands", "lowerBands"):
+        incoming_group = saved.get(group) if isinstance(saved.get(group), dict) else {}
+        out[group] = {}
+        for metric, defaults in DEFAULT_GRADING_SETTINGS[group].items():
+            incoming = incoming_group.get(metric) if isinstance(incoming_group.get(metric), dict) else {}
+            out[group][metric] = {
+                key: _finite_setting(incoming.get(key), fallback)
+                for key, fallback in defaults.items()
+            }
+
+    # Invalid ordering falls back metric-by-metric instead of silently changing
+    # the meaning of a band. The Settings page also prevents these saves.
+    letter_order = ["aPlus", "a", "aMinus", "bPlus", "b", "bMinus",
+                    "cPlus", "c", "cMinus", "dPlus", "d", "dMinus"]
+    if any(out["letterCutoffs"][letter_order[i]] > out["letterCutoffs"][letter_order[i - 1]]
+           for i in range(1, len(letter_order))):
+        out["letterCutoffs"] = dict(DEFAULT_GRADING_SETTINGS["letterCutoffs"])
+    for metric, bands in out["higherBands"].items():
+        vals = [bands[k] for k in ("excellent", "good", "fair", "poor")]
+        if any(vals[i] > vals[i - 1] for i in range(1, len(vals))):
+            out["higherBands"][metric] = dict(DEFAULT_GRADING_SETTINGS["higherBands"][metric])
+    for metric, bands in out["lowerBands"].items():
+        vals = [bands[k] for k in ("excellent", "good", "fair", "poor")]
+        if any(vals[i] < vals[i - 1] for i in range(1, len(vals))):
+            out["lowerBands"][metric] = dict(DEFAULT_GRADING_SETTINGS["lowerBands"][metric])
+    return out
+
+
+def _band_tuple(settings, direction, metric):
+    bands = settings[direction][metric]
+    return tuple(bands[key] for key in ("excellent", "good", "fair", "poor"))
+
+
 def min_observations_for_window(available_observations,
                                 default=MIN_RATIO_OBSERVATIONS,
                                 floor=ABSOLUTE_MIN_RATIO_OBSERVATIONS,
@@ -245,19 +336,20 @@ def _score_lower(val, thr):
     return max(0.0, 40 * (1 - (val - poor) / poor)) if poor != 0 else 0.0
 
 
-def letter_grade(score):
-    if score >= 97: return "A+"
-    if score >= 93: return "A"
-    if score >= 90: return "A-"
-    if score >= 87: return "B+"
-    if score >= 83: return "B"
-    if score >= 80: return "B-"
-    if score >= 77: return "C+"
-    if score >= 73: return "C"
-    if score >= 70: return "C-"
-    if score >= 67: return "D+"
-    if score >= 63: return "D"
-    if score >= 60: return "D-"
+def letter_grade(score, grading_settings=None):
+    cuts = normalize_grading_settings(grading_settings)["letterCutoffs"]
+    if score >= cuts["aPlus"]: return "A+"
+    if score >= cuts["a"]: return "A"
+    if score >= cuts["aMinus"]: return "A-"
+    if score >= cuts["bPlus"]: return "B+"
+    if score >= cuts["b"]: return "B"
+    if score >= cuts["bMinus"]: return "B-"
+    if score >= cuts["cPlus"]: return "C+"
+    if score >= cuts["c"]: return "C"
+    if score >= cuts["cMinus"]: return "C-"
+    if score >= cuts["dPlus"]: return "D+"
+    if score >= cuts["d"]: return "D"
+    if score >= cuts["dMinus"]: return "D-"
     return "F"
 
 
@@ -293,7 +385,8 @@ def _is_stale_or_dead(close, daily_ret, min_obs=MIN_RATIO_OBSERVATIONS):
         return True
 
 
-def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS):
+def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS,
+                 grading_settings=None):
     """Compute individual ticker risk score (0-100).
     Returns (score, sharpe, sortino, calmar, omega, mdd, down_capture, ulcer)."""
     # Guard: delisted / flat-lined / stale series must not score well just
@@ -311,17 +404,22 @@ def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATION
     dc = _safe(dc)
 
     mdd_pct = mdd_v * 100 if mdd_v is not None else None
+    settings = normalize_grading_settings(grading_settings)
     sub = {
-        "ulcer_index":  _score_lower(ulcer_v,    (3, 7, 12, 20)),
-        "calmar":       _score_higher(calmar_v,   (1.5, 1.0, 0.5, 0.2)),
-        "omega":        _score_higher(omega_v,    (2.0, 1.5, 1.2, 1.0)),
-        "sortino":      _score_higher(sortino_v,  (2.0, 1.5, 1.0, 0.5)),
-        "sharpe":       _score_higher(sharpe_v,   (1.5, 1.0, 0.5, 0.0)),
-        "max_drawdown": _score_lower(abs(mdd_pct) if mdd_pct is not None else None, (10, 20, 30, 40)),
-        "down_capture": _score_lower(dc, (80, 90, 100, 120)),
+        "ulcer_index":  _score_lower(ulcer_v, _band_tuple(settings, "lowerBands", "ulcerIndex")),
+        "calmar":       _score_higher(calmar_v, _band_tuple(settings, "higherBands", "calmar")),
+        "omega":        _score_higher(omega_v, _band_tuple(settings, "higherBands", "omega")),
+        "sortino":      _score_higher(sortino_v, _band_tuple(settings, "higherBands", "sortino")),
+        "sharpe":       _score_higher(sharpe_v, _band_tuple(settings, "higherBands", "sharpe")),
+        "max_drawdown": _score_lower(abs(mdd_pct) if mdd_pct is not None else None, _band_tuple(settings, "lowerBands", "maxDrawdown")),
+        "down_capture": _score_lower(dc, _band_tuple(settings, "lowerBands", "downCapture")),
     }
-    gw = {"ulcer_index": 25, "calmar": 20, "omega": 15,
-          "sortino": 15, "sharpe": 10, "max_drawdown": 10, "down_capture": 5}
+    weight_keys = {
+        "ulcer_index": "ulcerIndex", "calmar": "calmar", "omega": "omega",
+        "sortino": "sortino", "sharpe": "sharpe",
+        "max_drawdown": "maxDrawdown", "down_capture": "downCapture",
+    }
+    gw = {key: settings["holdingWeights"][saved_key] for key, saved_key in weight_keys.items()}
     tw = ts = 0.0
     for k, w in gw.items():
         sc = sub.get(k)
@@ -334,7 +432,8 @@ def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATION
 
 # ── Portfolio-level grading ───────────────────────────────────────────────────
 
-def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS):
+def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS,
+                    grading_settings=None, nav_erosion=None):
     """Compute composite portfolio grade.
 
     Args:
@@ -348,6 +447,7 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
         dict with sharpe, sortino, calmar, omega, max_drawdown,
         effective_n, top_weight, up/down_capture, and grade sub-dict.
     """
+    settings = normalize_grading_settings(grading_settings)
     w = np.array(weights_arr, dtype=float)
     w_sum = w.sum()
     if w_sum > 0:
@@ -387,44 +487,67 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
 
     mdd_pct = port_mdd * 100 if port_mdd is not None else None
     sub = {
-        "ulcer_index":   _score_lower(metrics.get("ulcer_index"),    (3, 7, 12, 20)),
-        "calmar":        _score_higher(metrics.get("calmar"),        (1.5, 1.0, 0.5, 0.2)),
-        "omega":         _score_higher(metrics.get("omega"),         (2.0, 1.5, 1.2, 1.0)),
-        "sortino":       _score_higher(metrics.get("sortino"),       (2.0, 1.5, 1.0, 0.5)),
-        "sharpe":        _score_higher(metrics.get("sharpe"),        (1.5, 1.0, 0.5, 0.0)),
-        "max_drawdown":  _score_lower(abs(mdd_pct) if mdd_pct is not None else None, (10, 20, 30, 40)),
-        "down_capture":  _score_lower(metrics.get("down_capture"),  (80, 90, 100, 120)),
-        "diversification": _score_higher(metrics.get("effective_n"), (20, 12, 6, 3)),
+        "ulcer_index":   _score_lower(metrics.get("ulcer_index"), _band_tuple(settings, "lowerBands", "ulcerIndex")),
+        "calmar":        _score_higher(metrics.get("calmar"), _band_tuple(settings, "higherBands", "calmar")),
+        "omega":         _score_higher(metrics.get("omega"), _band_tuple(settings, "higherBands", "omega")),
+        "sortino":       _score_higher(metrics.get("sortino"), _band_tuple(settings, "higherBands", "sortino")),
+        "sharpe":        _score_higher(metrics.get("sharpe"), _band_tuple(settings, "higherBands", "sharpe")),
+        "max_drawdown":  _score_lower(abs(mdd_pct) if mdd_pct is not None else None, _band_tuple(settings, "lowerBands", "maxDrawdown")),
+        "down_capture":  _score_lower(metrics.get("down_capture"), _band_tuple(settings, "lowerBands", "downCapture")),
+        "diversification": _score_higher(metrics.get("effective_n"), _band_tuple(settings, "higherBands", "diversification")),
     }
 
-    gw = {"ulcer_index": 20, "calmar": 20, "omega": 15, "sortino": 12,
-          "sharpe": 8, "max_drawdown": 10, "down_capture": 5, "diversification": 10}
+    if nav_erosion is not None:
+        decline_pct = max(0.0, -float(nav_erosion) * 100.0)
+        nav_formula = settings["navHealth"]
+        sub["nav_health"] = max(
+            0.0,
+            nav_formula["fullScore"] - decline_pct * nav_formula["penaltyPerDeclinePct"],
+        )
+        metrics["nav_erosion_avg_pct"] = round(float(nav_erosion) * 100, 2)
+
+    weight_keys = {
+        "ulcer_index": "ulcerIndex", "calmar": "calmar", "omega": "omega",
+        "sortino": "sortino", "sharpe": "sharpe", "max_drawdown": "maxDrawdown",
+        "down_capture": "downCapture", "diversification": "diversification",
+        "nav_health": "navHealth",
+    }
+    gw = {
+        key: settings["portfolioWeights"][saved_key]
+        for key, saved_key in weight_keys.items()
+        if key in sub
+    }
     label_map = {
         "ulcer_index": "Ulcer Index", "calmar": "Calmar Ratio",
         "omega": "Omega Ratio", "sortino": "Sortino Ratio",
         "sharpe": "Sharpe Ratio",
         "max_drawdown": "Max Drawdown", "down_capture": "Downside Capture",
-        "diversification": "Diversification",
+        "diversification": "Diversification", "nav_health": "NAV Health",
     }
 
     total_w = total_s = 0.0
     breakdown = []
     for key, wt in gw.items():
         sc = sub.get(key)
-        if sc is not None:
+        # A zero weight excludes the metric entirely, so it is not listed.
+        if sc is not None and wt > 0:
             total_w += wt
             total_s += sc * wt
             breakdown.append({
                 "category": label_map[key],
                 "score": round(sc, 1),
                 "weight": wt,
-                "grade": letter_grade(sc),
+                "grade": letter_grade(sc, settings),
             })
+    # Weights are relative, so report each one's share of the active total too.
+    for item in breakdown:
+        item["weight_pct"] = round(item["weight"] / total_w * 100, 1) if total_w > 0 else 0.0
 
     overall = round(total_s / total_w, 1) if total_w > 0 else 0.0
     metrics["grade"] = {
-        "overall": letter_grade(overall),
+        "overall": letter_grade(overall, settings),
         "score": overall,
         "breakdown": breakdown,
+        "settings": settings,
     }
     return metrics
