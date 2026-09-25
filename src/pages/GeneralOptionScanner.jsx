@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import CompactScannerFilterPanel from '../components/CompactScannerFilterPanel'
 import OptionSelectionControls from '../components/OptionSelectionControls'
@@ -7,14 +7,18 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { OPTION_SCANNER_GROUPS, OPTION_SCANNERS } from '../utils/optionScannerCatalog'
 import {
   CORE_INDEX_TICKERS,
+  DOUBLE_HEDGE_STRATEGY,
   defaultsForGeneralStrategy,
+  doubleHedgeCashFlowText,
   EARNINGS_IN_TRADE_OPTIONS,
   earningsInTradeState,
+  effectiveGeneralFilters,
   MATCH_RESULTS_OPTIONS,
   fieldsForGeneralStrategy,
   GENERAL_STRATEGY_CONFIG,
   helpForGeneralField,
   isIndexOnlyStrategy,
+  isStructureChoice,
   MAX_OPTION_DTE,
   MIN_OPTION_DTE,
   normalizeEarningsFilter,
@@ -22,6 +26,7 @@ import {
   setupDefaultsForGeneralStrategy,
   setupsForGeneralStrategy,
   updateDteFilters,
+  updateStrategyFilter,
 } from '../utils/generalOptionScannerConfig'
 import { buildScannerTrade, hasScannerTrade } from '../utils/optionTradeHandoff'
 import {
@@ -377,10 +382,15 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
   const config = GENERAL_STRATEGY_CONFIG[strategy]
   const setupPresets = useMemo(() => setupsForGeneralStrategy(strategy), [strategy])
   const strategyFields = strategy
-    ? fieldsForGeneralStrategy(strategy).filter(field => field.key !== 'min_open_interest')
+    ? fieldsForGeneralStrategy(strategy, filters).filter(field => field.key !== 'min_open_interest')
     : []
   const expirationScenarioSupported = EXPIRATION_SCENARIO_STRATEGIES.has(strategy)
-  const setFilter = (key, value) => setFilters(current => ({ ...current, risk_profile: 'custom', [key]: value }))
+  // A construction choice (the Double-Hedge plan or ratio size) rescales the
+  // preset's rules rather than replacing them, so the preset stays selected.
+  const setFilter = (key, value) => setFilters(current => ({
+    ...updateStrategyFilter(strategy, current, key, value),
+    risk_profile: isStructureChoice(strategy, key) ? current.risk_profile : 'custom',
+  }))
   const setDteFilter = (key, value) => setFilters(current => ({
     ...updateDteFilters(current, key, value),
     risk_profile: 'custom',
@@ -457,7 +467,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     { title: 'Expiration (DTE)', help: 'Filters every strategy by days to expiration. Same-day contracts are 0 DTE, and the three-year upper limit includes LEAPS beyond 12 months.', items: [
       { label: 'DTE filter', value: `${filters.min_dte}–${filters.max_dte} DTE · target ${filters.target_dte}`, help: 'Minimum and maximum DTE are hard filters. Target DTE picks the preferred listed expiration inside that range. Set all three values to the same number to request one exact DTE; the scanner uses a contract only when that DTE is listed.', editor: <div className="gos-dte-fields"><DynamicField field={{ key: 'min_dte', label: 'Minimum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.min_dte} onChange={value => setDteFilter('min_dte', value)} /><DynamicField field={{ key: 'target_dte', label: 'Target DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.target_dte} onChange={value => setDteFilter('target_dte', value)} /><DynamicField field={{ key: 'max_dte', label: 'Maximum DTE', step: 1, min: MIN_OPTION_DTE, max: MAX_OPTION_DTE }} value={filters.max_dte} onChange={value => setDteFilter('max_dte', value)} /></div> },
     ] },
-    { title: 'Descriptive data', help: 'Select the stock and ETF symbols to scan. An exact symbol list takes precedence over the universe selections.', items: [{ label: 'Include symbols', value: restrictedCondor ? (filters.symbols || 'SPY') : indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: openingCashflowText(filters.entry_credit_mode), help: 'Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.', editor: null }] : [])] },
+    { title: 'Descriptive data', help: 'Select the stock and ETF symbols to scan. An exact symbol list takes precedence over the universe selections.', items: [{ label: 'Include symbols', value: restrictedCondor ? (filters.symbols || 'SPY') : indexOnly ? (filters.symbols || 'Index ETFs only') : symbolScopeText(filters), help: symbolHelp, editor: symbolEditor }, ...(indexOnly ? [{ label: 'Opening cash flow', value: doubleHedgeCashFlowText(strategy, filters) || openingCashflowText(effectiveGeneralFilters(strategy, filters).entry_credit_mode), help: `Risk Averse accepts a debit or zero credit, Moderate accepts zero through a small credit, and Aggressive requires a positive opening credit. These rules apply to all unbalanced long-dated structures.${strategy === DOUBLE_HEDGE_STRATEGY ? ' The Double-Hedge Put Butterfly uses the Opening debit / credit you set at the top instead, and fits its longs to it.' : ''}`, editor: null }] : [])] },
     { title: 'Quality and liquidity', help: 'Drops names that are too small, too thinly traded, or that report earnings inside the option\'s life. Open Filters leave size and earnings unconstrained. Risk and Setup presets skip stocks with earnings before expiry; switch Earnings in the trade to Allow or Require if you want that event.', items: [
       { label: 'Results to show', value: matchResultsText(filters.include_near_matches), help: 'Exact matches only returns trades that pass every active rule, including max loss, skew, and earnings. Nearest trades if none qualify still prices constructible structures when the preset has no exact hit; those rows are labelled as near matches and list the rules they missed. Every starting point and setup defaults to the nearest-trade fallback. Switch to Exact matches only when you want an empty table instead of near matches.', editor: <DynamicField field={{ key: 'include_near_matches', label: 'Results to show', type: 'select', options: MATCH_RESULTS_OPTIONS }} value={Boolean(filters.include_near_matches)} onChange={value => setFilter('include_near_matches', value)} /> },
       { label: 'Earnings in the trade', value: earningsInTradeText(filters.earnings_in_trade), help: 'Skip hides stocks whose next report falls on or before expiration. Allow includes those names. Require keeps only stocks with earnings inside the selected expiration. Funds are not filtered. Missing report dates are not treated as a hit for Skip, and they fail Require. Put/call spread, put-selling, and call-selling presets start on Skip.', editor: <DynamicField field={{ key: 'earnings_in_trade', label: 'Earnings in the trade', type: 'select', options: EARNINGS_IN_TRADE_OPTIONS }} value={filters.earnings_in_trade || 'any'} onChange={value => setFilters(current => ({ ...current, risk_profile: 'custom', ...earningsInTradeState(value) }))} /> },
@@ -494,7 +504,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
       { label: 'Bid/Ask level', value: filters.bid_ask_level || config?.bidAsk || 'Mid', help: 'Controls the quote assumption used to estimate entry price. Conservative uses sell-at-bid and buy-at-ask values; Mid uses midpoint prices; 25% improvement assumes a fill one quarter of the way from the conservative price toward mid.', editor: <DynamicField field={{ key: 'bid_ask_level', label: 'Pricing assumption', type: 'select', options: [['Conservative (use bid/ask values)', 'Conservative (bid/ask)'], ['25% price improvement', '25% price improvement'], ['Mid', 'Mid']] }} value={filters.bid_ask_level} onChange={value => setFilter('bid_ask_level', value)} /> },
       { label: 'Reference option delta', value: filters.reference_delta_mode === 'none' ? 'Construction-specific' : `${filters.reference_delta_mode === 'short' ? 'Short' : 'Long'} ${filters.min_reference_delta}–${filters.max_reference_delta} Δ`, help: 'Controls the absolute delta of the primary risk-defining option. For income and credit trades this is normally the short leg; for directional debit trades it is the long leg. A displayed value of 10 means 0.10 delta. Neutral structures can leave this construction-specific.', editor: <div className="gos-inline-stack"><DynamicField field={{ key: 'reference_delta_mode', label: 'Reference leg', type: 'select', options: [['none', 'Use strategy construction'], ['short', 'Short option'], ['long', 'Long option']] }} value={filters.reference_delta_mode} onChange={value => setFilter('reference_delta_mode', value)} />{filters.reference_delta_mode !== 'none' && <div className="gos-quick-pair"><DynamicField field={{ key: 'min_reference_delta', label: 'Minimum absolute delta', step: 1, min: 1, max: 99 }} value={filters.min_reference_delta} onChange={value => setFilter('min_reference_delta', Math.min(value, filters.max_reference_delta))} /><DynamicField field={{ key: 'max_reference_delta', label: 'Maximum absolute delta', step: 1, min: 1, max: 99 }} value={filters.max_reference_delta} onChange={value => setFilter('max_reference_delta', Math.max(value, filters.min_reference_delta))} /></div>}</div> },
     ] },
-    { title: 'Strategy specific', help: 'Defines the selected strategy\'s trade construction, risk and reward requirements, and any strategy-only mechanics.', items: strategyFields.map(item => ({ label: item.label, value: fieldText(item, filters[item.key]), help: helpForGeneralField(item), editor: <DynamicField field={item} value={filters[item.key]} onChange={value => setFilter(item.key, value)} /> })) },
+    { title: 'Strategy specific', help: 'Defines the selected strategy\'s trade construction, risk and reward requirements, and any strategy-only mechanics.', items: strategyFields.filter(item => !item.toolbar).map(item => ({ label: item.label, value: fieldText(item, filters[item.key]), help: helpForGeneralField(item), editor: <DynamicField field={item} value={filters[item.key]} onChange={value => setFilter(item.key, value)} /> })) },
     ]
     if (expirationScenarioSupported) {
       const marginText = expirationScenario.marginRule === 'any'
@@ -522,9 +532,10 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     const controller = new AbortController()
     scanRequestRef.current = { id: requestId, controller }
     setLoading(true); setError(''); setFocusedTicker(null); setSelected(null); setRows([]); setStats(null); setUnavailable([]); setAsOf(null)
+    const scanFilters = effectiveGeneralFilters(strategy, filters)
     const requestFilters = isIndexOnlyStrategy(strategy)
-      ? { ...filters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false }
-      : filters
+      ? { ...scanFilters, include_stocks: false, include_index_etfs: true, include_sector_etfs: false, include_commodity_etfs: false }
+      : scanFilters
     const strategyFilters = Object.fromEntries(strategyFields.map(field => [field.key, requestFilters[field.key]]))
     try {
       const response = await pf('/api/options/general-scan', {
@@ -632,11 +643,35 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
     <div className="scanner-filter-workspace">
       <CompactScannerFilterPanel title={scanner?.label || 'Choose a scan'} strategyControl={strategyPicker} groups={summaryGroups} onRun={runScan} loading={loading} disabled={!strategy} toolbar={strategy && (
         <div className="gos-preset-bar">
+          {strategyFields.filter(field => field.toolbar).map(field => <Fragment key={field.key}>
+            <span>{field.label}</span>
+            {field.toolbar === 'buttons'
+              ? field.options.map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-structure-choice={value}
+                  className={String(filters[field.key]) === String(value) ? 'active' : ''}
+                  title={field.optionHelp?.[value] || helpForGeneralField(field)}
+                  onClick={() => setFilter(field.key, value)}
+                >
+                  {label}
+                </button>
+              ))
+              : field.toolbar === 'number'
+                ? <label className="gos-preset-number" title={helpForGeneralField(field)}>
+                  {field.prefix && <b>{field.prefix}</b>}
+                  <input type="number" aria-label={field.label} min={field.min} step={field.step} value={filters[field.key] ?? ''} onChange={event => setFilter(field.key, event.target.value === '' ? null : Number(event.target.value))} />
+                </label>
+                : <select className="gos-preset-select" aria-label={field.label} title={helpForGeneralField(field)} value={String(filters[field.key] ?? '')} onChange={event => setFilter(field.key, event.target.value)}>
+                  {field.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>}
+          </Fragment>)}
           <span>Starting point</span>
-          <button type="button" className={filters.risk_profile === 'open' ? 'active' : ''} onClick={() => replaceFilters(defaultsForGeneralStrategy(strategy))} title="Use broad discovery filters while retaining this trade's construction rules. Earnings are allowed. If nothing passes every rule, nearest constructible trades are shown.">Open Filters</button>
-          <button type="button" className={filters.risk_profile === 'risk_averse' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'risk_averse'))} title="Higher-quality, tighter-liquidity setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 5–15 delta.">Risk Averse</button>
-          <button type="button" className={filters.risk_profile === 'moderate' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'moderate'))} title="Balanced setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 15–20 delta.">Moderate</button>
-          <button type="button" className={filters.risk_profile === 'aggressive' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'aggressive'))} title="Broader, higher-risk setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 30–50 delta.">Aggressive</button>
+          <button type="button" className={filters.risk_profile === 'open' ? 'active' : ''} onClick={() => replaceFilters(defaultsForGeneralStrategy(strategy, filters))} title="Use broad discovery filters while retaining this trade's construction rules. Earnings are allowed. If nothing passes every rule, nearest constructible trades are shown.">Open Filters</button>
+          <button type="button" className={filters.risk_profile === 'risk_averse' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'risk_averse', filters))} title="Higher-quality, tighter-liquidity setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 5–15 delta.">Risk Averse</button>
+          <button type="button" className={filters.risk_profile === 'moderate' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'moderate', filters))} title="Balanced setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 15–20 delta.">Moderate</button>
+          <button type="button" className={filters.risk_profile === 'aggressive' ? 'active' : ''} onClick={() => replaceFilters(riskProfileDefaultsForGeneralStrategy(strategy, 'aggressive', filters))} title="Broader, higher-risk setup. If nothing passes every rule, nearest constructible trades are shown. Skips stocks with earnings before expiry and requires a favorable vol skew. Short-premium trades target 30–50 delta.">Aggressive</button>
           {setupPresets.length > 0 && (
             <>
               <span>Setup</span>
@@ -647,7 +682,7 @@ function GeneralOptionScannerWorkspace({ initialStrategy }) {
                   data-setup={preset.key}
                   className={filters.risk_profile === preset.key ? 'active' : ''}
                   title={preset.title}
-                  onClick={() => replaceFilters(setupDefaultsForGeneralStrategy(strategy, preset.key))}
+                  onClick={() => replaceFilters(setupDefaultsForGeneralStrategy(strategy, preset.key, filters))}
                 >
                   {preset.label}
                 </button>

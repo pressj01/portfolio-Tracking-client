@@ -1225,6 +1225,12 @@ a:hover {
 .gos-preset-bar button { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 4px; color: var(--text-muted); cursor: pointer; font-size: 0.54rem; font-weight: 750; padding: 0.28rem 0.38rem; }
 .gos-preset-bar button:hover { border-color: var(--accent); color: var(--accent-bright); }
 .gos-preset-bar button.active { background: color-mix(in srgb, var(--pos) 14%, var(--surface-sunken)); border-color: var(--pos); color: var(--pos); }
+.gos-preset-bar .gos-preset-select { background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 4px; color: var(--text-strong); cursor: pointer; font-size: 0.6rem; font-weight: 750; grid-column: 1 / -1; padding: 0.24rem 0.38rem; }
+.gos-preset-bar .gos-preset-select:hover, .gos-preset-bar .gos-preset-select:focus { border-color: var(--accent); }
+.gos-preset-bar .gos-preset-number { align-items: center; background: var(--surface-sunken); border: 1px solid var(--border); border-radius: 4px; display: flex; gap: 0.3rem; grid-column: 1 / -1; padding: 0.12rem 0.38rem; }
+.gos-preset-bar .gos-preset-number:focus-within { border-color: var(--accent); }
+.gos-preset-bar .gos-preset-number b { color: var(--text-muted); font-size: 0.6rem; }
+.gos-preset-bar .gos-preset-number input { background: transparent; border: 0; color: var(--text-strong); flex: 1; font-size: 0.6rem; font-weight: 750; min-width: 0; outline: none; padding: 0.12rem 0; }
 .csf-summary { padding: 0.2rem 0.75rem 0.65rem; }
 .csf-summary section { border-bottom: 1px solid var(--grid-line); padding: 0.62rem 0; }
 .csf-summary section:last-child { border-bottom: 0; }

@@ -101,6 +101,7 @@ const STRUCT_KEY_TO_SHOT = Object.fromEntries(
 )
 
 function fieldExtra(fieldDef) {
+  if (fieldDef.choicesSummary) return fieldDef.choicesSummary
   if (fieldDef.type === 'select') return `Choices: ${fieldDef.options.map(([, label]) => label).join(' · ')}.`
   if (fieldDef.type === 'text') return null
   const unit = fieldDef.prefix === '$' ? 'dollars' : fieldDef.suffix ? fieldDef.suffix.trim() : null

@@ -325,6 +325,45 @@ class GeneralOptionScannerTests(unittest.TestCase):
         )
         self.assertEqual([row["ticker"] for row in result["rows"]], ["FLAT", "SMALL"])
 
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
+    def test_unreached_opening_debit_or_credit_is_a_missed_rule(self, score_rows, iv_history):
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        row = {
+            "price": 767, "expiration": EXPIRATION, "body_strike": 675,
+            "upper_line_target_dollars": 300.0,
+        }
+        rows = [
+            {**row, "ticker": "MISSED", "upper_flat_dollars": -2252.0},
+            {**row, "ticker": "MET", "upper_flat_dollars": 312.0},
+            # CC4 rows carry no target and are never held to one.
+            {**row, "ticker": "CC4", "upper_flat_dollars": -2252.0,
+             "upper_line_target_dollars": None},
+        ]
+        result = run_general_option_scan(
+            {"strategy": "double-hedge-put-butterfly", "include_near_matches": True},
+            runner=lambda _: {"rows": rows},
+        )
+        shown = sorted(row["ticker"] for row in result["rows"])
+
+        self.assertEqual(shown, ["CC4", "MET"])
+        self.assertEqual(
+            result["stats"]["filter_rejections"].get("Opening debit / credit"),
+            1,
+        )
+
+        near = run_general_option_scan(
+            {"strategy": "double-hedge-put-butterfly", "include_near_matches": True},
+            runner=lambda _: {"rows": rows[:1]},
+        )
+        self.assertEqual(near["rows"][0]["_general"]["match_status"], "near_match")
+        self.assertIn(
+            "Opening debit / credit",
+            near["rows"][0]["_general"]["filter_reasons"],
+        )
+
     @patch("general_option_scanner.resolve_scan_universe", return_value=["SPY", "QQQ", "AAPL"])
     def test_missing_strategy_uses_shared_engine_and_selected_universe(self, resolve):
         payload = _runner_payload("bull-call-spread", {

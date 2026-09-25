@@ -135,7 +135,7 @@ export const OPTION_SCANNER_GROUPS = [
         route: '/double-hedge-put-butterfly-scanner',
         stance: 'Crash hedge',
         risk: 'Campaign-sized debit',
-        description: 'Find the 4/-8/+8 downside hedge structure and its campaign sizing.',
+        description: 'Find the 1/-2/+2 downside hedge at any size: the CC4 25/15/2.5-delta plan near 200 DTE, or a 30/12/3-delta plan near 100 DTE.',
       },
       {
         key: 'road-trip-butterfly',

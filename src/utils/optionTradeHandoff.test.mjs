@@ -243,6 +243,29 @@ test('builds the complete 60/40/20 fly for Strategy Lab', () => {
   assert.deepEqual(trade.legs.map(leg => leg.qty), [2, 4, 2])
 })
 
+test('a scaled double-hedge trade keeps its size and the untested-upside success rule', () => {
+  const row = {
+    ticker: 'SPY',
+    price: 767,
+    expiration,
+    upper_long_strike: 745,
+    body_short_strike: 700,
+    lower_long_strike: 640,
+    upper_long_quantity: 2,
+    body_short_quantity: 4,
+    lower_long_quantity: 4,
+    upper_long_leg: quote('upper_long', 'put', 745, 2),
+    body_short_leg: quote('body_short', 'put', 700, -4),
+    lower_long_leg: quote('lower_long', 'put', 640, 4),
+  }
+
+  const trade = buildScannerTrade('double-hedge-put-butterfly', { ...row, structure_variant: '100dte' })
+  assert.deepEqual(trade.legs.map(leg => leg.qty), [2, 4, 4])
+  // Either plan's upper line can be raised after entry, so only the downside
+  // valley is failure -- the 30/12/3 debit included.
+  assert.equal(scannerProbabilitySuccessMode('double-hedge-put-butterfly'), 'profit-or-untested')
+})
+
 test('builds the complete three-strike iron butterfly for Strategy Lab', () => {
   const row = {
     ticker: 'SPY',

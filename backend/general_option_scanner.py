@@ -1488,6 +1488,17 @@ def run_general_option_scan(payload: dict, *, runner: Runner | None = None) -> d
         reasons, unverified = _gate_reasons(row["_general"], supplied)
         for reason in _nested(row, "put.selection_reasons", "spread.selection_reasons") or []:
             (unverified if _is_unverified(reason) else reasons).append(reason)
+        # A plan that fits its legs to a requested opening debit or credit
+        # returns its plain structure when no combination reaches it. Every
+        # leg is listed, so only this rule says the request was not met.
+        upper_line_target = _num(row.get("upper_line_target_dollars"))
+        upper_line = _num(row.get("upper_flat_dollars"))
+        if (
+            upper_line_target is not None
+            and upper_line is not None
+            and upper_line < upper_line_target - 1e-9
+        ):
+            reasons.append("Opening debit / credit")
         if (row.get("_source_watchlist")
                 or row.get("chain_status") in {"constraints_relaxed", "underlying_filters_missed"}
                 or row.get("candidate_status") == "lower_confidence"):
