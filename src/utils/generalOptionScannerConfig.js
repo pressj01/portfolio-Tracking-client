@@ -500,9 +500,10 @@ const DOUBLE_HEDGE_PER_UNIT = {
   min_t0_minus_20_dollars: -2500,
   planned_capital_per_tranche_dollars: 3125,
   upper_line_amount_dollars: 75,
+  uel_tolerance_dollars: 62.5,
 }
-// Construction choices a starting point or setup keeps instead of resetting.
-const DOUBLE_HEDGE_CHOICE_KEYS = ['structure_variant', 'tranche_quantity', 'upper_line_mode', 'upper_line_amount_dollars']
+// Plan and size changes keep the selected risk preset. Cash-flow edits customize it.
+const DOUBLE_HEDGE_CHOICE_KEYS = ['structure_variant', 'tranche_quantity']
 
 export function doubleHedgeRatioLabel(size) {
   return `${size} / −${2 * size} / +${2 * size}`
@@ -512,6 +513,7 @@ export function doubleHedgeRatioLabel(size) {
 // another strategy, whose preset cash-flow rule applies.
 export function doubleHedgeCashFlowText(strategy, filters) {
   if (strategy !== DOUBLE_HEDGE_STRATEGY || !filters) return null
+  if (filters.upper_line_mode === 'preset') return null
   const amount = Math.max(0, Number(filters.upper_line_amount_dollars) || 0).toLocaleString()
   return filters.upper_line_mode === 'credit' ? `Credit of at least $${amount}` : `Debit up to $${amount}`
 }
@@ -548,6 +550,7 @@ function rescaleDoubleHedge(filters, fromSize, toSize) {
 
 const isCc4Plan = filters => doubleHedgePlanKey(filters?.structure_variant) === 'cc4'
 const cc4Only = item => ({ ...item, showWhen: isCc4Plan, note: 'CC4 plan only; hidden and not applied for the 30/12/3 plan.' })
+const cc4PresetOnly = item => ({ ...cc4Only(item), showWhen: filters => isCc4Plan(filters) && filters.upper_line_mode === 'preset' })
 
 // `toolbar` fields are construction choices: the scanner shows them beside
 // Starting point and Setup instead of in the Strategy specific list.
@@ -556,7 +559,7 @@ const DOUBLE_HEDGE_FIELDS = [
     ...choice('structure_variant', 'Leg plan', Object.entries(DOUBLE_HEDGE_PLANS).map(([key, plan]) => [key, plan.label])),
     toolbar: 'buttons',
     optionHelp: Object.fromEntries(Object.entries(DOUBLE_HEDGE_PLANS).map(([key, plan]) => [key, plan.help])),
-    help: 'CC4 is the presentation’s trade: a 25-delta upper long, 15-delta body, and 2.5-delta lower hedge near 200 DTE (160–230), with its theta floor, entry monitors, and campaign rules. 30/12/3 buys the 30-delta put, sells two 12-delta puts, and buys two lower puts starting near 3 delta, about 100 DTE (80–120); at exactly those deltas it costs roughly 0.7% of the price per 1 / −2 / +2 unit, and the CC4-only rules are hidden. For either plan you choose the opening debit or credit and the bought longs shift to fit it: the lower longs first, the upper long only when needed. An untested finish above the upper long counts as success: the upper expiration line can be raised after entry, so the real risk is the downside valley. Changing the plan sets its expiration window and keeps your ratio size, debit or credit, and starting point.',
+    help: 'CC4 is the presentation’s trade: a 25-delta upper long, 15-delta body, and 2.5-delta lower hedge near 200 DTE (160–230), with its theta floor, entry monitors, and campaign rules. 30/12/3 buys the 30-delta put, sells two 12-delta puts, and buys two lower puts starting near 3 delta, about 100 DTE (80–120); at exactly those deltas it costs roughly 0.7% of the price per 1 / −2 / +2 unit, and the CC4-only rules are hidden. For either plan you can choose a custom opening debit or credit and the bought longs shift to fit it: the lower longs first, the upper long only when needed. An untested finish above the upper long counts as success: the upper expiration line can be raised after entry, so the real risk is the downside valley. Risk Averse, Moderate, and Aggressive restore their opening cash-flow rules; CC4 also restores the corresponding bearish, neutral, or bullish delta band. Changing the plan sets its expiration window and keeps your ratio size, entry rule, and starting point.',
   },
   {
     ...choice('tranche_quantity', 'Ratio size', DOUBLE_HEDGE_SIZES.map(size => [String(size), doubleHedgeRatioLabel(size)])),
@@ -565,21 +568,28 @@ const DOUBLE_HEDGE_FIELDS = [
     choicesSummary: `Choices: ${doubleHedgeRatioLabel(1)} through ${doubleHedgeRatioLabel(DOUBLE_HEDGE_SIZES.at(-1))}.`,
   },
   {
-    ...choice('upper_line_mode', 'Opening debit / credit', [['debit', 'Debit up to'], ['credit', 'Credit at least']]),
+    ...choice('upper_line_mode', 'Opening debit / credit', [['preset', 'Preset rules'], ['debit', 'Debit up to'], ['credit', 'Credit at least']]),
     toolbar: 'buttons',
     optionHelp: {
+      preset: 'Use the starting point’s opening cash-flow rules. Risk Averse accepts a debit or flat entry, Moderate accepts flat through 0.5 credit points, and Aggressive requires a credit. CC4 also uses the preset’s bearish, neutral, or bullish delta band.',
       debit: 'Pay no more than the amount below to open. The upper expiration line then finishes no worse than that debit.',
       credit: 'Collect at least the amount below — the more bullish version, with the upper expiration line slightly positive.',
     },
-    help: 'Sets the upper expiration line: the P/L if price finishes above the upper long. The sold body stays on its delta (15 for CC4, 12 for 30/12/3) and the lower longs shift to fit first. Down means a cheaper hedge (less debit or more credit) and a deeper valley below the body; up means the reverse. It takes the highest lower strike that fits. Only when no lower strike can reach your amount does the upper long move down to a cheaper strike. If nothing fits, the row lists "Opening debit / credit" as a missed rule and shows the plan’s standard trade.',
+    help: 'Preset rules uses the starting point’s cash-flow band and, for CC4, its market-bias delta band. Debit up to or Credit at least replaces those bands with your own limit on the upper expiration line: the P/L if price finishes above the upper long. The sold body stays on its delta (15 for CC4, 12 for 30/12/3) and the lower longs shift to fit first. Down means a cheaper hedge and a deeper valley below the body; up means the reverse. It takes the highest lower strike that fits. Only when no lower strike can reach your amount does the upper long move down to a cheaper strike. If nothing fits, the row lists "Opening debit / credit" as a missed rule and shows the plan’s standard trade.',
   },
   field('upper_line_amount_dollars', 'Amount, whole position', {
     prefix: '$',
     step: 25,
     min: 0,
     toolbar: 'number',
+    disabledWhen: filters => filters.upper_line_mode === 'preset',
+    statusText: filters => filters.upper_line_mode === 'preset'
+      ? 'Saved custom amount. Choose Debit up to or Credit at least to use it.'
+      : 'Custom limit for the whole position at the selected ratio size.',
     help: 'Dollars for the whole position at the selected Ratio size: the most debit to pay, or the least credit to collect. It starts at $300 for 4 / −8 / +8 and scales with Ratio size.',
   }),
+  cc4PresetOnly(choice('market_bias', 'Market bias', [['neutral', 'Neutral'], ['bullish', 'Bullish'], ['bearish', 'Bearish']])),
+  cc4PresetOnly(field('uel_tolerance_dollars', 'Upper expiration-line tolerance', { prefix: '$', step: 25, min: 0 })),
   field('delta_tolerance', 'Leg delta tolerance', { step: 0.0025, min: 0.0025, max: 0.1 }),
   cc4Only(field('min_theta_dollars', 'Minimum theta / day', { prefix: '$', step: 5, help: 'Requires at least this much modeled daily theta for the complete position. The CC4 document asks for more than $10 per 4 / −8 / +8 tranche; the value scales with Ratio size.' })),
   field('min_t0_minus_20_dollars', 'Minimum T+0 at −20%', { prefix: '$', step: 100, help: 'Lowest acceptable modeled P/L for the complete position right after a 20% decline. Starts at −$2,500 per 1 / −2 / +2 unit (the CC4 document’s −$10,000 per 4 / −8 / +8 tranche) and scales with Ratio size.' }),
@@ -896,7 +906,7 @@ export const GENERAL_STRATEGY_CONFIG = {
   },
   'put-call-condor': { bidAsk: '25% price improvement', defaults: { target_dte: 42, min_dte: 30, max_dte: 60, option_side: 'both', placement_mode: 'slightly_otm', debit_otm_pct: 0.5, max_risk_dollars: 200, credit_short_delta: 0.15, target_upper_credit_dollars: 10, max_upper_credit_dollars: 25, min_open_interest: 0 }, fields: PUT_CALL_CONDOR_FIELDS },
   'unbalanced-put-condor': { bidAsk: '25% price improvement', defaults: { target_dte: 160, min_dte: 120, max_dte: 240, delta_preset: 'all', bought_width: 5, sold_width: 10, bought_quantity: 1, sold_quantity: 1, delta_tolerance: 0.04, target_position_delta: 0, position_delta_tolerance: 2, width_tolerance_pct: 20, min_open_interest: 0, require_upside_credit: false }, fields: UNBALANCED_CONDOR_FIELDS },
-  'double-hedge-put-butterfly': { bidAsk: 'Mid', defaults: { target_dte: 200, min_dte: 160, max_dte: 230, structure_variant: 'cc4', upper_line_mode: 'debit', upper_line_amount_dollars: 300, tranche_quantity: 4, delta_tolerance: 0.02, min_theta_dollars: 10, min_t0_minus_20_dollars: -10000, min_lower_wing_ratio: 1.05, min_open_interest: 0, price_signal: 'unconfirmed', concavity_signal: 'unconfirmed', skew_signal: 'unconfirmed', campaign_planned_capital_dollars: 150000, planned_capital_per_tranche_dollars: 12500, open_tranches: 0 }, fields: DOUBLE_HEDGE_FIELDS },
+  'double-hedge-put-butterfly': { bidAsk: 'Mid', defaults: { target_dte: 200, min_dte: 160, max_dte: 230, structure_variant: 'cc4', market_bias: 'neutral', uel_tolerance_dollars: 250, upper_line_mode: 'debit', upper_line_amount_dollars: 300, tranche_quantity: 4, delta_tolerance: 0.02, min_theta_dollars: 10, min_t0_minus_20_dollars: -10000, min_lower_wing_ratio: 1.05, min_open_interest: 0, price_signal: 'unconfirmed', concavity_signal: 'unconfirmed', skew_signal: 'unconfirmed', campaign_planned_capital_dollars: 150000, planned_capital_per_tranche_dollars: 12500, open_tranches: 0 }, fields: DOUBLE_HEDGE_FIELDS },
   'road-trip-butterfly': { bidAsk: 'Mid', defaults: { target_dte: 77, min_dte: 70, max_dte: 85, market_bias: 'neutral', tranche_quantity: 5, upper_offset_pct: 1.25, offset_tolerance_pct: 0.75, upper_wing_pct: 2.25, lower_wing_pct: 2.75, wing_tolerance_pct: 1, min_lower_wing_ratio: 1.05, max_debit_to_margin_pct: 5, min_theta_dollars: 1, profit_target_low_pct: 7, profit_target_high_pct: 15, max_loss_pct: 5, exit_days_before_expiration: 17, hands_off_days: 25, require_favorable_entry_timing: false, min_open_interest: 0 }, fields: ROAD_TRIP_FIELDS },
   'sixty-forty-twenty-fly': { bidAsk: 'Mid', defaults: { target_dte: 70, min_dte: 60, max_dte: 80, quantity: 1, delta_tolerance: 0.03, max_abs_net_delta: 5, delta_theta_caution_pct: 50, delta_theta_exit_pct: 60, exit_dte: 30, min_open_interest: 0, max_bid_ask_pct: 35 }, fields: SIXTY_FORTY_TWENTY_FIELDS },
   'fourteen-day-aic': { bidAsk: 'Mid', defaults: { target_dte: 32, min_dte: 28, max_dte: 38, tranche_quantity: 1, put_credit_qty: 4, call_credit_qty: 1, hedge_qty: 1, put_short_delta: 0.25, call_short_delta: 0.12, put_long_delta: 0.10, call_long_delta: 0.05, hedge_long_delta: 0.40, delta_tolerance: 0.04, max_abs_net_delta: 8, plan_capital_dollars: 18000, profit_target_low_pct: 2, profit_target_high_pct: 4, max_loss_pct: 5, max_hold_days: 14, exit_remaining_dte: 0, min_open_interest: 0, max_bid_ask_pct: 35 }, fields: AIC_FIELDS },
@@ -928,8 +938,8 @@ function withStructureChoices(strategy, filters, choices) {
     doubleHedgePlanKey(choices?.structure_variant ?? filters.structure_variant),
     doubleHedgeSize(choices?.tranche_quantity ?? filters.tranche_quantity),
   )
-  // The debit or credit you picked is part of the trade, like its size.
-  if (['debit', 'credit'].includes(choices?.upper_line_mode)) next.upper_line_mode = choices.upper_line_mode
+  // Keep the custom amount for later use. Risk presets explicitly select preset mode.
+  if (['preset', 'debit', 'credit'].includes(choices?.upper_line_mode)) next.upper_line_mode = choices.upper_line_mode
   const amount = choices?.upper_line_amount_dollars
   if (amount !== null && amount !== undefined && amount !== '' && Number.isFinite(Number(amount))) {
     next.upper_line_amount_dollars = Math.max(0, Number(amount))
@@ -955,9 +965,8 @@ export function updateStrategyFilter(strategy, filters, key, value) {
   return { ...filters, [key]: value }
 }
 
-// The rules a scan runs with. The Double-Hedge fits its longs to the debit or
-// credit you set, so a preset's opening-cash-flow rule would only fight it;
-// it is overridden here without being erased from the preset.
+// A custom debit/credit limit replaces the preset's cash-flow band. Selecting
+// a risk preset restores that band instead of silently overriding it.
 export function effectiveGeneralFilters(strategy, filters) {
   if (strategy !== DOUBLE_HEDGE_STRATEGY || !filters) return filters
   return {
@@ -965,7 +974,7 @@ export function effectiveGeneralFilters(strategy, filters) {
     // The fitted legs set position delta. The generic cap has no editor on
     // this strategy, and a large 30/12/3 position exceeds 100.
     max_abs_position_delta: null,
-    entry_credit_mode: 'any',
+    entry_credit_mode: filters.upper_line_mode === 'preset' ? filters.entry_credit_mode : 'any',
   }
 }
 
@@ -1083,7 +1092,9 @@ export function riskProfileDefaultsForGeneralStrategy(strategy, profileKey, choi
       result.upper_offset_pct = [2, 1.25, 0.75][intensity]
     }
   }
-  return withStructureChoices(strategy, result, choices)
+  const preset = withStructureChoices(strategy, result, choices)
+  if (strategy === DOUBLE_HEDGE_STRATEGY) preset.upper_line_mode = 'preset'
+  return preset
 }
 
 export function setupDefaultsForGeneralStrategy(strategy, setupKey, choices) {
@@ -1156,8 +1167,8 @@ export function setupDefaultsForGeneralStrategy(strategy, setupKey, choices) {
   return withStructureChoices(strategy, result, choices)
 }
 
-// With `filters`, only the fields that apply to them (a Double-Hedge plan hides
-// the CC4-only rules). Without, every field, as the field reference lists them.
+// With `filters`, show only fields for the active plan and entry rule.
+// Without filters, return every field for the reference guide.
 export function fieldsForGeneralStrategy(strategy, filters) {
   const fields = GENERAL_STRATEGY_CONFIG[strategy]?.fields || ADVANCED_FIELDS
   return filters ? fields.filter(item => !item.showWhen || item.showWhen(filters)) : fields

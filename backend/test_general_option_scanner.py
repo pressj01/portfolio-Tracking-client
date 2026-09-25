@@ -315,15 +315,37 @@ class GeneralOptionScannerTests(unittest.TestCase):
             {"ticker": "SMALL", "price": 100, "entry_credit": 0.25, "expiration": EXPIRATION, "body_strike": 100},
             {"ticker": "LARGE", "price": 100, "entry_credit": 0.75, "expiration": EXPIRATION, "body_strike": 100},
         ]
-        result = run_general_option_scan(
-            {
-                "strategy": "unbalanced-butterfly",
-                "entry_credit_mode": "flat_or_slight_credit",
-                "entry_credit_max_points": 0.5,
-            },
-            runner=lambda _: {"rows": rows},
+        for strategy in ("unbalanced-butterfly", "double-hedge-put-butterfly"):
+            for profile, mode, expected in (
+                ("risk_averse", "debit_or_flat", ["DEBIT", "FLAT"]),
+                ("moderate", "flat_or_slight_credit", ["FLAT", "SMALL"]),
+                ("aggressive", "credit", ["SMALL", "LARGE"]),
+            ):
+                with self.subTest(strategy=strategy, profile=profile):
+                    payload = {
+                        "strategy": strategy,
+                        "risk_profile": profile,
+                        "entry_credit_mode": mode,
+                        "entry_credit_max_points": 0.5,
+                        "include_near_matches": True,
+                        "strategy_filters": {"upper_line_mode": "preset"},
+                    }
+                    runner_payload = _runner_payload(strategy, payload)
+                    self.assertEqual(runner_payload["upper_line_mode"], "preset")
+                    self.assertEqual(runner_payload["entry_credit_mode"], mode)
+                    result = run_general_option_scan(
+                        payload, runner=lambda _: {"rows": [dict(row) for row in rows]},
+                    )
+                    self.assertCountEqual([row["ticker"] for row in result["rows"]], expected)
+                    self.assertTrue(all(row["_general"]["match_status"] == "match" for row in result["rows"]))
+
+        # A constructible trade outside the chosen risk band stays a labelled near match.
+        near = run_general_option_scan(
+            {"strategy": "double-hedge-put-butterfly", "entry_credit_mode": "credit", "include_near_matches": True},
+            runner=lambda _: {"rows": [dict(rows[0])]},
         )
-        self.assertEqual([row["ticker"] for row in result["rows"]], ["FLAT", "SMALL"])
+        self.assertEqual(near["rows"][0]["_general"]["match_status"], "near_match")
+        self.assertIn("Opening cash flow must be a credit", near["rows"][0]["_general"]["filter_reasons"])
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")

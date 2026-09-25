@@ -18,11 +18,13 @@ A second plan builds the same 1/-2/+2 structure around 100 DTE on 30/12/3
 delta legs. It has no source document, so none of the CC4 entry rules (theta
 floor, monitors, campaign) are applied to it.
 
-For either plan the trader picks the opening debit or credit. The sold body
+For either plan the trader can pick a custom opening debit or credit. The sold body
 stays on its delta; the lower longs shift up or down to fit, and the upper
 long moves down only when the lower longs alone cannot reach it. That fit
 replaces CC4's bias band and upper-line tolerance as the rule that places
-the lower hedge; they apply only to a trade built without a target.
+the lower hedge. Selecting "preset" restores the original CC4 bias band
+and upper-line tolerance, with opening cash flow filtered by the general
+scanner's selected risk preset. The 100-DTE plan keeps its own delta targets.
 ``tranche_quantity`` scales the whole ratio for either plan, and every
 per-tranche dollar rule the caller leaves out scales with it.
 
@@ -117,7 +119,7 @@ SIZE_SCALED_RULES = (
     "planned_capital_per_tranche_dollars",
     "upper_line_amount_dollars",
 )
-UPPER_LINE_MODES = {"debit", "credit"}
+UPPER_LINE_MODES = {"preset", "debit", "credit"}
 
 # Course targets and management references. A plan without document rules
 # reports none of them rather than borrowing another trade's numbers.
@@ -206,7 +208,7 @@ def _variant_name(value) -> str:
 def _upper_line_mode(value) -> str:
     normalized = str(value or "debit").strip().lower()
     if normalized not in UPPER_LINE_MODES:
-        raise ValueError("upper_line_mode must be debit or credit")
+        raise ValueError("upper_line_mode must be preset, debit, or credit")
     return normalized
 
 
@@ -892,7 +894,8 @@ def run_488_scan(payload: dict) -> dict:
     # bought longs to it, which replaces CC4's bias band and upper-line
     # tolerance as the rule that places the lower hedge.
     upper_line_target = (
-        -upper_line_amount if upper_line_mode == "debit"
+        None if upper_line_mode == "preset"
+        else -upper_line_amount if upper_line_mode == "debit"
         else upper_line_amount
     )
     upper_line_label = (
@@ -1225,9 +1228,7 @@ def run_488_scan(payload: dict) -> dict:
             "structure_variant": variant_name,
             "structure_variant_label": variant["label"],
             "ratio_label": ratio_label,
-            "upper_line_mode": (
-                None if upper_line_target is None else upper_line_mode
-            ),
+            "upper_line_mode": upper_line_mode,
             "upper_line_amount_dollars": (
                 None if upper_line_target is None else upper_line_amount
             ),
@@ -1369,9 +1370,7 @@ def run_488_scan(payload: dict) -> dict:
             "max_dte": max_dte,
             "tranche_quantity": quantity,
             "ratio_label": ratio_label,
-            "upper_line_mode": (
-                None if upper_line_target is None else upper_line_mode
-            ),
+            "upper_line_mode": upper_line_mode,
             "upper_line_amount_dollars": (
                 None if upper_line_target is None else upper_line_amount
             ),

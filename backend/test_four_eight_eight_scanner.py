@@ -534,6 +534,49 @@ class HundredDayPlan(unittest.TestCase):
             scanner.run_488_scan({"structure_variant": "weekly"})
 
 
+class RiskPresetConstruction(unittest.TestCase):
+    def test_cc4_presets_restore_the_scaled_bias_band_and_upper_line_tolerance(self):
+        expiration, dte = eligible_monthly()
+        for bias, (low, high) in scanner.BIAS_RANGES.items():
+            with self.subTest(bias=bias), patch.object(
+                scanner, "_choose_candidate", wraps=scanner._choose_candidate
+            ) as choose:
+                result = run_scan_with(
+                    base_candidate(expiration, dte), expiration,
+                    upper_line_mode="preset", market_bias=bias,
+                    tranche_quantity=2, upper_line_amount_dollars=100000,
+                )
+                params = result["params"]
+                row = result["rows"][0]
+                self.assertEqual(params["upper_line_mode"], "preset")
+                self.assertIsNone(params["upper_line_target_dollars"])
+                self.assertIsNone(params["upper_line_amount_dollars"])
+                self.assertEqual(params["market_bias"], bias)
+                self.assertEqual(params["bias_delta_min"], low / 2)
+                self.assertEqual(params["bias_delta_max"], high / 2)
+                self.assertEqual(params["uel_tolerance_dollars"], 125)
+                self.assertIsNone(choose.call_args.kwargs["upper_line_target"])
+                self.assertEqual(choose.call_args.kwargs["bias_low"], low / 2)
+                self.assertEqual(row["market_bias"], bias)
+                bias_flags = [flag for flag in row["structure_flags"] if "Position delta" in flag]
+                self.assertEqual(bool(bias_flags), bias != "neutral")
+
+    def test_100dte_preset_mode_keeps_its_plan_without_cc4_rules(self):
+        expiration, dte = eligible_monthly(80, 120)
+        candidate = HundredDayPlan().choose(skewed_put_chain(100.0, dte), dte)
+        result = run_scan_with(
+            candidate, expiration, structure_variant="100dte",
+            tranche_quantity=1, upper_line_mode="preset", market_bias="bullish",
+        )
+        row = result["rows"][0]
+        self.assertIsNone(result["params"]["upper_line_target_dollars"])
+        self.assertIsNone(row["market_bias"])
+        self.assertIsNone(row["min_theta_dollars"])
+        self.assertEqual(row["monitor_flags"], [])
+        self.assertEqual(row["upper_long_strike"], candidate["upper_long_strike"])
+        self.assertEqual(row["lower_long_strike"], candidate["lower_long_strike"])
+
+
 class HundredDayCashFlowFit(unittest.TestCase):
     """The lower longs shift to fit the opening debit or credit you pick."""
 

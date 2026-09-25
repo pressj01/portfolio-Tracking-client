@@ -402,24 +402,41 @@ test('double-hedge defaults are unchanged at the CC4 base size', () => {
   assert.deepEqual([open.upper_line_mode, open.upper_line_amount_dollars], ['debit', 300])
 })
 
-test('a double-hedge debit or credit choice survives presets and scales with size', () => {
+test('custom double-hedge cash flow survives Open Filters and setups, while risk presets restore their rules', () => {
   const choices = { structure_variant: '100dte', tranche_quantity: 4, upper_line_mode: 'credit', upper_line_amount_dollars: 40 }
   for (const filters of [
     defaultsForGeneralStrategy(DOUBLE_HEDGE, choices),
-    riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'risk_averse', choices),
-    riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'aggressive', choices),
     setupDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'core_indexes', choices),
   ]) {
     assert.deepEqual([filters.upper_line_mode, filters.upper_line_amount_dollars], ['credit', 40])
   }
-  // Without a choice, a preset starts at a $300 debit per 4 / −8 / +8.
+  for (const [profile, mode, bias] of [
+    ['risk_averse', 'debit_or_flat', 'bearish'],
+    ['moderate', 'flat_or_slight_credit', 'neutral'],
+    ['aggressive', 'credit', 'bullish'],
+  ]) {
+    for (const plan of ['cc4', '100dte']) {
+      const filters = riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, profile, { ...choices, structure_variant: plan })
+      assert.deepEqual([filters.upper_line_mode, filters.upper_line_amount_dollars], ['preset', 40])
+      assert.equal(filters.market_bias, bias)
+      assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, filters).entry_credit_mode, mode)
+      assert.equal(filters.entry_credit_max_points, 0.5)
+      assert.equal(doubleHedgeCashFlowText(DOUBLE_HEDGE, filters), null)
+      const custom = updateStrategyFilter(DOUBLE_HEDGE, filters, 'upper_line_mode', 'credit')
+      assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, custom).entry_credit_mode, 'any')
+      assert.equal(doubleHedgeCashFlowText(DOUBLE_HEDGE, custom), 'Credit of at least $40')
+      const restored = updateStrategyFilter(DOUBLE_HEDGE, custom, 'upper_line_mode', 'preset')
+      assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, restored).entry_credit_mode, mode)
+    }
+  }
+  // The custom amount remains available and scales, but is inactive in preset mode.
   const two = riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'moderate', { structure_variant: '100dte', tranche_quantity: 2 })
-  assert.deepEqual([two.upper_line_mode, two.upper_line_amount_dollars], ['debit', 150])
+  assert.deepEqual([two.upper_line_mode, two.upper_line_amount_dollars], ['preset', 150])
   // A new size keeps the same debit per unit.
   const doubled = updateStrategyFilter(DOUBLE_HEDGE, { ...two, upper_line_amount_dollars: 200 }, 'tranche_quantity', '4')
   assert.equal(doubled.upper_line_amount_dollars, 400)
-  assert.equal(isStructureChoice(DOUBLE_HEDGE, 'upper_line_mode'), true)
-  assert.equal(isStructureChoice(DOUBLE_HEDGE, 'upper_line_amount_dollars'), true)
+  assert.equal(isStructureChoice(DOUBLE_HEDGE, 'upper_line_mode'), false)
+  assert.equal(isStructureChoice(DOUBLE_HEDGE, 'upper_line_amount_dollars'), false)
 })
 
 test('every double-hedge starting point and setup keeps the chosen plan and size', () => {
@@ -457,6 +474,8 @@ test('choosing a double-hedge size rescales rules quoted for the whole position'
   // A custom $15 per 4 / −8 / +8 stays the same per unit.
   assert.deepEqual(perPositionRules(halved), { theta: 7.5, t0: -5000, capital: 6250, amount: 150 })
   assert.equal(halved.min_dte, base.min_dte)
+  assert.equal(halved.uel_tolerance_dollars, 125)
+  assert.equal(halved.upper_line_mode, 'preset')
 
   const cleared = updateStrategyFilter(DOUBLE_HEDGE, { ...base, min_theta_dollars: null }, 'tranche_quantity', '8')
   assert.equal(cleared.min_theta_dollars, null, 'a cleared rule is left to the scanner default')
@@ -482,27 +501,37 @@ test('choosing a double-hedge plan brings its expiration window and keeps the si
   assert.equal(isStructureChoice('road-trip-butterfly', 'tranche_quantity'), false)
 })
 
-test('the 30/12/3 plan hides the CC4-only rules, and neither plan uses a preset cash-flow rule', () => {
+test('double-hedge editors and effective cash flow follow the selected plan and entry rule', () => {
   const keys = filters => fieldsForGeneralStrategy(DOUBLE_HEDGE, filters).map(field => field.key)
   assert.deepEqual(keys({ structure_variant: '100dte' }), [
     'structure_variant', 'tranche_quantity', 'upper_line_mode', 'upper_line_amount_dollars',
     'delta_tolerance', 'min_t0_minus_20_dollars', 'min_lower_wing_ratio', 'min_open_interest',
   ])
-  // CC4 balances its hedge to the bias band, so it has no debit/credit choice.
-  // CC4 takes the same debit/credit choice, plus its document-only rules.
   const cc4Keys = keys({ structure_variant: 'cc4' })
   assert.equal(cc4Keys.includes('upper_line_mode'), true)
-  assert.equal(cc4Keys.length, fieldsForGeneralStrategy(DOUBLE_HEDGE).length)
+  assert.equal(cc4Keys.length, fieldsForGeneralStrategy(DOUBLE_HEDGE).length - 2)
   assert.equal(cc4Keys.includes('market_bias'), false)
+  const presetKeys = keys(riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'risk_averse'))
+  assert.equal(presetKeys.includes('market_bias'), true)
+  assert.equal(presetKeys.includes('uel_tolerance_dollars'), true)
+  assert.equal(presetKeys.includes('upper_line_amount_dollars'), true)
+  const hundredKeys = keys(riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'moderate', { structure_variant: '100dte' }))
+  assert.equal(hundredKeys.includes('market_bias'), false)
+  assert.equal(hundredKeys.includes('uel_tolerance_dollars'), false)
+  assert.equal(hundredKeys.includes('upper_line_amount_dollars'), true)
+  const amount = fieldsForGeneralStrategy(DOUBLE_HEDGE).find(field => field.key === 'upper_line_amount_dollars')
+  assert.equal(amount.disabledWhen({ upper_line_mode: 'preset' }), true)
+  assert.equal(amount.disabledWhen({ upper_line_mode: 'debit' }), false)
+  assert.equal(amount.disabledWhen({ upper_line_mode: 'credit' }), false)
   const bias = fieldsForGeneralStrategy(DOUBLE_HEDGE).find(field => field.key === 'price_signal')
   assert.match(helpForGeneralField(bias), /CC4 plan only/)
 
   const aggressive = riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'aggressive', { structure_variant: '100dte' })
   assert.equal(aggressive.entry_credit_mode, 'credit', 'the preset keeps its own rule')
-  assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, aggressive).entry_credit_mode, 'any')
+  assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, aggressive).entry_credit_mode, 'credit')
   const cc4 = riskProfileDefaultsForGeneralStrategy(DOUBLE_HEDGE, 'aggressive')
   assert.equal(cc4.entry_credit_mode, 'credit', 'the preset keeps its own rule')
-  assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, cc4).entry_credit_mode, 'any')
+  assert.equal(effectiveGeneralFilters(DOUBLE_HEDGE, cc4).entry_credit_mode, 'credit')
 
   // Open Filters' hidden ±100 cap would reject a large 30/12/3 (−12 per unit).
   const open = defaultsForGeneralStrategy(DOUBLE_HEDGE, { structure_variant: '100dte', tranche_quantity: 10 })

@@ -1231,6 +1231,9 @@ a:hover {
 .gos-preset-bar .gos-preset-number:focus-within { border-color: var(--accent); }
 .gos-preset-bar .gos-preset-number b { color: var(--text-muted); font-size: 0.6rem; }
 .gos-preset-bar .gos-preset-number input { background: transparent; border: 0; color: var(--text-strong); flex: 1; font-size: 0.6rem; font-weight: 750; min-width: 0; outline: none; padding: 0.12rem 0; }
+.gos-preset-bar .gos-preset-number input:disabled { color: var(--text-dim); cursor: not-allowed; }
+.gos-preset-bar .gos-preset-number:has(input:disabled) { background: var(--surface-inset); opacity: 0.55; }
+.gos-preset-bar .gos-preset-note { color: var(--text-muted); font-size: 0.56rem; grid-column: 1 / -1; line-height: 1.4; }
 .csf-summary { padding: 0.2rem 0.75rem 0.65rem; }
 .csf-summary section { border-bottom: 1px solid var(--grid-line); padding: 0.62rem 0; }
 .csf-summary section:last-child { border-bottom: 0; }
