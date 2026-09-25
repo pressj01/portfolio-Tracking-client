@@ -96,6 +96,29 @@ class PortfolioDailyPriceChangeTest(unittest.TestCase):
         self.assertEqual(result["holdings_covered"], 2)
         self.assertGreater(result["coverage_pct"], 99)
 
+    def test_money_market_fund_is_flat_not_missing(self):
+        # Yahoo returns only today's $1.00 bar for FZDXX and no previous close.
+        # At 60% of the book it used to withhold the whole day change.
+        dates = pd.to_datetime(["2026-09-24", "2026-09-25"])
+        result = _portfolio_daily_price_change(
+            {
+                (6, "AAA"): {"qty": 100},
+                (6, "FZDXX"): {"qty": 15000, "description": "FIDELITY MONEY MARKET"},
+                (6, "SWEEP"): {"qty": 500, "description": "Treasury Money Market Fund", "current_value": 500},
+            },
+            {
+                "AAA": pd.Series([100.0, 99.0], index=dates),
+                "FZDXX": pd.Series([1.0], index=pd.to_datetime(["2026-09-25"])),
+            },
+            profile_ids=[6],
+            sessions=(date(2026, 9, 24), date(2026, 9, 25)),
+        )
+
+        self.assertEqual(result["amount"], -100.0)
+        self.assertEqual(result["missing_tickers"], [])
+        self.assertEqual(result["holdings_covered"], 3)
+        self.assertEqual(result["previous_value"], 25500.0)
+
     def test_without_sessions_every_holding_uses_the_latest_two_seen(self):
         result = _portfolio_daily_price_change(
             {(6, "AAA"): {"qty": 1}, (6, "LAG"): {"qty": 1000}},

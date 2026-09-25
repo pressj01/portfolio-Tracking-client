@@ -17499,6 +17499,21 @@ def _portfolio_daily_price_change(
         closes = closes_by_ticker[ticker]
         latest_price = closes.get(as_of_date)
         previous_price = closes.get(previous_date)
+        if (latest_price is None or previous_price is None) and _is_money_market_holding(
+            {"ticker": ticker, "description": holding.get("description")}
+        ):
+            # Yahoo keeps a single bar for a $1.00-NAV fund and its quote has no
+            # previous close, so the prior session is never there. Its price
+            # move is a known zero, not a gap: left out, a big sweep balance
+            # withheld the whole account's day change.
+            flat = latest_price or previous_price or (closes[max(closes)] if closes else None)
+            if flat is None:
+                try:
+                    flat = float(holding.get("current_value") or 0) / quantity or None
+                except (TypeError, ValueError):
+                    flat = None
+            if flat is not None:
+                latest_price = previous_price = flat
         if latest_price is not None:
             book = quantity * latest_price
         elif closes:
