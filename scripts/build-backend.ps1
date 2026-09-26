@@ -45,6 +45,7 @@ $hiddenImports = @(
   "statistics",
   "decimal",
   "config",
+  "market_data_provider",
   "database",
   "import_data",
   "normalize",

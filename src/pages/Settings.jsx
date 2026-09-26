@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { useCurrency } from '../context/CurrencyContext'
+import { useAdviceNoticeVisibility } from '../components/NotFinancialAdviceNotice'
 import {
   loadGradingPreferences,
   resetGradingPreferences,
@@ -68,6 +69,7 @@ export default function Settings() {
   const { selection, currentProfileName, isAggregate } = useProfile()
   const { theme, setTheme, isDark } = useTheme()
   const { displayCurrency, usdToCadRate, rateAsOf, rateInfo, loading: currencyLoading, setDisplayCurrency, refreshCadRate, setCadManualRate } = useCurrency()
+  const [adviceNoticesVisible, setAdviceNoticesVisible] = useAdviceNoticeVisibility()
   const [stats, setStats] = useState(null)
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState(null)
@@ -100,6 +102,16 @@ export default function Settings() {
   const [priceReuse, setPriceReuse] = useState({ enabled: false, ttl_sec: 600, requests_avoided: 0, entries: 0 })
   const [priceReuseBusy, setPriceReuseBusy] = useState(false)
   const [priceReuseStatus, setPriceReuseStatus] = useState(null)
+
+  // Optional Tiingo-first market data. A saved key alone never enables it.
+  const [marketProvider, setMarketProvider] = useState({
+    requested: false, enabled: false, key_configured: false, key_valid: false,
+    masked_key: null, runtime: {},
+  })
+  const [useTiingo, setUseTiingo] = useState(false)
+  const [tiingoKey, setTiingoKey] = useState('')
+  const [providerBusy, setProviderBusy] = useState(false)
+  const [providerStatus, setProviderStatus] = useState(null)
 
   // Broker -> Yahoo symbol mapping
   const [symbolMap, setSymbolMap] = useState([])
@@ -168,6 +180,100 @@ export default function Settings() {
       })
       .catch(() => setPriceReuseStatus({ type: 'error', msg: 'Could not clear the reused prices.' }))
       .finally(() => setPriceReuseBusy(false))
+  }
+
+  const applyMarketProviderResponse = (data) => {
+    if (!data || data.error) return
+    setMarketProvider(data)
+    setUseTiingo(Boolean(data.requested))
+  }
+
+  const fetchMarketProvider = () => {
+    pf('/api/market-feed/provider')
+      .then(r => r.json())
+      .then(applyMarketProviderResponse)
+      .catch(() => {})
+  }
+
+  const testTiingoKey = async () => {
+    if (!tiingoKey.trim() && !marketProvider.key_configured) {
+      setProviderStatus({ type: 'error', msg: 'Enter a Tiingo API key first.' })
+      return
+    }
+    setProviderBusy(true)
+    setProviderStatus(null)
+    try {
+      const response = await pf('/api/market-feed/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          use_tiingo: true,
+          tiingo_api_key: tiingoKey.trim() || undefined,
+          test_only: true,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Tiingo did not accept that key.')
+      setProviderStatus({ type: 'success', msg: 'Tiingo accepted the API key.' })
+    } catch (error) {
+      setProviderStatus({ type: 'error', msg: error.message })
+    } finally {
+      setProviderBusy(false)
+    }
+  }
+
+  const saveMarketProvider = async () => {
+    if (useTiingo && !tiingoKey.trim() && !marketProvider.key_configured) {
+      setProviderStatus({ type: 'error', msg: 'Enter a valid Tiingo API key before enabling Tiingo.' })
+      return
+    }
+    setProviderBusy(true)
+    setProviderStatus(null)
+    try {
+      const response = await pf('/api/market-feed/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          use_tiingo: useTiingo,
+          tiingo_api_key: tiingoKey.trim() || undefined,
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not save the market-data provider.')
+      applyMarketProviderResponse(data)
+      setTiingoKey('')
+      setProviderStatus({
+        type: 'success',
+        msg: data.enabled
+          ? 'Tiingo is now preferred. Yahoo will fill unsupported, quota-limited, or unavailable data.'
+          : 'Tiingo is off. Non-option market data will use Yahoo.',
+      })
+    } catch (error) {
+      setProviderStatus({ type: 'error', msg: error.message })
+    } finally {
+      setProviderBusy(false)
+    }
+  }
+
+  const clearTiingoKey = async () => {
+    setProviderBusy(true)
+    setProviderStatus(null)
+    try {
+      const response = await pf('/api/market-feed/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ use_tiingo: false, clear_key: true }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not remove the Tiingo key.')
+      applyMarketProviderResponse(data)
+      setTiingoKey('')
+      setProviderStatus({ type: 'success', msg: 'The Tiingo key was removed and Yahoo is active.' })
+    } catch (error) {
+      setProviderStatus({ type: 'error', msg: error.message })
+    } finally {
+      setProviderBusy(false)
+    }
   }
 
   const fetchSymbolMap = () => {
@@ -403,7 +509,7 @@ export default function Settings() {
       .finally(() => setDeletingBackup(null))
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse() }, [selection])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse(); fetchMarketProvider() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -635,6 +741,22 @@ export default function Settings() {
           >
             ☀️ Light
           </button>
+        </div>
+        <div style={{ borderTop: '1px solid var(--border)', marginTop: '1rem', paddingTop: '0.9rem' }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={adviceNoticesVisible}
+              onChange={event => setAdviceNoticesVisible(event.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong style={{ color: 'var(--text-strong)' }}>Show educational notice boxes</strong>
+              <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: 3 }}>
+                Close either notice with its × button to hide both across the app. This setting restores them whenever you want to read them again.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
 
@@ -924,15 +1046,104 @@ export default function Settings() {
         </div>
       </div>
 
+      {/* Market Data Provider */}
+      <div className="card">
+        <h2>Market Data Provider</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          Yahoo is the default. You may use your own Tiingo API key for non-option prices,
+          history, dividends, and splits. If Tiingo cannot provide a ticker or field—or the
+          account reaches a plan limit—the app automatically fills that request from Yahoo.
+        </p>
+
+        {providerStatus && (
+          <div className={`alert alert-${providerStatus.type}`} style={{ marginBottom: '0.75rem' }}>{providerStatus.msg}</div>
+        )}
+
+        <label style={{
+          display: 'flex', alignItems: 'flex-start', gap: '0.65rem', padding: '0.8rem',
+          border: `1px solid ${useTiingo ? 'var(--accent-bright)' : 'var(--border)'}`,
+          borderRadius: 6, background: 'var(--surface-sunken)', cursor: providerBusy ? 'wait' : 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={useTiingo}
+            onChange={event => { setUseTiingo(event.target.checked); setProviderStatus(null) }}
+            disabled={providerBusy}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            <strong style={{ color: 'var(--text-strong)' }}>Use Tiingo when available</strong>
+            <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: 3 }}>
+              Tiingo activates only after this box is saved and Tiingo validates the key.
+              Clearing the box sends all non-option requests directly to Yahoo.
+            </span>
+          </span>
+        </label>
+
+        <div style={{ marginTop: '0.9rem' }}>
+          <label htmlFor="tiingo-api-key" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+            Tiingo API key
+          </label>
+          <input
+            id="tiingo-api-key"
+            type="password"
+            autoComplete="off"
+            value={tiingoKey}
+            onChange={event => { setTiingoKey(event.target.value); setProviderStatus(null) }}
+            placeholder={marketProvider.masked_key || 'Paste your Tiingo key'}
+            disabled={providerBusy}
+            style={{ width: '100%', boxSizing: 'border-box' }}
+          />
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 5 }}>
+            {marketProvider.key_configured
+              ? `A validated key is saved on this device (${marketProvider.masked_key || 'masked'}). Leave this blank to keep it.`
+              : 'The key is stored only in this application database and is never returned by the API.'}
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
+          <button className="btn btn-secondary" type="button" onClick={testTiingoKey} disabled={providerBusy || (!tiingoKey.trim() && !marketProvider.key_configured)}>
+            {providerBusy ? 'Working…' : 'Test key'}
+          </button>
+          <button className="btn btn-primary" type="button" onClick={saveMarketProvider} disabled={providerBusy}>
+            Save provider
+          </button>
+          {marketProvider.key_configured && (
+            <button className="btn" type="button" onClick={clearTiingoKey} disabled={providerBusy}>
+              Remove Tiingo key
+            </button>
+          )}
+        </div>
+
+        <div style={{
+          marginTop: '0.9rem', padding: '0.75rem 0.8rem', borderRadius: 6,
+          border: '1px solid var(--border)', background: 'var(--surface-sunken)', fontSize: '0.8rem',
+        }}>
+          <div style={{ color: 'var(--text-strong)', fontWeight: 700 }}>
+            Active: {marketProvider.enabled ? 'Tiingo preferred · Yahoo fallback' : 'Yahoo'}
+          </div>
+          <div style={{ color: 'var(--text-dim)', marginTop: 4 }}>
+            Options always remain on Yahoo. CEF Connect, SEC filings, issuer holdings, and other
+            specialist sources are unchanged. Paid Tiingo plans should fall back less often for
+            ordinary price history, but unsupported metadata, indices, and non-entitled fundamentals
+            can still use Yahoo.
+          </div>
+          {marketProvider.runtime?.yahoo_fallbacks > 0 && (
+            <div style={{ color: 'var(--text-dim)', marginTop: 5 }}>
+              This session: {marketProvider.runtime.yahoo_fallbacks} Yahoo fallback{marketProvider.runtime.yahoo_fallbacks === 1 ? '' : 's'}
+              {marketProvider.runtime.last_fallback_reason ? ` · latest reason: ${marketProvider.runtime.last_fallback_reason}` : ''}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* Price Data Freshness */}
       <div className="card">
         <h2>Price Data Freshness</h2>
         <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-          Yahoo Finance limits how many price requests this app may make, and blocks it for
-          a while once that limit is passed — which is what turns prices, grades and charts
-          into blanks. Switching date ranges or moving between screens often re-downloads
-          prices this app already has. Reusing those cuts the number of Yahoo requests, so
-          you hit the limit less often.
+          Market-data providers limit how many requests this app may make. Switching date ranges
+          or moving between screens often re-downloads prices this app already has. Reusing those
+          cuts both Tiingo requests and Yahoo fallback requests.
         </p>
 
         {priceReuseStatus && (
@@ -969,8 +1180,8 @@ export default function Settings() {
           }}>
             <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Always Fetch Live</div>
             <div style={{ color: 'var(--text-dim)' }}>
-              Every screen downloads current prices. Prices are always up to the minute,
-              and the app makes the most Yahoo requests — so rate limiting is more likely.
+              Every screen downloads current prices. The app makes the most provider requests,
+              so rate limiting and Yahoo fallback are more likely.
             </div>
           </div>
           <div style={{
@@ -981,7 +1192,7 @@ export default function Settings() {
             <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Reuse Recent Prices</div>
             <div style={{ color: 'var(--text-dim)' }}>
               If this app already downloaded the exact same prices within the time below,
-              it reuses them instead of asking Yahoo again. Far fewer requests — but a
+              it reuses them instead of asking the active provider again. Far fewer requests — but a
               price can be up to that many minutes old.
             </div>
           </div>
@@ -1010,7 +1221,7 @@ export default function Settings() {
             </div>
             <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.7rem' }}>
               Holding {priceReuse.entries || 0} reused price set{priceReuse.entries === 1 ? '' : 's'}
-              {priceReuse.requests_avoided ? ` · ${priceReuse.requests_avoided} Yahoo request${priceReuse.requests_avoided === 1 ? '' : 's'} avoided this session` : ''}
+              {priceReuse.requests_avoided ? ` · ${priceReuse.requests_avoided} provider request${priceReuse.requests_avoided === 1 ? '' : 's'} avoided this session` : ''}
             </div>
           </div>
         )}

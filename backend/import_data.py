@@ -4,6 +4,7 @@ from datetime import date
 from config import get_connection
 from database import ensure_tables_exist
 import yahoo_gateway
+import market_data_provider as market_data
 
 # ── Column mapping for the owner's Excel spreadsheet (All Accounts sheet) ─────
 COLUMN_MAP = {
@@ -215,7 +216,6 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
 
     # ── Recompute paid_for_itself from yfinance dividend history ────────────
     if "purchase_date" in df.columns:
-        import yfinance as yf
         _pd_mask = df["purchase_date"].notna()
         if _pd_mask.any():
             _dated = df.loc[_pd_mask].copy()
@@ -224,7 +224,7 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
             _ticker_str = " ".join(_tickers)
             try:
                 _raw = yahoo_gateway.call(
-                    lambda: yf.download(
+                    lambda: market_data.download(
                         _ticker_str, start=_earliest.strftime("%Y-%m-%d"),
                         progress=False, auto_adjust=False, actions=True
                     ),
@@ -742,7 +742,6 @@ def import_from_upload(df, profile_id):
     Optional: price_paid, div, div_frequency, ex_div_date, reinvest.
     Returns (row_count, message).
     """
-    import yfinance as yf
     from datetime import datetime as _dt, date as _date
 
     df = _normalize_upload_columns(df.copy())
@@ -789,7 +788,7 @@ def import_from_upload(df, profile_id):
     freq_hist = {}
     try:
         raw = yahoo_gateway.call(
-            lambda: yf.download(ticker_str, period='1y', progress=False,
+            lambda: market_data.download(ticker_str, period='1y', progress=False,
                                 auto_adjust=False, actions=True),
             lock=yahoo_gateway.DOWNLOAD_LOCK,
         )
@@ -841,7 +840,7 @@ def import_from_upload(df, profile_id):
             break
         try:
             info = yahoo_gateway.fetch(
-                "import_info", t, lambda s=t: yf.Ticker(s).info or {}
+                "import_info", t, lambda s=t: market_data.ticker(s).info or {}
             )[0] or {}
             new_sym = (info.get("symbol") or "").upper()
             if new_sym and new_sym != t:
@@ -849,13 +848,13 @@ def import_from_upload(df, profile_id):
                 # Re-fetch info under the new symbol for accurate data
                 info = yahoo_gateway.fetch(
                     "import_info", new_sym,
-                    lambda s=new_sym: yf.Ticker(s).info or {}
+                    lambda s=new_sym: market_data.ticker(s).info or {}
                 )[0] or {}
                 # Also grab price/dividend data under new symbol if missing
                 if t not in price_map:
                     try:
                         r2 = yahoo_gateway.call(
-                            lambda s=new_sym: yf.download(
+                            lambda s=new_sym: market_data.download(
                                 s, period='1y', progress=False,
                                 auto_adjust=False, actions=True),
                             lock=yahoo_gateway.DOWNLOAD_LOCK,

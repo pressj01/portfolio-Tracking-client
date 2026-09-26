@@ -4,6 +4,7 @@ pandas
 openpyxl
 xlrd
 yfinance
+requests
 plotly
 scipy
 pypdf

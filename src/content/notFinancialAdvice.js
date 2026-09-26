@@ -9,3 +9,7 @@ export const PRIVACY_NOTE =
   'Ticker symbols and the market requests needed to price them are sent to Yahoo Finance and other public data sites. Portfolio holdings, transactions, notes, and account records stay in the local database on this computer. This app does not upload that portfolio data.'
 
 export const ADVICE_ACK_STORAGE_KEY = 'portfolio-tracker-not-financial-advice-v1'
+
+// The first-launch acknowledgement above remains mandatory once. This separate
+// preference controls the small repeated notices shown after acknowledgement.
+export const ADVICE_NOTICE_VISIBILITY_STORAGE_KEY = 'portfolio-tracker-advice-notices-v1'

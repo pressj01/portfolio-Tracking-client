@@ -12627,6 +12627,7 @@ body:has(.split-page) #root *:has(> .split-page) {
   text-align: center;
 }
 .nfa-page {
+  position: relative;
   margin: 0 0 0.85rem;
   padding: 0.55rem 0.75rem;
   background: color-mix(in srgb, var(--amber) 10%, var(--surface-sunken));
@@ -12635,6 +12636,35 @@ body:has(.split-page) #root *:has(> .split-page) {
   color: var(--text-muted);
   font-size: 0.78rem;
   line-height: 1.45;
+}
+.nfa-banner,
+.nfa-page {
+  padding-right: 2.75rem;
+}
+.nfa-notice-text {
+  display: block;
+}
+.nfa-notice-dismiss {
+  position: absolute;
+  top: 50%;
+  right: 0.55rem;
+  width: 1.55rem;
+  height: 1.55rem;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 1px solid color-mix(in srgb, var(--amber) 40%, var(--border));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+.nfa-notice-dismiss:hover,
+.nfa-notice-dismiss:focus-visible {
+  border-color: var(--amber);
+  color: var(--text-strong);
+  outline: none;
 }
 .nfa-ack {
   position: fixed;

@@ -150,6 +150,7 @@ from dividend_safety import (
 )
 from accumulation_sim import run_accumulation_comparison
 import yahoo_gateway
+import market_data_provider
 
 # yfinance stashes each download's frames in a module-level dict keyed by ticker
 # ALONE (yfinance.shared._DFS) — the date range is not part of the key. Two
@@ -410,9 +411,8 @@ def _restore_broker_symbols(frame, reverse):
 
 
 def _yf_ticker(symbol, *args, **kwargs):
-    """yf.Ticker for the Yahoo spelling of a broker symbol."""
-    import yfinance as yf
-    return yf.Ticker(_yahoo_symbol(symbol), *args, **kwargs)
+    """Selected-provider Ticker facade for the market spelling of a symbol."""
+    return market_data_provider.ticker(_yahoo_symbol(symbol), *args, **kwargs)
 
 
 def _yahoo_symbol_candidates(ticker):
@@ -719,21 +719,18 @@ def _download_kwargs_key(kwargs):
     return tuple(sorted((str(k), repr(v)) for k, v in kwargs.items()))
 
 
-def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
-    """Drop-in replacement for yf.download that batches large ticker lists.
+def _chunked_yf_download(tickers, chunk_size=25, provider_override=None, **kwargs):
+    """Provider-aware replacement for yf.download that batches ticker lists.
 
     yfinance silently drops tickers when downloading 50+ at once.
     This splits into chunks and merges the results.
     Single-ticker and small lists pass through unchanged.
     Caller's group_by preference is fully preserved across all paths.
 
-    Every request goes through `yahoo_gateway`, which supplies the shared
-    rate-limit policy: 429-aware backoff, a cooldown breaker that fails fast
-    instead of hammering a throttled feed, and coalescing so two endpoints
-    asking for the identical window during one dashboard load pay for one
-    download between them. A cooldown returns an empty frame — the same shape
-    callers already handle for a failed download, and the same shape their
-    outage detection already refuses to cache.
+    When the user has explicitly enabled Tiingo with a validated key, the
+    provider facade tries Tiingo first and invokes the existing guarded Yahoo
+    path only for coverage, entitlement, quota, or transport gaps. Option
+    modules pass ``provider_override='yahoo'`` and are never switched.
     """
     import yfinance as yf
 
@@ -770,11 +767,25 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
             _broker_by_yahoo,
         )
 
-    def _download_single_batch():
+    def _yahoo_fetch(symbols, fetch_kwargs):
         return yahoo_gateway.call(
-            lambda: yf.download(tickers if len(tickers) > 1 else tickers[0], **kwargs),
+            lambda: yf.download(
+                symbols if len(symbols) > 1 else symbols[0],
+                **fetch_kwargs,
+            ),
             lock=_YF_DOWNLOAD_LOCK,
         )
+
+    def _download_symbols(symbols):
+        return market_data_provider.download(
+            symbols,
+            yahoo_fetch=_yahoo_fetch,
+            provider_override=provider_override,
+            **kwargs,
+        )
+
+    def _download_single_batch():
+        return _download_symbols(tickers)
 
     def _download_chunked():
         # Multi-chunk path: use caller's group_by (if any) in each chunk.
@@ -788,10 +799,7 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
                 _time.sleep(1)  # pause between batches to avoid rate limits
             chunk = tickers[i:i + chunk_size]
             try:
-                raw = yahoo_gateway.call(
-                    lambda c=chunk: yf.download(c if len(c) > 1 else c[0], **kwargs),
-                    lock=_YF_DOWNLOAD_LOCK,
-                )
+                raw = _download_symbols(chunk)
             except yahoo_gateway.YahooCooldown:
                 # The breaker closed mid-sweep. Keep the chunks already in hand
                 # and stop; the remaining symbols come back as unpriced, which
@@ -817,7 +825,8 @@ def _chunked_yf_download(tickers, chunk_size=25, **kwargs):
     # Coalesce on the raw request, before shaping: two callers wanting the same
     # download but different trims still share the one network round trip and
     # then trim their own copy.
-    key = ("yf.download", tuple(tickers), int(chunk_size), _download_kwargs_key(kwargs))
+    provider_key = provider_override or market_data_provider.active_mode()
+    key = ("market.download", provider_key, tuple(tickers), int(chunk_size), _download_kwargs_key(kwargs))
 
     # Opt-in reuse of a recent identical download. Off unless the user turns it
     # on in Settings, because it is the one guard rail here that trades price
@@ -2711,6 +2720,107 @@ def market_feed_status():
         "ok": True,
         **yahoo_gateway.breaker_state(),
         "price_reuse": yahoo_gateway.reuse_stats(),
+        "provider": market_data_provider.provider_config(),
+        "tiingo": market_data_provider.runtime_status(),
+    })
+
+
+@app.route("/api/market-feed/provider", methods=["GET", "POST"])
+def market_feed_provider():
+    """Read or save the explicit Tiingo-hybrid opt-in and validated key.
+
+    A token is never returned. Enabling Tiingo always validates the candidate
+    token first, and the provider independently checks the stored validation
+    hash before every activation. A token in the database cannot enable Tiingo
+    while the checkbox is off.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        requested = bool(data.get("use_tiingo"))
+        clear_key = bool(data.get("clear_key"))
+        test_only = bool(data.get("test_only"))
+        supplied_key = str(data.get("tiingo_api_key") or "").strip()
+
+        conn = get_connection()
+        try:
+            existing = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (market_data_provider.TIINGO_TOKEN_KEY,),
+            ).fetchone()
+            existing_key = str(existing["value"] or "").strip() if existing else ""
+        finally:
+            conn.close()
+
+        candidate = "" if clear_key else (supplied_key or existing_key)
+        if (requested or test_only) and not candidate:
+            return jsonify({
+                "error": "Enter a Tiingo API key before enabling Tiingo."
+            }), 400
+
+        # A newly supplied token is always tested, even when the checkbox is
+        # currently off, so an unverified secret is never presented as ready.
+        # Re-enabling a stored token revalidates it in case it was revoked.
+        should_validate = bool(candidate and (supplied_key or requested))
+        if should_validate:
+            try:
+                market_data_provider.validate_token(candidate)
+            except market_data_provider.TiingoError as exc:
+                return jsonify({
+                    "error": f"Tiingo did not accept that key: {exc}",
+                    "reason": exc.reason,
+                }), 400
+        if test_only:
+            return jsonify({"ok": True, "valid": True})
+
+        conn = get_connection()
+        try:
+            if clear_key:
+                conn.execute(
+                    "DELETE FROM settings WHERE key IN (?, ?)",
+                    (
+                        market_data_provider.TIINGO_TOKEN_KEY,
+                        market_data_provider.TIINGO_VALIDATED_HASH_KEY,
+                    ),
+                )
+                requested = False
+            elif supplied_key:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (market_data_provider.TIINGO_TOKEN_KEY, candidate),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (
+                        market_data_provider.TIINGO_VALIDATED_HASH_KEY,
+                        market_data_provider.token_hash(candidate),
+                    ),
+                )
+            elif requested and candidate:
+                # Revalidation refreshes the proof even when the token itself
+                # was not retyped.
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (
+                        market_data_provider.TIINGO_VALIDATED_HASH_KEY,
+                        market_data_provider.token_hash(candidate),
+                    ),
+                )
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (market_data_provider.USE_TIINGO_KEY, "true" if requested else "false"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        market_data_provider.invalidate_config()
+        market_data_provider.reset_runtime_status()
+        yahoo_gateway.reset_reuse_cache()
+
+    return jsonify({
+        "ok": True,
+        **market_data_provider.provider_config(force=True),
+        "runtime": market_data_provider.runtime_status(),
     })
 
 
@@ -2749,7 +2859,7 @@ def market_feed_price_reuse():
 
 @app.route("/api/market-feed/clear-price-cache", methods=["POST"])
 def market_feed_clear_price_cache():
-    """Drop every reused price so the next request goes to Yahoo."""
+    """Drop every reused price so the next request goes to its provider."""
     yahoo_gateway.reset_reuse_cache()
     return jsonify({"ok": True, **yahoo_gateway.reuse_stats()})
 
@@ -56982,7 +57092,12 @@ def cef_scan():
 
 
 register_options_routes(app)
-register_option_dashboard_routes(app, download_history=_chunked_yf_download)
+register_option_dashboard_routes(
+    app,
+    download_history=lambda *args, **kwargs: _chunked_yf_download(
+        *args, provider_override=market_data_provider.YAHOO_MODE, **kwargs
+    ),
+)
 register_diversification_routes(app)
 register_sector_exposure_routes(app)
 register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)

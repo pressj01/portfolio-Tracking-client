@@ -39,6 +39,7 @@ from flask import jsonify, request
 
 from config import get_connection
 import yahoo_gateway
+import market_data_provider as market_data
 
 HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 HTTP_TIMEOUT = 25
@@ -1305,8 +1306,7 @@ def _fund_family_text(ticker):
     symbol = ticker.strip().upper()
 
     def _load():
-        import yfinance as yf
-        return yf.Ticker(symbol).info or {}
+        return market_data.ticker(symbol).info or {}
 
     # Persisted: a fund's family and name do not change, so the last good
     # answer is as good as a live one and costs nothing during a throttle.
@@ -1467,8 +1467,7 @@ def _fetch_yahoo_holdings(ticker, limit=None):
     blocked this beats reporting the whole position as Undisclosed.
     """
     def _load():
-        import yfinance as yf
-        return yf.Ticker(ticker.strip().upper()).funds_data.top_holdings
+        return market_data.ticker(ticker.strip().upper()).funds_data.top_holdings
 
     try:
         holdings = yahoo_gateway.call(_load)
@@ -1512,8 +1511,7 @@ def _security_type(ticker):
         except Exception:
             pass
     def _load():
-        import yfinance as yf
-        return yf.Ticker(sym).info or {}
+        return market_data.ticker(sym).info or {}
 
     # A quote type is a fixed property of the listing, so the stored answer
     # stays correct; without the fallback a throttled sweep reclassifies every

@@ -28,6 +28,7 @@ Three things make a naive version of this wrong, and each is handled here:
 
 import re
 import threading
+import market_data_provider as market_data
 from concurrent.futures import ThreadPoolExecutor
 
 from flask import jsonify, request
@@ -289,18 +290,12 @@ def fetch_sector_profile(ticker):
     if not sym:
         return blank
 
-    try:
-        import yfinance as yf
-    except Exception as exc:
-        blank["note"] = f"yfinance unavailable: {type(exc).__name__}"
-        return blank
-
     info = {}
     last_err = None
     tk = None
     for candidate in _yahoo_symbol(sym):
         try:
-            tk = yf.Ticker(candidate)
+            tk = market_data.ticker(candidate)
             info = yahoo_gateway.call(lambda t=tk: t.info or {})
         except yahoo_gateway.YahooCooldown as exc:
             # Stop the alias sweep outright. Trying BRK-B after BRKB was

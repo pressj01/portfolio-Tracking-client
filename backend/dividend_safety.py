@@ -3,6 +3,7 @@ import json
 import math
 import time
 import yahoo_gateway
+import market_data_provider as market_data
 
 
 SAFETY_CACHE_TTL_HOURS = 24
@@ -255,12 +256,11 @@ def _nav_distribution_coverage(ticker_obj, benchmark_ticker=None, annual_yield_f
             return None, None
         benchmark_return = fund_return
         if benchmark_ticker:
-            import yfinance as yf
             component_returns = []
             for bench in _benchmark_parts(benchmark_ticker):
                 try:
                     bench_hist = yahoo_gateway.call(
-                        lambda b=bench: yf.Ticker(b).history(period="1y", auto_adjust=True),
+                        lambda b=bench: market_data.ticker(b).history(period="1y", auto_adjust=True),
                         lock=yahoo_gateway.DOWNLOAD_LOCK,
                     )
                 except Exception:
@@ -598,10 +598,8 @@ def _risk_reasons(metrics, model):
 
 
 def _build_payload(ticker, holding):
-    import yfinance as yf
-
     ticker = ticker.strip().upper()
-    tk = yf.Ticker(ticker)
+    tk = market_data.ticker(ticker)
     # Persisted last-good: payout ratio, EPS and dividend rate move on an
     # earnings cadence, so yesterday's values are a far better answer during a
     # throttle than the all-blank payload that used to be scored and cached.

@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import yfinance as yf
+import market_data_provider as market_data
 
 import yahoo_gateway
 
@@ -30,6 +31,17 @@ MAX_YEARS = 25
 
 _PRICE_CACHE: Dict[str, Tuple[float, pd.DataFrame, pd.DataFrame]] = {}
 _CACHE_TTL = 600  # 10 min
+
+
+def _download_market_data(tickers, **kwargs):
+    """Selected provider while preserving this module's patchable Yahoo seam."""
+    return market_data.download(
+        tickers,
+        yahoo_fetch=lambda symbols, options: yf.download(
+            " ".join(symbols) if len(symbols) > 1 else symbols[0], **options
+        ),
+        **kwargs,
+    )
 
 
 # ── Data fetch ────────────────────────────────────────────────────────────────
@@ -95,7 +107,7 @@ def fetch_prices(tickers: List[str], start: str, end: str
     download_end = (pd.Timestamp(end) + pd.Timedelta(days=1)).date().isoformat()
     try:
         raw = yahoo_gateway.call(
-            lambda: yf.download(
+            lambda: _download_market_data(
                 " ".join(yahoo_tickers),
                 start=start,
                 end=download_end,
@@ -136,7 +148,7 @@ def fetch_prices(tickers: List[str], start: str, end: str
         if yahoo_ticker not in retries:
             try:
                 retries[yahoo_ticker] = yahoo_gateway.call(
-                    lambda s=yahoo_ticker: yf.download(
+                    lambda s=yahoo_ticker: _download_market_data(
                         s,
                         start=start,
                         end=download_end,

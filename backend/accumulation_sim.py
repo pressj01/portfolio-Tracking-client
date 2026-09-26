@@ -26,6 +26,7 @@ import pandas as pd
 
 from cash_flow import HOLDING_SCENARIO_PROFILES
 import yahoo_gateway
+import market_data_provider as market_data
 
 
 SCENARIOS = ("bullish", "neutral", "bearish")
@@ -413,14 +414,12 @@ def _extract_ticker_frame(raw: pd.DataFrame, ticker: str) -> pd.DataFrame | None
 
 def download_histories(tickers: list[str]) -> dict[str, pd.DataFrame]:
     """Download up to ten years of price and distribution history in one batch."""
-    import yfinance as yf
-
     symbols = list(dict.fromkeys([*tickers, "SPY"]))
     # Ten years across every symbol is one of the heaviest single requests the
     # app makes, so it is exactly the one worth retrying rather than dropping.
     try:
         raw = yahoo_gateway.call(
-            lambda: yf.download(
+            lambda: market_data.download(
                 symbols if len(symbols) > 1 else symbols[0],
                 period="10y",
                 interval="1d",
