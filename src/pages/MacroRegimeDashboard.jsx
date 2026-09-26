@@ -1411,6 +1411,7 @@ function getMaxProjectionQuadrant(projection = {}) {
 }
 
 function QuadrantTab({ pf }) {
+  const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [data, setData] = useState(null)
@@ -1579,6 +1580,22 @@ function QuadrantTab({ pf }) {
 
   return (
     <div>
+      {safeData.fred_key_required && (
+        <div style={{
+          marginBottom: '1rem', padding: '0.75rem 0.9rem', borderRadius: 8,
+          background: 'rgba(255, 202, 40, 0.08)', border: '1px solid var(--warning)',
+          color: 'var(--text-muted)', fontSize: '0.84rem', lineHeight: 1.45,
+        }}>
+          <strong style={{ color: 'var(--text-strong)' }}>FRED economic indicators are unavailable.</strong>{' '}
+          Add and validate your own FRED API key in{' '}
+          <button type="button" onClick={() => navigate('/settings')} style={{ padding: 0, border: 0, background: 'none', color: 'var(--accent-bright)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline' }}>
+            Settings → FRED Economic Data
+          </button>{' '}
+          after getting one from{' '}
+          <a href="https://fredaccount.stlouisfed.org/apikeys" target="_blank" rel="noreferrer">fredaccount.stlouisfed.org/apikeys</a>.
+          The market-proxy portion remains available, but it does not include FRED indicators or FRED-based adjustments.
+        </div>
+      )}
       {/* Header: Current Quadrant */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', alignItems: 'center', marginBottom: '1.25rem' }}>
         <div style={{
@@ -2209,6 +2226,10 @@ export default function MacroRegimeDashboard() {
         Current macro conditions, portfolio exposure analysis, and illustrative rule-based allocation comparisons.
       </p>
       <NotFinancialAdviceNotice />
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', margin: '0 0 1rem' }}>
+        This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.{' '}
+        <a href="https://fred.stlouisfed.org/docs/api/terms_of_use.html" target="_blank" rel="noreferrer">FRED API Terms of Use</a>
+      </p>
 
       <div className="tabs">
         <button className={`tab ${activeTab === 'conditions' ? 'active' : ''}`}

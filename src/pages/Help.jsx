@@ -6360,6 +6360,18 @@ function MacroDashboardHelp() {
         four quadrants based on the direction of growth and inflation, then projects forward probabilities
         of transitioning to other regimes. Data is sourced from FRED economic indicators and market proxies.
       </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>FRED setup:</strong> The FRED indicator and FRED-adjustment features require your own API key.
+        Get one from{' '}
+        <a href="https://fredaccount.stlouisfed.org/apikeys" target="_blank" rel="noreferrer">fredaccount.stlouisfed.org/apikeys</a>,
+        then open <strong>Settings → FRED Economic Data</strong>, paste the key, choose <strong>Test key</strong>,
+        and save it. The key stays in this device&apos;s local application database. Without a valid key, the
+        dashboard keeps its market-proxy view but does not display FRED indicators or FRED-based adjustments.
+      </p>
+      <p style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+        This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.{' '}
+        Review the <a href="https://fred.stlouisfed.org/docs/api/terms_of_use.html" target="_blank" rel="noreferrer">FRED API Terms of Use</a>.
+      </p>
 
       <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>The Four Quadrants</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>

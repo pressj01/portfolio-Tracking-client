@@ -42,7 +42,8 @@ class NanSafeJSONProvider(DefaultJSONProvider):
     def dumps(self, obj, **kwargs):
         kwargs.setdefault("allow_nan", False)
         return super().dumps(_sanitize_nan(obj), **kwargs)
-from config import get_connection, FRED_API_KEY, DB_PATH
+from config import get_connection, DB_PATH
+import fred_provider
 from database import ensure_tables_exist
 from db_backup import remove_sidecars, sqlite_backup, sqlite_restore
 from snowball_assign import apply_snowball_assignment, ensure_snowball_category
@@ -2821,6 +2822,74 @@ def market_feed_provider():
         "ok": True,
         **market_data_provider.provider_config(force=True),
         "runtime": market_data_provider.runtime_status(),
+    })
+
+
+@app.route("/api/fred/provider", methods=["GET", "POST"])
+def fred_data_provider():
+    """Read or save the user's own validated FRED API key.
+
+    FRED requires each application user to use an individual key. The key is
+    stored only in this installation's local database and is never returned.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        clear_key = bool(data.get("clear_key"))
+        test_only = bool(data.get("test_only"))
+        supplied_key = str(data.get("fred_api_key") or "").strip()
+
+        conn = get_connection()
+        try:
+            existing = conn.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (fred_provider.FRED_TOKEN_KEY,),
+            ).fetchone()
+            existing_key = str(existing["value"] or "").strip() if existing else ""
+        finally:
+            conn.close()
+
+        candidate = "" if clear_key else (supplied_key or existing_key)
+        if not clear_key and not candidate:
+            return jsonify({"error": "Enter a FRED API key first."}), 400
+
+        current_config = fred_provider.provider_config(force=True)
+        should_validate = bool(candidate and (supplied_key or test_only or not current_config.get("key_valid")))
+        if should_validate:
+            try:
+                fred_provider.validate_token(candidate)
+            except fred_provider.FredError as exc:
+                return jsonify({"error": f"FRED did not accept that key: {exc}"}), 400
+        if test_only:
+            return jsonify({"ok": True, "valid": True})
+
+        conn = get_connection()
+        try:
+            if clear_key:
+                conn.execute(
+                    "DELETE FROM settings WHERE key IN (?, ?)",
+                    (fred_provider.FRED_TOKEN_KEY, fred_provider.FRED_VALIDATED_HASH_KEY),
+                )
+            elif supplied_key or not current_config.get("key_valid"):
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (fred_provider.FRED_TOKEN_KEY, candidate),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                    (fred_provider.FRED_VALIDATED_HASH_KEY, fred_provider.token_hash(candidate)),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+        fred_provider.invalidate_config()
+        _quadrant_cache.update(data=None, timestamp=0, fred_key_hash=None)
+
+    return jsonify({
+        "ok": True,
+        **fred_provider.provider_config(force=True),
+        "key_url": fred_provider.FRED_API_KEY_URL,
+        "terms_url": fred_provider.FRED_TERMS_URL,
     })
 
 
@@ -51674,7 +51743,7 @@ CANDIDATE_ETFS = {
 }
 
 _macro_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
-_quadrant_cache = {"data": None, "timestamp": 0, "ttl": 1800}  # 30 min TTL
+_quadrant_cache = {"data": None, "timestamp": 0, "ttl": 1800, "fred_key_hash": None}  # 30 min TTL
 
 
 def _classify_soft(g, inf, g_scale, i_scale):
@@ -53706,13 +53775,13 @@ FRED_SERIES_CONFIG = {
 }
 
 
-def _fetch_fred_series(series_id, start="2000-01-01"):
+def _fetch_fred_series(series_id, api_key, start="2000-01-01"):
     """Fetch a FRED series as a DataFrame via the official FRED JSON API."""
     import requests as _req
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
         "series_id": series_id,
-        "api_key": FRED_API_KEY,
+        "api_key": api_key,
         "file_type": "json",
         "observation_start": start,
         "sort_order": "asc",
@@ -53740,20 +53809,29 @@ def macro_quadrant():
     import yfinance as yf
 
     now = time.time()
-    if _quadrant_cache["data"] and (now - _quadrant_cache["timestamp"]) < _quadrant_cache["ttl"]:
+    fred_key = fred_provider.active_key()
+    fred_key_hash = fred_provider.token_hash(fred_key) if fred_key else None
+    if (
+        _quadrant_cache["data"]
+        and _quadrant_cache.get("fred_key_hash") == fred_key_hash
+        and (now - _quadrant_cache["timestamp"]) < _quadrant_cache["ttl"]
+    ):
         return jsonify(_quadrant_cache["data"])
 
     try:
         # ── A. FRED economic data for current classification ──────────────
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        fred_ok = True
+        fred_ok = bool(fred_key)
+        fred_key_required = not bool(fred_key)
         fred_indicators = {}
         try:
+            if not fred_key:
+                raise ValueError("A validated FRED API key is required.")
             # Fetch all series in parallel for speed
             fred_dfs = {}
             with ThreadPoolExecutor(max_workers=6) as pool:
                 futures = {
-                    pool.submit(_fetch_fred_series, cfg["id"]): name
+                    pool.submit(_fetch_fred_series, cfg["id"], fred_key): name
                     for name, cfg in FRED_SERIES_CONFIG.items()
                 }
                 for future in as_completed(futures):
@@ -54462,6 +54540,7 @@ def macro_quadrant():
             "transition_anchor_name": QUADRANT_NAMES[transition_anchor_quad],
             "states_aligned": states_aligned,
             "fred_indicators": fred_indicators if fred_ok else None,
+            "fred_key_required": fred_key_required,
             "fred_growth_z": fred_growth_z,
             "fred_inflation_z": fred_inflation_z,
             "transition_matrix": adjusted_matrix,
@@ -54490,6 +54569,7 @@ def macro_quadrant():
 
         _quadrant_cache["data"] = result
         _quadrant_cache["timestamp"] = time.time()
+        _quadrant_cache["fred_key_hash"] = fred_key_hash
         return jsonify(result)
 
     except Exception as e:

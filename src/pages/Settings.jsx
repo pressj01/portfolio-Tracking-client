@@ -64,6 +64,9 @@ const FORMULA_SCREENSHOTS = [
   { file: 'grading-signal-dashboard-2.png', title: 'Signal Dashboard vote weights', caption: 'Relative vote weights used to turn the active signals into the Overall result.' },
 ]
 
+const FRED_KEY_URL = 'https://fredaccount.stlouisfed.org/apikeys'
+const FRED_TERMS_URL = 'https://fred.stlouisfed.org/docs/api/terms_of_use.html'
+
 export default function Settings() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
@@ -112,6 +115,12 @@ export default function Settings() {
   const [tiingoKey, setTiingoKey] = useState('')
   const [providerBusy, setProviderBusy] = useState(false)
   const [providerStatus, setProviderStatus] = useState(null)
+
+  // FRED requires each app user to supply and validate an individual key.
+  const [fredProvider, setFredProvider] = useState({ key_configured: false, key_valid: false, masked_key: null })
+  const [fredKey, setFredKey] = useState('')
+  const [fredBusy, setFredBusy] = useState(false)
+  const [fredStatus, setFredStatus] = useState(null)
 
   // Broker -> Yahoo symbol mapping
   const [symbolMap, setSymbolMap] = useState([])
@@ -273,6 +282,87 @@ export default function Settings() {
       setProviderStatus({ type: 'error', msg: error.message })
     } finally {
       setProviderBusy(false)
+    }
+  }
+
+  const applyFredProviderResponse = (data) => {
+    if (!data || data.error) return
+    setFredProvider(data)
+  }
+
+  const fetchFredProvider = () => {
+    pf('/api/fred/provider')
+      .then(r => r.json())
+      .then(applyFredProviderResponse)
+      .catch(() => {})
+  }
+
+  const testFredKey = async () => {
+    if (!fredKey.trim() && !fredProvider.key_valid) {
+      setFredStatus({ type: 'error', msg: 'Enter a FRED API key first.' })
+      return
+    }
+    setFredBusy(true)
+    setFredStatus(null)
+    try {
+      const response = await pf('/api/fred/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fred_api_key: fredKey.trim() || undefined, test_only: true }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'FRED did not accept that key.')
+      setFredStatus({ type: 'success', msg: 'FRED accepted the API key.' })
+    } catch (error) {
+      setFredStatus({ type: 'error', msg: error.message })
+    } finally {
+      setFredBusy(false)
+    }
+  }
+
+  const saveFredKey = async () => {
+    if (!fredKey.trim() && !fredProvider.key_valid) {
+      setFredStatus({ type: 'error', msg: 'Enter a valid FRED API key before saving.' })
+      return
+    }
+    setFredBusy(true)
+    setFredStatus(null)
+    try {
+      const response = await pf('/api/fred/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fred_api_key: fredKey.trim() || undefined }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not save the FRED API key.')
+      applyFredProviderResponse(data)
+      setFredKey('')
+      setFredStatus({ type: 'success', msg: 'Your FRED key is saved. FRED-backed Macro Regime data is available.' })
+    } catch (error) {
+      setFredStatus({ type: 'error', msg: error.message })
+    } finally {
+      setFredBusy(false)
+    }
+  }
+
+  const clearFredKey = async () => {
+    setFredBusy(true)
+    setFredStatus(null)
+    try {
+      const response = await pf('/api/fred/provider', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear_key: true }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not remove the FRED API key.')
+      applyFredProviderResponse(data)
+      setFredKey('')
+      setFredStatus({ type: 'success', msg: 'The FRED key was removed. FRED-backed features are unavailable until another validated key is saved.' })
+    } catch (error) {
+      setFredStatus({ type: 'error', msg: error.message })
+    } finally {
+      setFredBusy(false)
     }
   }
 
@@ -509,7 +599,7 @@ export default function Settings() {
       .finally(() => setDeletingBackup(null))
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse(); fetchMarketProvider() }, [selection])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse(); fetchMarketProvider(); fetchFredProvider() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -1135,6 +1225,66 @@ export default function Settings() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* FRED API Key */}
+      <div className="card">
+        <h2>FRED Economic Data</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          The Macro Regime Dashboard&apos;s FRED economic-indicator features require your own FRED API key.
+          FRED requires every user of an application to use an individual key; this app does not include a
+          shared key.
+        </p>
+
+        {fredStatus && (
+          <div className={`alert alert-${fredStatus.type}`} style={{ marginBottom: '0.75rem' }}>{fredStatus.msg}</div>
+        )}
+
+        <div style={{ marginBottom: '0.9rem', padding: '0.75rem 0.8rem', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-sunken)', fontSize: '0.82rem' }}>
+          <strong style={{ color: 'var(--text-strong)' }}>Get your free FRED key:</strong>{' '}
+          <a href={FRED_KEY_URL} target="_blank" rel="noreferrer">fredaccount.stlouisfed.org/apikeys</a>
+          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 5 }}>
+            Create or sign in to a FRED account, request an API key, then paste it below. Your key is stored only in this device&apos;s local application database and is never returned by the API.
+          </div>
+        </div>
+
+        <label htmlFor="fred-api-key" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+          Your FRED API key
+        </label>
+        <input
+          id="fred-api-key"
+          type="password"
+          autoComplete="off"
+          value={fredKey}
+          onChange={event => { setFredKey(event.target.value); setFredStatus(null) }}
+          placeholder={fredProvider.masked_key || 'Paste your FRED key'}
+          disabled={fredBusy}
+          style={{ width: '100%', boxSizing: 'border-box' }}
+        />
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: 5 }}>
+          {fredProvider.key_valid
+            ? `A validated key is saved on this device (${fredProvider.masked_key || 'masked'}). Leave this blank to keep it.`
+            : 'FRED-backed Macro Regime data remains unavailable until FRED validates a key.'}
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
+          <button className="btn btn-secondary" type="button" onClick={testFredKey} disabled={fredBusy || (!fredKey.trim() && !fredProvider.key_configured)}>
+            {fredBusy ? 'Working…' : 'Test key'}
+          </button>
+          <button className="btn btn-primary" type="button" onClick={saveFredKey} disabled={fredBusy || (!fredKey.trim() && !fredProvider.key_valid)}>
+            Save FRED key
+          </button>
+          {fredProvider.key_configured && (
+            <button className="btn" type="button" onClick={clearFredKey} disabled={fredBusy}>
+              Remove FRED key
+            </button>
+          )}
+        </div>
+
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.75rem', marginTop: '0.9rem', marginBottom: 0 }}>
+          This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis.{' '}
+          <a href={FRED_TERMS_URL} target="_blank" rel="noreferrer">FRED API Terms of Use</a>
+        </p>
       </div>
 
       {/* Price Data Freshness */}
