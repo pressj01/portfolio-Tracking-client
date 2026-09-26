@@ -1,5 +1,7 @@
 ﻿import React, { useState } from 'react'
 import GradePeriodHelp from '../components/GradePeriodHelp'
+import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
+import { fundVerdictBands } from '../utils/gradingPreferences'
 
 const APP_VERSION = '1.35.3'
 
@@ -76,7 +78,7 @@ const GROUPS = [
     id: 'etfs',
     label: 'Checklists',
     sections: [
-      { id: 'stock-buying-checklist', label: 'Stock Buying Checklist' },
+      { id: 'stock-buying-checklist', label: 'Stock Checklist' },
       { id: 'etf-buying-checklist-evaluator', label: 'Non Income ETF Checklist Evaluator' },
       { id: 'option-income-etf-evaluator', label: 'Option-Income ETF Evaluator' },
     ],
@@ -102,7 +104,7 @@ const GROUPS = [
       { type: 'heading', label: 'Screeners & Signals' },
       { id: 'general-scanner', label: 'General Scanner' },
       { id: 'single-strategy', label: 'Single Strategy Scanner' },
-      { id: 'buy-sell', label: 'Buy/Sell Signals' },
+      { id: 'buy-sell', label: 'Technical Readings' },
       { type: 'heading', label: 'Income & NAV Risk' },
       { id: 'nav-erosion', label: 'NAV Erosion' },
       { id: 'nav-screener', label: 'NAV Erosion Screener' },
@@ -1265,7 +1267,7 @@ function HoldingsHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.75rem' }}>
         <li>Routinely — at least once a day or whenever you want current prices, gains, and yields.</li>
         <li>After market close, to capture payable distributions through the refresh date as estimated payment rows.</li>
-        <li>Before running Buy/Sell Signals, NAV Erosion screens, or rebalancing — these depend on fresh prices and yields.</li>
+        <li>Before running Technical Readings, NAV Erosion screens, or rebalancing — these depend on fresh prices and yields.</li>
         <li>Before exporting reports or showing portfolio numbers to someone else.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
@@ -1352,7 +1354,7 @@ function HoldingsHelp() {
         <strong>When to use.</strong>
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.7', marginBottom: '0.5rem' }}>
-        <li>When you want to see, in one view, exactly which accounts are reinvesting which tickers — useful before running Income Simulation, Income Growth, or Buy/Sell Signals.</li>
+        <li>When you want to see, in one view, exactly which accounts are reinvesting which tickers — useful before running Income Simulation, Income Growth, or Technical Readings.</li>
         <li>When changing DRIP at your broker — mirror the change here account-by-account so simulations match real-world cash flow.</li>
         <li>When a ticker is held in several accounts and only some have DRIP on, and you want simulations to reinvest only the DRIP-eligible share count instead of the full aggregate.</li>
         <li>To audit DRIP coverage — the % Reinvested stat tells you what fraction of total annual income is actually being compounded.</li>
@@ -2941,7 +2943,7 @@ function DivCalendarHelp() {
         The Dashboard reuses the Month layout for the current week.
         <strong>Optimization</strong> projects those payments across the next 12 months so you can
         see whether income is evenly distributed or concentrated in certain months. Use this page
-        for dividend timing and income-smoothing research; it is not a buy/sell signal.
+        for dividend timing and income-smoothing research; it does not recommend a trade.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3144,7 +3146,7 @@ function EarningsCalendarHelp() {
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Start in <strong>Upcoming</strong> to see what earnings dates are on the horizon.</li>
         <li>Switch to <strong>Past 30 Days</strong> after a busy week to scan for misses on income holdings.</li>
-        <li>If a holding shows a string of misses, cross-check the Dividend Calendar and Buy / Sell Signals before adding to the position.</li>
+        <li>If a holding shows a string of misses, cross-check the Dividend Calendar and Technical Readings.</li>
       </ol>
     </div>
   )
@@ -4357,7 +4359,7 @@ function WatchlistHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Count Badges</h3>
       <p style={{ marginBottom: '1rem' }}>
-        At the top of the table, summary badges show how many tickers have a BUY, SELL, or NEUTRAL
+        At the top of the table, summary badges show how many tickers have a Bullish, Bearish, or Neutral
         overall signal — a quick pulse check on your watchlist as a whole.
       </p>
 
@@ -4376,17 +4378,17 @@ function WatchlistHelp() {
         <li><strong>Price</strong> — Current market price.</li>
         <li><strong>1D Chg</strong> — Today's price change percentage. Green if up, red if down.</li>
         <li><strong>Div Yield</strong> — Annual dividend yield.</li>
-        <li><strong>Signal</strong> — Overall verdict (BUY/SELL/NEUTRAL) — majority vote across all indicators below.</li>
-        <li><strong>AO</strong> — Awesome Oscillator signal (BUY/SELL/NEUTRAL). Measures momentum using the difference of 5-period and 34-period midpoint averages.</li>
-        <li><strong>RSI</strong> — Relative Strength Index signal with the raw value. Above 70 = overbought (SELL); below 30 = oversold (BUY).</li>
+        <li><strong>Signal</strong> — Overall reading (Bullish / Bearish / Neutral) from the saved vote share across the indicators below.</li>
+        <li><strong>AO</strong> — Awesome Oscillator reading (Bullish / Bearish / Neutral). Measures momentum using the difference of 5-period and 34-period midpoint averages.</li>
+        <li><strong>RSI</strong> — Relative Strength Index signal with the raw value. Bearish above the saved overbought boundary; Bullish below the saved oversold boundary.</li>
         <li><strong>MACD</strong> — Moving Average Convergence Divergence signal. Bullish when the MACD line crosses above its signal line.</li>
-        <li><strong>SMA 50</strong> — Signal based on whether price is above (BUY) or below (SELL) the 50-day moving average, plus the % distance from price.</li>
+        <li><strong>SMA 50</strong> — Bullish above the saved neutral band around the 50-day average, Bearish below it, plus the % distance from price.</li>
         <li><strong>SMA 200</strong> — Same for the 200-day moving average. Being above is the classic "golden cross" bullish condition.</li>
         <li><strong>Sharpe</strong> — Risk-adjusted return. Above 1.5 = great, above 1.0 = good, below 0.5 = poor.</li>
         <li><strong>Sortino</strong> — Like Sharpe but only penalizes downside volatility. Above 2.0 = great, above 1.5 = good.</li>
         <li><strong>1Y Return</strong> — Total 12-month return percentage.</li>
         <li><strong>NAV Ratio</strong> — fund price decline divided by TTM distribution yield, only when the benchmark is flat or up. Lagging a rising benchmark is not treated as structural NAV erosion.</li>
-        <li><strong>NAV Signal</strong> — BUY/NEUTRAL/SELL from the ratio, with SELL/High forced when price declines 50%+ or the ending share deficit is 5%+.</li>
+        <li><strong>NAV Signal</strong> — Bullish, Neutral, or Bearish from the saved ratio bands. Bearish/High is also forced by the saved price-decline and share-deficit overrides.</li>
         <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: 'var(--p-81c784)' }}>Low</span>, <span style={{ color: 'var(--amber)' }}>Medium</span>, or <span style={{ color: 'var(--p-ef9a9a)' }}>High</span>. Indicates whether the income wrapper appears to be losing price/NAV faster than its distribution stream justifies.</li>
         <li><strong>Notes</strong> — Your custom notes for this ticker.</li>
         <li><strong>Actions</strong> — Remove button.</li>
@@ -4398,21 +4400,21 @@ function WatchlistHelp() {
 function BuySellHelp() {
   return (
     <div>
-      <h2>Buy / Sell Signals</h2>
+      <h2>Technical Readings</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Buy/Sell Signals page is a dashboard that aggregates technical and risk signals for
+        Technical Readings aggregates technical and risk readings for
         all your portfolio holdings and watchlist tickers in one place. It shows an overall
         signal verdict for each position and breaks it down by individual indicator, so you can
         quickly spot which holdings are flashing warning signs and which ones look strong.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Buy/Sell Signals dashboard" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/buy-sell-signals/Screenshot 2026-05-09 103926.jpg" alt="Technical Readings" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Summary Badges</h3>
       <p style={{ marginBottom: '1rem' }}>
-        At the top, four badges show total counts: BUY, SELL, NEUTRAL, and TOTAL tickers analyzed.
+        At the top, four badges show total counts: Bullish, Bearish, Neutral, and TOTAL tickers analyzed.
         A timestamp shows when the data was last refreshed. Click <strong>Refresh</strong> to re-fetch
         the latest prices and recalculate all signals.
       </p>
@@ -4421,7 +4423,7 @@ function BuySellHelp() {
       <p style={{ marginBottom: '1rem' }}>
         A color-coded treemap visualizes all holdings simultaneously. Each rectangle's size represents
         the position's dollar value in your portfolio — larger rectangles are bigger positions.
-        Color indicates the overall signal: green for BUY, red for SELL, orange for NEUTRAL.
+        Color indicates the overall reading: green for Bullish, red for Bearish, orange for Neutral.
         This gives an instant visual sense of whether most of your portfolio value is in bullish or
         bearish territory. Hover over any rectangle to see the ticker and signal details.
       </p>
@@ -4447,7 +4449,7 @@ function BuySellHelp() {
         <li><strong>Sharpe</strong> — Risk-adjusted return ratio.</li>
         <li><strong>Sortino</strong> — Downside-risk-adjusted return.</li>
         <li><strong>NAV Ratio</strong> — Benchmark-adjusted NAV erosion ratio. Lower is better; blank means the holding was not an eligible NAV test candidate or lacked enough data.</li>
-        <li><strong>NAV Signal</strong> — BUY/NEUTRAL/SELL from NAV severity. High severity is forced by ratio above 0.75, price decline of 50%+, or ending share deficit of 5%+.</li>
+        <li><strong>NAV Signal</strong> — Bullish, Neutral, or Bearish from the saved NAV bands. High severity is forced above the Bearish ratio, or by the saved price-decline and share-deficit overrides.</li>
         <li><strong>NAV Erosion</strong> — Low/Medium/High probability using the same expanded severity rule.</li>
         <li><strong>Portfolio $</strong> — Market value of this position (blank for watchlist tickers).</li>
       </ul>
@@ -4456,10 +4458,10 @@ function BuySellHelp() {
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Scan the treemap</strong> for a quick visual — are most large positions green or red?</li>
         <li><strong>Check summary badges</strong> to see the overall signal balance across your portfolio.</li>
-        <li><strong>Sort the table by "Overall"</strong> to group all SELL signals together and review them.</li>
+        <li><strong>Sort the table by "Overall"</strong> to group Bearish readings together and review them.</li>
         <li><strong>Sort by "NAV Erosion"</strong> to surface high-risk income funds that may be eroding your capital.</li>
         <li><strong>Sort by "NAV Ratio"</strong> to see which funds are underperforming their benchmark after accounting for distributions.</li>
-        <li><strong>Cross-reference with Portfolio $</strong> — a SELL signal on a large position is more urgent than on a small one.</li>
+        <li><strong>Cross-reference with Portfolio $</strong> — a Bearish reading on a large position is a larger share of the portfolio than the same reading on a small one.</li>
         <li>Click <strong>Refresh</strong> regularly (or after market close) to update signals with the latest data.</li>
       </ol>
     </div>
@@ -5319,9 +5321,11 @@ function AnalyticsHelp() {
         <li><strong>Balanced</strong> — Blends return and income optimization. An <strong>income/safety slider</strong> appears to tune the balance between income generation and capital preservation.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        Optimization results show a table with <strong>Action</strong> (BUY/SELL/HOLD badges),
-        ticker, dollar change, approximate shares to trade, current price, NAV change %, current allocation %,
-        and target allocation %. Save snapshots to compare multiple optimization scenarios side by side.
+        Optimization results appear as an illustrative <strong>Scenario: Model Allocation Changes</strong> table:
+        a <strong>Model Shift</strong> badge (Increase / Decrease / No change), ticker, dollar change, approximate
+        share equivalent at the last close, current price, NAV change %, current allocation %, and the model's
+        allocation %. The table is an example of how the model mix differs from yours, not a recommendation to
+        buy or sell. Save snapshots to compare multiple optimization scenarios side by side.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Chart Tabs</h3>
@@ -6111,7 +6115,7 @@ function SettingsHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Grading &amp; Signal Formulas</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         This card exposes every number behind the portfolio and holding risk grades, the stock checklist score,
-        the ETF / CEF / option-income final verdicts, and the Buy / Sell Signal Dashboard vote. Each input sits in
+        the ETF / CEF / option-income final verdicts, and the Technical Readings vote. Each input sits in
         its own tile; open <strong>What this input changes</strong> beneath it for a definition, where the value is used,
         and what raising or lowering it does. A <strong>Screenshot guide</strong> at the top of the card shows every group
         in screen order — click an image to open it full size.
@@ -6120,15 +6124,15 @@ function SettingsHelp() {
         <li><strong>Portfolio and holding risk-grade weights</strong> — relative weights for Ulcer Index, Calmar, Omega, Sortino, Sharpe, max drawdown, and downside capture; the portfolio grade adds Diversification and NAV Health.</li>
         <li><strong>Risk-metric scoring bands</strong> — the Excellent / Good / Fair / Poor boundaries (100 / 80 / 60 / 40 points) for each metric, split into higher-is-better and lower-is-better groups.</li>
         <li><strong>Letter-grade cutoffs</strong> — the minimum 0–100 score for A+ through D−; anything below D− is F. These change only the letter, not the numeric score.</li>
-        <li><strong>ETF, CEF, and option-income final grade bands</strong> — composite score and maximum failed criteria for Strong Buy and Weak Buy. Per-criterion thresholds stay on each evaluator's cards.</li>
-        <li><strong>Stock checklist</strong> — the fundamental/technical blend, criterion-group weights, sector-relative benchmark bands and their point values, technical thresholds (trend, RSI, stochastic, OBV), 52-week range bands, badge colors, and the Strong Buy / Buy / Hold cutoffs.</li>
-        <li><strong>Buy / Sell Signal Dashboard</strong> — AO, RSI, SMA, and NAV thresholds, the vote share required for an Overall BUY or SELL, and each vote's relative weight.</li>
+        <li><strong>ETF, CEF, and option-income final grade bands</strong> — composite score and maximum failed criteria for Strong reading and Partial reading. Per-criterion thresholds stay on each evaluator's cards.</li>
+        <li><strong>Stock checklist</strong> — the fundamental/technical blend, criterion-group weights, sector-relative benchmark bands and their point values, technical thresholds (trend, RSI, stochastic, OBV), 52-week range bands, badge colors, and the Strong reading / Favorable reading / Mixed reading cutoffs.</li>
+        <li><strong>Technical Readings</strong> — AO, RSI, SMA, and NAV thresholds, the vote share required for an Overall Bullish or Bearish reading, and each vote's relative weight.</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
         Weights are relative: a weight of 2 counts twice as much as a weight of 1, 0 excludes the item, and the
         available weights are normalized so they never need to total 100. Nothing changes until you click
         <strong> Save grading formulas</strong>. Saving checks that bands are in order (for example, letter cutoffs descend,
-        RSI BUY is below RSI SELL, Strong Buy is above Buy) and that each weight group has at least one non-zero weight;
+        RSI Bullish is below RSI Bearish, Strong reading is above Favorable reading) and that each weight group has at least one non-zero weight;
         if anything overlaps, nothing is saved and an error appears. Formulas are stored on this device.
         <strong> Reset formulas to defaults</strong> restores the application values.
       </p>
@@ -6185,7 +6189,7 @@ function SettingsHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Single-Stock ETFs</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         Single-stock ETFs are leveraged or inverse products tied to a single underlying stock
-        (e.g. NVDL, TSLL, MSFO). The Portfolio Builder optimizer suppresses BUY recommendations for
+        (e.g. NVDL, TSLL, MSFO). The Portfolio Builder optimizer suppresses increase-weight results for
         these tickers in <em>Optimize Returns</em> and <em>Balanced</em> modes unless the income
         slider is at 100%. They are still allowed when optimizing for income.
       </p>
@@ -6414,8 +6418,8 @@ function MacroDashboardHelp() {
       <h4 style={{ color: 'var(--accent-2)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Asset Class Performance Table</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         Shows how five asset classes (Tech/Growth, Commodities, Gold, Long-Treasuries, Healthcare/Staples)
-        historically perform in each quadrant, rated as Best, Good, Neutral, Underperform, or Avoid.
-        The current quadrant column is highlighted with a star (★). Use this to guide sector and asset
+        historically perform in each quadrant, rated as Best, Good, Neutral, Underperform, or Low fit.
+        The current quadrant column is highlighted with a star (★). The labels describe historical relative performance for each asset
         class tilts based on the current regime.
       </p>
     </div>
@@ -7435,7 +7439,7 @@ function OptionDashboardHelp() {
         (high for premium selling, low for debit structures, medium for the balanced flies). The fit
         score is <strong>55% technical + 25% economic + 20% volatility</strong>, and the badge follows
         from it: <strong>Ideal</strong> at 78 and above, <strong>Favorable</strong> at 65,
-        <strong> Selective</strong> at 50, and <strong>Avoid</strong> below that. Iron condors and iron
+        <strong> Selective</strong> at 50, and <strong>Low fit</strong> below that. Iron condors and iron
         butterflies additionally lose points when ADX 14 reaches 25, because a strong directional trend
         is the main way a neutral trade fails.
       </p>
@@ -8175,7 +8179,7 @@ function CoveredCallScannerHelp() {
       </p>
       <HelpScreenshot
         src="./help-screenshots/covered-call-scanner/02-expanded-row.png"
-        alt="Expanded Covered Call row showing the score breakdown by axis, the full suggested trade with effective sale price and downside breakeven, the management plan with buy back and defend levels, and the dividend and earnings detail"
+        alt="Expanded Covered Call row showing the score breakdown by axis, the full example trade with effective sale price and downside breakeven, the management plan with buy back and defend levels, and the dividend and earnings detail"
         caption={<>
           The expansion gives the score breakdown, the effective sale price, the downside breakeven, the gain against
           your own basis if called, and the ex-dividend and earnings dates that could take the shares early.
@@ -9767,13 +9771,13 @@ function AsymmetricalIronCondorScannerHelp({ campaign = 'fourteen_day' }) {
           The <strong>14-day</strong> campaign is a weekly trade. Enter 30–35 DTE, a little closer
           to the money (about a 25-delta short put and a 12-delta short call), and be out in
           14 days or less. The name is the hold, not 14-DTE options. Plan capital is about
-          $16,000–$18,000 per unit; take 2–4% of that and keep losses under 5%.
+          $16,000–$18,000 per unit. The source video's exit inputs are stored with the campaign; they are not a promised result.
         </p>
       ) : (
         <p>
           The <strong>monthly</strong> campaign enters 40–50 DTE and plans to exit at 14 DTE
-          remaining, so a typical trade lasts about 30 days. Same plan capital; the profit
-          target is 7–8%. The original unit is 10 put credits, 2 call credits, and 1 put debit hedge.
+          remaining, so the source plan's typical hold is about 30 days. Same plan capital.
+          The original unit is 10 put credits, 2 call credits, and 1 put debit hedge.
         </p>
       )}
       <h3>Structure</h3>
@@ -10287,7 +10291,7 @@ function DoubleHedgePutButterflyScannerHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Expiration geometry card:</strong> upper flat, body peak, lower-strike valley, crash tail at $0, and both breakevens. The valley is the number to size from &mdash; in the pictured SPY tranche it is −$113,818, more than nine times the $12,500 of planned capital.</li>
         <li><strong>Roll-down / roll-up reviews:</strong> printed as prices, roughly 2% and 14% above the upper long. They are calendar-free reminders to look, not automatic orders.</li>
-        <li><strong>Campaign card:</strong> the $1,000 fixed target, roughly $800 average expectation, $2,500 management loss, 12-week average hold, $20,000 learning reserve, tranche capacity, and the LPTA put count. All dollar figures scale with Upper-long qty.</li>
+        <li><strong>Campaign card:</strong> the presentation's planned-capital, management-loss, holding-period, and learning-reserve figures, plus tranche capacity and the LPTA put count. These are document context, not expected profits. Dollar figures scale with Upper-long qty.</li>
         <li><strong>LPTA context:</strong> at 4 warnings the plan calls for one roughly 30-DTE, 2-delta long put per three <em>already open</em> tranches; at 5 warnings, two. It hedges the campaign you have, and is not part of this entry order.</li>
         <li><strong>Theta references:</strong> the 120× and 71× appendix figures are shown as context. The source plan preferred conservative tiered fixed targets, so do not treat them as exits.</li>
       </ul>
@@ -11530,7 +11534,7 @@ function StockValuationHelp() {
         Data is fetched live from Yahoo Finance. The DCF treats free cash flow as firm-level and the discount
         rate as a CAPM cost of equity (not a full WACC) — pragmatic simplifications you can override. This is
         decision support and an educational tool, <strong>not investment advice</strong>. Always do your own
-        research before buying or selling.
+        research before you act on a figure.
       </p>
     </div>
   )
@@ -11539,10 +11543,10 @@ function StockValuationHelp() {
 function StockBuyingChecklistHelp() {
   return (
     <div>
-      <h2>Stock Buying Checklist</h2>
+      <h2>Stock Checklist</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Stock Buying Checklist scores an individual stock on both fundamental and technical analysis,
-        then blends the two into a single buy verdict. Fundamentals are graded <strong>relative to the
+        The Stock Checklist scores an individual stock on both fundamental and technical analysis,
+        then blends the two into a single reading. Fundamentals are graded <strong>relative to the
         stock's sector</strong> — a "cheap" utility P/E is different from a "cheap" technology P/E — while
         technicals use standard chart indicators. It is built for individual companies; use the ETF and CEF
         evaluators for funds.
@@ -11578,7 +11582,7 @@ function StockBuyingChecklistHelp() {
       <p style={{ marginBottom: '0.75rem', color: 'var(--p-9aa7b8)', fontSize: '0.9rem' }}>
         For skipped tickers, use the dedicated evaluators: <strong>Non Income ETF Checklist Evaluator</strong> for broad
         ETFs, <strong>Option-Income ETF Evaluator</strong> for covered-call/put-write funds, and
-        <strong>CEF Buying Checklist</strong> for closed-end funds and BDCs.
+        <strong>CEF Checklist</strong> for closed-end funds and BDCs.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Fundamental Criteria</h3>
@@ -11600,7 +11604,7 @@ function StockBuyingChecklistHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Blended Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The Fundamental and Technical composites are combined (60% fundamental / 40% technical by default) into a
-        verdict of <strong>Strong Buy</strong>, <strong>Buy</strong>, <strong>Hold</strong>, or <strong>Avoid</strong>.
+        reading of <strong>Strong reading</strong>, <strong>Favorable reading</strong>, <strong>Mixed reading</strong>, or <strong>Low reading</strong>.
         Keeping the two scores separate is deliberate: it lets you spot a great company with poor entry timing,
         or a hot chart on a weak business, instead of hiding that distinction in one number.
       </p>
@@ -11618,7 +11622,7 @@ function ETFBuyingChecklistHelp() {
       <p style={{ marginBottom: '1rem' }}>
         The Non Income ETF Checklist Evaluator grades any broad-market, sector, dividend, or specialty ETF across
         seven structured criteria. It fetches live data for the ticker, scores each criterion Pass / Warn / Fail,
-        rolls them up into a composite verdict, and suggests smarter alternatives when the fund falls short.
+        rolls them up into a composite reading, and lists higher-scoring peers when the fund falls short.
         It is designed for standard (non-option-income) ETFs — use the Option-Income ETF Evaluator for
         covered-call and put-write funds.
       </p>
@@ -11627,7 +11631,7 @@ function ETFBuyingChecklistHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Deep Dive</strong> — Type one ticker for a full scored breakdown: seven criteria cards,
-          a composite score, a buy verdict, and Smart Alternatives from the same strategy group.
+          a composite score, a checklist reading, and higher-scoring peers from the same strategy group.
         </li>
         <li>
           <strong>Scan a List</strong> — Evaluate multiple ETFs at once in a sortable ranking table.
@@ -11715,18 +11719,18 @@ function ETFBuyingChecklistHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all <em>scored</em> criteria (criteria with a numeric score —
-        informational and insufficient-data criteria are excluded). Verdict thresholds: composite ≥ 70 with
-        no failing criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak Buy</strong>;
-        otherwise → <strong>Do Not Buy</strong>.
+        informational and insufficient-data criteria are excluded). Verdict thresholds: composite ≥ {fundVerdictBands().strongScore} with
+        at most {fundVerdictBands().strongMaxFails} failing criteria → <strong>Strong reading</strong>; ≥ {fundVerdictBands().moderateScore} with at most {fundVerdictBands().moderateMaxFails} fails → <strong>Partial reading</strong>;
+        otherwise → <strong>Low reading</strong>.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/etf-buying-checklist-evaluator/etf-buy-checklist-bottom.jpg" alt="Non Income ETF Checklist Evaluator bottom — smart alternatives and threshold editor" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Higher-scoring peers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        When the evaluated fund scores poorly, a Smart Alternatives section appears listing ETFs in the same
+        When the evaluated fund scores poorly, a higher-scoring peers section lists ETFs in the same
         strategy group that score higher on the composite. Each alternative shows the specific improvements
         (lower expense ratio, better total return, larger fund, etc.).
       </p>
@@ -11744,7 +11748,7 @@ function ETFBuyingChecklistHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that is not primarily an option-income or covered-call fund.</li>
         <li>Use the <strong>Option-Income ETF Evaluator</strong> for JEPI, XYLD, QYLD, SPYI, and similar covered-call or put-write ETFs — they have different criteria, especially around NAV erosion and track record.</li>
-        <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium, leverage, and distribution-sustainability dimensions not relevant to ETFs.</li>
+        <li>Use the <strong>CEF Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium, leverage, and distribution-sustainability dimensions not relevant to ETFs.</li>
       </ul>
     </div>
   )
@@ -11768,7 +11772,7 @@ function OptionIncomeETFHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Deep Dive</strong> — Type one option-income ETF ticker for a full scorecard: eight
-          criteria cards, a composite score, an overall verdict, and Smart Alternatives drawn from ~150
+          criteria cards, a composite score, an overall reading, and higher-scoring peers drawn from ~150
           curated option-income peers. The underlying strategy (S&amp;P 500, Nasdaq 100, single stock, etc.)
           is auto-detected to filter alternatives appropriately.
         </li>
@@ -11882,9 +11886,9 @@ function OptionIncomeETFHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all scored criteria (criteria with a numeric score;
-        informational and insufficient-data criteria are excluded). Composite ≥ 70 with no failing
-        criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak Buy</strong>;
-        otherwise → <strong>Do Not Buy</strong>.
+        informational and insufficient-data criteria are excluded). Composite ≥ {fundVerdictBands().strongScore} with at most {fundVerdictBands().strongMaxFails} failing
+        criteria → <strong>Strong reading</strong>; ≥ {fundVerdictBands().moderateScore} with at most {fundVerdictBands().moderateMaxFails} fails → <strong>Partial reading</strong>;
+        otherwise → <strong>Low reading</strong>.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Underlying Strategy Detection</h3>
@@ -11895,9 +11899,9 @@ function OptionIncomeETFHelp() {
         type of underlier.
       </p>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Smart Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Higher-scoring peers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        When the fund scores below the passing threshold, Smart Alternatives lists option-income peers that
+        When the fund scores below the passing threshold, the peer list shows option-income funds that
         clear all quality checks and target the same underlying. You can filter by underlying, set a target
         yield or minimum yield floor, and the list is re-ranked automatically. Single-stock option funds
         (e.g. YieldMax) are sorted to the bottom and labelled "higher risk" unless the fund you evaluated
@@ -11915,7 +11919,7 @@ function OptionIncomeETFHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
         <li>Use this evaluator for any ETF that primarily generates income from selling options (covered calls, puts, collars).</li>
         <li>Use the <strong>Non Income ETF Checklist Evaluator</strong> for standard index, sector, or dividend ETFs without an option-overlay strategy.</li>
-        <li>Use the <strong>CEF Buying Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
+        <li>Use the <strong>CEF Checklist Evaluator</strong> (CEF's menu) for closed-end funds, which add discount/premium and leverage dimensions.</li>
       </ul>
     </div>
   )
@@ -11924,9 +11928,9 @@ function OptionIncomeETFHelp() {
 function CEFBuyingChecklistHelp() {
   return (
     <div>
-      <h2>CEF Buying Checklist Evaluator</h2>
+      <h2>CEF Checklist Evaluator</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The CEF Buying Checklist Evaluator grades a closed-end fund across eight criteria — including the
+        The CEF Checklist Evaluator grades a closed-end fund across eight criteria — including the
         discount/premium to NAV, leverage level, distribution sustainability, liquidity, and a bundled
         risk-adjusted-return criterion that captures how the fund behaves across the full drawdown cycle.
         It fetches live data from CEF Connect, scores each criterion Pass / Warn / Fail, produces a
@@ -11964,7 +11968,7 @@ function CEFBuyingChecklistHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem', marginTop: '1rem' }}>
-        <img src="./help-screenshots/cef/cef_evaluator.jpg" alt="CEF Buying Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/cef/cef_evaluator.jpg" alt="CEF Checklist Evaluator top — ticker lookup, CEF header data, and criteria" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The Eight Criteria</h3>
@@ -12008,7 +12012,7 @@ function CEFBuyingChecklistHelp() {
         <li>
           <strong>7. Liquidity</strong> — A single trade should not exceed ~10–20% of average daily volume,
           otherwise you move the market against yourself. Wider bid-ask spreads in thin funds increase
-          implicit transaction costs; limit orders are always recommended for CEFs. Adjustable volume floor.
+          implicit transaction costs. Limit orders are one way to control those costs. Adjustable volume floor.
         </li>
         <li>
           <strong>8. Risk-Adjusted Return Profile</strong> — A bundled criterion folding five quantitative
@@ -12047,27 +12051,27 @@ function CEFBuyingChecklistHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Composite Score &amp; Verdict</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         The composite is the simple average of all scored criteria (informational and
-        insufficient-data criteria are excluded). Verdict: composite ≥ 70 with no failing
-        criteria → <strong>Strong Buy</strong>; ≥ 60 with at most one fail → <strong>Weak
-        Buy</strong>; otherwise → <strong>Do Not Buy</strong>.
+        insufficient-data criteria are excluded). Verdict: composite ≥ {fundVerdictBands().strongScore} with at most {fundVerdictBands().strongMaxFails} failing
+        criteria → <strong>Strong reading</strong>; ≥ {fundVerdictBands().moderateScore} with at most {fundVerdictBands().moderateMaxFails} fails → <strong>Partial
+        reading</strong>; otherwise → <strong>Low reading</strong>.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Buying Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/cef/cef_evaluator_bottom.jpg" alt="CEF Checklist Evaluator bottom — verdict card, alternatives, and threshold editors" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Better Alternatives</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Higher-Scoring Peers</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The alternatives section compares the current CEF against peers that score higher on the same checklist.
+        The peer section lists CEFs that score higher on the same checklist, for comparison and research only — it is not a recommendation to switch funds.
         When the fund name, strategy, or category indicates a recognizable theme — such as infrastructure,
         utilities, energy/MLP/midstream, real estate, municipal bonds, preferreds, senior loans, covered-call
-        income, technology, health care, or emerging markets — suggestions are narrowed to that theme first.
+        income, technology, health care, or emerging markets — the peer list is narrowed to that theme first.
         For example, an infrastructure CEF is compared with other infrastructure CEFs instead of every broad
         global-income CEF in the same Morningstar category.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         If the app cannot detect a specific theme, or if too few same-theme peers are available, it falls back
-        to the broader CEF category so the alternatives list still has enough funds to compare.
+        to the broader CEF category so the peer list still has enough funds to compare.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Customizing Thresholds</h3>
@@ -12565,6 +12569,10 @@ export default function Help() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
         <h1>Help</h1>
         <span style={{ color: 'var(--text-dim-2)', fontSize: '0.85rem' }}>Version {APP_VERSION}</span>
+      </div>
+      <div className="nfa-page" role="note">
+        <p style={{ margin: '0 0 0.45rem' }}>{NOT_FINANCIAL_ADVICE}</p>
+        <p style={{ margin: 0 }}>{PRIVACY_NOTE}</p>
       </div>
 
       {/* Group selector */}

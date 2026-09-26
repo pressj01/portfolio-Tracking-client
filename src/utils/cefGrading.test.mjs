@@ -155,10 +155,10 @@ test('fund verdicts follow the saved grade bands', () => {
     { key: 'navErosion', score: 70, badge: 'pass' },
     { key: 'riskRatios', score: 40, badge: 'fail' },
   ]
-  // One failing criterion caps the default rule at Weak Buy.
-  assert.equal(verdictFromComposite(75, criteria).label, 'Weak Buy')
+  // One failing criterion caps the default rule at Partial reading.
+  assert.equal(verdictFromComposite(75, criteria).label, 'Partial reading')
   const lenient = { strongScore: 70, moderateScore: 60, strongMaxFails: 1, moderateMaxFails: 1 }
-  assert.equal(verdictFromComposite(75, criteria, lenient).label, 'Strong Buy')
+  assert.equal(verdictFromComposite(75, criteria, lenient).label, 'Strong reading')
   const strict = { strongScore: 90, moderateScore: 80, strongMaxFails: 0, moderateMaxFails: 0 }
-  assert.equal(verdictFromComposite(75, criteria, strict).label, 'Do Not Buy')
+  assert.equal(verdictFromComposite(75, criteria, strict).label, 'Low reading')
 })

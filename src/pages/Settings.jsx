@@ -51,14 +51,14 @@ const FORMULA_SCREENSHOTS = [
   { file: 'grading-scoring-bands-3.png', title: 'Drawdown and downside-capture bands', caption: 'The remaining lower-is-better risk thresholds.' },
   { file: 'grading-letter-cutoffs.png', title: 'Letter-grade cutoffs: A through C', caption: 'The upper letter boundaries applied after the numeric risk score is calculated.' },
   { file: 'grading-letter-cutoffs-2.png', title: 'Letter-grade cutoffs: B through D−', caption: 'The lower grade boundaries and the rule that sends scores below D− to F.' },
-  { file: 'grading-fund-verdicts.png', title: 'ETF, CEF, and option-income verdicts', caption: 'Composite-score and failed-criterion limits for Strong Buy, Weak Buy, and Do Not Buy.' },
+  { file: 'grading-fund-verdicts.png', title: 'ETF, CEF, and option-income verdicts', caption: 'Composite-score and failed-criterion limits for Strong reading, Partial reading, and Low reading.' },
   { file: 'grading-stock-weights.png', title: 'Stock blend and group weights', caption: 'Fundamental-versus-technical influence and the first stock criterion weights.' },
   { file: 'grading-stock-weights-2.png', title: 'Remaining stock criterion weights', caption: 'Trend, momentum, oscillators, and volume/range influence, with a help example open.' },
   { file: 'grading-fundamental-formula.png', title: 'Sector-comparison boundaries', caption: 'Benchmark multiples that classify lower-is-better and higher-is-better fundamentals.' },
   { file: 'grading-fundamental-formula-2.png', title: 'Sector-comparison point values', caption: 'The points awarded after a fundamental metric lands in one of the comparison bands.' },
   { file: 'grading-stock-technicals.png', title: 'Stock technical thresholds and points', caption: 'Trend, RSI, stochastic, OBV, and the point value assigned to each signal state.' },
   { file: 'grading-range-badges-verdicts.png', title: '52-week range and badge inputs', caption: 'Range-position boundaries, range points, and the beginning of the badge/verdict cutoffs.' },
-  { file: 'grading-range-badges-verdicts-2.png', title: 'Stock verdict cutoffs', caption: 'Pass/warn badges and the Strong Buy, Buy, and Hold score boundaries.' },
+  { file: 'grading-range-badges-verdicts-2.png', title: 'Stock verdict cutoffs', caption: 'Pass/warn badges and the Strong reading, Favorable reading, and Mixed reading score boundaries.' },
   { file: 'grading-signal-dashboard.png', title: 'Signal Dashboard thresholds', caption: 'AO, RSI, SMA, vote-share, and NAV classification inputs.' },
   { file: 'grading-signal-dashboard-2.png', title: 'Signal Dashboard vote weights', caption: 'Relative vote weights used to turn the active signals into the Overall result.' },
 ]
@@ -798,14 +798,14 @@ export default function Settings() {
           </p>
           <FormulaFieldGrid>
             <FormulaNumberField label="Trend neutral band" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'trendBufferPct')} value={stockFormula.technicalThresholds.trendBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'trendBufferPct', value)} />
-            <FormulaNumberField label="RSI BUY below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiBuyBelow')} value={stockFormula.technicalThresholds.rsiBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiBuyBelow', value)} />
-            <FormulaNumberField label="RSI SELL above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiSellAbove')} value={stockFormula.technicalThresholds.rsiSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiSellAbove', value)} />
-            <FormulaNumberField label="Stochastic BUY below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticBuyBelow')} value={stockFormula.technicalThresholds.stochasticBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticBuyBelow', value)} />
-            <FormulaNumberField label="Stochastic SELL above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticSellAbove')} value={stockFormula.technicalThresholds.stochasticSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticSellAbove', value)} />
+            <FormulaNumberField label="RSI Bullish below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiBuyBelow')} value={stockFormula.technicalThresholds.rsiBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI Bearish above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiSellAbove')} value={stockFormula.technicalThresholds.rsiSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="Stochastic Bullish below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticBuyBelow')} value={stockFormula.technicalThresholds.stochasticBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticBuyBelow', value)} />
+            <FormulaNumberField label="Stochastic Bearish above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticSellAbove')} value={stockFormula.technicalThresholds.stochasticSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticSellAbove', value)} />
             <FormulaNumberField label="OBV neutral band" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'obvNeutralBandPct')} value={stockFormula.technicalThresholds.obvNeutralBandPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'obvNeutralBandPct', value)} />
-            <FormulaNumberField label="BUY signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'buy')} value={stockFormula.signalScores.buy} onChange={value => updateGradingPreference('stock', 'signalScores', 'buy', value)} />
-            <FormulaNumberField label="NEUTRAL signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'neutral')} value={stockFormula.signalScores.neutral} onChange={value => updateGradingPreference('stock', 'signalScores', 'neutral', value)} />
-            <FormulaNumberField label="SELL signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'sell')} value={stockFormula.signalScores.sell} onChange={value => updateGradingPreference('stock', 'signalScores', 'sell', value)} />
+            <FormulaNumberField label="Bullish signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'buy')} value={stockFormula.signalScores.buy} onChange={value => updateGradingPreference('stock', 'signalScores', 'buy', value)} />
+            <FormulaNumberField label="Neutral signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'neutral')} value={stockFormula.signalScores.neutral} onChange={value => updateGradingPreference('stock', 'signalScores', 'neutral', value)} />
+            <FormulaNumberField label="Bearish signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'sell')} value={stockFormula.signalScores.sell} onChange={value => updateGradingPreference('stock', 'signalScores', 'sell', value)} />
           </FormulaFieldGrid>
         </details>
 
@@ -820,27 +820,28 @@ export default function Settings() {
             ))}
             <FormulaNumberField label="Pass badge from" help={gradingPreferenceHelp('stock', 'badgeBands', 'pass')} value={stockFormula.badgeBands.pass} onChange={value => updateGradingPreference('stock', 'badgeBands', 'pass', value)} />
             <FormulaNumberField label="Warn badge from" help={gradingPreferenceHelp('stock', 'badgeBands', 'warn')} value={stockFormula.badgeBands.warn} onChange={value => updateGradingPreference('stock', 'badgeBands', 'warn', value)} />
-            <FormulaNumberField label="Strong Buy from" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongBuy')} value={stockFormula.verdictBands.strongBuy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongBuy', value)} />
-            <FormulaNumberField label="Strong Buy min fundamental" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongFundamental')} value={stockFormula.verdictBands.strongFundamental} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongFundamental', value)} />
-            <FormulaNumberField label="Buy from" help={gradingPreferenceHelp('stock', 'verdictBands', 'buy')} value={stockFormula.verdictBands.buy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'buy', value)} />
-            <FormulaNumberField label="Hold from" help={gradingPreferenceHelp('stock', 'verdictBands', 'hold')} value={stockFormula.verdictBands.hold} onChange={value => updateGradingPreference('stock', 'verdictBands', 'hold', value)} />
+            <FormulaNumberField label="Strong reading from" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongBuy')} value={stockFormula.verdictBands.strongBuy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongBuy', value)} />
+            <FormulaNumberField label="Strong reading min fundamental" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongFundamental')} value={stockFormula.verdictBands.strongFundamental} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongFundamental', value)} />
+            <FormulaNumberField label="Favorable reading from" help={gradingPreferenceHelp('stock', 'verdictBands', 'buy')} value={stockFormula.verdictBands.buy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'buy', value)} />
+            <FormulaNumberField label="Mixed reading from" help={gradingPreferenceHelp('stock', 'verdictBands', 'hold')} value={stockFormula.verdictBands.hold} onChange={value => updateGradingPreference('stock', 'verdictBands', 'hold', value)} />
           </FormulaFieldGrid>
         </details>
 
         <details open style={{ borderTop: '1px solid var(--border)', paddingTop: '0.75rem', marginTop: '0.75rem' }}>
-          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Buy / Sell Signal Dashboard formula</summary>
+          <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>Technical Readings formula</summary>
           <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-            AO, RSI, MACD, SMA 50, SMA 200 and eligible NAV signals cast weighted votes. BUY or SELL must exceed the selected percentage of all active vote weight; otherwise the result is NEUTRAL.
+            AO, RSI, MACD, SMA 50, SMA 200 and eligible NAV signals cast weighted votes. Bullish or Bearish must exceed the selected percentage of all active vote weight; otherwise the result is Neutral.
           </p>
           <FormulaFieldGrid>
             <FormulaNumberField label="AO zero-line buffer" help={gradingPreferenceHelp('signals', 'thresholds', 'aoZeroBuffer')} value={signalFormula.thresholds.aoZeroBuffer} step={0.01} onChange={value => updateGradingPreference('signals', 'thresholds', 'aoZeroBuffer', value)} />
-            <FormulaNumberField label="RSI BUY below" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiBuyBelow')} value={signalFormula.thresholds.rsiBuyBelow} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiBuyBelow', value)} />
-            <FormulaNumberField label="RSI SELL above" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiSellAbove')} value={signalFormula.thresholds.rsiSellAbove} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="RSI Bullish below" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiBuyBelow')} value={signalFormula.thresholds.rsiBuyBelow} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI Bearish above" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiSellAbove')} value={signalFormula.thresholds.rsiSellAbove} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiSellAbove', value)} />
             <FormulaNumberField label="SMA neutral band" help={gradingPreferenceHelp('signals', 'thresholds', 'smaBufferPct')} value={signalFormula.thresholds.smaBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('signals', 'thresholds', 'smaBufferPct', value)} />
             <FormulaNumberField label="Required vote share" help={gradingPreferenceHelp('signals', 'thresholds', 'majorityPct')} value={signalFormula.thresholds.majorityPct} min={1} max={100} suffix="%" onChange={value => updateGradingPreference('signals', 'thresholds', 'majorityPct', value)} />
-            <FormulaNumberField label="NAV BUY ratio through" help={gradingPreferenceHelp('signals', 'thresholds', 'navBuyMaxRatio')} value={signalFormula.thresholds.navBuyMaxRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navBuyMaxRatio', value)} />
-            <FormulaNumberField label="NAV SELL ratio above" help={gradingPreferenceHelp('signals', 'thresholds', 'navSellAboveRatio')} value={signalFormula.thresholds.navSellAboveRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navSellAboveRatio', value)} />
-            <FormulaNumberField label="NAV hard-decline SELL" help={gradingPreferenceHelp('signals', 'thresholds', 'navHardDeclinePct')} value={signalFormula.thresholds.navHardDeclinePct} step={1} suffix="% decline" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeclinePct', value)} />
+            <FormulaNumberField label="NAV Bullish ratio through" help={gradingPreferenceHelp('signals', 'thresholds', 'navBuyMaxRatio')} value={signalFormula.thresholds.navBuyMaxRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navBuyMaxRatio', value)} />
+            <FormulaNumberField label="NAV Bearish ratio above" help={gradingPreferenceHelp('signals', 'thresholds', 'navSellAboveRatio')} value={signalFormula.thresholds.navSellAboveRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navSellAboveRatio', value)} />
+            <FormulaNumberField label="NAV hard-decline Bearish" help={gradingPreferenceHelp('signals', 'thresholds', 'navHardDeclinePct')} value={signalFormula.thresholds.navHardDeclinePct} step={1} suffix="% decline" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeclinePct', value)} />
+            <FormulaNumberField label="NAV share-deficit High" help={gradingPreferenceHelp('signals', 'thresholds', 'navHardDeficitPct')} value={signalFormula.thresholds.navHardDeficitPct} step={0.5} suffix="% deficit" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeficitPct', value)} />
             {Object.entries({ ao: 'AO vote weight', rsi: 'RSI vote weight', macd: 'MACD vote weight', sma50: 'SMA 50 vote weight', sma200: 'SMA 200 vote weight', nav: 'NAV vote weight' }).map(([key, label]) => (
               <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('signals', 'weights', key)} value={signalFormula.weights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('signals', 'weights', key, value)} />
             ))}
@@ -1207,7 +1208,7 @@ export default function Settings() {
       <div className="card">
         <h2>Single-Stock ETFs</h2>
         <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
-          These tickers are excluded from BUY recommendations in Optimize Returns and Balanced mode
+          These tickers are excluded from increase-weight results in Optimize Returns and Balanced mode
           (unless the slider is at 100%). They are still allowed in Optimize Income.
         </p>
 

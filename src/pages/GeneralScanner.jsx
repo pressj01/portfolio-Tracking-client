@@ -3,6 +3,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 const TABS = [
   { key: 'overview', label: 'Descriptive' },
@@ -731,6 +732,7 @@ export default function GeneralScanner() {
 
   return (
     <div className="page-container">
+      <NotFinancialAdviceNotice />
       <div style={{
         marginBottom: '1rem',
         padding: '1rem 1.1rem',

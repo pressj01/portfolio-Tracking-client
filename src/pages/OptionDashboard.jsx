@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '../config'
+import { fitReading } from '../utils/readingLabels'
 
 const TIMEFRAMES = [
   { key: 'daily', label: 'Daily', hint: 'Tactical entries · days to weeks' },
@@ -143,7 +144,7 @@ function RecommendationTable({ rows, onOpen }) {
             <td><span className="od-rank">#{row.rank}</span></td>
             <td><strong className="od-market-symbol">{row.market}</strong><small>{row.stance}</small></td>
             <td><strong>{row.name}</strong><small>{row.risk} · {row.scanner}</small></td>
-            <td><span className={`od-fit-badge ${fitTone(row.category)}`}>{row.category}</span><b className="od-fit-score">{row.score}</b></td>
+            <td><span className={`od-fit-badge ${fitTone(row.category)}`}>{fitReading(row.category)}</span><b className="od-fit-score">{row.score}</b></td>
             <td><b>{row.technical_fit}</b><small>55% weight</small></td>
             <td><b>{row.macro_fit}</b><small>{signed(row.macro_adjustment, 1)} pt adjustment</small></td>
             <td><b>{row.volatility_fit}</b><small>20% weight</small></td>
@@ -225,7 +226,7 @@ export default function OptionDashboard() {
           <HeroMetric label={`${current.label} market posture`} value={signed(current.summary.score)} helper={`${current.summary.bullish_markets} bullish · ${current.summary.bearish_markets} bearish · ${current.summary.agreement}% agreement`} tone={scoreTone(current.summary.score)} />
           <HeroMetric label="Economic prediction" value={economy.outlook} helper={`${signed(economy.score)} macro score · ${economy.recession_risk} recession risk`} tone={scoreTone(economy.score)} />
           <HeroMetric label="Volatility regime" value={`${percent(averageVolatility, 0)} percentile`} helper="Average realized-volatility percentile across SPY, QQQ, and IWM" tone={averageVolatility >= 70 ? 'negative' : averageVolatility <= 30 ? 'positive' : 'neutral'} />
-          <HeroMetric label="Best scanner fit" value={topRecommendation ? topRecommendation.name : 'No match'} helper={topRecommendation ? `${topRecommendation.market} · ${topRecommendation.category} ${topRecommendation.score}/100` : 'Adjust the recommendation filters'} tone={topRecommendation?.category === 'Ideal' ? 'positive' : 'neutral'} />
+          <HeroMetric label="Best scanner fit" value={topRecommendation ? topRecommendation.name : 'No match'} helper={topRecommendation ? `${topRecommendation.market} · ${fitReading(topRecommendation.category)} ${topRecommendation.score}/100` : 'Adjust the fit filters'} tone={topRecommendation?.category === 'Ideal' ? 'positive' : 'neutral'} />
         </section>
 
         <section className="od-timeframe-shell card">

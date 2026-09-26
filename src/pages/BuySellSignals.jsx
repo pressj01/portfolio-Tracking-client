@@ -6,11 +6,13 @@ import {
   GRADING_PREFERENCES_EVENT,
   loadGradingPreferences,
 } from '../utils/gradingPreferences'
+import { signalReading } from '../utils/readingLabels'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 function Sig({ signal }) {
   if (!signal) return <span>{'\u2014'}</span>
   const cls = { BUY: 'sig-BUY', SELL: 'sig-SELL', NEUTRAL: 'sig-NEUTRAL' }
-  return <span className={`sig ${cls[signal] || ''}`}>{signal}</span>
+  return <span className={`sig ${cls[signal] || ''}`}>{signalReading(signal)}</span>
 }
 
 function AoDir({ dir }) {
@@ -43,19 +45,19 @@ function pctCls(s) {
 const signalHelpItems = settings => [
   {
     label: 'AO',
-    text: `Awesome Oscillator compares 5-day and 34-day midpoint averages. BUY means AO is above +${settings.thresholds.aoZeroBuffer} and rising; SELL means it is below -${settings.thresholds.aoZeroBuffer} and falling. Vote weight: ${settings.weights.ao}.`,
+    text: `Awesome Oscillator compares 5-day and 34-day midpoint averages. Bullish means AO is above +${settings.thresholds.aoZeroBuffer} and rising; Bearish means it is below -${settings.thresholds.aoZeroBuffer} and falling. Vote weight: ${settings.weights.ao}.`,
   },
   {
     label: 'RSI',
-    text: `RSI uses a 14-day relative strength reading. Below ${settings.thresholds.rsiBuyBelow} is BUY, above ${settings.thresholds.rsiSellAbove} is SELL, and the middle range is NEUTRAL. Vote weight: ${settings.weights.rsi}.`,
+    text: `RSI uses a 14-day relative strength reading. Below ${settings.thresholds.rsiBuyBelow} is Bullish, above ${settings.thresholds.rsiSellAbove} is Bearish, and the middle range is Neutral. Vote weight: ${settings.weights.rsi}.`,
   },
   {
     label: 'MACD',
-    text: `MACD uses the standard 12/26/9 setup. BUY means the MACD line is above its signal line; SELL means it is below. Vote weight: ${settings.weights.macd}.`,
+    text: `MACD uses the standard 12/26/9 setup. Bullish means the MACD line is above its signal line; Bearish means it is below. Vote weight: ${settings.weights.macd}.`,
   },
   {
     label: 'SMA 50',
-    text: `BUY when price is more than ${settings.thresholds.smaBufferPct}% above the 50-day moving average, SELL when more than ${settings.thresholds.smaBufferPct}% below it, otherwise NEUTRAL. Vote weight: ${settings.weights.sma50}.`,
+    text: `Bullish when price is more than ${settings.thresholds.smaBufferPct}% above the 50-day moving average, Bearish when more than ${settings.thresholds.smaBufferPct}% below it, otherwise Neutral. Vote weight: ${settings.weights.sma50}.`,
   },
   {
     label: 'SMA 200',
@@ -63,7 +65,7 @@ const signalHelpItems = settings => [
   },
   {
     label: 'NAV',
-    text: `Only used for NAV-erosion candidates. BUY at a ratio ≤${settings.thresholds.navBuyMaxRatio}, NEUTRAL through ${settings.thresholds.navSellAboveRatio}, and SELL above it or after a price decline of ${settings.thresholds.navHardDeclinePct}%+. Vote weight: ${settings.weights.nav}.`,
+    text: `Only used for NAV-erosion candidates. Bullish at a ratio ≤${settings.thresholds.navBuyMaxRatio}, Neutral through ${settings.thresholds.navSellAboveRatio}, and Bearish above it or after a price decline of ${settings.thresholds.navHardDeclinePct}%+. Vote weight: ${settings.weights.nav}.`,
   },
 ]
 
@@ -99,6 +101,7 @@ export default function BuySellSignals() {
       nav_buy_max_ratio: formula.thresholds.navBuyMaxRatio,
       nav_sell_above_ratio: formula.thresholds.navSellAboveRatio,
       nav_hard_decline_pct: formula.thresholds.navHardDeclinePct,
+      nav_hard_deficit_pct: formula.thresholds.navHardDeficitPct,
       weight_ao: formula.weights.ao,
       weight_rsi: formula.weights.rsi,
       weight_macd: formula.weights.macd,
@@ -172,14 +175,14 @@ export default function BuySellSignals() {
     { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
     { label: 'AO Value', tip: 'Raw Awesome Oscillator value' },
     { label: 'AO Dir', tip: 'Awesome Oscillator direction (rising or falling)' },
-    { label: 'RSI', tip: `Relative Strength Index signal — SELL above ${formula.thresholds.rsiSellAbove}, BUY below ${formula.thresholds.rsiBuyBelow}` },
+    { label: 'RSI', tip: `Relative Strength Index signal — Bearish above ${formula.thresholds.rsiSellAbove}, Bullish below ${formula.thresholds.rsiBuyBelow}` },
     { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
     { label: 'SMA 50', tip: `Simple Moving Average 50-day with a ±${formula.thresholds.smaBufferPct}% neutral band` },
     { label: 'SMA 200', tip: `Simple Moving Average 200-day with a ±${formula.thresholds.smaBufferPct}% neutral band` },
     { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
     { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
     { label: 'NAV Ratio', tip: 'NAV erosion ratio: fund price decline / TTM distribution yield, only when benchmark is flat or up. Lagging a rising benchmark is not erosion.' },
-    { label: 'NAV Signal', tip: `BUY at ratio ≤${formula.thresholds.navBuyMaxRatio}; SELL above ${formula.thresholds.navSellAboveRatio} or after a ${formula.thresholds.navHardDeclinePct}%+ price decline; otherwise NEUTRAL.` },
+    { label: 'NAV Signal', tip: `Bullish at ratio ≤${formula.thresholds.navBuyMaxRatio}; Bearish above ${formula.thresholds.navSellAboveRatio} or after a ${formula.thresholds.navHardDeclinePct}%+ price decline; otherwise Neutral.` },
     { label: 'NAV Erosion', tip: `High above ratio ${formula.thresholds.navSellAboveRatio} or after the hard-decline override; Medium above ${formula.thresholds.navBuyMaxRatio}; Low at or below ${formula.thresholds.navBuyMaxRatio}.` },
     { label: 'Div Safety', tip: 'Dividend safety score and cut-risk level for portfolio holdings' },
     { label: 'Cut Risk', tip: 'Flags portfolio holdings with elevated or high dividend cut risk' },
@@ -188,8 +191,9 @@ export default function BuySellSignals() {
 
   return (
     <div className="bss-page">
+      <NotFinancialAdviceNotice />
       <div className="bss-header">
-        <h1 style={{ margin: 0 }}>Buy / Sell Signal Dashboard</h1>
+        <h1 style={{ margin: 0 }}>Technical Readings</h1>
         {!loading && (
           <button className="bss-refresh-btn" onClick={loadData}>
             &#8635; Refresh
@@ -198,10 +202,10 @@ export default function BuySellSignals() {
         {timestamp && <span className="bss-timestamp">Updated: {timestamp}</span>}
       </div>
       <p className="bss-legend">
-        <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}>&#9632; BUY</span>&nbsp;
-        <span style={{ color: 'var(--neg-strong)', fontWeight: 600 }}>&#9632; SELL</span>&nbsp;
-        <span style={{ color: 'var(--warning)', fontWeight: 600 }}>&#9632; NEUTRAL</span>
-        &nbsp;&middot;&nbsp; Overall signal = weighted vote; BUY or SELL must exceed {formula.thresholds.majorityPct}% of active weight
+        <span style={{ color: 'var(--pos-strong)', fontWeight: 600 }}>&#9632; Bullish</span>&nbsp;
+        <span style={{ color: 'var(--neg-strong)', fontWeight: 600 }}>&#9632; Bearish</span>&nbsp;
+        <span style={{ color: 'var(--warning)', fontWeight: 600 }}>&#9632; Neutral</span>
+        &nbsp;&middot;&nbsp; Overall reading = weighted vote; Bullish or Bearish must exceed {formula.thresholds.majorityPct}% of active weight
       </p>
 
       <details className="bss-help">
@@ -227,15 +231,15 @@ export default function BuySellSignals() {
         <div className="bss-counts">
           <div className="wl-count-box wl-count-buy">
             <div className="wl-count-num">{counts.BUY}</div>
-            <div className="wl-count-lbl">BUY</div>
+            <div className="wl-count-lbl">Bullish</div>
           </div>
           <div className="wl-count-box wl-count-sell">
             <div className="wl-count-num">{counts.SELL}</div>
-            <div className="wl-count-lbl">SELL</div>
+            <div className="wl-count-lbl">Bearish</div>
           </div>
           <div className="wl-count-box wl-count-neut">
             <div className="wl-count-num">{counts.NEUTRAL}</div>
-            <div className="wl-count-lbl">NEUTRAL</div>
+            <div className="wl-count-lbl">Neutral</div>
           </div>
           <div className="bss-count-total">
             <div className="wl-count-num" style={{ color: 'var(--p-ccc)' }}>{rows.length}</div>

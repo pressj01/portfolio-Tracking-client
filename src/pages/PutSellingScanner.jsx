@@ -327,7 +327,7 @@ function HelpPanel() {
         </p>
       </HelpSection>
 
-      <HelpSection title="The suggested trade and when to buy it back">
+      <HelpSection title="The example trade and when it would be bought back">
         <p style={p}>
           For the highest-rated candidates the scanner pulls the live chain, takes the expiration closest to your target
           DTE, and picks the put nearest your target delta. <strong>Basis if Assigned</strong> is the strike minus the

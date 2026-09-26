@@ -3,6 +3,7 @@ import Plot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
 import { formatMoney } from '../utils/money'
+import { fitReading } from '../utils/readingLabels'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -2090,7 +2091,7 @@ function QuadrantTab({ pf }) {
                         fontWeight: isCurrentQ ? 700 : 400,
                         background: isCurrentQ ? `${QUAD_COLORS[q]}10` : 'transparent',
                       }}>
-                        {rating}
+                        {fitReading(rating)}
                       </td>
                     )
                   })}

@@ -1271,7 +1271,7 @@ export default function OptionTradingTools() {
     return () => { cancelled = true }
   }, [ticker, selectedExpiration, marketRefresh])
 
-  // A scanner staged its suggested trade before navigating here. Load it as the
+  // A scanner staged its example trade before navigating here. Load it as the
   // active position so the risk profile and the strike lines on the price chart
   // describe the exact trade the user clicked.
   useEffect(() => {

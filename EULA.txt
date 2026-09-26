@@ -1,0 +1,20 @@
+PORTFOLIO TRACKER
+END USER LICENSE AGREEMENT
+
+This software is licensed, not sold. By installing or using Portfolio Tracker you agree to this agreement.
+
+1. Not financial advice
+
+Portfolio Tracker is for education and personal record-keeping only. It is not financial, investment, tax, or trading advice, and it is not a recommendation to buy, sell, or hold any security or strategy. Scores, signals, checklists, grades, scans, and projections are model outputs. They do not promise profits, income, win rates, or returns. Past illustrations are not future results. You are responsible for your own decisions.
+
+2. Privacy
+
+Ticker symbols and the market requests needed to price them are sent to Yahoo Finance and other public data sites. Portfolio holdings, transactions, notes, and account records stay in the local database on this computer. This app does not upload that portfolio data.
+
+3. License
+
+You may install and use the software for your own personal record-keeping. You may not redistribute the software, rent it, or remove this agreement.
+
+4. No warranty
+
+The software is provided as is, without a warranty of any kind. Market data can be delayed, missing, or wrong. To the fullest extent permitted by law, the author is not liable for lost profits, trading losses, or other damages arising from use of the software.

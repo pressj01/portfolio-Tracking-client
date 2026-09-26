@@ -7,6 +7,7 @@ import MarkovPanel from '../components/MarkovPanel'
 import YieldOnCostChart from '../components/YieldOnCostChart'
 import { computeMarkov, REGIME_COLORS } from '../utils/markov'
 import { formatMoney } from '../utils/money'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
 import {
   comparerActualCloses,
@@ -1687,9 +1688,9 @@ const STUDY_TEMPLATES = [
         }
       }
 
-      // Generate BUY/SELL signals
-      // BUY: fast EMA crosses above slow EMA AND RSI not overbought
-      // SELL: fast EMA crosses below slow EMA AND RSI not oversold (confirmation of weakness)
+      // Mark EMA crossovers. These are chart markers, not trade instructions.
+      // Bullish: fast EMA crosses above slow EMA AND RSI not overbought
+      // Bearish: fast EMA crosses below slow EMA AND RSI not oversold
       const buyDates = [], buyPrices = [], buyText = []
       const sellDates = [], sellPrices = [], sellText = []
 
@@ -1699,14 +1700,14 @@ const STUDY_TEMPLATES = [
         if (emaF[i - 1] <= emaS[i - 1] && emaF[i] > emaS[i]) {
           if (rsi[i] == null || rsi[i] < rsiOB) {
             buyDates.push(dates[i]); buyPrices.push(closes[i] * 0.97)
-            buyText.push(`BUY ${formatMoney(closes[i])}`)
+            buyText.push(`Bullish ${formatMoney(closes[i])}`)
           }
         }
         // Bearish crossover
         if (emaF[i - 1] >= emaS[i - 1] && emaF[i] < emaS[i]) {
           if (rsi[i] == null || rsi[i] > rsiOS) {
             sellDates.push(dates[i]); sellPrices.push(closes[i] * 1.03)
-            sellText.push(`SELL ${formatMoney(closes[i])}`)
+            sellText.push(`Bearish ${formatMoney(closes[i])}`)
           }
         }
       }
@@ -1741,11 +1742,11 @@ const STUDY_TEMPLATES = [
         mainTraces: [
           { x: dates, y: emaF, type: 'scatter', mode: 'lines', name: `VV Fast (${fp})`, line: { color: '#4CAF50', width: 1 }, showlegend: false },
           { x: dates, y: emaS, type: 'scatter', mode: 'lines', name: `VV Slow (${sp})`, line: { color: '#F44336', width: 1 }, showlegend: false },
-          { x: buyDates, y: buyPrices, type: 'scatter', mode: 'markers+text', name: 'BUY',
+          { x: buyDates, y: buyPrices, type: 'scatter', mode: 'markers+text', name: 'Bullish',
             marker: { symbol: 'triangle-up', size: 14, color: '#00E676' },
             text: buyText, textposition: 'bottom center', textfont: { color: '#00E676', size: 10 },
             showlegend: false },
-          { x: sellDates, y: sellPrices, type: 'scatter', mode: 'markers+text', name: 'SELL',
+          { x: sellDates, y: sellPrices, type: 'scatter', mode: 'markers+text', name: 'Bearish',
             marker: { symbol: 'triangle-down', size: 14, color: '#FF1744' },
             text: sellText, textposition: 'top center', textfont: { color: '#FF1744', size: 10 },
             showlegend: false },
@@ -3168,6 +3169,7 @@ export default function ETFScreen() {
 
   return (
     <div className="page etf-screen">
+      <NotFinancialAdviceNotice />
       <h2>Stock and ETF Analysis</h2>
 
       {/* Tab bar */}

@@ -1,9 +1,9 @@
 // Scanner → Options page handoff.
 //
-// Every option scanner ends at one concrete suggested trade. This turns that
-// suggestion into risk-graph legs and parks it in sessionStorage so the Options
-// page can pick it up on its next mount and draw both the P/L profile and the
-// price chart with the strikes marked on it.
+// Every option scanner row carries one example trade setup that illustrates the
+// strategy's rules. This turns that example into risk-graph legs and parks it in
+// sessionStorage so the Options page can pick it up on its next mount and draw
+// both the P/L profile and the price chart with the strikes marked on it.
 
 const HANDOFF_KEY = 'optionScannerTradeHandoff'
 // Long enough to survive the navigation, short enough that a trade left behind in
@@ -304,7 +304,7 @@ const BUILDERS = {
   },
 }
 
-/** The suggested trade as risk-graph legs, or null when the row has no option trade. */
+/** The row's example trade as risk-graph legs, or null when the row has no option trade. */
 export function buildScannerTrade(kind, row) {
   const build = BUILDERS[kind]
   if (!row?.ticker) return null

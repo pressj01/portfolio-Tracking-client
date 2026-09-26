@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 import { NAV_BENCHMARK_CHOICES } from '../utils/navBenchmarks'
+import { withSignalFormula } from '../utils/gradingPreferences'
 
 const MAX_ROWS = 80
 
@@ -262,7 +263,7 @@ export default function NavErosionPortfolio() {
     }) : Promise.resolve()
 
     savePromise.then(() => {
-      pf('/api/nav-erosion-portfolio/data', {
+      pf(withSignalFormula('/api/nav-erosion-portfolio/data'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ start: startDate, end: endDate, rows }),

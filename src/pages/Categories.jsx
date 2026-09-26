@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
+import { withSignalFormula } from '../utils/gradingPreferences'
 
 function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   const [name, setName] = useState(category?.name || '')
@@ -821,7 +822,7 @@ export default function Categories() {
       const [catRes, holdingsRes, navCoverageRes, ownerTargetRefRes] = await Promise.all([
         pf('/api/categories/data'),
         useCache ? null : pf('/api/holdings').catch(() => null),
-        useCache ? null : pf('/api/portfolio-coverage').catch(() => null),
+        useCache ? null : pf(withSignalFormula('/api/portfolio-coverage')).catch(() => null),
         isOwnerProfile ? pf('/api/categories/owner-target-reference').catch(() => null) : Promise.resolve(null),
       ])
       const d = await catRes.json()

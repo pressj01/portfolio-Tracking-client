@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { FUND_READING } from '../utils/readingLabels'
+import { fundVerdictBands } from '../utils/gradingPreferences'
 import FundScanTab from '../components/FundScanTab'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
@@ -542,13 +545,13 @@ function AlternativesList({ fund, currentComposite, alternatives, fallbackAltern
   return (
     <div style={{ marginTop: '1rem' }}>
       <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
-        Better alternatives{filterLabel ? ` — ${filterLabel}` : ''}
+        Higher-scoring peers{filterLabel ? ` — ${filterLabel}` : ''}
       </h2>
       <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
         A peer is listed only if it beats this fund's composite by at least 2 points, clears the checklist,
         keeps the yield floor above, and shows a concrete improvement (NAV trend, total return, yield, cost,
         or size){filterLabel ? `, restricted to ${filterLabel} underliers` : ''}. {peerCount} peers screened.
-        Single-stock income ETFs are excluded unless the selected fund is also single-stock.
+        Single-stock income ETFs are excluded unless the selected fund is also single-stock. Peers are listed for comparison and research only, not as a recommendation.
       </p>
       <RankStrip rankInfo={rankInfo} filterLabel={filterLabel} ticker={fund.ticker} />
       {alternatives.length > 0 ? (
@@ -568,8 +571,8 @@ function AlternativesList({ fund, currentComposite, alternatives, fallbackAltern
               : { background: 'var(--p-1f2e52)', border: '1px solid var(--p-2a3e6b)', color: 'var(--p-b8c8e0)' }),
           }}>
             {rankedTop
-              ? `No stronger alternative found — ${fund.ticker} is the top-ranked fund in this group. The strongest peers are shown below for context.`
-              : `No peer beats ${fund.ticker} by the required margin while clearing the checklist and yield floor. The strongest peers are shown below for context — none qualified as a genuinely better alternative.`}
+              ? `No higher-scoring peer found — ${fund.ticker} is the top-ranked fund in this group. The strongest peers are shown below for context.`
+              : `No peer beats ${fund.ticker} by the required margin while clearing the checklist and yield floor. The strongest peers are shown below for context — none cleared the comparison rules.`}
           </div>
           <AlternativesTable
             current={fund}
@@ -716,10 +719,11 @@ export default function OptionIncomeETFEvaluator() {
 
   return (
     <div className="page cef-page stock-check-page">
+      <NotFinancialAdviceNotice />
       <div className="cef-title-row stock-check-title-row">
         <div>
           <h1>Option-Income ETF Evaluator</h1>
-          <p>Enter an option-income / derivative-income ETF ticker. Six criteria are scored against editable thresholds tailored to the income trade-off, and better alternatives are surfaced.</p>
+          <p>Enter an option-income / derivative-income ETF ticker. Six criteria are scored against editable thresholds tailored to the income trade-off, and higher-scoring peers are listed for comparison.</p>
         </div>
       </div>
 
@@ -751,15 +755,15 @@ export default function OptionIncomeETFEvaluator() {
               fund with a great Sharpe ratio and strong total return so far, because there's no full
               market-cycle history yet to judge it on. 1–3 years old scores only 50 (a warn). Combined
               with one more failing criterion (expense, fund size, …), this alone is enough to cap a
-              young fund at Do Not Buy no matter how high its composite runs — see Verdict bands below.
+              young fund at {FUND_READING.low} no matter how high its composite runs — see Verdict bands below.
             </p>
           </section>
           <section className="stock-check-help-full">
             <h3>Verdict bands</h3>
             <ul>
-              <li><strong>Strong Buy:</strong> composite ≥ 70 with 0 failing criteria.</li>
-              <li><strong>Weak Buy:</strong> composite ≥ 60 with at most 1 failing criterion.</li>
-              <li><strong>Do Not Buy:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. A fund can score in the 70s and still land here if, say, its expense ratio sits above your threshold <em>and</em> it's under a year old — two fails always cap the verdict at Do Not Buy, no matter how high the composite climbs.</li>
+              <li><strong>{FUND_READING.strong}:</strong> composite ≥ {fundVerdictBands().strongScore} with at most {fundVerdictBands().strongMaxFails} failing criteria.</li>
+              <li><strong>{FUND_READING.partial}:</strong> composite ≥ {fundVerdictBands().moderateScore} with at most {fundVerdictBands().moderateMaxFails} failing criteria.</li>
+              <li><strong>{FUND_READING.low}:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. A fund can score in the 70s and still land here if, say, its expense ratio sits above your threshold <em>and</em> it's under a year old — two fails always cap the verdict at {FUND_READING.low}, no matter how high the composite climbs.</li>
               <li><strong>Not Enough Information to Evaluate:</strong> fewer than 3 criteria could be scored, or none of Performance / NAV Trend / Yield Sustainability / Risk-adjusted Return had enough data.</li>
             </ul>
           </section>
@@ -768,7 +772,7 @@ export default function OptionIncomeETFEvaluator() {
             <p>
               Alternatives are restricted to funds tracking the same underlying (Nasdaq 100, S&amp;P
               500, gold, crypto, single-stock, …), must clear a quality floor so a higher yield alone
-              can't recommend a structurally worse fund, and must show a concrete edge — higher
+              can't place a structurally weaker fund ahead of this one, and must show a concrete edge — higher
               yield, a better NAV trend, higher total return, a lower expense ratio, or a larger fund
               — not just a higher composite score.
             </p>

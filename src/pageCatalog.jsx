@@ -142,7 +142,7 @@ export const PAGE_GROUPS = [
   {
     group: 'Checklists',
     pages: [
-      { path: '/stock-buying-checklist', label: 'Stock Buying Checklist', element: <StockBuyingChecklist /> },
+      { path: '/stock-buying-checklist', label: 'Stock Checklist', element: <StockBuyingChecklist /> },
       { path: '/etf-buying-checklist-evaluator', label: 'Non Income ETF Checklist Evaluator', element: <ETFBuyingChecklistEvaluator /> },
       { path: '/option-income-etf-evaluator', label: 'Option-Income ETF Evaluator', element: <OptionIncomeETFEvaluator /> },
     ],
@@ -158,7 +158,7 @@ export const PAGE_GROUPS = [
       { path: '/dist-compare', label: 'Distribution Compare', element: <DistributionCompare /> },
       { path: '/general-scanner', label: 'General Scanner', element: <GeneralScanner /> },
       { path: '/scanner', label: 'Single Strategy Scanner', element: <TechnicalScanner /> },
-      { path: '/buy-sell-signals', label: 'Buy / Sell Signals', element: <BuySellSignals /> },
+      { path: '/buy-sell-signals', label: 'Technical Readings', element: <BuySellSignals /> },
       { path: '/nav-erosion', label: 'NAV Erosion', element: <NavErosion /> },
       { path: '/nav-erosion-portfolio', label: 'NAV Erosion Screener', element: <NavErosionPortfolio /> },
       { path: '/drip-score', label: 'DRIP vs. Cash Analyzer', element: <DripScore /> },
@@ -182,7 +182,7 @@ export const PAGE_GROUPS = [
     pages: [
       { path: '/closed-cef-info', label: 'Closed CEF Information', element: <ClosedCEFInformation /> },
       { path: '/cef-buying-guide', label: 'What to Look For When Buying CEFs', element: <CEFBuyingGuide /> },
-      { path: '/cef-buying-checklist-evaluator', label: 'CEF Buying Checklist Evaluator', element: <CEFBuyingChecklistEvaluator /> },
+      { path: '/cef-buying-checklist-evaluator', label: 'CEF Checklist Evaluator', element: <CEFBuyingChecklistEvaluator /> },
       { path: '/cef-vs-income-etf', label: 'CEFs & Income ETFs: A Guide', element: <CEFvsIncomeETF /> },
     ],
   },

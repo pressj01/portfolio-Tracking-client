@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 const MAX_TICKERS = 75
 const ALL_HOLDINGS_VALUE = '__all_holdings__'
@@ -755,6 +756,7 @@ export default function DripScore() {
 
   return (
     <div className="ds-page">
+      <NotFinancialAdviceNotice />
       <h1 className="ds-title">DRIP vs. Cash Analyzer</h1>
       <p className="ds-sub">
         Replays actual prices and distributions over one common window and asks, per fund:

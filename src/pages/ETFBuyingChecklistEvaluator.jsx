@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { FUND_READING } from '../utils/readingLabels'
+import { fundVerdictBands } from '../utils/gradingPreferences'
 import FundScanTab from '../components/FundScanTab'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
@@ -230,18 +233,18 @@ function AlternativesList({ alternatives, peerCount, strategy, isOptionIncome })
   return (
     <div style={{ marginTop: '1.5rem' }}>
       <h2 style={{ color: 'var(--p-e6edf7)', fontSize: '1.1rem', margin: '0 0 0.4rem' }}>
-        {isOptionIncome ? 'Quality alternatives' : 'Better alternatives'} in the {strategy} strategy
+        {isOptionIncome ? 'Quality-screened peers' : 'Higher-scoring peers'} in the {strategy} strategy
       </h2>
       <p style={{ color: 'var(--text-dim-2)', fontSize: '0.86rem', margin: '0 0 0.8rem' }}>
         {isOptionIncome
           ? 'Option-income ETFs that pass the specialized quality checks for NAV trend, total return, history, and structure.'
-          : 'ETFs in the same strategy scoring higher on the composite of all 6 criteria.'} {peerCount} peers screened.
+          : 'ETFs in the same strategy scoring higher on the composite of all 6 criteria.'} {peerCount} peers screened. Listed for comparison and research only, not as a recommendation.
       </p>
       {alternatives.length === 0 ? (
         <div style={{ background: 'var(--p-0f1e3b)', border: '1px solid var(--p-1c2e52)', borderRadius: 6, padding: '1rem', color: 'var(--p-b8c8e0)' }}>
           {isOptionIncome
             ? 'No option-income peers passed the quality floor against this fund.'
-            : 'No higher-scoring alternatives found in this strategy group.'}
+            : 'No higher-scoring peers found in this strategy group.'}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -350,10 +353,11 @@ export default function ETFBuyingChecklistEvaluator() {
 
   return (
     <div className="page cef-page stock-check-page">
+      <NotFinancialAdviceNotice />
       <div className="cef-title-row stock-check-title-row">
         <div>
           <h1>Non Income ETF Checklist Evaluator</h1>
-          <p>Enter an ETF ticker. Six criteria are scored against editable thresholds, and better alternatives in the same strategy group are surfaced.</p>
+          <p>Enter an ETF ticker. Six criteria are scored against editable thresholds, and higher-scoring peers in the same strategy group are listed for comparison.</p>
         </div>
       </div>
 
@@ -390,9 +394,9 @@ export default function ETFBuyingChecklistEvaluator() {
           <section className="stock-check-help-full">
             <h3>Verdict bands</h3>
             <ul>
-              <li><strong>Strong Buy:</strong> composite ≥ 70 with 0 failing criteria.</li>
-              <li><strong>Weak Buy:</strong> composite ≥ 60 with at most 1 failing criterion.</li>
-              <li><strong>Do Not Buy:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. Two fails always caps the verdict at Do Not Buy, no matter how high the composite climbs.</li>
+              <li><strong>{FUND_READING.strong}:</strong> composite ≥ {fundVerdictBands().strongScore} with at most {fundVerdictBands().strongMaxFails} failing criteria.</li>
+              <li><strong>{FUND_READING.partial}:</strong> composite ≥ {fundVerdictBands().moderateScore} with at most {fundVerdictBands().moderateMaxFails} failing criteria.</li>
+              <li><strong>{FUND_READING.low}:</strong> anything else — including a high composite dragged down by 2 or more failing criteria. Two fails always caps the verdict at {FUND_READING.low}, no matter how high the composite climbs.</li>
               <li><strong>Not Enough Information to Evaluate:</strong> fewer than 3 criteria could be scored, or none of Performance / Risk / Yield Sustainability / Risk-adjusted Return had enough data.</li>
             </ul>
           </section>

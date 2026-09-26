@@ -24871,6 +24871,14 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     from datetime import datetime as _dt, timedelta as _td
 
     tickers = list(ticker_info.keys())
+    bands = _nav_rule_bands()
+    if isinstance(cache_key, tuple):
+        cache_key = cache_key + ((
+            bands["low_ratio"],
+            bands["high_ratio"],
+            bands["hard_decline_pct"],
+            bands["hard_deficit_pct"],
+        ),)
     if cache_key and use_cache:
         cached = _PORTFOLIO_COVERAGE_CACHE.get(cache_key)
         if cached and (time.time() - cached[0]) < _PORTFOLIO_SUMMARY_TTL_SEC:
@@ -25043,7 +25051,9 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
             coverage = round(numerator / ttm_dist_yield, 4) if ttm_dist_yield > 0 and numerator is not None else None
             price_change_pct = fund_return * 100
             relative_drag_pct = max(0.0, (benchmark_return - fund_return) * 100.0)
-            severity = _nav_erosion_from_adjusted_ratio(coverage, price_change_pct=price_change_pct)
+            severity = _nav_erosion_from_adjusted_ratio(
+                coverage, price_change_pct=price_change_pct, **bands
+            )
             up_market_recovery = _nav_up_market_recovery(
                 aligned_benchmark["fund"], aligned_benchmark["benchmark"]
             )
@@ -25105,7 +25115,7 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     )
 
     agg_coverage = round(total_price_return_dollars / total_dist_dollars, 4) if total_dist_dollars > 0 else None
-    aggregate_severity = _nav_aggregate_severity(agg_coverage, results)
+    aggregate_severity = _nav_aggregate_severity(agg_coverage, results, **bands)
     aggregate_accounting = _nav_accounting_rates(
         accounting_start_nav_dollars,
         accounting_end_nav_dollars,
@@ -25150,10 +25160,10 @@ def _build_nav_coverage_payload(ticker_info, cache_key=None, use_cache=True):
     return payload
 
 
-def _nav_aggregate_severity(aggregate_coverage, results=None):
+def _nav_aggregate_severity(aggregate_coverage, results=None, **bands):
     """Classify portfolio NAV erosion from the dollar-weighted aggregate ratio."""
     del results
-    return _nav_erosion_from_adjusted_ratio(aggregate_coverage)
+    return _nav_erosion_from_adjusted_ratio(aggregate_coverage, **bands)
 
 
 @app.route("/api/portfolio-coverage", methods=["GET"])
@@ -30319,14 +30329,30 @@ def _nav_distribution_yield_from_history(divs_series, current_price, close_serie
     return dist_per_share / cur_price, dist_per_share
 
 
-def _nav_erosion_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=None):
+def _nav_erosion_from_adjusted_ratio(
+    ratio,
+    price_change_pct=None,
+    deficit_pct=None,
+    low_ratio=0.25,
+    high_ratio=0.75,
+    hard_decline_pct=50.0,
+    hard_deficit_pct=5.0,
+):
+    """Classify coverage. Bands match Settings → Technical Readings unless a caller overrides them."""
     try:
-        if price_change_pct is not None and float(price_change_pct) <= -50:
+        low_ratio = max(0.0, float(low_ratio))
+        high_ratio = max(low_ratio, float(high_ratio))
+        hard_decline_pct = max(0.0, float(hard_decline_pct))
+        hard_deficit_pct = max(0.0, float(hard_deficit_pct))
+    except (TypeError, ValueError):
+        low_ratio, high_ratio, hard_decline_pct, hard_deficit_pct = 0.25, 0.75, 50.0, 5.0
+    try:
+        if price_change_pct is not None and float(price_change_pct) <= -hard_decline_pct:
             return "High"
     except (TypeError, ValueError):
         pass
     try:
-        if deficit_pct is not None and float(deficit_pct) >= 5:
+        if deficit_pct is not None and float(deficit_pct) >= hard_deficit_pct:
             return "High"
     except (TypeError, ValueError):
         pass
@@ -30336,15 +30362,17 @@ def _nav_erosion_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=N
         ratio = float(ratio)
     except (TypeError, ValueError):
         return None
-    if ratio <= 0.25:
+    if ratio <= low_ratio:
         return "Low"
-    if ratio <= 0.75:
+    if ratio <= high_ratio:
         return "Medium"
     return "High"
 
 
-def _nav_signal_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=None):
-    erosion = _nav_erosion_from_adjusted_ratio(ratio, price_change_pct, deficit_pct)
+def _nav_signal_from_adjusted_ratio(ratio, price_change_pct=None, deficit_pct=None, **bands):
+    erosion = _nav_erosion_from_adjusted_ratio(
+        ratio, price_change_pct, deficit_pct, **bands
+    )
     if erosion == "Low":
         return "BUY"
     if erosion == "High":
@@ -40904,6 +40932,8 @@ def _bss_coverage(
     low_ratio=0.25,
     high_ratio=0.75,
     hard_decline_pct=50.0,
+    hard_deficit_pct=5.0,
+    deficit_pct=None,
 ):
     """Compute benchmark-adjusted NAV erosion ratio for Buy/Sell Signals.
 
@@ -40919,19 +40949,15 @@ def _bss_coverage(
             price_change_pct = (float(clean.iloc[-1]) - float(clean.iloc[0])) / float(clean.iloc[0]) * 100
     except Exception:
         price_change_pct = None
-    low_ratio = max(0.0, float(low_ratio))
-    high_ratio = max(low_ratio, float(high_ratio))
-    hard_decline_pct = max(0.0, float(hard_decline_pct))
-    if price_change_pct is not None and price_change_pct <= -hard_decline_pct:
-        erosion = "High"
-    elif ratio is None:
-        erosion = None
-    elif ratio <= low_ratio:
-        erosion = "Low"
-    elif ratio <= high_ratio:
-        erosion = "Medium"
-    else:
-        erosion = "High"
+    erosion = _nav_erosion_from_adjusted_ratio(
+        ratio,
+        price_change_pct=price_change_pct,
+        deficit_pct=deficit_pct,
+        low_ratio=low_ratio,
+        high_ratio=high_ratio,
+        hard_decline_pct=hard_decline_pct,
+        hard_deficit_pct=hard_deficit_pct,
+    )
     signal = "BUY" if erosion == "Low" else "SELL" if erosion == "High" else "NEUTRAL" if erosion == "Medium" else None
     return ratio, signal, erosion
 
@@ -41683,6 +41709,64 @@ def stock_checklist_scan():
     })
 
 
+def _request_signal_formula():
+    """Buy / Sell signal rules from the request's query string.
+
+    The Signal Dashboard and the Watchlist share these rules; the client sends
+    the values saved under Settings -> Grading & Signal Formulas. A missing or
+    malformed value falls back to the default and is clamped to its range.
+    """
+    def _formula_arg(name, default, minimum=0.0, maximum=100.0):
+        try:
+            value = float(request.args.get(name, default))
+        except (TypeError, ValueError):
+            value = float(default)
+        return max(minimum, min(maximum, value))
+
+    formula = {
+        "ao_zero_buffer": _formula_arg("ao_zero_buffer", 0.0),
+        "rsi_buy_below": _formula_arg("rsi_buy_below", 30.0),
+        "rsi_sell_above": _formula_arg("rsi_sell_above", 70.0),
+        "sma_buffer_pct": _formula_arg("sma_buffer_pct", 1.0),
+        "majority_pct": _formula_arg("majority_pct", 50.0, 1.0, 100.0),
+        "nav_buy_max_ratio": _formula_arg("nav_buy_max_ratio", 0.25, 0.0, 100.0),
+        "nav_sell_above_ratio": _formula_arg("nav_sell_above_ratio", 0.75, 0.0, 100.0),
+        "nav_hard_decline_pct": _formula_arg("nav_hard_decline_pct", 50.0, 0.0, 100.0),
+        "nav_hard_deficit_pct": _formula_arg("nav_hard_deficit_pct", 5.0, 0.0, 100.0),
+        "weights": {
+            "ao": _formula_arg("weight_ao", 1.0, 0.0, 10.0),
+            "rsi": _formula_arg("weight_rsi", 1.0, 0.0, 10.0),
+            "macd": _formula_arg("weight_macd", 1.0, 0.0, 10.0),
+            "sma50": _formula_arg("weight_sma50", 1.0, 0.0, 10.0),
+            "sma200": _formula_arg("weight_sma200", 1.0, 0.0, 10.0),
+            "nav": _formula_arg("weight_nav", 1.0, 0.0, 10.0),
+        },
+    }
+    if formula["rsi_buy_below"] >= formula["rsi_sell_above"]:
+        formula["rsi_buy_below"], formula["rsi_sell_above"] = 30.0, 70.0
+    formula["nav_sell_above_ratio"] = max(
+        formula["nav_buy_max_ratio"], formula["nav_sell_above_ratio"]
+    )
+    return formula
+
+
+def _nav_rule_bands(formula=None):
+    """Saved NAV severity bands. Defaults match the historical fixed rules."""
+    formula = formula or _request_signal_formula()
+    return {
+        "low_ratio": formula["nav_buy_max_ratio"],
+        "high_ratio": formula["nav_sell_above_ratio"],
+        "hard_decline_pct": formula["nav_hard_decline_pct"],
+        "hard_deficit_pct": formula["nav_hard_deficit_pct"],
+    }
+
+
+def _signal_formula_weights(formula):
+    """Vote weights in the order AO, RSI, MACD, SMA 50, SMA 200, NAV."""
+    weights = formula["weights"]
+    return [weights["ao"], weights["rsi"], weights["macd"], weights["sma50"], weights["sma200"], weights["nav"]]
+
+
 @app.route("/api/buy-sell-signals")
 def buy_sell_signals_data():
     """Compute 5-indicator majority-vote signals for portfolio + sector/watchlist tickers."""
@@ -41701,36 +41785,7 @@ def buy_sell_signals_data():
 
     WATCHLIST_SIZE = 1000
 
-    def _formula_arg(name, default, minimum=0.0, maximum=100.0):
-        try:
-            value = float(request.args.get(name, default))
-        except (TypeError, ValueError):
-            value = float(default)
-        return max(minimum, min(maximum, value))
-
-    formula = {
-        "ao_zero_buffer": _formula_arg("ao_zero_buffer", 0.0),
-        "rsi_buy_below": _formula_arg("rsi_buy_below", 30.0),
-        "rsi_sell_above": _formula_arg("rsi_sell_above", 70.0),
-        "sma_buffer_pct": _formula_arg("sma_buffer_pct", 1.0),
-        "majority_pct": _formula_arg("majority_pct", 50.0, 1.0, 100.0),
-        "nav_buy_max_ratio": _formula_arg("nav_buy_max_ratio", 0.25, 0.0, 100.0),
-        "nav_sell_above_ratio": _formula_arg("nav_sell_above_ratio", 0.75, 0.0, 100.0),
-        "nav_hard_decline_pct": _formula_arg("nav_hard_decline_pct", 50.0, 0.0, 100.0),
-        "weights": {
-            "ao": _formula_arg("weight_ao", 1.0, 0.0, 10.0),
-            "rsi": _formula_arg("weight_rsi", 1.0, 0.0, 10.0),
-            "macd": _formula_arg("weight_macd", 1.0, 0.0, 10.0),
-            "sma50": _formula_arg("weight_sma50", 1.0, 0.0, 10.0),
-            "sma200": _formula_arg("weight_sma200", 1.0, 0.0, 10.0),
-            "nav": _formula_arg("weight_nav", 1.0, 0.0, 10.0),
-        },
-    }
-    if formula["rsi_buy_below"] >= formula["rsi_sell_above"]:
-        formula["rsi_buy_below"], formula["rsi_sell_above"] = 30.0, 70.0
-    formula["nav_sell_above_ratio"] = max(
-        formula["nav_buy_max_ratio"], formula["nav_sell_above_ratio"]
-    )
+    formula = _request_signal_formula()
 
     def _fmt_pct(v):
         if v is None:
@@ -41871,20 +41926,14 @@ def buy_sell_signals_data():
                             low_ratio=formula["nav_buy_max_ratio"],
                             high_ratio=formula["nav_sell_above_ratio"],
                             hard_decline_pct=formula["nav_hard_decline_pct"],
+                            hard_deficit_pct=formula["nav_hard_deficit_pct"],
                         )
                     else:
                         cov_ratio, cov_sig, nav_erosion = None, None, None
 
                     signal = _bss_vote(
                         [ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig],
-                        [
-                            formula["weights"]["ao"],
-                            formula["weights"]["rsi"],
-                            formula["weights"]["macd"],
-                            formula["weights"]["sma50"],
-                            formula["weights"]["sma200"],
-                            formula["weights"]["nav"],
-                        ],
+                        _signal_formula_weights(formula),
                         formula["majority_pct"],
                     )
 
@@ -41900,13 +41949,16 @@ def buy_sell_signals_data():
                         ao_val_str = f"{ao_val:.4f}" if ao_val is not None else "\u2014"
                         rsi_val_str = f"{rsi_val:.1f}" if rsi_val is not None else "\u2014"
                         cov_str = f"{cov_ratio:.2f}" if cov_ratio is not None else "\u2014"
+                        def _reading(value):
+                            return {"BUY": "Bullish", "SELL": "Bearish", "NEUTRAL": "Neutral"}.get(value, value)
+
                         hover_text = (
-                            f"<b>{signal}</b><br>"
-                            f"AO: {ao_sig} ({ao_val_str}, {ao_dir or chr(8212)})<br>"
-                            f"RSI: {rsi_sig} ({rsi_val_str})<br>"
-                            f"MACD: {macd_sig}<br>"
-                            f"SMA 50: {sma50_sig} ({_fmt_pct(sma50_pct)})<br>"
-                            f"SMA 200: {sma200_sig} ({_fmt_pct(sma200_pct)})<br>"
+                            f"<b>{_reading(signal)}</b><br>"
+                            f"AO: {_reading(ao_sig)} ({ao_val_str}, {ao_dir or chr(8212)})<br>"
+                            f"RSI: {_reading(rsi_sig)} ({rsi_val_str})<br>"
+                            f"MACD: {_reading(macd_sig)}<br>"
+                            f"SMA 50: {_reading(sma50_sig)} ({_fmt_pct(sma50_pct)})<br>"
+                            f"SMA 200: {_reading(sma200_sig)} ({_fmt_pct(sma200_pct)})<br>"
                             f"NAV Ratio: {cov_str} ({nav_erosion or chr(8212)} erosion risk)"
                         )
                         if is_portfolio:
@@ -41977,7 +42029,7 @@ def buy_sell_signals_data():
                         hovertemplate="<b>%{label}</b><br>%{text}<extra></extra>",
                     ))
                     fig.update_layout(
-                        title="Buy / Sell Signal Dashboard",
+                        title="Technical Readings",
                         template="plotly_dark",
                         margin=dict(t=50, l=5, r=5, b=5),
                         height=720,
@@ -42168,6 +42220,7 @@ def watchlist_data():
     error = None
     result_rows = []
     counts = {"BUY": 0, "SELL": 0, "NEUTRAL": 0}
+    formula = _request_signal_formula()
 
     # ── Indicator helpers ──
 
@@ -42347,11 +42400,15 @@ def watchlist_data():
             else:
                 close = high = low = empty
 
-            ao_sig, ao_val, ao_dir = _ao(high, low)
-            rsi_sig, rsi_val = _rsi(close)
-            macd_sig = _macd(close)
-            sma50_sig, sma50_v, sma50_pct = _sma(close, 50)
-            sma200_sig, sma200_v, sma200_pct = _sma(close, 200)
+            ao_sig, ao_val, ao_dir = _bss_ao(high, low, formula["ao_zero_buffer"])
+            rsi_sig, rsi_val = _bss_rsi(
+                close,
+                buy_below=formula["rsi_buy_below"],
+                sell_above=formula["rsi_sell_above"],
+            )
+            macd_sig = _bss_macd(close)
+            sma50_sig, sma50_v, sma50_pct = _bss_sma(close, 50, formula["sma_buffer_pct"])
+            sma200_sig, sma200_v, sma200_pct = _bss_sma(close, 200, formula["sma_buffer_pct"])
             # Benchmark-adjusted NAV erosion ratio
             cov_ratio, cov_sig, cov_erosion = None, None, None
             scope = nav_scopes.get(ticker, "auto")
@@ -42379,12 +42436,24 @@ def watchlist_data():
                         if not any(part in close_df.columns and len(close_df[part].dropna()) >= 2 for part in bench_parts):
                             bench_valid = False
                     if bench_valid:
-                        cov_ratio, cov_sig, cov_erosion = _bss_coverage(nav_close, t_divs_cov, bench_close)
+                        cov_ratio, cov_sig, cov_erosion = _bss_coverage(
+                            nav_close,
+                            t_divs_cov,
+                            bench_close,
+                            low_ratio=formula["nav_buy_max_ratio"],
+                            high_ratio=formula["nav_sell_above_ratio"],
+                            hard_decline_pct=formula["nav_hard_decline_pct"],
+                            hard_deficit_pct=formula["nav_hard_deficit_pct"],
+                        )
                         nav_tested = True
                 except Exception:
                     pass
 
-            signal = _vote([ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig])
+            signal = _bss_vote(
+                [ao_sig, rsi_sig, macd_sig, sma50_sig, sma200_sig, cov_sig],
+                _signal_formula_weights(formula),
+                formula["majority_pct"],
+            )
 
             sharpe_val = _sharpe(close)
             sortino_val = _sortino(close)
@@ -42757,7 +42826,13 @@ def nav_erosion_data():
             if final_row.get("breakeven_sh", 0) and final_row["shares_deficit"] > 0
             else 0.0
         )
-        total_severity = _nav_erosion_from_adjusted_ratio(total_coverage)
+        nav_bands = _nav_rule_bands()
+        total_severity = _nav_erosion_from_adjusted_ratio(
+            total_coverage,
+            price_change_pct=fund_return * 100.0,
+            deficit_pct=deficit_pct,
+            **nav_bands,
+        )
         cash_taken = cumulative_dist - cumulative_reinvested
         ending_wealth = final_row["portfolio_val"] + cash_taken
         total_return_dollar = ending_wealth - initial_investment
@@ -43462,7 +43537,12 @@ def nav_erosion_portfolio_data():
             cumul_divs_per_share,
         )
         deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
-        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(coverage_ratio)
+        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(
+            coverage_ratio,
+            price_change_pct=price_delta_pct,
+            deficit_pct=deficit_pct,
+            **_nav_rule_bands(),
+        )
         relative_drag_pct = max(0.0, benchmark_return * 100.0 - price_delta_pct)
         up_market_recovery = _nav_up_market_recovery(fund_daily, benchmark_daily)
         overall_erosion = _nav_overall_erosion_metrics(
@@ -44923,7 +45003,13 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
 
 
 def _enrich_weights_with_actions(weights_out, close_df, total_val, nav_returns=None, threshold=0.5):
-    """Add action / dollar_change / shares_change / current_price / nav_change_pct to each weight dict."""
+    """Add action / dollar_change / shares_change / current_price / nav_change_pct to each weight dict.
+
+    ``action`` is a direction code (BUY = model weight above current, SELL = below,
+    HOLD = within ``threshold``), not a trade instruction. The client renders it as an
+    illustrative Increase / Decrease / No change scenario, and ``shares_change`` is only
+    the share equivalent of the dollar gap at the last close.
+    """
     total_buy = 0.0
     total_sell = 0.0
     for w in weights_out:
@@ -48896,7 +48982,9 @@ def builder_rebalance(pid):
         target_amount = round(total_value * target_pct / 100, 2)
         change_amount = round(target_amount - current_amount, 2)
 
-        # Determine action
+        # Direction of the gap between this model portfolio and its template. These
+        # codes describe the scenario; the client labels them as example changes to
+        # the model, not as trades to place.
         if not class_holdings[ac]:
             action = "add_new"
         elif change_amount > 0:
@@ -48906,7 +48994,7 @@ def builder_rebalance(pid):
         else:
             action = "on_target"
 
-        # Suggest ETF: use existing holding in that class, or auto-select
+        # Example ETF for the class: the existing holding in that class, or an auto-selected one
         if class_holdings[ac]:
             suggested = max(class_holdings[ac], key=lambda h: h["amount"])["ticker"]
         else:
@@ -56181,7 +56269,9 @@ def etf_evaluate(ticker):
                 from grading import ticker_score
                 ratio_close = adj if (adj is not None and len(adj) >= 30) else close
                 ratio_ret = ratio_close.pct_change().dropna()
-                score, sharpe, sortino, calmar, omega, mdd, _dc, ulcer = ticker_score(ratio_close, ratio_ret)
+                score, sharpe, sortino, calmar, omega, mdd, _dc, ulcer = ticker_score(
+                    ratio_close, ratio_ret, grading_settings=_request_grading_settings(),
+                )
                 sufficient = len(ratio_close) >= 250
                 risk_ratios = {
                     "composite": round(score, 1) if (sufficient and score) else None,
@@ -56440,10 +56530,10 @@ _FUND_KIND_LABEL = {
     "other": "Stock / other",
 }
 _FUND_SCAN_SUGGESTION = {
-    "cef": "CEF Buying Checklist",
+    "cef": "CEF Checklist Evaluator",
     "option_income": "Option-Income ETF Evaluator",
     "etf": "Non Income ETF Checklist Evaluator",
-    "other": "Stock Buying Checklist",
+    "other": "Stock Checklist",
 }
 
 
@@ -56563,7 +56653,9 @@ def _scan_history_metrics(tickers):
             # back to the price series only when the adjusted one is unavailable.
             ratio_close = adj if (adj is not None and len(adj) >= 30) else close
             ratio_ret = ratio_close.pct_change().dropna()
-            score, sharpe, sortino, calmar, omega, mdd, _dc, ulcer = ticker_score(ratio_close, ratio_ret)
+            score, sharpe, sortino, calmar, omega, mdd, _dc, ulcer = ticker_score(
+                ratio_close, ratio_ret, grading_settings=_request_grading_settings(),
+            )
             sufficient = len(ratio_close) >= MIN_RATIO_DAYS
             risk_ratios = {
                 "composite": round(score, 1) if (sufficient and score) else None,

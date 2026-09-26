@@ -330,7 +330,7 @@ const GUIDES = {
     {
       title: 'Management, adjustments, and laddering',
       items: [
-        ['Profit target low / high', 'Take-profit band as a percentage of capital at risk. The article aims for 7% to 15% per trade.'],
+        ['Profit target low / high', 'Take-profit band as a percentage of capital at risk. The article illustrates an example band; it is an exit input, not a promised result.'],
         ['Stop', 'Exit if the loss passes this share of utilized capital. The article uses 4% to 5% and treats such an exit as a good trade, not a failure.'],
         ['Article exit backstop', 'The article plans to be out 15 to 20 days before expiration. The probability cards lead with the earlier halfway-to-two-thirds close window, when the time-value profit zone is broad; this input remains the latest planned exit.'],
         ['Hands-off window', 'The first 21 to 30 days are left alone so theta can work. That is the stretch the trade is named for.'],
@@ -389,7 +389,7 @@ const GUIDES = {
       title: 'Capital, targets, and exits',
       items: [
         ['Plan capital', 'About $16,000–$18,000 per unit in the source campaign. Profit and stop percentages are measured against this number, not against max loss at expiration.'],
-        ['Profit target', '14-day: 2–4% of plan capital. Monthly: 7–8%. Take it when it is there; the video examples were often out in 5–6 days.'],
+        ['Profit target', 'Exit input stored as a percentage of plan capital for the 14-day and monthly campaigns. The percentage is a management input from the source video, not a promised result.'],
         ['Management max loss', 'Keep losses smaller than 5% of plan capital.'],
         ['Maximum days in trade', '14-day campaign only. The name is this hold, not 14-DTE options.'],
         ['Exit remaining DTE', 'Monthly campaign only. Default 14 DTE remaining.'],
@@ -413,7 +413,7 @@ const GUIDES = {
       title: 'Capital, targets, and exits',
       items: [
         ['Plan capital', 'Same $16,000–$18,000 per unit as the 14-day campaign, with a $20,000 account cushion in the video.'],
-        ['Profit target', '7–8% of plan capital. Take it early when it is available rather than holding to the 14-DTE backstop.'],
+        ['Profit target', 'Exit input stored as a percentage of plan capital. It is a management input from the source video, not a promised result.'],
         ['Management max loss', 'Keep losses smaller than 5% of plan capital.'],
         ['Exit remaining DTE', 'Planned backstop at 14 DTE remaining. Probability cards also show a halfway review.'],
         ['Net delta', 'Slightly long by construction. A short net delta is marked review-only.'],
@@ -483,7 +483,7 @@ const GUIDES = {
         ['Time-evolution card', 'Reprices the complete butterfly at the halfway review, two-thirds review, and expiration. It shows success/failure plus modeled P/L if price is unchanged, at the upper long, and at the body/tent peak.'],
         ['Reach / never touches', 'First-passage probability that price reaches the upper long, plus its complement, over the same halfway and two-thirds management windows and through expiration.'],
         ['Body and lower-tail risk', 'Shows the chance of touching or finishing below the double-short body and lower long.'],
-        ['Course targets', 'Compares the candidate with the $1,000 profit target, $2,000 management loss limit, roughly 16-week course harvest expectation, near-zero UEL, and +$20 theta goal. The probability checkpoints still match the Condor.'],
+        ['Course targets', 'Compares the candidate with the document\'s management-loss limit, near-zero upper expiration line, and theta goal. Dollar harvest figures are document context, not expected profits. The probability checkpoints still match the Condor.'],
         ['When narrowing is eligible', 'Only after price has moved up and away from the butterfly, leaving every put farther out of the money. Never narrow the front wing while price is falling toward or into the structure.'],
         ['How narrowing raises the UEL', 'A net-credit roll that reduces the distance between the upper long and double-short body adds cash to the position. Above the upper long, the puts expire worthless, so the added net credit raises the upper expiration line before costs.'],
         ['Why narrowing is bullish', 'Moving the front strikes closer together reduces put protection or adds short-put exposure, shifting the complete position toward positive delta. The exact Greek change depends on which front leg is rolled.'],

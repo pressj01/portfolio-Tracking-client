@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { plannedActionLabel } from '../utils/readingLabels'
 
 function fmt$(v) {
   return formatMoney(v, { zeroIfInvalid: true })
@@ -628,11 +630,12 @@ export default function RebalanceWizard() {
 
   return (
     <div className="page">
+      <NotFinancialAdviceNotice />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
         <div>
           <h1>Rebalance Wizard</h1>
           <p style={{ color: 'var(--text-dim-2)', marginTop: 4 }}>
-            Build a buy/sell list from category target drift while keeping the monthly income target visible and enforced.
+            Build a draft weight-adjustment list from category target drift while keeping the monthly income target visible and enforced.
           </p>
         </div>
         <button className="btn btn-primary" onClick={generate} disabled={loading}>
@@ -647,7 +650,7 @@ export default function RebalanceWizard() {
         <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
           <p style={{ margin: '0 0 0.6rem' }}>
             <strong style={{ color: 'var(--text-strong)' }}>What it does.</strong> The Rebalance Wizard compares each category's
-            actual weight to the <strong>target %</strong> you set on the Categories screen, then builds a buy/sell list that
+            actual weight to the <strong>target %</strong> you set on the Categories screen, then builds a draft list of weight increases and decreases that
             closes the gaps — while keeping your monthly income at or above a floor you choose. Nothing is sent to a broker;
             it produces a plan you review, edit, save, and export.
           </p>
@@ -658,8 +661,8 @@ export default function RebalanceWizard() {
           <ol style={{ margin: '0 0 0.7rem 1.1rem', padding: 0 }}>
             <li>Set the options below (income mode, priority, floors, new cash).</li>
             <li>Click <strong>Generate Plan</strong>.</li>
-            <li>Review the <strong>Category Drift</strong> table and the suggested trades.</li>
-            <li>Optionally set <strong>Buy Candidate Preferences</strong> so the wizard buys the tickers you prefer.</li>
+            <li>Review the <strong>Category Drift</strong> table and the draft adjustments.</li>
+            <li>Optionally set <strong>Buy Candidate Preferences</strong> so added weight uses the tickers you prefer.</li>
             <li>Edit, remove, or add trades; <strong>Save Scenario</strong> to compare options; export when satisfied.</li>
           </ol>
 
@@ -1083,10 +1086,10 @@ export default function RebalanceWizard() {
                               onChange={e => updateTradeEdit(t._key, { action: e.target.value })}
                               style={{ minWidth: 78, fontWeight: 700 }}
                             >
-                              <option value="buy">BUY</option>
-                              <option value="sell">SELL</option>
+                              <option value="buy">Increase</option>
+                              <option value="sell">Decrease</option>
                             </select>
-                          ) : t.action.toUpperCase()}
+                          ) : plannedActionLabel(t.action)}
                         </td>
                         <td style={{ fontWeight: 700 }}>
                           {t.action === 'buy' && result.trades[t.generatedIndex]?.candidates?.length ? (

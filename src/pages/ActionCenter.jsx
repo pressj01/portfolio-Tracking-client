@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { convertMoneyText, formatMoney } from '../utils/money'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 const PRIORITY_LABEL = {
   all: 'All',
@@ -175,6 +176,7 @@ export default function ActionCenter() {
 
   return (
     <div className="page action-center-page">
+      <NotFinancialAdviceNotice />
       <div className="ac-title-row">
         <div>
           <h1>Action Center</h1>

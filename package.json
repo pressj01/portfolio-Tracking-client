@@ -4,6 +4,7 @@
   "private": true,
   "description": "Portfolio Tracking Desktop Application",
   "author": "Press",
+  "license": "SEE LICENSE IN EULA.txt",
   "main": "electron/main.js",
   "scripts": {
     "icons": "node scripts/run-python.js scripts/generate-app-icon.py",
@@ -21,6 +22,7 @@
   "build": {
     "appId": "com.press.portfolio.tracker.client",
     "productName": "Portfolio Tracking Client",
+    "license": "EULA.txt",
     "directories": {
       "output": "release"
     },

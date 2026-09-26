@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { FUND_READING } from '../utils/readingLabels'
+import { fundVerdictBands } from '../utils/gradingPreferences'
 import FundScanTab from '../components/FundScanTab'
 import { formatMoney } from '../utils/money'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
@@ -322,11 +325,11 @@ function GradingHelp() {
         and below 50 in the fail band. Better values increase scores; UNII and z-score adjustments can move the final badge into a different band.
         Final badges use pass ≥ 80, warn ≥ 50, fail below 50. Scores are clamped to 0–100; calculations use unrounded values.
         The composite is the equal-weight average of available scored criteria; missing data contributes no points and no failure.
-        At least 3 scored criteria are needed. “Strong Buy” requires ≥ 70 and no failures; “Weak Buy” requires ≥ 60 and at most 1 failure;
-        otherwise the label is “Do Not Buy.” These are checklist labels, and unscored checks still need review.</p>
+        At least 3 scored criteria are needed. “{FUND_READING.strong}” requires ≥ {fundVerdictBands().strongScore} and at most {fundVerdictBands().strongMaxFails} failures; “{FUND_READING.partial}” requires ≥ {fundVerdictBands().moderateScore} and at most {fundVerdictBands().moderateMaxFails} failures;
+        otherwise the label is “{FUND_READING.low}.” These are checklist labels, and unscored checks still need review.</p>
       <p><strong>Alternatives:</strong> Candidates must pass the same peer filters, have exactly the same set of scored criteria,
         and exceed the selected fund’s composite by more than 1 point. Show up to 5, ordered by composite.
-        Each fund’s peer benchmarks exclude itself. Lower leverage is shown as context rather than a standalone reason to recommend switching.
+        Each fund’s peer benchmarks exclude itself. Lower leverage is shown as context rather than a reason to prefer one fund.
         A higher score does not establish suitability or equal currency, credit, duration or portfolio risk.</p>
       <p><strong>Background:</strong>{' '}
         <a href="https://www.fidelity.com/learning-center/investment-products/closed-end-funds/leverage" target="_blank" rel="noreferrer">Leverage, expenses and NAV returns (Fidelity)</a>
@@ -451,10 +454,11 @@ export default function CEFBuyingChecklistEvaluator() {
 
   return (
     <div className="page cef-page stock-check-page">
+      <NotFinancialAdviceNotice />
       <div className="cef-title-row stock-check-title-row">
         <div>
-          <h1>CEF Buying Checklist Evaluator</h1>
-          <p>Evaluate the buying-guide questions with editable thresholds and compare funds with similar strategies and leverage.</p>
+          <h1>CEF Checklist Evaluator</h1>
+          <p>Evaluate the checklist questions with editable thresholds and compare funds with similar strategies and leverage.</p>
         </div>
       </div>
 

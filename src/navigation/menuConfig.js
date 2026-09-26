@@ -50,7 +50,7 @@ export const NAVIGATION_ITEMS = [
     link('watchlist', 'Watchlist', '/watchlist'),
   ]),
   dropdown('checklists', 'Checklists', [
-    link('stock-buying-checklist', 'Stock Buying Checklist', '/stock-buying-checklist'),
+    link('stock-buying-checklist', 'Stock Checklist', '/stock-buying-checklist'),
     link('etf-buying-checklist', 'Non Income ETF Checklist Evaluator', '/etf-buying-checklist-evaluator'),
     link('option-income-etf-evaluator', 'Option-Income ETF Evaluator', '/option-income-etf-evaluator'),
   ]),
@@ -73,7 +73,7 @@ export const NAVIGATION_ITEMS = [
       items: [
         link('general-scanner', 'General Scanner', '/general-scanner'),
         link('single-strategy-scanner', 'Single Strategy Scanner', '/scanner'),
-        link('buy-sell-signals', 'Buy / Sell Signals', '/buy-sell-signals'),
+        link('buy-sell-signals', 'Technical Readings', '/buy-sell-signals'),
       ],
     },
     {
@@ -114,7 +114,7 @@ export const NAVIGATION_ITEMS = [
   dropdown('cefs', "CEF's", [
     link('closed-cef-information', 'Closed CEF Information', '/closed-cef-info'),
     link('cef-buying-guide', 'What to Look For When Buying CEFs', '/cef-buying-guide'),
-    link('cef-checklist-evaluator', 'CEF Buying Checklist Evaluator', '/cef-buying-checklist-evaluator'),
+    link('cef-checklist-evaluator', 'CEF Checklist Evaluator', '/cef-buying-checklist-evaluator'),
     link('cef-income-etf-guide', 'CEFs & Income ETFs: A Guide', '/cef-vs-income-etf'),
   ]),
   dropdown('taxes', 'Taxes', [

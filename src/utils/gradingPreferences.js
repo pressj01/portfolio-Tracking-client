@@ -93,6 +93,7 @@ export const DEFAULT_GRADING_PREFERENCES = Object.freeze({
       navBuyMaxRatio: 0.25,
       navSellAboveRatio: 0.75,
       navHardDeclinePct: 50,
+      navHardDeficitPct: 5,
     },
     weights: { ao: 1, rsi: 1, macd: 1, sma50: 1, sma200: 1, nav: 1 },
   },
@@ -168,6 +169,85 @@ export function gradingSettingsQuery(preferences = loadGradingPreferences()) {
 // Final ETF / CEF / option-income checklist verdict bands.
 export function fundVerdictBands(preferences = loadGradingPreferences()) {
   return normalizeGradingPreferences(preferences).fundVerdicts
+}
+
+// Query values for Technical Readings, the Watchlist, and NAV-erosion severity.
+// Names match `_request_signal_formula` in the backend.
+export function signalFormulaSearch(preferences = loadGradingPreferences()) {
+  const { thresholds: t, weights: w } = normalizeGradingPreferences(preferences).signals
+  const params = new URLSearchParams()
+  params.set('ao_zero_buffer', t.aoZeroBuffer)
+  params.set('rsi_buy_below', t.rsiBuyBelow)
+  params.set('rsi_sell_above', t.rsiSellAbove)
+  params.set('sma_buffer_pct', t.smaBufferPct)
+  params.set('majority_pct', t.majorityPct)
+  params.set('nav_buy_max_ratio', t.navBuyMaxRatio)
+  params.set('nav_sell_above_ratio', t.navSellAboveRatio)
+  params.set('nav_hard_decline_pct', t.navHardDeclinePct)
+  params.set('nav_hard_deficit_pct', t.navHardDeficitPct)
+  params.set('weight_ao', w.ao)
+  params.set('weight_rsi', w.rsi)
+  params.set('weight_macd', w.macd)
+  params.set('weight_sma50', w.sma50)
+  params.set('weight_sma200', w.sma200)
+  params.set('weight_nav', w.nav)
+  return params
+}
+
+export function withSignalFormula(url, preferences = loadGradingPreferences()) {
+  const query = signalFormulaSearch(preferences).toString()
+  return `${url}${url.includes('?') ? '&' : '?'}${query}`
+}
+
+export function portfolioGradeGuideRows(preferences = loadGradingPreferences()) {
+  const risk = normalizeGradingPreferences(preferences).portfolioRisk
+  const higher = (key) => {
+    const band = risk.higherBands[key]
+    return {
+      a: `≥${band.excellent}`,
+      b: `≥${band.good}`,
+      c: `≥${band.fair}`,
+      d: `≥${band.poor}`,
+      f: `<${band.poor}`,
+      list: `${band.excellent} / ${band.good} / ${band.fair} / ${band.poor}`,
+    }
+  }
+  const lower = (key, suffix = '') => {
+    const band = risk.lowerBands[key]
+    return {
+      a: `≤${band.excellent}${suffix}`,
+      b: `≤${band.good}${suffix}`,
+      c: `≤${band.fair}${suffix}`,
+      d: `≤${band.poor}${suffix}`,
+      f: `>${band.poor}${suffix}`,
+      list: `${band.excellent} / ${band.good} / ${band.fair} / ${band.poor}`,
+    }
+  }
+  const holding = risk.holdingWeights
+  const portfolio = risk.portfolioWeights
+  return [
+    { metric: 'Ulcer Index', measures: 'Drawdown depth & duration (lower = better)', direction: 'lower', holding: holding.ulcerIndex, portfolio: portfolio.ulcerIndex, ...lower('ulcerIndex') },
+    { metric: 'Calmar', measures: 'Return / max drawdown', direction: 'higher', holding: holding.calmar, portfolio: portfolio.calmar, ...higher('calmar') },
+    { metric: 'Omega', measures: 'Gains vs losses', direction: 'higher', holding: holding.omega, portfolio: portfolio.omega, ...higher('omega') },
+    { metric: 'Sortino', measures: 'Return per downside risk', direction: 'higher', holding: holding.sortino, portfolio: portfolio.sortino, ...higher('sortino') },
+    { metric: 'Sharpe', measures: 'Return per unit of risk', direction: 'higher', holding: holding.sharpe, portfolio: portfolio.sharpe, ...higher('sharpe') },
+    { metric: 'Max Drawdown', measures: 'Worst peak-to-trough', direction: 'lower', holding: holding.maxDrawdown, portfolio: portfolio.maxDrawdown, ...lower('maxDrawdown', '%') },
+    { metric: 'Down Capture', measures: 'Loss vs benchmark', direction: 'lower', holding: holding.downCapture, portfolio: portfolio.downCapture, ...lower('downCapture', '%') },
+    { metric: 'Diversification', measures: 'Effective # holdings', direction: 'higher', holding: null, portfolio: portfolio.diversification, ...higher('diversification') },
+    {
+      metric: 'NAV Health',
+      measures: `Starts at ${risk.navHealth.fullScore} and loses ${risk.navHealth.penaltyPerDeclinePct} points per 1% of portfolio NAV decline`,
+      direction: 'higher',
+      holding: null,
+      portfolio: portfolio.navHealth,
+      a: '—',
+      b: '—',
+      c: '—',
+      d: '—',
+      f: '—',
+      list: `${risk.navHealth.fullScore} − ${risk.navHealth.penaltyPerDeclinePct} per decline %`,
+    },
+  ]
 }
 
 export function loadGradingPreferences(storage = globalThis.localStorage) {

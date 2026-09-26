@@ -10,6 +10,8 @@ import BacktestCharts from './analytics/BacktestCharts'
 import ToolsPanel from './analytics/ToolsPanel'
 import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 import { gradingSettingsPayload } from '../utils/gradingPreferences'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { loadGradingPreferences, portfolioGradeGuideRows } from '../utils/gradingPreferences'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -178,6 +180,7 @@ export default function Analytics() {
 
   return (
     <div className="page">
+      <NotFinancialAdviceNotice />
       <h1 style={{ marginBottom: '0.3rem' }}>Portfolio Analytics</h1>
       <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
         Risk-adjusted metrics, portfolio grading, correlation analysis, and optimization.
@@ -227,10 +230,11 @@ export default function Analytics() {
           <p style={{ margin: '0 0 0.45rem' }}>
             Re-weights the tickers already on the list to raise <strong>risk-adjusted total return</strong>
             (about 60% Sharpe, 40% Sortino). It is not “pick the highest-returning ETF.” Needs at least two tickers.
-            Single-stock option ETFs are forced to a 0% target (sold). Funds with severe NAV erosion get a smaller
-            max weight. Each name is capped near 40%, and a sell cannot cut a current holding below about 25% of
-            its present weight in one pass. The result is a BUY / SELL / HOLD list versus your current mix.
-            Nothing is sent to a broker.
+            Single-stock option ETFs get a 0% model weight. Funds with severe NAV erosion get a smaller
+            max weight. Each name is capped near 40%, and the model cannot cut a current holding below about 25% of
+            its present weight in one pass. The result is an illustrative scenario showing which weights the model
+            would increase, decrease, or leave unchanged versus your current mix — an example to study, not a
+            recommendation to trade. Nothing is sent to a broker.
           </p>
 
           <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Optimize Income</p>
@@ -238,7 +242,7 @@ export default function Analytics() {
             Re-weights toward <strong>higher cash yield</strong> while still scoring quality (Ulcer, Calmar, Omega, Sortino).
             About 70% of the objective is yield and 30% is that quality score. Yield is reduced when a fund’s price
             has been structurally eroding (so a 40% distribution on a melting NAV does not win). Names with no yield
-            are not bought. Per-holding cap is about 20%. Same BUY / SELL / HOLD report; no trades are placed.
+            get no model weight. Per-holding cap is about 20%. Same increase / decrease / no-change scenario; no trades are placed.
           </p>
 
           <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Balanced</p>
@@ -250,7 +254,7 @@ export default function Analytics() {
             Move the slider, then click <strong>Balanced</strong> again — the slider alone does not re-run.
           </p>
           <p style={{ margin: '0 0 0.7rem' }}>
-            On any optimization result, <strong>Export CSV</strong> downloads the recommended trades and
+            On any optimization result, <strong>Export CSV</strong> downloads the scenario's model weight changes and
             <strong>Save Snapshot</strong> keeps a few runs so you can compare scenarios on this page.
           </p>
 
@@ -666,16 +670,13 @@ export default function Analytics() {
                         </tr>
                       </thead>
                       <tbody style={{ color: 'var(--text-strong)' }}>
-                        {[
-                          ['Ulcer Index', '25%', '20%', 'lower', '3 / 7 / 12 / 20'],
-                          ['Calmar Ratio', '20%', '20%', 'higher', '1.5 / 1.0 / 0.5 / 0.2'],
-                          ['Omega Ratio', '15%', '15%', 'higher', '2.0 / 1.5 / 1.2 / 1.0'],
-                          ['Sortino Ratio', '15%', '12%', 'higher', '2.0 / 1.5 / 1.0 / 0.5'],
-                          ['Sharpe Ratio', '10%', '8%', 'higher', '1.5 / 1.0 / 0.5 / 0.0'],
-                          ['Max Drawdown %', '10%', '10%', 'lower', '10 / 20 / 30 / 40'],
-                          ['Downside Capture', '5%', '5%', 'lower', '80 / 90 / 100 / 120'],
-                          ['Diversification (eff. N)', '—', '10%', 'higher', '20 / 12 / 6 / 3'],
-                        ].map(([metric, tw, pw, dir, thr]) => (
+                        {portfolioGradeGuideRows().map(row => {
+                          const metric = row.metric
+                          const tw = row.holding == null ? '—' : `${row.holding}%`
+                          const pw = `${row.portfolio}%`
+                          const dir = row.direction
+                          const thr = row.list
+                          return (
                           <tr key={metric} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
                             <td style={{ padding: '0.25rem 0.5rem' }}>{metric}</td>
                             <td style={{ padding: '0.25rem 0.5rem', textAlign: 'right' }}>{tw}</td>
@@ -683,7 +684,8 @@ export default function Analytics() {
                             <td style={{ padding: '0.25rem 0.5rem', color: 'var(--text-dim)' }}>{dir} is better</td>
                             <td style={{ padding: '0.25rem 0.5rem', color: 'var(--text-dim)' }}>{thr}</td>
                           </tr>
-                        ))}
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -745,8 +747,10 @@ export default function Analytics() {
                   </div>
 
                   <p style={{ margin: '0 0 0.4rem' }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>Letter grades.</strong> A+ ≥97 · A ≥93 · A- ≥90 · B+ ≥87 · B ≥83 ·
-                    B- ≥80 · C+ ≥77 · C ≥73 · C- ≥70 · D+ ≥67 · D ≥63 · D- ≥60 · F &lt;60.
+                    <strong style={{ color: 'var(--text-strong)' }}>Letter grades.</strong> {(() => {
+                      const cuts = loadGradingPreferences().portfolioRisk.letterCutoffs
+                      return `A+ ≥${cuts.aPlus} · A ≥${cuts.a} · A- ≥${cuts.aMinus} · B+ ≥${cuts.bPlus} · B ≥${cuts.b} · B- ≥${cuts.bMinus} · C+ ≥${cuts.cPlus} · C ≥${cuts.c} · C- ≥${cuts.cMinus} · D+ ≥${cuts.dPlus} · D ≥${cuts.d} · D- ≥${cuts.dMinus} · F <${cuts.dMinus}`
+                    })()}
                   </p>
 
                   <p style={{ margin: 0 }}>
@@ -1108,7 +1112,7 @@ export default function Analytics() {
                 )
               })()}
 
-              {/* Recommended Changes */}
+              {/* Model allocation scenario */}
               {result.optimization.weights?.[0]?.action && (() => {
                 const sorted = [...result.optimization.weights].sort((a, b) => {
                   const pri = { SELL: 0, BUY: 1, HOLD: 2 }
@@ -1116,36 +1120,39 @@ export default function Analytics() {
                   return Math.abs(b.dollar_change) - Math.abs(a.dollar_change)
                 })
                 const rs = result.optimization.rebalance_summary || {}
+                // BUY / SELL / HOLD are the API's direction codes. The screen shows them as
+                // model weight shifts so the table reads as a scenario, not trade instructions.
+                const shiftLabel = { BUY: 'Increase', SELL: 'Decrease', HOLD: 'No change' }
                 const actionColor = { BUY: '#4dff91', SELL: '#ff6b6b', HOLD: '#8899aa' }
                 const actionBg = { BUY: 'rgba(77,255,145,0.12)', SELL: 'rgba(255,107,107,0.12)', HOLD: 'rgba(136,153,170,0.08)' }
                 // Quick action summary
                 const comp = result.optimization.comparison
                 const incomeChange = comp ? (comp.after.annual_income - comp.before.annual_income) : null
                 const summaryParts = []
-                if (rs.num_sells > 0) summaryParts.push(`Sell ${rs.num_sells} holding${rs.num_sells > 1 ? 's' : ''}`)
-                if (rs.num_buys > 0) summaryParts.push(`buy ${rs.num_buys} holding${rs.num_buys > 1 ? 's' : ''}`)
-                const summaryText = summaryParts.join(', ')
-                const incomeSuffix = incomeChange != null ? ` \u2014 net income ${formatMoneyDelta(incomeChange, { digits: 0 })}/yr` : ''
+                if (rs.num_sells > 0) summaryParts.push(`${rs.num_sells} lower weight${rs.num_sells > 1 ? 's' : ''}`)
+                if (rs.num_buys > 0) summaryParts.push(`${rs.num_buys} higher weight${rs.num_buys > 1 ? 's' : ''}`)
+                const summaryText = summaryParts.length ? `In this scenario the model mix has ${summaryParts.join(' and ')}` : ''
+                const incomeSuffix = incomeChange != null ? ` \u2014 modeled income ${formatMoneyDelta(incomeChange, { digits: 0 })}/yr` : ''
 
                 // CSV export
                 const exportCsv = () => {
                   const modeLabel = mode === 'optimize_returns' ? 'Optimize Returns' : mode === 'optimize_income' ? 'Optimize Income' : `Balanced (${balance}%)`
-                  const header = `# ${modeLabel} - ${new Date().toLocaleDateString()}\n`
-                  const cols = 'Action,Ticker,USD Change,~Shares,USD Price,NAV Chg %,Current %,Target %\n'
+                  const header = `# ${modeLabel} scenario - ${new Date().toLocaleDateString()} - illustrative model weights, not a recommendation to trade\n`
+                  const cols = 'Model Shift,Ticker,USD Change,~Share Equivalent,USD Price,NAV Chg %,Current %,Model %\n'
                   const rows = sorted.map(w =>
-                    `${w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${w.nav_change_pct?.toFixed(1) ?? ''},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
+                    `${shiftLabel[w.action] ?? w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${w.nav_change_pct?.toFixed(1) ?? ''},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
                   ).join('\n')
                   const blob = new Blob([header + cols + rows], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
-                  a.href = url; a.download = `optimization-${mode}-${new Date().toISOString().slice(0,10)}.csv`
+                  a.href = url; a.download = `optimization-scenario-${mode}-${new Date().toISOString().slice(0,10)}.csv`
                   a.click(); URL.revokeObjectURL(url)
                 }
 
                 return (
                   <div style={{ marginBottom: '0.75rem' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.4rem' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-strong)', fontWeight: 600 }}>Recommended Changes</span>
+                      <span style={{ fontSize: '0.85rem', color: 'var(--text-strong)', fontWeight: 600 }}>Scenario: Model Allocation Changes</span>
                       <button onClick={exportCsv} style={{
                         background: 'none', border: '1px solid var(--p-3a5a8c)', borderRadius: 4, color: 'var(--accent-bright)',
                         fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
@@ -1160,6 +1167,10 @@ export default function Analytics() {
                         }}>Save Snapshot</button>
                       )}
                     </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: '0.4rem' }}>
+                      Illustrative only. This compares your current weights with the optimizer's model mix for the selected
+                      goal and period. It is an example to study, not a recommendation to buy or sell; share equivalents use the last close.
+                    </div>
                     {summaryText && (
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.4rem', fontStyle: 'italic' }}>
                         {summaryText}
@@ -1167,21 +1178,21 @@ export default function Analytics() {
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '0.5rem', fontSize: '0.78rem' }}>
-                      {rs.num_sells > 0 && <span style={{ color: 'var(--neg)' }}>{rs.num_sells} Sell{rs.num_sells > 1 ? 's' : ''} totaling {formatMoneyWhole(rs.total_sell)}</span>}
-                      {rs.num_buys > 0 && <span style={{ color: 'var(--pos)' }}>{rs.num_buys} Buy{rs.num_buys > 1 ? 's' : ''} totaling {formatMoneyWhole(rs.total_buy)}</span>}
-                      {rs.num_holds > 0 && <span style={{ color: 'var(--text-dim)' }}>{rs.num_holds} Hold{rs.num_holds > 1 ? 's' : ''}</span>}
+                      {rs.num_sells > 0 && <span style={{ color: 'var(--neg)' }}>{rs.num_sells} lower weight{rs.num_sells > 1 ? 's' : ''} ({formatMoneyWhole(rs.total_sell)})</span>}
+                      {rs.num_buys > 0 && <span style={{ color: 'var(--pos)' }}>{rs.num_buys} higher weight{rs.num_buys > 1 ? 's' : ''} ({formatMoneyWhole(rs.total_buy)})</span>}
+                      {rs.num_holds > 0 && <span style={{ color: 'var(--text-dim)' }}>{rs.num_holds} unchanged</span>}
                     </div>
                     <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
                       <thead>
                         <tr>
-                          <th style={thStyle}>Action</th>
+                          <th style={thStyle}>Model Shift</th>
                           <th style={thStyle}>Ticker</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Change ({getCurrencyLabel()})</th>
-                          <th style={{ ...thStyle, textAlign: 'right' }}>~Shares</th>
+                          <th style={{ ...thStyle, textAlign: 'right' }} title="Approximate share equivalent of the dollar change at the last close">~Share Equiv.</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Price</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>NAV Chg</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
-                          <th style={{ ...thStyle, textAlign: 'right' }}>Target %</th>
+                          <th style={{ ...thStyle, textAlign: 'right' }}>Model %</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1191,7 +1202,7 @@ export default function Analytics() {
                               <span style={{
                                 display: 'inline-block', padding: '1px 8px', borderRadius: 4, fontSize: '0.72rem', fontWeight: 700,
                                 color: actionColor[w.action], background: actionBg[w.action],
-                              }}>{w.action}</span>
+                              }}>{shiftLabel[w.action] ?? w.action}</span>
                             </td>
                             <td style={{ padding: '0.35rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{w.ticker}</td>
                             <td style={{
@@ -1252,8 +1263,8 @@ export default function Analytics() {
                         { label: 'Calmar', get: s => s.optimization.comparison?.after.calmar?.toFixed(2) ?? '—' },
                         { label: 'Ulcer Index', get: s => s.optimization.comparison?.after.ulcer_index?.toFixed(2) ?? '—' },
                         { label: 'Max Drawdown', get: s => { const v = s.optimization.comparison?.after.max_drawdown; return v != null ? (v * 100).toFixed(1) + '%' : '—' } },
-                        { label: 'Buys', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_buys} (${formatMoneyWhole(r.total_buy)})` : '—' } },
-                        { label: 'Sells', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_sells} (${formatMoneyWhole(r.total_sell)})` : '—' } },
+                        { label: 'Higher weights', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_buys} (${formatMoneyWhole(r.total_buy)})` : '—' } },
+                        { label: 'Lower weights', get: s => { const r = s.optimization.rebalance_summary; return r ? `${r.num_sells} (${formatMoneyWhole(r.total_sell)})` : '—' } },
                       ].map(row => (
                         <tr key={row.label} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
                           <td style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem' }}>{row.label}</td>

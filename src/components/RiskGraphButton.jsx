@@ -25,7 +25,7 @@ async function fetchJson(path, options) {
 }
 
 /**
- * Sends one scanner row's suggested trade to the Options page, which draws its
+ * Sends one scanner row's example trade to the Options page, which draws its
  * risk profile and marks the strikes on the underlying's price chart.
  *
  * `kind` selects the builder in optionTradeHandoff for that scanner's row shape.
@@ -115,8 +115,8 @@ export default function RiskGraphButton({ kind, row, source, label = 'Risk graph
         style={style}
         disabled={!available}
         title={available
-          ? `Open ${row?.ticker}'s suggested trade on the risk graph with the strikes drawn on the price chart`
-          : 'No option trade was suggested for this row'}
+          ? `Open ${row?.ticker}'s example trade on the risk graph with the strikes drawn on the price chart`
+          : 'This row has no example option trade'}
         onClick={event => {
           event.stopPropagation()
           const returnTo = `${location.pathname}${location.search || ''}`

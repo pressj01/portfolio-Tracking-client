@@ -1,4 +1,4 @@
-// Pure grading helpers for the Stock Buying Checklist.
+// Pure grading helpers for the Stock Checklist.
 //
 // Fundamentals are graded SECTOR-RELATIVE: each ratio is compared to a sector
 // benchmark (the median of the scanned cohort when available, otherwise a
@@ -11,6 +11,7 @@
 
 import { formatMoney } from './money.js'
 import { normalizeGradingPreferences } from './gradingPreferences.js'
+import { STOCK_READING } from './readingLabels.js'
 
 export const SCORE_WEIGHTS = { fundamental: 0.6, technical: 0.4 }
 
@@ -255,7 +256,7 @@ function gradeTechnicals(t, settings) {
     rationale: trend === 'BUY' ? 'Price is above its major moving averages — an uptrend.'
       : trend === 'SELL' ? 'Price is below its major moving averages — a downtrend.'
       : 'Price is hovering around its moving averages — no clear trend.',
-    formula: `Uses the 200-day average when available, otherwise the 50-day average. BUY above +${settings.technicalThresholds.trendBufferPct}%, SELL below -${settings.technicalThresholds.trendBufferPct}%, otherwise NEUTRAL. Group weight: ${settings.groupWeights.trend}.`,
+    formula: `Uses the 200-day average when available, otherwise the 50-day average. Bullish above +${settings.technicalThresholds.trendBufferPct}%, Bearish below -${settings.technicalThresholds.trendBufferPct}%, otherwise Neutral. Group weight: ${settings.groupWeights.trend}.`,
   })
 
   // Momentum: MACD + RSI
@@ -274,7 +275,7 @@ function gradeTechnicals(t, settings) {
     ],
     rationale: `MACD is ${t.macd_state === 'BUY' ? 'bullish (line above signal)' : t.macd_state === 'SELL' ? 'bearish (line below signal)' : 'flat'}; `
       + `RSI ${num(t.rsi14) === null ? 'n/a' : Number(t.rsi14).toFixed(0)} is ${rsi === 'BUY' ? 'oversold' : rsi === 'SELL' ? 'overbought' : 'neutral'}.`,
-    formula: `Averages MACD and RSI signal scores. RSI is BUY below ${settings.technicalThresholds.rsiBuyBelow}, SELL above ${settings.technicalThresholds.rsiSellAbove}; MACD is BUY when its line is above the signal line. Group weight: ${settings.groupWeights.momentum}.`,
+    formula: `Averages MACD and RSI signal scores. RSI is Bullish below ${settings.technicalThresholds.rsiBuyBelow}, Bearish above ${settings.technicalThresholds.rsiSellAbove}; MACD is Bullish when its line is above the signal line. Group weight: ${settings.groupWeights.momentum}.`,
   })
 
   // Oscillators: Stochastic + Awesome Oscillator
@@ -292,7 +293,7 @@ function gradeTechnicals(t, settings) {
     ],
     rationale: `Slow stochastic is ${stochastic === 'BUY' ? 'oversold' : stochastic === 'SELL' ? 'overbought' : 'mid-range'}; `
       + `the awesome oscillator is ${t.ao_state === 'BUY' ? 'bullish' : t.ao_state === 'SELL' ? 'bearish' : 'flat'}.`,
-    formula: `Averages slow-stochastic and Awesome Oscillator signal scores. Stochastic is BUY when K and D are below ${settings.technicalThresholds.stochasticBuyBelow}, SELL when both exceed ${settings.technicalThresholds.stochasticSellAbove}. Group weight: ${settings.groupWeights.oscillators}.`,
+    formula: `Averages slow-stochastic and Awesome Oscillator signal scores. Stochastic is Bullish when K and D are below ${settings.technicalThresholds.stochasticBuyBelow}, Bearish when both exceed ${settings.technicalThresholds.stochasticSellAbove}. Group weight: ${settings.groupWeights.oscillators}.`,
   })
 
   // Volume & 52-week range
@@ -345,14 +346,14 @@ export function stockVerdict(fundComposite, techComposite, rawSettings) {
   else combined = f * w.fundamental + t * w.technical
   let label, tone
   const verdictBands = settings.verdictBands
-  if (combined >= verdictBands.strongBuy && (f === null || f >= verdictBands.strongFundamental)) { label = 'Strong Buy'; tone = 'pass' }
-  else if (combined >= verdictBands.buy) { label = 'Buy'; tone = 'pass' }
-  else if (combined >= verdictBands.hold) { label = 'Hold'; tone = 'warn' }
-  else { label = 'Avoid'; tone = 'fail' }
+  if (combined >= verdictBands.strongBuy && (f === null || f >= verdictBands.strongFundamental)) { label = STOCK_READING.strong; tone = 'pass' }
+  else if (combined >= verdictBands.buy) { label = STOCK_READING.favorable; tone = 'pass' }
+  else if (combined >= verdictBands.hold) { label = STOCK_READING.mixed; tone = 'warn' }
+  else { label = STOCK_READING.low; tone = 'fail' }
 
   let detail = `Fundamental ${f === null ? 'n/a' : f.toFixed(0)}/100, technical ${t === null ? 'n/a' : t.toFixed(0)}/100 → blended ${combined.toFixed(0)}/100.`
   if (f !== null && t !== null) {
-    if (f >= 65 && t < 50) detail += ' Solid business, but the chart/entry timing is weak — consider waiting for a better setup.'
+    if (f >= 65 && t < 50) detail += ' The business score is solid and the chart score is weak.'
     else if (f < 50 && t >= 65) detail += ' The chart looks strong, but the underlying business scores poorly — momentum without quality.'
     else if (f >= 65 && t >= 65) detail += ' Quality business and a constructive chart line up.'
   }

@@ -364,7 +364,7 @@ function HelpPanel() {
         </p>
       </HelpSection>
 
-      <HelpSection title="The suggested trade and how to manage it">
+      <HelpSection title="The example trade and how it would be managed">
         <p style={p}>
           For the highest-rated candidates the scanner pulls the live chain, takes the expiration closest to your target
           DTE, and picks the call nearest your target delta that is at least your minimum distance out of the money.

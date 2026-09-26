@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
+import { withSignalFormula } from '../utils/gradingPreferences'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
@@ -1053,7 +1054,7 @@ export function CommonInfoPanel({
   }, [pf, growthTickers])
 
   const refreshCoverage = useCallback(() => {
-    return readJson(pf('/api/portfolio-coverage'))
+    return readJson(pf(withSignalFormula('/api/portfolio-coverage')))
       .then(data => {
         const map = {}
         const meta = {}

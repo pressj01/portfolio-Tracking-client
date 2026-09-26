@@ -816,7 +816,7 @@ export function rankAmongPeers(currentFund, peers, thresholds, gradeFunc, opts =
 }
 
 // opts:
-//   passingOnly    — only keep alternatives that clear the checklist (verdict not "Do Not Buy")
+//   passingOnly    — only keep alternatives that clear the checklist (verdict not "Low reading")
 //   yieldFloorRatio — alt yield must be ≥ currentYield × ratio (e.g. 0.90 = at most 10% less income)
 //   singleStockLast — sort diversified funds first, single-stock income ETFs last (still shown, flagged)
 //   optionIncomeQualityFloor — reject option-income peers materially worse than the selected fund

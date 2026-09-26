@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { STOCK_READING } from '../utils/readingLabels'
 import { API_BASE } from '../config'
 import { useProfile } from '../context/ProfileContext'
 import useTickerQueryParam from '../utils/useTickerQueryParam'
@@ -471,13 +473,14 @@ export default function StockBuyingChecklist() {
 
   return (
     <div className="page cef-page stock-check-page">
+      <NotFinancialAdviceNotice />
       <div className="cef-title-row stock-check-title-row">
         <div>
-          <h1>Stock Buying Checklist</h1>
+          <h1>Stock Checklist</h1>
           <p>
             Score a stock on fundamentals (valuation, profitability, growth, balance-sheet health)
             and technicals (trend, MACD, RSI, stochastics, awesome oscillator, volume), then get
-            a blended buy verdict.
+            a blended reading.
           </p>
         </div>
       </div>
@@ -508,17 +511,17 @@ export default function StockBuyingChecklist() {
             <p>
               Trend compares price with the 50-/200-day averages and the golden cross; Momentum
               blends MACD and RSI; Oscillators blend the slow stochastic and awesome oscillator;
-              Volume blends on-balance volume with 52-week range position. Each BUY / SELL / NEUTRAL
+              Volume blends on-balance volume with 52-week range position. Each Bullish / Bearish / Neutral
               signal scores {settings.signalScores.buy} / {settings.signalScores.sell} / {settings.signalScores.neutral} before averaging into its group.
             </p>
           </section>
           <section className="stock-check-help-full">
             <h3>Verdict bands</h3>
             <ul>
-              <li><strong>Strong Buy:</strong> blended score ≥ {settings.verdictBands.strongBuy}, and the fundamental composite is ≥ {settings.verdictBands.strongFundamental} (or unavailable).</li>
-              <li><strong>Buy:</strong> blended score ≥ {settings.verdictBands.buy}.</li>
-              <li><strong>Hold:</strong> blended score ≥ {settings.verdictBands.hold}.</li>
-              <li><strong>Avoid:</strong> blended score below {settings.verdictBands.hold}.</li>
+              <li><strong>{STOCK_READING.strong}:</strong> blended score ≥ {settings.verdictBands.strongBuy}, and the fundamental composite is ≥ {settings.verdictBands.strongFundamental} (or unavailable).</li>
+              <li><strong>{STOCK_READING.favorable}:</strong> blended score ≥ {settings.verdictBands.buy}.</li>
+              <li><strong>{STOCK_READING.mixed}:</strong> blended score ≥ {settings.verdictBands.hold}.</li>
+              <li><strong>{STOCK_READING.low}:</strong> blended score below {settings.verdictBands.hold}.</li>
               <li><strong>Insufficient Data:</strong> neither the fundamental nor technical side has enough data to score.</li>
             </ul>
             <p><Link to="/settings#grading-formulas">View or change every stock grading input in Settings.</Link></p>

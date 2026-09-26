@@ -7,6 +7,7 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
 import { NAV_BENCHMARK_CHOICES } from '../utils/navBenchmarks'
 import { todayInputValue } from '../utils/performancePeriods'
+import { signalFormulaSearch } from '../utils/gradingPreferences'
 
 function fmt$(v) {
   return formatMoney(v)
@@ -102,6 +103,7 @@ export default function NavErosion() {
       ticker: sym, amount, start: startDate, end: endDate, reinvest: String(reinvest)
     })
     if (benchmark.trim()) params.set('benchmark', benchmark.trim().toUpperCase())
+    signalFormulaSearch().forEach((value, key) => params.set(key, value))
 
     pf('/api/nav-erosion/data?' + params.toString())
       .then(r => r.json())

@@ -85,18 +85,18 @@ const metricScoreHelp = {
 }
 
 const stockSignalScoreHelp = {
-  buy: 'Points given to a BUY state inside the stock checklist technical cards. Trend, MACD/RSI, stochastic/AO, and OBV states use this value before their card averages are calculated. Raising it boosts the Technical composite when bullish or oversold BUY readings occur; it does not change how the separate Buy / Sell Signal Dashboard counts votes.',
-  neutral: 'Points given to a NEUTRAL state inside the stock checklist technical cards. Raising it makes inconclusive readings less costly and usually lifts the Technical composite; lowering it demands clearer BUY signals for a high score. It does not change the separate dashboard vote rules.',
-  sell: 'Points given to a SELL state inside the stock checklist technical cards. Raising it makes bearish or overbought readings less damaging; lowering it increases their penalty. It does not change the separate Buy / Sell Signal Dashboard vote rules.',
+  buy: 'Points given to a Bullish state inside the stock checklist technical cards. Trend, MACD/RSI, stochastic/AO, and OBV states use this value before their card averages are calculated. Raising it boosts the Technical composite when bullish or oversold Bullish readings occur; it does not change how the separate Technical Readings page counts votes.',
+  neutral: 'Points given to a Neutral state inside the stock checklist technical cards. Raising it makes inconclusive readings less costly and usually lifts the Technical composite; lowering it demands clearer Bullish signals for a high score. It does not change the separate Technical Readings vote rules.',
+  sell: 'Points given to a Bearish state inside the stock checklist technical cards. Raising it makes bearish or overbought readings less damaging; lowering it increases their penalty. It does not change the separate Technical Readings vote rules.',
 }
 
 const technicalThresholdHelp = {
-  trendBufferPct: 'Defines a neutral zone around the 200-day SMA, or the 50-day SMA when the 200-day value is unavailable. Price above +this percentage is BUY, below −this percentage is SELL, and inside the band is NEUTRAL. Increasing it creates more NEUTRAL readings; decreasing it makes small moves trigger BUY or SELL sooner.',
-  rsiBuyBelow: 'A 14-day RSI strictly below this value is classified BUY (oversold) in the stock checklist. Raising it makes BUY easier to trigger; lowering it requires a more deeply oversold reading. It must stay below the RSI SELL boundary.',
-  rsiSellAbove: 'A 14-day RSI strictly above this value is classified SELL (overbought) in the stock checklist. Lowering it makes SELL easier to trigger; raising it requires a more extreme overbought reading. It must stay above the RSI BUY boundary.',
-  stochasticBuyBelow: 'Both slow-stochastic %K and %D must be strictly below this value for a BUY state in the stock checklist. Raising it creates more BUY readings; lowering it requires a more deeply oversold setup.',
-  stochasticSellAbove: 'Both slow-stochastic %K and %D must be strictly above this value for a SELL state in the stock checklist. Lowering it creates more SELL readings; raising it requires a more extremely overbought setup.',
-  obvNeutralBandPct: 'Defines the neutral band for the 20-day On-Balance Volume trend. OBV growth above +this percentage is BUY, below −this percentage is SELL, and inside the band is NEUTRAL. Increasing it filters out small volume trends; decreasing it makes the signal more sensitive.',
+  trendBufferPct: 'Defines a neutral zone around the 200-day SMA, or the 50-day SMA when the 200-day value is unavailable. Price above +this percentage is Bullish, below −this percentage is Bearish, and inside the band is Neutral. Increasing it creates more Neutral readings; decreasing it makes small moves trigger Bullish or Bearish sooner.',
+  rsiBuyBelow: 'A 14-day RSI strictly below this value is classified Bullish (oversold) in the stock checklist. Raising it makes Bullish easier to trigger; lowering it requires a more deeply oversold reading. It must stay below the RSI Bearish boundary.',
+  rsiSellAbove: 'A 14-day RSI strictly above this value is classified Bearish (overbought) in the stock checklist. Lowering it makes Bearish easier to trigger; raising it requires a more extreme overbought reading. It must stay above the RSI Bullish boundary.',
+  stochasticBuyBelow: 'Both slow-stochastic %K and %D must be strictly below this value for a Bullish state in the stock checklist. Raising it creates more Bullish readings; lowering it requires a more deeply oversold setup.',
+  stochasticSellAbove: 'Both slow-stochastic %K and %D must be strictly above this value for a Bearish state in the stock checklist. Lowering it creates more Bearish readings; raising it requires a more extremely overbought setup.',
+  obvNeutralBandPct: 'Defines the neutral band for the 20-day On-Balance Volume trend. OBV growth above +this percentage is Bullish, below −this percentage is Bearish, and inside the band is Neutral. Increasing it filters out small volume trends; decreasing it makes the signal more sensitive.',
 }
 
 const rangeBandMeaning = {
@@ -131,7 +131,7 @@ const dashboardWeightDefinitions = {
 
 const dashboardWeightHelp = Object.fromEntries(Object.entries(dashboardWeightDefinitions).map(([key, description]) => [
   key,
-  `This is the relative weight of ${description} in the Buy / Sell Signal Dashboard's Overall result. Increasing it gives that vote more power to produce BUY or SELL; decreasing it reduces its influence, and 0 disables it. `
+  `This is the relative weight of ${description} in the Technical Readings page Overall result. Increasing it gives that vote more power to produce Bullish or Bearish; decreasing it reduces its influence, and 0 disables it. `
     + 'Only active, available votes are included in the denominator, and weights are normalized automatically rather than needing to total 100.',
 ]))
 
@@ -162,10 +162,10 @@ export const GRADING_PREFERENCE_HELP = {
     },
   },
   fundVerdicts: {
-    strongScore: 'Minimum checklist composite required for the final Strong Buy label on ETF, CEF, and option-income evaluators. Raising it makes Strong Buy harder to earn; lowering it makes the label easier. The weak-criteria limit must also be satisfied, and this setting does not change any individual criterion score.',
-    moderateScore: 'Minimum checklist composite required for the final Weak Buy label when Strong Buy is not earned. Raising it sends more funds to Do Not Buy; lowering it lets more funds qualify as Weak Buy. The moderate weak-criteria limit must also be satisfied.',
-    strongMaxFails: 'Maximum number of scored criteria carrying a fail badge that a fund may have and still receive Strong Buy. Raising it is more permissive of serious weak spots; lowering it is stricter. The composite must still meet the Strong score threshold.',
-    moderateMaxFails: 'Maximum number of scored criteria carrying a fail badge that a fund may have and still receive Weak Buy. Raising it is more permissive; lowering it sends more otherwise adequate composites to Do Not Buy. This value cannot be stricter than the Strong Buy failure limit.',
+    strongScore: 'Minimum checklist composite required for the final Strong reading label on ETF, CEF, and option-income evaluators. Raising it makes Strong reading harder to earn; lowering it makes the label easier. The weak-criteria limit must also be satisfied, and this setting does not change any individual criterion score.',
+    moderateScore: 'Minimum checklist composite required for the final Partial reading label when Strong reading is not earned. Raising it sends more funds to Low reading; lowering it lets more funds qualify as Partial reading. The moderate weak-criteria limit must also be satisfied.',
+    strongMaxFails: 'Maximum number of scored criteria carrying a fail badge that a fund may have and still receive Strong reading. Raising it is more permissive of serious weak spots; lowering it is stricter. The composite must still meet the Strong score threshold.',
+    moderateMaxFails: 'Maximum number of scored criteria carrying a fail badge that a fund may have and still receive Partial reading. Raising it is more permissive; lowering it sends more otherwise adequate composites to Low reading. This value cannot be stricter than the Strong reading failure limit.',
   },
   stock: {
     blendWeights: {
@@ -184,22 +184,23 @@ export const GRADING_PREFERENCE_HELP = {
     rangeBands: rangeBandHelp,
     rangeScores: rangeScoreHelp,
     verdictBands: {
-      strongBuy: 'Minimum blended stock score required for Strong Buy. Raising it makes Strong Buy harder to earn; lowering it makes it easier. The Fundamental composite must also meet its separate minimum when fundamental data is available.',
-      strongFundamental: 'Minimum Fundamental composite required for Strong Buy when fundamental data is available. Raising it prevents technically strong but fundamentally weaker stocks from receiving Strong Buy; lowering it makes that safeguard more permissive. It does not affect Buy, Hold, or a technical-only result.',
-      buy: 'Minimum blended stock score required for Buy when Strong Buy is not earned. Raising it moves more stocks to Hold or Avoid; lowering it awards Buy more readily. Keep it below the Strong Buy threshold and above the Hold threshold.',
-      hold: 'Minimum blended stock score required for Hold when Buy is not earned. Raising it makes Avoid more common; lowering it allows weaker scores to remain Hold. Any score below this boundary receives Avoid.',
+      strongBuy: 'Minimum blended stock score required for Strong reading. Raising it makes Strong reading harder to earn; lowering it makes it easier. The Fundamental composite must also meet its separate minimum when fundamental data is available.',
+      strongFundamental: 'Minimum Fundamental composite required for Strong reading when fundamental data is available. Raising it prevents technically strong but fundamentally weaker stocks from receiving Strong reading; lowering it makes that safeguard more permissive. It does not affect Favorable reading, Mixed reading, or a technical-only result.',
+      buy: 'Minimum blended stock score required for Favorable reading when Strong reading is not earned. Raising it moves more stocks to Mixed reading or Low reading; lowering it awards Favorable reading more readily. Keep it below the Strong reading threshold and above the Mixed reading threshold.',
+      hold: 'Minimum blended stock score required for Mixed reading when Favorable reading is not earned. Raising it makes Low reading more common; lowering it allows weaker scores to remain Mixed reading. Any score below this boundary receives Low reading.',
     },
   },
   signals: {
     thresholds: {
-      aoZeroBuffer: 'Minimum Awesome Oscillator distance from zero used by the Buy / Sell Signal Dashboard. AO must be above the positive buffer and rising for BUY, or below the negative buffer and falling for SELL; otherwise it is NEUTRAL. Increasing the buffer filters out weak momentum and creates more NEUTRAL votes; decreasing it makes AO more sensitive.',
-      rsiBuyBelow: 'A 14-day RSI strictly below this value casts a BUY vote on the Buy / Sell Signal Dashboard. Raising it makes BUY votes more frequent; lowering it requires a more deeply oversold reading. It must remain below the dashboard RSI SELL boundary.',
-      rsiSellAbove: 'A 14-day RSI strictly above this value casts a SELL vote on the Buy / Sell Signal Dashboard. Lowering it makes SELL votes more frequent; raising it requires a more extremely overbought reading. It must remain above the dashboard RSI BUY boundary.',
-      smaBufferPct: 'Defines the same neutral percentage band around both the 50-day and 200-day simple moving averages. Price above +this band votes BUY, below −this band votes SELL, and inside it votes NEUTRAL. Increasing it filters small deviations and creates more NEUTRAL votes; decreasing it makes both SMA votes more responsive.',
-      majorityPct: 'Percentage of all active vote weight that BUY or SELL must exceed to become the Overall dashboard signal. Raising it demands stronger agreement and creates more NEUTRAL results; lowering it allows a smaller coalition to decide the signal. At 50, one side must hold a true weighted majority, not merely tie.',
-      navBuyMaxRatio: 'Highest NAV-erosion ratio that casts a BUY vote for an eligible income fund. The ratio compares qualifying price/NAV decline with trailing distribution yield, so lower means less erosion relative to income paid. Raising it labels more erosion cases BUY; lowering it reserves BUY for healthier cases. It must stay below the NAV SELL boundary.',
-      navSellAboveRatio: 'An eligible income fund with a NAV-erosion ratio above this value casts a SELL vote; ratios between the BUY and SELL boundaries are NEUTRAL. Lowering it makes the NAV test more sensitive and produces more SELL votes; raising it tolerates more erosion. A hard price decline can still force SELL.',
-      navHardDeclinePct: 'Absolute qualifying price-decline percentage that forces the eligible NAV signal to SELL even when the yield-based erosion ratio would not. Lowering it triggers the safety override sooner; raising it tolerates a deeper decline before the override. It affects only holdings eligible for NAV-erosion analysis.',
+      aoZeroBuffer: 'Minimum Awesome Oscillator distance from zero used by Technical Readings. AO must be above the positive buffer and rising for Bullish, or below the negative buffer and falling for Bearish; otherwise it is Neutral. Increasing the buffer filters out weak momentum and creates more Neutral votes; decreasing it makes AO more sensitive.',
+      rsiBuyBelow: 'A 14-day RSI strictly below this value casts a Bullish vote on Technical Readings. Raising it makes Bullish votes more frequent; lowering it requires a more deeply oversold reading. It must remain below the dashboard RSI Bearish boundary.',
+      rsiSellAbove: 'A 14-day RSI strictly above this value casts a Bearish vote on Technical Readings. Lowering it makes Bearish votes more frequent; raising it requires a more extremely overbought reading. It must remain above the dashboard RSI Bullish boundary.',
+      smaBufferPct: 'Defines the same neutral percentage band around both the 50-day and 200-day simple moving averages. Price above +this band votes Bullish, below −this band votes Bearish, and inside it votes Neutral. Increasing it filters small deviations and creates more Neutral votes; decreasing it makes both SMA votes more responsive.',
+      majorityPct: 'Percentage of all active vote weight that Bullish or Bearish must exceed to become the Overall Technical Readings result. Raising it demands stronger agreement and creates more Neutral results; lowering it allows a smaller coalition to decide the reading. At 50, one side must hold a true weighted majority, not merely tie.',
+      navBuyMaxRatio: 'Highest NAV-erosion ratio that casts a Bullish vote for an eligible income fund. The ratio compares qualifying price/NAV decline with trailing distribution yield, so lower means less erosion relative to income paid. Raising it labels more erosion cases Bullish; lowering it reserves Bullish for healthier cases. It must stay below the NAV Bearish boundary.',
+      navSellAboveRatio: 'An eligible income fund with a NAV-erosion ratio above this value casts a Bearish vote; ratios between the Bullish and Bearish boundaries are Neutral. Lowering it makes the NAV test more sensitive and produces more Bearish votes; raising it tolerates more erosion. A hard price decline can still force Bearish.',
+      navHardDeclinePct: 'Absolute qualifying price-decline percentage that forces the eligible NAV signal to Bearish even when the yield-based erosion ratio would not. Lowering it triggers the safety override sooner; raising it tolerates a deeper decline before the override. It affects only holdings eligible for NAV-erosion analysis.',
+      navHardDeficitPct: 'Ending share-deficit percentage that forces NAV erosion severity to High on a backtest, even when the coverage ratio is still in a milder band. The deficit compares shares still held with the share count needed to recover the starting value. Lowering it flags a smaller shortfall; raising it waits for a deeper share gap. Watchlist rows that have no share-deficit figure are not affected by this override.',
     },
     weights: dashboardWeightHelp,
   },

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 const DAILY_PERIODS = ['1mo', '3mo', '6mo', '1y', '2y', '5y', '10y']
 const WEEKLY_PERIODS = ['1y', '2y', '3y', '5y', '10y', 'max']
@@ -173,6 +174,7 @@ export default function TechnicalScanner() {
 
   return (
     <div className="page-container" style={{ maxWidth: 1100, margin: '0 auto', padding: '1.5rem' }}>
+      <NotFinancialAdviceNotice />
       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '0.75rem' }}>
           <h1 style={{ margin: 0, color: 'var(--accent-bright)' }}>Single Strategy Scanner</h1>
         <button className="btn btn-xs btn-outline" onClick={() => setShowHelp(h => !h)}>
@@ -183,7 +185,7 @@ export default function TechnicalScanner() {
       {showHelp && (
         <div className="help-box" style={{ marginBottom: '1rem', padding: '1rem', background: 'var(--p-111124)',
           border: '1px solid var(--p-2a2a4e)', borderRadius: '6px', fontSize: '0.88rem', color: 'var(--text-muted)' }}>
-          <p style={{ margin: '0 0 0.5rem' }}><strong>Scan Conditions (all must be true for BUY):</strong></p>
+          <p style={{ margin: '0 0 0.5rem' }}><strong>Scan conditions (all must be true for a Bullish marker):</strong></p>
           <ul style={{ margin: 0, paddingLeft: '1.2rem' }}>
             <li>50 SMA at or above the 175 SMA</li>
             <li>Price within {smaPct}% above or below the 175 SMA</li>
@@ -294,7 +296,7 @@ export default function TechnicalScanner() {
                   <td style={{ textAlign: 'right' }}>{fmt(r.slow_k)}</td>
                   <td style={{ textAlign: 'right' }}>{fmt(r.slow_d)}</td>
                   <td style={{ textAlign: 'center' }}>
-                    {r.buy_signal ? <span className="sig sig-BUY">BUY</span> : ''}
+                    {r.buy_signal ? <span className="sig sig-BUY">Bullish</span> : ''}
                   </td>
                 </tr>
               ))}

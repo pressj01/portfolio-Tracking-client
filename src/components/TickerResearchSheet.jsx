@@ -5,6 +5,8 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import NotFinancialAdviceNotice from './NotFinancialAdviceNotice'
+import { withSignalFormula } from '../utils/gradingPreferences'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -244,7 +246,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
     if (!ticker || !snapshot?.holding || snapshot.nav) return undefined
     let active = true
     setNavLoading(true)
-    pf(`/api/ticker-research/${encodeURIComponent(ticker)}/nav`)
+    pf(withSignalFormula(`/api/ticker-research/${encodeURIComponent(ticker)}/nav`))
       .then(async response => {
         const body = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(body.error || `Could not compute NAV coverage for ${ticker}`)
@@ -479,6 +481,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
           <div className="trs-loading"><span className="spinner" /> Loading position, CEF quote, and NAV coverage…</div>
         )}
 
+        <NotFinancialAdviceNotice />
         <section className="trs-decision" aria-label="Research decision">
           {cards.map(item => (
             <DecisionCard

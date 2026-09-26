@@ -11,6 +11,8 @@ import MenuOrderProvider, { useMenuOrder } from './context/MenuOrderContext'
 import TickerResearchProvider from './context/TickerResearchContext'
 import CommandPalette from './components/CommandPalette'
 import HiddenPageBanner from './components/HiddenPageBanner'
+import AdviceAcknowledgement from './components/AdviceAcknowledgement'
+import { NotFinancialAdviceBanner } from './components/NotFinancialAdviceNotice'
 import AppRoutes from './pageCatalog'
 import { visibleNavigation } from './navigation/menuConfig'
 import { openCommandPalette, paletteShortcutLabel } from './utils/commandPalette'
@@ -106,6 +108,8 @@ function AppFrame() {
   return (
     <TickerResearchProvider>
       <Nav />
+      <NotFinancialAdviceBanner />
+      <AdviceAcknowledgement />
       <HiddenPageBanner />
       <CommandPalette />
       <AppRoutes />

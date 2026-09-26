@@ -100,12 +100,11 @@ function HelpPanel() {
         until the bullish 8/34 EMA crossover appears on the 30-minute chart.
       </p>
       <p>
-        The campaign panel applies the presentation&rsquo;s $12,500 planned capital,
-        $1,000 target, roughly $800 average expectation, $2,500 management loss,
-        and 12-week average holding period. The $20,000 learning reserve and the
-        appendix&rsquo;s 120× theta target / 71× theta expected-P/L references are
-        shown separately. The presentation ultimately preferred conservatively tiered fixed
-        targets, so the theta values are context rather than automatic exits.
+        The campaign panel records the presentation&rsquo;s planned-capital, management-loss,
+        and holding-period figures as document context. The learning reserve and the
+        appendix theta multiples are shown separately and are not expected profits.
+        The presentation preferred conservatively tiered fixed targets, so the theta
+        multiples are context rather than exits.
       </p>
       <p style={{ marginBottom: 0 }}>
         LPTA guidance is campaign context, not part of the entry order: at four
@@ -298,7 +297,7 @@ function Detail({ row, colSpan }) {
 
           <Card title="Campaign sizing, targets, and LPTA context">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', marginTop: '0.65rem' }}>
-              <Metric label="Fixed profit target" value={usd(row.course_profit_target_dollars, 0)} detail={`Average expectation about ${usd(row.course_average_profit_dollars, 0)}`} good />
+              <Metric label="Document profit figure" value={usd(row.course_profit_target_dollars, 0)} detail="Document figure, not a projected profit" good />
               <Metric label="Management max loss" value={`−${usd(row.course_max_loss_target_dollars, 0)}`} detail="Exit discipline, not expiration geometry" good />
               <Metric label="Planned capital" value={usd(row.course_planned_capital_dollars, 0)} detail={`Learning suggestion at least ${usd(row.course_learning_capital_dollars, 0)}`} good />
               <Metric label="Average holding period" value={`${row.course_expected_hold_days} days`} detail="About 12 weeks; actual examples ranged widely" good />
@@ -306,8 +305,9 @@ function Detail({ row, colSpan }) {
               <Metric label="LPTA puts indicated" value={row.required_lpta_puts} detail="Roughly 30 DTE / 2 delta; reassess at 7 DTE" good={row.required_lpta_puts === 0} accent={row.required_lpta_puts ? 'var(--amber)' : undefined} />
             </div>
             <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginTop: '0.65rem' }}>
-              Appendix references from current entry theta: 120× target {usd(row.theta_reference_profit_target_dollars, 0)};
-              {' '}71× expected realized P/L {usd(row.theta_reference_expected_profit_dollars, 0)}.
+              Appendix references from current entry theta, shown as document context rather than expected profits:
+              {' '}120× {usd(row.theta_reference_profit_target_dollars, 0)};
+              {' '}71× {usd(row.theta_reference_expected_profit_dollars, 0)}.
               {' '}The document prefers conservative tiered fixed targets over relying on these values alone.
             </div>
           </Card>

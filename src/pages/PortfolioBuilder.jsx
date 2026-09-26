@@ -5,6 +5,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 import { gradingSettingsPayload } from '../utils/gradingPreferences'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -599,6 +600,7 @@ export default function PortfolioBuilder() {
 
       {/* ── Main Panel ───────────────────────────────────────────────────── */}
       <div className="pb-main">
+        <NotFinancialAdviceNotice />
         {!activeId ? (
           <div style={{ color: 'var(--p-556)', textAlign: 'center', padding: '4rem 2rem', fontSize: '1.1rem' }}>
             Select or create a portfolio to begin.
@@ -1201,11 +1203,15 @@ export default function PortfolioBuilder() {
             {rebalanceResult && (
               <>
                 <h4 style={{ color: 'var(--p-ddd)', margin: '1.5rem 0 0.5rem', borderTop: '1px solid var(--p-333)', paddingTop: '1rem' }}>
-                  Rebalance Suggestions
+                  Rebalance Scenario
                   <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginLeft: '0.8rem' }}>
                     Total: {fmt$(rebalanceResult.total_value)}
                   </span>
                 </h4>
+                <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
+                  Illustrative only. Each row shows how far this model portfolio sits from the strategy template and
+                  an example ticker for that asset class. It is not a recommendation to buy or sell any security.
+                </p>
                 <table className="pb-table" style={{ fontSize: '0.85rem' }}>
                   <thead>
                     <tr>
@@ -1215,17 +1221,17 @@ export default function PortfolioBuilder() {
                       <th>Drift</th>
                       <th>Current Value</th>
                       <th>Target Value</th>
-                      <th style={{ textAlign: 'left' }}>Action</th>
-                      <th>Ticker</th>
+                      <th style={{ textAlign: 'left' }}>Gap to Template</th>
+                      <th>Example Ticker</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rebalanceResult.suggestions.map(s => {
                       const driftColor = Math.abs(s.drift_pct) <= 2 ? '#4dff91' : Math.abs(s.drift_pct) <= 5 ? '#ffb74d' : '#ff6b6b'
                       const actionColor = s.action === 'buy' ? '#4dff91' : s.action === 'reduce' ? '#ff6b6b' : s.action === 'add_new' ? '#7ecfff' : '#8899aa'
-                      const actionText = s.action === 'buy' ? `Buy ${fmt$(s.change_amount)}`
-                        : s.action === 'reduce' ? `Reduce ${fmt$(Math.abs(s.change_amount))}`
-                        : s.action === 'add_new' ? `Add New: ${fmt$(s.change_amount)}`
+                      const actionText = s.action === 'buy' ? `Under by ${fmt$(s.change_amount)}`
+                        : s.action === 'reduce' ? `Over by ${fmt$(Math.abs(s.change_amount))}`
+                        : s.action === 'add_new' ? `Not held: ${fmt$(s.change_amount)}`
                         : 'On Target'
                       return (
                         <tr key={s.asset_class}>
@@ -1252,7 +1258,7 @@ export default function PortfolioBuilder() {
                 )}
                 <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
                   <button className="btn-success" onClick={applyRebalance}>
-                    Apply Suggestions
+                    Apply to Model Portfolio
                   </button>
                   <button className="btn-secondary" onClick={() => setRebalanceResult(null)}>Dismiss</button>
                 </div>

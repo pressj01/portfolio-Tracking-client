@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import GainsLosses from './GainsLosses'
 import Growth from './Growth'
 import PortfolioGrowth2 from './PortfolioGrowth2'
@@ -43,6 +44,7 @@ export default function GrowthWorkspace() {
 
   return (
     <div className="page dashboard">
+      <NotFinancialAdviceNotice />
       <h1 style={{ marginBottom: '0.4rem' }}>Growth</h1>
       <p className="tr-note" style={{ marginTop: 0, marginBottom: '0.85rem' }}>
         <strong>Tracker Total Return %</strong> uses the same transaction-aware calculation as

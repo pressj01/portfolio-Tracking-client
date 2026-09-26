@@ -4,11 +4,18 @@ import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
+import { signalReading } from '../utils/readingLabels'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import {
+  GRADING_PREFERENCES_EVENT,
+  loadGradingPreferences,
+  signalFormulaSearch,
+} from '../utils/gradingPreferences'
 
 function SignalBadge({ signal }) {
   if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
   const cls = { BUY: 'sig-BUY', SELL: 'sig-SELL', NEUTRAL: 'sig-NEUTRAL' }
-  return <span className={`sig ${cls[signal] || ''}`}>{signal}</span>
+  return <span className={`sig ${cls[signal] || ''}`}>{signalReading(signal)}</span>
 }
 
 function fmtPct(v) {
@@ -324,25 +331,25 @@ function WatchlistTickerModal({ ticker, onClose }) {
   )
 }
 
-const WATCHLIST_HEADERS = [
+const watchlistHeaders = (t) => [
   { label: 'Ticker' },
   { label: 'Description', tip: 'Security or fund name' },
   { label: 'Price', tip: 'Current market price' },
   { label: '1D Chg', tip: '1-day price change percentage' },
   { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
   { label: 'AUM', tip: 'Assets under management (fund size)' },
-  { label: 'Signal', tip: 'Overall buy/sell signal — majority vote across indicators' },
-  { label: 'AO', tip: 'Awesome Oscillator signal — momentum based on 5/34-period midpoint SMAs' },
-  { label: 'RSI', tip: 'Relative Strength Index signal — overbought >70, oversold <30' },
-  { label: 'MACD', tip: 'Moving Average Convergence Divergence signal' },
-  { label: 'SMA 50', tip: 'Simple Moving Average 50-day — BUY when price is above' },
-  { label: 'SMA 200', tip: 'Simple Moving Average 200-day — BUY when price is above' },
+  { label: 'Signal', tip: `Overall technical reading. Bullish or Bearish must exceed ${t.majorityPct}% of the active indicator weight. Change the share in Settings → Technical Readings.` },
+  { label: 'AO', tip: `Awesome Oscillator. Bullish when the value is above +${t.aoZeroBuffer} and rising; Bearish when it is below -${t.aoZeroBuffer} and falling.` },
+  { label: 'RSI', tip: `14-day RSI. Bullish below ${t.rsiBuyBelow}; Bearish above ${t.rsiSellAbove}.` },
+  { label: 'MACD', tip: 'MACD line versus its 9-period signal line. Bullish when the line is above the signal line; Bearish when it is below. There is no extra distance setting.' },
+  { label: 'SMA 50', tip: `50-day average with a ±${t.smaBufferPct}% neutral band. Bullish above the band; Bearish below it.` },
+  { label: 'SMA 200', tip: `200-day average with the same ±${t.smaBufferPct}% neutral band.` },
   { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
   { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
   { label: '1Y Return', tip: 'Total return over the past 12 months' },
-  { label: 'NAV Ratio', tip: 'Benchmark-gated Yield-Funding Coverage: qualifying fund price decline ÷ distribution yield. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High. A zero can mean the benchmark also fell; it does not prove raw NAV was flat.' },
-  { label: 'NAV Signal', tip: 'Signal from benchmark-gated coverage: BUY/Low at 0–0.25, NEUTRAL/Medium above 0.25–0.75, SELL/High above 0.75.' },
-  { label: 'NAV Erosion', tip: 'Derived from NAV Ratio. Use Auto/Test/Skip and optional benchmark override to control watchlist NAV testing.' },
+  { label: 'NAV Ratio', tip: `Benchmark-gated coverage: qualifying price decline ÷ distribution yield. Low at or below ${t.navBuyMaxRatio}, Medium through ${t.navSellAboveRatio}, High above that. A ${t.navHardDeclinePct}% price decline also forces High.` },
+  { label: 'NAV Signal', tip: `Bullish when coverage is Low (≤ ${t.navBuyMaxRatio}); Neutral through ${t.navSellAboveRatio}; Bearish when High. A ${t.navHardDeclinePct}% price decline forces Bearish. Backtests also force High at a ${t.navHardDeficitPct}% share deficit.` },
+  { label: 'NAV Erosion', tip: `Low / Medium / High from the NAV ratio bands above (${t.navBuyMaxRatio} / ${t.navSellAboveRatio}), the ${t.navHardDeclinePct}% decline override, and the ${t.navHardDeficitPct}% share-deficit override on backtests.` },
   { label: 'Notes' },
 ]
 
@@ -372,6 +379,9 @@ export default function Watchlist() {
   const [sortAsc, setSortAsc] = useState(true)
   const [modalTicker, setModalTicker] = useState(null)
   const [freezeCount, setFreezeCount] = useState(6)
+  const [preferences, setPreferences] = useState(loadGradingPreferences)
+  const signalThresholds = preferences.signals.thresholds
+  const headers = watchlistHeaders(signalThresholds)
   const [freezeLefts, setFreezeLefts] = useState([])
   const initialLoad = useRef(true)
   const watchingListRef = useRef(watchingList)
@@ -450,10 +460,16 @@ export default function Watchlist() {
     }
   }
 
+  useEffect(() => {
+    const refresh = event => setPreferences(event.detail || loadGradingPreferences())
+    window.addEventListener(GRADING_PREFERENCES_EVENT, refresh)
+    return () => window.removeEventListener(GRADING_PREFERENCES_EVENT, refresh)
+  }, [])
+
   const loadAnalysis = useCallback(() => {
     setLoading(true)
     setError(null)
-    pf('/api/watchlist/data')
+    pf(`/api/watchlist/data?${signalFormulaSearch(preferences)}`)
       .then(r => r.json())
       .then(data => {
         setLoading(false)
@@ -464,7 +480,7 @@ export default function Watchlist() {
         setLoading(false)
         setError('Error loading analysis: ' + err)
       })
-  }, [pf, selection])
+  }, [pf, selection, preferences])
 
   const loadWatchingList = useCallback(() => {
     pf('/api/watchlist/watching')
@@ -638,6 +654,7 @@ export default function Watchlist() {
 
   return (
     <div className="wl-page" ref={pageRef}>
+      <NotFinancialAdviceNotice />
       <h1 style={{ marginBottom: '0.5rem' }}>Watchlist</h1>
 
       {/* Add form */}
@@ -686,15 +703,15 @@ export default function Watchlist() {
         <div className="wl-counts">
           <div className="wl-count-box wl-count-buy">
             <div className="wl-count-num">{counts.BUY || 0}</div>
-            <div className="wl-count-lbl">BUY</div>
+            <div className="wl-count-lbl">Bullish</div>
           </div>
           <div className="wl-count-box wl-count-sell">
             <div className="wl-count-num">{counts.SELL || 0}</div>
-            <div className="wl-count-lbl">SELL</div>
+            <div className="wl-count-lbl">Bearish</div>
           </div>
           <div className="wl-count-box wl-count-neut">
             <div className="wl-count-num">{counts.NEUTRAL || 0}</div>
-            <div className="wl-count-lbl">NEUTRAL</div>
+            <div className="wl-count-lbl">Neutral</div>
           </div>
         </div>
       )}
@@ -721,7 +738,7 @@ export default function Watchlist() {
           <table className="sst" ref={tableRef}>
             <thead>
               <tr>
-                {WATCHLIST_HEADERS.map((h, i) => {
+                {headers.map((h, i) => {
                   const frozen = frozenCell(i)
                   return (
                     <th
