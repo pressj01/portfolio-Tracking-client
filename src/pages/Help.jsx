@@ -6103,10 +6103,55 @@ function SettingsHelp() {
     <div>
       <h2>Settings</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Settings page provides a data overview for the active portfolio, lets you manage the
-        Single-Stock ETF list used by the Portfolio Builder optimizer, and offers a nuclear
-        "Clear All Data" option.
+        The Settings page provides a data overview for the active portfolio, lets you adjust the
+        grading and signal formulas, manage the Single-Stock ETF list used by the Portfolio Builder
+        optimizer, and offers a nuclear "Clear All Data" option.
       </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Grading &amp; Signal Formulas</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        This card exposes every number behind the portfolio and holding risk grades, the stock checklist score,
+        the ETF / CEF / option-income final verdicts, and the Buy / Sell Signal Dashboard vote. Each input sits in
+        its own tile; open <strong>What this input changes</strong> beneath it for a definition, where the value is used,
+        and what raising or lowering it does. A <strong>Screenshot guide</strong> at the top of the card shows every group
+        in screen order — click an image to open it full size.
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
+        <li><strong>Portfolio and holding risk-grade weights</strong> — relative weights for Ulcer Index, Calmar, Omega, Sortino, Sharpe, max drawdown, and downside capture; the portfolio grade adds Diversification and NAV Health.</li>
+        <li><strong>Risk-metric scoring bands</strong> — the Excellent / Good / Fair / Poor boundaries (100 / 80 / 60 / 40 points) for each metric, split into higher-is-better and lower-is-better groups.</li>
+        <li><strong>Letter-grade cutoffs</strong> — the minimum 0–100 score for A+ through D−; anything below D− is F. These change only the letter, not the numeric score.</li>
+        <li><strong>ETF, CEF, and option-income final grade bands</strong> — composite score and maximum failed criteria for Strong Buy and Weak Buy. Per-criterion thresholds stay on each evaluator's cards.</li>
+        <li><strong>Stock checklist</strong> — the fundamental/technical blend, criterion-group weights, sector-relative benchmark bands and their point values, technical thresholds (trend, RSI, stochastic, OBV), 52-week range bands, badge colors, and the Strong Buy / Buy / Hold cutoffs.</li>
+        <li><strong>Buy / Sell Signal Dashboard</strong> — AO, RSI, SMA, and NAV thresholds, the vote share required for an Overall BUY or SELL, and each vote's relative weight.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Weights are relative: a weight of 2 counts twice as much as a weight of 1, 0 excludes the item, and the
+        available weights are normalized so they never need to total 100. Nothing changes until you click
+        <strong> Save grading formulas</strong>. Saving checks that bands are in order (for example, letter cutoffs descend,
+        RSI BUY is below RSI SELL, Strong Buy is above Buy) and that each weight group has at least one non-zero weight;
+        if anything overlaps, nothing is saved and an error appears. Formulas are stored on this device.
+        <strong> Reset formulas to defaults</strong> restores the application values.
+      </p>
+      <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+        <img
+          src="./help-screenshots/settings/grading-risk-weights.png"
+          alt="Grading and Signal Formulas card showing holding risk-grade weights, each with a What this input changes link"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginTop: '0.5rem' }}>
+          Each formula input sits in a labeled tile with its own expandable explanation.
+        </p>
+      </div>
+      <div style={{ marginTop: '1rem', marginBottom: '1.5rem' }}>
+        <img
+          src="./help-screenshots/settings/grading-signal-dashboard-2.png"
+          alt="Signal Dashboard vote weights with one explanation expanded, followed by the Save grading formulas and Reset formulas to defaults buttons"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }}
+        />
+        <p style={{ fontSize: '0.9rem', color: 'var(--text-dim-2)', marginTop: '0.5rem' }}>
+          An expanded explanation, and the Save and Reset buttons at the bottom of the card.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Display Currency &amp; Exchange Rate</h3>
       <p style={{ marginBottom: '0.75rem' }}>

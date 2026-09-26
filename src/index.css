@@ -12583,3 +12583,32 @@ body:has(.split-page) #root *:has(> .split-page) {
   .gos-help-steps, .gos-help-preset-grid { grid-template-columns: 1fr; }
   .gos-header-actions { align-items: flex-start; }
 }
+
+/* Settings formula field help */
+.formula-help-intro { background: color-mix(in srgb, var(--accent) 8%, var(--surface-inset)); border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border)); border-radius: 7px; color: var(--text-muted); font-size: 0.8rem; line-height: 1.55; margin: 0 0 0.9rem; padding: 0.7rem 0.8rem; }
+.formula-help-intro strong { color: var(--text-strong); }
+.formula-field-grid { display: grid; gap: 0.7rem; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); margin-top: 0.7rem; }
+.formula-number-field { align-content: start; background: var(--surface-inset); border: 1px solid var(--border); border-radius: 7px; display: grid; gap: 0.35rem; min-width: 0; padding: 0.65rem; }
+.formula-number-field > label { display: grid; gap: 0.35rem; }
+.formula-number-label { color: var(--text-strong); font-size: 0.76rem; font-weight: 700; line-height: 1.35; }
+.formula-number-control { align-items: center; display: flex; gap: 0.4rem; }
+.formula-number-control input { width: 95px; }
+.formula-number-control small { color: var(--text-dim-2); font-size: 0.68rem; line-height: 1.3; }
+.formula-input-help { border-top: 1px solid var(--border); margin-top: 0.15rem; padding-top: 0.35rem; }
+.formula-input-help summary { color: var(--accent-bright); cursor: pointer; font-size: 0.68rem; font-weight: 750; line-height: 1.35; }
+.formula-input-help p { color: var(--text-muted); font-size: 0.68rem; line-height: 1.55; margin: 0.45rem 0 0; }
+.formula-input-help[open] summary { color: var(--text-strong); }
+.formula-screenshot-guide { background: var(--surface-inset); border: 1px solid var(--border); border-radius: 8px; margin: 0 0 0.9rem; padding: 0.7rem 0.8rem; }
+.formula-screenshot-guide > summary { color: var(--text-strong); cursor: pointer; font-size: 0.8rem; font-weight: 800; }
+.formula-screenshot-guide > p { color: var(--text-muted); font-size: 0.72rem; line-height: 1.55; margin: 0.65rem 0; }
+.formula-screenshot-grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.formula-screenshot-grid figure { background: var(--surface); border: 1px solid var(--border); border-radius: 7px; margin: 0; overflow: hidden; }
+.formula-screenshot-grid a { display: block; }
+.formula-screenshot-grid img { aspect-ratio: 16 / 10; display: block; object-fit: cover; object-position: top center; width: 100%; }
+.formula-screenshot-grid figcaption { border-top: 1px solid var(--border); display: grid; gap: 0.2rem; padding: 0.55rem 0.65rem; }
+.formula-screenshot-grid figcaption strong { color: var(--text-strong); font-size: 0.7rem; }
+.formula-screenshot-grid figcaption span { color: var(--text-muted); font-size: 0.64rem; line-height: 1.45; }
+@media (max-width: 560px) {
+  .formula-field-grid { grid-template-columns: 1fr; }
+  .formula-screenshot-grid { grid-template-columns: 1fr; }
+}

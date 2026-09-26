@@ -7,34 +7,61 @@ import {
   resetGradingPreferences,
   saveGradingPreferences,
 } from '../utils/gradingPreferences'
+import { gradingPreferenceHelp } from '../utils/gradingPreferenceHelp'
 
-function FormulaNumberField({ label, value, onChange, min = 0, max = 100, step = 1, suffix = '' }) {
+function FormulaNumberField({ label, value, onChange, help, min = 0, max = 100, step = 1, suffix = '' }) {
   return (
-    <label style={{ display: 'grid', gap: 4, minWidth: 145 }}>
-      <span style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem' }}>{label}</span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={event => onChange(Number(event.target.value))}
-          style={{ width: 95 }}
-        />
-        {suffix && <small style={{ color: 'var(--text-dim-2)' }}>{suffix}</small>}
-      </span>
-    </label>
+    <div className="formula-number-field">
+      <label>
+        <span className="formula-number-label">{label}</span>
+        <span className="formula-number-control">
+          <input
+            type="number"
+            min={min}
+            max={max}
+            step={step}
+            value={value}
+            onChange={event => onChange(Number(event.target.value))}
+          />
+          {suffix && <small>{suffix}</small>}
+        </span>
+      </label>
+      <details className="formula-input-help">
+        <summary>What this input changes</summary>
+        <p>{help}</p>
+      </details>
+    </div>
   )
 }
 
 function FormulaFieldGrid({ children }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: '0.7rem', marginTop: '0.7rem' }}>
+    <div className="formula-field-grid">
       {children}
     </div>
   )
 }
+
+const FORMULA_SCREENSHOTS = [
+  { file: 'grading-risk-weights.png', title: 'Holding risk weights', caption: 'Ulcer Index through downside capture—the inputs that build each holding risk grade.' },
+  { file: 'grading-risk-weights-2.png', title: 'Portfolio and NAV weights', caption: 'Portfolio-only weights, NAV Health scoring, and an expanded example of the detailed help.' },
+  { file: 'grading-scoring-bands-1.png', title: 'Calmar and Omega bands', caption: 'The first higher-is-better scoring thresholds.' },
+  { file: 'grading-scoring-bands-middle.png', title: 'Sortino, Sharpe, and diversification bands', caption: 'The middle higher-is-better thresholds, including an open field explanation.' },
+  { file: 'grading-scoring-bands-2.png', title: 'Diversification and Ulcer Index bands', caption: 'The transition from higher-is-better to lower-is-better scoring.' },
+  { file: 'grading-scoring-bands-3.png', title: 'Drawdown and downside-capture bands', caption: 'The remaining lower-is-better risk thresholds.' },
+  { file: 'grading-letter-cutoffs.png', title: 'Letter-grade cutoffs: A through C', caption: 'The upper letter boundaries applied after the numeric risk score is calculated.' },
+  { file: 'grading-letter-cutoffs-2.png', title: 'Letter-grade cutoffs: B through D−', caption: 'The lower grade boundaries and the rule that sends scores below D− to F.' },
+  { file: 'grading-fund-verdicts.png', title: 'ETF, CEF, and option-income verdicts', caption: 'Composite-score and failed-criterion limits for Strong Buy, Weak Buy, and Do Not Buy.' },
+  { file: 'grading-stock-weights.png', title: 'Stock blend and group weights', caption: 'Fundamental-versus-technical influence and the first stock criterion weights.' },
+  { file: 'grading-stock-weights-2.png', title: 'Remaining stock criterion weights', caption: 'Trend, momentum, oscillators, and volume/range influence, with a help example open.' },
+  { file: 'grading-fundamental-formula.png', title: 'Sector-comparison boundaries', caption: 'Benchmark multiples that classify lower-is-better and higher-is-better fundamentals.' },
+  { file: 'grading-fundamental-formula-2.png', title: 'Sector-comparison point values', caption: 'The points awarded after a fundamental metric lands in one of the comparison bands.' },
+  { file: 'grading-stock-technicals.png', title: 'Stock technical thresholds and points', caption: 'Trend, RSI, stochastic, OBV, and the point value assigned to each signal state.' },
+  { file: 'grading-range-badges-verdicts.png', title: '52-week range and badge inputs', caption: 'Range-position boundaries, range points, and the beginning of the badge/verdict cutoffs.' },
+  { file: 'grading-range-badges-verdicts-2.png', title: 'Stock verdict cutoffs', caption: 'Pass/warn badges and the Strong Buy, Buy, and Hold score boundaries.' },
+  { file: 'grading-signal-dashboard.png', title: 'Signal Dashboard thresholds', caption: 'AO, RSI, SMA, vote-share, and NAV classification inputs.' },
+  { file: 'grading-signal-dashboard-2.png', title: 'Signal Dashboard vote weights', caption: 'Relative vote weights used to turn the active signals into the Overall result.' },
+]
 
 export default function Settings() {
   const pf = useProfileFetch()
@@ -619,6 +646,31 @@ export default function Settings() {
           Weights are relative: a weight of 2 counts twice as much as a weight of 1, and 0 excludes that item.
           ETF and CEF criterion thresholds remain editable directly on their evaluator cards; their final grade bands are below.
         </p>
+        <p className="formula-help-intro">
+          Every input is labeled by its role. Open <strong>What this input changes</strong> beneath any value for a detailed definition,
+          where the setting is used, and what increasing or decreasing it will do. Changes do not take effect until you select
+          <strong> Save grading formulas</strong>.
+        </p>
+        <details className="formula-screenshot-guide">
+          <summary>Screenshot guide: find and identify every formula input</summary>
+          <p>
+            The screenshots follow the groups below in screen order. Each input is labeled with the exact name used on this page;
+            select an image to open it at full size, then use the matching <strong>What this input changes</strong> row for the complete explanation.
+          </p>
+          <div className="formula-screenshot-grid">
+            {FORMULA_SCREENSHOTS.map(item => {
+              const src = `./help-screenshots/settings/${item.file}`
+              return (
+                <figure key={item.file}>
+                  <a href={src} target="_blank" rel="noreferrer" aria-label={`Open full-size screenshot: ${item.title}`}>
+                    <img src={src} alt={`${item.title} settings with every input labeled`} loading="lazy" />
+                  </a>
+                  <figcaption><strong>{item.title}</strong><span>{item.caption}</span></figcaption>
+                </figure>
+              )
+            })}
+          </div>
+        </details>
         {gradingStatus && (
           <div className={`alert alert-${gradingStatus.type}`} style={{ marginBottom: '0.75rem' }}>{gradingStatus.msg}</div>
         )}
@@ -631,21 +683,21 @@ export default function Settings() {
           <h4 style={{ marginBottom: 0 }}>Holding weights</h4>
           <FormulaFieldGrid>
             {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={`${label} weight`} value={portfolioRiskFormula.holdingWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'holdingWeights', key, value)} />
+              <FormulaNumberField key={key} label={`${label} weight`} help={gradingPreferenceHelp('portfolioRisk', 'holdingWeights', key)} value={portfolioRiskFormula.holdingWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'holdingWeights', key, value)} />
             ))}
           </FormulaFieldGrid>
           <h4 style={{ marginBottom: 0 }}>Portfolio weights</h4>
           <FormulaFieldGrid>
             {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture', diversification: 'Diversification', navHealth: 'NAV Health' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={`${label} weight`} value={portfolioRiskFormula.portfolioWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'portfolioWeights', key, value)} />
+              <FormulaNumberField key={key} label={`${label} weight`} help={gradingPreferenceHelp('portfolioRisk', 'portfolioWeights', key)} value={portfolioRiskFormula.portfolioWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'portfolioWeights', key, value)} />
             ))}
           </FormulaFieldGrid>
           <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem', marginTop: '0.8rem' }}>
             NAV Health score = full score − (portfolio-weighted NAV decline percentage points × penalty per point). Positive or flat NAV receives the full score.
           </p>
           <FormulaFieldGrid>
-            <FormulaNumberField label="NAV Health full score" value={portfolioRiskFormula.navHealth.fullScore} onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'fullScore', value)} />
-            <FormulaNumberField label="Penalty per 1% decline" value={portfolioRiskFormula.navHealth.penaltyPerDeclinePct} max={1000} step={0.1} suffix="points" onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'penaltyPerDeclinePct', value)} />
+            <FormulaNumberField label="NAV Health full score" help={gradingPreferenceHelp('portfolioRisk', 'navHealth', 'fullScore')} value={portfolioRiskFormula.navHealth.fullScore} onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'fullScore', value)} />
+            <FormulaNumberField label="Penalty per 1% decline" help={gradingPreferenceHelp('portfolioRisk', 'navHealth', 'penaltyPerDeclinePct')} value={portfolioRiskFormula.navHealth.penaltyPerDeclinePct} max={1000} step={0.1} suffix="points" onChange={value => updateGradingPreference('portfolioRisk', 'navHealth', 'penaltyPerDeclinePct', value)} />
           </FormulaFieldGrid>
         </details>
 
@@ -661,7 +713,7 @@ export default function Settings() {
               <strong style={{ fontSize: '0.82rem' }}>{label} · higher is better</strong>
               <FormulaFieldGrid>
                 {Object.entries({ excellent: 'Excellent from', good: 'Good from', fair: 'Fair from', poor: 'Poor from' }).map(([key, fieldLabel]) => (
-                  <FormulaNumberField key={key} label={fieldLabel} value={portfolioRiskFormula.higherBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'higherBands', metric, key, value)} />
+                  <FormulaNumberField key={key} label={fieldLabel} help={gradingPreferenceHelp('portfolioRisk', 'higherBands', metric, key)} value={portfolioRiskFormula.higherBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'higherBands', metric, key, value)} />
                 ))}
               </FormulaFieldGrid>
             </div>
@@ -671,7 +723,7 @@ export default function Settings() {
               <strong style={{ fontSize: '0.82rem' }}>{label} · lower is better</strong>
               <FormulaFieldGrid>
                 {Object.entries({ excellent: 'Excellent through', good: 'Good through', fair: 'Fair through', poor: 'Poor through' }).map(([key, fieldLabel]) => (
-                  <FormulaNumberField key={key} label={fieldLabel} value={portfolioRiskFormula.lowerBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'lowerBands', metric, key, value)} />
+                  <FormulaNumberField key={key} label={fieldLabel} help={gradingPreferenceHelp('portfolioRisk', 'lowerBands', metric, key)} value={portfolioRiskFormula.lowerBands[metric][key]} min={-1000} max={1000} step={0.1} onChange={value => updateNestedGradingPreference('portfolioRisk', 'lowerBands', metric, key, value)} />
                 ))}
               </FormulaFieldGrid>
             </div>
@@ -683,7 +735,7 @@ export default function Settings() {
           <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>A score at or above a cutoff receives that letter. Scores below D− receive F.</p>
           <FormulaFieldGrid>
             {Object.entries({ aPlus: 'A+', a: 'A', aMinus: 'A−', bPlus: 'B+', b: 'B', bMinus: 'B−', cPlus: 'C+', c: 'C', cMinus: 'C−', dPlus: 'D+', d: 'D', dMinus: 'D−' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={`${label} from`} value={portfolioRiskFormula.letterCutoffs[key]} onChange={value => updateGradingPreference('portfolioRisk', 'letterCutoffs', key, value)} />
+              <FormulaNumberField key={key} label={`${label} from`} help={gradingPreferenceHelp('portfolioRisk', 'letterCutoffs', key)} value={portfolioRiskFormula.letterCutoffs[key]} onChange={value => updateGradingPreference('portfolioRisk', 'letterCutoffs', key, value)} />
             ))}
           </FormulaFieldGrid>
         </details>
@@ -692,10 +744,10 @@ export default function Settings() {
           <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>ETF, CEF, and option-income final grade bands</summary>
           <p style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>These final labels summarize a checklist; they are research grades, not instructions to trade.</p>
           <FormulaFieldGrid>
-            <FormulaNumberField label="Strong grade from" value={fundVerdictFormula.strongScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongScore: value } }))} />
-            <FormulaNumberField label="Moderate grade from" value={fundVerdictFormula.moderateScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateScore: value } }))} />
-            <FormulaNumberField label="Strong grade max weak criteria" value={fundVerdictFormula.strongMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongMaxFails: value } }))} />
-            <FormulaNumberField label="Moderate grade max weak criteria" value={fundVerdictFormula.moderateMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateMaxFails: value } }))} />
+            <FormulaNumberField label="Strong grade from" help={gradingPreferenceHelp('fundVerdicts', 'strongScore')} value={fundVerdictFormula.strongScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongScore: value } }))} />
+            <FormulaNumberField label="Moderate grade from" help={gradingPreferenceHelp('fundVerdicts', 'moderateScore')} value={fundVerdictFormula.moderateScore} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateScore: value } }))} />
+            <FormulaNumberField label="Strong grade max weak criteria" help={gradingPreferenceHelp('fundVerdicts', 'strongMaxFails')} value={fundVerdictFormula.strongMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, strongMaxFails: value } }))} />
+            <FormulaNumberField label="Moderate grade max weak criteria" help={gradingPreferenceHelp('fundVerdicts', 'moderateMaxFails')} value={fundVerdictFormula.moderateMaxFails} max={20} onChange={value => setGradingPreferences(current => ({ ...current, fundVerdicts: { ...current.fundVerdicts, moderateMaxFails: value } }))} />
           </FormulaFieldGrid>
         </details>
 
@@ -705,13 +757,13 @@ export default function Settings() {
             Each side is a weighted average of its available criteria. The final score blends the Fundamental and Technical sides after normalizing their two weights.
           </p>
           <FormulaFieldGrid>
-            <FormulaNumberField label="Fundamental blend weight" value={stockFormula.blendWeights.fundamental} onChange={value => updateGradingPreference('stock', 'blendWeights', 'fundamental', value)} />
-            <FormulaNumberField label="Technical blend weight" value={stockFormula.blendWeights.technical} onChange={value => updateGradingPreference('stock', 'blendWeights', 'technical', value)} />
+            <FormulaNumberField label="Fundamental blend weight" help={gradingPreferenceHelp('stock', 'blendWeights', 'fundamental')} value={stockFormula.blendWeights.fundamental} onChange={value => updateGradingPreference('stock', 'blendWeights', 'fundamental', value)} />
+            <FormulaNumberField label="Technical blend weight" help={gradingPreferenceHelp('stock', 'blendWeights', 'technical')} value={stockFormula.blendWeights.technical} onChange={value => updateGradingPreference('stock', 'blendWeights', 'technical', value)} />
             {Object.entries({
               valuation: 'Valuation weight', profitability: 'Profitability weight', growth: 'Growth weight', health: 'Balance-sheet weight',
               trend: 'Trend weight', momentum: 'Momentum weight', oscillators: 'Oscillators weight', volume: 'Volume/range weight',
             }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={stockFormula.groupWeights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('stock', 'groupWeights', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('stock', 'groupWeights', key)} value={stockFormula.groupWeights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('stock', 'groupWeights', key, value)} />
             ))}
           </FormulaFieldGrid>
         </details>
@@ -726,7 +778,7 @@ export default function Settings() {
               lowerExcellent: 'Lower: excellent through', lowerGood: 'Lower: good through', lowerFair: 'Lower: fair through', lowerWeak: 'Lower: weak through',
               higherExcellent: 'Higher: excellent from', higherGood: 'Higher: good from', higherFair: 'Higher: fair from', higherWeak: 'Higher: weak from',
             }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={stockFormula.fundamentalBands[key]} max={10} step={0.05} suffix="× benchmark" onChange={value => updateGradingPreference('stock', 'fundamentalBands', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('stock', 'fundamentalBands', key)} value={stockFormula.fundamentalBands[key]} max={10} step={0.05} suffix="× benchmark" onChange={value => updateGradingPreference('stock', 'fundamentalBands', key, value)} />
             ))}
           </FormulaFieldGrid>
           <FormulaFieldGrid>
@@ -734,7 +786,7 @@ export default function Settings() {
               excellent: 'Excellent points', good: 'Good points', lowerFair: 'Lower/fair points', lowerWeak: 'Lower/weak points',
               higherFair: 'Higher/fair points', higherWeak: 'Higher/weak points', poor: 'Poor points',
             }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={stockFormula.metricScores[key]} onChange={value => updateGradingPreference('stock', 'metricScores', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('stock', 'metricScores', key)} value={stockFormula.metricScores[key]} onChange={value => updateGradingPreference('stock', 'metricScores', key, value)} />
             ))}
           </FormulaFieldGrid>
         </details>
@@ -745,15 +797,15 @@ export default function Settings() {
             Trend, RSI, stochastic and OBV are reclassified with these thresholds before the technical groups are scored.
           </p>
           <FormulaFieldGrid>
-            <FormulaNumberField label="Trend neutral band" value={stockFormula.technicalThresholds.trendBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'trendBufferPct', value)} />
-            <FormulaNumberField label="RSI BUY below" value={stockFormula.technicalThresholds.rsiBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiBuyBelow', value)} />
-            <FormulaNumberField label="RSI SELL above" value={stockFormula.technicalThresholds.rsiSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiSellAbove', value)} />
-            <FormulaNumberField label="Stochastic BUY below" value={stockFormula.technicalThresholds.stochasticBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticBuyBelow', value)} />
-            <FormulaNumberField label="Stochastic SELL above" value={stockFormula.technicalThresholds.stochasticSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticSellAbove', value)} />
-            <FormulaNumberField label="OBV neutral band" value={stockFormula.technicalThresholds.obvNeutralBandPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'obvNeutralBandPct', value)} />
-            <FormulaNumberField label="BUY signal points" value={stockFormula.signalScores.buy} onChange={value => updateGradingPreference('stock', 'signalScores', 'buy', value)} />
-            <FormulaNumberField label="NEUTRAL signal points" value={stockFormula.signalScores.neutral} onChange={value => updateGradingPreference('stock', 'signalScores', 'neutral', value)} />
-            <FormulaNumberField label="SELL signal points" value={stockFormula.signalScores.sell} onChange={value => updateGradingPreference('stock', 'signalScores', 'sell', value)} />
+            <FormulaNumberField label="Trend neutral band" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'trendBufferPct')} value={stockFormula.technicalThresholds.trendBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'trendBufferPct', value)} />
+            <FormulaNumberField label="RSI BUY below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiBuyBelow')} value={stockFormula.technicalThresholds.rsiBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI SELL above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'rsiSellAbove')} value={stockFormula.technicalThresholds.rsiSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="Stochastic BUY below" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticBuyBelow')} value={stockFormula.technicalThresholds.stochasticBuyBelow} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticBuyBelow', value)} />
+            <FormulaNumberField label="Stochastic SELL above" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'stochasticSellAbove')} value={stockFormula.technicalThresholds.stochasticSellAbove} onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'stochasticSellAbove', value)} />
+            <FormulaNumberField label="OBV neutral band" help={gradingPreferenceHelp('stock', 'technicalThresholds', 'obvNeutralBandPct')} value={stockFormula.technicalThresholds.obvNeutralBandPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('stock', 'technicalThresholds', 'obvNeutralBandPct', value)} />
+            <FormulaNumberField label="BUY signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'buy')} value={stockFormula.signalScores.buy} onChange={value => updateGradingPreference('stock', 'signalScores', 'buy', value)} />
+            <FormulaNumberField label="NEUTRAL signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'neutral')} value={stockFormula.signalScores.neutral} onChange={value => updateGradingPreference('stock', 'signalScores', 'neutral', value)} />
+            <FormulaNumberField label="SELL signal points" help={gradingPreferenceHelp('stock', 'signalScores', 'sell')} value={stockFormula.signalScores.sell} onChange={value => updateGradingPreference('stock', 'signalScores', 'sell', value)} />
           </FormulaFieldGrid>
         </details>
 
@@ -761,17 +813,17 @@ export default function Settings() {
           <summary style={{ cursor: 'pointer', color: 'var(--text-strong)', fontWeight: 700 }}>52-week range, badges, and verdict bands</summary>
           <FormulaFieldGrid>
             {Object.entries({ best: 'Range best through', good: 'Range good through', fair: 'Range fair through', weak: 'Range weak through' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={stockFormula.rangeBands[key]} suffix="% of range" onChange={value => updateGradingPreference('stock', 'rangeBands', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('stock', 'rangeBands', key)} value={stockFormula.rangeBands[key]} suffix="% of range" onChange={value => updateGradingPreference('stock', 'rangeBands', key, value)} />
             ))}
             {Object.entries({ best: 'Range best points', good: 'Range good points', fair: 'Range fair points', weak: 'Range weak points', poor: 'Range poor points' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={stockFormula.rangeScores[key]} onChange={value => updateGradingPreference('stock', 'rangeScores', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('stock', 'rangeScores', key)} value={stockFormula.rangeScores[key]} onChange={value => updateGradingPreference('stock', 'rangeScores', key, value)} />
             ))}
-            <FormulaNumberField label="Pass badge from" value={stockFormula.badgeBands.pass} onChange={value => updateGradingPreference('stock', 'badgeBands', 'pass', value)} />
-            <FormulaNumberField label="Warn badge from" value={stockFormula.badgeBands.warn} onChange={value => updateGradingPreference('stock', 'badgeBands', 'warn', value)} />
-            <FormulaNumberField label="Strong Buy from" value={stockFormula.verdictBands.strongBuy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongBuy', value)} />
-            <FormulaNumberField label="Strong Buy min fundamental" value={stockFormula.verdictBands.strongFundamental} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongFundamental', value)} />
-            <FormulaNumberField label="Buy from" value={stockFormula.verdictBands.buy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'buy', value)} />
-            <FormulaNumberField label="Hold from" value={stockFormula.verdictBands.hold} onChange={value => updateGradingPreference('stock', 'verdictBands', 'hold', value)} />
+            <FormulaNumberField label="Pass badge from" help={gradingPreferenceHelp('stock', 'badgeBands', 'pass')} value={stockFormula.badgeBands.pass} onChange={value => updateGradingPreference('stock', 'badgeBands', 'pass', value)} />
+            <FormulaNumberField label="Warn badge from" help={gradingPreferenceHelp('stock', 'badgeBands', 'warn')} value={stockFormula.badgeBands.warn} onChange={value => updateGradingPreference('stock', 'badgeBands', 'warn', value)} />
+            <FormulaNumberField label="Strong Buy from" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongBuy')} value={stockFormula.verdictBands.strongBuy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongBuy', value)} />
+            <FormulaNumberField label="Strong Buy min fundamental" help={gradingPreferenceHelp('stock', 'verdictBands', 'strongFundamental')} value={stockFormula.verdictBands.strongFundamental} onChange={value => updateGradingPreference('stock', 'verdictBands', 'strongFundamental', value)} />
+            <FormulaNumberField label="Buy from" help={gradingPreferenceHelp('stock', 'verdictBands', 'buy')} value={stockFormula.verdictBands.buy} onChange={value => updateGradingPreference('stock', 'verdictBands', 'buy', value)} />
+            <FormulaNumberField label="Hold from" help={gradingPreferenceHelp('stock', 'verdictBands', 'hold')} value={stockFormula.verdictBands.hold} onChange={value => updateGradingPreference('stock', 'verdictBands', 'hold', value)} />
           </FormulaFieldGrid>
         </details>
 
@@ -781,16 +833,16 @@ export default function Settings() {
             AO, RSI, MACD, SMA 50, SMA 200 and eligible NAV signals cast weighted votes. BUY or SELL must exceed the selected percentage of all active vote weight; otherwise the result is NEUTRAL.
           </p>
           <FormulaFieldGrid>
-            <FormulaNumberField label="AO zero-line buffer" value={signalFormula.thresholds.aoZeroBuffer} step={0.01} onChange={value => updateGradingPreference('signals', 'thresholds', 'aoZeroBuffer', value)} />
-            <FormulaNumberField label="RSI BUY below" value={signalFormula.thresholds.rsiBuyBelow} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiBuyBelow', value)} />
-            <FormulaNumberField label="RSI SELL above" value={signalFormula.thresholds.rsiSellAbove} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiSellAbove', value)} />
-            <FormulaNumberField label="SMA neutral band" value={signalFormula.thresholds.smaBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('signals', 'thresholds', 'smaBufferPct', value)} />
-            <FormulaNumberField label="Required vote share" value={signalFormula.thresholds.majorityPct} min={1} max={100} suffix="%" onChange={value => updateGradingPreference('signals', 'thresholds', 'majorityPct', value)} />
-            <FormulaNumberField label="NAV BUY ratio through" value={signalFormula.thresholds.navBuyMaxRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navBuyMaxRatio', value)} />
-            <FormulaNumberField label="NAV SELL ratio above" value={signalFormula.thresholds.navSellAboveRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navSellAboveRatio', value)} />
-            <FormulaNumberField label="NAV hard-decline SELL" value={signalFormula.thresholds.navHardDeclinePct} step={1} suffix="% decline" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeclinePct', value)} />
+            <FormulaNumberField label="AO zero-line buffer" help={gradingPreferenceHelp('signals', 'thresholds', 'aoZeroBuffer')} value={signalFormula.thresholds.aoZeroBuffer} step={0.01} onChange={value => updateGradingPreference('signals', 'thresholds', 'aoZeroBuffer', value)} />
+            <FormulaNumberField label="RSI BUY below" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiBuyBelow')} value={signalFormula.thresholds.rsiBuyBelow} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiBuyBelow', value)} />
+            <FormulaNumberField label="RSI SELL above" help={gradingPreferenceHelp('signals', 'thresholds', 'rsiSellAbove')} value={signalFormula.thresholds.rsiSellAbove} onChange={value => updateGradingPreference('signals', 'thresholds', 'rsiSellAbove', value)} />
+            <FormulaNumberField label="SMA neutral band" help={gradingPreferenceHelp('signals', 'thresholds', 'smaBufferPct')} value={signalFormula.thresholds.smaBufferPct} step={0.1} suffix="± %" onChange={value => updateGradingPreference('signals', 'thresholds', 'smaBufferPct', value)} />
+            <FormulaNumberField label="Required vote share" help={gradingPreferenceHelp('signals', 'thresholds', 'majorityPct')} value={signalFormula.thresholds.majorityPct} min={1} max={100} suffix="%" onChange={value => updateGradingPreference('signals', 'thresholds', 'majorityPct', value)} />
+            <FormulaNumberField label="NAV BUY ratio through" help={gradingPreferenceHelp('signals', 'thresholds', 'navBuyMaxRatio')} value={signalFormula.thresholds.navBuyMaxRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navBuyMaxRatio', value)} />
+            <FormulaNumberField label="NAV SELL ratio above" help={gradingPreferenceHelp('signals', 'thresholds', 'navSellAboveRatio')} value={signalFormula.thresholds.navSellAboveRatio} step={0.05} onChange={value => updateGradingPreference('signals', 'thresholds', 'navSellAboveRatio', value)} />
+            <FormulaNumberField label="NAV hard-decline SELL" help={gradingPreferenceHelp('signals', 'thresholds', 'navHardDeclinePct')} value={signalFormula.thresholds.navHardDeclinePct} step={1} suffix="% decline" onChange={value => updateGradingPreference('signals', 'thresholds', 'navHardDeclinePct', value)} />
             {Object.entries({ ao: 'AO vote weight', rsi: 'RSI vote weight', macd: 'MACD vote weight', sma50: 'SMA 50 vote weight', sma200: 'SMA 200 vote weight', nav: 'NAV vote weight' }).map(([key, label]) => (
-              <FormulaNumberField key={key} label={label} value={signalFormula.weights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('signals', 'weights', key, value)} />
+              <FormulaNumberField key={key} label={label} help={gradingPreferenceHelp('signals', 'weights', key)} value={signalFormula.weights[key]} max={10} step={0.25} onChange={value => updateGradingPreference('signals', 'weights', key, value)} />
             ))}
           </FormulaFieldGrid>
         </details>
