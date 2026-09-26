@@ -266,6 +266,12 @@ class LicenseManagerTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PORTFOLIO_LICENSE_ENFORCE": "0"}):
             self.assertEqual(self.client().get("/api/profiles").status_code, 200)
 
+    def test_installed_build_cannot_be_switched_off_by_environment(self):
+        with mock.patch.dict(os.environ, {"PORTFOLIO_LICENSE_ENFORCE": "0"}), \
+                mock.patch.object(sys, "frozen", True, create=True):
+            self.assertTrue(lm.enforcement_enabled())
+            self.assertEqual(self.client().get("/api/profiles").status_code, 403)
+
     def test_activate_route_maps_errors_to_status_codes(self):
         client = self.client()
         self.gumroad.return_value = not_found()

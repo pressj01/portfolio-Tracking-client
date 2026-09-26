@@ -10,7 +10,8 @@ Network failures never revoke; they only start an offline grace period.
 
 Enforcement is on for the packaged (PyInstaller) backend and off when running
 from source, so development is never locked. ``PORTFOLIO_LICENSE_ENFORCE=1``
-forces it on for testing, ``=0`` forces it off. It also stays off while no
+forces it on from source for testing; nothing turns it off in the installed
+build. It also stays off while no
 Gumroad product ID is configured, so a release built before the ID is filled
 in cannot lock every buyer out.
 """
@@ -96,12 +97,12 @@ def product_url() -> str:
 
 
 def enforcement_enabled() -> bool:
-    override = str(os.environ.get("PORTFOLIO_LICENSE_ENFORCE", "")).strip().lower()
-    if override in ("1", "true", "yes", "on"):
+    # The installed build always enforces; an environment variable that
+    # switched it off would be a one-line bypass for every buyer.
+    if getattr(sys, "frozen", False):
         return True
-    if override in ("0", "false", "no", "off"):
-        return False
-    return bool(getattr(sys, "frozen", False))
+    override = str(os.environ.get("PORTFOLIO_LICENSE_ENFORCE", "")).strip().lower()
+    return override in ("1", "true", "yes", "on")
 
 
 def license_path() -> str:
