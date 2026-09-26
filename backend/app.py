@@ -44,6 +44,7 @@ class NanSafeJSONProvider(DefaultJSONProvider):
         return super().dumps(_sanitize_nan(obj), **kwargs)
 from config import get_connection, DB_PATH
 import fred_provider
+from license_manager import register_routes as register_license_routes
 from database import ensure_tables_exist
 from db_backup import remove_sidecars, sqlite_backup, sqlite_restore
 from snowball_assign import apply_snowball_assignment, ensure_snowball_category
@@ -57171,6 +57172,7 @@ def cef_scan():
     return _run_fund_scan("cef")
 
 
+register_license_routes(app)
 register_options_routes(app)
 register_option_dashboard_routes(
     app,

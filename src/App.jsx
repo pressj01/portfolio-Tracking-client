@@ -12,6 +12,7 @@ import TickerResearchProvider from './context/TickerResearchContext'
 import CommandPalette from './components/CommandPalette'
 import HiddenPageBanner from './components/HiddenPageBanner'
 import AdviceAcknowledgement from './components/AdviceAcknowledgement'
+import LicenseGate from './components/LicenseGate'
 import { NotFinancialAdviceBanner } from './components/NotFinancialAdviceNotice'
 import AppRoutes from './pageCatalog'
 import { visibleNavigation } from './navigation/menuConfig'
@@ -121,6 +122,7 @@ function App() {
   return (
     <DialogProvider>
     <ThemeProvider>
+    <LicenseGate>
     <ProfileProvider>
     <MarketRefreshProvider>
     <MenuOrderProvider>
@@ -131,6 +133,7 @@ function App() {
     </MenuOrderProvider>
     </MarketRefreshProvider>
     </ProfileProvider>
+    </LicenseGate>
     </ThemeProvider>
     </DialogProvider>
   )

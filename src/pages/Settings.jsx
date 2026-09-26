@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { useCurrency } from '../context/CurrencyContext'
 import { useAdviceNoticeVisibility } from '../components/NotFinancialAdviceNotice'
+import LicenseSettingsCard from '../components/LicenseSettingsCard'
 import {
   loadGradingPreferences,
   resetGradingPreferences,
@@ -1226,6 +1227,8 @@ export default function Settings() {
           )}
         </div>
       </div>
+
+      <LicenseSettingsCard />
 
       {/* FRED API Key */}
       <div className="card">

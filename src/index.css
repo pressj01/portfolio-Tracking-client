@@ -12705,3 +12705,33 @@ body:has(.split-page) #root *:has(> .split-page) {
 .nfa-ack-check { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0 0 1rem; font-size: 0.88rem; color: var(--text-strong); }
 .nfa-ack-check input { margin-top: 0.2rem; }
 .nfa-ack-card .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* License activation (LicenseGate.jsx) */
+.license-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 14000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  background: var(--bg);
+}
+.license-gate-card {
+  width: min(520px, 100%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.4rem 1.5rem 1.2rem;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+.license-gate-card h2 { margin: 0 0 0.6rem; color: var(--text-strong); font-size: 1.2rem; }
+.license-gate-card p { margin: 0 0 0.9rem; color: var(--text-muted); font-size: 0.92rem; line-height: 1.5; }
+.license-gate-label { display: block; color: var(--text-dim); font-size: 0.8rem; margin-bottom: 5px; }
+.license-gate-card input { width: 100%; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: 0.02em; }
+.license-gate-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.9rem 0; }
+.license-gate-card .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.license-gate-card p.license-gate-help { margin: 0; font-size: 0.8rem; color: var(--text-dim); }
+.license-gate-loading { padding: 2rem; color: var(--text-dim); font-size: 0.9rem; }
+.license-overdue-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin: 0; border-radius: 0; font-size: 0.85rem; }
