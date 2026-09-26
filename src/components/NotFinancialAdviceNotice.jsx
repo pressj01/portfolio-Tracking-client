@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ADVICE_NOTICE_VISIBILITY_STORAGE_KEY,
+  NOT_FINANCIAL_ADVICE_FOOTER,
   NOT_FINANCIAL_ADVICE_SHORT,
 } from '../content/notFinancialAdvice'
 
@@ -47,9 +48,15 @@ export function useAdviceNoticeVisibility() {
   return [visible, setVisible]
 }
 
-function AdviceNotice({ className }) {
+function AdviceNotice({ className, persistentFooter = false }) {
   const [visible, setVisible] = useAdviceNoticeVisibility()
-  if (!visible) return null
+  if (!visible) {
+    return persistentFooter ? (
+      <div className="nfa-page-footer" role="note" aria-label="Informational-purpose disclaimer">
+        {NOT_FINANCIAL_ADVICE_FOOTER}
+      </div>
+    ) : null
+  }
 
   return (
     <div className={className} role="note" aria-label="Not financial advice">
@@ -72,5 +79,5 @@ export function NotFinancialAdviceBanner() {
 }
 
 export default function NotFinancialAdviceNotice() {
-  return <AdviceNotice className="nfa-page" />
+  return <AdviceNotice className="nfa-page" persistentFooter />
 }

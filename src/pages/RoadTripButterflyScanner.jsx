@@ -119,8 +119,10 @@ function HelpPanel() {
         Management is scheduled rather than discretionary: leave it alone for
         the first 21–30 days and let theta work, seek the close from halfway to
         two-thirds through the trade while the T+0 zone is broad, and retain the
-        article&rsquo;s 15–20 DTE date as the exit backstop. Take 7–15% on capital
-        at risk and cut the trade if the loss passes 4–5% of utilized capital.
+        article&rsquo;s 15–20 DTE date as the exit backstop. The article uses a 7–15%
+        management band on capital at risk; treat it as an editable exit input,
+        not an expected return. Cut the trade if the loss passes 4–5% of utilized
+        capital.
         Entries are staggered every two weeks
         with four or five running at once. Timing preference is a down day with
         volatility up; that is graded from realized volatility, since the price

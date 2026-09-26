@@ -297,7 +297,7 @@ const GUIDES = {
         ['Awaiting 8/34 all-clear', 'After a four- or five-warning event, keep this checked until a bullish 8/34 EMA crossover occurs on the 30-minute chart.'],
         ['Campaign capital / Capital per tranche / Open tranches', 'Enforces the document’s campaign-capacity ceiling. The default $150,000 ÷ $12,500 permits at most 12 open tranches.'],
         ['LPTA context', 'At four warnings, the document calls for one roughly 30-DTE 2-delta long put per three open tranches; at five warnings, two. Reassess coverage at 7 DTE.'],
-        ['Fixed and theta references', 'Shows the $1,000 target, roughly $800 expected profit, $2,500 management loss, 12-week average holding period, $20,000 learning reserve, and appendix 120×/71× theta references. The document favors conservative tiered fixed targets rather than theta alone.'],
+        ['Fixed and theta references', 'Shows the document’s $1,000 management figure, $800 illustrative checkpoint, $2,500 management loss, 12-week average holding period, $20,000 learning reserve, and appendix 120×/71× theta references. These are course context, not expected results; the document favors conservative tiered fixed targets rather than theta alone.'],
       ],
     },
   ],

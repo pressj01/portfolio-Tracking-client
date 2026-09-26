@@ -5,8 +5,11 @@ export const NOT_FINANCIAL_ADVICE =
 export const NOT_FINANCIAL_ADVICE_SHORT =
   'Educational information only — not financial, investment, or trading advice, and not a recommendation to buy, sell, or hold. Scores and projections do not promise returns.'
 
+export const NOT_FINANCIAL_ADVICE_FOOTER =
+  'For informational purposes only. Not financial advice.'
+
 export const PRIVACY_NOTE =
-  'Ticker symbols and the market requests needed to price them are sent to Yahoo Finance and other public data sites. Portfolio holdings, transactions, notes, and account records stay in the local database on this computer. This app does not upload that portfolio data.'
+  'Ticker symbols and the market requests needed to price them are sent to Yahoo Finance and other public data sites. If you enable Tiingo, your Tiingo API key is sent to Tiingo only to authenticate your own requests. Portfolio holdings, transactions, notes, and account records stay in the local database on this computer. This app does not upload that portfolio data.'
 
 export const ADVICE_ACK_STORAGE_KEY = 'portfolio-tracker-not-financial-advice-v1'
 

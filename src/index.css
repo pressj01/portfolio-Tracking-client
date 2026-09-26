@@ -12666,6 +12666,21 @@ body:has(.split-page) #root *:has(> .split-page) {
   color: var(--text-strong);
   outline: none;
 }
+.nfa-page-footer {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 35;
+  padding: 0.2rem 1rem;
+  background: color-mix(in srgb, var(--surface-sunken) 88%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  color: var(--text-dim-2);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  pointer-events: none;
+  text-align: center;
+}
 .nfa-ack {
   position: fixed;
   inset: 0;

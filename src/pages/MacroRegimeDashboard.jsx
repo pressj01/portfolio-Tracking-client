@@ -4,6 +4,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useNavigate } from 'react-router-dom'
 import { formatMoney } from '../utils/money'
 import { fitReading } from '../utils/readingLabels'
+import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -416,6 +417,12 @@ function TiltsTab({ pf }) {
 
   return (
     <div>
+      <div style={{
+        background: 'rgba(255, 202, 40, 0.08)', border: '1px solid var(--warning)', borderRadius: 8,
+        color: 'var(--text-muted)', fontSize: '0.8rem', lineHeight: 1.45, padding: '0.65rem 0.85rem', marginBottom: '1rem',
+      }}>
+        Educational model output only. These rule-based allocation comparisons are not personalized investment advice or directions to buy, sell, increase, or reduce a holding. Review your own goals, risks, taxes, and constraints before making any decision.
+      </div>
       {/* Header */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginBottom: '1rem', alignItems: 'center' }}>
         <div style={{
@@ -452,9 +459,9 @@ function TiltsTab({ pf }) {
           padding: '1rem 1.25rem', marginBottom: '1rem',
         }}>
           <h3 style={{ color: 'var(--p-e0e8f0)', margin: '0 0 0.5rem' }}>
-            Rebalance to Breakeven
+            Illustrative Neutral-Alignment Scenario
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim-2)', fontWeight: 400, marginLeft: 8 }}>
-              Shift {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable {'->'} favorable to reach neutral alignment
+              Model comparison: {fmtPct(data.breakeven_target.total_shift_pct)} ({fmt$(data.breakeven_target.total_shift_needed)}) from unfavorable {'->'} favorable to reach neutral alignment
             </span>
           </h3>
           <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
@@ -507,7 +514,7 @@ function TiltsTab({ pf }) {
         {/* Next dollar pie chart */}
         {pieLabels.length > 0 && (
           <div style={{ flex: '0 1 380px' }}>
-            <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Where Your Next Dollar Should Go</h3>
+            <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Illustrative Next-Dollar Allocation</h3>
             <Plot
               data={[{
                 type: 'pie',
@@ -533,7 +540,7 @@ function TiltsTab({ pf }) {
 
         {/* Suggestion cards */}
         <div style={{ flex: '1 1 400px' }}>
-          <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Suggestions</h3>
+          <h3 style={{ color: 'var(--p-e0e8f0)', marginBottom: '0.5rem' }}>Model Tilt Comparisons</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             {suggestions.map((s, i) => {
               const isIncrease = s.action === 'increase'
@@ -541,7 +548,7 @@ function TiltsTab({ pf }) {
               const isHold = s.action === 'hold'
               const borderColor = isIncrease ? '#2e7d32' : isReduce ? '#c62828' : '#546e7a'
               const bgColor = isIncrease ? 'rgba(76,175,80,0.08)' : isReduce ? 'rgba(239,83,80,0.08)' : 'rgba(84,110,122,0.08)'
-              const actionLabel = isIncrease ? 'INCREASE' : isReduce ? 'REDUCE' : 'HOLD'
+              const actionLabel = isIncrease ? 'MODEL INCREASE' : isReduce ? 'MODEL REDUCE' : 'MODEL HOLD'
               const actionColor = isIncrease ? '#4caf50' : isReduce ? '#ef5350' : '#90a4ae'
 
               return (
@@ -2199,8 +2206,9 @@ export default function MacroRegimeDashboard() {
     <div className="page">
       <h1 style={{ marginBottom: '0.3rem' }}>Macro Regime Dashboard</h1>
       <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-        Current macro conditions, portfolio exposure analysis, and rebalancing tilt suggestions.
+        Current macro conditions, portfolio exposure analysis, and illustrative rule-based allocation comparisons.
       </p>
+      <NotFinancialAdviceNotice />
 
       <div className="tabs">
         <button className={`tab ${activeTab === 'conditions' ? 'active' : ''}`}

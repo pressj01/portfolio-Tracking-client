@@ -3,7 +3,7 @@ import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
 
-const APP_VERSION = '1.35.3'
+const APP_VERSION = '1.36.3'
 
 const GROUPS = [
   {
@@ -193,7 +193,7 @@ function Overview() {
         <li><strong>Taxes</strong> — Annual Tax Report with realized gains/losses and dividend income summaries.</li>
         <li><strong>Command palette</strong> — Press Ctrl+K (⌘K on a Mac) or use Search in the top bar to jump to a page, ticker, or action, including pages you hid from the menu.</li>
         <li><strong>Multi-Portfolio</strong> — Create multiple portfolios and view them individually or as an aggregate.</li>
-        <li><strong>Market Data</strong> — Prices, dividends, and ex-div dates refresh automatically from Yahoo Finance.</li>
+        <li><strong>Market Data</strong> — Yahoo Finance is the default. You can optionally use your own Tiingo key for supported non-option prices, history, dividends, and splits, with Yahoo filling any gaps.</li>
       </ul>
     </div>
   )
@@ -6112,6 +6112,52 @@ function SettingsHelp() {
         optimizer, and offers a nuclear "Clear All Data" option.
       </p>
 
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Appearance &amp; Educational Notices</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The small <strong>Educational information only</strong> notices below the navigation and at the
+        top of analysis pages are reminders, not a requirement to read them on every visit. Select the
+        <strong> ×</strong> on either notice to hide both expanded copies across the app. The choice is saved on
+        this device, so they remain hidden after you return to the Dashboard or restart the application.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        To show them again, go to <strong>Settings → Appearance</strong> and check
+        <strong> Show educational notice boxes</strong>. This does not change the separate first-launch
+        acknowledgement, which remains a one-time confirmation. When the expanded notices are hidden, pages
+        that display grades or signals retain a small gray footer: <strong>For informational purposes only. Not financial advice.</strong>
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Market Data Provider: Tiingo + Yahoo</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Yahoo Finance remains the default market-data provider. If you have your own Tiingo account,
+        the <strong>Market Data Provider</strong> card lets the app prefer Tiingo for supported non-option
+        price history, dividends, and stock splits while retaining Yahoo as an automatic fallback.
+      </p>
+      <ol style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li>Open <strong>Settings → Market Data Provider</strong>.</li>
+        <li>Enter your Tiingo API key and optionally choose <strong>Test key</strong> to validate it with Tiingo.</li>
+        <li>Check <strong>Use Tiingo when available</strong>.</li>
+        <li>Select <strong>Save provider</strong>. Testing a key alone does not activate Tiingo; saving the checked provider does.</li>
+      </ol>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9', marginBottom: '0.75rem' }}>
+        <li><strong>Activation safeguard</strong> — Tiingo is used only when the checkbox is saved and the stored key has passed validation. A saved key by itself does not turn Tiingo on.</li>
+        <li><strong>Hybrid fallback</strong> — If Tiingo cannot supply a symbol or field, the account reaches a plan limit, or a request fails, the app asks Yahoo for that specific data instead of leaving the screen blank. The active-provider card shows session fallback count and the latest reason.</li>
+        <li><strong>Turning it off</strong> — Clear <strong>Use Tiingo when available</strong> and save. Non-option market-data requests return directly to Yahoo; you may keep the masked key for later or remove it completely with <strong>Remove Tiingo key</strong>.</li>
+        <li><strong>Options stay on Yahoo</strong> — Tiingo does not provide the option chains used by this app, so option quotes, contracts, and option tools are not switched.</li>
+        <li><strong>CEF and specialist sources</strong> — CEF Connect, SEC filings, issuer holdings, and other specialist sources do not change. Tiingo can provide the market history for supported CEFs; Yahoo fills any unsupported market-data gap.</li>
+        <li><strong>Paid-plan expectations</strong> — A paid Tiingo plan should reduce quota- and entitlement-driven fallbacks for ordinary supported price-history requests. Yahoo can still be needed for unsupported symbols, indices, richer metadata, or non-entitled fundamental fields.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Your key is stored only in the local application database, is masked in Settings, and is never returned by the app's API. The key is sent to Tiingo only to authenticate the Tiingo requests you chose to make. Use <strong>Remove Tiingo key</strong> whenever you want to delete the local copy.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Price Data Freshness</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Always Fetch Live</strong> asks the active provider whenever a screen needs the same price window.
+        <strong> Reuse Recent Prices</strong> reuses an identical recent result for the selected number of minutes,
+        reducing both Tiingo requests and Yahoo fallback requests at the cost of a potentially older displayed price.
+        Clearing the price cache forces the next request to use the active provider again.
+      </p>
+
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Grading &amp; Signal Formulas</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         This card exposes every number behind the portfolio and holding risk grades, the stock checklist score,
@@ -6224,7 +6270,8 @@ function MacroDashboardHelp() {
       <h2>Macro Regime Dashboard</h2>
       <p style={{ marginBottom: '1rem' }}>
         The Macro Regime Dashboard shows current macroeconomic conditions, analyzes your portfolio's
-        sensitivity to macro factors, suggests rebalancing tilts, and benchmarks your income allocation.
+        sensitivity to macro factors, illustrates rule-based allocation comparisons, and benchmarks your income allocation.
+        Its model labels and percentages are educational scenario outputs, not personalized investment advice or directions to trade.
         It has six tabs.
       </p>
 
@@ -10015,7 +10062,7 @@ function RoadTripButterflyScannerHelp() {
         <li><strong>Hands-off window:</strong> leave the trade alone for the first 21–30 days so theta can work.</li>
         <li><strong>Preferred close window:</strong> manage the exit from halfway through two-thirds through the trade, while the time-value profit zone remains broad.</li>
         <li><strong>Article exit backstop:</strong> the 15–20 DTE date is the latest planned exit, not the probability headline or the start of the preferred close window.</li>
-        <li><strong>Profit and stop:</strong> the defaults seek 7%–15% of utilized capital and stop near a 4%–5% loss, well before the expiration maximum loss.</li>
+        <li><strong>Profit and stop:</strong> the article uses a 7%–15% management band on utilized capital as an editable exit input, not an expected return. It also uses a 4%–5% loss limit, well before the expiration maximum loss.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>
