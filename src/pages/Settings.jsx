@@ -1144,6 +1144,15 @@ export default function Settings() {
           Yahoo is the default. You may use your own Tiingo API key for non-option prices,
           history, dividends, and splits. If Tiingo cannot provide a ticker or field—or the
           account reaches a plan limit—the app automatically fills that request from Yahoo.
+          {' '}Need an account? Sign up at{' '}
+          <a
+            href="https://www.tiingo.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open Tiingo signup in a new window"
+          >
+            https://www.tiingo.com/
+          </a>.
         </p>
 
         {providerStatus && (
