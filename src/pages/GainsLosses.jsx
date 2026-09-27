@@ -33,7 +33,7 @@ import {
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 import {
   fetchHoldingsJson,
-  lifetimeMetricsFromHoldings,
+  lifetimeAccountingProfitFromTotals,
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
@@ -120,7 +120,6 @@ export default function GainsLosses({ embedded = false }) {
   const catRef = useRef(null)
 
   const [data, setData] = useState(null)
-  const [lifetimeProfit, setLifetimeProfit] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
@@ -169,20 +168,16 @@ export default function GainsLosses({ embedded = false }) {
     const params = new URLSearchParams()
     if (categories.length) params.set('category', categories.join(','))
     if (subcategories.length) params.set('subcategory', subcategories.join(','))
-    Promise.all([
-      pf(`/api/gains-losses/summary?${params}`).then(r => r.json()),
-      fetchHoldingsJson(pf, { categories, subcategories }).catch(() => []),
-    ])
-      .then(([d, holdings]) => {
+    pf(`/api/gains-losses/summary?${params}`)
+      .then(r => r.json())
+      .then(d => {
         if (!active) return
         if (d.error) throw new Error(d.error)
         setData(d)
-        setLifetimeProfit(lifetimeMetricsFromHoldings(Array.isArray(holdings) ? holdings : []).metrics)
       })
       .catch(e => {
         if (!active) return
         setError(e.message)
-        setLifetimeProfit(null)
       })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
@@ -477,6 +472,7 @@ export default function GainsLosses({ embedded = false }) {
   })
 
   const t = data?.totals || {}
+  const lifetimeProfit = lifetimeAccountingProfitFromTotals(t)
   const periodFilterLabel = PERFORMANCE_PERIODS.find(option => option.key === period)?.label
     || chartData?.period_label
     || 'Selected period'
@@ -985,6 +981,8 @@ export default function GainsLosses({ embedded = false }) {
               <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
               <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Use the lifetime cards below, or choose <strong>Life</strong>, for current value versus cost basis.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
+              <li><strong>Realized Profit &amp; Loss (Life only):</strong> profit or loss already locked in by sales that trimmed a position you still own. Fully closed positions remain in the Lifetime Realized and Combined sections below.</li>
+              <li><strong>Life Total Return:</strong> Life Price G/L plus Distributions plus Realized Profit &amp; Loss. A realized loss is negative, so it reduces the total.</li>
               <li><strong>Tracker Total Return:</strong> Tracker Price Return plus Distributions, including positions fully closed during the range.</li>
               <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, and Growth after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
             </ul>
@@ -1009,6 +1007,7 @@ export default function GainsLosses({ embedded = false }) {
               <li><strong>Current Value:</strong> those same holdings at today's market price. Does not include cash.</li>
               <li><strong>Account Value:</strong> Current Value plus cash and any open option contracts — compare this one against your broker, not Current Value.</li>
               <li><strong>Unrealized G/L:</strong> gain or loss on shares you still hold. <em>Price Only</em> ignores dividends; <em>Price + Divs</em> adds every dividend received while holding those shares.</li>
+              <li><strong>Total Profit:</strong> unrealized price G/L plus all recorded lifetime dividends plus realized price G/L across both open and fully closed positions. Realized gains increase it and realized losses reduce it.</li>
               <li><strong>Realized G/L:</strong> the same split, but for shares you have already sold — the gain or loss is locked in at the sale.</li>
               <li><strong>Combined G/L:</strong> Unrealized plus Realized — your total cost-basis result across everything you have ever owned, sold or not.</li>
             </ul>
@@ -1143,12 +1142,19 @@ export default function GainsLosses({ embedded = false }) {
             <MetricCard label="Distributions" value={fmtInt(periodMetrics.distribution_dollar)} range={performanceRange}>
               <div className="summary-sub">{isLifetimePerformancePeriod(period) ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
+            {isLifetimePerformancePeriod(period) && (
+              <MetricCard label="Realized Profit & Loss" range={performanceRange}
+                value={<span style={{ color: glColor(periodMetrics.realized_return_dollar) }}>{fmtInt(periodMetrics.realized_return_dollar)}</span>}>
+                <div className="summary-sub">Profit or loss locked in by sales from current holding lots</div>
+                <div className="summary-sub">Fully closed positions remain in the Lifetime tables below</div>
+              </MetricCard>
+            )}
             <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>}>
               <div className="summary-sub">
                 Price {fmtInt(periodMetrics.price_return_dollar)} + distributions {fmtInt(periodMetrics.distribution_dollar)}
-                {Number(periodMetrics.realized_return_dollar || 0) !== 0
-                  ? ` + realized trims ${fmtInt(periodMetrics.realized_return_dollar)}`
+                {isLifetimePerformancePeriod(period)
+                  ? ` + realized P/L ${fmtInt(periodMetrics.realized_return_dollar)}`
                   : ''}
               </div>
               {!isLifetimePerformancePeriod(period) && <div className="summary-sub">Includes positions fully closed during this range</div>}
@@ -1246,14 +1252,13 @@ export default function GainsLosses({ embedded = false }) {
                   : '— vs cost basis'}
               </div>
               <div className="summary-sub">
-                Price {fmt(lifetimeProfit?.price_return_dollar)}
-                {' + dividends '}
+                Unrealized price {fmt(lifetimeProfit?.price_return_dollar)}
+                {' + all dividends '}
                 {fmt(lifetimeProfit?.distribution_dollar)}
-                {Number(lifetimeProfit?.realized_return_dollar || 0) !== 0
-                  ? ` + realized trims ${fmt(lifetimeProfit.realized_return_dollar)}`
-                  : ''}
+                {' + realized P/L '}
+                {fmt(lifetimeProfit?.realized_return_dollar)}
               </div>
-              <div className="summary-sub">Open holdings after realized trims — same as Dashboard</div>
+              <div className="summary-sub">Open and fully closed positions — complete lifetime accounting</div>
             </MetricCard>
           </div>
           <div className="summary-strip" style={{ marginBottom: '1rem' }}>
