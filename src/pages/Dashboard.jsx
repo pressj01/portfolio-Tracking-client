@@ -49,6 +49,7 @@ import {
   isNavHistoryInterval,
   navHistoryCallouts,
   resampleNavHistory,
+  withLiveNavPoint,
 } from '../utils/navHistoryInterval'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
 
@@ -1810,15 +1811,23 @@ export default function Dashboard() {
     return 'Holding estimates'
   }, [incomeSummary])
 
+  // The same live account value as the Portfolio Value card; the chart's last
+  // point follows it on a market day until the official close is recorded.
+  const liveNavDate = portfolioValue?.live_nav_date || null
+  const liveAccountValue = portfolioValue?.account_value ?? null
+
   useEffect(() => {
     const el = navChartRef.current
     if (!el || !window.Plotly || navHistory.length < 1) return
     const isTotalReturn = navReturnMode === 'total'
-    const points = resampleNavHistory(navHistory
+    const history = withLiveNavPoint(navHistory, { date: liveNavDate, value: liveAccountValue })
+    const points = resampleNavHistory(history
       .map(r => ({
         date: r.date,
         value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
-        dividends: Number(r.cumulative_dividends) || 0,
+        portfolioValue: Number(r.value),
+        withdrawnAfter: Number(r.net_withdrawn_after) || 0,
+        liveNote: r.source === 'live' ? '<br><i>Live value, not yet recorded</i>' : '',
       }))
       .filter(r => r.date && Number.isFinite(r.value)), navHistoryInterval)
     if (points.length < 1) return
@@ -1860,10 +1869,10 @@ export default function Dashboard() {
       line: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', width: 2 },
       marker: { color: isTotalReturn ? (isDark ? '#4dff91' : '#15803d') : '#7ecfff', size: markerSize },
       textposition: 'top center',
-      customdata: points.map(point => point.dividends),
+      customdata: points.map(point => [point.portfolioValue, point.withdrawnAfter, point.liveNote]),
       hovertemplate: isTotalReturn
-        ? '%{x|%b %d, %Y}<br>Total return value: $%{y:,.2f}<br>Dividends added: $%{customdata:,.2f}<extra></extra>'
-        : '%{x|%b %d, %Y}<br>Portfolio value: $%{y:,.2f}<extra></extra>',
+        ? '%{x|%b %d, %Y}<br>Total return value: $%{y:,.2f}<br>Portfolio value: $%{customdata[0]:,.2f}<br>Net withdrawn since: $%{customdata[1]:,.2f}%{customdata[2]}<extra></extra>'
+        : '%{x|%b %d, %Y}<br>Portfolio value: $%{y:,.2f}%{customdata[2]}<extra></extra>',
     }
     const traces = [valueTrace]
     const oneDayMs = 24 * 60 * 60 * 1000
@@ -1925,7 +1934,7 @@ export default function Dashboard() {
         font: { size: 15, color: ct.title },
       },
       xaxis,
-      yaxis: { title: { text: isTotalReturn ? 'Value + Dividends ($)' : 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
+      yaxis: { title: { text: isTotalReturn ? 'Value, Adjusted for Withdrawals ($)' : 'Portfolio Value ($)', font: { size: 12, color: ct.font } }, gridcolor: ct.grid, color: ct.font, tickprefix: '$', range: yRange },
       margin: { l: 90, r: 20, t: 70, b: 52 },
       height: 340,
       hovermode: 'x unified',
@@ -1979,7 +1988,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory, navReturnMode, navHistoryInterval, isDark])
+  }, [navHistory, liveNavDate, liveAccountValue, navReturnMode, navHistoryInterval, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -2711,7 +2720,7 @@ export default function Dashboard() {
           >
             {[
               { value: 'price', label: 'Price Return', title: 'Show recorded portfolio value without adding dividend payments' },
-              { value: 'total', label: 'Total Return', title: 'Add actual recorded dividend payments since the first chart date' },
+              { value: 'total', label: 'Total Return', title: 'Ends at today\'s value; earlier points are shifted by money withdrawn or deposited after them, so the rise to today is investment gain including dividends' },
             ].map((option, index, options) => (
               <button
                 key={option.value}

@@ -142,3 +142,22 @@ export const resampleNavHistory = (points = [], interval = 'daily') => {
   })
   return [...lastByPeriod.values()]
 }
+
+// Today's chart point follows the live Dashboard account value, so the chart's
+// "Current" matches Portfolio Value between recorded snapshots. The official
+// close, once recorded, is kept as-is; a live date older than the history (a
+// stale cached value) changes nothing; and an empty history stays empty so a
+// portfolio with no recorded snapshots still says so.
+export const withLiveNavPoint = (history = [], live = null) => {
+  const date = live?.date
+  const value = Number(live?.value)
+  if (!history.length || !date || !Number.isFinite(value) || value <= 0) return history
+  const last = history[history.length - 1]
+  const livePoint = { date, value, total_return_value: value, net_withdrawn_after: 0, source: 'live' }
+  if (last.date > date) return history
+  if (last.date === date) {
+    if (last.source === 'close') return history
+    return [...history.slice(0, -1), { ...last, ...livePoint }]
+  }
+  return [...history, livePoint]
+}

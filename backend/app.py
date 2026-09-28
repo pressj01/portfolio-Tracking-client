@@ -138,7 +138,7 @@ from market_calendar import (
     eastern_now,
     market_has_closed,
 )
-from nav_history import build_nav_history_payload
+from nav_history import activity_flows, build_nav_history_payload, dividend_outflows
 from refresh_sessions import (
     QUOTE_URL as _YAHOO_QUOTE_URL,
     align_to_sessions,
@@ -11600,6 +11600,60 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
     })
 
 
+def _nav_history_flows(conn, profile_ids, first_date, last_date):
+    """Money into (+) and out of (-) the recorded value, for the Total Return line.
+
+    A broker-synced account's recorded value is the broker's own positions and
+    cash, so every dividend is already in it (reinvested as shares or held as
+    cash); only deposits, withdrawals and transfers move money in or out.
+    Adding dividends on top would count them twice. A manually kept
+    portfolio's value is shares x price and never sees a paid dividend, so
+    there the dividend is the money that left.
+    """
+    managed = [pid for pid in profile_ids if _profile_is_positions_managed(pid, conn)]
+    manual = [pid for pid in profile_ids if pid not in managed]
+    flows = []
+    try:
+        if manual:
+            placeholders = ",".join("?" * len(manual))
+            payment_rows = conn.execute(
+                f"""SELECT payment_date, amount, source
+                    FROM dividend_payments
+                    WHERE profile_id IN ({placeholders})
+                      AND payment_date > ? AND payment_date <= ?""",
+                [*manual, first_date, last_date],
+            ).fetchall()
+            flows.extend(dividend_outflows(payment_rows))
+        if managed:
+            placeholders = ",".join("?" * len(managed))
+            activity_rows = conn.execute(
+                f"""SELECT profile_id, activity_date, direction, base_amount,
+                           ticker, quantity, price_per_share
+                    FROM account_activity
+                    WHERE profile_id IN ({placeholders})
+                      AND performance_treatment = 'EXTERNAL_FLOW'
+                      AND activity_date > ? AND activity_date <= ?""",
+                [*managed, first_date, last_date],
+            ).fetchall()
+
+            def price_on(ticker, _day):
+                # An unpaired security transfer (an ACAT in or out) carries no
+                # price; the stored price keeps the chart load off the network.
+                row = conn.execute(
+                    """SELECT MAX(current_price) FROM all_account_info
+                       WHERE UPPER(ticker) = ? AND current_price > 0""",
+                    (str(ticker).upper(),),
+                ).fetchone()
+                return float(row[0]) if row and row[0] else None
+
+            activity, _unvalued = activity_flows(activity_rows, price_on)
+            flows.extend(activity)
+    except sqlite3.OperationalError:
+        # Minimal/older databases may lack the activity or payment tables.
+        pass
+    return flows
+
+
 @app.route("/api/nav/history", methods=["GET"])
 def api_nav_history():
     """Return portfolio NAV snapshots for the current profile."""
@@ -11608,22 +11662,15 @@ def api_nav_history():
     def trim_incompatible_position_history(rows, profile_id, conn):
         return _trim_incompatible_position_nav_history(rows, profile_id, conn)
 
-    def history_payload(rows, payment_profile_ids, conn):
+    def history_payload(rows, flow_profile_ids, conn):
         trading_day_rows = [
             row for row in rows if is_nyse_trading_day(row["nav_date"])
         ]
         if not trading_day_rows:
             return []
-        placeholders = ",".join("?" * len(payment_profile_ids))
-        payment_rows = conn.execute(
-            f"""SELECT payment_date, amount, source
-                FROM dividend_payments
-                WHERE profile_id IN ({placeholders})
-                  AND payment_date IS NOT NULL
-                ORDER BY payment_date""",
-            payment_profile_ids,
-        ).fetchall()
-        return build_nav_history_payload(trading_day_rows, payment_rows)
+        dates = sorted(str(row["nav_date"])[:10] for row in trading_day_rows)
+        flows = _nav_history_flows(conn, flow_profile_ids, dates[0], dates[-1])
+        return build_nav_history_payload(trading_day_rows, flows)
 
     conn = get_connection()
     try:
@@ -11633,8 +11680,10 @@ def api_nav_history():
             if not profile_ids:
                 return jsonify([])
             placeholders = ",".join("?" * len(profile_ids))
+            # A summed day is the official close only when every member's is.
             query = (
-                "SELECT nav_date, SUM(total_value) AS total_value "
+                "SELECT nav_date, SUM(total_value) AS total_value, "
+                "CASE WHEN SUM(source = 'close') = COUNT(*) THEN 'close' ELSE MAX(source) END AS source "
                 f"FROM portfolio_nav WHERE profile_id IN ({placeholders})"
             )
             params = list(profile_ids)
@@ -11644,11 +11693,11 @@ def api_nav_history():
             query += " GROUP BY nav_date HAVING COUNT(DISTINCT profile_id) = ? ORDER BY nav_date"
             params.append(len(profile_ids))
             rows = conn.execute(query, params).fetchall()
-            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
-            return jsonify(history_payload(rows, payment_profile_ids, conn))
+            flow_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
+            return jsonify(history_payload(rows, flow_profile_ids, conn))
         else:
             profile_id = get_profile_id()
-            query = "SELECT nav_date, total_value FROM portfolio_nav WHERE profile_id = ?"
+            query = "SELECT nav_date, total_value, source FROM portfolio_nav WHERE profile_id = ?"
             params = [profile_id]
             if start:
                 query += " AND nav_date >= ?"
@@ -11656,8 +11705,8 @@ def api_nav_history():
             query += " ORDER BY nav_date"
             rows = conn.execute(query, params).fetchall()
             rows = trim_incompatible_position_history(rows, profile_id, conn)
-            payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, [profile_id])
-            return jsonify(history_payload(rows, payment_profile_ids, conn))
+            flow_profile_ids = _dividend_payment_profile_ids_for_read(conn, [profile_id])
+            return jsonify(history_payload(rows, flow_profile_ids, conn))
     finally:
         conn.close()
 
@@ -11708,10 +11757,16 @@ def api_portfolio_value():
             excluded_tickers=irr_excluded_tickers,
         )
         irr_details["source_profile_ids"] = irr_profile_ids
+        # The date a Record NAV would stamp right now, or None when the market
+        # is closed today; the Dashboard chart's last point follows the live
+        # account value on that date until the official close is recorded.
+        today = datetime.date.today()
+        live_nav_date = None if nyse_closure_reason(today) else today.isoformat()
         return jsonify({
             "holdings_value": round(holdings_value, 2),
             "cash_value": round(cash_value, 2),
             "account_value": round(holdings_value + cash_value, 2),
+            "live_nav_date": live_nav_date,
             "irr": irr_details.get("irr"),
             "irr_pct": irr_details.get("irr_pct"),
             "irr_details": irr_details,
