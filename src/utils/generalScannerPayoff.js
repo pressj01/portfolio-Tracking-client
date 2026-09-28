@@ -57,6 +57,27 @@ export function scannerLegVolatility(leg, baseIvPct, selectedIvPct) {
   return Math.max(MIN_VOLATILITY, marketIv + pointShift)
 }
 
+/**
+ * Where the P/L crosses zero between two chart samples that straddle it. The
+ * payoff is not a straight line between samples — at expiration it bends at
+ * every strike — so interpolating across a strike put a bull put's breakeven
+ * on the wrong side of its short strike ($676.26 for a $674.50 breakeven).
+ */
+export function payoffZeroBetween(valueAt, low, high, iterations = 40) {
+  let lowValue = valueAt(low)
+  for (let step = 0; step < iterations; step += 1) {
+    const middle = (low + high) / 2
+    const value = valueAt(middle)
+    if (value === 0) return middle
+    if (value * lowValue < 0) high = middle
+    else {
+      low = middle
+      lowValue = value
+    }
+  }
+  return (low + high) / 2
+}
+
 export function scannerTradePayoff(
   trade,
   scenarioSpot,
@@ -85,5 +106,5 @@ export function scannerTradePayoff(
       dividendYield,
     )
     return total + sign * qty * 100 * (current - Number(leg.entry_price || 0))
-  }, -(Number(trade?.estimated_costs_dollars) || 0))
+  }, 0)
 }

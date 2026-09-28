@@ -511,8 +511,11 @@ def _position_leg(
         "quantity": qty,
         "strike": normalized_strike,
         "expiration": str(normalized_expiration),
+        # The fill price, not ``net_entry_price``: the chart and the detailed
+        # risk graph both draw the market credit, so max profit/loss must too.
+        # Estimated costs stay in the scanner's own expected value and ranking.
         "entry_price": _first_num(
-            source.get("net_entry_price"), source.get("entry_price"), source.get("mid"), source.get("last"),
+            source.get("entry_price"), source.get("mid"), source.get("last"),
             source.get("ask"), source.get("bid"),
         ),
         "bid": _num(source.get("bid")),
@@ -766,10 +769,18 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         row, "spread.max_loss_dollars", "spread.max_loss", "max_loss_dollars",
         "max_loss", "cash_required", "put.cash_required",
     ))
+    estimated_costs = _num(_nested(
+        row, "put.estimated_costs_dollars", "spread.estimated_costs_dollars"
+    ))
     # The one-leg income scanners historically exposed collateral and premium,
     # not the actual position-wide payoff extrema.  Use the exact expiration
-    # profile so the columns mean the same thing for every strategy.
-    if trade_kind in {"cash-secured-put", "covered-call"}:
+    # profile so the columns mean the same thing for every strategy.  The
+    # cost-aware scanners quote their own extrema net of estimated costs, which
+    # made Max profit read $45 on a $50 credit the risk graph showed as $50.
+    uses_profile_extrema = (
+        trade_kind in {"cash-secured-put", "covered-call"} or estimated_costs is not None
+    )
+    if uses_profile_extrema:
         max_profit = profile["max_profit"] if profile["max_profit"] is not None else max_profit
         max_loss = profile["max_loss"] if profile["max_loss"] is not None else max_loss
     else:
@@ -779,7 +790,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         row, "spread.profit_ratio_pct", "spread.reward_risk", "profit_ratio_pct",
         "reward_risk", "return_on_risk_pct",
     ))
-    if trade_kind in {"cash-secured-put", "covered-call"}:
+    if uses_profile_extrema:
         ratio = None
     if ratio is None and max_profit is not None and max_loss not in (None, 0):
         ratio = abs(max_profit / max_loss) * 100.0
@@ -1000,7 +1011,7 @@ def _general_metrics(strategy: str, row: dict, reference_mode: str = "none") -> 
         "stress_loss_pct": _num(_nested(row, "put.stress_loss_pct", "spread.stress_loss_pct")),
         "stress_pnl_dollars": _num(_nested(row, "put.stress_pnl_dollars", "spread.stress_pnl_dollars")),
         "managed_probability": _nested(row, "put.managed_probability", "spread.managed_probability"),
-        "estimated_costs_dollars": _num(_nested(row, "put.estimated_costs_dollars", "spread.estimated_costs_dollars")),
+        "estimated_costs_dollars": estimated_costs,
         "expirations_considered": _nested(row, "put.expirations_considered", "spread.expirations_considered"),
         "entry_credit": entry_credit,
         "entry_credit_dollars": entry_credit_dollars,
