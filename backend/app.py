@@ -13559,6 +13559,113 @@ def _holding_eligible_for_current_dividend(purchase_date, ex_div_date):
     return purchase_dt < ex_dt
 
 
+# How far back the calendar reads BUY/SELL rows to work out who held a share
+# before an ex-date. An ex-date older than this has long since paid.
+DIVIDEND_ENTITLEMENT_LOOKBACK_DAYS = 400
+
+
+def _share_flows_since(conn, profile_ids, since, today=None):
+    """Signed share changes per (profile, ticker), for entitlement checks.
+
+    BUY is positive, SELL negative. Rows dated after today are ignored: a
+    future-dated ledger entry has not changed what anyone held yet.
+    """
+    ids = [int(pid) for pid in profile_ids or []]
+    if not ids:
+        return {}
+    today = today or datetime.date.today()
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, transaction_date,
+                   UPPER(transaction_type) AS kind, shares
+            FROM transactions
+            WHERE profile_id IN ({placeholders})
+              AND transaction_date >= ? AND transaction_date <= ?
+              AND UPPER(COALESCE(transaction_type, '')) IN ('BUY', 'SELL')""",
+        [*ids, since.isoformat(), today.isoformat()],
+    ).fetchall()
+    flows = {}
+    for row in rows:
+        try:
+            shares = float(row["shares"] or 0)
+        except (TypeError, ValueError):
+            continue
+        if shares <= 0 or not row["ticker"]:
+            continue
+        signed = shares if row["kind"] == "BUY" else -shares
+        flows.setdefault((int(row["profile_id"]), row["ticker"]), []).append(
+            (str(row["transaction_date"])[:10], signed)
+        )
+    return flows
+
+
+def _entitled_quantity_at_ex_date(lots, ex_date, today=None):
+    """Shares that were held before ``ex_date`` and so earn its distribution.
+
+    A share bought on or after the ex-date is not paid that distribution, which
+    is the same cut-off ``_holding_eligible_for_current_dividend`` applies to
+    ``dividend_paid``. ``lots`` holds one entry per account row: its current
+    ``quantity``, the ``purchase_date`` of its earliest open lot, and the
+    signed ``flows`` (date, shares) recorded in the ledger. Reversing the flows
+    on or after the ex-date recovers what the account held before it, which
+    also catches shares added to an older position. Returns None when there is
+    nothing to judge by, so callers keep the quantity they already had.
+    """
+    ex_dt = _date_from_value(ex_date)
+    if not lots or ex_dt is None:
+        return None
+    today = today or datetime.date.today()
+    total = 0.0
+    for lot in lots:
+        try:
+            quantity = max(0.0, float(lot.get("quantity") or 0))
+        except (TypeError, ValueError):
+            continue
+        if ex_dt > today:
+            # Not ex-dividend yet: whatever is held by then qualifies.
+            total += quantity
+            continue
+        purchased = _date_from_value(lot.get("purchase_date"))
+        if purchased is not None and purchased >= ex_dt:
+            continue
+        held_before = quantity
+        for flow_date, delta in lot.get("flows") or ():
+            flow_dt = _date_from_value(flow_date)
+            if flow_dt is not None and flow_dt >= ex_dt:
+                held_before -= float(delta or 0)
+        # Never credit more than the account holds now: a stale snapshot must
+        # not turn a later sale into shares that were never there.
+        total += min(quantity, max(0.0, held_before))
+    return total
+
+
+def _apply_ex_date_entitlement(event, lots, today=None):
+    """Fit one calendar event to the shares that earn it.
+
+    Returns the event untouched when every share qualifies (or nothing is
+    known), a copy scaled to the qualifying shares when only some do, and None
+    when none do so the caller drops a distribution the account is not owed.
+    """
+    held = _entitled_quantity_at_ex_date(lots, event.get("date"), today)
+    if held is None:
+        return event
+    try:
+        quantity = float(event.get("quantity") or 0)
+    except (TypeError, ValueError):
+        return event
+    if quantity <= 0 or held >= quantity - 1e-9:
+        return event
+    if held <= 1e-9:
+        return None
+    adjusted = dict(event)
+    adjusted["entitled_quantity"] = round(held, 6)
+    if adjusted.get("payment_income"):
+        adjusted["payment_income"] = round(
+            float(adjusted["payment_income"]) * held / quantity, 2
+        )
+    return adjusted
+
+
 def _infer_dividend_frequency_from_count(count):
     """Infer dividend frequency code from the number of positive payments in ~1 year."""
     if count >= 45:
@@ -38785,7 +38892,8 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
         f"""SELECT profile_id, ticker, description, ex_div_date, div_pay_date,
                    div, div_frequency, div_frequency_locked, div_manual_until,
                    div_dates_manual_until, quantity, current_price, current_value,
-                   estim_payment_per_year, approx_monthly_income, import_date
+                   estim_payment_per_year, approx_monthly_income, import_date,
+                   purchase_date
             FROM all_account_info
             WHERE profile_id IN ({placeholders})
               AND COALESCE(quantity, 0) > 0
@@ -38794,6 +38902,15 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
                      import_date DESC""",
         ids,
     ).fetchall()
+    # Who held what before an ex-date decides which distributions each account
+    # is actually paid, so carry the recent ledger alongside the quantities.
+    try:
+        share_flows = _share_flows_since(
+            conn, ids,
+            date.today() - timedelta(days=DIVIDEND_ENTITLEMENT_LOOKBACK_DAYS),
+        )
+    except Exception:
+        share_flows = {}
 
     def num(value):
         try:
@@ -38843,9 +38960,16 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
             "annual_income": 0.0,
             "payment_income": 0.0,
             "profile_count": 0,
+            "entitlement_lots": [],
             "_profile_ids": set(),
             "_distribution_value": 0.0,
             "_distribution_quantity": 0.0,
+        })
+        purchased_on = _date_from_value(row["purchase_date"])
+        holding["entitlement_lots"].append({
+            "quantity": quantity,
+            "purchase_date": purchased_on.isoformat() if purchased_on else None,
+            "flows": share_flows.get((int(row["profile_id"]), ticker), []),
         })
         holding["quantity"] += quantity
         holding["current_value"] += value
@@ -39278,16 +39402,48 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             frequency = _payment_history_frequency(history, stored_frequency)
             schedule_history = history
 
+        def entitled_share(payment, pay_value, source):
+            """Fraction of today's shares that were held before this payment's ex-date."""
+            lots = item.get("entitlement_lots")
+            if not isinstance(lots, list) or not lots:
+                return 1.0
+            ex_date = None
+            if source == "confirmed":
+                ex_date = _date_from_value(payment.get("date"))
+            if ex_date is None:
+                # A projected payment has no ex-date of its own; place it the
+                # same distance before the pay date as the current cycle's.
+                event_ex = _date_from_value((event or {}).get("date"))
+                lag = (
+                    (event_pay_date - event_ex).days
+                    if event_ex is not None and event_pay_date is not None
+                    and event_pay_date >= event_ex
+                    else {"W": 1, "52": 1, "M": 7, "Q": 24, "SA": 30, "A": 32}.get(frequency, 21)
+                )
+                ex_date = pay_value - datetime.timedelta(days=lag)
+            held = _entitled_quantity_at_ex_date(lots, ex_date)
+            total = sum(max(0.0, float(lot.get("quantity") or 0)) for lot in lots)
+            if held is None or total <= 0:
+                return 1.0
+            return min(1.0, held / total)
+
         def add_payment(value, source, payment_item=None):
             if value is None or value < start or value > end:
                 return
             payment = dict(payment_item or item)
             payment_frequency = frequency
+            share = 1.0
             if payment.get("official_schedule"):
                 payment_frequency = str(
                     payment.get("freq") or payment.get("div_frequency") or frequency
                 ).strip().upper() or frequency
-            declared = _dividend_payment_value(payment)
+            elif source != "history":
+                # Recorded cash is what was paid; anything else is a forecast,
+                # and shares bought after its ex-date are not part of it.
+                share = entitled_share(payment, value, source)
+                if share <= 1e-9:
+                    return
+            declared = _dividend_payment_value(payment) * share
             cash_map = payment.get("payment_cash_by_date") or item.get("payment_cash_by_date") or {}
             try:
                 cash = float(cash_map.get(value.isoformat()) or 0)
@@ -39651,7 +39807,7 @@ _DIVIDEND_CALENDAR_CACHE_COLUMNS = (
     "ticker", "description", "date", "pay_date", "amount", "freq",
     "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
     "quantity", "current_price", "annual_income", "payment_income",
-    "payment_history",
+    "payment_history", "entitlement_lots",
 )
 
 
@@ -39662,7 +39818,10 @@ def _dividend_calendar_frame_and_cache_key(
     df = pd.DataFrame(holdings or [])
     if df.empty:
         return df, None
-    for column in ("div_frequency_locked", "div_manual_until", "div_dates_manual_until"):
+    for column in (
+        "div_frequency_locked", "div_manual_until", "div_dates_manual_until",
+        "entitlement_lots",
+    ):
         if column not in df.columns:
             df[column] = None
     scope_key = (
@@ -39916,19 +40075,36 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
         current_pay_hint = official_pay_ts or _parse_timestamp_value(
             yf_pay_dates.get(ticker) or stored_pay_ts
         )
+        # Shares bought on or after an ex-date are not paid that distribution,
+        # so an account that bought after this cycle's ex-date is owed nothing
+        # from it however soon it pays. The calendar priced that payment off
+        # today's share count and promised cash the account will never get.
+        entitlement_lots = row.get("entitlement_lots")
+        if not isinstance(entitlement_lots, list):
+            entitlement_lots = None
+
+        def not_entitled(ex_date):
+            held = _entitled_quantity_at_ex_date(entitlement_lots, ex_date, today_d)
+            return held is not None and quantity > 0 and held <= 1e-9
+
+        skip_unentitled_cycle = bool(freq) and not dates_pinned and not_entitled(dt)
         has_unpaid_current_cycle = (
             not is_weekly
             and current_pay_hint is not None
             and current_pay_hint.date() >= today_d
+            and not skip_unentitled_cycle
         )
         if (
-            (is_weekly or not is_owner_view)
-            and not has_unpaid_current_cycle
-            and dt < threshold
-            and freq
-            and not dates_pinned
+            (
+                (is_weekly or not is_owner_view)
+                and not has_unpaid_current_cycle
+                and dt < threshold
+                and freq
+                and not dates_pinned
+            )
+            or skip_unentitled_cycle
         ):
-            while dt < threshold:
+            while dt < threshold or (skip_unentitled_cycle and not_entitled(dt)):
                 next_dt = _advance_dividend_cycle(pd.Timestamp(dt), freq, 1)
                 if next_dt is None:
                     break
@@ -39954,12 +40130,20 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
         elif freq in ("52", "W"):
             # Weekly: pay 1 business day after ex-div
             pay_dt = _estimate_dividend_pay_timestamp(dt, freq)
-        elif ticker in yf_pay_dates:
-            # Confirmed pay date from Yahoo Finance
+        elif ticker in yf_pay_dates and (
+            _date_from_value(yf_pay_dates[ticker]) or dt
+        ) >= dt:
+            # Confirmed pay date from Yahoo Finance. It names one distribution,
+            # so it only belongs to an ex-date it can follow; a cycle rolled
+            # past it needs its own projected date.
             pay_dt = yf_pay_dates[ticker]
             pay_estimated = False
         else:
-            projected_pay = _estimate_dividend_pay_timestamp(dt, freq, stored_pay_ts, cycle_steps)
+            # Project from the confirmed pay date when there is one; the stored
+            # value is often only ex-date plus a default lag.
+            projected_pay = _estimate_dividend_pay_timestamp(
+                dt, freq, yf_pay_dates.get(ticker) or stored_pay_ts, cycle_steps
+            )
             pay_dt = projected_pay or _estimate_dividend_pay_from_pattern(
                 dt,
                 freq,
@@ -40026,7 +40210,17 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
         declared_events = _calendar_events_from_official_schedule(
             official_schedule, base_event, today=today_d
         )
-        events.extend(declared_events or [base_event])
+        for candidate in declared_events or [base_event]:
+            candidate = _apply_ex_date_entitlement(
+                candidate, entitlement_lots, today_d
+            )
+            if candidate is None:
+                continue
+            if cycle_steps and skip_unentitled_cycle:
+                # A projection for this account alone; keep it out of the
+                # shared holdings rows that other accounts also read.
+                candidate = dict(candidate, entitlement_rolled=True)
+            events.append(candidate)
 
     # Run every current event through the same transaction-history-aware date
     # resolver used by the Month view before any other screen consumes it.
@@ -40178,7 +40372,7 @@ def _persist_calendar_dividend_metadata(events):
     try:
         for event in events:
             ticker = str(event.get("ticker") or "").strip().upper()
-            if not ticker:
+            if not ticker or event.get("entitlement_rolled"):
                 continue
             ex_fmt = _format_holding_date(event.get("date"))
             pay_fmt = _format_holding_date(event.get("pay_date"))
