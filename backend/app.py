@@ -42564,13 +42564,16 @@ def watchlist_data():
     try:
         raw = _chunked_yf_download(
             " ".join(download_tickers),
+            # One chunk for a typical list (a second chunk costs a 1s pause), and
+            # parallel fetches: ~40 sequential history calls took ~5s cold.
+            chunk_size=45,
             period="1y",
             interval="1d",
             auto_adjust=False,
             actions=True,
             progress=False,
             ignore_tz=True,
-            threads=False,
+            threads=True,
         )
 
         if raw.empty:
