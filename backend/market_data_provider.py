@@ -388,6 +388,42 @@ def _split_value(value):
     return 0.0 if abs(number - 1.0) < 1e-12 else number
 
 
+def _split_ratio(value):
+    """New-shares-per-old-share for one row's ``splitFactor``; 1.0 when no split."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return number if number > 0 else 1.0
+
+
+def _later_split_factors(ratios):
+    """For each row, the product of every split that took effect *after* it.
+
+    Tiingo's raw ``close``/``open``/``high``/``low`` and ``divCash`` are what
+    was actually quoted that day, so they step at every split. Yahoo's
+    unadjusted Close is already restated to the latest share count, and the
+    charts are built on that. Dividing a pre-split price by the splits that
+    follow it puts Tiingo on the same basis. A split's own row is already on the
+    post-split basis, so it is excluded from its own factor.
+    """
+    factors = [1.0] * len(ratios)
+    running = 1.0
+    for i in range(len(ratios) - 1, -1, -1):
+        factors[i] = running
+        running *= ratios[i]
+    return factors
+
+
+def _divided(value, divisor):
+    if value is None or divisor == 1.0:
+        return value
+    try:
+        return float(value) / divisor
+    except (TypeError, ValueError):
+        return value
+
+
 def _eod_frame(symbol, token, kwargs):
     tiingo = tiingo_symbol(symbol)
     if not tiingo:
@@ -402,32 +438,46 @@ def _eod_frame(symbol, token, kwargs):
     index = []
     auto_adjust = bool(kwargs.get("auto_adjust", True))
     actions = bool(kwargs.get("actions", False))
+    dated = []
     for item in payload:
         if not isinstance(item, dict) or not item.get("date"):
             continue
         stamp = pd.to_datetime(item.get("date"), errors="coerce", utc=True)
         if pd.isna(stamp):
             continue
-        stamp = stamp.tz_convert(None).normalize()
+        dated.append((stamp.tz_convert(None).normalize(), item))
+    dated.sort(key=lambda pair: pair[0])
+    # Computed over every row, before the window trim below, so a split that
+    # lands after `end` still restates the rows inside it the way Yahoo does.
+    later_splits = _later_split_factors([_split_ratio(item.get("splitFactor")) for _, item in dated])
+    for (stamp, item), later in zip(dated, later_splits):
         if start is not None and stamp < start.normalize() - pd.Timedelta(days=7):
             continue
         if end is not None and stamp >= end.normalize():
             continue
         if auto_adjust:
+            # adj* already carries both splits and dividends.
             row = {
                 "Open": item.get("adjOpen"), "High": item.get("adjHigh"),
                 "Low": item.get("adjLow"), "Close": item.get("adjClose"),
                 "Volume": item.get("adjVolume"),
             }
         else:
+            # Raw quotes step at every split; restate them to the latest share
+            # count like Yahoo's unadjusted Close (see _later_split_factors).
+            volume = item.get("volume")
             row = {
-                "Open": item.get("open"), "High": item.get("high"),
-                "Low": item.get("low"), "Close": item.get("close"),
-                "Adj Close": item.get("adjClose"), "Volume": item.get("volume"),
+                "Open": _divided(item.get("open"), later),
+                "High": _divided(item.get("high"), later),
+                "Low": _divided(item.get("low"), later),
+                "Close": _divided(item.get("close"), later),
+                "Adj Close": item.get("adjClose"),
+                "Volume": volume if volume is None or later == 1.0 else float(volume) * later,
             }
         if actions:
+            # Yahoo's Dividends are per latest-share whatever auto_adjust says.
             row.update({
-                "Dividends": item.get("divCash") or 0.0,
+                "Dividends": _divided(item.get("divCash") or 0.0, later),
                 "Stock Splits": _split_value(item.get("splitFactor")),
             })
         rows.append(row)

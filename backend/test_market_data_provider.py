@@ -130,6 +130,98 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertAlmostEqual(float(frame["Dividends"].iloc[-1]), 0.25)
         self.assertEqual(frame.attrs["market_data_sources"], {"ABC": "tiingo"})
 
+    @staticmethod
+    def _split_history():
+        """A 3-for-1 split on day 2: raw quotes step down, adjClose is smooth."""
+        def row(date, close, volume, div, split, adj):
+            return {
+                "date": f"{date}T00:00:00.000Z",
+                "open": close - 1, "high": close + 1, "low": close - 2,
+                "close": close, "volume": volume,
+                "adjOpen": adj - 1, "adjHigh": adj + 1, "adjLow": adj - 2,
+                "adjClose": adj, "adjVolume": volume,
+                "divCash": div, "splitFactor": split,
+            }
+        return [
+            row("2026-09-22", 300.0, 1000, 0.9, 1.0, 97.0),
+            row("2026-09-23", 100.0, 3000, 0.0, 3.0, 100.0),
+            row("2026-09-24", 101.0, 3000, 0.0, 1.0, 101.0),
+        ]
+
+    def test_unadjusted_tiingo_history_is_restated_across_a_split_like_yahoo(self):
+        # Yahoo's unadjusted Close is already split-adjusted; Tiingo's raw close
+        # is not. Left alone, a 3:1 split read as a -67% one-day crash in every
+        # return chart that uses auto_adjust=False (SCHD/SCHG in the ETF comparer).
+        with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
+             patch.object(provider.requests, "get", return_value=FakeResponse(payload=self._split_history())):
+            frame = provider.download(
+                "ABC", yahoo_fetch=Mock(), start="2026-09-15", end="2026-09-30",
+                auto_adjust=False, actions=True,
+            )
+        self.assertEqual([round(v, 6) for v in frame["Close"]], [100.0, 100.0, 101.0])
+        self.assertEqual([round(v, 6) for v in frame["Open"]], [round(299.0 / 3, 6), 99.0, 100.0])
+        self.assertEqual([round(v, 6) for v in frame["High"]], [round(301.0 / 3, 6), 101.0, 102.0])
+        self.assertEqual([round(v, 6) for v in frame["Low"]], [round(298.0 / 3, 6), 98.0, 99.0])
+        # Volume is restated the other way: the same money traded in more shares.
+        self.assertEqual(list(frame["Volume"]), [3000.0, 3000.0, 3000.0])
+        # The per-share dividend is restated with the price, so a reinvested
+        # dividend buys the same fraction of the fund before and after.
+        self.assertAlmostEqual(float(frame["Dividends"].iloc[0]), 0.3)
+        self.assertAlmostEqual(float(frame["Dividends"].iloc[0] / frame["Close"].iloc[0]), 0.9 / 300.0)
+        # The action column still marks the split itself, and Adj Close is untouched.
+        self.assertEqual(list(frame["Stock Splits"]), [0.0, 3.0, 0.0])
+        self.assertEqual(list(frame["Adj Close"]), [97.0, 100.0, 101.0])
+
+    def test_total_return_through_a_split_has_no_step(self):
+        with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
+             patch.object(provider.requests, "get", return_value=FakeResponse(payload=self._split_history())):
+            frame = provider.download(
+                "ABC", yahoo_fetch=Mock(), start="2026-09-15", end="2026-09-30",
+                auto_adjust=False, actions=True,
+            )
+        total = app_module._blend_price_drip(frame["Close"], frame["Dividends"], 1.0)
+        # Day 1 -> day 2 is flat in price and the day-1 dividend is reinvested
+        # at the restated price: 1.003 shares at 100 == 100.3, not a crash to ~33.
+        self.assertAlmostEqual(float(total.iloc[1]), 100.3, places=6)
+
+    def test_split_after_the_window_end_still_restates_rows_inside_it(self):
+        history = self._split_history()
+        with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
+             patch.object(provider.requests, "get", return_value=FakeResponse(payload=history)):
+            frame = provider.download(
+                "ABC", yahoo_fetch=Mock(), start="2026-09-15", end="2026-09-23",
+                auto_adjust=False,
+            )
+        # Only day 1 is inside the window, but the later split still applies.
+        self.assertEqual([round(v, 6) for v in frame["Close"]], [100.0])
+
+    def test_reverse_split_scales_older_prices_up(self):
+        history = [
+            {"date": "2026-09-22T00:00:00.000Z", "open": 5.0, "high": 5.0, "low": 5.0,
+             "close": 5.0, "volume": 10000, "adjClose": 5.0, "divCash": 0.05, "splitFactor": 1.0},
+            {"date": "2026-09-23T00:00:00.000Z", "open": 50.0, "high": 50.0, "low": 50.0,
+             "close": 50.0, "volume": 1000, "adjClose": 50.0, "divCash": 0.0, "splitFactor": 0.1},
+        ]
+        with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
+             patch.object(provider.requests, "get", return_value=FakeResponse(payload=history)):
+            frame = provider.download(
+                "ABC", yahoo_fetch=Mock(), start="2026-09-15", end="2026-09-30",
+                auto_adjust=False, actions=True,
+            )
+        self.assertEqual([round(v, 6) for v in frame["Close"]], [50.0, 50.0])
+        self.assertAlmostEqual(float(frame["Dividends"].iloc[0]), 0.5)
+        self.assertAlmostEqual(float(frame["Volume"].iloc[0]), 1000.0)
+
+    def test_auto_adjusted_history_keeps_adjusted_prices_and_split_adjusts_dividends(self):
+        with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
+             patch.object(provider.requests, "get", return_value=FakeResponse(payload=self._split_history())):
+            frame = provider.download(
+                "ABC", yahoo_fetch=Mock(), start="2026-09-15", end="2026-09-30",
+                auto_adjust=True, actions=True,
+            )
+        self.assertEqual(list(frame["Close"]), [97.0, 100.0, 101.0])
+        self.assertAlmostEqual(float(frame["Dividends"].iloc[0]), 0.3)
+
     def test_refusal_falls_back_to_yahoo_and_records_reason(self):
         yahoo_frame = pd.DataFrame(
             {"Close": [88.0]}, index=pd.to_datetime(["2026-09-24"])
