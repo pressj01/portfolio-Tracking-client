@@ -1,4 +1,4 @@
-import { annualDistributionEstimate } from './approxYield'
+import { annualDistributionEstimate } from './approxYield.js'
 
 const dateKey = value => String(value || '').slice(0, 10)
 
