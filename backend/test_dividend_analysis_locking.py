@@ -31,6 +31,7 @@ class DividendAnalysisLockingTest(unittest.TestCase):
                     original_purchase_value REAL,
                     broker_price_paid REAL,
                     broker_purchase_value REAL,
+                    original_seed_premium REAL,
                     div_frequency_locked INTEGER DEFAULT 0,
                     div_manual_until TEXT,
                     div_manual_set_at TEXT,

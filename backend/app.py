@@ -4903,6 +4903,44 @@ def _basis_fallback_price(row, mode=None):
     return _first_not_none(row.get("original_price_paid"), row.get("price_paid"), row.get("broker_price_paid"))
 
 
+def _carried_original_basis(original_price, original_total, old_quantity, old_basis_total,
+                            new_quantity, new_basis_price, new_basis_total):
+    """Original (price_per_share, total) after a feed moves a position's share count.
+
+    The original basis is what was paid for the shares still held, so it has to
+    move whenever they do. Writing it once and COALESCE-ing it ever after left
+    the total describing a share count the position no longer had: SPAB kept a
+    $52,387.70 original cost from when it held 1,949 shares long after it was
+    down to 1,504, beside a per-share price that put it at $40,426.42.
+
+    A position feed reports only the broker's own (adjusted) basis, so the
+    original is carried by what changed rather than replaced: shares that left
+    take their share of the cost with them, and shares that arrived bring what
+    the feed's basis grew by. With no change in shares the original is left
+    exactly as it is — an adjustment the broker makes to its own figure is the
+    difference the Original / Broker-adjusted split exists to show.
+    """
+    new_quantity = _num_or_zero(new_quantity)
+    old_quantity = _num_or_zero(old_quantity)
+    if original_price is None or original_total is None or old_quantity <= 1e-9:
+        return new_basis_price, new_basis_total
+    original_price = float(original_price)
+    original_total = float(original_total)
+    if new_quantity <= 1e-9 or abs(new_quantity - old_quantity) <= _basis_share_tolerance(old_quantity):
+        return original_price, original_total
+    if new_quantity < old_quantity:
+        return original_price, round(original_total * new_quantity / old_quantity, 2)
+
+    added_shares = new_quantity - old_quantity
+    added_cost = _num_or_zero(new_basis_total) - _num_or_zero(old_basis_total)
+    if old_basis_total is None or added_cost <= 0:
+        # Nothing to difference against: price the arrivals at the feed's cost
+        # per share, or at the original's own when the feed reports no cost.
+        added_cost = added_shares * (_num_or_zero(new_basis_price) or original_price)
+    carried_total = round(original_total + added_cost, 2)
+    return round(carried_total / new_quantity, 6), carried_total
+
+
 def _repair_encoded_security_descriptions(conn):
     """Clean Excel line-break escapes already stored in holding descriptions."""
     for table in ("all_account_info", "holdings"):
@@ -4939,6 +4977,10 @@ def _ensure_basis_columns(conn):
         "original_purchase_value": "REAL",
         "broker_price_paid": "REAL",
         "broker_purchase_value": "REAL",
+        # Per seeded share, how much more was originally paid than the price the
+        # seed lot carries. NULL until the first rollup measures it — see
+        # _original_basis_from_lots.
+        "original_seed_premium": "REAL",
         # Set when a frequency is chosen by hand on the holdings screen. The
         # market refresh re-derives cadence from observed payment spacing and
         # writes it back on every run, so without this flag a manual correction
@@ -6937,12 +6979,15 @@ def _prepare_manual_holding_payload(data, existing=None):
     payload = dict(data or {})
     basis_mode = _basis_mode()
 
-    def final_value(field):
-        if field in payload:
-            return payload[field]
+    def stored_value(field):
         if existing is None:
             return None
         return existing[field] if hasattr(existing, "keys") and field in existing.keys() else None
+
+    def final_value(field):
+        if field in payload:
+            return payload[field]
+        return stored_value(field)
 
     quantity = _optional_float(final_value("quantity"))
     price_paid = _optional_float(final_value("price_paid"))
@@ -6980,18 +7025,41 @@ def _prepare_manual_holding_payload(data, existing=None):
     if total_divs is not None and purchase_value is not None:
         payload["paid_for_itself"] = round(total_divs / purchase_value, 6) if purchase_value > 0 else 0
 
+    selected_price_field = "broker_price_paid" if basis_mode == "broker_adjusted" else "original_price_paid"
+    fallback_price_field = "original_price_paid" if basis_mode == "broker_adjusted" else "broker_price_paid"
+    selected_total_field = "broker_purchase_value" if basis_mode == "broker_adjusted" else "original_purchase_value"
+    fallback_total_field = "original_purchase_value" if basis_mode == "broker_adjusted" else "broker_purchase_value"
+    # The other basis's price, read before this edit can fill it in below.
+    other_price = _optional_float(final_value(fallback_price_field))
     if "price_paid" in payload:
-        selected_price_field = "broker_price_paid" if basis_mode == "broker_adjusted" else "original_price_paid"
-        fallback_price_field = "original_price_paid" if basis_mode == "broker_adjusted" else "broker_price_paid"
         payload[selected_price_field] = payload.get("price_paid")
         if existing is None or final_value(fallback_price_field) is None:
             payload[fallback_price_field] = payload.get("price_paid")
     if "purchase_value" in payload:
-        selected_total_field = "broker_purchase_value" if basis_mode == "broker_adjusted" else "original_purchase_value"
-        fallback_total_field = "original_purchase_value" if basis_mode == "broker_adjusted" else "broker_purchase_value"
-        payload[selected_total_field] = payload.get("purchase_value")
+        selected_total = payload.get("purchase_value")
+        if existing is not None and "price_paid" not in payload and quantity is not None:
+            # No price in the edit, so the total above was built on the stored
+            # working price; the selected basis has to be priced at its own.
+            selected_price = _optional_float(final_value(selected_price_field))
+            if selected_price is not None:
+                selected_total = round(quantity * selected_price, 2)
+        payload[selected_total_field] = selected_total
         if existing is None or final_value(fallback_total_field) is None:
             payload[fallback_total_field] = payload.get("purchase_value")
+
+    # A share-count edit changes the position, not one view of its cost: the
+    # basis not on screen keeps its per-share price and its total follows the
+    # shares, instead of going on describing the count it was entered against.
+    if (
+        existing is not None
+        and "quantity" in payload
+        and quantity is not None
+        and other_price is not None
+        and fallback_total_field not in payload
+    ):
+        old_quantity = _optional_float(stored_value("quantity"))
+        if old_quantity is None or abs(quantity - old_quantity) > 1e-9:
+            payload[fallback_total_field] = round(quantity * other_price, 2)
 
     return payload
 
@@ -10079,7 +10147,8 @@ def _import_positions(parsed, profile_id, nav_date=None):
 
             existing = conn.execute(
                 """SELECT quantity, price_paid, purchase_value, current_value,
-                          import_date, broker_price_paid, broker_purchase_value
+                          import_date, broker_price_paid, broker_purchase_value,
+                          original_price_paid, original_purchase_value
                    FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
                 (ticker, profile_id),
             ).fetchone()
@@ -10095,6 +10164,13 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 pos = corrected_pos
 
             if existing:
+                # The feed owns broker_*; original_* is carried by what the
+                # position changed by rather than left at its first-seen total.
+                original_price, original_total = _carried_original_basis(
+                    existing[7], existing[8], existing[0],
+                    _first_not_none(existing[6], existing[2]),
+                    pos["quantity"], pos["cost_per_share"], pos["purchase_value"],
+                )
                 update_sets = [
                     "quantity = ?",
                     "price_paid = ?",
@@ -10102,8 +10178,8 @@ def _import_positions(parsed, profile_id, nav_date=None):
                     "purchase_value = ?",
                     "broker_price_paid = ?",
                     "broker_purchase_value = ?",
-                    "original_price_paid = COALESCE(original_price_paid, ?)",
-                    "original_purchase_value = COALESCE(original_purchase_value, ?)",
+                    "original_price_paid = ?",
+                    "original_purchase_value = ?",
                     "current_value = ?",
                     "gain_or_loss = ?",
                     "base_quantity = ?",
@@ -10114,7 +10190,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 update_values = [
                     pos["quantity"], pos["cost_per_share"], pos["current_price"],
                     pos["purchase_value"], pos["cost_per_share"], pos["purchase_value"],
-                    pos["cost_per_share"], pos["purchase_value"],
+                    original_price, original_total,
                     pos["current_value"], pos["gain_or_loss"],
                     pos["quantity"], snapshot_date,
                     pos["description"],
@@ -21153,6 +21229,96 @@ def _infer_reinvested_share_gap_basis(conn, ticker, profile_id, share_delta, hol
     }
 
 
+# Notes on the BUY that _seed_transaction_if_needed writes to stand in for a
+# position that predates the ledger.
+_SEED_TXN_NOTE = "Initial seed from existing holding"
+
+
+def _original_basis_from_lots(conn, ticker, profile_id, rows, lots, total_shares,
+                              total_cost, reset_seed_premium=False):
+    """Original cost of the open lots: (price_per_share, total, seed_premium).
+
+    Every lot the ledger holds open was bought at a real price, so what was
+    originally paid for the position is simply what those lots cost — with one
+    exception. The seed lot is priced from the holding's working basis at the
+    moment transactions were first used, and on a broker-fed account that is
+    the broker's *adjusted* figure (return of capital, wash sales) rather than
+    what was paid. That difference, per seeded share, is the only part of the
+    Original / Broker-adjusted split the ledger cannot reproduce. It is
+    measured once, kept in original_seed_premium, and re-applied to however
+    many seeded shares are still open.
+
+    The rollup used to protect that split by freezing original_* outright,
+    which also stopped the basis following the position. SLV went from 561.78
+    to 599.78 shares on a $2,082.40 buy while its original cost stayed
+    $42,324.51 at $75.34 — a total for shares it no longer described, beside a
+    ledger reading $44,406.91 at $74.04.
+
+    `rows` are the ledger rows in the column order the rebuild passes select
+    them, and `lots` the queue left after replaying them. Read before the
+    caller rewrites original_*: the premium is measured against the stored
+    values. Returns a premium of None while there is no seed lot to carry one.
+    """
+    total_shares = float(total_shares or 0)
+    if total_shares <= 1e-9:
+        return 0.0, 0.0, None
+
+    def _val(r, key, idx):
+        return r[key] if isinstance(r, dict) else r[idx]
+
+    seed_rows = [
+        r for r in rows
+        if (_val(r, "transaction_type", 1) or "BUY").upper() == "BUY"
+        and str(_val(r, "notes", 6) or "").startswith(_SEED_TXN_NOTE)
+    ]
+    if not seed_rows:
+        return total_cost / total_shares, total_cost, None
+
+    holding = conn.execute(
+        "SELECT original_price_paid, original_purchase_value, broker_price_paid, "
+        "original_seed_premium FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    premium = _val(holding, "original_seed_premium", 3) if holding else None
+    if reset_seed_premium:
+        premium = 0.0
+    elif premium is None:
+        premium = 0.0
+        seed_shares = sum(abs(float(_val(r, "shares", 2) or 0)) for r in seed_rows)
+        orig_price = _val(holding, "original_price_paid", 0) if holding else None
+        orig_total = _val(holding, "original_purchase_value", 1) if holding else None
+        broker_price = _val(holding, "broker_price_paid", 2) if holding else None
+        # Only a broker-fed account has an adjusted basis distinct from what
+        # was paid. Elsewhere the ledger is the sole authority, and a seed
+        # price the user has since corrected must not be second-guessed.
+        if (
+            seed_shares > 1e-9
+            and None not in (orig_price, orig_total, broker_price)
+            and _profile_is_positions_managed(profile_id, conn)
+        ):
+            seed_price = sum(
+                abs(float(_val(r, "shares", 2) or 0)) * float(_val(r, "price_per_share", 3) or 0)
+                + float(_val(r, "fees", 4) or 0)
+                for r in seed_rows
+            ) / seed_shares
+            gap = float(orig_price) - seed_price
+            # The stored original has to still be the pre-seed figure for the
+            # gap to mean anything: priced off the broker's basis, and a total
+            # that describes exactly the seeded shares.
+            priced_off_broker = abs(seed_price - float(broker_price)) <= 0.005
+            untouched = (
+                abs(float(orig_total) - float(orig_price) * seed_shares)
+                <= max(1.0, 0.006 * seed_shares)
+            )
+            if priced_off_broker and untouched and abs(gap) > 0.005:
+                premium = gap
+
+    seed_ids = {_val(r, "id", 0) for r in seed_rows}
+    seed_open = sum(lot["shares"] for lot in lots if lot.get("id") in seed_ids)
+    original_total = max(0.0, total_cost + float(premium) * seed_open)
+    return original_total / total_shares, original_total, float(premium)
+
+
 def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     """Update original basis from transaction lots when they reconcile to broker shares."""
     _ensure_basis_columns(conn)
@@ -21291,16 +21457,21 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
     else:
         inferred_gap = None
 
+    original_price, original_total, seed_premium = _original_basis_from_lots(
+        conn, ticker, profile_id, rows, lots, total_shares, total_cost
+    )
     conn.execute(
         """UPDATE all_account_info
            SET original_price_paid = ?,
                original_purchase_value = ?,
+               original_seed_premium = ?,
                realized_gains = ?,
                purchase_date = COALESCE(purchase_date, ?)
            WHERE ticker = ? AND profile_id = ?""",
         (
-            round(avg_price, 4) if total_shares > 1e-9 else 0,
-            round(total_cost, 2) if total_shares > 1e-9 else 0,
+            round(original_price, 4),
+            round(original_total, 2),
+            seed_premium,
             round(total_realized, 2),
             earliest_buy,
             ticker,
@@ -21312,13 +21483,158 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
         "ticker": ticker,
         "holding_shares": round(holding_shares, 6),
         "transaction_shares": round(total_shares, 6),
-        "original_price_paid": round(avg_price, 4) if total_shares > 1e-9 else 0,
-        "original_purchase_value": round(total_cost, 2) if total_shares > 1e-9 else 0,
+        "original_price_paid": round(original_price, 4),
+        "original_purchase_value": round(original_total, 2),
         "purchase_date": earliest_buy,
         "inferred_reinvestment_shares": (
             round(inferred_gap["shares"], 6) if inferred_gap else 0.0
         ),
     }
+
+
+_BASIS_TOTALS_REPAIR_KEY = "basis_totals_follow_position_v1"
+
+
+def _basis_total_is_stale(total, price, quantity, base_quantity=None):
+    """True when a stored basis total no longer describes the shares held.
+
+    A cent of rounding per share is the most a healthy row is off by. A total
+    that matches base_quantity instead is the DRIP simulation at work — it adds
+    reinvested shares on top of a cost that deliberately still covers only the
+    shares bought — and is not stale.
+    """
+    if total is None or price is None:
+        return False
+    total, price, quantity = float(total), float(price), _num_or_zero(quantity)
+    if abs(total - quantity * price) <= max(0.05, 0.006 * quantity):
+        return False
+    base_quantity = _num_or_zero(base_quantity)
+    if base_quantity > 1e-9 and abs(total - base_quantity * price) <= max(0.05, 0.006 * base_quantity):
+        return False
+    return True
+
+
+def _repair_stale_basis_totals(conn):
+    """One-time: bring basis totals the old write paths froze back to the position.
+
+    Every writer used to record original_* once and COALESCE it ever after —
+    the transaction rollup, the broker position import and the spreadsheet
+    merge alike — so each later buy or sell moved the share count underneath a
+    total that stayed put, and nothing revisits such a row on its own. Each is
+    rebuilt from the best evidence left, in this order:
+
+    - the ledger, where it accounts for every share held;
+    - a profile with no broker feed takes its working basis, which is what the
+      spreadsheet or the user last stated;
+    - a broker-fed position that has shrunk keeps its original cost per share
+      for the shares that remain, and one that has grown takes the broker's
+      current basis, the only figure on record that covers the added shares.
+
+    Returns the number of holdings repaired; what changed is kept in settings.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    if conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?", (_BASIS_TOTALS_REPAIR_KEY,)
+    ).fetchone():
+        return 0
+
+    _ensure_basis_columns(conn)
+    rows = [dict(r) for r in conn.execute(
+        """SELECT a.ticker, a.profile_id, a.quantity, a.base_quantity,
+                  a.price_paid, a.purchase_value,
+                  a.original_price_paid, a.original_purchase_value,
+                  a.broker_price_paid, a.broker_purchase_value,
+                  (SELECT COUNT(*) FROM transactions t
+                    WHERE t.ticker = a.ticker AND t.profile_id = a.profile_id) AS txn_count,
+                  (SELECT COALESCE(SUM(
+                              CASE WHEN UPPER(COALESCE(t.transaction_type, 'BUY')) = 'BUY'
+                                   THEN ABS(t.shares) ELSE -ABS(t.shares) END), 0)
+                     FROM transactions t
+                    WHERE t.ticker = a.ticker AND t.profile_id = a.profile_id) AS ledger_shares
+             FROM all_account_info a
+            WHERE a.quantity > 0"""
+    ).fetchall()]
+
+    managed_by_profile = {}
+    changes = []
+    for row in rows:
+        ticker, profile_id = row["ticker"], row["profile_id"]
+        quantity = _num_or_zero(row["quantity"])
+        if profile_id not in managed_by_profile:
+            managed_by_profile[profile_id] = _profile_is_positions_managed(profile_id, conn)
+        managed = managed_by_profile[profile_id]
+        working = (row["price_paid"], row["purchase_value"])
+        broker = (row["broker_price_paid"], row["broker_purchase_value"])
+        # What the basis would be if nothing had ever been frozen. A total that
+        # disagrees with shares x price but still matches this was reported
+        # that way by the source (E*TRADE's totals carry commissions its
+        # per-share price does not), and there is nothing to bring it back to.
+        reference = broker if managed else working
+
+        def _frozen(price, total):
+            if not _basis_total_is_stale(total, price, quantity, row["base_quantity"]):
+                return False
+            return None in reference or (
+                abs(float(price) - float(reference[0])) > 1e-6
+                or abs(float(total) - float(reference[1])) > 0.005
+            )
+
+        updates = {}
+
+        if _frozen(row["original_price_paid"], row["original_purchase_value"]):
+            ledger_covers = row["txn_count"] and (
+                abs(_num_or_zero(row["ledger_shares"]) - quantity) <= _basis_share_tolerance(quantity)
+            )
+            refreshed = (
+                _refresh_original_basis_from_transactions(ticker, profile_id, conn)
+                if ledger_covers else {}
+            )
+            if refreshed.get("status") == "updated":
+                updates["original_price_paid"] = refreshed["original_price_paid"]
+                updates["original_purchase_value"] = refreshed["original_purchase_value"]
+            elif not managed:
+                if None not in working:
+                    updates["original_price_paid"], updates["original_purchase_value"] = working
+            else:
+                original_price = float(row["original_price_paid"])
+                held_then = (
+                    float(row["original_purchase_value"]) / original_price
+                    if original_price > 0 else 0.0
+                )
+                if quantity < held_then:
+                    updates["original_purchase_value"] = round(quantity * original_price, 2)
+                elif None not in broker:
+                    updates["original_price_paid"], updates["original_purchase_value"] = broker
+
+        # With no broker feed, broker_* is only ever a copy of the working basis.
+        if not managed and None not in working and _frozen(*broker):
+            updates["broker_price_paid"], updates["broker_purchase_value"] = working
+
+        if not updates:
+            continue
+        conn.execute(
+            f"UPDATE all_account_info SET {', '.join(f'{col} = ?' for col in updates)} "
+            "WHERE ticker = ? AND profile_id = ?",
+            (*updates.values(), ticker, profile_id),
+        )
+        changes.append({
+            "profile_id": profile_id,
+            "ticker": ticker,
+            "before": {col: row[col] for col in updates},
+            "after": updates,
+        })
+
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (_BASIS_TOTALS_REPAIR_KEY, json.dumps(changes)),
+    )
+    conn.commit()
+    if changes:
+        for profile_id in {change["profile_id"] for change in changes}:
+            populate_holdings(profile_id)
+        # Owner is a stored sum of its member accounts' basis totals.
+        _auto_reconcile_owner()
+    return len(changes)
 
 
 def _refresh_drip_tracking_from_transactions(ticker, profile_id, conn):
@@ -21370,7 +21686,7 @@ def _refresh_drip_tracking_from_transactions(ticker, profile_id, conn):
     )
 
 
-def _rollup_transactions(ticker, profile_id, conn):
+def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False):
     """Recalculate all_account_info from transactions.
 
     BUY transactions add to a lot queue.
@@ -21378,6 +21694,9 @@ def _rollup_transactions(ticker, profile_id, conn):
     in transaction_lot_allocations, otherwise falling back to FIFO.
     The remaining lots determine quantity, weighted-average price_paid, and
     purchase_value.  Realized gains are stored per-sell transaction and summed.
+
+    `reset_seed_premium` drops the seed lot's stored original-cost premium, for
+    when the user has repriced that lot themselves.
     """
     _ensure_basis_columns(conn)
     order_by = _transaction_order_by(conn)
@@ -21504,16 +21823,21 @@ def _rollup_transactions(ticker, profile_id, conn):
         gl = round(cur_val - total_cost, 2) if cur_val is not None else None
         gl_pct = round(gl / total_cost, 6) if gl is not None and total_cost > 0 else None
 
-        # original_* is the frozen first-seen basis, so COALESCE it the same way
-        # the position import does.  Rewriting it on every rollup collapses the
-        # Original vs Broker-adjusted toggle to a single value.  broker_* mirrors
-        # the broker's own reported basis, so refresh it here only for profiles
+        # original_* is what was paid for the shares still held, so it follows
+        # the lots; _original_basis_from_lots keeps it apart from the broker's
+        # adjusted figure where the two genuinely differ.  broker_* mirrors the
+        # broker's own reported basis, so refresh it here only for profiles
         # with no broker position feed, where the ledger is the authority.
+        original_price, original_total, seed_premium = _original_basis_from_lots(
+            conn, ticker, profile_id, rows, lots, total_shares, total_cost,
+            reset_seed_premium=reset_seed_premium,
+        )
         basis_sets = [
-            "original_price_paid = COALESCE(original_price_paid, ?)",
-            "original_purchase_value = COALESCE(original_purchase_value, ?)",
+            "original_price_paid = ?",
+            "original_purchase_value = ?",
+            "original_seed_premium = ?",
         ]
-        basis_values = [round(avg_price, 4), round(total_cost, 2)]
+        basis_values = [round(original_price, 4), round(original_total, 2), seed_premium]
         if not _profile_is_positions_managed(profile_id, conn):
             basis_sets += ["broker_price_paid = ?", "broker_purchase_value = ?"]
             basis_values += [round(avg_price, 4), round(total_cost, 2)]
@@ -21579,8 +21903,17 @@ def _seed_transaction_if_needed(ticker, profile_id, conn):
         shares=qty,
         price_per_share=price,
         fees=0,
-        notes="Initial seed from existing holding",
+        notes=_SEED_TXN_NOTE,
     )
+    # A premium left over from an earlier ledger (every transaction deleted,
+    # then started again) belongs to a seed lot that no longer exists. Left
+    # uncommitted with the seed itself, which a rejected sell still discards.
+    if "original_seed_premium" in _table_columns(conn, "all_account_info"):
+        conn.execute(
+            "UPDATE all_account_info SET original_seed_premium = NULL "
+            "WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
 
 
 def _load_lot_alloc_map(conn, sell_ids):
@@ -23385,7 +23718,8 @@ def update_transaction(ticker, txn_id):
     conn = get_connection()
 
     existing = conn.execute(
-        "SELECT id, ticker, profile_id, transaction_type, shares, transaction_date FROM transactions WHERE id = ?",
+        "SELECT id, ticker, profile_id, transaction_type, shares, transaction_date, "
+        "price_per_share, notes FROM transactions WHERE id = ?",
         (txn_id,),
     ).fetchone()
     if not existing:
@@ -23396,6 +23730,8 @@ def update_transaction(ticker, txn_id):
     existing_type = ((existing["transaction_type"] if isinstance(existing, dict) else existing[3]) or "BUY").upper()
     existing_shares = existing["shares"] if isinstance(existing, dict) else existing[4]
     existing_date = existing["transaction_date"] if isinstance(existing, dict) else existing[5]
+    existing_price = existing["price_per_share"] if isinstance(existing, dict) else existing[6]
+    existing_notes = existing["notes"] if isinstance(existing, dict) else existing[7]
     if existing_ticker != ticker or existing_profile_id != profile_id:
         conn.close()
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
@@ -23492,7 +23828,14 @@ def update_transaction(ticker, txn_id):
             )
     conn.commit()
 
-    _rollup_transactions(ticker, profile_id, conn)
+    # Repricing the seed lot is the user stating what those shares cost, which
+    # supersedes a premium measured against the price it was seeded with.
+    seed_repriced = (
+        str(existing_notes or "").startswith(_SEED_TXN_NOTE)
+        and "price_per_share" in data
+        and abs((_optional_float(data["price_per_share"]) or 0.0) - float(existing_price or 0)) > 1e-9
+    )
+    _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=seed_repriced)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} updated"})
 
@@ -58833,6 +59176,13 @@ if __name__ == "__main__":
         # database looked fine.
         for _seed_name, _seed_problem in bootstrap_diversification(conn).items():
             print(f"Fund look-through {_seed_name} seed failed: {_seed_problem}")
+        try:
+            _basis_repaired = _repair_stale_basis_totals(conn)
+            if _basis_repaired:
+                print(f"[startup] brought cost basis totals back in line for {_basis_repaired} holding(s)")
+        except Exception as _basis_problem:
+            conn.rollback()
+            print(f"Cost basis total repair failed: {_basis_problem}")
     finally:
         conn.close()
     # The stored "reuse recent prices" preference has to reach the gateway

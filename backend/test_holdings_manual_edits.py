@@ -595,6 +595,52 @@ class ManualHoldingEditApiTest(unittest.TestCase):
         self.assertEqual(row["original_price_paid"], 10)
         self.assertEqual(row["original_purchase_value"], 100)
 
+    def test_quantity_edit_moves_the_other_basis_total_with_the_shares(self):
+        # Editing in one basis mode used to leave the other one's total at the
+        # old share count: 20 shares shown against a cost recorded for 10.
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('ABC', 1, 10, 12, 25, 120, 250, 10, 100, 12, 120)"
+        )
+
+        res = self.client.put(
+            "/api/holdings/ABC?profile_id=1&basis_mode=broker_adjusted",
+            json={"quantity": 20, "price_paid": 12},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row(
+            "SELECT quantity, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'ABC'"
+        )
+        self.assertEqual(row["quantity"], 20)
+        self.assertEqual(row["broker_price_paid"], 12)
+        self.assertEqual(row["broker_purchase_value"], 240)
+        self.assertEqual(row["original_price_paid"], 10)
+        self.assertEqual(row["original_purchase_value"], 200)
+
+    def test_quantity_only_edit_prices_each_basis_at_its_own_cost(self):
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, current_price, purchase_value, current_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('ABC', 1, 10, 12, 25, 120, 250, 10, 100, 12, 120)"
+        )
+
+        res = self.client.put("/api/holdings/ABC?profile_id=1", json={"quantity": 20})
+
+        self.assertEqual(res.status_code, 200)
+        row = self._row(
+            "SELECT original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'ABC'"
+        )
+        self.assertEqual(row["original_price_paid"], 10)
+        self.assertEqual(row["original_purchase_value"], 200)
+        self.assertEqual(row["broker_price_paid"], 12)
+        self.assertEqual(row["broker_purchase_value"], 240)
+
     def test_reconcile_owner_syncs_aggregate_basis_fields(self):
         conn = self._get_connection()
         try:
