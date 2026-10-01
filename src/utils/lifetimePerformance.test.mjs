@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   fetchHoldingsJson,
   holdingLifetimeReturnParts,
+  lifetimeAccountingProfitFromTotals,
   lifetimeGrowth2Payload,
   lifetimeMetricsFromHoldings,
   lifetimeTotalReturnPayload,
@@ -94,6 +95,58 @@ test('lifetime total return uses the guarded Holdings components and basis', () 
   assert.equal(metrics.total_return_pct, 45)
   assert.equal(performance_rows[0].price_return_pct, 20)
   assert.equal(performance_rows[0].total_return_pct, 45)
+})
+
+test('lifetime total return subtracts realized losses', () => {
+  const { metrics } = lifetimeMetricsFromHoldings([{
+    ticker: 'TRIMLOSS',
+    quantity: 1,
+    purchase_value: 10,
+    current_value: 15,
+    gain_or_loss: 5,
+    total_return_divs_component: 2,
+    total_return_realized_component: -10,
+    total_return_basis: 20,
+  }])
+
+  assert.equal(metrics.price_return_dollar, 5)
+  assert.equal(metrics.distribution_dollar, 2)
+  assert.equal(metrics.realized_return_dollar, -10)
+  assert.equal(metrics.total_return_dollar, -3)
+  assert.equal(metrics.total_return_pct, -15)
+})
+
+test('complete lifetime profit includes realized results from fully closed positions', () => {
+  const profit = lifetimeAccountingProfitFromTotals({
+    unrealized_invested: 100,
+    unrealized_price_gl: 25,
+    unrealized_divs: 6,
+    realized_cost: 50,
+    realized_price_gl: -20,
+    realized_divs: 4,
+    combined_divs: 10,
+  })
+
+  assert.equal(profit.price_return_dollar, 25)
+  assert.equal(profit.distribution_dollar, 10)
+  assert.equal(profit.realized_return_dollar, -20)
+  assert.equal(profit.total_return_basis, 150)
+  assert.equal(profit.total_return_dollar, 15)
+  assert.equal(profit.total_return_pct, 10)
+})
+
+test('complete lifetime profit falls back to open plus realized dividends without double counting', () => {
+  const profit = lifetimeAccountingProfitFromTotals({
+    unrealized_invested: 100,
+    unrealized_price_gl: 5,
+    unrealized_divs: 6,
+    realized_cost: 50,
+    realized_price_gl: 4,
+    realized_divs: 3,
+  })
+
+  assert.equal(profit.distribution_dollar, 9)
+  assert.equal(profit.total_return_dollar, 18)
 })
 
 test('lifetime total profit ignores the stale realized_gains column', () => {

@@ -138,6 +138,35 @@ export function lifetimeMetricsFromHoldings(holdings) {
   return { metrics, performance_rows, start, end }
 }
 
+// Complete lifetime accounting across open and fully closed positions. The
+// Gains & Losses summary has already allocated each dividend between the open
+// shares and the sold lots that earned it, so use combined_divs exactly once.
+// This differs from lifetimeMetricsFromHoldings(), whose intentional scope is
+// the current holding lot plus any partial-sale trims of that lot.
+export function lifetimeAccountingProfitFromTotals(totals) {
+  const unrealized = asNumber(totals?.unrealized_price_gl)
+  const storedDistributions = optionalNumber(totals?.combined_divs)
+  const distributions = storedDistributions ?? (
+    asNumber(totals?.unrealized_divs) + asNumber(totals?.realized_divs)
+  )
+  const realized = asNumber(totals?.realized_price_gl)
+  const basis = (
+    asNumber(totals?.unrealized_invested) + asNumber(totals?.realized_cost)
+  )
+  const totalReturnDollar = unrealized + distributions + realized
+
+  return {
+    price_return_dollar: unrealized,
+    distribution_dollar: distributions,
+    realized_return_dollar: realized,
+    total_return_basis: basis,
+    total_return_dollar: totalReturnDollar,
+    total_return_pct: basis > 0
+      ? round4((totalReturnDollar / basis) * 100)
+      : null,
+  }
+}
+
 function payloadShell(start, end, extra = {}) {
   return {
     period_key: LIFETIME_PERIOD_KEY,

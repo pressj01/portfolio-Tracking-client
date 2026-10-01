@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import RiskGraphButton from './RiskGraphButton'
 import { buildScannerTrade } from '../utils/optionTradeHandoff'
 import { optionMoneyness } from '../utils/optionMoneyness'
-import { scannerTradePayoff } from '../utils/generalScannerPayoff'
+import { payoffZeroBetween, scannerTradePayoff } from '../utils/generalScannerPayoff'
 
 const money = value => value != null && value !== '' && Number.isFinite(Number(value))
   ? Number(value).toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
@@ -26,7 +26,7 @@ const ordinal = value => {
   return `${value}${value % 10 === 1 ? 'st' : value % 10 === 2 ? 'nd' : value % 10 === 3 ? 'rd' : 'th'}`
 }
 
-function nearestZeroCrossing(values, prices, referencePrice) {
+function nearestZeroCrossing(values, prices, referencePrice, valueAt) {
   const crossings = []
   for (let index = 1; index < values.length; index += 1) {
     const previous = Number(values[index - 1])
@@ -35,10 +35,7 @@ function nearestZeroCrossing(values, prices, referencePrice) {
     const currentPrice = Number(prices[index])
     if (![previous, current, previousPrice, currentPrice].every(Number.isFinite)) continue
     if (previous === 0) crossings.push(previousPrice)
-    else if (previous * current < 0) {
-      const fraction = previous / (previous - current)
-      crossings.push(previousPrice + (currentPrice - previousPrice) * fraction)
-    }
+    else if (previous * current < 0) crossings.push(payoffZeroBetween(valueAt, previousPrice, currentPrice))
   }
   if (values.length && Number(values[values.length - 1]) === 0) crossings.push(Number(prices[prices.length - 1]))
   return crossings.length
@@ -91,7 +88,9 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, baseIvPct, ivPct, 
     const min = Math.min(...values)
     const max = Math.max(...values)
     const pad = Math.max(10, (max - min) * 0.12)
-    return { prices, expiration, current, low, high, min: min - pad, max: max + pad }
+    const expirationBreakeven = nearestZeroCrossing(expiration, prices, spot, price => scannerTradePayoff(trade, price, 0, pricing))
+    const currentBreakeven = nearestZeroCrossing(current, prices, spot, price => scannerTradePayoff(trade, price, dte, pricing))
+    return { prices, expiration, current, low, high, min: min - pad, max: max + pad, expirationBreakeven, currentBreakeven }
   }, [trade, spot, dte, rangePct, baseIvPct, ivPct, rate, dividendYield])
   const strikeMarkers = useMemo(() => {
     const seen = new Set()
@@ -125,11 +124,9 @@ function PayoffChart({ trade, spot, dte, rangePct, markerPct, baseIvPct, ivPct, 
       expiration: interpolate(model.expiration, model.prices, price),
     })
   }
-  const currentBreakeven = nearestZeroCrossing(model.current, model.prices, spot)
-  const expirationBreakeven = nearestZeroCrossing(model.expiration, model.prices, spot)
   const breakevenLabels = [
-    { label: 'Day step', price: currentBreakeven, color: '#f4a11a' },
-    { label: 'Expiration', price: expirationBreakeven, color: '#54c8c3' },
+    { label: 'Day step', price: model.currentBreakeven, color: '#f4a11a' },
+    { label: 'Expiration', price: model.expirationBreakeven, color: '#54c8c3' },
   ].filter(item => item.price != null)
   const percentageTicks = []
   for (let value = Math.ceil(-rangePct / markerPct) * markerPct; value <= Math.floor(rangePct / markerPct) * markerPct; value += markerPct) percentageTicks.push(value)
@@ -265,7 +262,7 @@ export default function GeneralScannerAnalysis({ row, strategyLabel }) {
       {meta.expected_return_on_capital_pct != null && <article><span>Expected return / capital</span><strong>{percent(meta.expected_return_on_capital_pct)}</strong></article>}
       {meta.managed_probability && <article title={meta.managed_probability.monitoring}><span>Target before loss stop (modeled)</span><strong>{percent(meta.managed_probability.probability_pct)}</strong><small>Target {money(meta.managed_probability.profit_target_dollars)} · loss stop {money(meta.managed_probability.loss_stop_dollars)}</small></article>}
       {meta.stress_pnl_dollars != null && <article><span>Stress P/L: −10% price, +25% IV</span><strong>{money(meta.stress_pnl_dollars)}</strong></article>}
-      {meta.estimated_costs_dollars != null && <article><span>Estimated round-trip costs included</span><strong>{money(meta.estimated_costs_dollars)}</strong><small>{meta.expirations_considered || 1} expiration(s) compared</small></article>}
+      {meta.estimated_costs_dollars != null && <article title="Entry and exit commissions plus estimated exit slippage. They reduce expected value and ranking; max profit, max loss and the P/L graph use the market credit, the same as the detailed risk graph."><span>Estimated round-trip costs</span><strong>{money(meta.estimated_costs_dollars)}</strong><small>In expected value, not max profit · {meta.expirations_considered || 1} expiration(s) compared</small></article>}
       <article><span>Max profit</span><strong>{riskMoney(meta.max_profit, meta.max_profit_unbounded)}</strong></article>
       <article><span>Max loss</span><strong>{riskMoney(meta.max_loss, meta.max_loss_unbounded)}</strong></article>
       <article><span>Profit ratio</span><strong>{percent(meta.profit_ratio)}</strong></article>

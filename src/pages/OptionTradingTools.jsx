@@ -5,7 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { assignBrokerImportSides, mapBrokerOptionUnderlying, parseBrokerOptionDescriptor } from '../utils/brokerOptions'
 import { smaOverlayTraces } from '../utils/chartIndicators'
 import { chartTheme } from '../utils/chartTheme'
-import { interpolateRiskPnl, RISK_CHART_SPOT_COLOR, riskChartFocusRange, riskChartMoneynessFills, riskChartSpotValue, riskChartViewRevision } from '../utils/optionsRiskChart'
+import { atmImpliedVolatility, interpolateRiskPnl, matchingSigmaPreset, matchingSlicePreset, nearestRiskHandleIndex, PRICE_SLICE_PRESETS, PROBABILITY_SIGMA_PRESETS, priceSliceOffsetFromPrice, priceSlicePresetOffsets, RISK_CHART_SLICE_COLOR, RISK_CHART_SPOT_COLOR, riskChartFocusRange, riskChartMinimumPriceSpan, riskChartMoneynessFills, riskChartRangeWithPrices, riskChartSpotValue, riskChartViewRevision, sliceZoneProbabilities, widenRiskChartPriceRange } from '../utils/optionsRiskChart'
 import { resizeOptionStructure } from '../utils/optionsStrategy'
 import { hydrateTrackedTradeLegs, isCoveredCallTrade, resolveStrategyLabProbabilities, scannerProbabilitySuccessMode, scannerTradeKey, takeScannerTrade } from '../utils/optionTradeHandoff'
 import { moneynessPercentFromPrice, optionMoneyness, optionMoneynessRange } from '../utils/optionMoneyness'
@@ -182,13 +182,61 @@ function riskPnlRange(result) {
   return [lower - padding, upper + padding]
 }
 
-function RiskChart({ result, evaluationDate, controls, loading, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary }) {
+const PROBABILITY_COLORS = {
+  ITM: { line: '#35d07f', fill: 'rgba(53, 208, 127, 0.13)' },
+  OTM: { line: '#f0b429', fill: 'rgba(240, 180, 41, 0.13)' },
+  TOUCH: { line: '#d46adf', fill: 'rgba(212, 106, 223, 0.13)' },
+}
+
+function probabilityHandleColor(probability, label) {
+  const modeColor = (PROBABILITY_COLORS[String(probability?.probability_mode || 'ITM').toUpperCase()] || PROBABILITY_COLORS.ITM).line
+  if (probability?.range_mode === 'probability') return modeColor
+  return String(label).endsWith('ITM') ? PROBABILITY_COLORS.ITM.line : PROBABILITY_COLORS.OTM.line
+}
+
+// One row per label type above the plot, offset in pixels: the reference
+// option and a range edge near its strike shared a row and printed over each
+// other. Pixel offsets also keep the spacing when the graph is expanded.
+const TOP_LABEL_ROW_OFFSETS = { reference: 4, range: 21, breakeven: 38, structure: 55 }
+const topLabelRow = row => ({ y: 1, yref: 'paper', yanchor: 'bottom', yshift: TOP_LABEL_ROW_OFFSETS[row] })
+
+// Grab strips are wider than the drawn lines: Plotly only starts a shape drag
+// after the line is clicked once, so a direct drag fell through to the zoom box.
+const RISK_HANDLE_GRAB_PX = 9
+const RISK_HANDLE_MIN_MOVE_PX = 2
+
+function readRiskAxisBox(chartElement, eventData) {
+  const xAxis = chartElement?._fullLayout?.xaxis
+  const yAxis = chartElement?._fullLayout?.yaxis
+  if (!xAxis || !yAxis || !(xAxis._length > 0)) return null
+  const low = Number(eventData?.['xaxis.range[0]'] ?? xAxis.range?.[0])
+  const high = Number(eventData?.['xaxis.range[1]'] ?? xAxis.range?.[1])
+  const pnlLow = Number(yAxis.range?.[0])
+  const pnlHigh = Number(yAxis.range?.[1])
+  if (![low, high, pnlLow, pnlHigh].every(Number.isFinite) || high === low || pnlHigh === pnlLow) return null
+  return { left: xAxis._offset, width: xAxis._length, top: yAxis._offset, height: yAxis._length, low, high, pnlLow, pnlHigh }
+}
+
+const sameAxisBox = (left, right) => Boolean(left && right)
+  && ['left', 'width', 'top', 'height', 'low', 'high', 'pnlLow', 'pnlHigh'].every(key => Math.abs(left[key] - right[key]) < 1e-6)
+
+function RiskChart({ result, evaluationDate, controls, loading, strikeStructure, positionStrikes, priceSlices, onResizeStructure, onAdjustProbabilityBoundary, onMoveSlice, onSetSlices, slicePreset, sliceSpacing, probabilityControl }) {
   const ref = useRef(null)
   const shellRef = useRef(null)
   const { isDark } = useTheme()
   const [hover, setHover] = useState(null)
-  const [dragMode, setDragMode] = useState('zoom')
+  // thinkorswim: drag the chart to pan it. A zoom box started by a missed line
+  // grab is what made the graph look like it disappeared.
+  const [dragMode, setDragMode] = useState('pan')
   const [isExpanded, setIsExpanded] = useState(false)
+  const [axisBox, setAxisBox] = useState(null)
+  const [dragging, setDragging] = useState(null)
+  const [pendingDrop, setPendingDrop] = useState(null)
+  const dragRef = useRef(null)
+  // The visible price window, re-applied on every repricing. Plotly's
+  // uirevision only keeps mouse zooms, so +, −, Fit and Set slices used to
+  // snap back the next time any control repriced the graph.
+  const viewRef = useRef({ revision: null, range: null, slicesKey: '' })
 
   const scaleView = useCallback(factor => {
     const chartElement = ref.current
@@ -217,10 +265,134 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
     })
   }, [result])
 
+  // Every line the user can move: probability boundaries, the structure's
+  // outer strikes, and the price slices.
+  const dragHandles = useMemo(() => {
+    const handles = []
+    const probability = result?.probability_range
+    if (probability && Number(probability.high) > Number(probability.low)) {
+      ;[
+        { edge: 'low', value: Number(probability.low), label: probability.lower_label },
+        { edge: 'high', value: Number(probability.high), label: probability.upper_label },
+      ].forEach(handle => handles.push({
+        ...handle,
+        key: `probability-${handle.edge}`,
+        kind: 'probability',
+        // Matches the neutral boundary line, so only slices highlight orange.
+        color: chartTheme(isDark).font,
+        label: handle.label || `${handle.edge === 'low' ? 'Lower' : 'Upper'} boundary`,
+      }))
+    }
+    if (strikeStructure) {
+      ;[['low', strikeStructure.low], ['high', strikeStructure.high]].forEach(([edge, value]) => handles.push({
+        key: `structure-${edge}`,
+        kind: 'structure',
+        edge,
+        value: Number(value),
+        color: '#7ecfff',
+        label: `${edge === 'low' ? 'Low' : 'High'} strike`,
+      }))
+    }
+    ;(priceSlices || []).forEach(slice => handles.push({
+      key: `slice-${slice.index}`,
+      kind: 'slice',
+      index: slice.index,
+      value: Number(slice.price),
+      color: RISK_CHART_SLICE_COLOR,
+      label: `Price slice ${Number(slice.offset) > 0 ? '+' : ''}${fmt(slice.offset, 2)}%`,
+    }))
+    return handles.filter(handle => Number.isFinite(handle.value) && handle.value > 0)
+  }, [result?.probability_range, strikeStructure, priceSlices, isDark])
+
+  // A dropped boundary keeps its line where it was released until the new
+  // value arrives (probability boundaries wait for the repriced graph). Render
+  // drops the ghost as soon as the handle's value changes.
   useEffect(() => {
-    if (!window.Plotly || !ref.current?._fullLayout) return
-    window.Plotly.relayout(ref.current, { dragmode: dragMode })
-  }, [dragMode])
+    if (!pendingDrop) return undefined
+    const timer = setTimeout(() => setPendingDrop(null), 3000)
+    return () => clearTimeout(timer)
+  }, [pendingDrop])
+
+  const priceToPixel = useCallback(price => (
+    axisBox ? axisBox.left + (Number(price) - axisBox.low) / (axisBox.high - axisBox.low) * axisBox.width : NaN
+  ), [axisBox])
+
+  // What the dragged line crosses, thinkorswim style: the day-step (analysis
+  // date) and expiration P/L at the line's price.
+  const dragReading = useMemo(() => {
+    if (!dragging || !result?.curves?.today?.length) return null
+    const today = interpolateRiskPnl(result.curves.today, dragging.price)
+    const expiry = interpolateRiskPnl(result.curves.expiration || [], dragging.price)
+    return {
+      today,
+      expiry,
+      rows: [{ value: signedMoney(today) }, { value: signedMoney(expiry) }],
+    }
+  }, [dragging, result])
+  const readoutRows = dragReading?.rows || hover?.rows
+
+  const pointerToPrice = useCallback(clientX => {
+    const rect = ref.current?.getBoundingClientRect()
+    if (!rect || !axisBox) return null
+    const x = Math.min(axisBox.left + axisBox.width, Math.max(axisBox.left, clientX - rect.left))
+    return { x, price: axisBox.low + (x - axisBox.left) / axisBox.width * (axisBox.high - axisBox.low) }
+  }, [axisBox])
+
+  const commitHandle = useCallback((handle, price) => {
+    if (!(Number(price) > 0)) return
+    setPendingDrop({ key: handle.key, from: handle.value, price })
+    if (handle.kind === 'probability') onAdjustProbabilityBoundary?.(handle.edge, price)
+    else if (handle.kind === 'structure') onResizeStructure?.(handle.edge, price)
+    else onMoveSlice?.(handle.index, price)
+  }, [onAdjustProbabilityBoundary, onResizeStructure, onMoveSlice])
+
+  const beginHandleDrag = event => {
+    if (event.button !== 0 || !axisBox) return
+    event.preventDefault()
+    event.stopPropagation()
+    const rect = ref.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = event.clientX - rect.left
+    // Strips overlap where lines sit close together; take the nearest line.
+    const index = nearestRiskHandleIndex(dragHandles.map(handle => priceToPixel(handle.value)), x, RISK_HANDLE_GRAB_PX)
+    if (index < 0) return
+    const handle = dragHandles[index]
+    try { event.currentTarget.setPointerCapture?.(event.pointerId) } catch { /* capture is a nicety, not required */ }
+    dragRef.current = { handle, startX: x, price: handle.value, moved: false }
+    setHover(null)
+    setDragging({ key: handle.key, price: handle.value })
+  }
+
+  const continueHandleDrag = event => {
+    const drag = dragRef.current
+    if (!drag) return
+    const point = pointerToPrice(event.clientX)
+    if (!point) return
+    drag.price = point.price
+    drag.moved = drag.moved || Math.abs(point.x - drag.startX) >= RISK_HANDLE_MIN_MOVE_PX
+    setDragging({ key: drag.handle.key, price: point.price })
+  }
+
+  const finishHandleDrag = event => {
+    const drag = dragRef.current
+    if (!drag) return
+    dragRef.current = null
+    try { event.currentTarget.releasePointerCapture?.(event.pointerId) } catch { /* already released */ }
+    setDragging(null)
+    if (drag.moved) commitHandle(drag.handle, drag.price)
+  }
+
+  const cancelHandleDrag = () => {
+    dragRef.current = null
+    setDragging(null)
+  }
+
+  const nudgeHandle = (event, handle) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || !axisBox) return
+    event.preventDefault()
+    const step = Math.abs(axisBox.high - axisBox.low) / 200 * (event.shiftKey ? 10 : 1)
+    commitHandle(handle, handle.value + (event.key === 'ArrowRight' ? step : -step))
+  }
 
   useEffect(() => {
     const chartElement = ref.current
@@ -364,14 +536,9 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
       return ` · currently ${fmt(distancePct, 1)}% ${status}`
     })()
     const probabilityMode = String(probability?.probability_mode || 'ITM').toUpperCase()
-    const probabilityColors = {
-      ITM: { line: '#35d07f', fill: 'rgba(53, 208, 127, 0.13)' },
-      OTM: { line: '#f0b429', fill: 'rgba(240, 180, 41, 0.13)' },
-      TOUCH: { line: '#d46adf', fill: 'rgba(212, 106, 223, 0.13)' },
-    }
+    const probabilityColors = PROBABILITY_COLORS
     const probabilityColor = probabilityColors[probabilityMode] || probabilityColors.ITM
     const shapes = []
-    const interactiveHandles = []
     const probabilityLineAnnotations = []
     const annotationTag = color => ({
       showarrow: false,
@@ -391,7 +558,11 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
         rangeMode: probability.range_mode,
       })
       moneynessFills.forEach(fill => {
-        const fillColor = probabilityColors[fill.kind]?.fill || probabilityColor.fill
+        // The probability range is one neutral band, as in thinkorswim: lighter
+        // inside the expected move, the chart's own background outside it.
+        const fillColor = fill.kind === 'band'
+          ? (isDark ? 'rgba(255, 255, 255, 0.075)' : 'rgba(15, 23, 42, 0.07)')
+          : probabilityColors[fill.kind]?.fill || probabilityColor.fill
         shapes.push({
           type: 'rect', x0: fill.x0, x1: fill.x1, y0: 0, y1: 1, yref: 'paper',
           editable: false, fillcolor: fillColor, line: { width: 0 }, layer: 'below',
@@ -415,34 +586,30 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
       })
       probabilityLineAnnotations.push({
         x: probability.anchor_strike,
-        y: 1.02,
-        yref: 'paper',
+        ...topLabelRow('reference'),
         text: `<b>Reference ${String(probability.opt_type || 'option').toLowerCase()}</b> · $${fmt(probability.anchor_strike)}${probabilityAnchorMoneyness}`,
         xanchor: 'center',
-        yanchor: 'bottom',
         ...annotationTag('#7ecfff'),
       })
       ;[
         { edge: 'low', value: probability.low, label: probability.lower_label },
         { edge: 'high', value: probability.high, label: probability.upper_label },
       ].forEach(handle => {
-        const handleColor = probability.range_mode === 'probability'
-          ? probabilityColor.line
-          : String(handle.label).endsWith('ITM') ? '#35d07f' : '#f0b429'
-        interactiveHandles.push({ ...handle, kind: 'probability', shapeIndex: shapes.length })
+        const handleColor = probabilityHandleColor(probability, handle.label)
+        // Neutral, not the ITM/OTM color: an amber dashed OTM edge read as a
+        // fourth price slice. The label above keeps the ITM/OTM color.
         shapes.push({
           type: 'line', x0: handle.value, x1: handle.value, y0: 0, y1: 1, yref: 'paper',
-          editable: true,
-          line: { color: handleColor, width: 2.5, dash: 'dash' },
+          editable: false,
+          line: { color: ct.font, width: 2, dash: 'dash' },
         })
         probabilityLineAnnotations.push({
           x: handle.value,
-          y: 1.02,
-          yref: 'paper',
+          ...topLabelRow('range'),
           text: `<b>${handle.label}</b> · $${fmt(handle.value)}`,
           xanchor: handle.edge === 'low' ? 'right' : 'left',
-          yanchor: 'bottom',
-          ...annotationTag(handleColor),
+          // The σ band is neutral like its shading; moneyness edges keep ITM/OTM color.
+          ...annotationTag(probability.range_mode === 'probability' ? ct.title : handleColor),
         })
       })
     }
@@ -468,22 +635,39 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
     ] : []
     const structureLineAnnotations = []
     resizeHandles.forEach(handle => {
-      interactiveHandles.push({ ...handle, kind: 'structure', shapeIndex: shapes.length })
       shapes.push({
         type: 'line', x0: handle.value, x1: handle.value, y0: 0, y1: 1, yref: 'paper',
-        editable: true,
+        editable: false,
         line: { color: '#7ecfff', width: 4, dash: 'dot' },
       })
       structureLineAnnotations.push({
         x: handle.value,
-        y: 1.18,
-        yref: 'paper',
+        ...topLabelRow('structure'),
         text: `<b>↔ ${handle.edge === 'low' ? 'Low' : 'High'} strike</b> · $${fmt(handle.value)}`,
         xanchor: handle.edge === 'low' ? 'right' : 'left',
-        yanchor: 'bottom',
         ...annotationTag('#7ecfff'),
       })
     })
+    // Price slices, thinkorswim style: orange dashed lines with the price rotated
+    // at the axis — the only orange dashed lines on the graph. Drawn over the
+    // current-price line so the middle slice still shows there as a slice; its
+    // label is left to the current price's.
+    const sliceSpotTolerance = spotValue != null ? spotValue * 0.0005 : 0
+    const visibleSlices = (priceSlices || []).filter(slice => Number(slice.price) > 0)
+    const sliceAnnotations = visibleSlices
+      .filter(slice => spotValue == null || Math.abs(slice.price - spotValue) > sliceSpotTolerance)
+      .map(slice => ({
+        x: slice.price,
+        y: 0,
+        yref: 'paper',
+        text: `${fmt(slice.price)}`,
+        textangle: -90,
+        xanchor: 'right',
+        yanchor: 'bottom',
+        xshift: -1,
+        yshift: 5,
+        ...annotationTag(RISK_CHART_SLICE_COLOR),
+      }))
     if (spotValue != null) {
       shapes.push({
         type: 'line', x0: spotValue, x1: spotValue, y0: 0, y1: 1, yref: 'paper',
@@ -491,7 +675,34 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
         line: { color: RISK_CHART_SPOT_COLOR, width: 2.5, dash: 'solid' },
       })
     }
+    visibleSlices.forEach(slice => {
+      shapes.push({
+        type: 'line', x0: slice.price, x1: slice.price, y0: 0, y1: 1, yref: 'paper',
+        editable: false, layer: 'above',
+        line: { color: RISK_CHART_SLICE_COLOR, width: 1.5, dash: 'dash' },
+      })
+    })
+    // thinkorswim's percentages across the top: the chance the price finishes
+    // between each pair of slices (tails included), on the band's distribution.
+    const zoneDistribution = probability && Number(probability.iv) > 0 && probability.years != null && spotValue != null
+      ? { spot: spotValue, iv: Number(probability.iv), years: Number(probability.years), rate: Number(probability.rate) || 0, dividendYield: Number(probability.dividend_yield) || 0 }
+      : null
+    const zoneAnnotations = zoneDistribution
+      ? sliceZoneProbabilities(visibleSlices.map(slice => slice.price), zoneDistribution).map(zone => ({
+        x: zone.low == null ? zone.high : zone.high == null ? zone.low : (zone.low + zone.high) / 2,
+        y: 0.985,
+        yref: 'paper',
+        text: `${zone.pct.toFixed(2)}%`,
+        xanchor: zone.low == null ? 'right' : zone.high == null ? 'left' : 'center',
+        xshift: zone.low == null ? -6 : zone.high == null ? 6 : 0,
+        yanchor: 'top',
+        ...annotationTag(RISK_CHART_SLICE_COLOR),
+        font: { color: RISK_CHART_SLICE_COLOR, size: 11 },
+      }))
+      : []
     const annotations = [
+      ...zoneAnnotations,
+      ...sliceAnnotations,
       ...(spotValue != null ? [{
         x: spotValue,
         y: 0,
@@ -505,8 +716,8 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
         ...annotationTag(RISK_CHART_SPOT_COLOR),
       }] : []),
       ...(result.breakevens || []).map((value, index, values) => ({
-        x: value, y: 1.10, yref: 'paper', text: `<b>B/E</b> · $${fmt(value)}`,
-        xanchor: index < values.length / 2 ? 'right' : 'left', yanchor: 'bottom',
+        x: value, ...topLabelRow('breakeven'), text: `<b>B/E</b> · $${fmt(value)}`,
+        xanchor: index < values.length / 2 ? 'right' : 'left',
         ...annotationTag('#ff8a8a'),
       })),
       ...probabilityLineAnnotations,
@@ -515,8 +726,35 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
     const chartElement = ref.current
     let mounted = true
     let restoringYAxis = false
+    let restoringXAxis = false
+    const minimumPriceSpan = riskChartMinimumPriceSpan(spotValue, evaluation[0].s, evaluation[evaluation.length - 1].s)
+    const syncAxisBox = eventData => {
+      const next = readRiskAxisBox(chartElement, eventData)
+      if (next) setAxisBox(previous => (sameAxisBox(previous, next) ? previous : next))
+    }
+    const recordView = () => {
+      const range = chartElement?._fullLayout?.xaxis?.range?.map(Number)
+      if (range?.length === 2 && range.every(Number.isFinite) && viewRef.current.revision === strategyViewRevision) {
+        viewRef.current = { ...viewRef.current, range }
+      }
+    }
+    const handleAfterPlot = () => {
+      recordView()
+      syncAxisBox()
+    }
     const handleRelayout = update => {
       const updateKeys = Object.keys(update || {})
+      const changedXAxis = updateKeys.some(key => key === 'xaxis.range' || key.startsWith('xaxis.range['))
+      if (changedXAxis && !restoringXAxis) {
+        const widened = widenRiskChartPriceRange(chartElement?._fullLayout?.xaxis?.range, minimumPriceSpan)
+        if (widened) {
+          restoringXAxis = true
+          Promise.resolve(window.Plotly.relayout(chartElement, {
+            'xaxis.autorange': false,
+            'xaxis.range': widened,
+          })).finally(() => { restoringXAxis = false })
+        }
+      }
       const changedYAxis = updateKeys.some(key => key === 'yaxis.autorange' || key.startsWith('yaxis.range'))
       if (changedYAxis && !restoringYAxis) {
         const visibleRange = chartElement?._fullLayout?.yaxis?.range?.map(Number)
@@ -533,17 +771,8 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
           })).finally(() => { restoringYAxis = false })
         }
       }
-      const shapeKey = updateKeys.find(key => /^shapes\[(\d+)\](?:\.x[01])?$/.test(key))
-      if (!shapeKey) return
-      const match = shapeKey.match(/^shapes\[(\d+)\]/)
-      const shapeIndex = Number(match?.[1])
-      const handle = interactiveHandles.find(item => item.shapeIndex === shapeIndex)
-      if (!handle) return
-      const shapeUpdate = update[`shapes[${shapeIndex}]`]
-      const nextValue = Number(update[`shapes[${shapeIndex}].x0`] ?? update[`shapes[${shapeIndex}].x1`] ?? shapeUpdate?.x0 ?? shapeUpdate?.x1)
-      if (!Number.isFinite(nextValue)) return
-      if (handle.kind === 'probability') onAdjustProbabilityBoundary?.(handle.edge, nextValue)
-      else onResizeStructure?.(handle.edge, nextValue)
+      recordView()
+      syncAxisBox()
     }
     // Custom thinkorswim-style crosshair: a price tag pinned to the x-axis and
     // a color-coded date/P&L legend that track the cursor across the graph.
@@ -588,6 +817,17 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
     const handlePointerLeave = () => setHover(null)
     const frameHeight = shellRef.current?.querySelector('.opt-risk-chart-frame')?.clientHeight || 0
     const chartHeight = isExpanded ? Math.max(260, frameHeight - 2) : 520
+    // Keep the user's window while the trade is unchanged; a new or changed set
+    // of slices only ever widens it so every slice line stays on screen.
+    const modeledLow = evaluation[0].s
+    const modeledHigh = evaluation[evaluation.length - 1].s
+    const slicePrices = visibleSlices.map(slice => Number(slice.price))
+    const slicesKey = slicePrices.map(price => price.toFixed(4)).join(',')
+    const keptRange = viewRef.current.revision === strategyViewRevision ? viewRef.current.range : null
+    const viewRange = !keptRange || slicesKey !== viewRef.current.slicesKey
+      ? riskChartRangeWithPrices(keptRange || xRange, slicePrices, modeledLow, modeledHigh)
+      : keptRange
+    viewRef.current = { revision: strategyViewRevision, range: viewRange, slicesKey }
     const plotPromise = window.Plotly.react(chartElement, traces, {
       template: ct.template,
       paper_bgcolor: ct.surface,
@@ -605,12 +845,14 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
         align: 'left',
       },
       legend: { orientation: 'h', x: 0, y: 1.34 },
-      dragmode: 'zoom',
+      // From state: a hard-coded mode here reset a chosen Pan back to Zoom on
+      // every repricing.
+      dragmode: dragMode,
       uirevision: strategyViewRevision,
       xaxis: {
         title: 'Underlying price', gridcolor: ct.grid, tickprefix: '$', zerolinecolor: ct.zeroline,
         autorange: false,
-        range: xRange,
+        range: viewRange,
         showspikes: true,
         spikemode: 'across+toaxis',
         spikesnap: 'cursor',
@@ -633,9 +875,9 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
       displaylogo: false,
       scrollZoom: true,
       doubleClick: 'reset',
-      // Per-shape `editable` keeps only boundary lines draggable. Plotly's
-      // global shapePosition edit mode also captures the shaded rectangle and
-      // prevents P/L hover events from reaching the traces beneath it.
+      // No shape is Plotly-editable: the grab strips in `.opt-risk-handles` move
+      // the lines. Plotly's shapePosition edit mode would also capture the shaded
+      // rectangle and block P/L hover events from reaching the traces beneath it.
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     })
     Promise.resolve(plotPromise).then(async () => {
@@ -652,18 +894,29 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
         })
       }
       if (!mounted) return
-      if (chartElement?.on) chartElement.on('plotly_relayout', handleRelayout)
+      if (chartElement?.on) {
+        chartElement.on('plotly_relayout', handleRelayout)
+        // Panning redraws the axis without an afterplot, so the grab strips
+        // follow the in-progress range to stay on their lines.
+        chartElement.on('plotly_relayouting', syncAxisBox)
+        chartElement.on('plotly_afterplot', handleAfterPlot)
+      }
       chartElement?.addEventListener('mousemove', handlePointerMove)
       chartElement?.addEventListener('mouseleave', handlePointerLeave)
+      syncAxisBox()
     })
     return () => {
       mounted = false
-      if (chartElement?.removeListener) chartElement.removeListener('plotly_relayout', handleRelayout)
+      if (chartElement?.removeListener) {
+        chartElement.removeListener('plotly_relayout', handleRelayout)
+        chartElement.removeListener('plotly_relayouting', syncAxisBox)
+        chartElement.removeListener('plotly_afterplot', handleAfterPlot)
+      }
       chartElement?.removeEventListener('mousemove', handlePointerMove)
       chartElement?.removeEventListener('mouseleave', handlePointerLeave)
       setHover(null)
     }
-  }, [result, evaluationDate, isDark, isExpanded, strikeStructure, positionStrikes, onResizeStructure, onAdjustProbabilityBoundary])
+  }, [result, evaluationDate, isDark, isExpanded, strikeStructure, positionStrikes, priceSlices, dragMode])
 
   useEffect(() => () => {
     const chartElement = ref.current
@@ -686,24 +939,42 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
           <button type="button" onClick={() => scaleView(1.35)} aria-label="Zoom risk graph out" title="Zoom out on the underlying-price axis">−</button>
           <button type="button" onClick={fitView} title="Restore the full modeled price and profit/loss range">Fit</button>
         </span>
-        <span className="opt-risk-chart-mouse-hint">Drag to {dragMode === 'zoom' ? 'zoom' : 'pan'} price · mouse wheel changes price scale · P/L height stays fixed</span>
+        {onSetSlices && (
+          <label className="opt-risk-chart-slice-control" title="Put the outer price slices this far below and above the current price and return the middle slice to the current price">
+            <span>Set slices</span>
+            {/* Shows the spacing the slices sit on. Once a slice is moved it reads
+                "moved", so picking that same spacing again still resets them. */}
+            <select
+              className="opt-risk-chart-slice-menu"
+              value={slicePreset != null ? String(slicePreset) : 'moved'}
+              onChange={event => onSetSlices(Number(event.target.value))}
+              aria-label="Set price slices"
+            >
+              {slicePreset == null && <option value="moved" disabled hidden>{sliceSpacing ? `±${sliceSpacing}% · moved` : 'Custom'}</option>}
+              {PRICE_SLICE_PRESETS.map(percent => <option key={percent} value={percent}>±{percent}%</option>)}
+            </select>
+          </label>
+        )}
+        {probabilityControl}
+        <span className="opt-risk-chart-mouse-hint">Drag a line to move it · drag elsewhere to {dragMode === 'zoom' ? 'zoom' : 'pan'} price · mouse wheel changes price scale</span>
         <button type="button" className="opt-risk-chart-expand" onClick={() => setIsExpanded(value => !value)} aria-pressed={isExpanded} title={isExpanded ? 'Return the graph to the page' : 'Expand the graph to the window'}>{isExpanded ? 'Contract' : 'Expand'}</button>
       </div>
       <div className="opt-risk-readout" aria-hidden="true">
         <span className="opt-risk-readout-price opt-risk-readout-current"><small>Current price · {result?.underlying || 'Underlying'}</small><strong>{fmt(result?.spot)}</strong></span>
-        {hover && <span className="opt-risk-readout-price opt-risk-readout-hover"><small>Cursor</small><strong>{hover.price}</strong></span>}
+        {hover && !dragging && <span className="opt-risk-readout-price opt-risk-readout-hover"><small>Cursor</small><strong>{hover.price}</strong></span>}
+        {dragging && <span className="opt-risk-readout-price opt-risk-readout-hover"><small>{dragHandles.find(handle => handle.key === dragging.key)?.label || 'Moving'}</small><strong>{money(dragging.price, 2)}</strong></span>}
         <span className="opt-risk-readout-chip" style={{ borderColor: '#d46adf' }}>
           <span className="opt-risk-readout-swatch" style={{ background: '#d46adf' }} />
           <small style={{ color: '#d46adf' }}>{evaluationLabel}</small>
-          <strong>{hover ? hover.rows[0].value : '—'}</strong>
+          <strong>{readoutRows ? readoutRows[0].value : '—'}</strong>
         </span>
         <span className="opt-risk-readout-chip" style={{ borderColor: '#20c7c7' }}>
           <span className="opt-risk-readout-swatch" style={{ background: '#20c7c7' }} />
           <small style={{ color: '#20c7c7' }}>{horizonLabel}</small>
-          <strong>{hover ? hover.rows[1].value : '—'}</strong>
+          <strong>{readoutRows ? readoutRows[1].value : '—'}</strong>
         </span>
         {loading && <span className="opt-risk-readout-busy">Repricing…</span>}
-        {!hover && !loading && <span className="opt-risk-readout-hint">Move across the graph to read the price and P/L</span>}
+        {!hover && !dragging && !loading && <span className="opt-risk-readout-hint">Move across the graph to read the price and P/L</span>}
       </div>
       <div className={`opt-risk-chart-frame is-${dragMode}${loading ? ' is-busy' : ''}`}>
         <div ref={ref} className="opt-risk-chart" role="img" aria-label="Interactive option strategy profit and loss graph. Drag or use the mouse wheel to adjust the underlying-price axis while the profit-and-loss height stays fixed, and drag probability or strike handles to adjust the strategy." />
@@ -716,6 +987,50 @@ function RiskChart({ result, evaluationDate, controls, loading, strikeStructure,
                 : null
             ))}
             <span className="opt-risk-price-tag" style={{ left: `${hover.tagX}px`, top: `${hover.bottom}px` }}>{hover.price}</span>
+          </div>
+        )}
+        {axisBox && !!dragHandles.length && (
+          <div className="opt-risk-handles">
+            {dragHandles.map(handle => {
+              const isDragging = dragging?.key === handle.key
+              const pendingPrice = !isDragging && pendingDrop?.key === handle.key && pendingDrop.from === handle.value ? pendingDrop.price : null
+              const price = isDragging ? dragging.price : pendingPrice ?? handle.value
+              const x = priceToPixel(price)
+              if (!Number.isFinite(x) || x < axisBox.left - 1 || x > axisBox.left + axisBox.width + 1) return null
+              return (
+                <span
+                  key={handle.key}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label={`${handle.label}. Drag, or use the left and right arrow keys, to move it.`}
+                  aria-valuenow={Math.round(price * 100) / 100}
+                  aria-valuetext={money(price, 2)}
+                  title={`${handle.label} · ${money(price, 2)} · drag to move`}
+                  className={`opt-risk-handle is-${handle.kind}${isDragging ? ' is-dragging' : ''}${pendingPrice != null ? ' is-pending' : ''}`}
+                  style={{ left: `${x}px`, top: `${axisBox.top}px`, height: `${axisBox.height}px`, '--handle-color': handle.color }}
+                  onPointerDown={beginHandleDrag}
+                  onPointerMove={continueHandleDrag}
+                  onPointerUp={finishHandleDrag}
+                  onPointerCancel={cancelHandleDrag}
+                  onLostPointerCapture={cancelHandleDrag}
+                  onKeyDown={event => nudgeHandle(event, handle)}
+                >
+                  {isDragging && <b className="opt-risk-handle-tag" style={{ top: `${axisBox.height}px` }}>{money(price, 2)}</b>}
+                  {isDragging && dragReading && (() => {
+                    const pnlOffset = value => (axisBox.pnlHigh - Number(value)) / (axisBox.pnlHigh - axisBox.pnlLow) * axisBox.height
+                    const onPlot = offset => Number.isFinite(offset) && offset >= 0 && offset <= axisBox.height
+                    const todayOffset = pnlOffset(dragReading.today)
+                    const expiryOffset = pnlOffset(dragReading.expiry)
+                    const flipped = x > axisBox.left + axisBox.width - 120
+                    return <>
+                      {onPlot(expiryOffset) && <i className="opt-risk-handle-dot" style={{ top: `${expiryOffset}px`, borderColor: '#20c7c7' }} />}
+                      {onPlot(todayOffset) && <i className="opt-risk-handle-dot" style={{ top: `${todayOffset}px`, borderColor: '#d46adf' }} />}
+                      {onPlot(todayOffset) && <b className={`opt-risk-handle-pnl${flipped ? ' is-flipped' : ''}`} style={{ top: `${Math.min(axisBox.height - 10, Math.max(10, todayOffset))}px` }}>{signedMoney(dragReading.today)}</b>}
+                    </>
+                  })()}
+                </span>
+              )
+            })}
           </div>
         )}
       </div>
@@ -1164,7 +1479,9 @@ export default function OptionTradingTools() {
   const [volatilityTermShocks, setVolatilityTermShocks] = useState({})
   const [showProbabilityRange, setShowProbabilityRange] = useState(true)
   const [probabilityAnchorId, setProbabilityAnchorId] = useState('')
-  const [probabilityRangeMode, setProbabilityRangeMode] = useState('moneyness')
+  // thinkorswim's probability range (the 1σ expected move) is the default;
+  // Moneyness stays available for a band set around the reference strike.
+  const [probabilityRangeMode, setProbabilityRangeMode] = useState('probability')
   const [probabilityMode, setProbabilityMode] = useState('ITM')
   const syncedProbabilityModeKey = useRef('')
   const [probabilityMassPct, setProbabilityMassPct] = useState(68.27)
@@ -1173,6 +1490,8 @@ export default function OptionTradingTools() {
   const [priceRangePct, setPriceRangePct] = useState(35)
   const [dayStep, setDayStep] = useState(0)
   const [sliceOffsets, setSliceOffsets] = useState([-15, 0, 15])
+  // The last Set slices spacing, so the menu can say "±10% · moved" after a drag.
+  const [sliceSpacing, setSliceSpacing] = useState(15)
   const [risk, setRisk] = useState(null)
   const [riskLoading, setRiskLoading] = useState(false)
   const [riskError, setRiskError] = useState('')
@@ -1498,6 +1817,20 @@ export default function OptionTradingTools() {
     const earliest = activeExpirations[0] || selectedExpiration || TODAY()
     return earliest < TODAY() ? TODAY() : earliest
   }, [activeExpirations, selectedExpiration])
+  // The probability band is the underlying's expected move, priced on the
+  // horizon expiration's at-the-money IV with the same vol scenario applied.
+  // The legs' chains are already loaded, so this costs no extra request.
+  const bandIv = useMemo(() => {
+    const horizonChain = monthChains[analysisHorizon] || (chain?.expiration === analysisHorizon ? chain : null)
+    const atmIv = atmImpliedVolatility(horizonChain, spot)
+    if (atmIv == null) return null
+    return buildVolatilityScenarioLeg({ iv: atmIv, strike: spot, expiration: analysisHorizon }, {
+      spot,
+      surfaceShockPct: volatilitySurfaceShock,
+      skewPoints: volatilitySkewPoints,
+      termShocks: volatilityTermShocks,
+    }).modeledIv
+  }, [monthChains, chain, analysisHorizon, spot, volatilitySurfaceShock, volatilitySkewPoints, volatilityTermShocks])
   const hasMixedExpirations = activeExpirations.length > 1
   const evolutionDays = daysBetween(TODAY(), analysisHorizon)
   const evaluationOffset = Math.min(evolutionDays, daysBetween(TODAY(), evaluationDate))
@@ -1564,7 +1897,7 @@ export default function OptionTradingTools() {
           price_range: { low: scenarioLow, high: scenarioHigh, steps: 241 },
           price_slices: sliceOffsets.map(offset => ({ s: spot * (1 + Number(offset) / 100) })),
           probability_range: showProbabilityRange && probabilityRange
-            ? { enabled: true, ...probabilityRange }
+            ? { enabled: true, ...probabilityRange, ...(bandIv ? { band_iv: bandIv } : {}) }
             : { enabled: false },
           probability_success_mode: scannerProbabilitySuccessMode(
             scannerTrade?.kind || scannerTrade?.label || scannerTrade?.name,
@@ -1614,7 +1947,7 @@ export default function OptionTradingTools() {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [activeLegs, activeExpirations, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilityDynamics, volatilitySurfaceShockValue, volatilitySkewPointsValue, volatilityTermShocks, legVolatilityScenarios, modeledSkewByExpiration, showProbabilityRange, probabilityRange, scannerTrade?.kind])
+  }, [activeLegs, activeExpirations, spot, ticker, model, ratePct, quote?.div_yield, evaluationDate, priceRangePct, dayStep, sliceOffsets, volatilityDynamics, volatilitySurfaceShockValue, volatilitySkewPointsValue, volatilityTermShocks, legVolatilityScenarios, modeledSkewByExpiration, showProbabilityRange, probabilityRange, bandIv, scannerTrade?.kind])
 
   const submitTicker = event => {
     event.preventDefault()
@@ -1773,10 +2106,16 @@ export default function OptionTradingTools() {
     if (!anchorStrike || !Number.isFinite(proposedPrice)) return
     if (probabilityRangeMode === 'probability') {
       const probability = risk?.probability_range
-      const horizonYears = daysBetween(TODAY(), probability?.date) / 365
+      // The backend's own band parameters: time from the analysis date (not
+      // today) to expiration, and the band's at-the-money IV.
+      const horizonYears = probability?.years != null
+        ? Number(probability.years)
+        : daysBetween(TODAY(), probability?.date) / 365
       const sigma = Number(probability?.iv)
+      const rate = probability?.rate != null ? Number(probability.rate) : (Number(ratePct) || 0) / 100
+      const dividendYield = probability?.dividend_yield != null ? Number(probability.dividend_yield) : Number(quote?.div_yield || 0)
       if (!spot || !horizonYears || !sigma || proposedPrice <= 0) return
-      const drift = Math.log(spot) + (((Number(ratePct) || 0) / 100) - Number(quote?.div_yield || 0) - 0.5 * sigma * sigma) * horizonYears
+      const drift = Math.log(spot) + (rate - dividendYield - 0.5 * sigma * sigma) * horizonYears
       const z = (Math.log(proposedPrice) - drift) / (sigma * Math.sqrt(horizonYears))
       const cumulative = standardNormalCdf(z)
       const nextRange = edge === 'low' ? 1 - 2 * cumulative : 2 * cumulative - 1
@@ -1794,6 +2133,61 @@ export default function OptionTradingTools() {
     if (isOtmHandle) setOtmRangePct(nextPercent)
     else setItmRangePct(nextPercent)
   }, [probabilityAnchor, probabilityRangeMode, risk, spot, ratePct, quote?.div_yield])
+
+  // Slices stay % offsets from the underlying, so 0% is always the current price.
+  const sliceLines = useMemo(() => (spot > 0 ? sliceOffsets
+    .map((offset, index) => ({ index, offset: Number(offset), price: spot * (1 + Number(offset) / 100) }))
+    .filter(slice => Number.isFinite(slice.price) && slice.price > 0) : []), [sliceOffsets, spot])
+
+  const moveSlice = useCallback((index, price) => {
+    const offset = priceSliceOffsetFromPrice(price, spot)
+    if (offset == null) return
+    setSliceOffsets(values => values.map((value, current) => current === index ? offset : value))
+  }, [spot])
+
+  const setSlicePreset = useCallback(percent => {
+    const offsets = priceSlicePresetOffsets(percent)
+    if (!offsets) return
+    setSliceOffsets(offsets)
+    setSliceSpacing(offsets[2])
+  }, [])
+
+  const changeSliceOffset = (index, value) => {
+    const next = sliceOffsets.map((current, position) => position === index ? value : current)
+    setSliceOffsets(next)
+    const matched = matchingSlicePreset(next)
+    if (matched) setSliceSpacing(matched)
+  }
+  const slicePreset = matchingSlicePreset(sliceOffsets)
+
+  // thinkorswim's Prob range: 1σ/2σ/3σ expected-move bands. The menu shows
+  // what is on the chart, including a custom % or the Moneyness band.
+  const sigmaPreset = matchingSigmaPreset(probabilityMassPct)
+  const probabilityMenuValue = !showProbabilityRange
+    ? 'off'
+    : probabilityRangeMode !== 'probability' ? 'moneyness' : sigmaPreset != null ? String(sigmaPreset) : 'custom'
+  const chooseProbabilityRange = value => {
+    if (value === 'off') {
+      setShowProbabilityRange(false)
+      return
+    }
+    const preset = PROBABILITY_SIGMA_PRESETS.find(item => String(item.sigma) === value)
+    if (!preset) return
+    setShowProbabilityRange(true)
+    setProbabilityRangeMode('probability')
+    setProbabilityMassPct(preset.pct)
+  }
+  const probabilityRangeMenu = activeOptionLegs.length ? (
+    <label className="opt-risk-chart-slice-control" title="Shade the range the underlying is expected to finish inside by expiration: 1σ holds 68.27% of outcomes, 2σ 95.45%, 3σ 99.73%. It narrows as the analysis date moves toward expiration.">
+      <span>Prob range</span>
+      <select className="opt-risk-chart-slice-menu" value={probabilityMenuValue} onChange={event => chooseProbabilityRange(event.target.value)} aria-label="Probability range">
+        {probabilityMenuValue === 'moneyness' && <option value="moneyness" disabled hidden>Moneyness</option>}
+        {probabilityMenuValue === 'custom' && <option value="custom" disabled hidden>{fmt(probabilityMassPct, 2)}%</option>}
+        {PROBABILITY_SIGMA_PRESETS.map(preset => <option key={preset.sigma} value={String(preset.sigma)}>{preset.sigma}σ · {preset.pct}%</option>)}
+        <option value="off">Off</option>
+      </select>
+    </label>
+  ) : null
 
   const resetVolatilityScenario = useCallback(() => {
     setVolatilitySurfaceShock(0)
@@ -2167,7 +2561,7 @@ export default function OptionTradingTools() {
     <div className="opt-risk-slices">
       <div className="opt-slice-heading">
         <div><span>Price slices</span><h3>Greeks and modeled P/L at selected prices</h3></div>
-        <div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" value={offset} onChange={event => setSliceOffsets(values => values.map((value, current) => current === index ? Number(event.target.value) : value))} /><span>%</span></label>)}</div>
+        <div className="opt-slice-inputs">{sliceOffsets.map((offset, index) => <label key={index}><input type="number" step="any" value={offset} onChange={event => changeSliceOffset(index, Number(event.target.value))} /><span>%</span></label>)}</div>
       </div>
       <div className="opt-table-wrap"><table className="opt-slices-table"><thead><tr><th>Underlying</th><th>Move</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th><th>P/L open</th><th>1-day theta</th></tr></thead><tbody>{(risk?.price_slices || []).map((slice, index) => <tr key={`${slice.s}-${index}`} className={Number(sliceOffsets[index]) === 0 ? 'opt-slice-current' : ''}><td>{money(slice.s)}</td><td>{Number(sliceOffsets[index]) > 0 ? '+' : ''}{sliceOffsets[index]}%</td><td>{fmt(slice.delta, 3)}</td><td>{fmt(slice.gamma, 4)}</td><td>{fmt(slice.theta, 2)}</td><td>{fmt(slice.vega, 2)}</td><td className={Number(slice.pnl_open) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_open)}</td><td className={Number(slice.pnl_day) >= 0 ? 'opt-positive' : 'opt-negative'}>{signedMoney(slice.pnl_day)}</td></tr>)}</tbody></table></div>
     </div>
@@ -2440,7 +2834,7 @@ export default function OptionTradingTools() {
           {risk && <>
               {!!positionStrikes.length && <div className="opt-position-strikes"><strong>Position strikes</strong>{positionStrikes.map(strike => <span key={strike}>{money(strike)}</span>)}</div>}
               {strikeStructure && <div className="opt-structure-drag-hint"><span aria-hidden="true">↔</span><span>Drag either blue strike handle to widen or narrow the entire structure around <strong>{money(strikeStructure.center)}</strong>.</span></div>}
-              <RiskChart result={risk} evaluationDate={evaluationDate} controls={riskControls} loading={riskLoading} strikeStructure={strikeStructure} positionStrikes={positionStrikes} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} />
+              <RiskChart result={risk} evaluationDate={evaluationDate} controls={riskControls} loading={riskLoading} strikeStructure={strikeStructure} positionStrikes={positionStrikes} priceSlices={sliceLines} onResizeStructure={resizeLegStructure} onAdjustProbabilityBoundary={adjustProbabilityBoundary} onMoveSlice={moveSlice} onSetSlices={setSlicePreset} slicePreset={slicePreset} sliceSpacing={sliceSpacing} probabilityControl={probabilityRangeMenu} />
               {priceSlices}
               <div className="opt-summary-grid">
                 <SummaryMetric label="Entry" value={netDebit >= 0 ? `${money(netDebit)} debit` : `${money(Math.abs(netDebit))} credit`} />
@@ -2579,7 +2973,9 @@ export default function OptionTradingTools() {
                     <span className={probabilityMode === 'OTM' ? 'selected otm' : ''}><small>Probability OTM</small><strong>{fmt(risk.probability_range.probability_otm_pct, 1)}%</strong></span>
                     <span className={probabilityMode === 'TOUCH' ? 'selected touch' : ''}><small>Probability touch</small><strong>{fmt(risk.probability_range.probability_touch_pct, 1)}%</strong></span>
                     <span><small>Inside shaded range</small><strong>{fmt(risk.probability_range.inside_pct, 1)}%</strong></span>
-                    <em>{probabilityRangeMode === 'probability' ? 'Drag either boundary or type the probability range.' : 'Drag either boundary or type the ITM and OTM percentages.'}</em>
+                    {risk.probability_range.range_mode === 'probability' && <span><small>Expected range <span style={{ textTransform: 'none' }}>{String(risk.probability_range.upper_label || '').replace('+', '±')}</span></small><strong>{money(risk.probability_range.low)} – {money(risk.probability_range.high)}</strong></span>}
+                    <span title="At-the-money IV of the expiration, with the volatility scenario applied, over the time from the analysis date to expiration"><small>Range IV · {Math.round(Number(risk.probability_range.years || 0) * 365)} days</small><strong>{percent(risk.probability_range.iv, 1)}</strong></span>
+                    <em>{probabilityRangeMode === 'probability' ? 'The expected move to expiration; it narrows as the analysis date moves forward. Drag either edge or pick 1σ/2σ/3σ.' : 'Drag either boundary or type the ITM and OTM percentages.'}</em>
                   </> : <em>{activeOptionLegs.length ? 'Probability updates with date and volatility.' : 'Add an option leg to show a probability range.'}</em>}
                 </div>
                 {risk?.probability_range && <div className="opt-moneyness-key">

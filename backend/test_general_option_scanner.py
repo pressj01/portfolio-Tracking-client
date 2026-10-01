@@ -475,6 +475,47 @@ class GeneralOptionScannerTests(unittest.TestCase):
 
     @patch("general_option_scanner._iv_history")
     @patch("general_option_scanner._score_rows")
+    def test_cost_aware_bull_put_reports_the_market_credit(
+        self, score_rows, iv_history
+    ):
+        # The P/L graph and the detailed risk graph draw the $50 fill credit;
+        # Max profit read $45.40 because the row quotes it net of $4.60 costs.
+        score_rows.side_effect = lambda rows: [
+            row["_general"].update(stock_scores={}) for row in rows
+        ]
+        expiration = (date.today() + timedelta(days=32)).isoformat()
+        result = run_general_option_scan(
+            {"strategy": "bull-put-spread"},
+            runner=lambda _: {"rows": [{
+                "ticker": "SPY", "price": 765.66,
+                "spread": {
+                    "expiration": expiration, "dte": 32, "distribution_iv": 0.22,
+                    "short_strike": 675, "long_strike": 620,
+                    "max_profit_dollars": 45.4, "max_loss_dollars": 5_454.6,
+                    "expected_value_dollars": 12.0,
+                    "estimated_costs_dollars": 4.6,
+                    "short_leg": {
+                        "strike": 675, "bid": 1.10, "ask": 1.20, "mid": 1.15,
+                        "entry_price": 1.10, "net_entry_price": 1.077,
+                        "iv": 0.20, "delta": -0.05,
+                    },
+                    "long_leg": {
+                        "strike": 620, "bid": 0.55, "ask": 0.60, "mid": 0.575,
+                        "entry_price": 0.60, "net_entry_price": 0.623,
+                        "iv": 0.25, "delta": -0.02,
+                    },
+                },
+            }]},
+        )
+        meta = result["rows"][0]["_general"]
+        self.assertAlmostEqual(meta["max_profit"], 50.0)
+        self.assertAlmostEqual(meta["max_loss"], 5_450.0)
+        self.assertAlmostEqual(meta["profit_ratio"], 50 / 5_450 * 100)
+        self.assertEqual(meta["estimated_costs_dollars"], 4.6)
+        self.assertEqual(meta["expected_value"], 12.0)
+
+    @patch("general_option_scanner._iv_history")
+    @patch("general_option_scanner._score_rows")
     def test_covered_call_uses_the_whole_position_for_risk_and_delta(
         self, score_rows, iv_history
     ):

@@ -1144,10 +1144,11 @@ export default function TotalReturn() {
       <details className="tracker-help">
         <summary>What do these cards mean?</summary>
         <p className="tracker-help-footer">
-          Every card in the summary strip moves together with the Shared Performance Date Range above —
-          unlike Gains &amp; Losses, nothing here is a lifetime figure. All of it comes from one replay of
-          your dated buy and sell history, priced at each day&apos;s market observation: a live quote
-          when available today, otherwise that day&apos;s close.
+          For market periods, every card in the summary strip comes from one replay of your dated buy
+          and sell history, priced at each day&apos;s market observation: a live quote when available today,
+          otherwise that day&apos;s close. <strong>Life</strong> is different: it is cost-basis accounting for
+          current holding lots from purchase through today, including any profit or loss already realized
+          by trimming those positions.
         </p>
         <div className="tracker-help-grid">
           <section>
@@ -1158,6 +1159,8 @@ export default function TotalReturn() {
               <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
               <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Choose <strong>Life</strong> instead when comparing current value with the cost basis of shares still held.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
+              <li><strong>Realized Profit &amp; Loss (Life only):</strong> profit or loss locked in by sales that trimmed a position you still own. Fully closed positions remain available on Gains &amp; Losses.</li>
+              <li><strong>Life Total Return:</strong> Life Price G/L plus Distributions plus Realized Profit &amp; Loss. A realized loss is negative, so it reduces the total.</li>
               <li><strong>SPY:</strong> the S&amp;P 500's own return over this portfolio's actual market-observation dates, for comparison.</li>
             </ul>
           </section>
@@ -1576,6 +1579,15 @@ export default function TotalReturn() {
               )}
               <div className="summary-sub">{lifetimeView ? 'Lifetime dividends included in this result' : 'Dividends paid during the range'}</div>
             </MetricCard>
+            {lifetimeView && (
+              <MetricCard label="Realized Profit & Loss" value={partialValue(
+                <span style={{ color: (t.realized_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.realized_return_dollar)}</span>,
+              )} range={dashboardCardRange}>
+                {partialNote}
+                <div className="summary-sub">Profit or loss locked in by sales from current holding lots</div>
+                <div className="summary-sub">Fully closed positions remain available on Gains &amp; Losses</div>
+              </MetricCard>
+            )}
             {!lifetimeView && (
               <MetricCard label="Tracker Total Return" range={dashboardCardRange}
                 value={partialValue(
@@ -1610,9 +1622,7 @@ export default function TotalReturn() {
               {lifetimeView && (
                 <div className="summary-sub">
                   Price {fmtInt(t.price_return_dollar)} + distributions {fmtInt(t.distribution_dollar)}
-                  {Number(t.realized_return_dollar || 0) !== 0
-                    ? ` + realized trims ${fmtInt(t.realized_return_dollar)}`
-                    : ''}
+                  {' + realized P/L '}{fmtInt(t.realized_return_dollar)}
                 </div>
               )}
               <div className="summary-sub">{lifetimeView ? 'Cost-basis total return, not time-weighted' : 'Time-weighted — timing-neutral performance'}</div>

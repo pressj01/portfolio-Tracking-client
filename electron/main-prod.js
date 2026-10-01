@@ -141,6 +141,9 @@ function startFlask() {
     env: {
       ...process.env,
       PORTFOLIO_DB_DIR: databaseDir,
+      // The license activation is per computer, so it lives in userData even
+      // when the database directory points somewhere shared.
+      PORTFOLIO_LICENSE_DIR: app.getPath('userData'),
       PORTFOLIO_BACKEND_TOKEN: backendInstanceToken,
     },
     stdio: ['pipe', 'pipe', 'pipe'],

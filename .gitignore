@@ -31,6 +31,9 @@ tmp_*.png
 # Runtime user uploads
 backend/uploads/
 
+# Per-computer license activation
+backend/license.json
+
 # IDE
 .vscode/
 .idea/

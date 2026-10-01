@@ -1418,8 +1418,16 @@ def register_routes(app):
         probability_in = payload.get('probability_range') or {}
         if probability_in.get('enabled'):
             option_ivs = [leg['iv'] for leg in legs if leg['opt_type'] != 'stock' and leg['iv'] > 0]
+            # The reference option's own IV prices its ITM/OTM/touch odds.
             probability_iv = float(probability_in.get('iv') or (sum(option_ivs) / len(option_ivs) if option_ivs else 0.20))
+            # The band is the underlying's expected move, so it uses at-the-money
+            # IV (thinkorswim's probability range). A far-OTM put's skewed IV
+            # would draw it far too wide.
+            band_iv = float(probability_in.get('band_iv') or probability_iv)
+            # From the analysis date to expiration: the band narrows as the
+            # analysis date moves toward expiration.
             probability_T = max((horizon_d - eval_d).days, 0) / 365.0
+            sigma_multiple = None
             range_mode = str(probability_in.get('range_mode') or 'moneyness').lower()
             probability_mode = str(probability_in.get('probability_mode') or 'ITM').upper()
             if probability_mode not in ('ITM', 'OTM', 'TOUCH'):
@@ -1439,13 +1447,19 @@ def register_routes(app):
             if range_mode == 'probability':
                 tail_probability = (1.0 - range_pct / 100.0) / 2.0
                 range_low = _lognormal_quantile(
-                    spot, tail_probability, probability_iv, probability_T, r, q,
+                    spot, tail_probability, band_iv, probability_T, r, q,
                 )
                 range_high = _lognormal_quantile(
-                    spot, 1.0 - tail_probability, probability_iv, probability_T, r, q,
+                    spot, 1.0 - tail_probability, band_iv, probability_T, r, q,
                 )
-                lower_label = f'{tail_probability * 100.0:.1f}% lower tail'
-                upper_label = f'{tail_probability * 100.0:.1f}% upper tail'
+                sigma_multiple = NormalDist().inv_cdf(1.0 - tail_probability)
+                sigma_text = (
+                    str(round(sigma_multiple))
+                    if abs(sigma_multiple - round(sigma_multiple)) < 0.005
+                    else f'{sigma_multiple:.2f}'
+                )
+                lower_label = f'−{sigma_text}σ'
+                upper_label = f'+{sigma_text}σ'
             else:
                 range_mode = 'moneyness'
                 if anchor_strike > 0 and has_moneyness_percentages:
@@ -1456,13 +1470,20 @@ def register_routes(app):
                 spot,
                 range_low,
                 range_high,
-                probability_iv,
+                band_iv,
                 probability_T,
                 r,
                 q,
             )
             probability_out.update({
                 'date': horizon_d.isoformat(),
+                # Everything the chart needs to price other zones (between price
+                # slices) on exactly the same distribution as the band.
+                'years': round(probability_T, 8),
+                'rate': r,
+                'dividend_yield': q,
+                'anchor_iv': round(probability_iv, 6),
+                'sigma_multiple': round(sigma_multiple, 6) if sigma_multiple is not None else None,
                 'anchor_strike': anchor_strike,
                 'opt_type': anchor_type,
                 'itm_pct': itm_pct,

@@ -815,6 +815,50 @@ class OptionsRiskGraphApiTest(unittest.TestCase):
         self.assertLessEqual(probability["probability_touch_pct"], 100.0)
 
     @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
+    def test_probability_band_is_the_atm_expected_move_and_narrows_with_time(self, _quote):
+        # thinkorswim's probability range: the underlying's 1σ expected move on
+        # at-the-money IV, not the reference option's skewed IV, and it narrows
+        # as the analysis date moves toward expiration.
+        expiration = self.today + timedelta(days=64)
+
+        def band(eval_date, band_iv=0.16, range_pct=68.27):
+            payload = self.payload(eval_date)
+            for leg in payload["legs"]:
+                leg["expiration"] = expiration.isoformat()
+            payload["probability_range"] = {
+                "enabled": True,
+                "range_mode": "probability",
+                "probability_mode": "ITM",
+                "range_pct": range_pct,
+                "iv": 0.30,
+                "band_iv": band_iv,
+                "anchor_strike": 110,
+                "opt_type": "CALL",
+            }
+            response = self.client.post("/api/options/risk-graph", json=payload)
+            self.assertEqual(response.status_code, 200)
+            return response.get_json()["probability_range"]
+
+        today_band = band(self.today)
+        years = 64 / 365
+        drift = math.log(100) + (0.04 - 0.01 - 0.5 * 0.16 ** 2) * years
+        self.assertAlmostEqual(today_band["low"], math.exp(drift - 0.16 * math.sqrt(years)), places=2)
+        self.assertAlmostEqual(today_band["high"], math.exp(drift + 0.16 * math.sqrt(years)), places=2)
+        self.assertAlmostEqual(today_band["iv"], 0.16)
+        self.assertAlmostEqual(today_band["anchor_iv"], 0.30)
+        self.assertAlmostEqual(today_band["years"], years, places=6)
+        self.assertEqual((today_band["lower_label"], today_band["upper_label"]), ("−1σ", "+1σ"))
+        self.assertAlmostEqual(today_band["sigma_multiple"], 1.0, places=3)
+
+        two_sigma = band(self.today, range_pct=95.45)
+        self.assertEqual(two_sigma["upper_label"], "+2σ")
+        self.assertGreater(two_sigma["high"] - two_sigma["low"], today_band["high"] - today_band["low"])
+
+        later_band = band(self.today + timedelta(days=40))
+        self.assertLess(later_band["high"] - later_band["low"], today_band["high"] - today_band["low"])
+        self.assertAlmostEqual(later_band["years"], 24 / 365, places=6)
+
+    @patch("options_api._fetch_quote", return_value={"last": 100, "div_yield": 0.01})
     def test_chain_contracts_include_configurable_greek_columns(self, _quote):
         expiration = self.expiration.isoformat()
         row = {

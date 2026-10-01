@@ -121,10 +121,11 @@ jobs:
               -WorkingDirectory $releaseRoot `
               -WindowStyle Hidden
 
+            # /api/health stays open without a license; data endpoints do not.
             $ready = $false
             for ($attempt = 0; $attempt -lt 120; $attempt++) {
               try {
-                Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/profiles" -TimeoutSec 2 | Out-Null
+                Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/health" -TimeoutSec 2 | Out-Null
                 $ready = $true
                 break
               }
@@ -140,6 +141,50 @@ jobs:
               }
               throw "The packaged Windows application did not become ready."
             }
+
+            # A first launch must be locked: licensing configured, enforced,
+            # and portfolio data refused until a license is activated.
+            $license = Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/license/status" -TimeoutSec 10
+            if (-not $license.configured) {
+              throw "The packaged build has no Gumroad product ID, so buyers would never be asked for a license."
+            }
+            if (-not $license.enforced -or $license.licensed) {
+              throw "The packaged build does not enforce the license on first launch."
+            }
+            try {
+              Invoke-WebRequest -Uri "http://127.0.0.1:5001/api/profiles" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              throw "The packaged build served portfolio data without a license."
+            }
+            catch {
+              if ($_.Exception.Response.StatusCode.value__ -ne 403) { throw }
+            }
+
+            # Stand in for an activation made moments ago so the checks below
+            # can reach data. It is bound to this runner's machine ID the same
+            # way the backend computes it, and a fresh last-verified time means
+            # no Gumroad re-check is due during the test.
+            $machineGuid = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Cryptography").MachineGuid
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            $machineHash = -join ($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes("portfolio-tracker|$machineGuid")) |
+              ForEach-Object { $_.ToString("x2") })
+            $verifiedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss+00:00")
+            $activation = @{
+              license_key = "CI-SMOKE-TEST"
+              product_id = "ci-smoke-test"
+              machine = $machineHash
+              activated_at = $verifiedAt
+              last_verified_at = $verifiedAt
+              last_check_attempt_at = $verifiedAt
+              revoked = $false
+            } | ConvertTo-Json
+            # WriteAllText writes UTF-8 without the BOM PowerShell 5 would add.
+            [IO.File]::WriteAllText((Join-Path $testData "license.json"), $activation)
+            Start-Sleep -Seconds 3
+            $license = Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/license/status" -TimeoutSec 10
+            if (-not $license.licensed) {
+              throw "The packaged build did not accept a saved activation (state: $($license.state))."
+            }
+            Invoke-RestMethod -Uri "http://127.0.0.1:5001/api/profiles" -TimeoutSec 10 | Out-Null
             if (-not (Test-Path (Join-Path $testData "portfolio.db"))) {
               throw "The packaged backend did not create its per-user database."
             }

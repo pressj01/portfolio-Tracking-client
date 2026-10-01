@@ -482,17 +482,37 @@ export default function Watchlist() {
       })
   }, [pf, selection, preferences])
 
+  // Saves POST the whole list and replace what is stored, so nothing may be
+  // saved until the stored list has actually been read.
+  const [listLoaded, setListLoaded] = useState(false)
+  const listLoadedRef = useRef(false)
+  const retryTimerRef = useRef(null)
+
   const loadWatchingList = useCallback(() => {
+    clearTimeout(retryTimerRef.current)
     pf('/api/watchlist/watching')
       .then(r => r.json())
       .then(data => {
-        setWatchingList(data.rows || [])
-        if (data.rows && data.rows.length > 0) loadAnalysis()
+        if (!Array.isArray(data.rows)) throw new Error('bad watchlist response')
+        // Don't clobber edits made locally after a previous successful load.
+        if (!listLoadedRef.current) {
+          watchingListRef.current = data.rows
+          setWatchingList(data.rows)
+        }
+        listLoadedRef.current = true
+        setListLoaded(true)
+        if (data.rows.length > 0) loadAnalysis()
       })
-      .catch(() => {})
-  }, [loadAnalysis])
+      .catch(() => {
+        // Backend may still be starting; keep trying rather than showing an empty list.
+        retryTimerRef.current = setTimeout(loadWatchingList, 2000)
+      })
+  }, [pf, loadAnalysis])
 
-  useEffect(() => { loadWatchingList() }, [loadWatchingList])
+  useEffect(() => {
+    loadWatchingList()
+    return () => clearTimeout(retryTimerRef.current)
+  }, [loadWatchingList])
 
   const cleanWatchlistRows = (rows) => rows.map(r => ({
     ticker: r.ticker,
@@ -503,6 +523,7 @@ export default function Watchlist() {
   }))
 
   const saveList = useCallback((newList, options = {}) => {
+    if (!listLoadedRef.current) return saveQueueRef.current
     watchingListRef.current = newList
     setWatchingList(newList)
     saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(() => pf('/api/watchlist/watching', {
@@ -520,7 +541,7 @@ export default function Watchlist() {
 
   const addWatching = async () => {
     const t = ticker.trim().toUpperCase()
-    if (!t) return
+    if (!t || !listLoadedRef.current) return
     const current = watchingListRef.current
     const trimmedNotes = notes.trim()
     const existingIdx = current.findIndex(r => r.ticker === t)
@@ -681,7 +702,12 @@ export default function Watchlist() {
             onKeyDown={e => e.key === 'Enter' && addWatching()}
           />
         </div>
-        <button className="wl-btn-add" onClick={addWatching}>+ Add</button>
+        <button
+          className="wl-btn-add"
+          onClick={addWatching}
+          disabled={!listLoaded}
+          title={listLoaded ? undefined : 'Waiting for your saved watchlist to load'}
+        >+ Add</button>
         <div>
           <label className="wl-label" htmlFor="wl-freeze-cols">Lock columns</label>
           <select
@@ -728,7 +754,10 @@ export default function Watchlist() {
       {error && <div className="wl-error">{error}</div>}
 
       {/* Empty state */}
-      {watchingList.length === 0 && !loading && (
+      {!listLoaded && (
+        <div className="wl-empty">Loading your watchlist&hellip;</div>
+      )}
+      {listLoaded && watchingList.length === 0 && !loading && (
         <div className="wl-empty">No tickers in your watching list yet. Add one above to get started.</div>
       )}
 
