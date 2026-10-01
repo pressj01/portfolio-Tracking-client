@@ -443,6 +443,9 @@ def ensure_tables_exist(conn=None):
             original_purchase_value    REAL,
             broker_price_paid          REAL,
             broker_purchase_value      REAL,
+            -- Per seeded share, how much more was originally paid than the
+            -- price the ledger's seed lot carries (app._original_basis_from_lots).
+            original_seed_premium      REAL,
             current_value              REAL,
             gain_or_loss               REAL,
             gain_or_loss_percentage    REAL,

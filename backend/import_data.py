@@ -52,6 +52,71 @@ _VALID_TICKER = re.compile(r'^[A-Z][A-Z0-9.\-/]{0,10}$')
 _EXCLUDED_TICKERS = {"TOTALS", "TOTAL", "GRAND", "SUMMARY"}
 
 
+def _basis_restatement(cur, ticker, profile_id, quantity, price_paid, purchase_value,
+                       sheet_has_cost=True):
+    """SET fragments keeping original_*/broker_* in step with a re-imported row.
+
+    A spreadsheet carries one cost basis, and a re-import that changes the
+    shares or the cost is the user restating it. The merge used to update only
+    price_paid/purchase_value, so original_* and broker_* — the figures the
+    holdings table actually shows — stayed at whatever the first import
+    recorded, priced for a share count the position no longer had.
+
+    A row that comes back unchanged is left alone, so a basis corrected by hand
+    survives re-importing the same sheet. A sheet with no cost columns cannot
+    restate a basis at all (its price_paid is just today's price), so there the
+    per-share basis is kept and only the total follows the shares.
+    Returns (sets, values) to append to the row's UPDATE.
+    """
+    def _num(value):
+        try:
+            return None if value is None or pd.isna(value) else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _same(stored, incoming, tolerance):
+        return stored is not None and incoming is not None and abs(float(stored) - incoming) <= tolerance
+
+    existing = cur.execute(
+        "SELECT quantity, price_paid, purchase_value, original_price_paid, broker_price_paid "
+        "FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    quantity, price_paid, purchase_value = _num(quantity), _num(price_paid), _num(purchase_value)
+    if not existing or quantity is None:
+        return [], []
+    quantity_same = _same(existing[0], quantity, 1e-6)
+
+    if sheet_has_cost and (price_paid or purchase_value):
+        if purchase_value is None:
+            purchase_value = round(quantity * price_paid, 2)
+        if not price_paid:
+            price_paid = purchase_value / quantity if quantity else 0.0
+        if (
+            quantity_same
+            and _same(existing[1], price_paid, 1e-6)
+            and _same(existing[2], purchase_value, 0.005)
+        ):
+            return [], []
+        return (
+            ["original_price_paid = ?", "original_purchase_value = ?",
+             "broker_price_paid = ?", "broker_purchase_value = ?"],
+            [price_paid, purchase_value, price_paid, purchase_value],
+        )
+
+    if quantity_same:
+        return [], []
+    sets, values = [], []
+    for total_col, basis_price in (
+        ("original_purchase_value", existing[3]),
+        ("broker_purchase_value", existing[4]),
+    ):
+        if basis_price is not None:
+            sets.append(f"{total_col} = ?")
+            values.append(round(quantity * float(basis_price), 2))
+    return sets, values
+
+
 def _next_business_day(ts):
     if ts is None:
         return None
@@ -325,6 +390,12 @@ def import_from_excel(file_path, sheet_name="All Accounts", profile_id=1):
                         sets.append(f"{field} = ?")
                         vals.append(0)
                 if sets:
+                    basis_sets, basis_vals = _basis_restatement(
+                        cur, ticker, profile_id,
+                        row.get('quantity'), row.get('price_paid'), row.get('purchase_value'),
+                    )
+                    sets.extend(basis_sets)
+                    vals.extend(basis_vals)
                     sets.append("import_date = ?")
                     vals.append(date.today().isoformat())
                     vals.extend([ticker, profile_id])
@@ -905,6 +976,7 @@ def import_from_upload(df, profile_id):
             _category_assignments[row['ticker']] = _split_category_names(_val(row, 'category'))
 
     enriched = []
+    cost_supplied = set()  # tickers whose row carried its own cost basis
     for _, row in df.iterrows():
         t = row['ticker']
         info = info_map.get(t, {})
@@ -951,6 +1023,8 @@ def import_from_upload(df, profile_id):
             div_frequency = freq_map.get(info.get('payoutFrequency'), 'Q')
 
         qty = float(row['quantity'])
+        if _fval(row, 'price_paid') or _fval(row, 'purchase_value'):
+            cost_supplied.add(t)
         price_paid = _fval(row, 'price_paid') or current_price
 
         # ── Computed values: use user-supplied if present, else compute ──
@@ -1095,6 +1169,13 @@ def import_from_upload(df, profile_id):
                             sets.append(f"{field} = ?")
                             vals.append(0)
                 if sets:
+                    basis_sets, basis_vals = _basis_restatement(
+                        cur, ticker, profile_id,
+                        row.get('quantity'), row.get('price_paid'), row.get('purchase_value'),
+                        sheet_has_cost=ticker in cost_supplied,
+                    )
+                    sets.extend(basis_sets)
+                    vals.extend(basis_vals)
                     sets.append("import_date = ?")
                     vals.append(_date.today().isoformat())
                     vals.extend([ticker, profile_id])

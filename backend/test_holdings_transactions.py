@@ -389,9 +389,9 @@ class HoldingsTransactionTest(unittest.TestCase):
         )
 
     def test_rollup_keeps_broker_basis_split_from_original(self):
-        # Broker-managed profile: the position import owns broker_*, and original_*
-        # is frozen at first sight.  A later rollup must leave both alone so the
-        # Original / Broker-adjusted toggle still has two distinct values.
+        # Broker-managed profile: the position import owns broker_*, so a
+        # rollup leaves it alone, while original_* follows what the open lots
+        # cost.  The Original / Broker-adjusted toggle keeps two distinct values.
         self._seed_profiles_table(1, positions_managed=True)
         self.conn.execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
@@ -410,17 +410,193 @@ class HoldingsTransactionTest(unittest.TestCase):
         _rollup_transactions("ABC", 1, self.conn)
 
         row = self.conn.execute(
-            "SELECT price_paid, original_price_paid, broker_price_paid, broker_purchase_value "
+            "SELECT price_paid, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value "
             "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
         ).fetchone()
         self.assertEqual(row["price_paid"], 25)  # ledger average moves
-        self.assertEqual(row["original_price_paid"], 20)  # frozen original survives
+        self.assertEqual(row["original_price_paid"], 25)  # and so does what was paid
+        self.assertEqual(row["original_purchase_value"], 500)
         self.assertEqual(row["broker_price_paid"], 15)  # broker feed still owns this
         self.assertEqual(row["broker_purchase_value"], 150)
 
+    def test_rollup_added_buy_moves_original_basis_with_the_position(self):
+        # The reported case: a hand-entered SLV holding, then one more buy
+        # through the Transactions dialog.  The ledger read 599.78 shares at
+        # $74.04 / $44,406.91 while the holdings table kept $75.34 / $42,324.51.
+        self._seed_profiles_table(1, positions_managed=False)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, "
+            "purchase_date) "
+            "VALUES ('SLV', 1, 561.78, 75.34, 42324.51, 75.34, 42324.51, 75.34, 42324.51, '2026-01-05')"
+        )
+        app_module._seed_transaction_if_needed("SLV", 1, self.conn)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('SLV', 1, 'BUY', '2026-10-01', 38, 54.80, 0)"
+        )
+
+        _rollup_transactions("SLV", 1, self.conn)
+
+        row = self.conn.execute(
+            "SELECT quantity, original_price_paid, original_purchase_value "
+            "FROM all_account_info WHERE ticker = 'SLV' AND profile_id = 1"
+        ).fetchone()
+        self.assertAlmostEqual(row["quantity"], 599.78, places=6)
+        self.assertAlmostEqual(row["original_purchase_value"], 44406.91, places=2)
+        self.assertAlmostEqual(row["original_price_paid"], 74.0387, places=4)
+
+    def test_rollup_carries_seed_lot_premium_on_broker_fed_profile(self):
+        # Paid $20, broker-adjusted to $15, and the seed lot is priced off the
+        # broker's figure.  That $5 a share is the one part of the split the
+        # ledger cannot reproduce, so it rides along with the seeded shares.
+        self._seed_profiles_table(1, positions_managed=True)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, "
+            "purchase_date) "
+            "VALUES ('ABC', 1, 10, 15, 150, 20, 200, 15, 150, '2026-01-10')"
+        )
+        app_module._seed_transaction_if_needed("ABC", 1, self.conn)
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'BUY', '2026-02-10', 10, 30, 0)"
+        )
+
+        _rollup_transactions("ABC", 1, self.conn)
+
+        def basis():
+            return self.conn.execute(
+                "SELECT price_paid, original_price_paid, original_purchase_value, "
+                "broker_price_paid, broker_purchase_value "
+                "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
+            ).fetchone()
+
+        row = basis()
+        self.assertEqual(row["price_paid"], 22.5)  # 10 @ 15 + 10 @ 30
+        self.assertEqual(row["original_purchase_value"], 500)  # 10 @ 20 + 10 @ 30
+        self.assertEqual(row["original_price_paid"], 25)
+        self.assertEqual(row["broker_price_paid"], 15)
+        self.assertEqual(row["broker_purchase_value"], 150)
+
+        # Selling half the seeded shares takes half the premium with it, and a
+        # second rollup must reuse the stored premium rather than re-measure it
+        # against an original that has already moved.
+        self.conn.execute(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES ('ABC', 1, 'SELL', '2026-03-10', 5, 40, 0)"
+        )
+        _rollup_transactions("ABC", 1, self.conn)
+
+        row = basis()
+        self.assertEqual(row["original_purchase_value"], 400)  # 5 @ 20 + 10 @ 30
+        self.assertEqual(row["broker_price_paid"], 15)
+
+    def test_rollup_drops_seed_lot_premium_when_the_seed_is_repriced(self):
+        self._seed_profiles_table(1, positions_managed=True)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, "
+            "purchase_date) "
+            "VALUES ('ABC', 1, 10, 15, 150, 20, 200, 15, 150, '2026-01-10')"
+        )
+        app_module._seed_transaction_if_needed("ABC", 1, self.conn)
+        _rollup_transactions("ABC", 1, self.conn)
+        self.conn.execute("UPDATE transactions SET price_per_share = 18 WHERE ticker = 'ABC'")
+
+        _rollup_transactions("ABC", 1, self.conn, reset_seed_premium=True)
+
+        row = self.conn.execute(
+            "SELECT original_price_paid, original_purchase_value FROM all_account_info "
+            "WHERE ticker = 'ABC' AND profile_id = 1"
+        ).fetchone()
+        self.assertEqual(row["original_price_paid"], 18)
+        self.assertEqual(row["original_purchase_value"], 180)
+
+    def test_stale_basis_repair_rebuilds_totals_each_writer_froze(self):
+        self._seed_profiles_table(1, positions_managed=False)
+        self._seed_profiles_table(2, positions_managed=True)
+        self.conn.executemany(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, base_quantity, price_paid, "
+            "purchase_value, original_price_paid, original_purchase_value, broker_price_paid, "
+            "broker_purchase_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                # Frozen by the rollup: 38 shares bought since, total never moved.
+                ("SLV", 1, 599.78, 599.78, 74.0387, 44406.91, 75.34, 42324.51, 74.0387, 44406.91),
+                # Spreadsheet re-imported at 30 shares; both bases still say 10.
+                ("SHEET", 1, 30, 30, 25, 750, 20, 200, 20, 200),
+                # DRIP simulation: one reinvested share on top of a cost that
+                # still, deliberately, covers the ten that were bought.
+                ("DRIP", 1, 11, 10, 20, 220, 20, 200, 20, 200),
+                ("OK", 1, 10, 10, 20, 200, 20, 200, 20, 200),
+                # Broker-fed, 20 shares when recorded and 15 now.
+                ("SOLD", 2, 15, 15, 21, 315, 20, 400, 21, 315),
+                # Broker-fed and grown; the ledger knows only 10 of the 30.
+                ("GREW", 2, 30, 30, 22, 660, 20, 200, 22, 660),
+                # The broker's own total carries commissions its price does
+                # not. Never frozen, so there is nothing to repair.
+                ("FEES", 2, 140, 140, 10.1, 1441.6, 10.1, 1441.6, 10.1, 1441.6),
+            ],
+        )
+        self.conn.executemany(
+            "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES (?, ?, 'BUY', ?, ?, ?, 0, ?)",
+            [
+                ("SLV", 1, "2026-01-05", 561.78, 75.34, "Initial seed from existing holding"),
+                ("SLV", 1, "2026-10-01", 38, 54.80, None),
+                ("GREW", 2, "2026-01-05", 10, 20, None),
+            ],
+        )
+
+        def basis():
+            return {
+                r["ticker"]: (
+                    r["original_price_paid"], r["original_purchase_value"],
+                    r["broker_price_paid"], r["broker_purchase_value"],
+                )
+                for r in self.conn.execute("SELECT * FROM all_account_info")
+            }
+
+        with patch.object(app_module, "_auto_reconcile_owner") as reconcile_owner:
+            self.assertEqual(app_module._repair_stale_basis_totals(self.conn), 4)
+            reconcile_owner.assert_called_once()
+
+        rows = basis()
+        self.assertAlmostEqual(rows["SLV"][0], 74.0387, places=4)
+        self.assertAlmostEqual(rows["SLV"][1], 44406.91, places=2)
+        self.assertEqual(rows["SHEET"], (25, 750, 25, 750))
+        self.assertEqual(rows["DRIP"], (20, 200, 20, 200))
+        self.assertEqual(rows["OK"], (20, 200, 20, 200))
+        self.assertEqual(rows["SOLD"], (20, 300, 21, 315))
+        self.assertEqual(rows["GREW"], (22, 660, 22, 660))
+        self.assertEqual(rows["FEES"], (10.1, 1441.6, 10.1, 1441.6))
+
+        # One-time: a row that goes stale afterwards is its writer's to fix.
+        self.conn.execute(
+            "UPDATE all_account_info SET original_purchase_value = 1 WHERE ticker = 'SLV'"
+        )
+        with patch.object(app_module, "_auto_reconcile_owner"):
+            self.assertEqual(app_module._repair_stale_basis_totals(self.conn), 0)
+        self.assertEqual(basis()["SLV"][1], 1)
+
+    def test_carried_original_basis_follows_the_share_count(self):
+        carried = app_module._carried_original_basis
+        # First sight, or a position reopened from nothing: take the feed's.
+        self.assertEqual(carried(None, None, 10, 150, 10, 15, 150), (15, 150))
+        self.assertEqual(carried(20, 200, 0, 0, 10, 15, 150), (15, 150))
+        # Same shares, broker adjusted its own basis: the split is preserved.
+        self.assertEqual(carried(20, 200, 10, 200, 10, 15, 150), (20, 200))
+        # Half sold: half the original cost leaves with them.
+        self.assertEqual(carried(20, 200, 10, 150, 5, 15, 75), (20, 100))
+        # Ten more bought for $300: the original grows by what the feed's did.
+        self.assertEqual(carried(20, 200, 10, 150, 20, 22.5, 450), (25, 500))
+        # No prior feed total to difference against: price the new shares.
+        self.assertEqual(carried(20, 200, 10, None, 20, 30, 600), (25, 500))
+
     def test_rollup_tracks_broker_basis_when_profile_has_no_broker_feed(self):
-        # No position feed: the ledger is the only authority, so broker_* should
-        # follow it while original_* stays pinned to what was first recorded.
+        # No position feed: the ledger is the only authority, so both the
+        # original and the broker basis follow it.
         self._seed_profiles_table(1, positions_managed=False)
         self.conn.execute(
             "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
@@ -442,13 +618,13 @@ class HoldingsTransactionTest(unittest.TestCase):
             "SELECT original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value "
             "FROM all_account_info WHERE ticker = 'ABC' AND profile_id = 1"
         ).fetchone()
-        self.assertEqual(row["original_price_paid"], 20)
-        self.assertEqual(row["original_purchase_value"], 200)
+        self.assertEqual(row["original_price_paid"], 25)
+        self.assertEqual(row["original_purchase_value"], 500)
         self.assertEqual(row["broker_price_paid"], 25)
         self.assertEqual(row["broker_purchase_value"], 500)
 
     def test_rollup_still_seeds_original_basis_when_absent(self):
-        # A brand-new holding has no frozen original yet; COALESCE must still fill it.
+        # A brand-new holding has no original basis yet; the rollup must fill it.
         self._seed_profiles_table(1, positions_managed=True)
         self.conn.execute(
             "INSERT INTO transactions (ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
@@ -3126,6 +3302,50 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertIn("no holding exists", res.get_json()["error"])
         self.assertEqual(self._scalar("SELECT COUNT(*) FROM all_account_info"), 0)
         self.assertEqual(self._scalar("SELECT COUNT(*) FROM transactions"), 0)
+
+    def test_post_buy_on_existing_holding_moves_the_cost_basis_the_table_shows(self):
+        # The reported flow, through the endpoints the Transactions dialog uses.
+        self._execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value, "
+            "purchase_date) "
+            "VALUES ('SLV', 1, 561.78, 75.34, 42324.51, 75.34, 42324.51, 75.34, 42324.51, '2026-01-05')"
+        )
+
+        res = self.client.post(
+            "/api/holdings/SLV/transactions?profile_id=1",
+            json={
+                "transaction_type": "BUY",
+                "transaction_date": "2026-10-01",
+                "shares": 38,
+                "price_per_share": 54.80,
+            },
+        )
+
+        self.assertEqual(res.status_code, 201)
+        row = self._rows(
+            "SELECT quantity, original_price_paid, original_purchase_value "
+            "FROM all_account_info WHERE ticker = 'SLV'"
+        )[0]
+        self.assertAlmostEqual(row["quantity"], 599.78, places=6)
+        self.assertAlmostEqual(row["original_price_paid"], 74.0387, places=4)
+        self.assertAlmostEqual(row["original_purchase_value"], 44406.91, places=2)
+
+        # Correcting the seed lot's price is a restatement of what was paid.
+        seed_id = self._scalar(
+            "SELECT id FROM transactions WHERE ticker = 'SLV' AND notes LIKE 'Initial seed%'"
+        )
+        res = self.client.put(
+            f"/api/holdings/SLV/transactions/{seed_id}?profile_id=1",
+            json={"transaction_date": "2026-01-05", "price_per_share": 70},
+        )
+
+        self.assertEqual(res.status_code, 200)
+        self.assertAlmostEqual(
+            self._scalar("SELECT original_purchase_value FROM all_account_info WHERE ticker = 'SLV'"),
+            561.78 * 70 + 38 * 54.80,
+            places=2,
+        )
 
     def test_post_oversell_existing_holding_is_rejected_without_seed_side_effect(self):
         self._execute(
