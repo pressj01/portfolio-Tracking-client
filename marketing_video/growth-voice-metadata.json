@@ -1,0 +1,70 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "lead_seconds": 0.5,
+  "tail_seconds": 0.7,
+  "total_duration": 410.0,
+  "scenes": [
+    {
+      "id": "00-welcome",
+      "audio": "00-welcome.mp3",
+      "audio_duration": 32.76,
+      "scene_duration": 33.96
+    },
+    {
+      "id": "01-workspace",
+      "audio": "01-workspace.mp3",
+      "audio_duration": 38.02,
+      "scene_duration": 39.22
+    },
+    {
+      "id": "02-dollars-bubbles",
+      "audio": "02-dollars-bubbles.mp3",
+      "audio_duration": 37.13,
+      "scene_duration": 38.33
+    },
+    {
+      "id": "03-dollars-charts",
+      "audio": "03-dollars-charts.mp3",
+      "audio_duration": 41.14,
+      "scene_duration": 42.34
+    },
+    {
+      "id": "04-vs-market-bubbles",
+      "audio": "04-vs-market-bubbles.mp3",
+      "audio_duration": 45.24,
+      "scene_duration": 46.44
+    },
+    {
+      "id": "05-vs-market-indexes",
+      "audio": "05-vs-market-indexes.mp3",
+      "audio_duration": 40.3,
+      "scene_duration": 41.5
+    },
+    {
+      "id": "06-vs-market-drivers",
+      "audio": "06-vs-market-drivers.mp3",
+      "audio_duration": 41.59,
+      "scene_duration": 42.79
+    },
+    {
+      "id": "07-lots-period",
+      "audio": "07-lots-period.mp3",
+      "audio_duration": 43.44,
+      "scene_duration": 44.64
+    },
+    {
+      "id": "08-lots-tables",
+      "audio": "08-lots-tables.mp3",
+      "audio_duration": 45.55,
+      "scene_duration": 46.75
+    },
+    {
+      "id": "09-finish",
+      "audio": "09-finish.mp3",
+      "audio_duration": 32.83,
+      "scene_duration": 34.03
+    }
+  ]
+}

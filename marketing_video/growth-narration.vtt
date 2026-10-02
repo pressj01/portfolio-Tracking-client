@@ -1,0 +1,245 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:03.053
+Welcome to Growth in Portfolio Tracker.
+
+2
+00:00:03.053 --> 00:00:06.456
+This workspace answers three related but different questions.
+
+3
+00:00:06.456 --> 00:00:11.562
+Dollars shows what the account is worth and how its value changed.
+
+4
+00:00:11.562 --> 00:00:16.667
+Vs market compares the selected holdings with a benchmark using transaction-aware returns.
+
+5
+00:00:16.667 --> 00:00:23.475
+Lots separates the results that are still open from gains and losses that were already realized.
+
+6
+00:00:23.475 --> 00:00:33.260
+In this walkthrough, we will explain every tab, the summary bubbles, and the charts that turn account history into a clear performance story.
+
+7
+00:00:34.460 --> 00:00:37.417
+Start with the controls at the top.
+
+8
+00:00:37.417 --> 00:00:44.176
+Dollars, Vs market, and Lots are three views of the same selected account and performance range.
+
+9
+00:00:44.176 --> 00:00:50.090
+The date presets run from one day through five years, All, Life, and Custom.
+
+10
+00:00:50.090 --> 00:00:54.315
+Except for Life, returns end at the latest market observation.
+
+11
+00:00:54.315 --> 00:01:00.229
+Life is different: it is cost-basis gain and loss rather than a market-return window.
+
+12
+00:01:00.229 --> 00:01:12.480
+With the same account, holdings scope, and date range, Tracker Total Return percent is designed to reconcile across Growth, Total Return, Dashboard, and Gains and Losses after the close.
+
+13
+00:01:13.680 --> 00:01:16.874
+The Dollars tab begins with the account-level bubbles.
+
+14
+00:01:16.874 --> 00:01:23.661
+Start Value and End Value are the account values at the two ends of the selected window.
+
+15
+00:01:23.661 --> 00:01:29.650
+They include tracked cash, and the account reading can also include open-option value when shown.
+
+16
+00:01:29.650 --> 00:01:32.045
+Tracker Total Return dollars is different.
+
+17
+00:01:32.045 --> 00:01:39.631
+It is the cash-flow-adjusted investment result: price return plus distributions, without treating deposits, purchases, or sales as investment gain.
+
+18
+00:01:39.631 --> 00:01:50.810
+Tracker Total Return percent expresses that same return as a percentage, making it the best number to compare with the other Growth tabs and the Total Return screen.
+
+19
+00:01:52.010 --> 00:01:56.632
+Below the bubbles, Portfolio Value plots the account over time.
+
+20
+00:01:56.632 --> 00:02:03.104
+The portfolio line follows recorded value, while the optional invested line provides cost-basis context.
+
+21
+00:02:03.104 --> 00:02:09.575
+It is an account-value chart, so deposits, withdrawals, cash, and purchases can move it.
+
+22
+00:02:09.575 --> 00:02:13.736
+The Transaction-Aware Return chart answers a cleaner investment question.
+
+23
+00:02:13.736 --> 00:02:16.971
+Its price-return line shows market movement only.
+
+24
+00:02:16.971 --> 00:02:25.292
+Its distributions line records income, and the tracker-total line combines the two without counting cash flows as performance.
+
+25
+00:02:25.292 --> 00:02:33.150
+Toggle between return percent and amount when you want a normalized rate or the matching dollar result.
+
+26
+00:02:34.350 --> 00:02:44.204
+Choose Vs market when the question is not only how much you made, but how the selected holdings performed against a benchmark.
+
+27
+00:02:44.204 --> 00:02:50.027
+Enter a market ticker, such as SPY, and use Go to load it.
+
+28
+00:02:50.027 --> 00:02:59.434
+The portfolio calculation does not change when you change the benchmark; only the comparison series, difference, and benchmark risk statistics change.
+
+29
+00:02:59.434 --> 00:03:10.632
+The bubbles show Portfolio Grade, transaction-aware price return, open-lots price return, open-lots total return, tracker total return, and both portfolio and benchmark Sharpe and Sortino.
+
+30
+00:03:10.632 --> 00:03:13.767
+Open-lots metrics include only positions still held.
+
+31
+00:03:13.767 --> 00:03:19.590
+Tracker metrics also include positions that were fully closed during the selected range.
+
+32
+00:03:20.790 --> 00:03:24.454
+The two index charts make the comparison visual.
+
+33
+00:03:24.454 --> 00:03:27.201
+Both series begin at one hundred.
+
+34
+00:03:27.201 --> 00:03:34.987
+An ending value of one hundred and fifteen means a fifteen-percent return, not a one-hundred-and-fifteen-dollar account balance.
+
+35
+00:03:34.987 --> 00:03:45.062
+The Transaction-Aware Price Return Index uses market-price movement only, with the portfolio in cyan and the benchmark as the dotted orange line.
+
+36
+00:03:45.062 --> 00:03:53.763
+The Transaction-Aware Total Return Index uses the same starting point but reinvests distributions, shown by the green portfolio line.
+
+37
+00:03:53.763 --> 00:04:01.090
+The distance between the price and total-return readings highlights the contribution from dividends and other distributions.
+
+38
+00:04:02.290 --> 00:04:08.998
+Performance by Ticker ranks the included holdings by transaction-aware total return for the selected period.
+
+39
+00:04:08.998 --> 00:04:13.023
+Green bars are positive and red bars are negative.
+
+40
+00:04:13.023 --> 00:04:21.520
+A long bar identifies a large percentage move, but not necessarily the largest dollar contribution, because position sizes differ.
+
+41
+00:04:21.520 --> 00:04:24.650
+The Portfolio Growth Map completes that picture.
+
+42
+00:04:24.650 --> 00:04:26.886
+Each tile is a holding.
+
+43
+00:04:26.886 --> 00:04:39.408
+Its area reflects the holding's current tracked market value, while its color reflects its total return: red for a loss, neutral near zero, and green for a gain.
+
+44
+00:04:39.408 --> 00:04:43.880
+Together, the bars and map expose both performance and concentration.
+
+45
+00:04:45.080 --> 00:04:52.539
+The Lots tab, labeled Gains and Losses inside the panel, separates a selected-period replay from lifetime accounting.
+
+46
+00:04:52.539 --> 00:05:02.193
+The upper bubbles follow the shared performance range: Start Value, End Value, price return, distributions, tracker total return, and their open-lot counterparts.
+
+47
+00:05:02.193 --> 00:05:06.581
+Purchases and sales change weights without being counted as returns.
+
+48
+00:05:06.581 --> 00:05:12.724
+The Lifetime Cost-Basis section below does not change when you move the date filter.
+
+49
+00:05:12.724 --> 00:05:28.520
+It compares current value with what was paid for the shares, includes realized results for sold shares, and can show Account Value separately when cash and open option contracts need to be reconciled with a broker.
+
+50
+00:05:29.720 --> 00:05:33.899
+The Lots tables bring the accounting down to each ticker.
+
+51
+00:05:33.899 --> 00:05:43.092
+Unrealized lists the shares still held, with invested amount, current value, price gain or loss, dividends received, and total gain or loss.
+
+52
+00:05:43.092 --> 00:05:47.689
+Realized lists closed sales, including their locked-in proceeds versus cost basis.
+
+53
+00:05:47.689 --> 00:05:57.301
+Combined places both sides together for every ticker you have owned, so a fully sold position does not disappear from the lifetime picture.
+
+54
+00:05:57.301 --> 00:06:09.420
+The chart above the tables compares price gain and loss with total gain and loss over time, while the ticker bars make the dividend contribution visible beside price-only results.
+
+55
+00:06:09.420 --> 00:06:15.270
+Use the table tabs and Columns control to focus on the detail you need.
+
+56
+00:06:16.470 --> 00:06:21.723
+To recap, use Dollars to understand account value and transaction-aware dollar return.
+
+57
+00:06:21.723 --> 00:06:32.228
+Use Vs market to compare the selected holdings with a benchmark, then use its bubbles, indexes, bars, and growth map to find the drivers.
+
+58
+00:06:32.228 --> 00:06:40.545
+Use Lots when you need to separate current holdings from completed sales and inspect cost-basis accounting ticker by ticker.
+
+59
+00:06:40.545 --> 00:06:46.236
+Keep the account, filter, and shared date range aligned when you compare screens.
+
+60
+00:06:46.236 --> 00:06:47.987
+For informational purposes only.
+
+61
+00:06:47.987 --> 00:06:49.300
+Not financial advice.

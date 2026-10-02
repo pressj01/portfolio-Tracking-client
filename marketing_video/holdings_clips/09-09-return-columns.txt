@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/09-09-return-columns-0.png'
+duration 25.297916
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/09-09-return-columns-1.png'
+duration 24.962084
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/09-09-return-columns-1.png'

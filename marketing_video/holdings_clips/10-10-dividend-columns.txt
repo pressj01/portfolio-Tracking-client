@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/10-10-dividend-columns-0.png'
+duration 54.240000
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/10-10-dividend-columns-0.png'

@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/23-23-history-cash-0.png'
+duration 18.136458
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/23-23-history-cash-1.png'
+duration 34.733542
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/23-23-history-cash-1.png'

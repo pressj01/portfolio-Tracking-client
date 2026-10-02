@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/24-24-refresh-repair-0.png'
+duration 28.201583
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/24-24-refresh-repair-1.png'
+duration 28.558417
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/24-24-refresh-repair-1.png'

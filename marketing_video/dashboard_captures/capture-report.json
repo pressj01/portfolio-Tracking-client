@@ -1,0 +1,267 @@
+{
+  "capturedAt": "2026-09-29T21:00:54.487Z",
+  "initialReadyState": {
+    "complete": true,
+    "pendingText": [],
+    "busyCount": 0,
+    "errors": [],
+    "missing": [],
+    "holdingsRows": 73,
+    "height": 4722,
+    "signature": "29496:4722:7:30:73"
+  },
+  "captures": [
+    {
+      "filename": "01-headline-metrics.png",
+      "scrollY": 0,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "02-timeframes-and-alerts.png",
+      "scrollY": 95,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "03-nav-erosion-boxes.png",
+      "scrollY": 644,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "04-grade-and-risk-boxes.png",
+      "scrollY": 823,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "05-income-and-yield-boxes.png",
+      "scrollY": 673,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "06-portfolio-value-chart.png",
+      "scrollY": 1350,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 4722,
+        "signature": "29496:4722:7:30:73"
+      }
+    },
+    {
+      "filename": "07-grade-exposure-guide.png",
+      "scrollY": 1773,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6524,
+        "signature": "35892:6524:7:30:73"
+      }
+    },
+    {
+      "filename": "08-account-alpha-guide.png",
+      "scrollY": 3638,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6934,
+        "signature": "38833:6934:7:30:73"
+      }
+    },
+    {
+      "filename": "09-weekly-calendar.png",
+      "scrollY": 4106,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6934,
+        "signature": "38833:6934:7:30:73"
+      }
+    },
+    {
+      "filename": "10-portfolio-all-categories.png",
+      "scrollY": 5150,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6934,
+        "signature": "38833:6934:7:30:73"
+      }
+    },
+    {
+      "filename": "11-portfolio-category-drilldown.png",
+      "scrollY": 5150,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "38867:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "12-portfolio-holdings-drilldown.png",
+      "scrollY": 5150,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "38891:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "13-holdings-overview-controls.png",
+      "scrollY": 5549,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "38891:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "14-common-table-view.png",
+      "scrollY": 5848,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "38891:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "15-general-table-view.png",
+      "scrollY": 5549,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "35081:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "16-dividends-table-view.png",
+      "scrollY": 5549,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "35799:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "17-returns-table-view.png",
+      "scrollY": 5549,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "34656:6928:7:27:73"
+      }
+    },
+    {
+      "filename": "18-table-columns-and-totals.png",
+      "scrollY": 5848,
+      "state": {
+        "complete": true,
+        "pendingText": [],
+        "busyCount": 0,
+        "errors": [],
+        "missing": [],
+        "holdingsRows": 73,
+        "height": 6928,
+        "signature": "34656:6928:7:27:73"
+      }
+    }
+  ]
+}

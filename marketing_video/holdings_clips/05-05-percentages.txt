@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/05-05-percentages-0.png'
+duration 33.540125
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/05-05-percentages-1.png'
+duration 12.539875
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/05-05-percentages-1.png'

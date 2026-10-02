@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/22-22-dividend-event-0.png'
+duration 13.618250
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/22-22-dividend-event-1.png'
+duration 35.051750
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/22-22-dividend-event-1.png'

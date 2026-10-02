@@ -1,0 +1,16 @@
+{
+  "video": "C:\\Users\\Press\\Portfolio_Tracking_client\\marketing_video\\portfolio-tracker-growth-guide.mp4",
+  "bytes": 18476135,
+  "chapters": 10,
+  "dimensions": [
+    1920,
+    1080
+  ],
+  "video_codec": "h264",
+  "audio_codec": "aac",
+  "captions": "embedded English + VTT",
+  "full_decode": "passed",
+  "mean_volume_db": -24.8,
+  "peak_volume_db": -4.6,
+  "voice": "en-US-AndrewMultilingualNeural"
+}

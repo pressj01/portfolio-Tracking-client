@@ -1,0 +1,439 @@
+WEBVTT
+
+00:00:00.617 --> 00:00:05.044
+Welcome to Portfolio Tracker This guide explains the Import screen
+
+00:00:05.253 --> 00:00:08.208
+and the Manage Portfolios screen We will walk through the
+
+00:00:08.208 --> 00:00:11.815
+recommended brokerage import order look closely at the Charles Schwab
+
+00:00:11.815 --> 00:00:15.995
+workflow explain the Generic Import choices and then set up
+
+00:00:15.995 --> 00:00:21.294
+accounts Owner and aggregates You can create as many individual
+
+00:00:21.294 --> 00:00:26.034
+accounts or portfolios as you need Those accounts remain independent
+
+00:00:26.464 --> 00:00:29.185
+and you can combine any selection of them in one
+
+00:00:29.328 --> 00:00:31.620
+or more aggregate views whenever you want
+
+00:00:33.364 --> 00:00:36.437
+Start on Broker Import The screen is designed to be
+
+00:00:36.437 --> 00:00:40.539
+used in order First import a current Positions export That
+
+00:00:40.552 --> 00:00:44.341
+establishes the current shares and cost basis for the selected
+
+00:00:44.354 --> 00:00:50.526
+account Next import Transaction History That adds purchases sales dividends
+
+00:00:50.786 --> 00:00:56.489
+reinvestments and lots after the positions snapshot exists Last Refresh
+
+00:00:56.658 --> 00:00:59.796
+is optional Use it when you want the latest prices
+
+00:00:59.940 --> 00:01:04.184
+and forward-looking dividend fields A positions file is a full
+
+00:01:04.198 --> 00:01:07.713
+current snapshot so use a complete export rather than a
+
+00:01:07.726 --> 00:01:11.671
+partial file The other tabs are for broker-neutral spreadsheets a
+
+00:01:11.685 --> 00:01:15.682
+combined app export or a Snowball migration not the normal
+
+00:01:15.682 --> 00:01:16.489
+broker path
+
+00:01:18.283 --> 00:01:21.955
+For a single Charles Schwab account go to Accounts then
+
+00:01:21.955 --> 00:01:25.913
+Positions in Schwab and export the current view to CSV
+
+00:01:26.031 --> 00:01:31.018
+or Excel Back in Portfolio Tracker choose Charles Schwab leave
+
+00:01:31.018 --> 00:01:35.028
+the workflow on Positions and choose This account The import
+
+00:01:35.028 --> 00:01:39.572
+reads the holdings shares cost basis and current prices from
+
+00:01:39.572 --> 00:01:42.645
+that export You can download the Schwab template when you
+
+00:01:42.645 --> 00:01:46.447
+need the exact field names Choose the file set the
+
+00:01:46.551 --> 00:01:50.940
+NAV snapshot date if needed and select Preview Review the
+
+00:01:50.953 --> 00:01:54.169
+rows before you confirm the import This is the step
+
+00:01:54.286 --> 00:01:58.309
+that makes the account holdings match the complete broker snapshot
+
+00:02:00.054 --> 00:02:04.247
+Schwab can also export Positions for All Accounts In Schwab
+
+00:02:04.703 --> 00:02:08.023
+switch the account selector to All Accounts before exporting the
+
+00:02:08.023 --> 00:02:12.398
+CSV or Excel file On this screen choose Charles Schwab
+
+00:02:12.671 --> 00:02:17.294
+Positions then All Accounts The preview separates the export into
+
+00:02:17.294 --> 00:02:20.770
+account blocks and lists your portfolios that are tagged Charles
+
+00:02:20.770 --> 00:02:24.976
+Schwab on Manage Portfolios Check only the portfolios you want
+
+00:02:24.976 --> 00:02:29.052
+to update You can verify or change each mapping before
+
+00:02:29.195 --> 00:02:32.554
+anything is written skip an account in the file or
+
+00:02:32.554 --> 00:02:37.007
+create a destination portfolio for a new account Confirmed routing
+
+00:02:37.138 --> 00:02:41.187
+is remembered for the next combined export This shortcut is
+
+00:02:41.200 --> 00:02:45.341
+for Positions transaction history is still imported one account at
+
+00:02:45.341 --> 00:02:45.731
+a time
+
+00:02:47.471 --> 00:02:51.859
+After the positions import choose Transactions in the same workflow
+
+00:02:52.276 --> 00:02:56.443
+In Schwab go to Accounts then History choose the date
+
+00:02:56.443 --> 00:03:00.622
+range you need and export the Transactions CSV or Excel
+
+00:03:00.635 --> 00:03:04.151
+file Preview it and then import it into that one
+
+00:03:04.359 --> 00:03:09.646
+selected account This adds transaction history such as buys sells
+
+00:03:09.880 --> 00:03:15.687
+dividend payments and DRIP reinvestments Importing positions first matters it
+
+00:03:15.687 --> 00:03:19.125
+preserves the current broker holdings while the history is added
+
+00:03:19.125 --> 00:03:24.424
+behind them Reimporting an older history file safely skips matching
+
+00:03:24.424 --> 00:03:28.956
+transaction rows and duplicate dividend payments When a file is
+
+00:03:28.969 --> 00:03:32.849
+incomplete use the review screen before confirming so you do
+
+00:03:32.849 --> 00:03:36.312
+not mistake a partial history for the entire account record
+
+00:03:38.054 --> 00:03:41.778
+The other broker choices work the same basic way Select
+
+00:03:41.778 --> 00:03:44.942
+the broker that supplied the export start with its current
+
+00:03:44.955 --> 00:03:48.888
+Positions file for the selected account then import its Transaction
+
+00:03:48.888 --> 00:03:54.877
+History and optionally refresh prices and dividend data E*TRADE Fidelity
+
+00:03:55.151 --> 00:03:59.278
+Robinhood and Interactive Brokers each have their matching format and
+
+00:03:59.526 --> 00:04:03.914
+downloadable template or field guidance on the screen Interactive Brokers
+
+00:04:03.927 --> 00:04:08.484
+uses its Activity Statement for positions and its Transaction History
+
+00:04:08.497 --> 00:04:13.236
+export for activity Fidelity also offers an optional All Accounts
+
+00:04:13.236 --> 00:04:17.989
+positions shortcut that uses the same preview-and-map approach as Schwab
+
+00:04:18.393 --> 00:04:23.445
+Regardless of broker the important sequence is unchanged a complete
+
+00:04:23.458 --> 00:04:28.536
+current positions snapshot first activity history second and a preview
+
+00:04:28.549 --> 00:04:29.877
+before the final import
+
+00:04:31.624 --> 00:04:34.632
+Choose Generic Positions when your data is in your own
+
+00:04:34.645 --> 00:04:37.991
+spreadsheet or another source that does not match a brokerage
+
+00:04:38.004 --> 00:04:42.158
+importer The minimum columns are Ticker and Shares You can
+
+00:04:42.158 --> 00:04:47.588
+also provide Price Paid Dividend Frequency Ex-Dividend Date and DRIP
+
+00:04:48.017 --> 00:04:51.442
+Use Download Holdings Template to begin with the supported layout
+
+00:04:51.872 --> 00:04:55.491
+The app enriches eligible holdings with market data If the
+
+00:04:55.491 --> 00:05:00.687
+selected portfolio already has positions Generic Import uses merge mode
+
+00:05:01.155 --> 00:05:05.049
+it updates matching tickers and adds new ones while preserving
+
+00:05:05.062 --> 00:05:08.929
+app-only values such as DRIP or pay dates unless your
+
+00:05:08.929 --> 00:05:12.939
+spreadsheet supplies them You can also import all filled workbook
+
+00:05:12.939 --> 00:05:17.431
+tabs as separate portfolios which is useful for a multi-account
+
+00:05:17.431 --> 00:05:18.056
+spreadsheet
+
+00:05:19.794 --> 00:05:24.664
+Generic Transactions is the companion to Generic Positions Use its
+
+00:05:24.755 --> 00:05:29.482
+XLSX or CSV format for one row per BUY SELL
+
+00:05:29.703 --> 00:05:35.159
+DIVIDEND DRIP deposit withdrawal or share transfer It uses the
+
+00:05:35.159 --> 00:05:41.135
+same preview duplicate protection and realized-gain workflow as broker transaction
+
+00:05:41.148 --> 00:05:46.513
+imports Positions plus Transactions is different it restores one workbook
+
+00:05:46.526 --> 00:05:50.185
+that contains both a portfolio sheet and a Transactions sheet
+
+00:05:50.601 --> 00:05:53.870
+such as a workbook exported by this app. Its scope
+
+00:05:53.883 --> 00:05:58.740
+controls can import both sections together or run positions only
+
+00:05:58.909 --> 00:06:02.815
+or transactions only Match the tab to the file A
+
+00:06:02.815 --> 00:06:07.867
+combined workbook belongs on Positions plus Transactions while a normal
+
+00:06:07.867 --> 00:06:10.120
+broker export belongs on Broker Import
+
+00:06:11.874 --> 00:06:16.093
+Now open Manage Portfolios Each regular row is a real
+
+00:06:16.405 --> 00:06:20.963
+independent portfolio or brokerage account Use New Portfolio whenever you
+
+00:06:20.963 --> 00:06:24.127
+want another account there is no fixed limit Give it
+
+00:06:24.127 --> 00:06:28.215
+a meaningful name choose the appropriate broker source before importing
+
+00:06:28.684 --> 00:06:32.642
+and it keeps its own holdings transaction history cash snapshot
+
+00:06:33.072 --> 00:06:36.718
+and settings The table lets you rename an account inline
+
+00:06:37.122 --> 00:06:39.895
+select it as the active account or move it up
+
+00:06:39.908 --> 00:06:43.593
+and down in the portfolio selector Add accounts for every
+
+00:06:43.606 --> 00:06:49.049
+brokerage retirement account experiment household member or separate strategy you
+
+00:06:49.062 --> 00:06:52.747
+want to track Creating another account does not merge it
+
+00:06:52.760 --> 00:06:54.439
+with any existing account
+
+00:06:56.204 --> 00:06:59.277
+The Broker Source is the broker whose importer is allowed
+
+00:06:59.290 --> 00:07:02.636
+to write to that portfolio it is independent of the
+
+00:07:02.650 --> 00:07:07.064
+account name Account Type marks a portfolio User-owned or Test
+
+00:07:07.077 --> 00:07:11.920
+/ non-owned Test accounts remain usable but cannot be included
+
+00:07:11.933 --> 00:07:15.553
+in Owner Show controls whether an account appears in the
+
+00:07:15.553 --> 00:07:20.215
+top portfolio selector Clearing Show simply hides it there it
+
+00:07:20.228 --> 00:07:24.173
+does not delete data Cash is a dated snapshot not
+
+00:07:24.173 --> 00:07:27.832
+a live balance Click a regular account’s cash amount to
+
+00:07:27.897 --> 00:07:32.324
+update it manually broker imports can replace it later The
+
+00:07:32.324 --> 00:07:36.855
+arrows set display order and Select changes the active account
+
+00:07:37.259 --> 00:07:42.025
+Clear removes holdings and the transaction ledger Reset also removes
+
+00:07:42.038 --> 00:07:46.204
+option trades and the DRIP contribution schedule and Delete removes
+
+00:07:46.217 --> 00:07:49.746
+the portfolio itself after a confirmation and backup
+
+00:07:51.504 --> 00:07:54.069
+Owner is optional Create it only when you want a
+
+00:07:54.082 --> 00:07:58.288
+personal rollup of selected user-owned brokerage accounts Then use the
+
+00:07:58.301 --> 00:08:02.819
+Owner checkbox on each regular user-owned account to include or
+
+00:08:02.819 --> 00:08:06.309
+exclude it Owner does not turn those accounts into one
+
+00:08:06.322 --> 00:08:10.645
+database record each account stays independent and keeps its own
+
+00:08:10.658 --> 00:08:14.603
+broker import destination Owner itself is never a place to
+
+00:08:14.603 --> 00:08:19.720
+import a broker file Instead import each brokerage file into
+
+00:08:19.720 --> 00:08:23.379
+its matching regular account and the checked accounts feed the
+
+00:08:23.392 --> 00:08:28.327
+Owner rollup The Dashboard uses this configuration for Owner-level income
+
+00:08:28.575 --> 00:08:33.900
+and DRIP-versus-cash calculations Test or non-owned accounts cannot be checked
+
+00:08:33.900 --> 00:08:38.262
+for Owner so temporary portfolios stay out of a personal
+
+00:08:38.262 --> 00:08:39.239
+rollup by design
+
+00:08:41.014 --> 00:08:44.881
+Aggregates are separate from Owner An aggregate is a read-only
+
+00:08:44.881 --> 00:08:49.686
+virtual portfolio that combines the real portfolios you check as
+
+00:08:49.686 --> 00:08:54.400
+members Click Add Aggregate rename it and choose its member
+
+00:08:54.400 --> 00:08:57.525
+accounts You can make as many aggregates as you want
+
+00:08:58.150 --> 00:09:02.082
+one for every account one for a household one for
+
+00:09:02.082 --> 00:09:05.741
+retirement accounts or one for a strategy There is no
+
+00:09:05.754 --> 00:09:10.272
+one-to-one rule The same individual account can be included in
+
+00:09:10.415 --> 00:09:14.348
+any number of aggregates and every aggregate can use any
+
+00:09:14.361 --> 00:09:19.087
+combination of the available regular portfolios Owner itself is not
+
+00:09:19.100 --> 00:09:22.941
+an aggregate member Each aggregate has its own Show checkbox
+
+00:09:23.397 --> 00:09:28.332
+ordering arrows Select button and Delete button Deleting an aggregate
+
+00:09:28.345 --> 00:09:33.241
+removes only the virtual definition it never removes the underlying
+
+00:09:33.241 --> 00:09:34.894
+accounts or their data
+
+00:09:36.618 --> 00:09:41.006
+To recap create a regular portfolio for every real account
+
+00:09:41.006 --> 00:09:43.519
+you want to track tag it with the matching broker
+
+00:09:43.519 --> 00:09:48.324
+source and import a complete positions snapshot before transaction history
+
+00:09:48.741 --> 00:09:52.113
+Use Generic Import when your spreadsheet is not a supported
+
+00:09:52.113 --> 00:09:55.759
+broker export Create Owner only for the personal rollup you
+
+00:09:55.772 --> 00:09:59.808
+want and use aggregates for any other combinations You can
+
+00:09:59.808 --> 00:10:03.363
+add more accounts at any time keep them independent and
+
+00:10:03.376 --> 00:10:06.996
+place the same account into any combination of aggregate views
+
+00:10:07.412 --> 00:10:12.256
+Review previews before imports and read the Clear Reset and
+
+00:10:12.256 --> 00:10:17.959
+Delete confirmations carefully For informational purposes only Not financial advice

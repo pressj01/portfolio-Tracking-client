@@ -1,0 +1,197 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "total_duration": 1357.4900000000005,
+  "scenes": [
+    {
+      "id": "00-welcome",
+      "audio": "00-welcome.mp3",
+      "audio_duration": 37.42,
+      "scene_duration": 38.620000000000005,
+      "start": 0.0
+    },
+    {
+      "id": "01-account",
+      "audio": "01-account.mp3",
+      "audio_duration": 45.53,
+      "scene_duration": 46.730000000000004,
+      "start": 38.620000000000005
+    },
+    {
+      "id": "02-accrual",
+      "audio": "02-accrual.mp3",
+      "audio_duration": 42.48,
+      "scene_duration": 43.68,
+      "start": 85.35000000000001
+    },
+    {
+      "id": "03-drip-count",
+      "audio": "03-drip-count.mp3",
+      "audio_duration": 41.93,
+      "scene_duration": 43.13,
+      "start": 129.03
+    },
+    {
+      "id": "04-income-boxes",
+      "audio": "04-income-boxes.mp3",
+      "audio_duration": 52.68,
+      "scene_duration": 53.88,
+      "start": 172.16
+    },
+    {
+      "id": "05-percentages",
+      "audio": "05-percentages.mp3",
+      "audio_duration": 44.88,
+      "scene_duration": 46.080000000000005,
+      "start": 226.04
+    },
+    {
+      "id": "06-columns",
+      "audio": "06-columns.mp3",
+      "audio_duration": 42.07,
+      "scene_duration": 43.27,
+      "start": 272.12
+    },
+    {
+      "id": "07-date-range",
+      "audio": "07-date-range.mp3",
+      "audio_duration": 51.98,
+      "scene_duration": 53.18,
+      "start": 315.39
+    },
+    {
+      "id": "08-position-columns",
+      "audio": "08-position-columns.mp3",
+      "audio_duration": 51.02,
+      "scene_duration": 52.220000000000006,
+      "start": 368.57
+    },
+    {
+      "id": "09-return-columns",
+      "audio": "09-return-columns.mp3",
+      "audio_duration": 49.06,
+      "scene_duration": 50.260000000000005,
+      "start": 420.79
+    },
+    {
+      "id": "10-dividend-columns",
+      "audio": "10-dividend-columns.mp3",
+      "audio_duration": 53.04,
+      "scene_duration": 54.24,
+      "start": 471.05
+    },
+    {
+      "id": "11-yield-history",
+      "audio": "11-yield-history.mp3",
+      "audio_duration": 51.5,
+      "scene_duration": 52.7,
+      "start": 525.29
+    },
+    {
+      "id": "12-risk",
+      "audio": "12-risk.mp3",
+      "audio_duration": 52.56,
+      "scene_duration": 53.760000000000005,
+      "start": 577.99
+    },
+    {
+      "id": "13-edit-choice",
+      "audio": "13-edit-choice.mp3",
+      "audio_duration": 49.7,
+      "scene_duration": 50.900000000000006,
+      "start": 631.75
+    },
+    {
+      "id": "14-basic-position",
+      "audio": "14-basic-position.mp3",
+      "audio_duration": 54.91,
+      "scene_duration": 56.11,
+      "start": 682.65
+    },
+    {
+      "id": "15-edit-dividends",
+      "audio": "15-edit-dividends.mp3",
+      "audio_duration": 51.98,
+      "scene_duration": 53.18,
+      "start": 738.76
+    },
+    {
+      "id": "16-edit-tracking",
+      "audio": "16-edit-tracking.mp3",
+      "audio_duration": 56.16,
+      "scene_duration": 57.36,
+      "start": 791.9399999999999
+    },
+    {
+      "id": "17-add-holding",
+      "audio": "17-add-holding.mp3",
+      "audio_duration": 52.58,
+      "scene_duration": 53.78,
+      "start": 849.3
+    },
+    {
+      "id": "18-ledger",
+      "audio": "18-ledger.mp3",
+      "audio_duration": 48.12,
+      "scene_duration": 49.32,
+      "start": 903.0799999999999
+    },
+    {
+      "id": "19-buy-edit",
+      "audio": "19-buy-edit.mp3",
+      "audio_duration": 50.35,
+      "scene_duration": 51.550000000000004,
+      "start": 952.4
+    },
+    {
+      "id": "20-sell-lots",
+      "audio": "20-sell-lots.mp3",
+      "audio_duration": 52.34,
+      "scene_duration": 53.540000000000006,
+      "start": 1003.9499999999999
+    },
+    {
+      "id": "21-order",
+      "audio": "21-order.mp3",
+      "audio_duration": 47.18,
+      "scene_duration": 48.38,
+      "start": 1057.49
+    },
+    {
+      "id": "22-dividend-event",
+      "audio": "22-dividend-event.mp3",
+      "audio_duration": 47.47,
+      "scene_duration": 48.67,
+      "start": 1105.8700000000001
+    },
+    {
+      "id": "23-history-cash",
+      "audio": "23-history-cash.mp3",
+      "audio_duration": 51.67,
+      "scene_duration": 52.870000000000005,
+      "start": 1154.5400000000002
+    },
+    {
+      "id": "24-refresh-repair",
+      "audio": "24-refresh-repair.mp3",
+      "audio_duration": 55.56,
+      "scene_duration": 56.760000000000005,
+      "start": 1207.4100000000003
+    },
+    {
+      "id": "25-owner-drip",
+      "audio": "25-owner-drip.mp3",
+      "audio_duration": 49.42,
+      "scene_duration": 50.620000000000005,
+      "start": 1264.1700000000003
+    },
+    {
+      "id": "26-finish",
+      "audio": "26-finish.mp3",
+      "audio_duration": 41.5,
+      "scene_duration": 42.7,
+      "start": 1314.7900000000004
+    }
+  ]
+}

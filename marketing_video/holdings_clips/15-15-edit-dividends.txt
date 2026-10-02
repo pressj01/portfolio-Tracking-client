@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/15-15-edit-dividends-0.png'
+duration 30.636458
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/15-15-edit-dividends-1.png'
+duration 22.543542
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/15-15-edit-dividends-1.png'

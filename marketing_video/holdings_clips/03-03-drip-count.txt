@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/03-03-drip-count-0.png'
+duration 43.130000
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/03-03-drip-count-0.png'

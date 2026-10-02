@@ -1,0 +1,387 @@
+{
+  "audio_lead_seconds": 0.5,
+  "visual_lead_seconds": 0.15,
+  "scenes": [
+    {
+      "index": 0,
+      "id": "00-welcome",
+      "title": "Know every holding. Control every detail.",
+      "segment_durations_seconds": [
+        38.620000000000005
+      ],
+      "cues": []
+    },
+    {
+      "index": 1,
+      "id": "01-account",
+      "title": "Start with the right account",
+      "segment_durations_seconds": [
+        19.751041,
+        26.978959
+      ],
+      "cues": [
+        {
+          "cue": "The toolbar provides",
+          "spoken_offset_seconds": 19.401,
+          "visual_start_seconds": 19.751
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "id": "02-accrual",
+      "title": "Post-refresh accrual: what the box means",
+      "segment_durations_seconds": [
+        11.365625,
+        32.314375
+      ],
+      "cues": [
+        {
+          "cue": "When payment details are available",
+          "spoken_offset_seconds": 11.016,
+          "visual_start_seconds": 11.366
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "id": "03-drip-count",
+      "title": "Ticker DRIP Coverage",
+      "segment_durations_seconds": [
+        43.13
+      ],
+      "cues": []
+    },
+    {
+      "index": 4,
+      "id": "04-income-boxes",
+      "title": "Four income boxes, one clear split",
+      "segment_durations_seconds": [
+        17.967208,
+        7.552083,
+        6.276042,
+        22.084667
+      ],
+      "cues": [
+        {
+          "cue": "Mo dollars Reinvested",
+          "spoken_offset_seconds": 17.617,
+          "visual_start_seconds": 17.967
+        },
+        {
+          "cue": "Mo dollars Not Reinvested",
+          "spoken_offset_seconds": 25.169,
+          "visual_start_seconds": 25.519
+        },
+        {
+          "cue": "Percent Reinvested",
+          "spoken_offset_seconds": 31.445,
+          "visual_start_seconds": 31.795
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "id": "05-percentages",
+      "title": "Why the two DRIP percentages differ",
+      "segment_durations_seconds": [
+        33.540125,
+        12.539875
+      ],
+      "cues": [
+        {
+          "cue": "In a combined or Owner view",
+          "spoken_offset_seconds": 33.19,
+          "visual_start_seconds": 33.54
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "id": "06-columns",
+      "title": "Make the table work for you",
+      "segment_durations_seconds": [
+        7.016666,
+        36.253334
+      ],
+      "cues": [
+        {
+          "cue": "then search for a field",
+          "spoken_offset_seconds": 6.667,
+          "visual_start_seconds": 7.017
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "id": "07-date-range",
+      "title": "Compare the right period",
+      "segment_durations_seconds": [
+        31.001041,
+        22.178959
+      ],
+      "cues": [
+        {
+          "cue": "This control does not hide holdings",
+          "spoken_offset_seconds": 30.651,
+          "visual_start_seconds": 31.001
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "id": "08-position-columns",
+      "title": "Read the position and cost fields",
+      "segment_durations_seconds": [
+        13.253666,
+        38.966334
+      ],
+      "cues": [
+        {
+          "cue": "Shares is the current quantity",
+          "spoken_offset_seconds": 12.904,
+          "visual_start_seconds": 13.254
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "id": "09-return-columns",
+      "title": "Period return, lifetime gain, and realized gain",
+      "segment_durations_seconds": [
+        25.297916,
+        24.962084
+      ],
+      "cues": [
+        {
+          "cue": "Life Gain and Loss",
+          "spoken_offset_seconds": 24.948,
+          "visual_start_seconds": 25.298
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "id": "10-dividend-columns",
+      "title": "Dividend schedule and income estimates",
+      "segment_durations_seconds": [
+        54.24
+      ],
+      "cues": []
+    },
+    {
+      "index": 11,
+      "id": "11-yield-history",
+      "title": "Yield, actual income, and dividend sources",
+      "segment_durations_seconds": [
+        19.073958,
+        33.626042
+      ],
+      "cues": [
+        {
+          "cue": "Dividend Paid, Year to Date Dividends",
+          "spoken_offset_seconds": 18.724,
+          "visual_start_seconds": 19.074
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "id": "12-risk",
+      "title": "Understand the risk and comparison columns",
+      "segment_durations_seconds": [
+        53.760000000000005
+      ],
+      "cues": []
+    },
+    {
+      "index": 13,
+      "id": "13-edit-choice",
+      "title": "Edit, Txn, and Del: choose the right control",
+      "segment_durations_seconds": [
+        5.883875,
+        45.016125
+      ],
+      "cues": [
+        {
+          "cue": "Edit opens the holding",
+          "spoken_offset_seconds": 5.534,
+          "visual_start_seconds": 5.884
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "id": "14-basic-position",
+      "title": "Edit Basic Info and Position",
+      "segment_durations_seconds": [
+        56.11
+      ],
+      "cues": []
+    },
+    {
+      "index": 15,
+      "id": "15-edit-dividends",
+      "title": "Edit Dividend Info and manual overrides",
+      "segment_durations_seconds": [
+        30.636458,
+        22.543542
+      ],
+      "cues": [
+        {
+          "cue": "Manual amount and date corrections",
+          "spoken_offset_seconds": 30.286,
+          "visual_start_seconds": 30.636
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "id": "16-edit-tracking",
+      "title": "Edit income tracking and reinvestment fields",
+      "segment_durations_seconds": [
+        57.36
+      ],
+      "cues": []
+    },
+    {
+      "index": 17,
+      "id": "17-add-holding",
+      "title": "Add a holding: snapshot or first transaction",
+      "segment_durations_seconds": [
+        22.928125,
+        30.851875
+      ],
+      "cues": [
+        {
+          "cue": "Add or Edit via Transaction",
+          "spoken_offset_seconds": 22.578,
+          "visual_start_seconds": 22.928
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "id": "18-ledger",
+      "title": "Expand the ticker to see its ledger",
+      "segment_durations_seconds": [
+        49.32
+      ],
+      "cues": []
+    },
+    {
+      "index": 19,
+      "id": "19-buy-edit",
+      "title": "Add or correct a buy transaction",
+      "segment_durations_seconds": [
+        27.863041,
+        23.686959
+      ],
+      "cues": [
+        {
+          "cue": "To correct a saved trade",
+          "spoken_offset_seconds": 27.513,
+          "visual_start_seconds": 27.863
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "id": "20-sell-lots",
+      "title": "Record a sale with the appropriate lot method",
+      "segment_durations_seconds": [
+        21.092208,
+        32.447792
+      ],
+      "cues": [
+        {
+          "cue": "Specific Lots displays",
+          "spoken_offset_seconds": 20.742,
+          "visual_start_seconds": 21.092
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "id": "21-order",
+      "title": "Match the order of same-day trades",
+      "segment_durations_seconds": [
+        32.277083,
+        16.102917
+      ],
+      "cues": [
+        {
+          "cue": "In the expanded ledger",
+          "spoken_offset_seconds": 31.927,
+          "visual_start_seconds": 32.277
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "id": "22-dividend-event",
+      "title": "Record or edit an actual dividend payment",
+      "segment_durations_seconds": [
+        13.61825,
+        35.05175
+      ],
+      "cues": [
+        {
+          "cue": "The dividend form",
+          "spoken_offset_seconds": 13.268,
+          "visual_start_seconds": 13.618
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "id": "23-history-cash",
+      "title": "Review history and account cash flows",
+      "segment_durations_seconds": [
+        18.136458,
+        34.733542
+      ],
+      "cues": [
+        {
+          "cue": "Deposits and Withdrawals",
+          "spoken_offset_seconds": 17.786,
+          "visual_start_seconds": 18.136
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "id": "24-refresh-repair",
+      "title": "Refresh market inputs and preview dividend repair",
+      "segment_durations_seconds": [
+        28.201583,
+        28.558417
+      ],
+      "cues": [
+        {
+          "cue": "The Dividend Repair mode",
+          "spoken_offset_seconds": 27.852,
+          "visual_start_seconds": 28.202
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "id": "25-owner-drip",
+      "title": "Manage reinvestment across accounts",
+      "segment_durations_seconds": [
+        50.620000000000005
+      ],
+      "cues": []
+    },
+    {
+      "index": 26,
+      "id": "26-finish",
+      "title": "A repeatable routine for clearer records",
+      "segment_durations_seconds": [
+        42.7
+      ],
+      "cues": []
+    }
+  ]
+}

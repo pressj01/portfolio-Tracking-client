@@ -1,0 +1,69 @@
+;FFMETADATA1
+title=Portfolio Tracker - Import and Manage Portfolios Guide
+artist=Portfolio Tracker
+comment=Broker, generic import, Owner, and aggregate walkthrough
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=32770
+title=Import accounts. Organize every portfolio.
+[CHAPTER]
+TIMEBASE=1/1000
+START=32770
+END=77650
+title=Start with the import map
+[CHAPTER]
+TIMEBASE=1/1000
+START=77650
+END=119460
+title=Schwab, step one: current positions
+[CHAPTER]
+TIMEBASE=1/1000
+START=119460
+END=166890
+title=Schwab, one file for multiple accounts
+[CHAPTER]
+TIMEBASE=1/1000
+START=166890
+END=217460
+title=Schwab, step two: transaction history
+[CHAPTER]
+TIMEBASE=1/1000
+START=217460
+END=271030
+title=Other broker imports follow the same pattern
+[CHAPTER]
+TIMEBASE=1/1000
+START=271030
+END=319200
+title=Generic Import: flexible positions
+[CHAPTER]
+TIMEBASE=1/1000
+START=319200
+END=371280
+title=Generic transactions and combined workbooks
+[CHAPTER]
+TIMEBASE=1/1000
+START=371280
+END=415610
+title=Manage Portfolios: one row per real account
+[CHAPTER]
+TIMEBASE=1/1000
+START=415610
+END=470910
+title=What the portfolio controls mean
+[CHAPTER]
+TIMEBASE=1/1000
+START=470910
+END=520420
+title=Owner is an optional personal rollup
+[CHAPTER]
+TIMEBASE=1/1000
+START=520420
+END=576050
+title=Aggregates combine any accounts you choose
+[CHAPTER]
+TIMEBASE=1/1000
+START=576050
+END=619120
+title=A safe, repeatable account workflow

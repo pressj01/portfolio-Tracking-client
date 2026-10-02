@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/11-11-yield-history-0.png'
+duration 19.073958
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/11-11-yield-history-1.png'
+duration 33.626042
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/11-11-yield-history-1.png'

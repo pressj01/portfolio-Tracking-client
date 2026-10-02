@@ -1,0 +1,17 @@
+Your portfolio should not make you piece together a dozen disconnected tools. Portfolio Tracker brings the day-to-day picture and the deeper research into one connected desktop workspace.
+
+Start with the dashboard. The private account total is blurred in this tour, while performance, income, risk, and portfolio health stay easy to scan. The Action Center then turns those signals into a practical list of items that may deserve attention.
+
+Move from the whole account to the holdings behind it. Review positions, lots, gains and losses, categories, targets, and the full story for an individual security. Income tools organize dividends by day, week, and month, with calendars, history, reinvestment analysis, and retirement cash-flow planning.
+
+When it is time to research, bring a stock, ETF, or closed-end fund into focus. Compare securities on the same timeline, examine distributions and NAV behavior, run valuation and technical screens, and use purpose-built buying checklists to keep the process consistent.
+
+Portfolio analytics adds another layer of context: allocation, diversification, sector exposure, correlations, risk and return, consolidation opportunities, and the current macro environment. Planning tools can model portfolios, test alternatives, set targets, and preview a rebalance before any decision is made.
+
+Options workflows live in the same application. Track open and closed trades, estimate probabilities, explore payoff and risk graphs, learn each strategy, and scan for setups across covered calls, cash-secured puts, spreads, condors, butterflies, and more.
+
+Tax tools bring annual reporting, gains and losses, blended yield, and tax-loss harvesting into view. Import and export workflows help keep the data portable, while Split View lets you compare two screens or accounts side by side.
+
+Finally, make the workspace your own. Reorder or hide navigation, choose a focused role preset, adjust settings, and open detailed help whenever you need it.
+
+One place to monitor, research, compare, plan, and learn. Portfolio Tracker. See the whole portfolio, and understand what is driving it.

@@ -54,3 +54,12 @@ installer/
 
 # Local dev server logs
 .codex-server-logs/
+
+# Generated marketing-video media. Keep reproducible scripts, scene plans,
+# narration text, captions, and timing metadata in Git; publish finished videos
+# separately as release assets.
+marketing_video/__pycache__/
+marketing_video/**/*.mp3
+marketing_video/**/*.mp4
+marketing_video/**/*.png
+marketing_video/**/*.jpg

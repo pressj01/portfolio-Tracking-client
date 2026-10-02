@@ -1,0 +1,99 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "total_duration": 619.1000000000001,
+  "scenes": [
+    {
+      "id": "00-welcome",
+      "audio": "00-welcome.mp3",
+      "audio_duration": 31.51,
+      "scene_duration": 32.760000000000005,
+      "start": 0.0
+    },
+    {
+      "id": "01-import-map",
+      "audio": "01-import-map.mp3",
+      "audio_duration": 43.63,
+      "scene_duration": 44.88,
+      "start": 32.760000000000005
+    },
+    {
+      "id": "02-schwab-positions",
+      "audio": "02-schwab-positions.mp3",
+      "audio_duration": 40.56,
+      "scene_duration": 41.81,
+      "start": 77.64000000000001
+    },
+    {
+      "id": "03-schwab-all-accounts",
+      "audio": "03-schwab-all-accounts.mp3",
+      "audio_duration": 46.18,
+      "scene_duration": 47.43,
+      "start": 119.45000000000002
+    },
+    {
+      "id": "04-schwab-transactions",
+      "audio": "04-schwab-transactions.mp3",
+      "audio_duration": 49.32,
+      "scene_duration": 50.57,
+      "start": 166.88000000000002
+    },
+    {
+      "id": "05-other-brokers",
+      "audio": "05-other-brokers.mp3",
+      "audio_duration": 52.32,
+      "scene_duration": 53.57,
+      "start": 217.45000000000002
+    },
+    {
+      "id": "06-generic-positions",
+      "audio": "06-generic-positions.mp3",
+      "audio_duration": 46.92,
+      "scene_duration": 48.17,
+      "start": 271.02000000000004
+    },
+    {
+      "id": "07-generic-activity",
+      "audio": "07-generic-activity.mp3",
+      "audio_duration": 50.83,
+      "scene_duration": 52.08,
+      "start": 319.19000000000005
+    },
+    {
+      "id": "08-portfolio-overview",
+      "audio": "08-portfolio-overview.mp3",
+      "audio_duration": 43.08,
+      "scene_duration": 44.33,
+      "start": 371.27000000000004
+    },
+    {
+      "id": "09-portfolio-controls",
+      "audio": "09-portfolio-controls.mp3",
+      "audio_duration": 54.05,
+      "scene_duration": 55.3,
+      "start": 415.6
+    },
+    {
+      "id": "10-owner",
+      "audio": "10-owner.mp3",
+      "audio_duration": 48.26,
+      "scene_duration": 49.51,
+      "start": 470.90000000000003
+    },
+    {
+      "id": "11-aggregates",
+      "audio": "11-aggregates.mp3",
+      "audio_duration": 54.38,
+      "scene_duration": 55.63,
+      "start": 520.4100000000001
+    },
+    {
+      "id": "12-finish",
+      "audio": "12-finish.mp3",
+      "audio_duration": 41.81,
+      "scene_duration": 43.06,
+      "start": 576.0400000000001
+    }
+  ]
+}

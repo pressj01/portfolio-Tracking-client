@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/12-12-risk-0.png'
+duration 53.760000
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/12-12-risk-0.png'

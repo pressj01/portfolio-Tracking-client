@@ -1,0 +1,601 @@
+WEBVTT
+
+1
+00:00:00.500 --> 00:00:03.262
+Welcome to the Portfolio Tracker dashboard.
+
+2
+00:00:03.262 --> 00:00:12.929
+This is the day-to-day command center for the account: performance, income, risk, allocation, upcoming payments, and holding-level detail on one page.
+
+3
+00:00:12.929 --> 00:00:28.120
+In this walkthrough, we will examine the entire dashboard, explain what every group of boxes is showing, and work through the chart controls, date ranges, calendar, category drilldowns, and all four table views.
+
+4
+00:00:29.320 --> 00:00:36.022
+At the top, the page identifies the active account and the number of holdings included.
+
+5
+00:00:36.022 --> 00:00:41.830
+Portfolio Value is the full account today: open holdings plus any idle cash.
+
+6
+00:00:41.830 --> 00:00:50.320
+Account Change is the move from the previous market close to the latest observation, with both dollars and percent.
+
+7
+00:00:50.320 --> 00:01:01.936
+Tracker Price Return measures price performance for every position held at any time in the selected range, including positions that were completely sold during that window.
+
+8
+00:01:01.936 --> 00:01:07.298
+Open Lots Price Return narrows the calculation to positions still owned now.
+
+9
+00:01:07.298 --> 00:01:12.660
+Open Lots Total Return uses that same open-position scope, then adds distributions.
+
+10
+00:01:12.660 --> 00:01:19.362
+Tracker Total Return adds distributions to the broader tracker history, including qualifying fully closed positions.
+
+11
+00:01:19.362 --> 00:01:25.170
+The dates under each return box show the exact data window actually used.
+
+12
+00:01:26.370 --> 00:01:33.832
+Above the date controls, compact warnings surface fund-closure risk and any Action Center items that need review.
+
+13
+00:01:33.832 --> 00:01:43.927
+The Shared Performance Date Range then controls performance throughout the dashboard and stays synchronized with Growth, Total Return, Gains and Losses, and Holdings.
+
+14
+00:01:43.927 --> 00:01:47.877
+One Day means the move since the previous close.
+
+15
+00:01:47.877 --> 00:01:51.389
+Seven Days goes back exactly seven calendar days.
+
+16
+00:01:51.389 --> 00:01:57.534
+One, Three, and Six Months use the same calendar day in the earlier month.
+
+17
+00:01:57.534 --> 00:02:03.240
+Year to Date starts from the final close on or before January first.
+
+18
+00:02:03.240 --> 00:02:06.751
+One Year and Five Years use calendar-year lookbacks.
+
+19
+00:02:06.751 --> 00:02:12.896
+All begins with the portfolio's first recorded trade and runs a time-weighted tracker replay.
+
+20
+00:02:12.896 --> 00:02:19.919
+Life asks a different question: current value minus cost basis for shares still held, matching Holdings.
+
+21
+00:02:19.919 --> 00:02:24.308
+Custom uses the inclusive start and end dates you enter.
+
+22
+00:02:24.308 --> 00:02:31.770
+Except for Life, each range ends at today's live quote when available, otherwise the most recent close.
+
+23
+00:02:32.970 --> 00:02:40.051
+The NAV erosion row asks whether portfolio income has been supported by underlying value.
+
+24
+00:02:40.051 --> 00:02:50.166
+Overall Verdict combines the raw NAV decline, the payout gap, benchmark-gated coverage, and relative drag into a historical risk score.
+
+25
+00:02:50.166 --> 00:02:56.741
+The adjacent coverage verdict translates the benchmark-gated result into Low, Moderate, or High.
+
+26
+00:02:56.741 --> 00:03:02.304
+Yield-Funding Coverage divides qualifying price-loss dollars by distributions; lower is better.
+
+27
+00:03:02.304 --> 00:03:09.384
+Raw NAV Erosion, labeled e, ignores the benchmark and shows the direct principal change.
+
+28
+00:03:09.384 --> 00:03:16.971
+Positive e means NAV fell, zero means it was flat, and negative means NAV rose.
+
+29
+00:03:16.971 --> 00:03:22.028
+Distribution Rate, d, is cash distributions divided by starting NAV.
+
+30
+00:03:22.028 --> 00:03:27.086
+Accounting Total Return, r, is the NAV change plus distributions.
+
+31
+00:03:27.086 --> 00:03:31.638
+These three reconcile through e equals d minus r.
+
+32
+00:03:31.638 --> 00:03:43.270
+The expandable guide immediately below explains the symbols, colors, benchmark gate, and cases where a zero coverage value can still carry a warning.
+
+33
+00:03:44.470 --> 00:03:49.392
+The next strip grades the portfolio over the selected market window.
+
+34
+00:03:49.392 --> 00:03:52.972
+Portfolio Grade is the composite letter and score.
+
+35
+00:03:52.972 --> 00:04:03.264
+Portfolio Beta estimates sensitivity to the selected benchmark; switch between the S and P 500 and Nasdaq to see which comparison is useful.
+
+36
+00:04:03.264 --> 00:04:12.213
+A beta of one moves roughly with the benchmark, below one is less sensitive, and above one is more sensitive.
+
+37
+00:04:12.213 --> 00:04:17.583
+The dollar line estimates the account impact of a one-percent benchmark move.
+
+38
+00:04:17.583 --> 00:04:26.085
+When sufficient transaction and daily-value history exists, Account Alpha shows the annualized return beyond what that beta would predict.
+
+39
+00:04:26.085 --> 00:04:32.349
+Ulcer Index focuses on the depth and duration of drawdowns, so lower is better.
+
+40
+00:04:32.349 --> 00:04:35.482
+Calmar compares annualized return with maximum drawdown.
+
+41
+00:04:35.482 --> 00:04:39.956
+Omega compares gains above the threshold with losses below it.
+
+42
+00:04:39.956 --> 00:04:45.773
+Sortino penalizes downside volatility, while Sharpe measures return per unit of total volatility.
+
+43
+00:04:45.773 --> 00:04:58.750
+One Day and Seven Days can be too short for meaningful annualized ratios, and Life produces no grade because cost-basis gain or loss is not a daily price series.
+
+44
+00:04:59.950 --> 00:05:03.941
+The remaining boxes summarize income and cash-flow behavior.
+
+45
+00:05:03.941 --> 00:05:08.930
+Lifetime Income is all supported distributions recorded for the account.
+
+46
+00:05:08.930 --> 00:05:15.915
+Year-to-Date Dividends and the named current-month Income box are actual payments inside those periods.
+
+47
+00:05:15.915 --> 00:05:26.392
+Estimated Monthly Income is the forward annual estimate divided by twelve, and Estimated Annual Income is the full next-twelve-month run rate.
+
+48
+00:05:26.392 --> 00:05:36.371
+Estimated Monthly Reinvested, Estimated Monthly Not Reinvested, and Estimated Percent Reinvested split that forward run rate according to DRIP settings.
+
+49
+00:05:36.371 --> 00:05:44.852
+The three current-month reinvestment boxes perform the same split using payments actually recorded so far this month.
+
+50
+00:05:44.852 --> 00:05:56.826
+Portfolio IRR is money-weighted, so it reflects the timing of deposits, withdrawals, and cash flows; Manage Exclusions can remove selected holdings from that calculation.
+
+51
+00:05:56.826 --> 00:06:01.815
+Average Yield on Cost compares annual income with purchase cost.
+
+52
+00:06:01.815 --> 00:06:05.806
+Current Yield compares forward income with today's value.
+
+53
+00:06:05.806 --> 00:06:13.290
+The S and P 500 box supplies current index level, daily move, and year-to-date context.
+
+54
+00:06:14.490 --> 00:06:20.394
+Portfolio Value Over Time turns recorded account snapshots into an equity curve.
+
+55
+00:06:20.394 --> 00:06:30.234
+High, Low, and Current callouts identify the important visible points, and normal chart zooming can narrow the period under inspection.
+
+56
+00:06:30.234 --> 00:06:33.187
+Daily shows every recorded trading-day value.
+
+57
+00:06:33.187 --> 00:06:45.979
+Weekly keeps the last recorded value in each calendar week, and Monthly keeps the last value in each month, reducing noise without changing the underlying history.
+
+58
+00:06:45.979 --> 00:06:50.899
+Price Return plots recorded portfolio value without adding dividend payments.
+
+59
+00:06:50.899 --> 00:07:03.199
+Total Return adjusts earlier points for later deposits and withdrawals and includes distributions, so the rise toward today represents investment gain rather than added capital.
+
+60
+00:07:03.199 --> 00:07:09.104
+Record NAV refreshes prices and dividends before saving the current account snapshot.
+
+61
+00:07:09.104 --> 00:07:14.024
+Backfill History fills missing transaction-supported dates without changing recorded days.
+
+62
+00:07:14.024 --> 00:07:20.420
+Repair Chart rebuilds previously backfilled points while preserving official snapshots and today's value.
+
+63
+00:07:21.620 --> 00:07:25.671
+The Grade and Exposure Guide is the dashboard's built-in legend.
+
+64
+00:07:25.671 --> 00:07:32.558
+It separates the market windows that can produce a grade from very short ranges and from Life.
+
+65
+00:07:32.558 --> 00:07:39.040
+It also explains the beta ranges used for conservative, balanced, aggressive, and very aggressive income portfolios.
+
+66
+00:07:39.040 --> 00:07:47.952
+The table lists each graded metric, what it measures, the thresholds for letter grades, and its weight in the composite Portfolio Grade.
+
+67
+00:07:47.952 --> 00:07:58.890
+Use this section whenever a letter changes after switching the date range: the grade is always describing that selected stretch, not a permanent label for the account.
+
+68
+00:08:00.090 --> 00:08:03.582
+Understanding Account Alpha explains the cash-flow-aware account calculation.
+
+69
+00:08:03.582 --> 00:08:13.621
+The app rebuilds daily account return, removes deposits, withdrawals, and transfers, and compares the result with the benchmark the account tracks most closely.
+
+70
+00:08:13.621 --> 00:08:26.279
+Positive alpha means the account earned more than its beta alone predicts; near zero means exposure explains most of the result; and negative alpha means it lagged that expectation.
+
+71
+00:08:26.279 --> 00:08:29.334
+The guide also calls out the limitations.
+
+72
+00:08:29.334 --> 00:08:33.699
+Short windows annualize a small sample and can swing sharply.
+
+73
+00:08:33.699 --> 00:08:41.120
+The alpha card can use fewer dates than the selected range when imported transaction history begins later.
+
+74
+00:08:41.120 --> 00:08:49.413
+Account Alpha is not the Alpha column for an individual holding, and it is not part of Portfolio Grade.
+
+75
+00:08:49.413 --> 00:08:55.960
+If the card is unavailable, this section states which history or coverage requirement is missing.
+
+76
+00:08:57.160 --> 00:09:02.555
+The weekly calendar shows expected dividend pay dates from Monday through Sunday.
+
+77
+00:09:02.555 --> 00:09:10.197
+The heading gives the exact calendar-week range, and Estimated Total adds every scheduled payment in that week.
+
+78
+00:09:10.197 --> 00:09:18.289
+Each day displays its own total, followed by the paying holdings, expected dollar amount, and available yield context.
+
+79
+00:09:18.289 --> 00:09:23.234
+Today's column is highlighted so the schedule is easy to orient.
+
+80
+00:09:23.234 --> 00:09:28.629
+Empty days remain visible, making the timing and concentration of income obvious.
+
+81
+00:09:28.629 --> 00:09:37.620
+Open Month Calendar moves to the full dividend calendar when you need a wider planning horizon or more payment detail.
+
+82
+00:09:38.820 --> 00:09:43.691
+The Portfolio section combines an allocation donut with a matching table.
+
+83
+00:09:43.691 --> 00:09:52.991
+At the All Categories level, each color represents one category and the slice size is its share of current holdings value.
+
+84
+00:09:52.991 --> 00:09:57.419
+When category targets exist, the chart also visualizes under-target space.
+
+85
+00:09:57.419 --> 00:10:02.290
+The table pairs each category's current Value with the amount Invested.
+
+86
+00:10:02.290 --> 00:10:10.261
+Gain can show price return only, or total return with lifetime dividends and realized gains from trimmed shares.
+
+87
+00:10:10.261 --> 00:10:12.918
+Target is the desired portfolio weight.
+
+88
+00:10:12.918 --> 00:10:16.461
+Allocation is the current share of holdings value.
+
+89
+00:10:16.461 --> 00:10:21.775
+Diff is Allocation minus Target: positive is overweight and negative is underweight.
+
+90
+00:10:21.775 --> 00:10:28.860
+The item count under each category name shows how many holdings are contributing to that row.
+
+91
+00:10:30.060 --> 00:10:34.693
+Choose a Category to focus the Portfolio chart and table.
+
+92
+00:10:34.693 --> 00:10:42.570
+If that category contains sub-categories, the top-level rows become those sub-categories, plus an Unassigned bucket when needed.
+
+93
+00:10:42.570 --> 00:10:49.983
+The label beside the filter shows how much of the entire account the selected parent represents.
+
+94
+00:10:49.983 --> 00:10:53.690
+Selecting a Sub-category drills one level deeper again.
+
+95
+00:10:53.690 --> 00:10:56.933
+Clear returns directly to the all-category view.
+
+96
+00:10:56.933 --> 00:11:06.200
+Because sub-categories and individual holdings do not have category-level target weights, Target and Diff appear only where they are meaningful.
+
+97
+00:11:07.400 --> 00:11:15.637
+At the deepest level, the donut slices and rows represent individual holdings inside the selected category or sub-category.
+
+98
+00:11:15.637 --> 00:11:19.298
+Value, Invested, and Gain now describe each position.
+
+99
+00:11:19.298 --> 00:11:28.908
+Allocation remains the holding's percentage of the full portfolio, while the smaller second line shows its percentage of the selected parent.
+
+100
+00:11:28.908 --> 00:11:38.975
+Switch Gain from Price Return to Total Return to add recorded distributions and realized trims; the row then identifies those included components.
+
+101
+00:11:38.975 --> 00:11:47.670
+This view is useful for spotting which holdings are driving a category's size or result without leaving the dashboard.
+
+102
+00:11:48.870 --> 00:11:52.610
+The final section is a detailed holdings overview.
+
+103
+00:11:52.610 --> 00:12:00.558
+Value totals the open holdings currently visible and shows their cost basis; cash is not included here.
+
+104
+00:12:00.558 --> 00:12:10.376
+Total Profit combines open-position price gain or loss, supported lifetime dividends, and realized trims, with the percentage measured against invested basis.
+
+105
+00:12:10.376 --> 00:12:19.259
+Passive Income is the estimated next-twelve-month dividends divided by current holdings value, with the annual dollar estimate beneath it.
+
+106
+00:12:19.259 --> 00:12:22.999
+Category and Sub Category filter the visible rows.
+
+107
+00:12:22.999 --> 00:12:28.142
+Show Sold adds fully closed positions where a view supports them.
+
+108
+00:12:28.142 --> 00:12:34.687
+Search matches ticker, security name, or category, and the clear control resets the filters.
+
+109
+00:12:34.687 --> 00:12:39.362
+Field Help expands definitions for every summary card and column.
+
+110
+00:12:39.362 --> 00:12:45.440
+Edit on Holdings opens the page used to change lots and DRIP settings.
+
+111
+00:12:46.640 --> 00:12:49.455
+Common is the broadest table view.
+
+112
+00:12:49.455 --> 00:13:09.631
+It brings together the holding name and ticker, current grade, shares, average cost, current price, category and sub-category, cost basis, current value, forward dividends, current yield, estimated yield, five-year dividend growth, Paid for Itself, Total Profit, portfolio share, and the NAV testing control.
+
+113
+00:13:09.631 --> 00:13:20.891
+Paid for Itself is lifetime distributions received as a percentage of original cost; one hundred percent means distributions have returned the initial amount invested.
+
+114
+00:13:20.891 --> 00:13:27.460
+Use Common when you want a balanced snapshot without choosing a specialized analysis lens.
+
+115
+00:13:28.660 --> 00:13:32.520
+General concentrates on position structure and market behavior.
+
+116
+00:13:32.520 --> 00:13:35.415
+Status distinguishes open and sold rows.
+
+117
+00:13:35.415 --> 00:13:41.205
+Shares, category, sub-category, and Share in Portfolio describe position size and placement.
+
+118
+00:13:41.205 --> 00:13:50.855
+Average Cost, Current Price, Cost Basis, and Current Value show what was paid and what the position is worth now.
+
+119
+00:13:50.855 --> 00:13:59.058
+Unrealized Gain and Unrealized Percent isolate price change on shares still held, excluding dividends and realized trims.
+
+120
+00:13:59.058 --> 00:14:05.330
+Beta and Alpha follow the dashboard's shared performance window for the individual security.
+
+121
+00:14:05.330 --> 00:14:14.980
+The NAV column lets you keep automatic testing, force a test, skip it, or assign a more appropriate benchmark symbol.
+
+122
+00:14:16.180 --> 00:14:19.711
+Dividends turns the table toward income planning.
+
+123
+00:14:19.711 --> 00:14:29.801
+It retains the holding, shares, category, sub-category, and current value, then adds estimated next-twelve-month Dividends and annualized dividend per share.
+
+124
+00:14:29.801 --> 00:14:35.351
+Dividend Yield shows current yield with yield on cost beneath it.
+
+125
+00:14:35.351 --> 00:14:40.396
+Estimated Yield uses the forward income estimate and current value.
+
+126
+00:14:40.396 --> 00:14:45.945
+Dividend Growth reports the five-year rate when source data is available.
+
+127
+00:14:45.945 --> 00:14:51.494
+Paid for Itself tracks lifetime recovery of original cost through distributions.
+
+128
+00:14:51.494 --> 00:15:05.620
+Next Payment, Ex-Dividend, and Frequency show when the holding is expected to pay, when eligibility is determined, and whether the cadence is weekly, monthly, quarterly, semiannual, or annual.
+
+129
+00:15:06.820 --> 00:15:10.260
+Returns focuses on the pieces of profit.
+
+130
+00:15:10.260 --> 00:15:14.683
+Cost Basis and Current Value frame the open position.
+
+131
+00:15:14.683 --> 00:15:17.632
+Dividends Received is recorded lifetime cash.
+
+132
+00:15:17.632 --> 00:15:22.055
+Paid for Itself expresses those distributions against original cost.
+
+133
+00:15:22.055 --> 00:15:30.901
+Capital Gain is current value minus cost basis for open holdings, or proceeds minus cost for sold rows.
+
+134
+00:15:30.901 --> 00:15:37.782
+Realized P and L is profit or loss already locked in from shares sold.
+
+135
+00:15:37.782 --> 00:15:42.205
+Total Profit combines capital result, distributions, and realized trims.
+
+136
+00:15:42.205 --> 00:15:50.068
+Share in Portfolio shows current weight, and NAV keeps the income-sustainability test beside the return result.
+
+137
+00:15:50.068 --> 00:15:57.440
+This is the clearest view for separating price performance from cash income and completed sales.
+
+138
+00:15:58.640 --> 00:16:01.915
+Every holdings view uses the same table tools.
+
+139
+00:16:01.915 --> 00:16:06.827
+Click a column header to sort; click it again to reverse direction.
+
+140
+00:16:06.827 --> 00:16:09.692
+Drag a header to move that column.
+
+141
+00:16:09.692 --> 00:16:15.013
+Open Columns to reorder fields or hide the ones you do not need.
+
+142
+00:16:15.013 --> 00:16:24.428
+The first column stays frozen for orientation when the table scrolls horizontally, and each of the four views remembers its own column layout.
+
+143
+00:16:24.428 --> 00:16:34.661
+The footer totals the fields that can be meaningfully summed, such as shares, cost basis, current value, dividends, unrealized result, total profit, and dividends received.
+
+144
+00:16:34.661 --> 00:16:41.620
+Filters also recalculate the summary cards and footer, so every number describes the rows currently on screen.
+
+145
+00:16:42.820 --> 00:16:56.997
+That is the complete Portfolio Dashboard: headline account results, shared time frames, NAV and risk context, income tracking, account history, the weekly payment calendar, allocation drilldowns, and four customizable holding tables.
+
+146
+00:16:56.997 --> 00:17:06.601
+Use the page from top to bottom for a full review, or jump directly to the section that answers today's question.
+
+147
+00:17:06.601 --> 00:17:07.515
+Portfolio Tracker.
+
+148
+00:17:07.515 --> 00:17:12.089
+See the whole portfolio, and understand what is driving it.
+
+149
+00:17:12.089 --> 00:17:13.918
+For informational purposes only.
+
+150
+00:17:13.918 --> 00:17:15.290
+Not financial advice.

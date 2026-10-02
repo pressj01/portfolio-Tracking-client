@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/14-14-basic-position-0.png'
+duration 56.110000
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/14-14-basic-position-0.png'

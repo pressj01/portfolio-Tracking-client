@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/13-13-edit-choice-0.png'
+duration 5.883875
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/13-13-edit-choice-1.png'
+duration 45.016125
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/13-13-edit-choice-1.png'

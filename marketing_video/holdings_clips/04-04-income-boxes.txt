@@ -1,0 +1,9 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/04-04-income-boxes-0.png'
+duration 17.967208
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/04-04-income-boxes-1.png'
+duration 7.552083
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/04-04-income-boxes-2.png'
+duration 6.276042
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/04-04-income-boxes-3.png'
+duration 22.084667
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/04-04-income-boxes-3.png'

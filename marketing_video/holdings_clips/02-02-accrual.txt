@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/02-02-accrual-0.png'
+duration 11.365625
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/02-02-accrual-1.png'
+duration 32.314375
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/02-02-accrual-1.png'

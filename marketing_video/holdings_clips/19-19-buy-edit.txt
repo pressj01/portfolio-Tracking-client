@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/19-19-buy-edit-0.png'
+duration 27.863041
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/19-19-buy-edit-1.png'
+duration 23.686959
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/19-19-buy-edit-1.png'

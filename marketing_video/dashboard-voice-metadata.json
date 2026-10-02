@@ -1,0 +1,130 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "lead_seconds": 0.5,
+  "tail_seconds": 0.7,
+  "total_duration": 1035.99,
+  "scenes": [
+    {
+      "id": "00-title",
+      "audio": "00-title.mp3",
+      "audio_duration": 27.62,
+      "scene_duration": 28.82
+    },
+    {
+      "id": "01-headline",
+      "audio": "01-headline.mp3",
+      "audio_duration": 55.85,
+      "scene_duration": 57.05
+    },
+    {
+      "id": "02-timeframes",
+      "audio": "02-timeframes.mp3",
+      "audio_duration": 65.4,
+      "scene_duration": 66.6
+    },
+    {
+      "id": "03-nav-risk",
+      "audio": "03-nav-risk.mp3",
+      "audio_duration": 70.3,
+      "scene_duration": 71.5
+    },
+    {
+      "id": "04-grade-risk",
+      "audio": "04-grade-risk.mp3",
+      "audio_duration": 74.28,
+      "scene_duration": 75.48
+    },
+    {
+      "id": "05-income-boxes",
+      "audio": "05-income-boxes.mp3",
+      "audio_duration": 73.34,
+      "scene_duration": 74.54
+    },
+    {
+      "id": "06-value-chart",
+      "audio": "06-value-chart.mp3",
+      "audio_duration": 65.93,
+      "scene_duration": 67.13
+    },
+    {
+      "id": "07-grade-guide",
+      "audio": "07-grade-guide.mp3",
+      "audio_duration": 37.27,
+      "scene_duration": 38.47
+    },
+    {
+      "id": "08-alpha-guide",
+      "audio": "08-alpha-guide.mp3",
+      "audio_duration": 55.87,
+      "scene_duration": 57.07
+    },
+    {
+      "id": "09-week-calendar",
+      "audio": "09-week-calendar.mp3",
+      "audio_duration": 40.46,
+      "scene_duration": 41.66
+    },
+    {
+      "id": "10-allocation",
+      "audio": "10-allocation.mp3",
+      "audio_duration": 50.04,
+      "scene_duration": 51.24
+    },
+    {
+      "id": "11-category-filter",
+      "audio": "11-category-filter.mp3",
+      "audio_duration": 36.14,
+      "scene_duration": 37.34
+    },
+    {
+      "id": "12-holding-drilldown",
+      "audio": "12-holding-drilldown.mp3",
+      "audio_duration": 40.27,
+      "scene_duration": 41.47
+    },
+    {
+      "id": "13-holdings-controls",
+      "audio": "13-holdings-controls.mp3",
+      "audio_duration": 56.57,
+      "scene_duration": 57.77
+    },
+    {
+      "id": "14-common-view",
+      "audio": "14-common-view.mp3",
+      "audio_duration": 40.82,
+      "scene_duration": 42.02
+    },
+    {
+      "id": "15-general-view",
+      "audio": "15-general-view.mp3",
+      "audio_duration": 46.32,
+      "scene_duration": 47.52
+    },
+    {
+      "id": "16-dividend-view",
+      "audio": "16-dividend-view.mp3",
+      "audio_duration": 49.44,
+      "scene_duration": 50.64
+    },
+    {
+      "id": "17-returns-view",
+      "audio": "17-returns-view.mp3",
+      "audio_duration": 50.62,
+      "scene_duration": 51.82
+    },
+    {
+      "id": "18-table-tools",
+      "audio": "18-table-tools.mp3",
+      "audio_duration": 42.98,
+      "scene_duration": 44.18
+    },
+    {
+      "id": "19-outro",
+      "audio": "19-outro.mp3",
+      "audio_duration": 32.47,
+      "scene_duration": 33.67
+    }
+  ]
+}

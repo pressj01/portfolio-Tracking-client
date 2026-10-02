@@ -1,0 +1,18 @@
+{
+  "video": "C:\\Users\\Press\\Portfolio_Tracking_client\\marketing_video\\portfolio-tracker-holdings-guide.mp4",
+  "bytes": 57643362,
+  "chapters": 27,
+  "dimensions": [
+    1920,
+    1080
+  ],
+  "video_codec": "h264",
+  "audio_codec": "aac",
+  "captions": "embedded English + VTT",
+  "full_decode": "passed",
+  "mean_volume_db": -24.8,
+  "peak_volume_db": -5.3,
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz"
+}

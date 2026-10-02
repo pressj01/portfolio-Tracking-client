@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/21-21-order-0.png'
+duration 32.277083
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/21-21-order-1.png'
+duration 16.102917
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/21-21-order-1.png'

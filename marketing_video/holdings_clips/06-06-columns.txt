@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/06-06-columns-0.png'
+duration 7.016666
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/06-06-columns-1.png'
+duration 36.253334
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/06-06-columns-1.png'

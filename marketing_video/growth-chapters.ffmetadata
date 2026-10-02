@@ -1,0 +1,53 @@
+;FFMETADATA1
+title=Portfolio Tracker - Growth Guide
+artist=Portfolio Tracker
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=33970
+title=Growth: three complementary views
+[CHAPTER]
+TIMEBASE=1/1000
+START=33970
+END=73200
+title=One shared range across all three tabs
+[CHAPTER]
+TIMEBASE=1/1000
+START=73200
+END=111530
+title=Dollars: value and cash-flow-adjusted return
+[CHAPTER]
+TIMEBASE=1/1000
+START=111530
+END=153870
+title=Dollars: follow value, price movement, and distributions
+[CHAPTER]
+TIMEBASE=1/1000
+START=153870
+END=200310
+title=Vs market: compare the same holdings fairly
+[CHAPTER]
+TIMEBASE=1/1000
+START=200310
+END=241810
+title=Vs market: price and total-return indexes
+[CHAPTER]
+TIMEBASE=1/1000
+START=241810
+END=284610
+title=Vs market: find the holdings driving the result
+[CHAPTER]
+TIMEBASE=1/1000
+START=284610
+END=329250
+title=Lots: period performance and lifetime accounting
+[CHAPTER]
+TIMEBASE=1/1000
+START=329250
+END=376020
+title=Lots: unrealized, realized, and combined results
+[CHAPTER]
+TIMEBASE=1/1000
+START=376020
+END=410050
+title=A fuller view of growth

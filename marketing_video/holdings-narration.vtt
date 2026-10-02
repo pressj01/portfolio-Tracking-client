@@ -1,0 +1,940 @@
+WEBVTT
+
+00:00:00.617 --> 00:00:04.589
+Welcome to Manage Holdings in Portfolio Tracker This is where
+
+00:00:04.602 --> 00:00:10.005
+an account’s positions dividend settings income estimates and transaction history
+
+00:00:10.018 --> 00:00:14.315
+come together In this detailed walkthrough we will explain every
+
+00:00:14.328 --> 00:00:18.677
+summary box work across the complete holdings table and show
+
+00:00:18.677 --> 00:00:21.451
+how the different editing controls are used You will see
+
+00:00:21.451 --> 00:00:25.500
+how to add a position correct its information maintain purchase
+
+00:00:25.500 --> 00:00:30.083
+and sale lots record dividends and check reinvestment across accounts
+
+00:00:30.513 --> 00:00:32.831
+The goal is a clear view of what you own
+
+00:00:33.312 --> 00:00:36.424
+what your records say and which control to use when
+
+00:00:36.424 --> 00:00:37.505
+something needs attention
+
+00:00:39.224 --> 00:00:42.141
+Start with the account selector at the top right It
+
+00:00:42.141 --> 00:00:46.255
+determines which portfolio you are viewing The Basis selector switches
+
+00:00:46.255 --> 00:00:51.060
+between original cost and broker adjusted cost where the application
+
+00:00:51.216 --> 00:00:55.461
+has that information Keep the basis consistent when comparing cost
+
+00:00:55.539 --> 00:01:00.084
+and gain or loss across pages The toolbar provides Import
+
+00:01:00.097 --> 00:01:05.552
+Holdings Transaction History Deposits and Withdrawals the dividend source filter
+
+00:01:05.787 --> 00:01:09.797
+price and dividend refresh dividend repair and the two ways
+
+00:01:09.797 --> 00:01:12.883
+to add a holding In an aggregate view the page
+
+00:01:12.896 --> 00:01:16.880
+identifies how holding edits are routed For a correction to
+
+00:01:16.880 --> 00:01:21.099
+one specific account select that account first or use the
+
+00:01:21.099 --> 00:01:24.250
+expanded transaction ledger’s explicit account selector
+
+00:01:25.954 --> 00:01:31.345
+The Post-Refresh Accrual Estimate panel describes income estimated since the
+
+00:01:31.345 --> 00:01:35.134
+most recent refresh Each account card shows an account name
+
+00:01:35.472 --> 00:01:39.066
+and an accrual amount When payment details are available the
+
+00:01:39.066 --> 00:01:43.389
+card lists the ticker expected payment date and amount The
+
+00:01:43.389 --> 00:01:46.371
+line below the total may show a count of payments
+
+00:01:46.501 --> 00:01:50.147
+since refresh or an estimate over an elapsed number of
+
+00:01:50.147 --> 00:01:54.287
+days A dash and no prior refresh mean there is
+
+00:01:54.301 --> 00:01:58.702
+no refresh baseline yet Use this panel to identify income
+
+00:01:58.897 --> 00:02:02.569
+that may need review It is an accrual view and
+
+00:02:02.569 --> 00:02:06.189
+you should compare it with recorded dividend history when confirming
+
+00:02:06.202 --> 00:02:07.907
+what actually arrived in the account
+
+00:02:09.634 --> 00:02:12.681
+Ticker DRIP Coverage counts the ticker names in the current
+
+00:02:12.681 --> 00:02:16.158
+dividend source view The large number is the total count
+
+00:02:16.600 --> 00:02:21.236
+The green badge shows how many have dividend reinvestment enabled
+
+00:02:21.600 --> 00:02:25.142
+and the percentage they represent The amber badge shows how
+
+00:02:25.142 --> 00:02:28.853
+many do not Every ticker counts once regardless of its
+
+00:02:28.853 --> 00:02:32.915
+value share count or dividend rate This makes the box
+
+00:02:32.928 --> 00:02:37.447
+useful for checking how widely reinvestment is enabled across the
+
+00:02:37.460 --> 00:02:41.457
+portfolio A small position has the same weight in this
+
+00:02:41.457 --> 00:02:45.428
+count as a large position The count follows the holding’s
+
+00:02:45.441 --> 00:02:49.504
+DRIP setting rather than proving that every historical dividend has
+
+00:02:49.517 --> 00:02:51.066
+already purchased shares
+
+00:02:52.764 --> 00:02:57.816
+The other four boxes describe estimated income Estimated Monthly Income
+
+00:02:58.012 --> 00:03:02.347
+is the portfolio’s annual dividend estimate divided by twelve It
+
+00:03:02.348 --> 00:03:06.540
+is a monthly average so quarterly or uneven payments do
+
+00:03:06.540 --> 00:03:11.788
+not necessarily arrive in equal monthly amounts Mo dollars Reinvested
+
+00:03:12.113 --> 00:03:16.957
+is the estimated monthly income allocated to holdings with reinvestment
+
+00:03:16.970 --> 00:03:22.256
+enabled Mo dollars Not Reinvested is the estimated monthly income
+
+00:03:22.413 --> 00:03:28.467
+allocated to cash Percent Reinvested divides estimated reinvested income by
+
+00:03:28.571 --> 00:03:33.402
+total estimated monthly income These boxes are forward estimates based
+
+00:03:33.402 --> 00:03:37.347
+on the recorded dividend inputs and DRIP settings They help
+
+00:03:37.348 --> 00:03:41.071
+you see the balance between projected reinvestment and cash income
+
+00:03:41.566 --> 00:03:44.483
+they are not a statement of actual cash received this
+
+00:03:44.496 --> 00:03:44.952
+month
+
+00:03:46.631 --> 00:03:49.951
+Expand Why the DRIP Percentages Can Be Different for an
+
+00:03:49.964 --> 00:03:53.754
+explanation built into the screen Suppose two of four tickers
+
+00:03:53.754 --> 00:03:58.311
+have DRIP enabled The ticker coverage is fifty percent If
+
+00:03:58.311 --> 00:04:02.243
+those two tickers produce twenty dollars of the portfolio’s hundred
+
+00:04:02.243 --> 00:04:06.813
+dollars of estimated monthly income the income reinvested percentage is
+
+00:04:06.826 --> 00:04:11.384
+only twenty percent Both answers are correct One counts names
+
+00:04:11.644 --> 00:04:16.735
+the other counts dollars Share quantities dividend amounts and payment
+
+00:04:16.735 --> 00:04:21.514
+frequency affect the dollar calculation In a combined or Owner
+
+00:04:21.514 --> 00:04:24.951
+view the same ticker can reinvest in one account and
+
+00:04:24.964 --> 00:04:28.571
+take cash in another Review the account-level split when a
+
+00:04:28.571 --> 00:04:31.019
+headline percentage needs explanation
+
+00:04:32.737 --> 00:04:35.576
+The holdings table has a wide set of fields and
+
+00:04:35.589 --> 00:04:38.310
+Columns lets you choose the ones you need Open the
+
+00:04:38.310 --> 00:04:41.813
+control then search for a field or browse the list
+
+00:04:42.229 --> 00:04:46.084
+Each description explains what that column means Uncheck an optional
+
+00:04:46.084 --> 00:04:50.029
+column to hide it The ticker stays visible Use the
+
+00:04:50.042 --> 00:04:52.998
+up and down buttons drag a row in the menu
+
+00:04:53.505 --> 00:04:56.578
+or drag a table header to change the order Show
+
+00:04:56.578 --> 00:05:01.513
+all restores all fields Reset order and visibility restores the
+
+00:05:01.526 --> 00:05:05.367
+default arrangement On the table click a sortable header to
+
+00:05:05.380 --> 00:05:10.524
+change the sort direction Horizontal scrolling reveals fields farther across
+
+00:05:10.537 --> 00:05:14.287
+the table while header tooltips provide a quick definition
+
+00:05:16.007 --> 00:05:20.890
+The Shared Performance Date Range controls the period-dependent performance figures
+
+00:05:21.333 --> 00:05:24.783
+One day measures from the previous close seven days looks
+
+00:05:24.796 --> 00:05:29.757
+back seven calendar days The month and year presets choose
+
+00:05:29.861 --> 00:05:33.716
+calendar-based start dates and year to date starts at January
+
+00:05:33.716 --> 00:05:38.807
+first All begins with the portfolio’s own recorded history Custom
+
+00:05:38.807 --> 00:05:44.158
+exposes inclusive start and end dates Read the explanatory lines
+
+00:05:44.288 --> 00:05:48.051
+for the actual resolved window This control does not hide
+
+00:05:48.064 --> 00:05:52.700
+holdings or change the current shares value or cost basis
+
+00:05:53.104 --> 00:05:56.893
+The regular gain and loss columns follow the selected window
+
+00:05:57.309 --> 00:06:01.203
+Life is different it measures current value against the cost
+
+00:06:01.216 --> 00:06:04.796
+of shares still held The separate Life Gain and Loss
+
+00:06:04.809 --> 00:06:07.479
+columns retain that cost-basis meaning
+
+00:06:09.174 --> 00:06:12.625
+Begin at the left of the table Ticker and Description
+
+00:06:12.742 --> 00:06:17.560
+identify the security and Category is the classification assigned to
+
+00:06:17.560 --> 00:06:21.062
+the holding Percent Account shows its share of current holdings
+
+00:06:21.075 --> 00:06:25.528
+value Shares is the current quantity Purchased shows the original
+
+00:06:25.724 --> 00:06:30.385
+or earliest lot date Base separates originally purchased shares from
+
+00:06:30.385 --> 00:06:36.010
+DRIP Shares acquired through reinvestment Cash Reinvested records the cash
+
+00:06:36.023 --> 00:06:39.669
+used for those reinvestments Paid is the average cost per
+
+00:06:39.669 --> 00:06:43.588
+share Current is the market price Cost is the position’s
+
+00:06:43.601 --> 00:06:47.494
+recorded cost basis and Value is its current market value
+
+00:06:47.911 --> 00:06:53.172
+These fields answer different questions quantity purchase history cost and
+
+00:06:53.172 --> 00:06:57.065
+today’s valuation Click the ticker to open its research sheet
+
+00:06:57.508 --> 00:06:59.695
+or the triangle to inspect its ledger
+
+00:07:01.394 --> 00:07:05.144
+Gain and Loss dollars and percent follow the shared range
+
+00:07:05.561 --> 00:07:09.076
+Each row describes the ticker’s current lot in that window
+
+00:07:09.493 --> 00:07:14.649
+The portfolio total uses the broader tracker price-return calculation which
+
+00:07:14.662 --> 00:07:18.022
+can include positions held during the range and fully sold
+
+00:07:18.022 --> 00:07:21.602
+afterward That is why a selected-period total should not be
+
+00:07:21.602 --> 00:07:26.967
+interpreted as simply adding lifetime open-position gains Life Gain and
+
+00:07:26.980 --> 00:07:30.339
+Loss is current value minus the cost of the remaining
+
+00:07:30.352 --> 00:07:33.855
+shares and its percentage compares that difference with their cost
+
+00:07:34.272 --> 00:07:38.139
+Realized Gain and Loss is profit or loss from completed
+
+00:07:38.139 --> 00:07:43.464
+sales Keep price performance realized sales and dividends separate when
+
+00:07:43.465 --> 00:07:47.501
+explaining results The table’s labels and notes help you compare
+
+00:07:47.501 --> 00:07:49.962
+the same scope across the application
+
+00:07:51.641 --> 00:07:56.993
+Div dollars is the recent distribution per share Frequency identifies
+
+00:07:57.006 --> 00:08:03.907
+the payment cadence weekly monthly quarterly semiannual or annual Ex
+
+00:08:03.907 --> 00:08:08.126
+Dividend and Pay Date describe the distribution schedule a pay
+
+00:08:08.126 --> 00:08:12.175
+date marked as estimated comes from the projected schedule rather
+
+00:08:12.175 --> 00:08:15.691
+than a confirmed payment The DRIP checkbox records whether this
+
+00:08:15.704 --> 00:08:20.287
+holding reinvests Changing it updates the application’s setting it does
+
+00:08:20.287 --> 00:08:23.581
+not place a broker order Year dollars and Month dollars
+
+00:08:23.581 --> 00:08:28.529
+are annual and monthly income estimates DRIP dollars and Cash
+
+00:08:28.542 --> 00:08:33.555
+dollars split estimated monthly income according to the reinvestment setting
+
+00:08:33.959 --> 00:08:38.842
+Month Shares and Year Shares estimate shares purchasable by reinvesting
+
+00:08:38.972 --> 00:08:43.438
+at the current price Those are hypothetical quantities not completed
+
+00:08:43.438 --> 00:08:44.193
+purchases
+
+00:08:45.894 --> 00:08:49.709
+Yield on Cost compares estimated annual dividends with the recorded
+
+00:08:49.709 --> 00:08:54.175
+cost basis Current Yield compares that annual estimate with current
+
+00:08:54.188 --> 00:08:58.251
+market value They can differ because your purchase cost differs
+
+00:08:58.251 --> 00:09:01.389
+from today’s price The column named for the current month
+
+00:09:01.545 --> 00:09:06.129
+shows that month’s holding income figure Dividend Paid Year to
+
+00:09:06.259 --> 00:09:11.519
+Date Dividends and Total Dividends summarize the application’s dividend records
+
+00:09:11.936 --> 00:09:15.985
+Paid For Itself shows the fraction of original cost recovered
+
+00:09:16.272 --> 00:09:20.842
+through cumulative dividends one hundred percent means dividends equal that
+
+00:09:20.842 --> 00:09:25.438
+cost Dividend Source identifies where the actuals came from such
+
+00:09:25.438 --> 00:09:30.230
+as imported broker history a snapshot or Yahoo If DRIP
+
+00:09:30.464 --> 00:09:34.267
+is a hypothetical share calculation at current price rather than
+
+00:09:34.267 --> 00:09:36.910
+a record of actual reinvested shares
+
+00:09:38.594 --> 00:09:43.047
+Beta describes historical price sensitivity to the benchmark shown for
+
+00:09:43.047 --> 00:09:47.878
+that ticker Delta Up and Delta Down estimate sensitivity on
+
+00:09:47.891 --> 00:09:52.435
+benchmark up days and down days They are historical relationships
+
+00:09:52.826 --> 00:09:57.956
+not guaranteed future moves Return versus Yield compares total return
+
+00:09:57.956 --> 00:10:01.420
+with yield on a compatible time basis Its header button
+
+00:10:01.420 --> 00:10:05.951
+switches between Yield on Cost and Current Yield Good indicates
+
+00:10:05.951 --> 00:10:10.157
+return at least matches the yield comparison Poor indicates the
+
+00:10:10.235 --> 00:10:15.313
+income rate exceeds total return Close is the fund closure-risk
+
+00:10:15.313 --> 00:10:19.714
+field which concerns a fund issuer closing a small ETF
+
+00:10:20.131 --> 00:10:23.802
+Stocks are not rated there Grade is the composite assessment
+
+00:10:23.816 --> 00:10:27.006
+for the selected market window and is blank on Life
+
+00:10:27.435 --> 00:10:30.678
+Missing data can produce a dash instead of a rating
+
+00:10:32.341 --> 00:10:36.260
+At the far right each holding has Edit Transaction and
+
+00:10:36.260 --> 00:10:41.456
+Delete controls Edit opens the holding’s basic information dividend settings
+
+00:10:41.729 --> 00:10:47.185
+income fields and reinvestment information Transaction opens the purchase and
+
+00:10:47.185 --> 00:10:51.768
+sale ledger Use it for trade dates share quantities purchase
+
+00:10:51.846 --> 00:10:56.755
+or sale prices and fees Delete is for removing a
+
+00:10:56.755 --> 00:11:01.638
+holding from the selected portfolio and presents a confirmation Within
+
+00:11:01.638 --> 00:11:05.909
+an expanded ledger Delete acts on one event instead Read
+
+00:11:05.909 --> 00:11:09.411
+the confirmation to understand what will be removed As a
+
+00:11:09.411 --> 00:11:14.099
+routine workflow open Edit for a category or dividend correction
+
+00:11:14.594 --> 00:11:17.979
+and use Transaction when the broker’s trading history needs a
+
+00:11:17.979 --> 00:11:21.534
+correction Save only after checking the account and the record
+
+00:11:23.241 --> 00:11:27.890
+In the Edit dialog Basic Info contains Ticker Description and
+
+00:11:27.890 --> 00:11:33.215
+Category Description and Category make the holding easier to recognize
+
+00:11:33.215 --> 00:11:37.421
+and organize Changing the ticker is a rename saving can
+
+00:11:37.421 --> 00:11:43.970
+rename it across portfolios transactions dividends categories and ticker settings
+
+00:11:44.400 --> 00:11:48.749
+Use that for an actual symbol correction Position contains Shares
+
+00:11:48.970 --> 00:11:53.905
+Price Paid Current Price and Purchase Date When transactions exist
+
+00:11:54.153 --> 00:11:58.619
+the dialog explains that Shares Price Paid and Purchase Date
+
+00:11:58.684 --> 00:12:03.384
+are managed by transactions and disables those fields Correct the
+
+00:12:03.515 --> 00:12:07.408
+underlying lots with the Transaction button For a simple holding
+
+00:12:07.525 --> 00:12:12.239
+without transaction history those position fields can be entered directly
+
+00:12:12.655 --> 00:12:17.147
+Update saves the holding form and Cancel closes it without
+
+00:12:17.160 --> 00:12:17.668
+saving
+
+00:12:19.364 --> 00:12:25.093
+Dividend Info contains Dividends per Share Frequency DRIP Ex Dividend
+
+00:12:25.093 --> 00:12:28.362
+Date and Pay Date Enter the amount for a single
+
+00:12:28.362 --> 00:12:33.752
+distribution per share then choose the appropriate cadence Auto allows
+
+00:12:33.752 --> 00:12:38.453
+market data detection a manually selected cadence can remain pinned
+
+00:12:38.700 --> 00:12:43.244
+until changed The DRIP checkbox tells the application how to
+
+00:12:43.310 --> 00:12:47.541
+allocate the holding’s income estimate Enter the schedule dates using
+
+00:12:47.541 --> 00:12:51.096
+the format shown in the form Manual amount and date
+
+00:12:51.109 --> 00:12:56.031
+corrections can temporarily override automatic data When an override is
+
+00:12:56.044 --> 00:12:59.455
+active the form shows its duration and a Use market
+
+00:12:59.468 --> 00:13:03.674
+data now link Undo reverses that pending choice Follow the
+
+00:13:03.674 --> 00:13:08.635
+displayed note some fields resume market data on save while
+
+00:13:08.648 --> 00:13:10.836
+others resume on the next refresh
+
+00:13:12.544 --> 00:13:16.385
+Scroll within the holding dialog to Dividend Tracking and Total
+
+00:13:16.385 --> 00:13:21.971
+Returns Dividends Paid Year to Date Dividends and Total Dividends
+
+00:13:21.984 --> 00:13:26.268
+Received let you maintain the holding’s income totals Check them
+
+00:13:26.268 --> 00:13:30.513
+against your actual payment records rather than copying an annual
+
+00:13:30.526 --> 00:13:35.200
+estimate into an actual-income field Paid For Itself is stored
+
+00:13:35.213 --> 00:13:38.976
+as a ratio a value of one represents one hundred
+
+00:13:38.976 --> 00:13:43.195
+percent and the table formats it as a percentage Estimated
+
+00:13:43.208 --> 00:13:48.078
+Annual and Monthly Dividend describe projected income On save the
+
+00:13:48.091 --> 00:13:53.234
+form recalculates applicable estimates and ratios from the position distribution
+
+00:13:53.456 --> 00:13:59.432
+and frequency inputs Reinvestment contains Cash Not Reinvested Cash Reinvested
+
+00:13:59.836 --> 00:14:04.289
+and Shares from Dividends Use real history for historical figures
+
+00:14:04.471 --> 00:14:08.182
+and review the recalculated values before relying on them
+
+00:14:09.904 --> 00:14:13.732
+Add Holding opens the same grouped form with empty fields
+
+00:14:14.149 --> 00:14:18.706
+Enter the ticker use Lookup to retrieve available market information
+
+00:14:19.162 --> 00:14:23.133
+review the description and category and enter the share quantity
+
+00:14:23.290 --> 00:14:27.925
+and purchase details Check the dividend cadence and dates before
+
+00:14:28.068 --> 00:14:33.172
+selecting Add Cancel exits without creating the position Add or
+
+00:14:33.290 --> 00:14:36.844
+Edit via Transaction is the alternative for starting with a
+
+00:14:36.844 --> 00:14:41.362
+trade record Its new-ticker form includes the ticker lookup description
+
+00:14:41.558 --> 00:14:47.079
+category trade date shares price per share fees and notes
+
+00:14:47.495 --> 00:14:51.467
+A new ticker begins with a buy This establishes transaction
+
+00:14:51.467 --> 00:14:56.623
+history that can later drive position calculations Import Holdings provides
+
+00:14:56.623 --> 00:15:00.816
+another route when your broker file already contains the positions
+
+00:15:00.933 --> 00:15:01.974
+or transactions
+
+00:15:03.684 --> 00:15:07.551
+Select the triangle beside a ticker to expand its ledger
+
+00:15:07.968 --> 00:15:12.161
+This view brings together trades and actual dividend payments It
+
+00:15:12.161 --> 00:15:17.799
+shows event type date shares price fees cost or proceeds
+
+00:15:18.085 --> 00:15:23.137
+unrealized gain realized gain and running position average cost and
+
+00:15:23.150 --> 00:15:27.304
+total cost Read the event type first a cash dividend
+
+00:15:27.421 --> 00:15:31.327
+does not add shares or change the position’s cost basis
+
+00:15:31.744 --> 00:15:36.119
+Reinvested shares appear as a separate buy Sortable headers help
+
+00:15:36.132 --> 00:15:39.413
+review the entries and the built-in help explains how to
+
+00:15:39.544 --> 00:15:43.202
+read and manage the table Edit opens that specific event
+
+00:15:43.346 --> 00:15:47.825
+in its actual account Delete removes that event and recalculates
+
+00:15:47.825 --> 00:15:51.301
+the holding it is separate from deleting the whole holding
+
+00:15:53.017 --> 00:15:57.392
+The Transaction dialog shows saved trades above an Add Transaction
+
+00:15:57.392 --> 00:16:01.533
+form Choose Buy to record purchased shares enter the actual
+
+00:16:01.533 --> 00:16:06.090
+trade date share quantity price per share and any fees
+
+00:16:06.390 --> 00:16:09.827
+then add a note if useful Originally Acquired is for
+
+00:16:09.827 --> 00:16:14.567
+shares transferred from another broker it preserves the original acquisition
+
+00:16:14.567 --> 00:16:18.707
+date separately from the transfer-related record Leave it blank for
+
+00:16:18.707 --> 00:16:22.666
+an ordinary purchase To correct a saved trade select its
+
+00:16:22.796 --> 00:16:26.233
+Edit control The form loads that event and its save
+
+00:16:26.246 --> 00:16:30.921
+control updates the existing transaction Cancel Edit returns to adding
+
+00:16:30.934 --> 00:16:35.673
+a new event Close exits the dialog Recording or correcting
+
+00:16:35.673 --> 00:16:40.999
+trades recalculates the position and cost basis so verify quantities
+
+00:16:40.999 --> 00:16:42.861
+and prices against the source record
+
+00:16:44.554 --> 00:16:48.005
+Choose Sell to record a completed sale The form changes
+
+00:16:48.005 --> 00:16:51.924
+to Shares Sold and displays available shares when open lots
+
+00:16:51.924 --> 00:16:57.302
+are present Enter the sale date quantity execution price fees
+
+00:16:57.549 --> 00:17:02.223
+and notes FIFO is the default cost-basis method it matches
+
+00:17:02.223 --> 00:17:07.106
+the oldest available purchase lots first Specific Lots displays the
+
+00:17:07.171 --> 00:17:12.302
+eligible buy dates prices cost per share and available quantities
+
+00:17:12.705 --> 00:17:16.820
+Enter the quantity sold from each lot those allocations are
+
+00:17:16.820 --> 00:17:20.427
+summed into the sale quantity Match this to the lot
+
+00:17:20.427 --> 00:17:25.179
+treatment documented in your broker records The application then recalculates
+
+00:17:25.179 --> 00:17:29.802
+the remaining shares cost basis and realized gain or loss
+
+00:17:30.231 --> 00:17:34.710
+These controls record transactions in Portfolio Tracker they do not
+
+00:17:34.723 --> 00:17:36.390
+execute a trade at your broker
+
+00:17:38.094 --> 00:17:40.295
+When more than one buy or sell occurs for the
+
+00:17:40.295 --> 00:17:44.722
+same ticker account and date the Same Day Order controls
+
+00:17:44.735 --> 00:17:48.081
+show up and down arrows Use them to match the
+
+00:17:48.094 --> 00:17:51.675
+broker’s actual execution order They do not move a trade
+
+00:17:51.675 --> 00:17:55.672
+onto a different date or into another account FIFO matching
+
+00:17:55.750 --> 00:18:00.073
+and cost basis recalculate after each move Only Trade means
+
+00:18:00.073 --> 00:18:04.292
+there is no other qualifying trade to reorder Not Applicable
+
+00:18:04.292 --> 00:18:08.289
+marks a dividend payment because cash dividends do not affect
+
+00:18:08.302 --> 00:18:12.261
+FIFO trade order In the expanded ledger use Edit when
+
+00:18:12.274 --> 00:18:16.441
+the event belongs on another date If the application identifies
+
+00:18:16.454 --> 00:18:21.050
+missing opening history or an unpriced purchase repair that source
+
+00:18:21.050 --> 00:18:24.800
+record before assuming a sale’s unavailable gain is zero
+
+00:18:26.474 --> 00:18:30.836
+The expanded ledger’s Add Transaction control asks for an account
+
+00:18:31.149 --> 00:18:34.508
+and a transaction type Choose Buy or Sell for a
+
+00:18:34.521 --> 00:18:38.557
+trade or Dividend Payment for an actual cash payment then
+
+00:18:38.558 --> 00:18:43.258
+Continue The dividend form shows the account payment date cash
+
+00:18:43.258 --> 00:18:46.722
+amount and notes Enter the total cash payment for the
+
+00:18:46.722 --> 00:18:51.214
+event rather than a per-share dividend estimate then use Save
+
+00:18:51.227 --> 00:18:56.357
+Dividend Cancel leaves the record unchanged An existing dividend event
+
+00:18:56.370 --> 00:19:01.044
+has its own Edit control A reinvested dividend needs its
+
+00:19:01.045 --> 00:19:04.990
+cash payment recorded here and the resulting shares recorded as
+
+00:19:05.003 --> 00:19:09.365
+a separate buy transaction Keeping both events distinct preserves a
+
+00:19:09.365 --> 00:19:12.789
+clear view of income received and the shares acquired with
+
+00:19:12.789 --> 00:19:13.427
+that income
+
+00:19:15.144 --> 00:19:20.392
+Transaction History opens the account’s saved buys sells and actual
+
+00:19:20.405 --> 00:19:24.337
+dividends including tickers that are no longer held Search by
+
+00:19:24.350 --> 00:19:29.233
+ticker account or notes filter by event type and select
+
+00:19:29.233 --> 00:19:34.389
+Closed Positions Only when reviewing past positions Deposits and Withdrawals
+
+00:19:34.558 --> 00:19:38.816
+serves a different purpose It records money added or removed
+
+00:19:39.090 --> 00:19:43.399
+and share transfers so Account Alpha can separate external funding
+
+00:19:43.399 --> 00:19:46.811
+from investment performance Add a missing event with its type
+
+00:19:47.110 --> 00:19:52.397
+date amount or share details and note The completed-period controls
+
+00:19:52.501 --> 00:19:57.201
+identify stretches with a complete cash-flow record including periods where
+
+00:19:57.201 --> 00:20:01.160
+no money moved Mark a period complete only after all
+
+00:20:01.160 --> 00:20:05.353
+its flows are present That completeness determines when Account Alpha
+
+00:20:05.548 --> 00:20:06.303
+can be measured
+
+00:20:08.014 --> 00:20:11.933
+All Dividend Sources filters the table and summary counts by
+
+00:20:11.933 --> 00:20:16.426
+the source of dividend actuals Selecting a source changes the
+
+00:20:16.439 --> 00:20:20.866
+view it does not repair the underlying record Refresh Prices
+
+00:20:21.009 --> 00:20:26.361
+and Dividends updates market inputs After a refresh Latest Refresh
+
+00:20:26.374 --> 00:20:31.374
+Result can show payable distributions changed holding dividend fields and
+
+00:20:31.374 --> 00:20:36.608
+payment-history rows recorded updated or already present The Dividend Repair
+
+00:20:36.608 --> 00:20:42.051
+mode chooses imported actuals plus Yahoo imported actuals only or
+
+00:20:42.064 --> 00:20:46.894
+Yahoo only Preview Dividend Repair shows the proposed repair scope
+
+00:20:47.168 --> 00:20:51.556
+source counts and any date or amount updates Inspect those
+
+00:20:51.569 --> 00:20:56.634
+details before selecting Apply Repair Cancel leaves the repair unapplied
+
+00:20:57.051 --> 00:21:01.022
+Preview and refresh may take time wait for the completed
+
+00:21:01.022 --> 00:21:03.053
+result before reviewing the figures
+
+00:21:04.774 --> 00:21:07.951
+The Owner view adds DRIP Matrix and Sync DRIP from
+
+00:21:07.951 --> 00:21:12.821
+Accounts The matrix puts ticker rows against account columns so
+
+00:21:12.834 --> 00:21:16.167
+you can inspect whether the same security reinvests in each
+
+00:21:16.167 --> 00:21:21.128
+account Use Filter Ticker to find one symbol Each checkbox
+
+00:21:21.141 --> 00:21:24.865
+belongs to that ticker in a specific account and toggling
+
+00:21:24.865 --> 00:21:29.371
+it updates that account’s application record Sync to Owner consolidates
+
+00:21:29.436 --> 00:21:33.446
+the account-level DRIP flags and share counts into the Owner
+
+00:21:33.459 --> 00:21:38.186
+view The toolbar’s Sync DRIP from Accounts performs that synchronization
+
+00:21:38.199 --> 00:21:42.834
+directly Review the account settings before syncing particularly where the
+
+00:21:42.834 --> 00:21:46.493
+same ticker takes cash in one account and reinvests in
+
+00:21:46.506 --> 00:21:51.141
+another These settings track your reinvestment choices in the application
+
+00:21:51.584 --> 00:21:53.693
+brokerage instructions remain separate
+
+00:21:55.394 --> 00:21:59.261
+A practical routine begins with the correct account and basis
+
+00:21:59.652 --> 00:22:03.858
+Review the income and DRIP boxes choose a performance window
+
+00:22:04.261 --> 00:22:06.592
+and arrange the table around the fields you want to
+
+00:22:06.605 --> 00:22:11.332
+compare Open Edit for holding information and dividend settings Open
+
+00:22:11.332 --> 00:22:16.267
+the transaction ledger for purchases sales and actual dividend events
+
+00:22:16.670 --> 00:22:21.175
+Compare history with your broker records review repair previews and
+
+00:22:21.188 --> 00:22:25.264
+use the cross-account matrix when managing the Owner view Portfolio
+
+00:22:25.277 --> 00:22:29.209
+Tracker brings those details together so you can maintain clearer
+
+00:22:29.209 --> 00:22:34.183
+records and understand what each number represents For informational purposes
+
+00:22:34.261 --> 00:22:36.371
+only Not financial advice

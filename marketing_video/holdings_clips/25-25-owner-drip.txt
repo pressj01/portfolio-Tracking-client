@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/25-25-owner-drip-0.png'
+duration 50.620000
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/holdings_scenes/25-25-owner-drip-0.png'

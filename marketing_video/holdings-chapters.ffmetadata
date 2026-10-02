@@ -1,0 +1,139 @@
+;FFMETADATA1
+title=Portfolio Tracker - Complete Holdings Guide
+artist=Portfolio Tracker
+comment=Detailed holdings, income, DRIP, and editing walkthrough
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=38630
+title=Know every holding. Control every detail.
+[CHAPTER]
+TIMEBASE=1/1000
+START=38630
+END=85360
+title=Start with the right account
+[CHAPTER]
+TIMEBASE=1/1000
+START=85360
+END=129040
+title=Post-refresh accrual: what the box means
+[CHAPTER]
+TIMEBASE=1/1000
+START=129040
+END=172170
+title=Ticker DRIP Coverage
+[CHAPTER]
+TIMEBASE=1/1000
+START=172170
+END=226050
+title=Four income boxes, one clear split
+[CHAPTER]
+TIMEBASE=1/1000
+START=226050
+END=272130
+title=Why the two DRIP percentages differ
+[CHAPTER]
+TIMEBASE=1/1000
+START=272130
+END=315400
+title=Make the table work for you
+[CHAPTER]
+TIMEBASE=1/1000
+START=315400
+END=368580
+title=Compare the right period
+[CHAPTER]
+TIMEBASE=1/1000
+START=368580
+END=420810
+title=Read the position and cost fields
+[CHAPTER]
+TIMEBASE=1/1000
+START=420810
+END=471080
+title=Period return, lifetime gain, and realized gain
+[CHAPTER]
+TIMEBASE=1/1000
+START=471080
+END=525320
+title=Dividend schedule and income estimates
+[CHAPTER]
+TIMEBASE=1/1000
+START=525320
+END=578020
+title=Yield, actual income, and dividend sources
+[CHAPTER]
+TIMEBASE=1/1000
+START=578020
+END=631790
+title=Understand the risk and comparison columns
+[CHAPTER]
+TIMEBASE=1/1000
+START=631790
+END=682690
+title=Edit, Txn, and Del: choose the right control
+[CHAPTER]
+TIMEBASE=1/1000
+START=682690
+END=738800
+title=Edit Basic Info and Position
+[CHAPTER]
+TIMEBASE=1/1000
+START=738800
+END=791980
+title=Edit Dividend Info and manual overrides
+[CHAPTER]
+TIMEBASE=1/1000
+START=791980
+END=849350
+title=Edit income tracking and reinvestment fields
+[CHAPTER]
+TIMEBASE=1/1000
+START=849350
+END=903130
+title=Add a holding: snapshot or first transaction
+[CHAPTER]
+TIMEBASE=1/1000
+START=903130
+END=952460
+title=Expand the ticker to see its ledger
+[CHAPTER]
+TIMEBASE=1/1000
+START=952460
+END=1004030
+title=Add or correct a buy transaction
+[CHAPTER]
+TIMEBASE=1/1000
+START=1004030
+END=1057570
+title=Record a sale with the appropriate lot method
+[CHAPTER]
+TIMEBASE=1/1000
+START=1057570
+END=1105950
+title=Match the order of same-day trades
+[CHAPTER]
+TIMEBASE=1/1000
+START=1105950
+END=1154620
+title=Record or edit an actual dividend payment
+[CHAPTER]
+TIMEBASE=1/1000
+START=1154620
+END=1207490
+title=Review history and account cash flows
+[CHAPTER]
+TIMEBASE=1/1000
+START=1207490
+END=1264260
+title=Refresh market inputs and preview dividend repair
+[CHAPTER]
+TIMEBASE=1/1000
+START=1264260
+END=1314890
+title=Manage reinvestment across accounts
+[CHAPTER]
+TIMEBASE=1/1000
+START=1314890
+END=1357590
+title=A repeatable routine for clearer records
