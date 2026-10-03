@@ -2052,6 +2052,9 @@ def ensure_tables_exist(conn=None):
 
     _seed_etf_provider_data(conn)
 
+    from watchlist_lists import ensure_watchlist_schema
+    ensure_watchlist_schema(conn)
+
     conn.commit()
     if close:
         conn.close()

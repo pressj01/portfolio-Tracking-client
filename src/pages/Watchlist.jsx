@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
-import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
@@ -12,233 +12,178 @@ import {
   signalFormulaSearch,
 } from '../utils/gradingPreferences'
 
+const ICONS = [
+  { id: 'chart', label: 'Chart' },
+  { id: 'laptop', label: 'Laptop' },
+  { id: 'crown', label: 'Crown' },
+  { id: 'rocket', label: 'Rocket' },
+  { id: 'shield', label: 'Shield' },
+  { id: 'star', label: 'Star' },
+  { id: 'bolt', label: 'Bolt' },
+  { id: 'globe', label: 'Globe' },
+]
+
+const COLORS = ['#7c8cff', '#3ecf8e', '#f5a524', '#ef5350', '#42a5f5', '#ec407a', '#ab47bc', '#26c6da']
+const ACTIVE_KEY = 'portfolio_watchlist_active'
+
+const COLUMNS = [
+  { key: 'ticker', label: 'Symbol' },
+  { key: 'name', label: 'Name', tip: 'Fund or company name' },
+  { key: 'price', label: 'Price', tip: 'Latest market price' },
+  { key: 'change_1d', label: 'Daily', tip: 'Price change since the previous close' },
+  { key: 'div_yield', label: 'Yield', tip: 'Distribution yield. Use Edit to type a manual yield.' },
+  { key: 'div_growth_5y', label: '5Y Div Growth', tip: 'Annualized dividend growth across five full years' },
+  { key: 'next_ex_date', label: 'Next Ex-Date', tip: 'Next ex-dividend date' },
+  { key: 'aum', label: 'AUM', tip: 'Assets under management' },
+  { key: 'one_yr_ret', label: '1Y Return', tip: 'Price return over the past year' },
+  { key: 'cov_sig', label: 'NAV Signal', tip: 'Bullish, Neutral, or Bearish from the NAV erosion reading' },
+  { key: 'nav_erosion_prob', label: 'NAV Erosion', tip: 'Low, Medium, or High reading for NAV erosion' },
+  { key: 'notes', label: 'Notes' },
+]
+
+function tint(hex, alpha) {
+  const raw = String(hex || '').replace('#', '')
+  if (raw.length !== 6) return `rgba(124, 140, 255, ${alpha})`
+  const red = parseInt(raw.slice(0, 2), 16)
+  const green = parseInt(raw.slice(2, 4), 16)
+  const blue = parseInt(raw.slice(4, 6), 16)
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`
+}
+
+function WatchlistGlyph({ name }) {
+  const common = {
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.8,
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+  }
+  const paths = {
+    chart: <path d="M4 16V9M8 16V5M12 16V11M16 16V3" />,
+    laptop: <><rect x="3" y="4" width="14" height="9" rx="1.2" /><path d="M2 16h16" /></>,
+    crown: <path d="M3 15h14L16 7l-4 3L10 5 8 10 4 7z" />,
+    rocket: <path d="M10 18c4-2 6-6 6-11-4 0-8 2-10 6 2 1 3 3 4 5zM8 14l-3 3M12 8h.01" />,
+    shield: <path d="M10 2 4 5v5c0 4 2.6 6.4 6 8 3.4-1.6 6-4 6-8V5z" />,
+    star: <path d="m10 2.8 2.1 4.3 4.7.7-3.4 3.3.8 4.7L10 13.6 5.8 15.8l.8-4.7L3.2 7.8l4.7-.7z" />,
+    bolt: <path d="M11 2 4 12h6l-1 6 7-10h-6z" />,
+    globe: <><circle cx="10" cy="10" r="7" /><path d="M3 10h14M10 3c2 2.2 2 11.8 0 14M10 3c-2 2.2-2 11.8 0 14" /></>,
+  }
+  return (
+    <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true" {...common}>
+      {paths[name] || paths.chart}
+    </svg>
+  )
+}
+
 function SignalBadge({ signal }) {
-  if (!signal || signal === '\u2014') return <span>{'\u2014'}</span>
+  if (!signal || signal === '—') return <span>—</span>
   const cls = { BUY: 'sig-BUY', SELL: 'sig-SELL', NEUTRAL: 'sig-NEUTRAL' }
   return <span className={`sig ${cls[signal] || ''}`}>{signalReading(signal)}</span>
 }
 
-function fmtPct(v) {
-  if (v == null) return '\u2014'
-  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
+function fmtSigned(value) {
+  if (value == null || value === '') return '—'
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  return `${number > 0 ? '+' : ''}${number.toFixed(2)}%`
 }
 
-function pctClass(v) {
-  if (v == null) return ''
-  return v >= 0 ? 'pct-up' : 'pct-down'
+function fmtPercent(value, digits = 2) {
+  if (value == null || value === '') return '—'
+  const number = Number(value)
+  if (!Number.isFinite(number)) return '—'
+  return `${number.toFixed(digits)}%`
 }
 
-function fmt(v) {
-  return formatMoney(v)
+function erosionStyle(level) {
+  if (level === 'Low') return { color: 'var(--pos-strong)' }
+  if (level === 'High') return { color: 'var(--neg-strong)' }
+  if (level === 'Medium') return { color: 'var(--warning)' }
+  return { color: 'var(--text-dim)' }
 }
 
-function YieldCell({ ticker, computed, source, override, overridden, onSave }) {
-  const [editing, setEditing] = useState(false)
-  const initial = (override ?? '').toString()
-  const [draft, setDraft] = useState(initial)
-  const inputRef = useRef(null)
+function SymbolSearch({ pf, picked, onAdd }) {
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState([])
+  const [searching, setSearching] = useState(false)
 
-  useEffect(() => { setDraft((override ?? '').toString()) }, [override])
   useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
+    const text = query.trim()
+    if (!text) {
+      setHits([])
+      setSearching(false)
+      return undefined
     }
-  }, [editing])
-
-  const commit = () => {
-    setEditing(false)
-    if (draft !== ((override ?? '').toString())) onSave(ticker, draft)
-  }
-
-  const cancel = () => {
-    setDraft((override ?? '').toString())
-    setEditing(false)
-  }
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        className="wl-input"
-        type="number"
-        step="0.01"
-        min="0"
-        placeholder="blank = auto"
-        style={{ width: 80, padding: '0.2rem 0.35rem', fontSize: '0.85rem' }}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
-        }}
-      />
-    )
-  }
-
-  const display = computed != null ? computed.toFixed(2) + '%' : '—'
-  return (
-    <span
-      onClick={() => setEditing(true)}
-      title={overridden
-        ? 'Manual override (click to edit)'
-        : `${source ? `${source}. ` : ''}Click to override yield`}
-      style={{
-        display: 'inline-block',
-        minWidth: 60,
-        padding: '0.15rem 0.3rem',
-        cursor: 'text',
-        color: overridden ? 'var(--p-ffb74d)' : 'inherit',
-        fontWeight: overridden ? 600 : 'inherit',
-        borderRadius: 3,
-      }}
-    >
-      {display}{overridden ? ' *' : ''}
-    </span>
-  )
-}
-
-function NotesCell({ ticker, value, onSave }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
-  const inputRef = useRef(null)
-
-  useEffect(() => { setDraft(value) }, [value])
-  useEffect(() => {
-    if (editing && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
+    let cancelled = false
+    setSearching(true)
+    const handle = setTimeout(() => {
+      pf(`/api/watchlist/lookup?q=${encodeURIComponent(text)}`)
+        .then(response => response.json())
+        .then(data => {
+          if (!cancelled) setHits(data.results || [])
+        })
+        .catch(() => {
+          if (!cancelled) setHits([])
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false)
+        })
+    }, 180)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
     }
-  }, [editing])
+  }, [query, pf])
 
-  const commit = () => {
-    setEditing(false)
-    if (draft !== value) onSave(ticker, draft)
-  }
-
-  const cancel = () => {
-    setDraft(value)
-    setEditing(false)
-  }
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        className="wl-input"
-        style={{ width: '100%', minWidth: 160, padding: '0.25rem 0.4rem', fontSize: '0.85rem' }}
-        value={draft}
-        maxLength={500}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit() }
-          else if (e.key === 'Escape') { e.preventDefault(); cancel() }
-        }}
-      />
-    )
+  const addHit = (hit) => {
+    onAdd({ ticker: hit.symbol, name: hit.name || '' })
+    setQuery('')
+    setHits([])
   }
 
   return (
-    <span
-      onClick={() => setEditing(true)}
-      title="Click to edit notes"
-      style={{
-        display: 'inline-block',
-        minHeight: '1.2em',
-        minWidth: 140,
-        padding: '0.15rem 0.3rem',
-        cursor: 'text',
-        color: value ? 'inherit' : 'var(--p-5a6878)',
-        fontStyle: value ? 'normal' : 'italic',
-        borderRadius: 3,
-      }}
-    >
-      {value || 'Click to add note'}
-    </span>
-  )
-}
-
-function NavCell({ row, analysis, onSave }) {
-  const scope = row.nav_erosion_scope || analysis?.nav_erosion_scope || 'auto'
-  const benchmarkOverride = row.nav_benchmark_override || analysis?.nav_benchmark_override || ''
-  const benchmarkUsed = analysis?.benchmark || row.benchmark || ''
-  const benchmarkInvalid = benchmarkOverride && (analysis?.benchmark_valid === false || row.benchmark_valid === false)
-  const navTested = analysis?.nav_tested ?? row.nav_tested
-  const navLabel = scope === 'test' ? 'Test' : scope === 'skip' ? 'Skip' : 'Auto'
-  const benchmarkLabel = benchmarkOverride || benchmarkUsed
-  const title = scope === 'skip'
-    ? 'Skipped by user override'
-    : benchmarkInvalid
-      ? `${benchmarkOverride} is not returning benchmark price history`
-      : scope === 'test'
-        ? `Forced NAV test${benchmarkOverride || benchmarkUsed ? ` vs ${benchmarkOverride || benchmarkUsed}` : ''}`
-        : navTested
-          ? `Auto-tested${benchmarkOverride || benchmarkUsed ? ` vs ${benchmarkOverride || benchmarkUsed}` : ''}`
-          : 'Auto: not tested by current NAV erosion rules'
-
-  const saveScope = (nextScope) => onSave(row.ticker, nextScope, benchmarkOverride)
-  const saveBenchmark = (value) => onSave(row.ticker, scope, value)
-
-  return (
-    <td
-      style={{
-        color: analysis?.nav_erosion_prob === 'Low' ? 'var(--pos-strong)' : analysis?.nav_erosion_prob === 'High' ? 'var(--neg-strong)' : analysis?.nav_erosion_prob === 'Medium' ? 'var(--warning)' : 'var(--p-888)',
-        fontWeight: 600,
-        backgroundColor: analysis?.nav_erosion_prob === 'Low' ? 'rgba(0,200,83,0.12)' : analysis?.nav_erosion_prob === 'High' ? 'rgba(213,0,0,0.12)' : analysis?.nav_erosion_prob === 'Medium' ? 'rgba(249,168,37,0.12)' : 'transparent',
-        minWidth: 128,
-      }}
-      title={title}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span>{analysis?.nav_erosion_prob ? `${analysis.nav_erosion_prob} Probability` : '\u2014'}</span>
-        <select
-          aria-label={`${row.ticker} NAV erosion testing`}
-          value={scope}
-          onChange={e => saveScope(e.target.value)}
-          title={title}
-          style={{
-            width: 48,
-            height: 21,
-            border: '1px solid var(--p-294b73)',
-            borderRadius: 4,
-            background: 'var(--p-0f1c36)',
-            color: scope === 'test' ? 'var(--accent-bright)' : scope === 'skip' ? 'var(--warning-money)' : 'var(--p-9aa8bd)',
-            fontSize: '0.62rem',
-            padding: '0 2px',
+    <div className="wl-search">
+      <label className="wl-label" htmlFor="wl-symbol-search">Find a symbol</label>
+      <div className="wl-search-box">
+        <span aria-hidden="true">⌕</span>
+        <input
+          id="wl-symbol-search"
+          value={query}
+          placeholder="Search by symbol or name"
+          onChange={event => setQuery(event.target.value)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && hits[0]) {
+              event.preventDefault()
+              addHit(hits[0])
+            }
           }}
-        >
-          <option value="auto">Auto</option>
-          <option value="test">Test</option>
-          <option value="skip">Skip</option>
-        </select>
+        />
       </div>
-      <input
-        aria-label={`${row.ticker} NAV benchmark override`}
-        value={benchmarkOverride}
-        placeholder={benchmarkUsed || 'bench'}
-        onChange={e => onSave(row.ticker, scope, e.target.value.toUpperCase(), true)}
-        onBlur={e => saveBenchmark(e.target.value)}
-        onKeyDown={e => {
-          if (e.key === 'Enter') e.currentTarget.blur()
-        }}
-        title="Optional benchmark override, e.g. QQQ, GLD, BTC-USD, or BTC-USD+GLD"
-        style={{
-          width: 86,
-          marginTop: 3,
-          border: benchmarkInvalid ? '1px solid var(--neg-strong)' : '1px solid var(--p-203a5f)',
-          borderRadius: 4,
-          background: 'var(--p-0d1830)',
-          color: benchmarkInvalid ? 'var(--p-ffb3b3)' : benchmarkOverride ? 'var(--p-d7e8ff)' : 'var(--p-7d8799)',
-          fontSize: '0.62rem',
-          padding: '2px 4px',
-        }}
-      />
-      <div style={{ fontSize: '0.58rem', color: 'var(--p-7d8799)', lineHeight: 1.1 }}>
-        {navLabel}{benchmarkLabel ? ` vs ${benchmarkLabel}` : ''}
-      </div>
-    </td>
+      {searching && query.trim() && <p className="wl-search-status">Searching…</p>}
+      {!!hits.length && (
+        <ul className="wl-hits">
+          {hits.map(hit => {
+            const added = picked.includes(hit.symbol)
+            return (
+              <li key={hit.symbol}>
+                <span className="wl-hit-symbol">{hit.symbol}</span>
+                <span>
+                  <strong>{hit.symbol}</strong>
+                  <small>{hit.name || 'Name loads with the quote'}</small>
+                </span>
+                {hit.issuer && <em>{hit.issuer}</em>}
+                <button type="button" onClick={() => addHit(hit)} disabled={added}>
+                  {added ? 'Added' : '+ Add'}
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {!searching && query.trim() && hits.length === 0 && (
+        <p className="wl-search-status">No matching symbol.</p>
+      )}
+    </div>
   )
 }
 
@@ -250,79 +195,85 @@ function WatchlistTickerModal({ ticker, onClose }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!ticker) return
+    if (!ticker) return undefined
+    let cancelled = false
     setLoading(true)
     setError(null)
-    pf(`/api/ticker-return-1y/${ticker}`)
-      .then(r => {
-        if (!r.ok) throw new Error(`Could not load return data for ${ticker}`)
-        return r.json()
+    const loadChart = async () => {
+      let lastError = null
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          const response = await pf(`/api/ticker-return-1y/${encodeURIComponent(ticker)}`)
+          const payload = await response.json().catch(() => ({}))
+          if (!response.ok || payload.error) {
+            throw new Error(payload.error || `Could not load return data for ${ticker}`)
+          }
+          return payload
+        } catch (err) {
+          lastError = err
+          if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 700))
+        }
+      }
+      throw lastError
+    }
+    loadChart()
+      .then(payload => {
+        if (!cancelled) setData(payload)
       })
-      .then(d => {
-        if (d.error) throw new Error(d.error)
-        setData(d)
+      .catch(err => {
+        if (!cancelled) setError(err.message)
       })
-      .catch(e => setError(e.message))
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
   }, [ticker, pf])
 
   useEffect(() => {
-    const handleEsc = (e) => { if (e.key === 'Escape') onClose() }
+    const handleEsc = (event) => { if (event.key === 'Escape') onClose() }
     window.addEventListener('keydown', handleEsc)
     return () => window.removeEventListener('keydown', handleEsc)
   }, [onClose])
 
   useEffect(() => {
-    if (!data || !window.Plotly) return
+    if (!data || !window.Plotly) return undefined
     const el = document.getElementById('wl-ticker-chart')
-    if (!el) return
+    if (!el) return undefined
     const ct = chartTheme(isDark)
-
     const traces = [
       {
         x: data.dates, y: data.price_return,
         mode: 'lines', name: 'Price Return %',
         line: { color: '#7ecfff', width: 2 },
-        hovertemplate: '%{y:.2f}%<extra>Price</extra>',
       },
       {
         x: data.dates, y: data.total_return,
         mode: 'lines', name: 'Total Return %',
         line: { color: '#4dff91', width: 2 },
-        fill: 'tonexty', fillcolor: 'rgba(77,255,145,0.08)',
-        hovertemplate: '%{y:.2f}%<extra>Total</extra>',
       },
     ]
-    const layout = {
+    window.Plotly.newPlot(el, traces, {
       template: ct.template,
-      paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
+      paper_bgcolor: ct.paper,
+      plot_bgcolor: ct.plot,
       font: { color: ct.font },
       title: { text: `${data.ticker} — 1 Year Return`, font: { size: 16, color: ct.title } },
-      xaxis: { title: '', gridcolor: ct.grid, zerolinecolor: ct.zeroline },
-      yaxis: { title: 'Return %', gridcolor: ct.grid, zerolinecolor: ct.zeroline, ticksuffix: '%' },
-      legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
       margin: { l: 50, r: 20, t: 60, b: 40 },
       hovermode: 'x unified',
-      shapes: [{ type: 'line', x0: data.dates[0], x1: data.dates[data.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }],
-    }
-    window.Plotly.newPlot(el, traces, layout, { responsive: true })
-    return () => { if (el) window.Plotly.purge(el) }
+    }, { responsive: true })
+    return () => { window.Plotly.purge(el) }
   }, [data, isDark])
 
   if (!ticker) return null
-
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-        <button className="modal-close" onClick={onClose}>&times;</button>
+      <div className="modal-content" onClick={event => event.stopPropagation()}>
+        <button type="button" className="modal-close" onClick={onClose}>&times;</button>
         {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
         {error && <div className="alert alert-error">{error}</div>}
         {data && (
           <>
             <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
-            <p style={{ color: 'var(--text-dim)', marginBottom: '1rem', fontSize: '0.9rem' }}>
-              1 Year Return starting at {fmt(data.start_price)}
-            </p>
             <div id="wl-ticker-chart" style={{ height: '400px' }} />
           </>
         )}
@@ -331,134 +282,47 @@ function WatchlistTickerModal({ ticker, onClose }) {
   )
 }
 
-const watchlistHeaders = (t) => [
-  { label: 'Ticker' },
-  { label: 'Description', tip: 'Security or fund name' },
-  { label: 'Price', tip: 'Current market price' },
-  { label: '1D Chg', tip: '1-day price change percentage' },
-  { label: 'Div Yield', tip: 'Expected annual distribution yield, annualized from the current payout schedule for funds without a full year of history. Click the cell to override.' },
-  { label: 'AUM', tip: 'Assets under management (fund size)' },
-  { label: 'Signal', tip: `Overall technical reading. Bullish or Bearish must exceed ${t.majorityPct}% of the active indicator weight. Change the share in Settings → Technical Readings.` },
-  { label: 'AO', tip: `Awesome Oscillator. Bullish when the value is above +${t.aoZeroBuffer} and rising; Bearish when it is below -${t.aoZeroBuffer} and falling.` },
-  { label: 'RSI', tip: `14-day RSI. Bullish below ${t.rsiBuyBelow}; Bearish above ${t.rsiSellAbove}.` },
-  { label: 'MACD', tip: 'MACD line versus its 9-period signal line. Bullish when the line is above the signal line; Bearish when it is below. There is no extra distance setting.' },
-  { label: 'SMA 50', tip: `50-day average with a ±${t.smaBufferPct}% neutral band. Bullish above the band; Bearish below it.` },
-  { label: 'SMA 200', tip: `200-day average with the same ±${t.smaBufferPct}% neutral band.` },
-  { label: 'Sharpe', tip: 'Risk-adjusted return. >1.5 great, >1.0 good, <0.5 poor' },
-  { label: 'Sortino', tip: 'Like Sharpe but only penalizes downside. >2.0 great, >1.5 good' },
-  { label: '1Y Return', tip: 'Total return over the past 12 months' },
-  { label: 'NAV Ratio', tip: `Benchmark-gated coverage: qualifying price decline ÷ distribution yield. Low at or below ${t.navBuyMaxRatio}, Medium through ${t.navSellAboveRatio}, High above that. A ${t.navHardDeclinePct}% price decline also forces High.` },
-  { label: 'NAV Signal', tip: `Bullish when coverage is Low (≤ ${t.navBuyMaxRatio}); Neutral through ${t.navSellAboveRatio}; Bearish when High. A ${t.navHardDeclinePct}% price decline forces Bearish. Backtests also force High at a ${t.navHardDeficitPct}% share deficit.` },
-  { label: 'NAV Erosion', tip: `Low / Medium / High from the NAV ratio bands above (${t.navBuyMaxRatio} / ${t.navSellAboveRatio}), the ${t.navHardDeclinePct}% decline override, and the ${t.navHardDeficitPct}% share-deficit override on backtests.` },
-  { label: 'Notes' },
-]
-
-const FREEZE_STORAGE_KEY = 'portfolio_watchlist_freeze_cols'
-const FREEZE_OPTIONS = [
-  { count: 0, label: 'None' },
-  { count: 1, label: 'Ticker' },
-  { count: 2, label: 'Ticker + Description' },
-  { count: 3, label: 'Through Price' },
-  { count: 4, label: 'Through 1D Chg' },
-  { count: 5, label: 'Through Div Yield' },
-  { count: 6, label: 'Through AUM' },
-  { count: 7, label: 'Through Signal' },
-]
-
 export default function Watchlist() {
   const pf = useProfileFetch()
-  const { selection } = useProfile()
   const dialog = useDialog()
-  const [watchingList, setWatchingList] = useState([])
-  const [analysisData, setAnalysisData] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
-  const [ticker, setTicker] = useState('')
-  const [notes, setNotes] = useState('')
-  const [sortCol, setSortCol] = useState(null)
+  const [lists, setLists] = useState([])
+  const [market, setMarket] = useState({})
+  const [ready, setReady] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [updating, setUpdating] = useState(false)
+  const [activeId, setActiveId] = useState(() => {
+    try { return Number(sessionStorage.getItem(ACTIVE_KEY)) || null } catch { return null }
+  })
+  const [sortKey, setSortKey] = useState('ticker')
   const [sortAsc, setSortAsc] = useState(true)
-  const [modalTicker, setModalTicker] = useState(null)
-  const [freezeCount, setFreezeCount] = useState(6)
+  const [wizard, setWizard] = useState(null)
+  const [adderFor, setAdderFor] = useState(null)
+  const [listEditor, setListEditor] = useState(null)
+  const [itemEditor, setItemEditor] = useState(null)
+  const [chartTicker, setChartTicker] = useState(null)
   const [preferences, setPreferences] = useState(loadGradingPreferences)
-  const signalThresholds = preferences.signals.thresholds
-  const headers = watchlistHeaders(signalThresholds)
-  const [freezeLefts, setFreezeLefts] = useState([])
-  const initialLoad = useRef(true)
-  const watchingListRef = useRef(watchingList)
-  const saveQueueRef = useRef(Promise.resolve())
-  const pageRef = useRef(null)
-  const tableRef = useRef(null)
+  const formula = signalFormulaSearch(preferences).toString()
+
+  const reload = useCallback(async () => {
+    const response = await pf('/api/watchlists')
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || 'Could not load watchlists')
+    setLists(data.lists || [])
+    setMarket(previous => ({ ...previous, ...(data.market || {}) }))
+    setReady(true)
+    return data.lists || []
+  }, [pf])
 
   useEffect(() => {
-    const inSplit = Boolean(pageRef.current?.closest('.split-pane'))
-    try {
-      const raw = window.localStorage.getItem(FREEZE_STORAGE_KEY)
-      if (raw == null) {
-        setFreezeCount(inSplit ? 1 : 6)
-        return
+    let cancelled = false
+    reload().catch(err => {
+      if (!cancelled) {
+        setReady(true)
+        setLoadError(err.message)
       }
-      const next = parseInt(raw, 10)
-      if (Number.isFinite(next) && next >= 0 && next <= FREEZE_OPTIONS[FREEZE_OPTIONS.length - 1].count) {
-        setFreezeCount(next)
-      }
-    } catch {
-      setFreezeCount(inSplit ? 1 : 6)
-    }
-  }, [])
-
-  const changeFreezeCount = (next) => {
-    setFreezeCount(next)
-    try {
-      window.localStorage.setItem(FREEZE_STORAGE_KEY, String(next))
-    } catch {
-      // Persistence is a convenience.
-    }
-  }
-
-  useLayoutEffect(() => {
-    const table = tableRef.current
-    if (!table || freezeCount <= 0) {
-      setFreezeLefts([])
-      return undefined
-    }
-    const apply = () => {
-      const headers = table.querySelectorAll(':scope > thead > tr > th')
-      const next = []
-      let offset = 0
-      for (let index = 0; index < freezeCount; index += 1) {
-        next.push(offset)
-        offset += headers[index]?.getBoundingClientRect().width || 0
-      }
-      setFreezeLefts((prev) => (
-        prev.length === next.length && prev.every((value, index) => Math.abs(value - next[index]) < 0.5)
-          ? prev
-          : next
-      ))
-    }
-    apply()
-    if (typeof ResizeObserver !== 'function') return undefined
-    const observer = new ResizeObserver(apply)
-    observer.observe(table)
-    return () => observer.disconnect()
-  }, [freezeCount, watchingList.length, analysisData])
-
-  const frozenCell = (index) => {
-    if (index >= freezeCount) return {}
-    return {
-      className: `wl-frozen${index === freezeCount - 1 ? ' wl-frozen-edge' : ''}`,
-      style: { left: freezeLefts[index] || 0 },
-    }
-  }
-
-  const bodyCell = (index, extra = {}) => {
-    const frozen = frozenCell(index)
-    const className = [frozen.className, extra.className].filter(Boolean).join(' ') || undefined
-    return {
-      className,
-      style: { ...frozen.style, ...extra.style },
-      title: extra.title,
-    }
-  }
+    })
+    return () => { cancelled = true }
+  }, [reload])
 
   useEffect(() => {
     const refresh = event => setPreferences(event.detail || loadGradingPreferences())
@@ -466,396 +330,538 @@ export default function Watchlist() {
     return () => window.removeEventListener(GRADING_PREFERENCES_EVENT, refresh)
   }, [])
 
-  const loadAnalysis = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    pf(`/api/watchlist/data?${signalFormulaSearch(preferences)}`)
-      .then(r => r.json())
-      .then(data => {
-        setLoading(false)
-        if (data.error) setError(data.error)
-        setAnalysisData(data)
-      })
-      .catch(err => {
-        setLoading(false)
-        setError('Error loading analysis: ' + err)
-      })
-  }, [pf, selection, preferences])
-
-  // Saves POST the whole list and replace what is stored, so nothing may be
-  // saved until the stored list has actually been read.
-  const [listLoaded, setListLoaded] = useState(false)
-  const listLoadedRef = useRef(false)
-  const retryTimerRef = useRef(null)
-
-  const loadWatchingList = useCallback(() => {
-    clearTimeout(retryTimerRef.current)
-    pf('/api/watchlist/watching')
-      .then(r => r.json())
-      .then(data => {
-        if (!Array.isArray(data.rows)) throw new Error('bad watchlist response')
-        // Don't clobber edits made locally after a previous successful load.
-        if (!listLoadedRef.current) {
-          watchingListRef.current = data.rows
-          setWatchingList(data.rows)
-        }
-        listLoadedRef.current = true
-        setListLoaded(true)
-        if (data.rows.length > 0) loadAnalysis()
-      })
-      .catch(() => {
-        // Backend may still be starting; keep trying rather than showing an empty list.
-        retryTimerRef.current = setTimeout(loadWatchingList, 2000)
-      })
-  }, [pf, loadAnalysis])
+  const active = lists.find(list => list.id === activeId) || lists.find(list => list.is_default) || lists[0] || null
 
   useEffect(() => {
-    loadWatchingList()
-    return () => clearTimeout(retryTimerRef.current)
-  }, [loadWatchingList])
+    if (!active) return
+    try { sessionStorage.setItem(ACTIVE_KEY, String(active.id)) } catch { /* ignore */ }
+  }, [active])
 
-  const cleanWatchlistRows = (rows) => rows.map(r => ({
-    ticker: r.ticker,
-    notes: r.notes || '',
-    div_yield_override: r.div_yield_override ?? null,
-    nav_erosion_scope: r.nav_erosion_scope || 'auto',
-    nav_benchmark_override: r.nav_benchmark_override || '',
-  }))
+  const tickerKey = (active?.items || []).map(item => item.ticker).join(',')
 
-  const saveList = useCallback((newList, options = {}) => {
-    if (!listLoadedRef.current) return saveQueueRef.current
-    watchingListRef.current = newList
-    setWatchingList(newList)
-    saveQueueRef.current = saveQueueRef.current.catch(() => {}).then(() => pf('/api/watchlist/watching', {
+  useEffect(() => {
+    const tickers = tickerKey ? tickerKey.split(',') : []
+    if (!tickers.length) return undefined
+    let cancelled = false
+    setUpdating(true)
+    const post = (part, search) => pf(`/api/watchlist/market/refresh${search || ''}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tickers, part }),
+    }).then(response => response.json())
+
+    post('quote')
+      .then(data => {
+        if (!cancelled && data.market) setMarket(previous => ({ ...previous, ...data.market }))
+      })
+      .catch(() => {})
+      .then(() => post('history', `?${formula}`))
+      .then(data => {
+        if (!cancelled && data?.market) setMarket(previous => ({ ...previous, ...data.market }))
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setUpdating(false)
+      })
+    return () => { cancelled = true }
+  }, [tickerKey, formula, pf])
+
+  const rows = useMemo(() => {
+    const source = (active?.items || []).map(item => {
+      const quote = market[item.ticker] || {}
+      const override = item.div_yield_override
+      const overridden = override !== null && override !== undefined && override !== ''
+      return {
+        ...item,
+        name: quote.name || item.name || '',
+        price: quote.price,
+        change_1d: quote.change_1d,
+        div_yield: overridden ? Number(override) : quote.div_yield,
+        yield_overridden: overridden,
+        div_growth_5y: quote.div_growth_5y,
+        next_ex_date: quote.next_ex_date,
+        aum: quote.aum,
+        one_yr_ret: quote.one_yr_ret,
+        cov_sig: quote.cov_sig,
+        nav_erosion_prob: quote.nav_erosion_prob,
+      }
+    })
+    const signalOrder = { BUY: 0, NEUTRAL: 1, SELL: 2 }
+    const erosionOrder = { High: 0, Medium: 1, Low: 2 }
+    const sorted = [...source]
+    sorted.sort((left, right) => {
+      let a = left[sortKey]
+      let b = right[sortKey]
+      if (sortKey === 'cov_sig') {
+        a = signalOrder[a] ?? 9
+        b = signalOrder[b] ?? 9
+      } else if (sortKey === 'nav_erosion_prob') {
+        a = erosionOrder[a] ?? 9
+        b = erosionOrder[b] ?? 9
+      }
+      if (a == null || a === '') return 1
+      if (b == null || b === '') return -1
+      if (typeof a === 'number' && typeof b === 'number') return sortAsc ? a - b : b - a
+      return sortAsc ? String(a).localeCompare(String(b)) : String(b).localeCompare(String(a))
+    })
+    return sorted
+  }, [active, market, sortKey, sortAsc])
+
+  const chooseSort = (key) => {
+    if (sortKey === key) setSortAsc(value => !value)
+    else {
+      setSortKey(key)
+      setSortAsc(true)
+    }
+  }
+
+  const openWizard = () => setWizard({
+    step: 1,
+    name: '',
+    description: '',
+    icon: 'chart',
+    color: COLORS[0],
+    picks: [],
+  })
+
+  const createList = async (includePicks) => {
+    const name = wizard.name.trim()
+    if (!name) {
+      await dialog.alert('Enter a watchlist name.')
+      setWizard(current => ({ ...current, step: 1 }))
+      return
+    }
+    const response = await pf('/api/watchlists', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        rows: cleanWatchlistRows(newList),
-        preserve_notes: !!options.preserveNotes,
+        name,
+        description: wizard.description.trim(),
+        icon: wizard.icon,
+        color: wizard.color,
+        tickers: includePicks ? wizard.picks : [],
       }),
-    }))
-    return saveQueueRef.current
-  }, [pf])
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      await dialog.alert(data.error || 'Could not create the watchlist.')
+      return
+    }
+    setWizard(null)
+    const next = await reload()
+    const created = next.find(list => list.id === data.list?.id) || data.list
+    if (created) setActiveId(created.id)
+  }
 
-  useEffect(() => { watchingListRef.current = watchingList }, [watchingList])
+  const saveListEditor = async () => {
+    const name = listEditor.name.trim()
+    if (!name) {
+      await dialog.alert('Enter a watchlist name.')
+      return
+    }
+    const response = await pf(`/api/watchlists/${listEditor.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        description: listEditor.description,
+        icon: listEditor.icon,
+        color: listEditor.color,
+        is_default: !!listEditor.is_default,
+      }),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      await dialog.alert(data.error || 'Could not save the watchlist.')
+      return
+    }
+    setListEditor(null)
+    await reload()
+  }
 
-  const addWatching = async () => {
-    const t = ticker.trim().toUpperCase()
-    if (!t || !listLoadedRef.current) return
-    const current = watchingListRef.current
-    const trimmedNotes = notes.trim()
-    const existingIdx = current.findIndex(r => r.ticker === t)
-    if (existingIdx !== -1) {
-      // Already in list — update notes instead of erroring out
-      if (!trimmedNotes) {
-        await dialog.alert(t + ' is already in your watching list. Type notes in the Notes field to update them, or click the Notes cell in the table.')
+  const removeList = async (list) => {
+    const ok = await dialog.confirm(`Delete "${list.name}"? Symbols on this list will be removed.`)
+    if (!ok) return
+    await pf(`/api/watchlists/${list.id}`, { method: 'DELETE' })
+    const next = await reload()
+    if (!next.some(entry => entry.id === activeId)) setActiveId(next[0]?.id || null)
+  }
+
+  const addSymbol = async (listId, hit) => {
+    const response = await pf(`/api/watchlists/${listId}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(hit),
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      await dialog.alert(data.error || 'Could not add that symbol.')
+      return false
+    }
+    await reload()
+    return true
+  }
+
+  const saveItem = async () => {
+    const notes = itemEditor.notes.slice(0, 500)
+    const yieldText = String(itemEditor.div_yield_override ?? '').trim()
+    let divYield = null
+    if (yieldText !== '') {
+      divYield = Number(yieldText)
+      if (!Number.isFinite(divYield)) {
+        await dialog.alert('Yield override must be a number, or blank to use the calculated yield.')
         return
       }
-      const newList = current.map((r, i) => i === existingIdx ? { ...r, notes: trimmedNotes } : r)
-      saveList(newList)
-      setTicker('')
-      setNotes('')
-      return
     }
-    const newList = [...current, { ticker: t, notes: trimmedNotes }]
-    saveList(newList)
-    setTicker('')
-    setNotes('')
-    // Re-run analysis to include new ticker
-    setTimeout(loadAnalysis, 300)
-  }
-
-  const updateNotes = (t, newNotes) => {
-    const current = watchingListRef.current
-    const trimmed = (newNotes || '').slice(0, 500)
-    const idx = current.findIndex(r => r.ticker === t)
-    if (idx === -1) return
-    if ((current[idx].notes || '') === trimmed) return
-    const newList = current.map((r, i) => i === idx ? { ...r, notes: trimmed } : r)
-    saveList(newList)
-  }
-
-  const updateYieldOverride = (t, newValue) => {
-    const current = watchingListRef.current
-    const idx = current.findIndex(r => r.ticker === t)
-    if (idx === -1) return
-    const trimmed = (newValue ?? '').toString().trim()
-    let parsed = null
-    if (trimmed !== '') {
-      const n = Number(trimmed)
-      if (Number.isFinite(n)) parsed = n
-      else return
-    }
-    const prev = current[idx].div_yield_override
-    const prevNorm = (prev === undefined || prev === null) ? null : Number(prev)
-    if (prevNorm === parsed) return
-    const newList = current.map((r, i) => i === idx ? { ...r, div_yield_override: parsed } : r)
-    saveList(newList, { preserveNotes: true })
-    setTimeout(loadAnalysis, 200)
-  }
-
-  const updateNavSettings = (t, scope, benchmark, localOnly = false) => {
-    const current = watchingListRef.current
-    const idx = current.findIndex(r => r.ticker === t)
-    if (idx === -1) return
-    const nextScope = ['auto', 'test', 'skip'].includes(scope) ? scope : 'auto'
-    const nextBenchmark = (benchmark || '').trim().toUpperCase()
-    const prevScope = current[idx].nav_erosion_scope || 'auto'
-    const prevBenchmark = current[idx].nav_benchmark_override || ''
-    if (prevScope === nextScope && prevBenchmark === nextBenchmark && !current[idx]._nav_dirty) return
-
-    const newList = current.map((r, i) => i === idx ? {
-      ...r,
-      nav_erosion_scope: nextScope,
-      nav_benchmark_override: nextBenchmark,
-      _nav_dirty: localOnly,
-    } : r)
-    if (localOnly) {
-      watchingListRef.current = newList
-      setWatchingList(newList)
-      return
-    }
-    saveList(newList, { preserveNotes: true })
-    setTimeout(loadAnalysis, 200)
-  }
-
-  const removeWatching = (t) => {
-    saveList(watchingListRef.current.filter(r => r.ticker !== t), { preserveNotes: true })
-  }
-
-  const getAnalysis = (tkr) => {
-    if (!analysisData) return null
-    const rows = analysisData.watching || []
-    return rows.find(r => r.ticker === tkr) || null
-  }
-
-  // Build display rows — spread analysis first so user-edited fields
-  // (notes, div_yield_override) from watchingList always win over any
-  // stale copies the analysis endpoint may return.
-  const displayRows = watchingList.map(r => ({
-    ...(getAnalysis(r.ticker) || {}),
-    ...r,
-  }))
-
-  // Sorting
-  const sortedRows = [...displayRows]
-  if (sortCol !== null) {
-    const cols = ['ticker', 'description', 'price', 'change_1d', 'div_yield', 'aum', 'signal', 'ao_sig',
-      'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'sharpe', 'sortino', 'one_yr_ret',
-      'cov_ratio', 'cov_sig', 'nav_erosion_prob', 'notes']
-    const key = cols[sortCol]
-    const sigOrder = { BUY: 0, NEUTRAL: 1, SELL: 2 }
-    sortedRows.sort((a, b) => {
-      let aV = a[key], bV = b[key]
-      if (['signal', 'ao_sig', 'rsi_sig', 'macd_sig', 'sma50_sig', 'sma200_sig', 'cov_sig'].includes(key)) {
-        aV = sigOrder[aV] ?? 9
-        bV = sigOrder[bV] ?? 9
-      }
-      if (key === 'nav_erosion_prob') {
-        const eroOrder = { High: 0, Medium: 1, Low: 2 }
-        aV = eroOrder[aV] ?? 9
-        bV = eroOrder[bV] ?? 9
-      }
-      if (aV == null) aV = ''
-      if (bV == null) bV = ''
-      if (typeof aV === 'number' && typeof bV === 'number')
-        return sortAsc ? aV - bV : bV - aV
-      return sortAsc ? String(aV).localeCompare(String(bV)) : String(bV).localeCompare(String(aV))
+    const response = await pf(`/api/watchlists/${active.id}/items/${encodeURIComponent(itemEditor.ticker)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notes,
+        div_yield_override: divYield,
+        nav_erosion_scope: itemEditor.nav_erosion_scope,
+        nav_benchmark_override: itemEditor.nav_benchmark_override,
+      }),
     })
+    const data = await response.json()
+    if (!response.ok) {
+      await dialog.alert(data.error || 'Could not save this symbol.')
+      return
+    }
+    setItemEditor(null)
+    await reload()
   }
 
-  const handleSort = (col) => {
-    if (sortCol === col) setSortAsc(!sortAsc)
-    else { setSortCol(col); setSortAsc(true) }
+  const removeSymbol = async (ticker) => {
+    await pf(`/api/watchlists/${active.id}/items/${encodeURIComponent(ticker)}`, { method: 'DELETE' })
+    await reload()
   }
 
-  const arrow = (col) => sortCol === col ? (sortAsc ? ' \u25B2' : ' \u25BC') : ''
-
-  const counts = analysisData?.counts || null
+  const renderCell = (row, key) => {
+    if (key === 'ticker') {
+      return (
+        <button type="button" className="wl-symbol" onClick={() => setChartTicker(row.ticker)}>
+          {row.ticker}
+        </button>
+      )
+    }
+    if (key === 'name') return <span className="wl-name" title={row.name}>{row.name || '—'}</span>
+    if (key === 'price') return formatMoney(row.price)
+    if (key === 'change_1d') {
+      return <span className={row.change_1d == null ? '' : row.change_1d >= 0 ? 'pct-up' : 'pct-down'}>{fmtSigned(row.change_1d)}</span>
+    }
+    if (key === 'div_yield') {
+      return <span title={row.yield_overridden ? 'Manual yield' : ''}>{fmtPercent(row.div_yield)}{row.yield_overridden ? ' *' : ''}</span>
+    }
+    if (key === 'div_growth_5y') return fmtPercent(row.div_growth_5y, 1)
+    if (key === 'next_ex_date') return row.next_ex_date || '—'
+    if (key === 'aum') return formatMoneyCompact(row.aum)
+    if (key === 'one_yr_ret') {
+      return <span className={row.one_yr_ret == null ? '' : row.one_yr_ret >= 0 ? 'pct-up' : 'pct-down'}>{fmtSigned(row.one_yr_ret)}</span>
+    }
+    if (key === 'cov_sig') return <SignalBadge signal={row.cov_sig} />
+    if (key === 'nav_erosion_prob') {
+      return (
+        <span style={erosionStyle(row.nav_erosion_prob)}>
+          {row.nav_erosion_prob ? `${row.nav_erosion_prob} Probability` : '—'}
+        </span>
+      )
+    }
+    if (key === 'notes') {
+      return (
+        <button type="button" className={`wl-note${row.notes ? '' : ' wl-note-empty'}`} onClick={() => setItemEditor({ ...row })}>
+          {row.notes || 'Add note'}
+        </button>
+      )
+    }
+    return '—'
+  }
 
   return (
-    <div className="wl-page" ref={pageRef}>
+    <div className="wl-page">
       <NotFinancialAdviceNotice />
-      <h1 style={{ marginBottom: '0.5rem' }}>Watchlist</h1>
+      <header className="wl-top">
+        <div>
+          <h1>Watchlists</h1>
+          <p>Your default list syncs to Home. Edit here and it updates on the dashboard.</p>
+        </div>
+        <button type="button" className="btn btn-primary" onClick={openWizard}>+ New Watchlist</button>
+      </header>
 
-      {/* Add form */}
-      <div className="wl-form-row">
-        <div>
-          <label className="wl-label">Ticker</label>
-          <input
-            className="wl-input"
-            style={{ width: 100, textTransform: 'uppercase' }}
-            placeholder="e.g. SCHD"
-            value={ticker}
-            onChange={e => setTicker(e.target.value.toUpperCase())}
-            onKeyDown={e => e.key === 'Enter' && addWatching()}
-          />
-        </div>
-        <div>
-          <label className="wl-label">Notes (optional)</label>
-          <input
-            className="wl-input"
-            style={{ width: 220 }}
-            placeholder="Why interested?"
-            value={notes}
-            onChange={e => setNotes(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addWatching()}
-          />
-        </div>
-        <button
-          className="wl-btn-add"
-          onClick={addWatching}
-          disabled={!listLoaded}
-          title={listLoaded ? undefined : 'Waiting for your saved watchlist to load'}
-        >+ Add</button>
-        <div>
-          <label className="wl-label" htmlFor="wl-freeze-cols">Lock columns</label>
-          <select
-            id="wl-freeze-cols"
-            className="wl-input"
-            value={freezeCount}
-            onChange={(e) => changeFreezeCount(Number(e.target.value))}
-            title="Keep leading columns visible while scrolling sideways. In Split View, Ticker-only is the default so the pane stays usable."
-          >
-            {FREEZE_OPTIONS.map((option) => (
-              <option key={option.count} value={option.count}>{option.label}</option>
+      {loadError && <div className="wl-error">{loadError}</div>}
+
+      {ready && lists.length === 0 && (
+        <section className="wl-empty-card">
+          <button type="button" className="wl-empty-plus" onClick={openWizard} aria-label="New watchlist">+</button>
+          <h2>No watchlists yet</h2>
+          <p>Create a list and it will appear on your Home dashboard.</p>
+          <button type="button" className="btn btn-primary" onClick={openWizard}>+ New Watchlist</button>
+        </section>
+      )}
+
+      {active && (
+        <>
+          <div className="wl-pills" role="tablist" aria-label="Watchlists">
+            {lists.map(list => (
+              <button
+                key={list.id}
+                type="button"
+                role="tab"
+                aria-selected={list.id === active.id}
+                className={`wl-pill${list.id === active.id ? ' wl-pill-active' : ''}`}
+                onClick={() => setActiveId(list.id)}
+              >
+                <span className="wl-pill-icon" style={{ color: list.color, background: tint(list.color, 0.16) }}>
+                  <WatchlistGlyph name={list.icon} />
+                </span>
+                {list.name}
+                {list.is_default && <span className="wl-home-tag">Home</span>}
+                <span className="wl-count">{list.items.length}</span>
+              </button>
             ))}
-          </select>
-        </div>
-      </div>
-
-      {/* Counts */}
-      {counts && (
-        <div className="wl-counts">
-          <div className="wl-count-box wl-count-buy">
-            <div className="wl-count-num">{counts.BUY || 0}</div>
-            <div className="wl-count-lbl">Bullish</div>
           </div>
-          <div className="wl-count-box wl-count-sell">
-            <div className="wl-count-num">{counts.SELL || 0}</div>
-            <div className="wl-count-lbl">Bearish</div>
-          </div>
-          <div className="wl-count-box wl-count-neut">
-            <div className="wl-count-num">{counts.NEUTRAL || 0}</div>
-            <div className="wl-count-lbl">Neutral</div>
-          </div>
-        </div>
+
+          <section className="wl-card">
+            <header className="wl-card-head">
+              <div className="wl-card-title">
+                <span className="wl-pill-icon wl-pill-icon-lg" style={{ color: active.color, background: tint(active.color, 0.16) }}>
+                  <WatchlistGlyph name={active.icon} />
+                </span>
+                <div>
+                  <h2>{active.name}</h2>
+                  <p>
+                    {active.items.length} {active.items.length === 1 ? 'item' : 'items'}
+                    {updating ? ' · updating prices' : ''}
+                  </p>
+                  {active.description && <p className="wl-card-desc">{active.description}</p>}
+                </div>
+              </div>
+              <div className="wl-card-actions">
+                <button type="button" className="btn btn-secondary" onClick={() => setAdderFor(active)}>+ Add Stocks</button>
+                <button type="button" className="wl-icon-btn" aria-label={`Edit ${active.name}`} onClick={() => setListEditor({ ...active })}>✎</button>
+                <button type="button" className="wl-icon-btn wl-icon-danger" aria-label={`Delete ${active.name}`} onClick={() => removeList(active)}>🗑</button>
+              </div>
+            </header>
+
+            {active.items.length === 0 ? (
+              <div className="wl-card-empty">
+                <p>This list has no symbols yet.</p>
+                <button type="button" className="btn btn-primary" onClick={() => setAdderFor(active)}>+ Add Stocks</button>
+              </div>
+            ) : (
+              <div className="wl-table-scroll">
+                <table className="sst wl-table">
+                  <thead>
+                    <tr>
+                      {COLUMNS.map((column, index) => (
+                        <th
+                          key={column.key}
+                          className={index < 2 ? `wl-sticky wl-sticky-${index}` : undefined}
+                          title={column.tip || ''}
+                          onClick={() => chooseSort(column.key)}
+                        >
+                          {column.label}{sortKey === column.key ? (sortAsc ? ' ▲' : ' ▼') : ''}
+                        </th>
+                      ))}
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(row => (
+                      <tr key={row.ticker}>
+                        {COLUMNS.map((column, index) => (
+                          <td key={column.key} className={index < 2 ? `wl-sticky wl-sticky-${index}` : undefined}>
+                            {renderCell(row, column.key)}
+                          </td>
+                        ))}
+                        <td className="wl-actions">
+                          <button type="button" onClick={() => setItemEditor({ ...row, div_yield_override: row.div_yield_override ?? '' })}>Edit</button>
+                          <button type="button" onClick={() => removeSymbol(row.ticker)}>Remove</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
       )}
 
-      {/* Spinner */}
-      {loading && (
-        <div className="wl-spinner">
-          <div className="wl-spin-circle" />
-          <p>Fetching price data &amp; calculating indicators&hellip;</p>
-        </div>
-      )}
+      {wizard && (
+        <div className="modal-overlay" onClick={() => setWizard(null)}>
+          <div className="modal-content wl-modal" role="dialog" aria-modal="true" aria-labelledby="wl-wizard-title" onClick={event => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setWizard(null)} aria-label="Close">&times;</button>
+            <h2 id="wl-wizard-title">{wizard.step === 1 ? 'Create Watchlist' : wizard.step === 2 ? 'Customize' : 'Add Stocks'}</h2>
+            <div className="wl-steps" aria-hidden="true">
+              {[1, 2, 3].map(step => <span key={step} className={step === wizard.step ? 'wl-step-on' : step < wizard.step ? 'wl-step-done' : ''} />)}
+            </div>
 
-      {/* Error */}
-      {error && <div className="wl-error">{error}</div>}
+            {wizard.step === 1 && (
+              <>
+                <label className="wl-label" htmlFor="wl-new-name">Watchlist Name</label>
+                <input id="wl-new-name" className="wl-input wl-input-wide" value={wizard.name} onChange={event => setWizard({ ...wizard, name: event.target.value })} autoFocus />
+                <label className="wl-label" htmlFor="wl-new-desc">Description (optional)</label>
+                <input id="wl-new-desc" className="wl-input wl-input-wide" placeholder="Optional description" value={wizard.description} onChange={event => setWizard({ ...wizard, description: event.target.value })} />
+                <div className="wl-modal-actions">
+                  <button type="button" className="btn btn-primary" onClick={() => wizard.name.trim() ? setWizard({ ...wizard, step: 2 }) : dialog.alert('Enter a watchlist name.')}>Next</button>
+                </div>
+              </>
+            )}
 
-      {/* Empty state */}
-      {!listLoaded && (
-        <div className="wl-empty">Loading your watchlist&hellip;</div>
-      )}
-      {listLoaded && watchingList.length === 0 && !loading && (
-        <div className="wl-empty">No tickers in your watching list yet. Add one above to get started.</div>
-      )}
-
-      {/* Table */}
-      {watchingList.length > 0 && !loading && (
-        <div className="sst-wrap watchlist-wrap">
-          <table className="sst" ref={tableRef}>
-            <thead>
-              <tr>
-                {headers.map((h, i) => {
-                  const frozen = frozenCell(i)
-                  return (
-                    <th
-                      key={h.label}
-                      className={frozen.className}
-                      onClick={() => handleSort(i)}
-                      style={{ cursor: 'pointer', ...frozen.style }}
-                      title={h.tip || ''}
+            {wizard.step === 2 && (
+              <>
+                <p className="wl-label">Icon</p>
+                <div className="wl-icon-grid">
+                  {ICONS.map(icon => (
+                    <button
+                      key={icon.id}
+                      type="button"
+                      aria-label={icon.label}
+                      aria-pressed={wizard.icon === icon.id}
+                      className={wizard.icon === icon.id ? 'wl-choice wl-choice-on' : 'wl-choice'}
+                      onClick={() => setWizard({ ...wizard, icon: icon.id })}
                     >
-                      {h.label}{h.tip ? ' \u24D8' : ''}{arrow(i)}
-                    </th>
-                  )
-                })}
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedRows.map(r => {
-                const a = analysisData ? getAnalysis(r.ticker) : null
-                return (
-                  <tr key={r.ticker}>
-                    <td {...bodyCell(0)}>
-                      <a
-                        href="#"
-                        onClick={(e) => { e.preventDefault(); setModalTicker(r.ticker) }}
-                        style={{ color: 'var(--accent-bright)', fontWeight: 600 }}
-                      >
-                        {r.ticker}
-                      </a>
-                    </td>
-                    <td {...bodyCell(1, { className: 'watchlist-description', title: r.description || '' })}>
-                      {r.description || '\u2014'}
-                    </td>
-                    <td {...bodyCell(2)}>{formatMoney(a?.price)}</td>
-                    <td {...bodyCell(3, { className: pctClass(a?.change_1d) })}>
-                      {a?.change_1d != null ? fmtPct(a.change_1d) : '\u2014'}
-                    </td>
-                    <td {...bodyCell(4)}>
-                      <YieldCell
-                        ticker={r.ticker}
-                        computed={a?.div_yield}
-                        source={a?.div_yield_source}
-                        override={r.div_yield_override}
-                        overridden={a?.div_yield_overridden}
-                        onSave={updateYieldOverride}
-                      />
-                    </td>
-                    <td {...bodyCell(5)}>{a?.aum != null ? formatMoneyCompact(a.aum) : '—'}</td>
-                    <td {...bodyCell(6)}><SignalBadge signal={a?.signal} /></td>
-                    <td><SignalBadge signal={a?.ao_sig} /></td>
-                    <td>
-                      <SignalBadge signal={a?.rsi_sig} />
-                      {a?.rsi_val != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{a.rsi_val}</span>}
-                    </td>
-                    <td><SignalBadge signal={a?.macd_sig} /></td>
-                    <td>
-                      <SignalBadge signal={a?.sma50_sig} />
-                      {a?.sma50_pct != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma50_pct)}</span>}
-                    </td>
-                    <td>
-                      <SignalBadge signal={a?.sma200_sig} />
-                      {a?.sma200_pct != null && <span style={{ color: 'var(--p-888)', fontSize: '0.75rem', marginLeft: 4 }}>{fmtPct(a.sma200_pct)}</span>}
-                    </td>
-                    <td>{a?.sharpe != null ? a.sharpe.toFixed(2) : '\u2014'}</td>
-                    <td>{a?.sortino != null ? a.sortino.toFixed(2) : '\u2014'}</td>
-                    <td className={pctClass(a?.one_yr_ret)}>{a?.one_yr_ret != null ? fmtPct(a.one_yr_ret) : '\u2014'}</td>
-                    <td title="Benchmark-gated Yield-Funding Coverage. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High. A zero can also result from a falling benchmark." style={{ cursor: a?.cov_ratio != null ? 'help' : undefined }}>{a?.cov_ratio != null ? a.cov_ratio.toFixed(4) : '\u2014'}</td>
-                    <td><SignalBadge signal={a?.cov_sig} /></td>
-                    <NavCell row={r} analysis={a} onSave={updateNavSettings} />
-                    <td style={{ minWidth: 180 }}>
-                      <NotesCell
-                        ticker={r.ticker}
-                        value={r.notes || ''}
-                        onSave={updateNotes}
-                      />
-                    </td>
-                    <td>
-                      <button className="btn-del" onClick={() => removeWatching(r.ticker)}>Remove</button>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      <WatchlistGlyph name={icon.id} />
+                    </button>
+                  ))}
+                </div>
+                <p className="wl-label">Accent Color</p>
+                <div className="wl-color-row">
+                  {COLORS.map(color => (
+                    <button
+                      key={color}
+                      type="button"
+                      aria-label={color}
+                      className={wizard.color === color ? 'wl-swatch wl-swatch-on' : 'wl-swatch'}
+                      style={{ background: color }}
+                      onClick={() => setWizard({ ...wizard, color })}
+                    />
+                  ))}
+                </div>
+                <div className="wl-preview">
+                  <span className="wl-pill-icon" style={{ color: wizard.color, background: tint(wizard.color, 0.18) }}>
+                    <WatchlistGlyph name={wizard.icon} />
+                  </span>
+                  <span>
+                    <strong>{wizard.name || 'Watchlist'}</strong>
+                    <small>0 stocks</small>
+                  </span>
+                </div>
+                <div className="wl-modal-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setWizard({ ...wizard, step: 1 })}>Back</button>
+                  <button type="button" className="btn btn-primary" onClick={() => setWizard({ ...wizard, step: 3 })}>Next</button>
+                </div>
+              </>
+            )}
+
+            {wizard.step === 3 && (
+              <>
+                <p className="wl-help">Add stocks now or skip — you can always add more later.</p>
+                <SymbolSearch
+                  pf={pf}
+                  picked={wizard.picks.map(pick => pick.ticker)}
+                  onAdd={hit => setWizard(current => (
+                    current.picks.some(pick => pick.ticker === hit.ticker)
+                      ? current
+                      : { ...current, picks: [...current.picks, hit] }
+                  ))}
+                />
+                {!!wizard.picks.length && (
+                  <p className="wl-picked">{wizard.picks.map(pick => pick.ticker).join(', ')}</p>
+                )}
+                <div className="wl-modal-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setWizard({ ...wizard, step: 2 })}>Back</button>
+                  {wizard.picks.length === 0 && (
+                    <button type="button" className="btn btn-secondary" onClick={() => createList(false)}>Skip</button>
+                  )}
+                  <button type="button" className="btn btn-primary" onClick={() => createList(true)}>Create</button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {modalTicker && <WatchlistTickerModal ticker={modalTicker} onClose={() => setModalTicker(null)} />}
+      {adderFor && (
+        <div className="modal-overlay" onClick={() => setAdderFor(null)}>
+          <div className="modal-content wl-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setAdderFor(null)} aria-label="Close">&times;</button>
+            <h2>Add Stocks to "{adderFor.name}"</h2>
+            <SymbolSearch
+              pf={pf}
+              picked={(lists.find(list => list.id === adderFor.id)?.items || []).map(item => item.ticker)}
+              onAdd={async hit => { await addSymbol(adderFor.id, hit) }}
+            />
+            <div className="wl-modal-actions">
+              <button type="button" className="btn btn-primary" onClick={() => setAdderFor(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {listEditor && (
+        <div className="modal-overlay" onClick={() => setListEditor(null)}>
+          <div className="modal-content wl-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setListEditor(null)} aria-label="Close">&times;</button>
+            <h2>Edit Watchlist</h2>
+            <label className="wl-label" htmlFor="wl-edit-name">Watchlist Name</label>
+            <input id="wl-edit-name" className="wl-input wl-input-wide" value={listEditor.name} onChange={event => setListEditor({ ...listEditor, name: event.target.value })} />
+            <label className="wl-label" htmlFor="wl-edit-desc">Description (optional)</label>
+            <input id="wl-edit-desc" className="wl-input wl-input-wide" value={listEditor.description || ''} onChange={event => setListEditor({ ...listEditor, description: event.target.value })} />
+            <p className="wl-label">Icon</p>
+            <div className="wl-icon-grid">
+              {ICONS.map(icon => (
+                <button key={icon.id} type="button" aria-label={icon.label} aria-pressed={listEditor.icon === icon.id} className={listEditor.icon === icon.id ? 'wl-choice wl-choice-on' : 'wl-choice'} onClick={() => setListEditor({ ...listEditor, icon: icon.id })}>
+                  <WatchlistGlyph name={icon.id} />
+                </button>
+              ))}
+            </div>
+            <p className="wl-label">Accent Color</p>
+            <div className="wl-color-row">
+              {COLORS.map(color => (
+                <button key={color} type="button" aria-label={color} className={listEditor.color === color ? 'wl-swatch wl-swatch-on' : 'wl-swatch'} style={{ background: color }} onClick={() => setListEditor({ ...listEditor, color })} />
+              ))}
+            </div>
+            <label className="wl-check">
+              <input type="checkbox" checked={!!listEditor.is_default} onChange={event => setListEditor({ ...listEditor, is_default: event.target.checked })} />
+              Show this list on Home
+            </label>
+            <div className="wl-modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setListEditor(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={saveListEditor}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {itemEditor && active && (
+        <div className="modal-overlay" onClick={() => setItemEditor(null)}>
+          <div className="modal-content wl-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
+            <button type="button" className="modal-close" onClick={() => setItemEditor(null)} aria-label="Close">&times;</button>
+            <h2>Edit {itemEditor.ticker}</h2>
+            <p className="wl-help">{itemEditor.name || itemEditor.ticker}</p>
+            <label className="wl-label" htmlFor="wl-item-note">Note</label>
+            <textarea id="wl-item-note" className="wl-input wl-input-wide" rows={3} maxLength={500} value={itemEditor.notes || ''} onChange={event => setItemEditor({ ...itemEditor, notes: event.target.value })} />
+            <label className="wl-label" htmlFor="wl-item-yield">Yield override (blank uses the calculated yield)</label>
+            <input id="wl-item-yield" className="wl-input" type="number" step="0.01" min="0" value={itemEditor.div_yield_override ?? ''} onChange={event => setItemEditor({ ...itemEditor, div_yield_override: event.target.value })} />
+            <label className="wl-label" htmlFor="wl-item-nav">NAV erosion</label>
+            <select id="wl-item-nav" className="wl-input" value={itemEditor.nav_erosion_scope || 'auto'} onChange={event => setItemEditor({ ...itemEditor, nav_erosion_scope: event.target.value })}>
+              <option value="auto">Auto</option>
+              <option value="test">Test</option>
+              <option value="skip">Skip</option>
+            </select>
+            <label className="wl-label" htmlFor="wl-item-bench">Benchmark override</label>
+            <input id="wl-item-bench" className="wl-input wl-input-wide" placeholder="QQQ, SPY, or BTC-USD+GLD" value={itemEditor.nav_benchmark_override || ''} onChange={event => setItemEditor({ ...itemEditor, nav_benchmark_override: event.target.value.toUpperCase() })} />
+            <div className="wl-modal-actions">
+              <button type="button" className="btn btn-secondary" onClick={() => setItemEditor(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={saveItem}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {chartTicker && <WatchlistTickerModal ticker={chartTicker} onClose={() => setChartTicker(null)} />}
     </div>
   )
 }

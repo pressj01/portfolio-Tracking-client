@@ -186,7 +186,7 @@ function Overview() {
         <li><strong>Options</strong> — Build simulated multi-leg trades, graph risk and moneyness, explore first- and higher-order Greeks, and run modeled historical strategy backtests.</li>
         <li><strong>Dividends</strong> — Dividend analysis, calendar view, dividend history, dividend compare, and dividend calculator.</li>
         <li><strong>Growth</strong> — Portfolio growth charts, total return tracking, gains &amp; losses breakdown, and safe withdrawal rate analysis.</li>
-        <li><strong>Watchlist</strong> — Track tickers outside your portfolio with live price and dividend data. Lock leading columns (Ticker by default in Split View) while scrolling sideways.</li>
+        <li><strong>Watchlist</strong> — Keep more than one named list of tickers you are researching. The list marked Home also appears on the dashboard. Price, yield, dividend growth, and NAV readings fill in after the list is on screen.</li>
         <li><strong>Split View</strong> — Two pages side by side. Each pane has its own account picker, so you can compare two portfolios; the date range and basis mode stay shared.</li>
         <li><strong>Checklists</strong> — Stock, ETF, and option-income ETF evaluators for structured pre-buy reviews.</li>
         <li><strong>Analysis</strong> — Organized into Research &amp; Compare, Screeners &amp; Signals, Income &amp; NAV Risk, Portfolio Diagnostics, and Planning &amp; Optimization. These groups cover security research, comparison tools, scanners, NAV erosion checks, income simulations, portfolio analytics, consolidation, macro regime context, portfolio testing, and rebalancing.</li>
@@ -4340,61 +4340,77 @@ function WatchlistHelp() {
     <div>
       <h2>Watchlist</h2>
       <p style={{ marginBottom: '1rem' }}>
-        The Watchlist is a curated monitor of tickers you're researching or considering buying.
-        For each ticker it runs a full suite of technical and risk signals automatically —
-        so you can see at a glance whether conditions favor buying, selling, or waiting.
-        It also shows benchmark-adjusted NAV erosion context for eligible income funds,
-        making it especially useful for evaluating high-yield strategies before adding them to your portfolio.
+        Watchlists are named lists of tickers you are researching. You can keep more than one.
+        The list badged <strong>Home</strong> is the one that also appears on the dashboard.
+        The page opens from what is already saved. Price, yield, dividend growth, and NAV
+        readings fill in afterward. A blank cell means that figure is not available yet.
+        It is not a zero.
       </p>
 
-      <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/watchlist/Screenshot 2026-05-09 102831.jpg" alt="Watchlist with price and dividend data" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
-      </div>
+      <HelpScreenshot
+        src="./help-screenshots/watchlist/empty.png"
+        alt="Empty Watchlists page with a New Watchlist button"
+        caption="With no lists yet, New Watchlist starts a three-step setup."
+      />
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Creating a list</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type a ticker symbol in the input field (auto-converts to uppercase).</li>
-        <li>Optionally type a note explaining why you're watching it (e.g., "considering for income sleeve").</li>
-        <li>Press <strong>Enter</strong> or click <strong>+Add</strong>. The app fetches market data and signals.</li>
-        <li>To remove a ticker, click the <strong>Remove</strong> button on its row.</li>
+        <li>Click <strong>+ New Watchlist</strong>. Name the list and, if you want, add a short description.</li>
+        <li>Pick an icon and an accent color. The preview shows how the list pill will look.</li>
+        <li>Search for symbols and click <strong>+ Add</strong>, or choose <strong>Skip</strong> and add them later. Then click <strong>Create</strong>.</li>
       </ol>
+      <HelpScreenshot
+        src="./help-screenshots/watchlist/create-name.png"
+        alt="Create Watchlist step with a name and optional description"
+        caption="Step 1 is the name and an optional description."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/watchlist/customize.png"
+        alt="Customize step with icon choices, accent colors, and a preview of the list"
+        caption="Step 2 sets the icon and color used on the list pill."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/watchlist/add-stocks.png"
+        alt="Add Stocks search showing TDAQ as the TappAlpha Innovation 100 ETF"
+        caption="Search resolves the ticker you typed. TDAQ is the TappAlpha Innovation 100 fund."
+      />
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Signal Count Badges</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>The list</h3>
       <p style={{ marginBottom: '1rem' }}>
-        At the top of the table, summary badges show how many tickers have a Bullish, Bearish, or Neutral
-        overall signal — a quick pulse check on your watchlist as a whole.
+        Pills along the top switch lists. <strong>+ Add Stocks</strong> searches again.
+        The pencil edits the name, description, icon, color, and whether this list is shown on Home.
+        The trash can deletes the whole list after you confirm. Symbol and Name stay put while you scroll the other columns.
+        Click a symbol for its one-year price and total-return chart.
       </p>
+      <HelpScreenshot
+        src="./help-screenshots/watchlist/list.png"
+        alt="A watchlist table with symbol, price, daily change, yield, dividend growth, and actions"
+        caption="The table is usable as soon as the symbols are listed. Market columns fill in after that."
+      />
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Locked columns</h3>
-      <p style={{ marginBottom: '1rem' }}>
-        Use <strong>Lock columns</strong> above the table to keep leading columns on screen while you
-        scroll sideways. Full-page Watchlist defaults to Ticker through AUM. In Split View it defaults
-        to <strong>Ticker</strong> only, so the frozen block fits the narrower pane. You can lock
-        through Signal, or turn locking off.
-      </p>
-
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Table Columns</h3>
-      <p style={{ marginBottom: '0.5rem' }}>Click any column header to sort. All 18 columns:</p>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Columns</h3>
+      <p style={{ marginBottom: '0.5rem' }}>Click a column header to sort.</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker</strong> — Symbol.</li>
-        <li><strong>Price</strong> — Current market price.</li>
-        <li><strong>1D Chg</strong> — Today's price change percentage. Green if up, red if down.</li>
-        <li><strong>Div Yield</strong> — Annual dividend yield.</li>
-        <li><strong>Signal</strong> — Overall reading (Bullish / Bearish / Neutral) from the saved vote share across the indicators below.</li>
-        <li><strong>AO</strong> — Awesome Oscillator reading (Bullish / Bearish / Neutral). Measures momentum using the difference of 5-period and 34-period midpoint averages.</li>
-        <li><strong>RSI</strong> — Relative Strength Index signal with the raw value. Bearish above the saved overbought boundary; Bullish below the saved oversold boundary.</li>
-        <li><strong>MACD</strong> — Moving Average Convergence Divergence signal. Bullish when the MACD line crosses above its signal line.</li>
-        <li><strong>SMA 50</strong> — Bullish above the saved neutral band around the 50-day average, Bearish below it, plus the % distance from price.</li>
-        <li><strong>SMA 200</strong> — Same for the 200-day moving average. Being above is the classic "golden cross" bullish condition.</li>
-        <li><strong>Sharpe</strong> — Risk-adjusted return. Above 1.5 = great, above 1.0 = good, below 0.5 = poor.</li>
-        <li><strong>Sortino</strong> — Like Sharpe but only penalizes downside volatility. Above 2.0 = great, above 1.5 = good.</li>
-        <li><strong>1Y Return</strong> — Total 12-month return percentage.</li>
-        <li><strong>NAV Ratio</strong> — fund price decline divided by TTM distribution yield, only when the benchmark is flat or up. Lagging a rising benchmark is not treated as structural NAV erosion.</li>
-        <li><strong>NAV Signal</strong> — Bullish, Neutral, or Bearish from the saved ratio bands. Bearish/High is also forced by the saved price-decline and share-deficit overrides.</li>
-        <li><strong>NAV Erosion</strong> — Probability label: <span style={{ color: 'var(--p-81c784)' }}>Low</span>, <span style={{ color: 'var(--amber)' }}>Medium</span>, or <span style={{ color: 'var(--p-ef9a9a)' }}>High</span>. Indicates whether the income wrapper appears to be losing price/NAV faster than its distribution stream justifies.</li>
-        <li><strong>Notes</strong> — Your custom notes for this ticker.</li>
-        <li><strong>Actions</strong> — Remove button.</li>
+        <li><strong>Symbol</strong> — Ticker. Click it to open the one-year chart.</li>
+        <li><strong>Name</strong> — Fund or company name.</li>
+        <li><strong>Price</strong> — Latest market price.</li>
+        <li><strong>Daily</strong> — Price change since the previous close.</li>
+        <li><strong>Yield</strong> — Distribution yield. An official issuer rate is used when that fund publishes one. Otherwise the figure is the last year of dividends divided by price. <strong>Edit</strong> can type a manual yield, which is marked with *.</li>
+        <li><strong>5Y Div Growth</strong> — Annualized growth from the last five full years of dividends. Newer funds stay blank.</li>
+        <li><strong>Next Ex-Date</strong> — The next ex-dividend date still ahead of today.</li>
+        <li><strong>AUM</strong> — Assets under management.</li>
+        <li><strong>1Y Return</strong> — Price change from the close about one year ago to the latest close. This is a price return, and it stays on the number once that history is in. It does not fall back to zero.</li>
+        <li><strong>NAV Signal</strong> — Bullish, Neutral, or Bearish from the saved NAV-erosion bands, for funds that are tested against a benchmark.</li>
+        <li><strong>NAV Erosion</strong> — Low, Medium, or High probability that the income wrapper is losing price faster than its distributions justify.</li>
+        <li><strong>Notes</strong> — Click the note, or use <strong>Edit</strong>, to write why you are watching the ticker.</li>
+        <li><strong>Actions</strong> — <strong>Edit</strong> changes the note, a manual yield, and the NAV test settings. <strong>Remove</strong> takes the symbol off this list.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Home</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        The dashboard shows Symbol, Name, Price, Daily, and Yield for the Home list.
+        Editing that list here updates the card. If you delete the Home list, the next list takes its place.
+      </p>
     </div>
   )
 }
