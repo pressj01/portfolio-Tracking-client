@@ -7061,22 +7061,52 @@ function DividendCalculatorHelp() {
         value, shares, price, and yield edits, and does not include taxes, DRIP, growth, or future contributions.
       </p>
       <p style={{ marginBottom: '1rem' }}>
-        After you click <strong>Calculate</strong> or <strong>Recalculate</strong>, four result bubbles appear at
-        the top: <strong>Total Income</strong> is cumulative gross dividend income over the full projection,
-        while <strong>Monthly Income</strong> and <strong>Annual Income</strong> are the combined income run-rates
-        at the final projection year. <strong>Portfolio Value</strong> is the combined value of invested holdings
-        at the final year and excludes cash dividends that are included separately in Ending Wealth. If inputs
-        change, the bubbles are marked as last-calculated values until the next recalculation.
+        The page is laid out side by side. The ticker bar runs across the top, the controls sit in a column on
+        the left, and every chart and table is on the right. The left column stays pinned and scrolls on its
+        own, so the controls remain in reach while you look at any chart. Results are live: the projection
+        appears as soon as a ticker loads and redraws every time an input changes.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Four result bubbles sit under the goal chart: <strong>Total Income</strong> is cumulative gross dividend
+        income over the full projection, while <strong>Monthly Income</strong> and <strong>Annual Income</strong>
+        are the combined income run-rates at the final projection year. <strong>Portfolio Value</strong> is the
+        combined value of invested holdings at the final year and excludes cash dividends that are included
+        separately in Ending Wealth.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator current payout, final-year income bubbles, monthly contribution schedule, limited contribution window, and custom allocation settings" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator with the ticker bar across the top, the goal and settings controls in the left column, and on the right a reached Portfolio Goal banner, the Portfolio Growth chart with nominal, today's dollars and target lines, and the result bubbles" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Goal and Income Goal</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        The first card in the left column sets what you are aiming for. Choose a goal type and enter a target:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Portfolio Goal</strong> — <strong>Target Portfolio Value</strong>. The chart plots the combined value of the holdings each year.</li>
+        <li><strong>Income Goal</strong> — <strong>Target Annual Income</strong>. The chart plots the gross annual dividend income run-rate each year; the note under the field shows the monthly equivalent.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The goal chart draws the target as a dotted line across the plot, the projection as a solid line
+        (<strong>Nominal value</strong> or <strong>Nominal income</strong>), and, when inflation is above 0, a dashed
+        <strong> Today&apos;s dollars</strong> line showing the same projection in today&apos;s purchasing power. Change
+        any input and the lines glide to their new position, so you can watch the projection close in on the
+        target or fall away from it. Hover the chart (or focus it and use the arrow keys) to read each year&apos;s
+        values and how far along the target that year is.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The banner above the chart states the outcome: the year the goal is first reached and how much the final
+        year exceeds it, or how far short the projection ends, with a progress bar showing the final year as a
+        percentage of the target. A ring on the line marks the year the goal is reached. If the projection
+        crosses the target and then falls back under it — a fund paying return of capital can do this as its
+        price erodes — the banner says the goal was reached but not held. With inflation above 0 the goal is
+        judged against the Today&apos;s dollars line, and the banner is labelled inflation-adjusted.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
       <p style={{ marginBottom: '0.5rem' }}>
-        Set your global assumptions once at the top of the page. These apply to every ticker you add and can be
-        adjusted at any time — the projection updates when you click <strong>Recalculate</strong>.
+        Set your global assumptions in the left column. These apply to every ticker you add and can be
+        adjusted at any time — the charts and tables update as you type.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Years to Invest</strong> — Length of the projection (1–50 years).</li>
@@ -7088,6 +7118,7 @@ function DividendCalculatorHelp() {
         <li><strong>Dividend Tax Rate</strong> — Applied to taxable dividends each period. The Return of Capital % on each ticker reduces the taxable portion.</li>
         <li><strong>Stock Price Growth (All Tickers)</strong> — Default annual price appreciation applied to every ticker. You can override this per ticker after it loads.</li>
         <li><strong>Dividends Reinvested (DRIP)</strong> — Percentage of net dividends reinvested each period (0–100%). Anything not reinvested is tracked as cash dividends.</li>
+        <li><strong>Annual Inflation Rate</strong> — Under Adjustments. Drives the Today&apos;s dollars line and the goal check only; the result tiles, the other charts, and the tables stay in future (nominal) dollars. Set it to 0 to judge the goal in nominal dollars. Contributions are held constant and are not raised with inflation.</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
         In custom allocation mode, every ticker can have a different percentage. The percentages refer to the
@@ -7104,7 +7135,7 @@ function DividendCalculatorHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/dividend-calculator-contributions.png" alt="Dividend Calculator ticker cards showing a custom 60 percent and 40 percent monthly contribution allocation" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-contributions.png" alt="Dividend Calculator left column scrolled to the monthly contribution schedule, limited contribution window, custom 60 percent allocation summary and adjustments, beside the Income Goal banner and Annual Income Growth chart" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
@@ -7115,9 +7146,11 @@ function DividendCalculatorHelp() {
         selected contribution allocation is applied across them and final results are aggregated.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        Each ticker becomes its own card with editable fields. Click the <strong>x</strong> on a chip or the
-        <strong> Remove</strong> button on the card to drop a ticker. <strong>Reset</strong> clears everything
-        back to defaults.
+        Each ticker becomes its own card with editable fields, listed under the settings in the left column.
+        With one or two tickers the cards are open; with three or more they start collapsed to a one-line
+        summary (value, yield, payout frequency, DRIP %) — click a ticker&apos;s name to open or close its card.
+        Click the <strong>x</strong> on a chip or the <strong> Remove</strong> button on the card to drop a
+        ticker. <strong>Reset</strong> clears everything back to defaults, including the goal and target.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
@@ -7132,14 +7165,15 @@ function DividendCalculatorHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running the Calculation</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Click <strong>Calculate</strong> to project results. Whenever inputs change after a calculation, a
-        <strong> Needs recalculation</strong> badge appears next to the settings card and a banner above the
-        results — click <strong>Recalculate</strong> to refresh. Inputs are stored locally in the page; nothing
-        is saved to the database.
+        There is nothing to recalculate: the results follow the inputs. <strong>Calculate</strong> replays the
+        goal line drawing in from Year 0, and if a symbol is still typed in the ticker box it loads that ticker
+        first. Projections run from 1 to 50 years. Inputs are stored locally in the page; nothing is saved to
+        the database.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Goal Chart</strong> — Portfolio Growth or Annual Income Growth against your target, at the top of the right column, with the goal banner above it and the result bubbles below.</li>
         <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
         <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
         <li><strong>Shares Over Time</strong> — One line per ticker when multiple are loaded, or a single line for one ticker. Shows how DRIP grows your share count year by year.</li>
@@ -7148,7 +7182,7 @@ function DividendCalculatorHelp() {
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/dividend-calculator-results.png" alt="Dividend Calculator results summary with ending wealth, final income, yield on cost, portfolio and income chart, and shares over time" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-results.png" alt="Dividend Calculator results in the right column — ending wealth, final income, yield on cost, the portfolio and income chart, and shares over time — with the controls still pinned on the left" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How DRIP Compounds</h3>
