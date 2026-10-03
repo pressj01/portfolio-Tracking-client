@@ -123,5 +123,17 @@
     "globals": "^17.7.0",
     "vite": "^6.0.0",
     "wait-on": "^8.0.0"
-  }
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pressj01/portfolio-Tracking-client.git"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/pressj01/portfolio-Tracking-client/issues"
+  },
+  "homepage": "https://github.com/pressj01/portfolio-Tracking-client#readme"
 }
