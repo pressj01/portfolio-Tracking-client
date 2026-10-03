@@ -25009,33 +25009,22 @@ def export_holdings_transactions():
 # ── Watchlist Export / Import ─────────────────────────────────────────────────
 
 _WATCHLIST_EXPORT_HEADERS = [
-    "Ticker", "Notes", "Div Yield Override",
+    "Watchlist", "Ticker", "Notes", "Div Yield Override",
     "NAV Erosion Scope", "NAV Benchmark Override", "Added Date",
 ]
 
 
 def _read_watchlist_rows():
+    from watchlist_lists import ensure_watchlist_schema, export_rows
     conn = get_connection()
     try:
-        rows = conn.execute(
-            "SELECT ticker, notes, added_date, div_yield_override, "
-            "nav_erosion_scope, nav_benchmark_override "
-            "FROM watchlist_watching ORDER BY sort_order, id"
-        ).fetchall()
+        ensure_watchlist_schema(conn)
+        rows = export_rows(conn)
     except Exception:
         rows = []
-    conn.close()
-    return [
-        {
-            "Ticker": r["ticker"],
-            "Notes": r["notes"] or "",
-            "Div Yield Override": r["div_yield_override"] if r["div_yield_override"] is not None else "",
-            "NAV Erosion Scope": r["nav_erosion_scope"] or "auto",
-            "NAV Benchmark Override": r["nav_benchmark_override"] or "",
-            "Added Date": r["added_date"] or "",
-        }
-        for r in rows
-    ]
+    finally:
+        conn.close()
+    return rows
 
 
 @app.route("/api/export/watchlist", methods=["GET"])
@@ -25069,7 +25058,7 @@ def export_watchlist():
             cell.border = thin_border
 
     widths = {
-        "Ticker": 12, "Notes": 60, "Div Yield Override": 20,
+        "Watchlist": 22, "Ticker": 12, "Notes": 60, "Div Yield Override": 20,
         "NAV Erosion Scope": 20, "NAV Benchmark Override": 24, "Added Date": 14,
     }
     for i, header in enumerate(_WATCHLIST_EXPORT_HEADERS, 1):
@@ -25129,11 +25118,12 @@ def api_import_watchlist():
         if not ticker_col:
             return jsonify({"error": "File must include a 'Ticker' column"}), 400
         notes_col = col_lookup.get("notes")
+        list_col = col_lookup.get("watchlist") or col_lookup.get("list")
         yield_col = col_lookup.get("div yield override") or col_lookup.get("yield override") or col_lookup.get("div_yield_override")
         scope_col = col_lookup.get("nav erosion scope") or col_lookup.get("nav_erosion_scope")
         bench_col = col_lookup.get("nav benchmark override") or col_lookup.get("nav_benchmark_override") or col_lookup.get("benchmark override")
 
-        # Build incoming rows (preserve order, dedupe on first occurrence)
+        # Build incoming rows (preserve order, dedupe on first occurrence per list)
         incoming = []
         seen = set()
         for _, row in df.iterrows():
@@ -25141,9 +25131,15 @@ def api_import_watchlist():
             if t is None or (isinstance(t, float) and math.isnan(t)):
                 continue
             ticker = str(t).strip().upper()
-            if not ticker or ticker in seen:
+            list_name = ""
+            if list_col is not None:
+                lv = row.get(list_col)
+                if lv is not None and not (isinstance(lv, float) and math.isnan(lv)):
+                    list_name = str(lv).strip()
+            identity = (list_name.lower(), ticker)
+            if not ticker or identity in seen:
                 continue
-            seen.add(ticker)
+            seen.add(identity)
             notes = ""
             if notes_col is not None:
                 nv = row.get(notes_col)
@@ -25171,68 +25167,24 @@ def api_import_watchlist():
                     cleaned = str(bv).strip().upper()
                     if cleaned:
                         bench_override = cleaned
-            incoming.append((ticker, notes, yield_override, scope, bench_override))
+            incoming.append({
+                "watchlist": list_name,
+                "ticker": ticker,
+                "notes": notes,
+                "div_yield_override": yield_override,
+                "nav_erosion_scope": scope,
+                "nav_benchmark_override": bench_override,
+            })
 
+        from watchlist_lists import apply_import
         conn = get_connection()
-        added = 0
-        updated = 0
-        if replace:
-            conn.execute("DELETE FROM watchlist_watching")
-            for i, (ticker, notes, yield_override, scope, bench_override) in enumerate(incoming):
-                conn.execute(
-                    "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
-                    "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
-                    (ticker, notes, i, yield_override, scope, bench_override),
-                )
-                added += 1
-        else:
-            existing = {
-                r["ticker"]: r["sort_order"] if "sort_order" in r.keys() else 0
-                for r in conn.execute("SELECT ticker, sort_order FROM watchlist_watching").fetchall()
-            }
-            max_order_row = conn.execute(
-                "SELECT COALESCE(MAX(sort_order), -1) AS m FROM watchlist_watching"
-            ).fetchone()
-            next_order = (max_order_row["m"] if max_order_row else -1) + 1
-            for ticker, notes, yield_override, scope, bench_override in incoming:
-                if ticker in existing:
-                    did_update = False
-                    if notes:
-                        conn.execute(
-                            "UPDATE watchlist_watching SET notes = ? WHERE ticker = ?",
-                            (notes, ticker),
-                        )
-                        did_update = True
-                    if yield_override is not None:
-                        conn.execute(
-                            "UPDATE watchlist_watching SET div_yield_override = ? WHERE ticker = ?",
-                            (yield_override, ticker),
-                        )
-                        did_update = True
-                    if scope != "auto":
-                        conn.execute(
-                            "UPDATE watchlist_watching SET nav_erosion_scope = ? WHERE ticker = ?",
-                            (scope, ticker),
-                        )
-                        did_update = True
-                    if bench_override:
-                        conn.execute(
-                            "UPDATE watchlist_watching SET nav_benchmark_override = ? WHERE ticker = ?",
-                            (bench_override, ticker),
-                        )
-                        did_update = True
-                    if did_update:
-                        updated += 1
-                else:
-                    conn.execute(
-                        "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
-                        "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
-                        (ticker, notes, next_order, yield_override, scope, bench_override),
-                    )
-                    next_order += 1
-                    added += 1
-        conn.commit()
-        conn.close()
+        try:
+            result = apply_import(conn, incoming, replace=replace)
+            conn.commit()
+        finally:
+            conn.close()
+        added = result["added"]
+        updated = result["updated"]
 
         if replace:
             msg = f"Replaced watchlist with {added} ticker{'s' if added != 1 else ''}."
@@ -42857,62 +42809,335 @@ def _watchlist_security_description(ticker, stored_description="", ticker_obj=No
 
 @app.route("/api/watchlist/watching", methods=["GET", "POST"])
 def watchlist_watching_list():
-    """GET: return watching rows.  POST: bulk-replace watching list."""
+    """Flat ticker list used by scanners and the command palette.
+
+    POST replaces the Home watchlist and leaves every other list alone.
+    """
+    from watchlist_lists import ensure_watchlist_schema, replace_default_items
+
     conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        if request.method == "POST":
+            data = request.get_json(force=True) or {}
+            rows = data.get("rows", [])
+            preserve_notes = bool(data.get("preserve_notes"))
+            existing_notes = {
+                r["ticker"]: r["notes"] or ""
+                for r in conn.execute("SELECT ticker, notes FROM watchlist_watching").fetchall()
+            }
+            cleaned = []
+            for raw in rows:
+                ticker = str(raw.get("ticker", "")).strip().upper()
+                if not ticker:
+                    continue
+                notes_value = existing_notes.get(ticker, "") if preserve_notes else raw.get("notes", existing_notes.get(ticker, ""))
+                cleaned.append({
+                    "ticker": ticker,
+                    "notes": str(notes_value or "")[:500],
+                    "div_yield_override": raw.get("div_yield_override"),
+                    "nav_erosion_scope": raw.get("nav_erosion_scope") or "auto",
+                    "nav_benchmark_override": raw.get("nav_benchmark_override") or "",
+                })
+            replace_default_items(conn, cleaned)
+            conn.commit()
+            return jsonify(ok=True)
 
-    if request.method == "POST":
-        data = request.get_json(force=True)
-        rows = data.get("rows", [])
-        preserve_notes = bool(data.get("preserve_notes"))
-        existing_notes = {
-            r["ticker"]: r["notes"] or ""
-            for r in conn.execute("SELECT ticker, notes FROM watchlist_watching").fetchall()
-        }
-        conn.execute("DELETE FROM watchlist_watching")
-        for i, r in enumerate(rows):
-            ticker = str(r.get("ticker", "")).strip().upper()
-            if not ticker:
-                continue
-            notes_value = existing_notes.get(ticker, "") if preserve_notes else r.get("notes", existing_notes.get(ticker, ""))
-            notes = str(notes_value)[:500]
-            override_raw = r.get("div_yield_override", None)
-            override = None
-            if override_raw is not None and override_raw != "":
-                try:
-                    override = float(override_raw)
-                except (TypeError, ValueError):
-                    override = None
-            scope = str(r.get("nav_erosion_scope") or "auto").strip().lower()
-            if scope not in ("auto", "test", "skip"):
-                scope = "auto"
-            bench_override = str(r.get("nav_benchmark_override") or "").strip().upper() or None
-            conn.execute(
-                "INSERT INTO watchlist_watching (ticker, notes, sort_order, div_yield_override, "
-                "nav_erosion_scope, nav_benchmark_override) VALUES (?, ?, ?, ?, ?, ?)",
-                (ticker, notes, i, override, scope, bench_override),
-            )
-        conn.commit()
+        rows = conn.execute(
+            "SELECT ticker, notes, added_date, div_yield_override, "
+            "nav_erosion_scope, nav_benchmark_override "
+            "FROM watchlist_watching ORDER BY sort_order, id"
+        ).fetchall()
+        result = []
+        for r in rows:
+            result.append({
+                "ticker": r["ticker"],
+                "notes": r["notes"] or "",
+                "added_date": r["added_date"] or "",
+                "div_yield_override": r["div_yield_override"],
+                "nav_erosion_scope": r["nav_erosion_scope"] or "auto",
+                "nav_benchmark_override": r["nav_benchmark_override"] or "",
+            })
+        return jsonify(rows=result)
+    finally:
         conn.close()
-        return jsonify(ok=True)
 
-    # GET
-    rows = conn.execute(
-        "SELECT ticker, notes, added_date, div_yield_override, "
-        "nav_erosion_scope, nav_benchmark_override "
-        "FROM watchlist_watching ORDER BY sort_order, id"
-    ).fetchall()
-    conn.close()
-    result = []
-    for r in rows:
-        result.append({
-            "ticker": r["ticker"],
-            "notes": r["notes"] or "",
-            "added_date": r["added_date"] or "",
-            "div_yield_override": r["div_yield_override"],
-            "nav_erosion_scope": r["nav_erosion_scope"] or "auto",
-            "nav_benchmark_override": r["nav_benchmark_override"] or "",
-        })
-    return jsonify(rows=result)
+
+def _watchlist_json_error(exc):
+    return jsonify(error=str(exc)), 400
+
+
+@app.route("/api/watchlists", methods=["GET", "POST"])
+def watchlists_collection():
+    from watchlist_lists import (
+        create_watchlist,
+        ensure_watchlist_schema,
+        fetch_watchlists,
+        read_market_cache,
+    )
+
+    conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        if request.method == "POST":
+            data = request.get_json(force=True) or {}
+            try:
+                created = create_watchlist(
+                    conn,
+                    data.get("name"),
+                    data.get("description") or "",
+                    data.get("icon") or "chart",
+                    data.get("color") or "",
+                    data.get("tickers") or [],
+                )
+            except ValueError as exc:
+                return _watchlist_json_error(exc)
+            conn.commit()
+            return jsonify(list=created)
+        lists = fetch_watchlists(conn)
+        tickers = sorted({item["ticker"] for entry in lists for item in entry["items"]})
+        return jsonify(lists=lists, market=read_market_cache(conn, tickers))
+    finally:
+        conn.close()
+
+
+@app.route("/api/watchlists/<int:list_id>", methods=["PATCH", "DELETE"])
+def watchlists_item(list_id):
+    from watchlist_lists import delete_watchlist, ensure_watchlist_schema, update_watchlist
+
+    conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        if request.method == "DELETE":
+            if not delete_watchlist(conn, list_id):
+                return jsonify(error="Watchlist not found."), 404
+            conn.commit()
+            return jsonify(ok=True)
+        data = request.get_json(force=True) or {}
+        try:
+            updated = update_watchlist(conn, list_id, data)
+        except ValueError as exc:
+            return _watchlist_json_error(exc)
+        if not updated:
+            return jsonify(error="Watchlist not found."), 404
+        conn.commit()
+        return jsonify(list=updated)
+    finally:
+        conn.close()
+
+
+@app.route("/api/watchlists/<int:list_id>/items", methods=["POST"])
+def watchlist_items_add(list_id):
+    from watchlist_lists import add_item, ensure_watchlist_schema
+
+    conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        data = request.get_json(force=True) or {}
+        try:
+            item = add_item(
+                conn,
+                list_id,
+                data.get("ticker"),
+                data.get("name") or "",
+                data.get("notes") or "",
+            )
+        except ValueError as exc:
+            return _watchlist_json_error(exc)
+        if item is None:
+            return jsonify(error="Watchlist not found."), 404
+        conn.commit()
+        return jsonify(item=item)
+    finally:
+        conn.close()
+
+
+@app.route("/api/watchlists/<int:list_id>/items/<path:ticker>", methods=["PATCH", "DELETE"])
+def watchlist_items_edit(list_id, ticker):
+    from watchlist_lists import ensure_watchlist_schema, remove_item, update_item
+
+    conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        if request.method == "DELETE":
+            if not remove_item(conn, list_id, ticker):
+                return jsonify(error="Symbol not found."), 404
+            conn.commit()
+            return jsonify(ok=True)
+        data = request.get_json(force=True) or {}
+        item = update_item(conn, list_id, ticker, data)
+        if item is None:
+            return jsonify(error="Symbol not found."), 404
+        conn.commit()
+        return jsonify(item=item)
+    finally:
+        conn.close()
+
+
+@app.route("/api/watchlist/lookup")
+def watchlist_lookup():
+    """Symbol search that prefers an exact ticker, including TappAlpha's TDAQ."""
+    from watchlist_lists import normalize_ticker, select_lookup_results
+
+    query = str(request.args.get("q") or "").strip()
+    if not query:
+        return jsonify(results=[])
+    upper = query.upper()
+    hits = []
+    conn = get_connection()
+    try:
+        if re.fullmatch(r"[A-Za-z0-9.\-]{1,15}", query):
+            try:
+                held = conn.execute(
+                    """
+                    SELECT UPPER(TRIM(ticker)) AS ticker,
+                           MAX(NULLIF(TRIM(description), '')) AS description
+                    FROM all_account_info
+                    WHERE UPPER(TRIM(ticker)) = ?
+                    GROUP BY UPPER(TRIM(ticker))
+                    """,
+                    (upper,),
+                ).fetchone()
+                if held and held["description"]:
+                    hits.append({
+                        "symbol": held["ticker"],
+                        "name": held["description"],
+                        "issuer": "Holding",
+                    })
+            except Exception:
+                pass
+        like = f"%{upper}%"
+        prefix = f"{upper}%"
+        try:
+            catalog = conn.execute(
+                """
+                SELECT f.symbol, f.fund_name, p.provider
+                FROM etf_provider_funds f
+                LEFT JOIN etf_providers p ON p.id = f.provider_id
+                WHERE UPPER(f.symbol) = ?
+                   OR UPPER(f.symbol) LIKE ?
+                   OR UPPER(f.fund_name) LIKE ?
+                ORDER BY CASE WHEN UPPER(f.symbol) = ? THEN 0
+                              WHEN UPPER(f.symbol) LIKE ? THEN 1
+                              ELSE 2 END, f.symbol
+                LIMIT 30
+                """,
+                (upper, prefix, like, upper, prefix),
+            ).fetchall()
+            for row in catalog:
+                hits.append({
+                    "symbol": row["symbol"],
+                    "name": row["fund_name"],
+                    "issuer": row["provider"] or "",
+                })
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+    results = select_lookup_results(query, hits)
+    exact = any(hit["symbol"] == upper for hit in results)
+    looks_like_ticker = bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9.\-]{0,14}", query))
+    if looks_like_ticker and not exact:
+        try:
+            info = _cached_yf_info(_yf_ticker(upper), upper) or {}
+            name = clean_security_description(info.get("longName") or info.get("shortName") or "").strip()
+            issuer = info.get("fundFamily") or ""
+            if name:
+                results = select_lookup_results(query, hits + [{
+                    "symbol": upper,
+                    "name": name,
+                    "issuer": issuer,
+                }])
+        except Exception:
+            pass
+    return jsonify(results=results)
+
+
+@app.route("/api/watchlist/market/refresh", methods=["POST"])
+def watchlist_market_refresh():
+    """Fill cached market columns. The screen does not wait on this call."""
+    from watchlist_lists import (
+        HISTORY_FIELDS,
+        QUOTE_FIELDS,
+        ensure_watchlist_schema,
+        item_settings,
+        merge_market_cache,
+        normalize_ticker,
+        read_market_cache,
+        remember_names,
+    )
+    from watchlist_market import refresh_history, refresh_quotes
+
+    data = request.get_json(force=True) or {}
+    part = str(data.get("part") or "quote").strip().lower()
+    if part not in ("quote", "history"):
+        part = "quote"
+    symbols = []
+    seen = set()
+    for raw in data.get("tickers") or []:
+        symbol = normalize_ticker(raw)
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+    symbols = symbols[:80]
+    if not symbols:
+        return jsonify(market={})
+
+    conn = get_connection()
+    try:
+        ensure_watchlist_schema(conn)
+        settings_by_ticker = item_settings(conn, symbols)
+    finally:
+        conn.close()
+
+    def persist(rows, keys):
+        write = get_connection()
+        try:
+            merge_market_cache(write, rows, keys)
+            remember_names(write, {
+                ticker: fields.get("name")
+                for ticker, fields in rows.items()
+                if isinstance(fields, dict)
+            })
+            write.commit()
+        finally:
+            write.close()
+
+    if part == "history":
+        formula = _request_signal_formula()
+        blank = {
+            "nav_erosion_scope": "auto",
+            "nav_benchmark_override": "",
+            "div_yield_override": None,
+        }
+        settings = {
+            "formula": formula,
+            "scopes": {
+                ticker: settings_by_ticker.get(ticker, blank)["nav_erosion_scope"]
+                for ticker in symbols
+            },
+            "benches": {
+                ticker: settings_by_ticker.get(ticker, blank)["nav_benchmark_override"]
+                for ticker in symbols
+            },
+            "overrides": {
+                ticker: settings_by_ticker.get(ticker, blank)["div_yield_override"]
+                for ticker in symbols
+            },
+        }
+        refresh_history(symbols, settings, on_rows=lambda rows: persist(rows, HISTORY_FIELDS))
+        keys = HISTORY_FIELDS
+    else:
+        refresh_quotes(symbols, on_rows=lambda rows: persist(rows, QUOTE_FIELDS))
+        keys = QUOTE_FIELDS
+
+    conn = get_connection()
+    try:
+        market = read_market_cache(conn, symbols)
+    finally:
+        conn.close()
+    return jsonify(market=market, part=part, fields=list(keys))
 
 
 @app.route("/api/watchlist/data")

@@ -15,6 +15,7 @@ import {
   weekPaymentTotal,
 } from '../utils/dividendCalendar'
 import { DividendWeekGrid } from '../components/DividendMonthGrid'
+import HomeWatchlist from '../components/HomeWatchlist'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -2684,6 +2685,8 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+
+      <HomeWatchlist />
 
       {/* Portfolio Equity Curve */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
