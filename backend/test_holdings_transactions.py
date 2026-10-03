@@ -1078,6 +1078,61 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         # position contributes its ledger-only $20.
         self.assertEqual(data["lifetime_income"], 120.0)
 
+    def test_dividend_analysis_ytd_matches_dashboard_cash(self):
+        today = datetime.date.today()
+        current_year_date = today.replace(month=1, day=15).isoformat()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)"
+        )
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner) VALUES (7, 'Pressj05', 1)"
+        )
+        self._execute(
+            """INSERT INTO all_account_info
+               (ticker, profile_id, description, quantity, purchase_value,
+                current_value, ytd_divs, total_divs_received)
+               VALUES ('OPEN', 1, 'Open fund', 10, 1000, 1200, 1, 1)"""
+        )
+        conn = self._get_connection()
+        try:
+            conn.executemany(
+                """INSERT INTO dividend_payments
+                   (ticker, profile_id, payment_date, amount, source)
+                   VALUES (?, 7, ?, ?, 'schwab')""",
+                [
+                    ("OPEN", current_year_date, 80),
+                    ("CLOSED", current_year_date, 20),
+                    ("ESTIMATE", current_year_date, 999),
+                ],
+            )
+            conn.execute(
+                "UPDATE dividend_payments SET source = 'refresh_estimate' "
+                "WHERE ticker = 'ESTIMATE' AND profile_id = 7"
+            )
+            conn.execute(
+                """CREATE TABLE monthly_payout_tickers (
+                       ticker TEXT,
+                       profile_id INTEGER,
+                       pay_month INTEGER
+                   )"""
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        income = self.client.get("/api/income-summary?profile_id=1").get_json()
+        with patch.object(app_module, "_chunked_yf_download", return_value=type("Raw", (), {"empty": True})()), \
+             patch("dividend_safety.get_dividend_safety_for_holdings", return_value={}):
+            analysis = self.client.get("/api/dividend-analysis/data?profile_id=1")
+
+        self.assertEqual(analysis.status_code, 200, analysis.get_data(as_text=True)[:500])
+        payload = analysis.get_json()
+        self.assertEqual(income["ytd_income"], 100.0)
+        self.assertEqual(payload["totals"]["ytd_divs"], income["ytd_income"])
+        self.assertEqual(payload["totals"]["total_divs_received"], income["lifetime_income"])
+        open_row = next(row for row in payload["rows"] if row["ticker"] == "OPEN")
+        self.assertEqual(open_row["ytd_divs"], 80.0)
+
     def _seed_missing_opening_lot(self):
         conn = self._get_connection()
         try:

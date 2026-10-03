@@ -551,6 +551,14 @@ def _score_bdc(metrics):
     return round(sum(score * weight for score, weight in scored) / total_weight)
 
 
+def _prepare_safety_payload(payload):
+    """Explain a cached fund score with the current reason rules."""
+    out = dict(payload or {})
+    if out.get("score_model") == "fund":
+        out["risk_reasons"] = _risk_reasons(out, "fund")
+    return out
+
+
 def _risk_reasons(metrics, model):
     reasons = []
     payout = metrics.get("payout_ratio_pct")
@@ -558,6 +566,7 @@ def _risk_reasons(metrics, model):
     streak = metrics.get("dividend_streak_years")
     debt = metrics.get("debt_to_equity")
     yield_pct = metrics.get("current_yield_pct")
+    consistency = metrics.get("distribution_consistency")
     if model == "option_income":
         nav_coverage = metrics.get("nav_coverage_ratio")
         nav_erosion = metrics.get("nav_erosion_risk")
@@ -579,8 +588,22 @@ def _risk_reasons(metrics, model):
             reasons.append("Limited BDC distribution history")
         return reasons[:4]
     if model == "fund":
+        # A two-year ETF is still short of the three-year warning line in the
+        # fund score, so say so instead of leaving the risk row blank.
         if streak is not None and streak < 2:
             reasons.append("Short distribution history")
+        elif streak is not None and streak < 3:
+            reasons.append(f"Distribution history is only {int(streak)} years")
+        # The five-year window counts years before a new fund existed. Only
+        # treat gaps as a reason once the fund itself has three years.
+        if consistency is not None and consistency < 0.6 and streak is not None and streak >= 3:
+            paid_years = int(round(consistency * 5))
+            if paid_years <= 0:
+                reasons.append("No distributions in the last 5 years")
+            else:
+                reasons.append(f"Distributions in {paid_years} of the last 5 years")
+        if yield_pct is not None and yield_pct >= 15:
+            reasons.append("High distribution yield")
         return reasons[:4]
     if payout is not None and payout >= 100:
         reasons.append("Payout ratio at or above 100%")
@@ -722,7 +745,7 @@ def get_dividend_safety_for_holdings(conn, profile_id, holdings, refresh=False):
             continue
         cached = _cache_get(conn, ticker, refresh=refresh)
         if cached is not None:
-            by_ticker[ticker] = cached
+            by_ticker[ticker] = _prepare_safety_payload(cached)
             continue
         try:
             payload = _build_payload(ticker, holding)
@@ -742,8 +765,9 @@ def get_dividend_safety_for_holdings(conn, profile_id, holdings, refresh=False):
                 "distribution_consistency": None,
                 "current_yield_pct": None,
             }
-        by_ticker[ticker] = payload
-        cache_updates.append((ticker, payload))
+        prepared = _prepare_safety_payload(payload)
+        by_ticker[ticker] = prepared
+        cache_updates.append((ticker, prepared))
 
     # Building a safety payload can make several slow provider calls.  Writing
     # the first result immediately used to keep SQLite's writer lock open while
@@ -842,6 +866,7 @@ def summarize_dividend_safety(rows):
             "safety_score": _clean_number(row.get("safety_score")),
             "est_annual_income": round(income, 2) if income is not None else 0,
             "risk_reasons": row.get("risk_reasons") or [],
+            "aum": _clean_number(row.get("aum")),
         })
     return {
         "average_score": round(sum(scores) / len(scores), 1) if scores else None,
