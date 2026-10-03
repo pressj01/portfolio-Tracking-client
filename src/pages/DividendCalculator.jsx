@@ -1,7 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import Plot from '../components/ThemedPlot'
+import GoalProjectionChart from '../components/GoalProjectionChart'
 import { useProfileFetch } from '../context/ProfileContext'
-import { formatMoney, formatMoneyCompact, formatMoneyWhole } from '../utils/money'
+import {
+  convertMoneySeries,
+  convertMoneyValue,
+  formatMoney,
+  formatMoneyCompact,
+  formatMoneyWhole,
+  getCurrencySymbol,
+} from '../utils/money'
+import { axisMoneyLabel, evaluateGoal, todaysDollars } from '../utils/dividendGoal'
 
 const FREQ_OPTIONS = [
   { code: 'N',  label: '0', per_year: 0  },
@@ -82,7 +91,18 @@ const clampPct = (v) => Math.min(100, Math.max(0, Number(v) || 0))
 const clampContributionPct = (v) => Math.min(100, Math.max(0, Number(v) || 0))
 const MAX_LOOKUP_DIV_GROWTH_PCT = 50
 
-const projectionYears = (years) => Math.max(1, Math.round(Number(years) || 0))
+// Results recalculate on every keystroke, so a stray "500" in the years field
+// must not turn into a 78,000-step projection per ticker.
+const MAX_PROJECTION_YEARS = 50
+const projectionYears = (years) => Math.min(
+  MAX_PROJECTION_YEARS,
+  Math.max(1, Math.round(Number(years) || 0))
+)
+
+const GOAL_MODE_OPTIONS = [
+  { value: 'portfolio', label: 'Portfolio Goal' },
+  { value: 'income', label: 'Income Goal' },
+]
 
 function contributionWindowMonths(years, mode, value, unit) {
   const totalMonths = projectionYears(years) * 12
@@ -305,6 +325,52 @@ function Toggle({ checked, onChange, label }) {
         <span className="dc-toggle-thumb" />
       </span>
     </label>
+  )
+}
+
+function GoalBanner({ goal, isIncome, inflationAdjusted }) {
+  const noun = isIncome ? 'Income' : 'Portfolio'
+  const unit = isIncome ? '/yr' : ''
+  const money = (v) => `${fmtMoney(v)}${unit}`
+  const basis = inflationAdjusted ? ' in today’s dollars' : ''
+  const horizon = `${goal.finalYear} year${goal.finalYear === 1 ? '' : 's'}`
+
+  let headline
+  let detail
+  if (goal.status === 'none') {
+    headline = `Enter a target ${isIncome ? 'annual income' : 'portfolio value'} to track your goal`
+    detail = `Projected ${isIncome ? 'income' : 'value'} at Year ${goal.finalYear}: ${money(goal.finalValue)}${basis}`
+  } else if (goal.status === 'reached') {
+    headline = goal.yearReached === 0
+      ? `${noun} goal of ${money(goal.target)} is already met today`
+      : `${noun} goal of ${money(goal.target)} achieved in Year ${goal.yearReached}!`
+    detail = `Exceeding target by ${money(goal.gap)} at Year ${goal.finalYear}${basis}`
+  } else if (goal.status === 'lapsed') {
+    // Crossed the target, then fell back under it (price erosion can do this).
+    headline = `${noun} goal of ${money(goal.target)} reached in Year ${goal.yearReached}, but not held`
+    detail = `Falls back to ${money(goal.finalValue)} by Year ${goal.finalYear}${basis} — ${money(-goal.gap)} short`
+  } else {
+    headline = `${noun} goal of ${money(goal.target)} not achieved within ${horizon}`
+    detail = `Reaches ${money(goal.finalValue)} by Year ${goal.finalYear}${basis} — ${money(-goal.gap)} short`
+  }
+
+  return (
+    <div className={`dc-goal-banner is-${goal.status}`}>
+      <div className="dc-goal-banner-kicker">
+        <span>{noun} Goal</span>
+        {inflationAdjusted && <small>(inflation-adjusted)</small>}
+      </div>
+      <div className="dc-goal-banner-headline">{headline}</div>
+      <div className="dc-goal-banner-detail">{detail}</div>
+      {goal.status !== 'none' && (
+        <div className="dc-goal-progress">
+          <div className="dc-goal-progress-track">
+            <div className="dc-goal-progress-fill" style={{ width: `${Math.min(100, goal.progressPct)}%` }} />
+          </div>
+          <span className="dc-goal-progress-label">{fmtPct(goal.progressPct, 0)} of target</span>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -584,6 +650,10 @@ const DEFAULT_SETTINGS = {
   dripApplyToAll: true,
   defaultInitialInvestment: 10000,
   defaultPriceGrowthPct: 5,
+  goalMode: 'portfolio',
+  targetPortfolioValue: 100000,
+  targetAnnualIncome: 1000,
+  inflationRatePct: 3,
 }
 
 function newRow(overrides = {}) {
@@ -764,7 +834,14 @@ export default function DividendCalculator() {
   const [defaultInitialInvestment, setDefaultInitialInvestment] = useState(DEFAULT_SETTINGS.defaultInitialInvestment)
   const [defaultPriceGrowthPct, setDefaultPriceGrowthPct] = useState(DEFAULT_SETTINGS.defaultPriceGrowthPct)
   const [tickerInput, setTickerInput] = useState('')
-  const [calculation, setCalculation] = useState(null)
+  const [goalMode, setGoalMode] = useState(DEFAULT_SETTINGS.goalMode)
+  const [targetPortfolioValue, setTargetPortfolioValue] = useState(DEFAULT_SETTINGS.targetPortfolioValue)
+  const [targetAnnualIncome, setTargetAnnualIncome] = useState(DEFAULT_SETTINGS.targetAnnualIncome)
+  const [inflationRatePct, setInflationRatePct] = useState(DEFAULT_SETTINGS.inflationRatePct)
+  // Bumped by Calculate to redraw the goal line from Year 0.
+  const [replayKey, setReplayKey] = useState(0)
+  // ticker -> true/false once a card has been opened or closed by hand.
+  const [tickerCardOpen, setTickerCardOpen] = useState({})
   const [currentHoldings, setCurrentHoldings] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
   const [pickerSearch, setPickerSearch] = useState('')
@@ -772,6 +849,44 @@ export default function DividendCalculator() {
   const [calcMessage, setCalcMessage] = useState('')
   const [calculateWhenReady, setCalculateWhenReady] = useState(false)
   const [allocationAdjustmentSummary, setAllocationAdjustmentSummary] = useState(null)
+
+  // The projection follows the inputs live: every loaded ticker and setting
+  // feeds straight into the results, so the goal chart can move as you type.
+  const calculation = useMemo(() => {
+    const calcRows = rowsForCalculation(rows)
+    if (!calcRows.length) return null
+    return {
+      rows: calcRows,
+      settings: {
+        years: projectionYears(years),
+        annualContribution: Number(annualContribution) || 0,
+        contributionFrequency,
+        contributionWindowMode,
+        contributionWindowValue: Number(contributionWindowValue) || 0,
+        contributionWindowUnit,
+        contributionDurationMonths: contributionWindowMonths(
+          years,
+          contributionWindowMode,
+          contributionWindowValue,
+          contributionWindowUnit
+        ),
+        contributionMode,
+        taxRatePct: Number(taxRatePct) || 0,
+        dripPct: clampPct(dripPct),
+      },
+    }
+  }, [
+    annualContribution,
+    contributionFrequency,
+    contributionMode,
+    contributionWindowMode,
+    contributionWindowUnit,
+    contributionWindowValue,
+    dripPct,
+    rows,
+    taxRatePct,
+    years,
+  ])
 
   useEffect(() => {
     pf('/api/holdings')
@@ -1002,7 +1117,13 @@ export default function DividendCalculator() {
     setDripApplyToAll(DEFAULT_SETTINGS.dripApplyToAll)
     setDefaultInitialInvestment(DEFAULT_SETTINGS.defaultInitialInvestment)
     setDefaultPriceGrowthPct(DEFAULT_SETTINGS.defaultPriceGrowthPct)
-    setCalculation(null)
+    setGoalMode(DEFAULT_SETTINGS.goalMode)
+    setTargetPortfolioValue(DEFAULT_SETTINGS.targetPortfolioValue)
+    setTargetAnnualIncome(DEFAULT_SETTINGS.targetAnnualIncome)
+    setInflationRatePct(DEFAULT_SETTINGS.inflationRatePct)
+    setTickerCardOpen({})
+    setCalcMessage('')
+    setCalculateWhenReady(false)
     setAllocationAdjustmentSummary(null)
   }
 
@@ -1164,8 +1285,7 @@ export default function DividendCalculator() {
   }
 
   const handleCalculate = () => {
-    const loadedRows = rowsForCalculation(rows)
-    if (!loadedRows.length) {
+    if (!rowsForCalculation(rows).length) {
       const sym = tickerInput.trim().toUpperCase()
       if (sym) {
         setCalcMessage(`Loading ${sym} before calculating...`)
@@ -1178,125 +1298,18 @@ export default function DividendCalculator() {
       return
     }
     setCalcMessage('')
-    setCalculation({
-      rows: loadedRows.map(r => ({ ...r })),
-      settings: {
-        years: Number(years) || 0,
-        annualContribution: Number(annualContribution) || 0,
-        contributionFrequency,
-        contributionWindowMode,
-        contributionWindowValue: Number(contributionWindowValue) || 0,
-        contributionWindowUnit,
-        contributionDurationMonths: contributionWindowMonths(
-          years,
-          contributionWindowMode,
-          contributionWindowValue,
-          contributionWindowUnit
-        ),
-        contributionMode,
-        taxRatePct: Number(taxRatePct) || 0,
-        dripPct: clampPct(dripPct),
-      },
-    })
+    // Results are already live; Calculate replays the line drawing toward the goal.
+    setReplayKey(key => key + 1)
   }
 
+  // Calculate was clicked with a symbol still in the box: clear the "loading"
+  // note once that lookup settles. The projection itself appears on its own.
   useEffect(() => {
     if (!calculateWhenReady) return
     if (rows.some(r => r.status === 'loading')) return
-    const loadedRows = rowsForCalculation(rows)
-    if (loadedRows.length) {
-      setCalculation({
-        rows: loadedRows.map(r => ({ ...r })),
-        settings: {
-          years: Number(years) || 0,
-          annualContribution: Number(annualContribution) || 0,
-          contributionFrequency,
-          contributionWindowMode,
-          contributionWindowValue: Number(contributionWindowValue) || 0,
-          contributionWindowUnit,
-          contributionDurationMonths: contributionWindowMonths(
-            years,
-            contributionWindowMode,
-            contributionWindowValue,
-            contributionWindowUnit
-          ),
-          contributionMode,
-          taxRatePct: Number(taxRatePct) || 0,
-          dripPct: clampPct(dripPct),
-        },
-      })
-      setCalcMessage('')
-      setCalculateWhenReady(false)
-    } else if (rows.some(r => r.status === 'error')) {
-      setCalculateWhenReady(false)
-    }
-  }, [
-    annualContribution,
-    calculateWhenReady,
-    contributionFrequency,
-    contributionMode,
-    contributionWindowMode,
-    contributionWindowUnit,
-    contributionWindowValue,
-    dripPct,
-    rows,
-    taxRatePct,
-    years,
-  ])
-
-  const currentInputsKey = JSON.stringify({
-    rows: rows.filter(r => r.status === 'loaded').map(r => ({
-      ticker: r.ticker,
-      initialInvestment: Number(r.initialInvestment) || 0,
-      sharePrice: Number(r.sharePrice) || 0,
-      shares: Number(r.shares) || 0,
-      yieldPct: Number(r.yieldPct) || 0,
-      yieldBasis: r.yieldBasis || '',
-      divGrowthPct: Number(r.divGrowthPct) || 0,
-      returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
-      priceGrowthPct: Number(r.priceGrowthPct) || 0,
-      dripPct: effectiveDripPct(r, dripPct),
-      annualContribution: Number(r.annualContribution) || 0,
-      contributionWeightPct: Number(r.contributionWeightPct) || 0,
-      payoutCode: effectivePayoutCode(r),
-    })),
-    settings: {
-      years: Number(years) || 0,
-      annualContribution: Number(annualContribution) || 0,
-      contributionFrequency,
-      contributionWindowMode,
-      contributionWindowValue: Number(contributionWindowValue) || 0,
-      contributionWindowUnit,
-      contributionDurationMonths: contributionWindowMonths(
-        years,
-        contributionWindowMode,
-        contributionWindowValue,
-        contributionWindowUnit
-      ),
-      contributionMode,
-      taxRatePct: Number(taxRatePct) || 0,
-      dripPct: clampPct(dripPct),
-    },
-  })
-
-  const calculatedInputsKey = calculation ? JSON.stringify({
-    rows: calculation.rows.map(r => ({
-      ticker: r.ticker,
-      initialInvestment: Number(r.initialInvestment) || 0,
-      sharePrice: Number(r.sharePrice) || 0,
-      shares: Number(r.shares) || 0,
-      yieldPct: Number(r.yieldPct) || 0,
-      yieldBasis: r.yieldBasis || '',
-      divGrowthPct: Number(r.divGrowthPct) || 0,
-      returnOfCapitalPct: Number(r.returnOfCapitalPct) || 0,
-      priceGrowthPct: Number(r.priceGrowthPct) || 0,
-      dripPct: effectiveDripPct(r, calculation.settings.dripPct),
-      annualContribution: Number(r.annualContribution) || 0,
-      contributionWeightPct: Number(r.contributionWeightPct) || 0,
-      payoutCode: effectivePayoutCode(r),
-    })),
-    settings: calculation.settings,
-  }) : ''
+    setCalcMessage('')
+    setCalculateWhenReady(false)
+  }, [calculateWhenReady, rows])
 
   const activeRows = rows.filter(r => r.status === 'loaded' || r.status === 'loading' || r.status === 'error')
   const loadedRows = rows.filter(r => r.status === 'loaded')
@@ -1329,7 +1342,6 @@ export default function DividendCalculator() {
         change => change.ticker === allocationAdjustmentSummary.editedTicker
       )
     : null
-  const resultsNeedUpdate = Boolean(calculation && currentInputsKey !== calculatedInputsKey)
   const currentAnnualPayout = loadedRows.reduce((sum, r) => {
     const shares = Number(r.shares) || 0
     const sharePrice = Number(r.sharePrice) || 0
@@ -1370,6 +1382,27 @@ export default function DividendCalculator() {
   }, [calculation])
 
   const totals = useMemo(() => aggregateProjections(projections), [projections])
+
+  // Goal tracking. With inflation on, the goal is judged in today's dollars:
+  // $100,000 ten years out does not buy what $100,000 buys now.
+  const goalIsIncome = goalMode === 'income'
+  const goalTarget = Math.max(0, Number(goalIsIncome ? targetAnnualIncome : targetPortfolioValue) || 0)
+  const inflationPct = Math.min(50, Math.max(0, Number(inflationRatePct) || 0))
+  const goal = useMemo(() => {
+    if (!totals) return null
+    const yearsList = totals.yearly.map(y => y.year)
+    const nominal = totals.yearly.map(y => (goalIsIncome ? y.annualIncome : y.portfolioValue))
+    const real = inflationPct > 0 ? todaysDollars(nominal, yearsList, inflationPct) : null
+    return {
+      nominal,
+      real,
+      ...evaluateGoal({ years: yearsList, values: real || nominal, target: goalTarget }),
+    }
+  }, [goalIsIncome, goalTarget, inflationPct, totals])
+  const goalCurrencySymbol = getCurrencySymbol()
+  const isTickerCardOpen = (ticker) => (
+    ticker in tickerCardOpen ? tickerCardOpen[ticker] : loadedRows.length <= 2
+  )
   const chartYearRange = useMemo(() => {
     if (!totals?.yearly?.length) return undefined
     const yearsList = totals.yearly.map(y => y.year)
@@ -1412,7 +1445,7 @@ export default function DividendCalculator() {
   }, [loadedRows])
 
   return (
-    <div className="page dc-page">
+    <div className="page dc-page dc-calc-page">
       <div className="dc-title-row">
         <div>
           <h1>Dividend Calculator</h1>
@@ -1438,311 +1471,6 @@ export default function DividendCalculator() {
           </div>
         )}
       </div>
-      {totals && (
-        <div className={`dc-income-bubbles${resultsNeedUpdate ? ' is-stale' : ''}`}>
-          <div className="dc-income-bubble">
-            <span>Total Income</span>
-            <strong>{fmtMoney(totals.cumGrossDivs)}</strong>
-            <small>Gross dividends over {Math.round(calculation.settings.years)} years</small>
-          </div>
-          <div className="dc-income-bubble">
-            <span>Monthly Income</span>
-            <strong>{fmtMoney(totals.final.monthlyIncome)}</strong>
-            <small>Combined income at Year {Math.round(calculation.settings.years)}</small>
-          </div>
-          <div className="dc-income-bubble">
-            <span>Annual Income</span>
-            <strong>{fmtMoney(totals.final.annualIncome)}</strong>
-            <small>Combined income at Year {Math.round(calculation.settings.years)}</small>
-          </div>
-          <div className="dc-income-bubble">
-            <span>Portfolio Value</span>
-            <strong>{fmtMoney(totals.final.portfolioValue)}</strong>
-            <small>Combined holdings at Year {Math.round(calculation.settings.years)}</small>
-          </div>
-          {resultsNeedUpdate && (
-            <span className="dc-income-bubbles-status">Last calculated values · Recalculate to update</span>
-          )}
-        </div>
-      )}
-
-      <div className="dc-shared-card dc-setup-card">
-        <div className="dc-card-head">
-          <div>
-            <h3>Calculation Settings</h3>
-            <p className="dc-muted">Set your assumptions first, then add a ticker and calculate.</p>
-          </div>
-          {resultsNeedUpdate && <span className="dc-dirty-badge">Needs recalculation</span>}
-        </div>
-        <details className="dc-help">
-          <summary>How to use the dividend calculator</summary>
-          <div className="dc-help-body">
-            <ol>
-              <li>
-                Set the projection length, starting investment, contribution schedule, taxes, growth, and DRIP assumptions.
-              </li>
-              <li>
-                Choose <strong>Annual</strong> or <strong>Monthly</strong> contributions. Only the selected schedule
-                is used, and its total is the dollar base for percentage allocations. Annual totals are divided
-                across each ticker&apos;s payout periods; monthly contributions are deposited at each month-end.
-              </li>
-              <li>
-                Choose a <strong>Contribution Window</strong>. Full period contributes throughout the projection;
-                Limited stops new contributions after the first X years or months while DRIP and growth continue.
-              </li>
-              <li>
-                Choose a <strong>Contribution Allocation</strong>: <strong>Even split</strong> assigns the same
-                percentage to every ticker, <strong>By current value</strong> follows each position&apos;s starting
-                value, and <strong>Custom percentages</strong> lets every ticker use a different percentage. In
-                custom mode, <strong>Split percentages evenly</strong> creates an editable equal starting point.
-                Changing one custom percentage redistributes the remaining percentage across the other tickers so
-                the total stays at 100%, including after a ticker is removed. An adjustment summary confirms the
-                100% total and lists every ticker&apos;s before-and-after percentage.
-              </li>
-              <li>
-                <strong>Dividends Reinvested (All Tickers)</strong> sets the portfolio-wide DRIP percentage.
-                100% reinvests every distribution; 30% reinvests 30% and takes the other 70% as cash. Each
-                ticker card also has its own <strong>Dividends Reinvested</strong> percentage, so individual
-                tickers can reinvest any percent — including 0% to take that ticker&apos;s payouts entirely as
-                cash. Use the <strong>Apply to every ticker on change</strong> toggle to control the global
-                override: when <strong>on</strong>, changing the all-tickers value resets every following ticker
-                to match (and turning it on syncs them immediately); when <strong>off</strong>, changing the
-                value leaves each ticker&apos;s own percentage untouched and only seeds newly added tickers.
-                Each ticker card also has a <strong>Follow all-tickers %</strong> toggle — turn it off (or just
-                edit that ticker&apos;s %) to exclude that one ticker from global changes while the master toggle
-                stays on; turning it back on snaps the ticker to the current all-tickers value.
-              </li>
-              <li>Add one or more tickers, then adjust any ticker-specific values in the cards below.</li>
-              <li>
-                The <strong>Current payout</strong> bubble at the top shows the selected tickers&apos; present
-                gross monthly and annual distribution run-rate before taxes, DRIP, growth, or future contributions.
-              </li>
-              <li>
-                After Calculate or Recalculate, the top result bubbles show cumulative Total Income plus the
-                combined Monthly Income, Annual Income, and Portfolio Value at the final projection year.
-              </li>
-              <li>Click <strong>Calculate</strong>. After changing an input, click <strong>Recalculate</strong> to refresh the results.</li>
-            </ol>
-            <p>
-              <strong>Important:</strong> each ticker&apos;s allocation percentage is a share of the selected{' '}
-              <strong>annual or monthly contribution total</strong>, not a percentage of the starting portfolio.
-              The allocation does not change the starting investment. In the per-ticker results, Initial Shares
-              appears immediately before Final Shares, followed by Share Delta (Final minus Initial). When the
-              contribution total is $0, all Contribution Allocation percentages display 0%; DRIP remains separate.
-              AOTS defaults to 0 payouts, but its frequency remains editable.
-            </p>
-          </div>
-        </details>
-        <div className="dc-grid">
-          <div className="dc-field">
-            <label>Years to Invest</label>
-            <NumberInput value={years} onChange={setYears} min="1" max="50" step="1" />
-          </div>
-          <div className="dc-field">
-            {allPortfolio ? (
-              <>
-                <label>Portfolio Value</label>
-                <div className="dc-portfolio-summary">
-                  {fmtMoneyShort(portfolioTotal)} across {portfolioRows.length} ticker{portfolioRows.length === 1 ? '' : 's'}
-                </div>
-              </>
-            ) : (
-              <>
-                <label>{mixedSources ? 'Initial Investment (manual tickers only)' : 'Initial Investment Per Ticker'}</label>
-                <NumberInput value={fmtInputNumber(defaultInitialInvestment, 2)} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
-                {mixedSources && (
-                  <div className="dc-field-note">
-                    Portfolio tickers use current values ({fmtMoneyShort(portfolioTotal)} across {portfolioRows.length})
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-          <div className="dc-field">
-            <label>Contribution Schedule</label>
-            <div className="dc-frequency-options" role="radiogroup" aria-label="Contribution schedule">
-              {CONTRIBUTION_FREQUENCY_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={contributionFrequency === option.value}
-                  className={contributionFrequency === option.value ? 'active' : ''}
-                  onClick={() => setContributionFrequency(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <div className="dc-field-note">
-              Only one schedule is applied. Switching converts the total to its equivalent annual or monthly amount.
-            </div>
-          </div>
-          <div className="dc-field">
-            <label>{contributionPeriodLabel} Contribution Total</label>
-            <NumberInput
-              value={fmtInputNumber(displayedContributionTotal, contributionFrequency === 'monthly' ? 2 : 0)}
-              onChange={updateGlobalContribution}
-              prefix="$"
-              step={contributionFrequency === 'monthly' ? '25' : '100'}
-            />
-            {loadedRows.length > 0 && (
-              <div className="dc-field-note">
-                Allocated {fmtMoneyShort(displayedAllocatedContribution)} per {contributionFrequency === 'monthly' ? 'month' : 'year'}
-                {contributionMode === 'custom' && contributionTarget > 0
-                  ? ` (${fmtPct((displayedAllocatedContribution / contributionTarget) * 100, 1)} assigned)`
-                  : ''}
-              </div>
-            )}
-          </div>
-          <div className="dc-field">
-            <label>Contribution Window</label>
-            <div className="dc-frequency-options" role="radiogroup" aria-label="Contribution window">
-              {CONTRIBUTION_WINDOW_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={contributionWindowMode === option.value}
-                  className={contributionWindowMode === option.value ? 'active' : ''}
-                  onClick={() => setContributionWindowMode(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            {contributionWindowMode === 'limited' && (
-              <div className="dc-duration-entry">
-                <NumberInput
-                  value={contributionWindowValue}
-                  onChange={setContributionWindowValue}
-                  min="1"
-                  max={contributionWindowUnit === 'months' ? totalProjectionMonths : projectionYears(years)}
-                  step="1"
-                />
-                <select
-                  className="dc-input"
-                  value={contributionWindowUnit}
-                  onChange={(e) => setContributionWindowUnit(e.target.value)}
-                >
-                  <option value="years">Years</option>
-                  <option value="months">Months</option>
-                </select>
-              </div>
-            )}
-            <div className="dc-field-note">
-              {contributionWindowMode === 'full'
-                ? `Contributions continue for all ${formatContributionWindow(totalProjectionMonths)}.`
-                : (
-                  <>
-                    Contributions stop after the first {formatContributionWindow(activeContributionMonths)}.
-                    {postContributionMonths > 0 && (
-                      <> The remaining {formatContributionWindow(postContributionMonths)} continue with DRIP and growth only.</>
-                    )}
-                  </>
-                )
-              }
-            </div>
-          </div>
-          <div className="dc-field">
-            <label>Contribution Allocation</label>
-            <select
-              className="dc-input"
-              value={contributionMode}
-              onChange={(e) => updateContributionMode(e.target.value)}
-            >
-              {CONTRIBUTION_ALLOCATION_OPTIONS.map(option => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <div className="dc-field-note">
-              {!hasContributionTotal && 'Allocation percentages are 0% until a contribution total is entered.'}
-              {hasContributionTotal && contributionMode === 'equal' && `Each ticker receives ${loadedRows.length ? fmtPct(100 / loadedRows.length, 2) : 'an equal percentage'} of the selected total.`}
-              {hasContributionTotal && contributionMode === 'weighted' && 'New dollars follow each ticker current value or starting investment.'}
-              {contributionMode === 'custom' && (
-                <>
-                  {hasContributionTotal && (
-                    <span>Set a different percentage for each ticker below. {fmtPct(contributionPctTotal, 1)} assigned.</span>
-                  )}
-                  <button
-                    type="button"
-                    className="dc-inline-action"
-                    onClick={splitCustomPercentagesEvenly}
-                    disabled={!loadedRows.length || !hasContributionTotal}
-                  >
-                    Split percentages evenly
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-          {allocationAdjustmentSummary && (
-            <div className="dc-allocation-summary">
-              <div className="dc-allocation-summary-head">
-                <div>
-                  <strong>{allocationAdjustmentSummary.label || 'Allocation adjusted'}</strong>
-                  {primaryAllocationChange ? (
-                    <span>
-                      {primaryAllocationChange.ticker}: {fmtPct(primaryAllocationChange.before, 2)}
-                      {' → '}
-                      {fmtPct(primaryAllocationChange.after, 2)}
-                    </span>
-                  ) : (
-                    <span>{allocationAdjustmentSummary.changes.length} ticker percentages adjusted.</span>
-                  )}
-                  {primaryAllocationChange && allocationAdjustmentSummary.changes.length > 1 && (
-                    <span>
-                      {allocationAdjustmentSummary.changes.length - 1} other ticker
-                      {allocationAdjustmentSummary.changes.length === 2 ? '' : 's'} rebalanced proportionally.
-                    </span>
-                  )}
-                </div>
-                <span className="dc-allocation-total">
-                  Total allocation: {fmtPct(allocationAdjustmentSummary.total, 2)}
-                </span>
-              </div>
-              <details className="dc-allocation-details">
-                <summary>View all {allocationAdjustmentSummary.changes.length} percentage adjustments</summary>
-                <div className="dc-allocation-change-grid">
-                  {allocationAdjustmentSummary.changes.map(change => (
-                    <div key={change.ticker}>
-                      <strong>{change.ticker}</strong>
-                      <span>{fmtPct(change.before, 2)} → {fmtPct(change.after, 2)}</span>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            </div>
-          )}
-          <div className="dc-field">
-            <label>Dividend Tax Rate</label>
-            <NumberInput value={fmtInputNumber(taxRatePct, 2)} onChange={setTaxRatePct} suffix="%" step="0.5" />
-          </div>
-          <div className="dc-field">
-            <label>Stock Price Growth (All Tickers)</label>
-            <NumberInput value={fmtInputNumber(defaultPriceGrowthPct, 2)} onChange={updateDefaultPriceGrowth} suffix="%" step="0.1" />
-            {negativeGrowthDripNote && <div className="dc-field-note">{negativeGrowthDripNote}</div>}
-          </div>
-          <div className="dc-field">
-            <label>Dividends Reinvested (All Tickers)</label>
-            <NumberInput value={fmtInputNumber(dripPct, 2)} onChange={updateGlobalDrip} min="0" max="100" suffix="%" step="0.1" />
-            <div className="dc-drip-toggle-row">
-              <Toggle
-                checked={dripApplyToAll}
-                onChange={toggleDripApplyToAll}
-                label="Apply to every ticker on change"
-              />
-            </div>
-            <div className="dc-field-note">
-              {dripApplyToAll
-                ? 'On: changing this % updates every ticker set to follow it (turn a ticker’s “Follow all-tickers %” off to keep its own). Turning it on re-syncs the following tickers.'
-                : 'Off: changing this % leaves each ticker’s own Dividends Reinvested % alone and only seeds newly added tickers.'}
-              {' '}Each ticker card below can still set its own %.
-            </div>
-          </div>
-        </div>
-      </div>
-
       <form className="dc-ticker-bar" onSubmit={handleAddTicker}>
         <div className={`dc-chip-input${activeRows.length > 14 ? ' dc-chip-input-dense' : ''}`}>
           {activeRows.length > 0 && (
@@ -1777,7 +1505,7 @@ export default function DividendCalculator() {
           From Portfolio{pickerOpen ? ' ▲' : ' ▼'}
         </button>
         <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={isLoadingTicker}>
-          {calculateWhenReady || isLoadingTicker ? 'Loading...' : (calculation ? 'Recalculate' : 'Calculate')}
+          {calculateWhenReady || isLoadingTicker ? 'Loading...' : 'Calculate'}
         </button>
         <button type="button" className="btn dc-reset" onClick={resetAll}>Reset</button>
         </div>
@@ -1871,564 +1599,974 @@ export default function DividendCalculator() {
         </div>
       )}
 
-      {heroLine && <div className="dc-hero">{heroLine}</div>}
-
-      {rows.filter(r => r.status === 'loaded').map((r) => {
-        const idx = rows.indexOf(r)
-        return (
-          <div className="dc-row-card" key={`${r.ticker}-${idx}`}>
-            <div className="dc-row-head">
-              <div>
-                <strong>{r.ticker}</strong> <span className="dc-muted">- {r.name}</span>
-              </div>
-              <button type="button" className="btn btn-sm" onClick={() => removeRow(idx)}>Remove</button>
+      <div className="dc-workspace">
+        <div className="dc-side">
+          <div className="dc-shared-card dc-goal-card">
+            <div className="dc-frequency-options" role="radiogroup" aria-label="Goal type">
+              {GOAL_MODE_OPTIONS.map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={goalMode === option.value}
+                  className={goalMode === option.value ? 'active' : ''}
+                  onClick={() => setGoalMode(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
             </div>
+            <div className="dc-field">
+              <label>{goalIsIncome ? 'Target Annual Income' : 'Target Portfolio Value'}</label>
+              {goalIsIncome ? (
+                <NumberInput key="income" value={targetAnnualIncome} onChange={setTargetAnnualIncome} prefix="$" min="0" step="100" />
+              ) : (
+                <NumberInput key="portfolio" value={targetPortfolioValue} onChange={setTargetPortfolioValue} prefix="$" min="0" step="1000" />
+              )}
+              <div className="dc-field-note">
+                {goalIsIncome
+                  ? `Gross dividend income per year${goalTarget > 0 ? ` (${fmtMoney(goalTarget / 12)} a month)` : ''}. The chart tracks how close each year’s income gets.`
+                  : 'Combined value of the holdings. The chart tracks how close each year’s value gets.'}
+              </div>
+            </div>
+          </div>
+
+          <div className="dc-shared-card dc-setup-card">
+            <div className="dc-card-head">
+              <div>
+                <h3>Calculation Settings</h3>
+                <p className="dc-muted">These apply to every ticker. The chart updates as you type.</p>
+              </div>
+            </div>
+            <details className="dc-help">
+              <summary>How to use the dividend calculator</summary>
+              <div className="dc-help-body">
+                <ol>
+                  <li>
+                    Add one or more tickers in the bar at the top. The projection appears as soon as a ticker loads
+                    and redraws whenever you change an input — there is nothing to recalculate.
+                  </li>
+                  <li>
+                    Pick <strong>Portfolio Goal</strong> or <strong>Income Goal</strong> and enter a target. The
+                    chart draws the target as a dotted line, and the banner above it says which year the goal is
+                    reached, or how far short the projection ends. Change any input and watch the line move toward
+                    or away from the target.
+                  </li>
+                  <li>
+                    Set the projection length, starting investment, contribution schedule, taxes, growth, and DRIP assumptions.
+                  </li>
+                  <li>
+                    Choose <strong>Annual</strong> or <strong>Monthly</strong> contributions. Only the selected schedule
+                    is used, and its total is the dollar base for percentage allocations. Annual totals are divided
+                    across each ticker&apos;s payout periods; monthly contributions are deposited at each month-end.
+                  </li>
+                  <li>
+                    Choose a <strong>Contribution Window</strong>. Full period contributes throughout the projection;
+                    Limited stops new contributions after the first X years or months while DRIP and growth continue.
+                  </li>
+                  <li>
+                    Choose a <strong>Contribution Allocation</strong>: <strong>Even split</strong> assigns the same
+                    percentage to every ticker, <strong>By current value</strong> follows each position&apos;s starting
+                    value, and <strong>Custom percentages</strong> lets every ticker use a different percentage. In
+                    custom mode, <strong>Split percentages evenly</strong> creates an editable equal starting point.
+                    Changing one custom percentage redistributes the remaining percentage across the other tickers so
+                    the total stays at 100%, including after a ticker is removed. An adjustment summary confirms the
+                    100% total and lists every ticker&apos;s before-and-after percentage.
+                  </li>
+                  <li>
+                    <strong>Dividends Reinvested (All Tickers)</strong> sets the portfolio-wide DRIP percentage.
+                    100% reinvests every distribution; 30% reinvests 30% and takes the other 70% as cash. Each
+                    ticker card also has its own <strong>Dividends Reinvested</strong> percentage, so individual
+                    tickers can reinvest any percent — including 0% to take that ticker&apos;s payouts entirely as
+                    cash. Use the <strong>Apply to every ticker on change</strong> toggle to control the global
+                    override: when <strong>on</strong>, changing the all-tickers value resets every following ticker
+                    to match (and turning it on syncs them immediately); when <strong>off</strong>, changing the
+                    value leaves each ticker&apos;s own percentage untouched and only seeds newly added tickers.
+                    Each ticker card also has a <strong>Follow all-tickers %</strong> toggle — turn it off (or just
+                    edit that ticker&apos;s %) to exclude that one ticker from global changes while the master toggle
+                    stays on; turning it back on snaps the ticker to the current all-tickers value.
+                  </li>
+                  <li>
+                    <strong>Annual Inflation Rate</strong> adds the <strong>Today&apos;s dollars</strong> line —
+                    the same projection in today&apos;s purchasing power — and the goal is judged against that
+                    line. Set it to 0 to judge the goal in plain future dollars. Contributions are held constant
+                    and are not raised with inflation.
+                  </li>
+                  <li>
+                    Adjust any ticker-specific values in the ticker cards below the settings. With three or more
+                    tickers the cards start collapsed; click a ticker&apos;s name to open it.
+                  </li>
+                  <li>
+                    The <strong>Current payout</strong> bubble at the top shows the selected tickers&apos; present
+                    gross monthly and annual distribution run-rate before taxes, DRIP, growth, or future contributions.
+                  </li>
+                  <li>
+                    The result bubbles under the chart show cumulative Total Income plus the combined Monthly
+                    Income, Annual Income, and Portfolio Value at the final projection year.
+                  </li>
+                  <li>
+                    <strong>Calculate</strong> replays the line drawing in from Year 0. If a symbol is still typed
+                    in the ticker box, it loads that ticker first.
+                  </li>
+                </ol>
+                <p>
+                  <strong>Important:</strong> each ticker&apos;s allocation percentage is a share of the selected{' '}
+                  <strong>annual or monthly contribution total</strong>, not a percentage of the starting portfolio.
+                  The allocation does not change the starting investment. In the per-ticker results, Initial Shares
+                  appears immediately before Final Shares, followed by Share Delta (Final minus Initial). When the
+                  contribution total is $0, all Contribution Allocation percentages display 0%; DRIP remains separate.
+                  AOTS defaults to 0 payouts, but its frequency remains editable.
+                </p>
+              </div>
+            </details>
             <div className="dc-grid">
               <div className="dc-field">
-                <label>{r.source === 'portfolio' ? 'Current Value' : 'Initial Investment'}</label>
-                <NumberInput
-                  value={fmtInputNumber(r.initialInvestment, 2)}
-                  onChange={(v) => updateRow(idx, { initialInvestment: v })}
-                  prefix="$"
-                  step="100"
-                />
+                <label>Years to Invest</label>
+                <NumberInput value={years} onChange={setYears} min="1" max="50" step="1" />
               </div>
               <div className="dc-field">
-                <label>Stock Price</label>
-                <NumberInput
-                  value={fmtInputNumber(r.sharePrice, 2)}
-                  onChange={(v) => updateRow(idx, { sharePrice: v })}
-                  prefix="$"
-                  step="0.01"
-                />
+                {allPortfolio ? (
+                  <>
+                    <label>Portfolio Value</label>
+                    <div className="dc-portfolio-summary">
+                      {fmtMoneyShort(portfolioTotal)} across {portfolioRows.length} ticker{portfolioRows.length === 1 ? '' : 's'}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <label>{mixedSources ? 'Initial Investment (manual tickers only)' : 'Initial Investment Per Ticker'}</label>
+                    <NumberInput value={fmtInputNumber(defaultInitialInvestment, 2)} onChange={updateDefaultInitialInvestment} prefix="$" step="100" />
+                    {mixedSources && (
+                      <div className="dc-field-note">
+                        Portfolio tickers use current values ({fmtMoneyShort(portfolioTotal)} across {portfolioRows.length})
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
               <div className="dc-field">
-                <label>Number of Shares</label>
-                <NumberInput
-                  value={fmtInputNumber(r.shares, 2)}
-                  onChange={(v) => updateRow(idx, { shares: v })}
-                  step="0.01"
-                />
-              </div>
-              <div className="dc-field">
-                <label>Yield Basis</label>
-                <select
-                  className="dc-input"
-                  value={r.yieldBasis || 'custom'}
-                  onChange={(e) => updateRowYieldBasis(idx, e.target.value)}
-                >
-                  {r.yieldBasis === 'portfolio' && <option value="portfolio">Portfolio estimate</option>}
-                  {(r.yieldOptions || []).map(o => (
-                    <option key={o.key} value={o.key}>{o.label}</option>
+                <label>Contribution Schedule</label>
+                <div className="dc-frequency-options" role="radiogroup" aria-label="Contribution schedule">
+                  {CONTRIBUTION_FREQUENCY_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={contributionFrequency === option.value}
+                      className={contributionFrequency === option.value ? 'active' : ''}
+                      onClick={() => setContributionFrequency(option.value)}
+                    >
+                      {option.label}
+                    </button>
                   ))}
-                  {(r.yieldBasis === 'custom' || !(r.yieldOptions || []).length) && <option value="custom">Custom</option>}
-                </select>
-                {yieldBasisNote(r) && <div className="dc-field-note">{yieldBasisNote(r)}</div>}
+                </div>
+                <div className="dc-field-note">
+                  Only one schedule is applied. Switching converts the total to its equivalent annual or monthly amount.
+                </div>
               </div>
               <div className="dc-field">
-                <label>Initial Dividend Yield</label>
+                <label>{contributionPeriodLabel} Contribution Total</label>
                 <NumberInput
-                  value={fmtInputNumber(r.yieldPct, 2)}
-                  onChange={(v) => updateRow(idx, { yieldPct: v, yieldBasis: 'custom', yieldNote: 'Manual yield override' })}
-                  suffix="%"
-                  step="0.01"
-                />
-              </div>
-              <div className="dc-field">
-                <label>Dividend Growth</label>
-                <NumberInput
-                  value={fmtInputNumber(r.divGrowthPct, 2)}
-                  onChange={(v) => updateRow(idx, { divGrowthPct: v })}
-                  suffix="%"
-                  step="0.1"
-                />
-              </div>
-              <div className="dc-field">
-                <label>Return of Capital</label>
-                <NumberInput
-                  value={fmtInputNumber(r.returnOfCapitalPct, 2)}
-                  onChange={(v) => updateRow(idx, { returnOfCapitalPct: v })}
-                  min="0"
-                  max="100"
-                  suffix="%"
-                  step="0.1"
-                />
-              </div>
-              <div className="dc-field">
-                <label>{contributionPeriodLabel} Contribution</label>
-                <NumberInput
-                  value={fmtInputNumber(
-                    (Number(r.annualContribution) || 0) / contributionDivisor,
-                    contributionFrequency === 'monthly' ? 2 : 0
-                  )}
-                  onChange={(v) => updateRowContributionAmount(idx, v)}
+                  value={fmtInputNumber(displayedContributionTotal, contributionFrequency === 'monthly' ? 2 : 0)}
+                  onChange={updateGlobalContribution}
                   prefix="$"
                   step={contributionFrequency === 'monthly' ? '25' : '100'}
                 />
-                {contributionMode !== 'custom' && (
+                {loadedRows.length > 0 && (
                   <div className="dc-field-note">
-                    Editing this switches the allocation to custom.
+                    Allocated {fmtMoneyShort(displayedAllocatedContribution)} per {contributionFrequency === 'monthly' ? 'month' : 'year'}
+                    {contributionMode === 'custom' && contributionTarget > 0
+                      ? ` (${fmtPct((displayedAllocatedContribution / contributionTarget) * 100, 1)} assigned)`
+                      : ''}
                   </div>
                 )}
               </div>
               <div className="dc-field">
-                <label>Contribution Allocation %</label>
-                <NumberInput
-                  value={fmtInputNumber(hasContributionTotal ? r.contributionWeightPct : 0, 2)}
-                  onChange={(v) => updateRowContributionPct(idx, v)}
-                  min="0"
-                  max="100"
-                  suffix="%"
-                  step="0.5"
-                  disabled={!hasContributionTotal}
-                />
+                <label>Contribution Window</label>
+                <div className="dc-frequency-options" role="radiogroup" aria-label="Contribution window">
+                  {CONTRIBUTION_WINDOW_OPTIONS.map(option => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={contributionWindowMode === option.value}
+                      className={contributionWindowMode === option.value ? 'active' : ''}
+                      onClick={() => setContributionWindowMode(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                {contributionWindowMode === 'limited' && (
+                  <div className="dc-duration-entry">
+                    <NumberInput
+                      value={contributionWindowValue}
+                      onChange={setContributionWindowValue}
+                      min="1"
+                      max={contributionWindowUnit === 'months' ? totalProjectionMonths : projectionYears(years)}
+                      step="1"
+                    />
+                    <select
+                      className="dc-input"
+                      value={contributionWindowUnit}
+                      onChange={(e) => setContributionWindowUnit(e.target.value)}
+                    >
+                      <option value="years">Years</option>
+                      <option value="months">Months</option>
+                    </select>
+                  </div>
+                )}
                 <div className="dc-field-note">
-                  {hasContributionTotal
-                    ? `Percentage of the ${contributionPeriodLabel.toLowerCase()} contribution total.`
-                    : `Enter a ${contributionPeriodLabel.toLowerCase()} contribution total to allocate percentages.`
+                  {contributionWindowMode === 'full'
+                    ? `Contributions continue for all ${formatContributionWindow(totalProjectionMonths)}.`
+                    : (
+                      <>
+                        Contributions stop after the first {formatContributionWindow(activeContributionMonths)}.
+                        {postContributionMonths > 0 && (
+                          <> The remaining {formatContributionWindow(postContributionMonths)} continue with DRIP and growth only.</>
+                        )}
+                      </>
+                    )
                   }
-                  {hasContributionTotal && contributionMode !== 'custom' ? ' Editing this switches the allocation to custom.' : ''}
                 </div>
               </div>
               <div className="dc-field">
-                <label>Stock Price Growth</label>
-                <NumberInput
-                  value={fmtInputNumber(r.priceGrowthPct, 2)}
-                  onChange={(v) => updateRow(idx, { priceGrowthPct: v })}
-                  suffix="%"
-                  step="0.1"
-                />
-              </div>
-              <div className="dc-field">
-                <label>Payout Frequency</label>
+                <label>Contribution Allocation</label>
                 <select
                   className="dc-input"
-                  value={effectivePayoutCode(r)}
-                  onChange={(e) => updateRow(idx, { payoutCode: e.target.value })}
+                  value={contributionMode}
+                  onChange={(e) => updateContributionMode(e.target.value)}
                 >
-                  {FREQ_OPTIONS.map(f => (
-                    <option key={f.code} value={f.code}>{f.label}</option>
+                  {CONTRIBUTION_ALLOCATION_OPTIONS.map(option => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+                <div className="dc-field-note">
+                  {!hasContributionTotal && 'Allocation percentages are 0% until a contribution total is entered.'}
+                  {hasContributionTotal && contributionMode === 'equal' && `Each ticker receives ${loadedRows.length ? fmtPct(100 / loadedRows.length, 2) : 'an equal percentage'} of the selected total.`}
+                  {hasContributionTotal && contributionMode === 'weighted' && 'New dollars follow each ticker current value or starting investment.'}
+                  {contributionMode === 'custom' && (
+                    <>
+                      {hasContributionTotal && (
+                        <span>Set a different percentage for each ticker below. {fmtPct(contributionPctTotal, 1)} assigned.</span>
+                      )}
+                      <button
+                        type="button"
+                        className="dc-inline-action"
+                        onClick={splitCustomPercentagesEvenly}
+                        disabled={!loadedRows.length || !hasContributionTotal}
+                      >
+                        Split percentages evenly
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {allocationAdjustmentSummary && (
+                <div className="dc-allocation-summary">
+                  <div className="dc-allocation-summary-head">
+                    <div>
+                      <strong>{allocationAdjustmentSummary.label || 'Allocation adjusted'}</strong>
+                      {primaryAllocationChange ? (
+                        <span>
+                          {primaryAllocationChange.ticker}: {fmtPct(primaryAllocationChange.before, 2)}
+                          {' → '}
+                          {fmtPct(primaryAllocationChange.after, 2)}
+                        </span>
+                      ) : (
+                        <span>{allocationAdjustmentSummary.changes.length} ticker percentages adjusted.</span>
+                      )}
+                      {primaryAllocationChange && allocationAdjustmentSummary.changes.length > 1 && (
+                        <span>
+                          {allocationAdjustmentSummary.changes.length - 1} other ticker
+                          {allocationAdjustmentSummary.changes.length === 2 ? '' : 's'} rebalanced proportionally.
+                        </span>
+                      )}
+                    </div>
+                    <span className="dc-allocation-total">
+                      Total allocation: {fmtPct(allocationAdjustmentSummary.total, 2)}
+                    </span>
+                  </div>
+                  <details className="dc-allocation-details">
+                    <summary>View all {allocationAdjustmentSummary.changes.length} percentage adjustments</summary>
+                    <div className="dc-allocation-change-grid">
+                      {allocationAdjustmentSummary.changes.map(change => (
+                        <div key={change.ticker}>
+                          <strong>{change.ticker}</strong>
+                          <span>{fmtPct(change.before, 2)} → {fmtPct(change.after, 2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+              )}
+              <div className="dc-field">
+                <label>Stock Price Growth (All Tickers)</label>
+                <NumberInput value={fmtInputNumber(defaultPriceGrowthPct, 2)} onChange={updateDefaultPriceGrowth} suffix="%" step="0.1" />
+                {negativeGrowthDripNote && <div className="dc-field-note">{negativeGrowthDripNote}</div>}
               </div>
               <div className="dc-field">
-                <label>Dividends Reinvested</label>
-                <NumberInput
-                  value={fmtInputNumber(effectiveDripPct(r, dripPct), 2)}
-                  onChange={(v) => updateRow(idx, { dripPct: v, dripFollowGlobal: false })}
-                  min="0"
-                  max="100"
-                  suffix="%"
-                  step="0.1"
-                />
+                <label>Dividends Reinvested (All Tickers)</label>
+                <NumberInput value={fmtInputNumber(dripPct, 2)} onChange={updateGlobalDrip} min="0" max="100" suffix="%" step="0.1" />
+              </div>
+              <div className="dc-field dc-field-wide">
                 <div className="dc-drip-toggle-row">
                   <Toggle
-                    checked={r.dripFollowGlobal !== false}
-                    onChange={(next) => toggleRowDripFollow(idx, next)}
-                    label="Follow all-tickers %"
+                    checked={dripApplyToAll}
+                    onChange={toggleDripApplyToAll}
+                    label="Apply to every ticker on change"
                   />
                 </div>
                 <div className="dc-field-note">
-                  {r.dripFollowGlobal !== false
-                    ? 'Following the all-tickers %. Turn this off (or edit the % above) to set a custom rate for this ticker only.'
-                    : 'Custom for this ticker — ignores the all-tickers %. 0% takes all of its payouts as cash.'}
+                  {dripApplyToAll
+                    ? 'On: changing this % updates every ticker set to follow it (turn a ticker’s “Follow all-tickers %” off to keep its own). Turning it on re-syncs the following tickers.'
+                    : 'Off: changing this % leaves each ticker’s own Dividends Reinvested % alone and only seeds newly added tickers.'}
+                  {' '}Each ticker card below can still set its own %.
                 </div>
               </div>
             </div>
-          </div>
-        )
-      })}
-
-      {totals && (
-        <>
-          <div className="dc-results-head">
-            <div>
-              <h2>Results After {Math.round(calculation.settings.years)} Years</h2>
-              <div className="dc-muted">
-                Contributions: {calculation.settings.contributionWindowMode === 'limited'
-                  ? `first ${formatContributionWindow(calculation.settings.contributionDurationMonths)}`
-                  : 'full projection period'}
+            <div className="dc-subhead">Adjustments</div>
+            <div className="dc-grid">
+              <div className="dc-field">
+                <label>Dividend Tax Rate</label>
+                <NumberInput value={fmtInputNumber(taxRatePct, 2)} onChange={setTaxRatePct} suffix="%" step="0.5" />
               </div>
-              {resultsNeedUpdate && <div className="dc-muted">Inputs changed since these results were calculated.</div>}
-            </div>
-            <button type="button" className="btn btn-primary" onClick={handleCalculate} disabled={isLoadingTicker}>
-              {isLoadingTicker ? 'Loading...' : 'Recalculate'}
-            </button>
-          </div>
-
-          <div className="dc-stat-row">
-            <div className="dc-stat">
-              <div className="dc-stat-label">{allPortfolio ? 'Current Portfolio Value' : 'Starting Wealth'}</div>
-              <div className="dc-stat-value">{fmtMoneyShort(totals.initial.portfolioValue)}</div>
-            </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Ending Wealth</div>
-              <div className="dc-stat-value">{fmtMoneyShort(totals.endingWealth)}</div>
-              <div className={`dc-stat-delta ${totals.growthPct >= 0 ? 'pos' : 'neg'}`}>
-                {totals.growthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.growthPct), 1)}
+              <div className="dc-field">
+                <label>Annual Inflation Rate</label>
+                <NumberInput value={fmtInputNumber(inflationRatePct, 2)} onChange={setInflationRatePct} min="0" max="50" suffix="%" step="0.1" />
+              </div>
+              <div className="dc-field-note dc-field-wide">
+                {inflationPct > 0
+                  ? 'The goal is judged in today’s dollars. Set inflation to 0 to judge it in future dollars.'
+                  : 'Inflation is off, so the goal is judged in future (nominal) dollars.'}
+                {' '}Contributions are held constant and are not raised with inflation.
               </div>
             </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Annual Dividend Income</div>
-              <div className="dc-stat-value">{fmtMoney(totals.final.annualIncome)}</div>
-              <div className={`dc-stat-delta ${totals.incomeGrowthPct >= 0 ? 'pos' : 'neg'}`}>
-                {totals.incomeGrowthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.incomeGrowthPct), 1)}
+          </div>
+
+          {heroLine && <div className="dc-hero">{heroLine}</div>}
+
+          {rows.filter(r => r.status === 'loaded').map((r) => {
+            const idx = rows.indexOf(r)
+            const cardOpen = isTickerCardOpen(r.ticker)
+            const payoutLabel = (FREQ_OPTIONS.find(f => f.code === effectivePayoutCode(r)) || {}).label
+            return (
+              <div className={`dc-row-card${cardOpen ? '' : ' is-collapsed'}`} key={`${r.ticker}-${idx}`}>
+                <div className="dc-row-head">
+                  <button
+                    type="button"
+                    className="dc-row-toggle"
+                    aria-expanded={cardOpen}
+                    onClick={() => setTickerCardOpen(prev => ({ ...prev, [r.ticker]: !cardOpen }))}
+                  >
+                    <span className="dc-row-caret" aria-hidden="true">{cardOpen ? '▾' : '▸'}</span>
+                    <strong>{r.ticker}</strong>
+                    <span className="dc-muted">- {r.name}</span>
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => removeRow(idx)}>Remove</button>
+                </div>
+                {!cardOpen && (
+                  <div className="dc-row-summary">
+                    {fmtMoneyShort(r.initialInvestment)} · {fmtPct(r.yieldPct, 2)} yield
+                    {payoutLabel && payoutLabel !== '0' ? ` · ${payoutLabel}` : ''}
+                    {' · '}DRIP {fmtPct(effectiveDripPct(r, dripPct), 0)}
+                  </div>
+                )}
+                <div className="dc-grid" hidden={!cardOpen}>
+                  <div className="dc-field">
+                    <label>{r.source === 'portfolio' ? 'Current Value' : 'Initial Investment'}</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.initialInvestment, 2)}
+                      onChange={(v) => updateRow(idx, { initialInvestment: v })}
+                      prefix="$"
+                      step="100"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Stock Price</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.sharePrice, 2)}
+                      onChange={(v) => updateRow(idx, { sharePrice: v })}
+                      prefix="$"
+                      step="0.01"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Number of Shares</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.shares, 2)}
+                      onChange={(v) => updateRow(idx, { shares: v })}
+                      step="0.01"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Yield Basis</label>
+                    <select
+                      className="dc-input"
+                      value={r.yieldBasis || 'custom'}
+                      onChange={(e) => updateRowYieldBasis(idx, e.target.value)}
+                    >
+                      {r.yieldBasis === 'portfolio' && <option value="portfolio">Portfolio estimate</option>}
+                      {(r.yieldOptions || []).map(o => (
+                        <option key={o.key} value={o.key}>{o.label}</option>
+                      ))}
+                      {(r.yieldBasis === 'custom' || !(r.yieldOptions || []).length) && <option value="custom">Custom</option>}
+                    </select>
+                    {yieldBasisNote(r) && <div className="dc-field-note">{yieldBasisNote(r)}</div>}
+                  </div>
+                  <div className="dc-field">
+                    <label>Initial Dividend Yield</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.yieldPct, 2)}
+                      onChange={(v) => updateRow(idx, { yieldPct: v, yieldBasis: 'custom', yieldNote: 'Manual yield override' })}
+                      suffix="%"
+                      step="0.01"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Dividend Growth</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.divGrowthPct, 2)}
+                      onChange={(v) => updateRow(idx, { divGrowthPct: v })}
+                      suffix="%"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Return of Capital</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.returnOfCapitalPct, 2)}
+                      onChange={(v) => updateRow(idx, { returnOfCapitalPct: v })}
+                      min="0"
+                      max="100"
+                      suffix="%"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>{contributionPeriodLabel} Contribution</label>
+                    <NumberInput
+                      value={fmtInputNumber(
+                        (Number(r.annualContribution) || 0) / contributionDivisor,
+                        contributionFrequency === 'monthly' ? 2 : 0
+                      )}
+                      onChange={(v) => updateRowContributionAmount(idx, v)}
+                      prefix="$"
+                      step={contributionFrequency === 'monthly' ? '25' : '100'}
+                    />
+                    {contributionMode !== 'custom' && (
+                      <div className="dc-field-note">
+                        Editing this switches the allocation to custom.
+                      </div>
+                    )}
+                  </div>
+                  <div className="dc-field">
+                    <label>Contribution Allocation %</label>
+                    <NumberInput
+                      value={fmtInputNumber(hasContributionTotal ? r.contributionWeightPct : 0, 2)}
+                      onChange={(v) => updateRowContributionPct(idx, v)}
+                      min="0"
+                      max="100"
+                      suffix="%"
+                      step="0.5"
+                      disabled={!hasContributionTotal}
+                    />
+                    <div className="dc-field-note">
+                      {hasContributionTotal
+                        ? `Percentage of the ${contributionPeriodLabel.toLowerCase()} contribution total.`
+                        : `Enter a ${contributionPeriodLabel.toLowerCase()} contribution total to allocate percentages.`
+                      }
+                      {hasContributionTotal && contributionMode !== 'custom' ? ' Editing this switches the allocation to custom.' : ''}
+                    </div>
+                  </div>
+                  <div className="dc-field">
+                    <label>Stock Price Growth</label>
+                    <NumberInput
+                      value={fmtInputNumber(r.priceGrowthPct, 2)}
+                      onChange={(v) => updateRow(idx, { priceGrowthPct: v })}
+                      suffix="%"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="dc-field">
+                    <label>Payout Frequency</label>
+                    <select
+                      className="dc-input"
+                      value={effectivePayoutCode(r)}
+                      onChange={(e) => updateRow(idx, { payoutCode: e.target.value })}
+                    >
+                      {FREQ_OPTIONS.map(f => (
+                        <option key={f.code} value={f.code}>{f.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="dc-field">
+                    <label>Dividends Reinvested</label>
+                    <NumberInput
+                      value={fmtInputNumber(effectiveDripPct(r, dripPct), 2)}
+                      onChange={(v) => updateRow(idx, { dripPct: v, dripFollowGlobal: false })}
+                      min="0"
+                      max="100"
+                      suffix="%"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="dc-field dc-field-wide">
+                    <div className="dc-drip-toggle-row">
+                      <Toggle
+                        checked={r.dripFollowGlobal !== false}
+                        onChange={(next) => toggleRowDripFollow(idx, next)}
+                        label="Follow all-tickers %"
+                      />
+                    </div>
+                    <div className="dc-field-note">
+                      {r.dripFollowGlobal !== false
+                        ? 'Following the all-tickers %. Turn this off (or edit the % above) to set a custom rate for this ticker only.'
+                        : 'Custom for this ticker — ignores the all-tickers %. 0% takes all of its payouts as cash.'}
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Monthly Dividend Income</div>
-              <div className="dc-stat-value">{fmtMoney(totals.final.monthlyIncome)}</div>
-              <div className={`dc-stat-delta ${totals.incomeGrowthPct >= 0 ? 'pos' : 'neg'}`}>
-                {totals.incomeGrowthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.incomeGrowthPct), 1)}
+            )
+          })}
+        </div>
+
+        <div className="dc-visual">
+          {goal ? (
+            <>
+              <GoalBanner goal={goal} isIncome={goalIsIncome} inflationAdjusted={inflationPct > 0} />
+              <div className="dc-chart-card dc-goal-chart-card">
+                <h3>{goalIsIncome ? 'Annual Income Growth' : 'Portfolio Growth'}</h3>
+                <GoalProjectionChart
+                  key={goalMode}
+                  nominal={convertMoneySeries(goal.nominal)}
+                  real={goal.real ? convertMoneySeries(goal.real) : null}
+                  target={goal.status === 'none' ? null : convertMoneyValue(goal.target)}
+                  markerYear={goal.yearReached}
+                  nominalLabel={goalIsIncome ? 'Nominal income' : 'Nominal value'}
+                  formatTick={(value, step, axisMax) => axisMoneyLabel(value, step, goalCurrencySymbol, axisMax)}
+                  formatValue={(value) => formatMoney(value, { convert: false, digits: goalIsIncome ? 2 : 0 })}
+                  replayKey={replayKey}
+                  ariaLabel={`${goalIsIncome ? 'Annual income' : 'Portfolio value'} projected over ${calculation.settings.years} years against the target`}
+                />
               </div>
-            </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Yield on Cost</div>
-              <div className="dc-stat-value">{fmtPct(totals.yieldOnCost, 2)}</div>
-            </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Current Yield</div>
-              <div className="dc-stat-value">{fmtPct(totals.final.portfolioValue > 0 ? (totals.final.annualIncome / totals.final.portfolioValue) * 100 : 0, 2)}</div>
-            </div>
-            <div className="dc-stat">
-              <div className="dc-stat-label">Estimated Dividend Taxes</div>
-              <div className="dc-stat-value">{fmtMoneyShort(totals.cumTaxes)}</div>
-              <div className="dc-stat-note">After ROC adjustments</div>
-            </div>
-          </div>
+              <div className="dc-income-bubbles">
+                <div className="dc-income-bubble">
+                  <span>Total Income</span>
+                  <strong>{fmtMoney(totals.cumGrossDivs)}</strong>
+                  <small>Gross dividends over {Math.round(calculation.settings.years)} years</small>
+                </div>
+                <div className="dc-income-bubble">
+                  <span>Monthly Income</span>
+                  <strong>{fmtMoney(totals.final.monthlyIncome)}</strong>
+                  <small>Combined income at Year {Math.round(calculation.settings.years)}</small>
+                </div>
+                <div className="dc-income-bubble">
+                  <span>Annual Income</span>
+                  <strong>{fmtMoney(totals.final.annualIncome)}</strong>
+                  <small>Combined income at Year {Math.round(calculation.settings.years)}</small>
+                </div>
+                <div className="dc-income-bubble">
+                  <span>Portfolio Value</span>
+                  <strong>{fmtMoney(totals.final.portfolioValue)}</strong>
+                  <small>Combined holdings at Year {Math.round(calculation.settings.years)}</small>
+                </div>
+              </div>
 
-          <div className="dc-section-head">
-            <h3>Total Return Breakdown</h3>
-            <div className="dc-total-return">{fmtMoneyShort(totals.endingWealth)} <span className="dc-muted">({fmtPct(totals.growthPct, 1)})</span></div>
-          </div>
+              <div className="dc-results-head">
+                <div>
+                  <h2>Results After {Math.round(calculation.settings.years)} Years</h2>
+                  <div className="dc-muted">
+                    Contributions: {calculation.settings.contributionWindowMode === 'limited'
+                      ? `first ${formatContributionWindow(calculation.settings.contributionDurationMonths)}`
+                      : 'full projection period'}
+                  </div>
+                </div>
+              </div>
 
-          <div className="dc-chart-card">
-            <Plot
-              data={[
-                {
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.portfolioValue),
-                  name: 'Portfolio Value',
-                  type: 'scatter',
-                  mode: 'lines',
-                  fill: 'tozeroy',
-                  line: { color: '#7ecfff', width: 2 },
-                  fillcolor: 'rgba(126, 207, 255, 0.18)',
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Portfolio</extra>',
-                },
-                {
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.annualIncome),
-                  name: 'Annual Income',
-                  type: 'scatter',
-                  mode: 'lines',
-                  line: { color: '#f9a825', width: 2, dash: 'dot' },
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Annual Income</extra>',
-                  yaxis: 'y2',
-                },
-                {
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.cumDividends),
-                  name: 'Cumulative Dividends',
-                  type: 'scatter',
-                  mode: 'lines',
-                  line: { color: '#4dff91', width: 3 },
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Dividends</extra>',
-                },
-              ]}
-              layout={{
-                template: 'plotly_dark',
-                paper_bgcolor: '#16213e',
-                plot_bgcolor: '#16213e',
-                font: { color: '#e0e8f5' },
-                margin: { l: 70, r: 70, t: 30, b: 50 },
-                height: 380,
-                xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
-                yaxis: { title: 'Portfolio / Cumulative Divs', gridcolor: '#1a2a3e', tickprefix: '$' },
-                yaxis2: { title: 'Annual Income', overlaying: 'y', side: 'right', tickprefix: '$', showgrid: false },
-                legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
-                hovermode: 'x unified',
-              }}
-              config={{ responsive: true, displayModeBar: false }}
-              style={{ width: '100%' }}
-              useResizeHandler
-            />
-          </div>
+              <div className="dc-stat-row">
+                <div className="dc-stat">
+                  <div className="dc-stat-label">{allPortfolio ? 'Current Portfolio Value' : 'Starting Wealth'}</div>
+                  <div className="dc-stat-value">{fmtMoneyShort(totals.initial.portfolioValue)}</div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Ending Wealth</div>
+                  <div className="dc-stat-value">{fmtMoneyShort(totals.endingWealth)}</div>
+                  <div className={`dc-stat-delta ${totals.growthPct >= 0 ? 'pos' : 'neg'}`}>
+                    {totals.growthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.growthPct), 1)}
+                  </div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Annual Dividend Income</div>
+                  <div className="dc-stat-value">{fmtMoney(totals.final.annualIncome)}</div>
+                  <div className={`dc-stat-delta ${totals.incomeGrowthPct >= 0 ? 'pos' : 'neg'}`}>
+                    {totals.incomeGrowthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.incomeGrowthPct), 1)}
+                  </div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Monthly Dividend Income</div>
+                  <div className="dc-stat-value">{fmtMoney(totals.final.monthlyIncome)}</div>
+                  <div className={`dc-stat-delta ${totals.incomeGrowthPct >= 0 ? 'pos' : 'neg'}`}>
+                    {totals.incomeGrowthPct >= 0 ? '+' : '-'}{fmtPct(Math.abs(totals.incomeGrowthPct), 1)}
+                  </div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Yield on Cost</div>
+                  <div className="dc-stat-value">{fmtPct(totals.yieldOnCost, 2)}</div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Current Yield</div>
+                  <div className="dc-stat-value">{fmtPct(totals.final.portfolioValue > 0 ? (totals.final.annualIncome / totals.final.portfolioValue) * 100 : 0, 2)}</div>
+                </div>
+                <div className="dc-stat">
+                  <div className="dc-stat-label">Estimated Dividend Taxes</div>
+                  <div className="dc-stat-value">{fmtMoneyShort(totals.cumTaxes)}</div>
+                  <div className="dc-stat-note">After ROC adjustments</div>
+                </div>
+              </div>
 
-          <div className="dc-chart-card">
-            <Plot
-              data={projections.length > 1
-                ? projections.map((p) => ({
-                    x: p.projection.yearly.map(y => y.year),
-                    y: p.projection.yearly.map(y => y.sharesOwned),
-                    name: p.ticker,
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    hovertemplate: `${p.ticker}<br>Year %{x}<br>%{y:,.2f} shares<extra></extra>`,
-                  }))
-                : [{
-                    x: totals.yearly.map(y => y.year),
-                    y: totals.yearly.map(y => y.sharesOwned),
-                    name: 'Shares Owned',
-                    type: 'scatter',
-                    mode: 'lines+markers',
-                    line: { color: '#b388ff', width: 2 },
-                    marker: { color: '#b388ff', size: 6 },
-                    hovertemplate: 'Year %{x}<br>%{y:,.2f} shares<extra>Shares</extra>',
-                  }]}
-              layout={{
-                template: 'plotly_dark',
-                paper_bgcolor: '#16213e',
-                plot_bgcolor: '#16213e',
-                font: { color: '#e0e8f5' },
-                margin: { l: 70, r: 30, t: 55, b: 80 },
-                height: 330,
-                title: {
-                  text: 'Shares Over Time',
-                  font: { size: 16, color: '#cfe5ff' },
-                  x: 0.5,
-                  xanchor: 'center',
-                },
-                xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
-                yaxis: { title: projections.length > 1 ? 'Shares by Ticker' : 'Shares Owned', gridcolor: '#1a2a3e' },
-                legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center', yanchor: 'top' },
-                hovermode: 'closest',
-                hoverlabel: {
-                  bgcolor: '#0f1a33',
-                  bordercolor: '#2f5ea8',
-                  font: { color: '#e0e8f5', size: 12 },
-                  align: 'left',
-                },
-              }}
-              config={{ responsive: true, displayModeBar: false }}
-              style={{ width: '100%' }}
-              useResizeHandler
-            />
-          </div>
+              <div className="dc-section-head">
+                <h3>Total Return Breakdown</h3>
+                <div className="dc-total-return">{fmtMoneyShort(totals.endingWealth)} <span className="dc-muted">({fmtPct(totals.growthPct, 1)})</span></div>
+              </div>
 
-          <div className="dc-section-head">
-            <h3>Growth Projections</h3>
-          </div>
+              <div className="dc-chart-card">
+                <Plot
+                  data={[
+                    {
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.portfolioValue),
+                      name: 'Portfolio Value',
+                      type: 'scatter',
+                      mode: 'lines',
+                      fill: 'tozeroy',
+                      line: { color: '#7ecfff', width: 2 },
+                      fillcolor: 'rgba(126, 207, 255, 0.18)',
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Portfolio</extra>',
+                    },
+                    {
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.annualIncome),
+                      name: 'Annual Income',
+                      type: 'scatter',
+                      mode: 'lines',
+                      line: { color: '#f9a825', width: 2, dash: 'dot' },
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Annual Income</extra>',
+                      yaxis: 'y2',
+                    },
+                    {
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.cumDividends),
+                      name: 'Cumulative Dividends',
+                      type: 'scatter',
+                      mode: 'lines',
+                      line: { color: '#4dff91', width: 3 },
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra>Dividends</extra>',
+                    },
+                  ]}
+                  layout={{
+                    template: 'plotly_dark',
+                    paper_bgcolor: '#16213e',
+                    plot_bgcolor: '#16213e',
+                    font: { color: '#e0e8f5' },
+                    margin: { l: 70, r: 70, t: 30, b: 50 },
+                    height: 380,
+                    xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
+                    yaxis: { title: 'Portfolio / Cumulative Divs', gridcolor: '#1a2a3e', tickprefix: '$' },
+                    yaxis2: { title: 'Annual Income', overlaying: 'y', side: 'right', tickprefix: '$', showgrid: false },
+                    legend: { orientation: 'h', y: 1.12, x: 0.5, xanchor: 'center' },
+                    hovermode: 'x unified',
+                  }}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 380 }}
+                  useResizeHandler
+                />
+              </div>
 
-          <div className="dc-chart-grid">
-            <div className="dc-chart-card dc-chart-card-compact">
-              <Plot
-                data={[{
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.portfolioValue),
-                  name: 'Portfolio Value',
-                  type: 'scatter',
-                  mode: 'lines+markers',
-                  line: { color: '#7ecfff', width: 2 },
-                  marker: { color: '#7ecfff', size: 6 },
-                  fill: 'tozeroy',
-                  fillcolor: 'rgba(126, 207, 255, 0.14)',
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
-                }]}
-                layout={{
-                  template: 'plotly_dark',
-                  paper_bgcolor: '#16213e',
-                  plot_bgcolor: '#16213e',
-                  font: { color: '#e0e8f5' },
-                  margin: { l: 70, r: 28, t: 45, b: 45 },
-                  height: 280,
-                  title: { text: 'Total Portfolio Value ($)', font: { size: 15, color: '#cfe5ff' } },
-                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
-                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
-                  showlegend: false,
-                  hovermode: 'x unified',
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            </div>
+              <div className="dc-chart-card">
+                <Plot
+                  data={projections.length > 1
+                    ? projections.map((p) => ({
+                        x: p.projection.yearly.map(y => y.year),
+                        y: p.projection.yearly.map(y => y.sharesOwned),
+                        name: p.ticker,
+                        type: 'scatter',
+                        mode: 'lines+markers',
+                        hovertemplate: `${p.ticker}<br>Year %{x}<br>%{y:,.2f} shares<extra></extra>`,
+                      }))
+                    : [{
+                        x: totals.yearly.map(y => y.year),
+                        y: totals.yearly.map(y => y.sharesOwned),
+                        name: 'Shares Owned',
+                        type: 'scatter',
+                        mode: 'lines+markers',
+                        line: { color: '#b388ff', width: 2 },
+                        marker: { color: '#b388ff', size: 6 },
+                        hovertemplate: 'Year %{x}<br>%{y:,.2f} shares<extra>Shares</extra>',
+                      }]}
+                  layout={{
+                    template: 'plotly_dark',
+                    paper_bgcolor: '#16213e',
+                    plot_bgcolor: '#16213e',
+                    font: { color: '#e0e8f5' },
+                    margin: { l: 70, r: 30, t: 55, b: 80 },
+                    height: 330,
+                    title: {
+                      text: 'Shares Over Time',
+                      font: { size: 16, color: '#cfe5ff' },
+                      x: 0.5,
+                      xanchor: 'center',
+                    },
+                    xaxis: { title: 'Years', gridcolor: '#1a2a3e' },
+                    yaxis: { title: projections.length > 1 ? 'Shares by Ticker' : 'Shares Owned', gridcolor: '#1a2a3e' },
+                    legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center', yanchor: 'top' },
+                    hovermode: 'closest',
+                    hoverlabel: {
+                      bgcolor: '#0f1a33',
+                      bordercolor: '#2f5ea8',
+                      font: { color: '#e0e8f5', size: 12 },
+                      align: 'left',
+                    },
+                  }}
+                  config={{ responsive: true, displayModeBar: false }}
+                  style={{ width: '100%', height: 330 }}
+                  useResizeHandler
+                />
+              </div>
 
-            <div className="dc-chart-card dc-chart-card-compact">
-              <Plot
-                data={[{
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.annualIncome),
-                  name: 'Annual Dividend Income',
-                  type: 'bar',
-                  marker: { color: '#4dff91' },
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
-                }]}
-                layout={{
-                  template: 'plotly_dark',
-                  paper_bgcolor: '#16213e',
-                  plot_bgcolor: '#16213e',
-                  font: { color: '#e0e8f5' },
-                  margin: { l: 70, r: 28, t: 45, b: 45 },
-                  height: 280,
-                  title: { text: 'Annual Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
-                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
-                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
-                  showlegend: false,
-                  bargap: 0.35,
-                  hovermode: 'x unified',
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            </div>
+              <div className="dc-section-head">
+                <h3>Growth Projections</h3>
+              </div>
 
-            <div className="dc-chart-card dc-chart-card-compact">
-              <Plot
-                data={[{
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.monthlyIncome),
-                  name: 'Monthly Dividend Income',
-                  type: 'bar',
-                  marker: { color: '#66d9a6' },
-                  hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
-                }]}
-                layout={{
-                  template: 'plotly_dark',
-                  paper_bgcolor: '#16213e',
-                  plot_bgcolor: '#16213e',
-                  font: { color: '#e0e8f5' },
-                  margin: { l: 70, r: 28, t: 45, b: 45 },
-                  height: 280,
-                  title: { text: 'Monthly Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
-                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
-                  yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
-                  showlegend: false,
-                  bargap: 0.35,
-                  hovermode: 'x unified',
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            </div>
+              <div className="dc-chart-grid">
+                <div className="dc-chart-card dc-chart-card-compact">
+                  <Plot
+                    data={[{
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.portfolioValue),
+                      name: 'Portfolio Value',
+                      type: 'scatter',
+                      mode: 'lines+markers',
+                      line: { color: '#7ecfff', width: 2 },
+                      marker: { color: '#7ecfff', size: 6 },
+                      fill: 'tozeroy',
+                      fillcolor: 'rgba(126, 207, 255, 0.14)',
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                    }]}
+                    layout={{
+                      template: 'plotly_dark',
+                      paper_bgcolor: '#16213e',
+                      plot_bgcolor: '#16213e',
+                      font: { color: '#e0e8f5' },
+                      margin: { l: 70, r: 28, t: 45, b: 45 },
+                      height: 280,
+                      title: { text: 'Total Portfolio Value ($)', font: { size: 15, color: '#cfe5ff' } },
+                      xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                      yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                      showlegend: false,
+                      hovermode: 'x unified',
+                    }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%', height: 280 }}
+                    useResizeHandler
+                  />
+                </div>
 
-            <div className="dc-chart-card dc-chart-card-compact">
-              <Plot
-                data={[{
-                  x: totals.yearly.map(y => y.year),
-                  y: totals.yearly.map(y => y.yieldOnCost),
-                  name: 'Yield on Cost',
-                  type: 'scatter',
-                  mode: 'lines+markers',
-                  line: { color: '#f9a825', width: 2 },
-                  marker: { color: '#f9a825', size: 6 },
-                  hovertemplate: 'Year %{x}<br>%{y:.2f}%<extra></extra>',
-                }]}
-                layout={{
-                  template: 'plotly_dark',
-                  paper_bgcolor: '#16213e',
-                  plot_bgcolor: '#16213e',
-                  font: { color: '#e0e8f5' },
-                  margin: { l: 70, r: 28, t: 45, b: 45 },
-                  height: 280,
-                  title: { text: 'Yield on Cost (%)', font: { size: 15, color: '#cfe5ff' } },
-                  xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
-                  yaxis: { ticksuffix: '%', gridcolor: '#1a2a3e' },
-                  showlegend: false,
-                  hovermode: 'x unified',
-                }}
-                config={{ responsive: true, displayModeBar: false }}
-                style={{ width: '100%' }}
-                useResizeHandler
-              />
-            </div>
-          </div>
+                <div className="dc-chart-card dc-chart-card-compact">
+                  <Plot
+                    data={[{
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.annualIncome),
+                      name: 'Annual Dividend Income',
+                      type: 'bar',
+                      marker: { color: '#4dff91' },
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                    }]}
+                    layout={{
+                      template: 'plotly_dark',
+                      paper_bgcolor: '#16213e',
+                      plot_bgcolor: '#16213e',
+                      font: { color: '#e0e8f5' },
+                      margin: { l: 70, r: 28, t: 45, b: 45 },
+                      height: 280,
+                      title: { text: 'Annual Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
+                      xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                      yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                      showlegend: false,
+                      bargap: 0.35,
+                      hovermode: 'x unified',
+                    }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%', height: 280 }}
+                    useResizeHandler
+                  />
+                </div>
 
-          <div className="dc-table-card">
-            <h3>Year-by-Year Breakdown</h3>
-            <div className="dc-table-wrap">
-              <table className="dc-table">
-                <thead>
-                  <tr>
-                    <th>Year</th>
-                    <th>{projections.length > 1 ? 'Total Shares' : 'Shares Owned'}</th>
-                    <th>Portfolio Value</th>
-                    <th>Annual Income</th>
-                    <th>Monthly Income</th>
-                    <th>Cumulative Dividends</th>
-                    <th>Estimated Taxes</th>
-                    <th>Net Dividends</th>
-                    <th>Reinvested Dividends</th>
-                    <th>Cash Dividends</th>
-                    <th>Cumulative Contributions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {totals.yearly.map(y => (
-                    <tr key={y.year}>
-                      <td>{y.year}</td>
-                      <td>{fmtShares(y.sharesOwned)}</td>
-                      <td>{fmtMoney(y.portfolioValue)}</td>
-                      <td>{fmtMoney(y.annualIncome)}</td>
-                      <td>{fmtMoney(y.monthlyIncome)}</td>
-                      <td>{fmtMoney(y.cumDividends)}</td>
-                      <td>{fmtMoney(y.cumTaxes)}</td>
-                      <td>{fmtMoney(y.cumNetDividends)}</td>
-                      <td>{fmtMoney(y.cumReinvestedDividends)}</td>
-                      <td>{fmtMoney(y.cumCashDividends)}</td>
-                      <td>{fmtMoney(y.cumContributions)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                <div className="dc-chart-card dc-chart-card-compact">
+                  <Plot
+                    data={[{
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.monthlyIncome),
+                      name: 'Monthly Dividend Income',
+                      type: 'bar',
+                      marker: { color: '#66d9a6' },
+                      hovertemplate: 'Year %{x}<br>%{y:$,.0f}<extra></extra>',
+                    }]}
+                    layout={{
+                      template: 'plotly_dark',
+                      paper_bgcolor: '#16213e',
+                      plot_bgcolor: '#16213e',
+                      font: { color: '#e0e8f5' },
+                      margin: { l: 70, r: 28, t: 45, b: 45 },
+                      height: 280,
+                      title: { text: 'Monthly Dividend Income ($)', font: { size: 15, color: '#cfe5ff' } },
+                      xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                      yaxis: { tickprefix: '$', gridcolor: '#1a2a3e' },
+                      showlegend: false,
+                      bargap: 0.35,
+                      hovermode: 'x unified',
+                    }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%', height: 280 }}
+                    useResizeHandler
+                  />
+                </div>
 
-          {projections.length > 1 && (
-            <div className="dc-table-card">
-              <h3>Per-Ticker Final Values</h3>
-              <div className="dc-table-wrap">
-                <table className="dc-table">
-                  <thead>
-                    <tr>
-                      <th>Ticker</th>
-                      <th>Initial Investment</th>
-                      <th>Initial Shares</th>
-                      <th>Final Shares</th>
-                      <th>Share Delta</th>
-                      <th>DRIP %</th>
-                      <th>ROC %</th>
-                      <th>Final Portfolio Value</th>
-                      <th>Final Annual Income</th>
-                      <th>Estimated Taxes</th>
-                      <th>Cash Dividends</th>
-                      <th>Cumulative Dividends</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {projections.map(p => (
-                      <tr key={p.ticker}>
-                        <td><strong>{p.ticker}</strong> <span className="dc-muted">{p.name}</span></td>
-                        <td>{fmtMoney(p.initialInvestment)}</td>
-                        <td>{fmtShares(p.projection.initial.sharesOwned)}</td>
-                        <td>{fmtShares(p.projection.final.sharesOwned)}</td>
-                        <td className={`dc-share-delta ${
-                          p.projection.final.sharesOwned > p.projection.initial.sharesOwned
-                            ? 'pos'
-                            : p.projection.final.sharesOwned < p.projection.initial.sharesOwned
-                              ? 'neg'
-                              : ''
-                        }`}>
-                          {fmtShareDelta(p.projection.final.sharesOwned - p.projection.initial.sharesOwned)}
-                        </td>
-                        <td>{fmtPct(p.projection.inputDripPct, 1)}</td>
-                        <td>{fmtPct(p.projection.inputReturnOfCapitalPct, 1)}</td>
-                        <td>{fmtMoney(p.projection.final.portfolioValue)}</td>
-                        <td>{fmtMoney(p.projection.final.annualIncome)}</td>
-                        <td>{fmtMoney(p.projection.cumTaxes)}</td>
-                        <td>{fmtMoney(p.projection.cumCashDivs)}</td>
-                        <td>{fmtMoney(p.projection.cumGrossDivs)}</td>
+                <div className="dc-chart-card dc-chart-card-compact">
+                  <Plot
+                    data={[{
+                      x: totals.yearly.map(y => y.year),
+                      y: totals.yearly.map(y => y.yieldOnCost),
+                      name: 'Yield on Cost',
+                      type: 'scatter',
+                      mode: 'lines+markers',
+                      line: { color: '#f9a825', width: 2 },
+                      marker: { color: '#f9a825', size: 6 },
+                      hovertemplate: 'Year %{x}<br>%{y:.2f}%<extra></extra>',
+                    }]}
+                    layout={{
+                      template: 'plotly_dark',
+                      paper_bgcolor: '#16213e',
+                      plot_bgcolor: '#16213e',
+                      font: { color: '#e0e8f5' },
+                      margin: { l: 70, r: 28, t: 45, b: 45 },
+                      height: 280,
+                      title: { text: 'Yield on Cost (%)', font: { size: 15, color: '#cfe5ff' } },
+                      xaxis: { title: 'Year', gridcolor: '#1a2a3e', range: chartYearRange },
+                      yaxis: { ticksuffix: '%', gridcolor: '#1a2a3e' },
+                      showlegend: false,
+                      hovermode: 'x unified',
+                    }}
+                    config={{ responsive: true, displayModeBar: false }}
+                    style={{ width: '100%', height: 280 }}
+                    useResizeHandler
+                  />
+                </div>
+              </div>
+
+              <div className="dc-table-card">
+                <h3>Year-by-Year Breakdown</h3>
+                <div className="dc-table-wrap">
+                  <table className="dc-table">
+                    <thead>
+                      <tr>
+                        <th>Year</th>
+                        <th>{projections.length > 1 ? 'Total Shares' : 'Shares Owned'}</th>
+                        <th>Portfolio Value</th>
+                        <th>Annual Income</th>
+                        <th>Monthly Income</th>
+                        <th>Cumulative Dividends</th>
+                        <th>Estimated Taxes</th>
+                        <th>Net Dividends</th>
+                        <th>Reinvested Dividends</th>
+                        <th>Cash Dividends</th>
+                        <th>Cumulative Contributions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {totals.yearly.map(y => (
+                        <tr key={y.year}>
+                          <td>{y.year}</td>
+                          <td>{fmtShares(y.sharesOwned)}</td>
+                          <td>{fmtMoney(y.portfolioValue)}</td>
+                          <td>{fmtMoney(y.annualIncome)}</td>
+                          <td>{fmtMoney(y.monthlyIncome)}</td>
+                          <td>{fmtMoney(y.cumDividends)}</td>
+                          <td>{fmtMoney(y.cumTaxes)}</td>
+                          <td>{fmtMoney(y.cumNetDividends)}</td>
+                          <td>{fmtMoney(y.cumReinvestedDividends)}</td>
+                          <td>{fmtMoney(y.cumCashDividends)}</td>
+                          <td>{fmtMoney(y.cumContributions)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
+
+              {projections.length > 1 && (
+                <div className="dc-table-card">
+                  <h3>Per-Ticker Final Values</h3>
+                  <div className="dc-table-wrap">
+                    <table className="dc-table">
+                      <thead>
+                        <tr>
+                          <th>Ticker</th>
+                          <th>Initial Investment</th>
+                          <th>Initial Shares</th>
+                          <th>Final Shares</th>
+                          <th>Share Delta</th>
+                          <th>DRIP %</th>
+                          <th>ROC %</th>
+                          <th>Final Portfolio Value</th>
+                          <th>Final Annual Income</th>
+                          <th>Estimated Taxes</th>
+                          <th>Cash Dividends</th>
+                          <th>Cumulative Dividends</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {projections.map(p => (
+                          <tr key={p.ticker}>
+                            <td><strong>{p.ticker}</strong> <span className="dc-muted">{p.name}</span></td>
+                            <td>{fmtMoney(p.initialInvestment)}</td>
+                            <td>{fmtShares(p.projection.initial.sharesOwned)}</td>
+                            <td>{fmtShares(p.projection.final.sharesOwned)}</td>
+                            <td className={`dc-share-delta ${
+                              p.projection.final.sharesOwned > p.projection.initial.sharesOwned
+                                ? 'pos'
+                                : p.projection.final.sharesOwned < p.projection.initial.sharesOwned
+                                  ? 'neg'
+                                  : ''
+                            }`}>
+                              {fmtShareDelta(p.projection.final.sharesOwned - p.projection.initial.sharesOwned)}
+                            </td>
+                            <td>{fmtPct(p.projection.inputDripPct, 1)}</td>
+                            <td>{fmtPct(p.projection.inputReturnOfCapitalPct, 1)}</td>
+                            <td>{fmtMoney(p.projection.final.portfolioValue)}</td>
+                            <td>{fmtMoney(p.projection.final.annualIncome)}</td>
+                            <td>{fmtMoney(p.projection.cumTaxes)}</td>
+                            <td>{fmtMoney(p.projection.cumCashDivs)}</td>
+                            <td>{fmtMoney(p.projection.cumGrossDivs)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="dc-chart-card dc-goal-empty">
+              <strong>{isLoadingTicker ? 'Loading ticker data…' : 'Add a ticker to see the projection'}</strong>
+              <span>
+                Enter a symbol above or pick tickers from your portfolio. The line draws toward your
+                {goalIsIncome ? ' income' : ' portfolio'} target and moves as you change the inputs.
+              </span>
             </div>
           )}
-        </>
-      )}
+        </div>
+      </div>
     </div>
   )
 }

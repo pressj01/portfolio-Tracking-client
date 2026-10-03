@@ -7497,6 +7497,9 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 
 /* Dividend Calculator */
 .dc-page { padding: 1.5rem 2rem; max-width: 1400px; margin: 0 auto; }
+/* `.dc-page` is shared with the Dividend Calendar; only the calculator's
+   side-by-side workspace wants the extra room. */
+.dc-page.dc-calc-page { max-width: 1800px; }
 .dc-title-row h1 { margin: 0 0 0.25rem 0; font-size: 1.75rem; }
 .dc-title-row {
   display: flex;
@@ -7589,19 +7592,11 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   color: var(--text-faint-2);
   font-size: 0.68rem;
 }
-.dc-income-bubbles.is-stale .dc-income-bubble { opacity: 0.7; }
-.dc-income-bubbles-status {
-  grid-column: 1 / -1;
-  color: var(--p-ffd27a);
-  font-size: 0.72rem;
-  text-align: right;
-}
 @media (max-width: 1100px) {
   .dc-income-bubbles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .dc-income-bubbles { grid-template-columns: 1fr; }
-  .dc-income-bubbles-status { text-align: left; }
 }
 .dc-muted { color: var(--text-faint-2); }
 
@@ -7732,12 +7727,6 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 .dc-table-card h3 { margin: 0 0 0.75rem 0; color: var(--accent); font-size: 1rem; }
 .dc-card-head h3 { margin-bottom: 0.25rem; }
 .dc-card-head p { margin: 0; }
-.dc-dirty-badge {
-  flex: 0 0 auto; align-self: center;
-  background: rgba(249, 168, 37, 0.16); border: 1px solid rgba(249, 168, 37, 0.45);
-  color: var(--p-ffd27a); border-radius: 999px; padding: 0.2rem 0.55rem;
-  font-size: 0.76rem; font-weight: 700;
-}
 .dc-help {
   margin: 0 0 0.9rem;
   background: rgba(126, 207, 255, 0.05);
@@ -8023,6 +8012,220 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
   font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
 }
 .dc-table tbody tr:hover { background: var(--p-0f1c33); }
+
+/* Dividend Calculator: goal workspace. Controls on the left, every chart and
+   table on the right, so an edit and its effect are on screen together instead
+   of a scroll apart. */
+.dc-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+  margin-bottom: 1rem;
+}
+.dc-side,
+.dc-visual { min-width: 0; }
+.dc-side > :last-child,
+.dc-visual > :last-child { margin-bottom: 0; }
+@media (min-width: 1040px) {
+  .dc-workspace {
+    grid-template-columns: minmax(340px, 430px) minmax(0, 1fr);
+    gap: 1.25rem;
+  }
+  /* The controls stay pinned and scroll on their own (as the scanner filter
+     panel does), so they are still in reach while the page is scrolled down to
+     a lower chart or table. */
+  .dc-side {
+    position: sticky;
+    /* Clears the app-wide notice strip, which is itself pinned to the top. */
+    top: 2.75rem;
+    max-height: calc(100vh - 3.5rem);
+    overflow-y: auto;
+    padding-right: 0.4rem;
+    scrollbar-color: var(--p-285996) transparent;
+    scrollbar-width: thin;
+  }
+  .dc-side .dc-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.dc-field-wide { grid-column: 1 / -1; }
+.dc-grid[hidden] { display: none; }
+.dc-goal-card .dc-frequency-options { margin-bottom: 0.85rem; }
+.dc-goal-card .dc-frequency-options button { min-height: 36px; font-size: 0.88rem; }
+.dc-subhead {
+  margin: 1rem 0 0.7rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid var(--p-1a4480);
+  color: var(--text-faint-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.dc-row-head { gap: 0.75rem; }
+.dc-row-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+.dc-row-toggle .dc-muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dc-row-caret { flex: 0 0 auto; width: 0.8rem; color: var(--accent-bright); }
+.dc-row-card.is-collapsed .dc-row-head { margin-bottom: 0.3rem; }
+.dc-row-summary {
+  color: var(--p-9bb0cc);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-goal-banner {
+  margin-bottom: 0.9rem;
+  padding: 0.8rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 8px;
+}
+.dc-goal-banner.is-reached {
+  background: rgba(77, 255, 145, 0.07);
+  border-color: rgba(77, 255, 145, 0.36);
+}
+.dc-goal-banner.is-missed,
+.dc-goal-banner.is-lapsed {
+  background: rgba(249, 168, 37, 0.08);
+  border-color: rgba(249, 168, 37, 0.42);
+}
+.dc-goal-banner-kicker {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.dc-goal-banner-kicker small { color: var(--text-faint-2); font-size: 0.74rem; font-weight: 400; }
+.dc-goal-banner-headline {
+  margin-top: 0.2rem;
+  color: var(--text-strong);
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+.dc-goal-banner.is-reached .dc-goal-banner-headline { color: var(--pos); }
+.dc-goal-banner.is-missed .dc-goal-banner-headline,
+.dc-goal-banner.is-lapsed .dc-goal-banner-headline { color: var(--warning-text); }
+.dc-goal-banner-detail { margin-top: 0.15rem; color: var(--text-soft); font-size: 0.86rem; }
+.dc-goal-progress { display: flex; align-items: center; gap: 0.65rem; margin-top: 0.55rem; }
+.dc-goal-progress-track {
+  flex: 1;
+  height: 6px;
+  overflow: hidden;
+  background: rgba(122, 138, 166, 0.24);
+  border-radius: 999px;
+}
+.dc-goal-progress-fill {
+  height: 100%;
+  background: var(--warning);
+  border-radius: 999px;
+  transition: width 0.65s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.dc-goal-banner.is-reached .dc-goal-progress-fill { background: var(--pos); }
+.dc-goal-progress-label {
+  flex: 0 0 auto;
+  color: var(--text-soft);
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-goal-chart-card h3 { margin: 0 0 0.6rem; color: var(--text-strong); font-size: 1rem; }
+/* Sized off the window so the banner, chart and result bubbles fit on screen
+   together without scrolling. */
+.dc-goal-plot {
+  position: relative;
+  width: 100%;
+  height: clamp(200px, calc(100vh - 690px), 380px);
+  outline: none;
+}
+.dc-goal-plot:focus-visible { border-radius: 4px; box-shadow: 0 0 0 2px var(--accent-bright); }
+.dc-goal-plot svg { display: block; overflow: visible; }
+.dc-goal-grid { stroke: var(--text-faint-2); stroke-opacity: 0.2; stroke-width: 1; shape-rendering: crispEdges; }
+.dc-goal-tick { fill: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.dc-goal-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.dc-goal-line-nominal { stroke: var(--accent-bright); }
+.dc-goal-line-real { stroke: var(--amber-2); stroke-dasharray: 7 5; }
+.dc-goal-line-target { stroke: var(--pos); stroke-dasharray: 2 5; }
+.dc-goal-fill-top { stop-color: var(--accent-bright); stop-opacity: 0.22; }
+.dc-goal-fill-bottom { stop-color: var(--accent-bright); stop-opacity: 0.02; }
+.dc-goal-target-label { fill: var(--text-soft); font-size: 11px; font-weight: 600; }
+.dc-goal-tip { fill: var(--accent-bright); stroke: var(--surface); stroke-width: 2; }
+.dc-goal-marker { fill: var(--surface); stroke: var(--pos); stroke-width: 2; }
+.dc-goal-crosshair { stroke: var(--text-faint-2); stroke-opacity: 0.6; stroke-width: 1; }
+.dc-goal-hover-dot { stroke: var(--surface); stroke-width: 2; }
+.dc-goal-hover-dot.nominal { fill: var(--accent-bright); }
+.dc-goal-hover-dot.real { fill: var(--amber-2); }
+.dc-goal-tooltip {
+  position: absolute;
+  z-index: 2;
+  min-width: 170px;
+  padding: 0.5rem 0.65rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(5, 14, 30, 0.28);
+  pointer-events: none;
+  transform: translateX(12px);
+  white-space: nowrap;
+}
+.dc-goal-tooltip.on-left { transform: translateX(calc(-100% - 12px)); }
+.dc-goal-tooltip-title { margin-bottom: 0.25rem; color: var(--text-dim); font-size: 0.72rem; font-weight: 700; }
+.dc-goal-tooltip-row { display: flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; line-height: 1.5; }
+.dc-goal-tooltip-row strong { color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.dc-goal-tooltip-row span { color: var(--text-dim); font-size: 0.74rem; }
+.dc-goal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1.2rem;
+  margin-top: 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.dc-goal-legend span { display: inline-flex; align-items: center; gap: 0.45rem; }
+.dc-goal-key {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 0;
+  border-top: 2px solid var(--accent-bright);
+}
+.dc-goal-key.real { border-top: 2px dashed var(--amber-2); }
+.dc-goal-key.target { border-top: 2px dotted var(--pos); }
+.dc-goal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 280px;
+  color: var(--text-faint-2);
+  text-align: center;
+}
+.dc-goal-empty strong { color: var(--text-strong); font-size: 1rem; }
+.dc-goal-empty span { max-width: 420px; font-size: 0.86rem; line-height: 1.5; }
+.dc-visual .dc-income-bubbles {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  margin: 0;
+}
 
 /* ETF Comparer: match the app's dark analysis theme */
 .etf-comparer-page {
