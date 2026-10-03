@@ -739,6 +739,101 @@ export default function BlendedYield() {
         Calculate the true after-tax blended yield of your portfolio using {state.name} + Federal progressive tax brackets.
       </p>
 
+      <details className="by-help">
+        <summary>How to use the Blended Yield Calculator</summary>
+        <div className="by-help-grid">
+          <section className="by-help-wide">
+            <h3>What this screen is for</h3>
+            <p>
+              Use it to compare income funds on an after-tax basis. A municipal bond, a Treasury fund,
+              a covered-call ETF, and a qualified-dividend stock can show very different stated yields
+              and still leave you with similar cash once federal and state tax are applied. Enter the
+              mix you are considering, and the screen reports what that mix keeps and what a fully
+              taxable fund would have to yield to match it.
+            </p>
+            <p>
+              It is a planning calculator for the account you have selected. It does not file a return,
+              and it does not include the 3.8% net investment income tax.
+            </p>
+          </section>
+          <section className="by-help-wide">
+            <h3>How to use it</h3>
+            <ol>
+              <li>
+                Set the tax profile. Choose the state, filing status, and taxable income. The four chips
+                under those fields show the marginal rates those inputs produce. Enter the total portfolio
+                investment you want to divide among the funds.
+              </li>
+              <li>
+                Open <strong>Tax Bracket Settings</strong> only when a bracket is wrong for your year.
+                Edit the federal ordinary table, the federal long-term capital gains table, or a state.
+                <strong> Save Brackets</strong> keeps the edits in this browser.
+                <strong> Restore 2025 Defaults</strong> puts the built-in tables back.
+              </li>
+              <li>
+                Add the funds. Type a ticker and click <strong>Add Fund</strong>, or click
+                <strong> From Portfolio</strong>, check the holdings you want, and click
+                <strong> Add Tickers</strong>. A recognized fund fills in its name, distribution yield,
+                and tax classification. A fund the lookup does not recognize stays a manual entry:
+                type the name and yield yourself.
+              </li>
+              <li>
+                Check each fund card. Confirm the yield and tax classification, then set the allocation
+                as a percent or as dollars. Editing either one updates the other.
+                <strong> Split Equally</strong> gives every fund the same percent of the total investment.
+                <strong> Remove</strong> drops one fund. <strong>Reset All</strong> clears the list.
+              </li>
+              <li>
+                Read the <strong>Portfolio Summary</strong>. <strong>Blended Yield (TEY)</strong> is the
+                number to compare across mixes. <strong>After-Tax Yield</strong> is what this mix keeps.
+                The bar and table show each fund&apos;s share. If a warning says the allocation is not
+                100%, change the percents until it is.
+              </li>
+            </ol>
+          </section>
+          <section>
+            <h3>Tax profile</h3>
+            <ul>
+              <li><strong>Taxable Income:</strong> the income used to choose your bracket. It is separate from the portfolio&apos;s distribution income.</li>
+              <li><strong>Total Portfolio Investment:</strong> the dollars the allocation percentages are applied to. Changing it keeps each percent and rescales the dollar amounts. Adding holdings from the portfolio replaces this total with the sum of those holdings&apos; current values.</li>
+              <li><strong>Filing Status:</strong> Single or Married Filing Jointly. Each status has its own bracket table.</li>
+              <li><strong>Federal:</strong> the marginal ordinary federal rate at that income and filing status.</li>
+              <li><strong>State:</strong> the marginal state rate. Arizona is a flat rate. Other states use brackets.</li>
+              <li><strong>Combined:</strong> federal plus state. This is the rate on fully taxable distributions.</li>
+              <li><strong>LTCG:</strong> long-term capital gains. The chip is the federal marginal rate for qualified dividends and long-term capital gains. It does not include the state rate.</li>
+              <li><strong>Marginal rate:</strong> the rate on the next dollar inside the bracket that contains the taxable income you typed. It is not the average rate on every dollar of income.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Tax classifications</h3>
+            <ul>
+              <li><strong>Fully Taxable:</strong> taxed at the combined ordinary rate.</li>
+              <li><strong>Treasury (State Exempt):</strong> taxed at the federal ordinary rate only.</li>
+              <li><strong>Fed Exempt (Muni):</strong> national municipal interest. The state rate still applies, except in a state that exempts all municipal interest, where the rate is zero.</li>
+              <li><strong>Fed+State Exempt:</strong> in-state municipal interest, taxed at zero. A built-in California municipal fund switches to Fed Exempt (Muni) when the selected state is not California.</li>
+              <li><strong>Return of Capital (ROC):</strong> on this screen, taxed at the federal LTCG rate plus the state rate.</li>
+              <li><strong>Qualified / LTCG:</strong> qualified dividends and long-term capital gains, taxed at the federal LTCG rate plus the state rate. The green chip shows only the federal piece.</li>
+            </ul>
+          </section>
+          <section className="by-help-wide">
+            <h3>Yields and the summary</h3>
+            <ul>
+              <li><strong>Distribution Yield:</strong> the fund&apos;s stated annual yield before tax.</li>
+              <li><strong>After-Tax Yield (ATY):</strong> distribution yield multiplied by one minus that fund&apos;s tax rate. The percent you keep.</li>
+              <li><strong>Tax-Equivalent Yield (TEY):</strong> the pre-tax yield a fully taxable fund would need in order to match this fund&apos;s after-tax yield.</li>
+              <li><strong>Effective Tax Rate:</strong> the rate this screen applies to that fund.</li>
+              <li><strong>Blended Yield (TEY):</strong> each fund&apos;s tax-equivalent yield weighted by its allocation percent. Use this to compare one mix with another.</li>
+              <li><strong>After-Tax Yield (summary):</strong> each fund&apos;s after-tax yield weighted by allocation.</li>
+              <li><strong>Gross Yield:</strong> each fund&apos;s stated yield weighted by allocation, before tax.</li>
+              <li><strong>Annual Income:</strong> allocation dollars times the distribution yield, before tax.</li>
+              <li><strong>After-Tax Annual</strong> and <strong>After-Tax Monthly:</strong> income after each fund&apos;s tax rate, with the monthly figure equal to the annual amount divided by 12.</li>
+              <li><strong>Allocation % and Allocation $:</strong> the fund&apos;s share of the total investment.</li>
+              <li><strong>Shares:</strong> allocation dollars divided by the latest looked-up share price. A fund with no price shows a dash.</li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       {/* ── Tax Profile ── */}
       <div className="by-card">
         <h3>Tax Profile</h3>
