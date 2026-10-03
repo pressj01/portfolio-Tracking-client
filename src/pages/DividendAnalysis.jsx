@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, themedPlotlyLayout } from '../utils/chartTheme'
-import { formatMoney } from '../utils/money'
+import { formatMoney, formatMoneyCompact } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
@@ -998,6 +998,7 @@ export default function DividendAnalysis() {
                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
                       <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Ticker</th>
                       <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Type</th>
+                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }} title="Assets under management, from the same fund profiles used by ETF Compare and Security Research">AUM</th>
                       <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Risk Level</th>
                       <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Safety Score</th>
                       <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Est. Annual Income</th>
@@ -1010,6 +1011,9 @@ export default function DividendAnalysis() {
                         <td style={{ padding: '0.4rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{h.ticker}</td>
                         <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: 'var(--text-strong)' }}>
                           <SafetyModelLabel model={h.score_model} />
+                        </td>
+                        <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)' }}>
+                          {h.score_model === 'stock' ? '—' : formatMoneyCompact(h.aum)}
                         </td>
                         <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center' }}>
                           <SafetyBadge level={h.risk_level} />

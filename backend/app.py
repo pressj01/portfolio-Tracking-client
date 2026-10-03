@@ -20535,11 +20535,16 @@ def list_holdings():
                     GROUP BY ticker""",
                 [month_start] + payment_profile_ids + [year_start, today_iso],
             ).fetchall()
+            recorded_ytd, recorded_rows = _recorded_dividend_amounts_by_ticker(
+                conn, payment_profile_ids, year_start, today_iso
+            )
+            if recorded_rows:
+                for r in results:
+                    ticker = str(r.get("ticker") or "").strip().upper()
+                    r["ytd_divs"] = round(recorded_ytd.get(ticker, 0.0), 2)
             if pay_rows:
-                ytd_paid_by_ticker = {r["ticker"]: float(r["ytd_amount"] or 0) for r in pay_rows}
                 month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
                 for r in results:
-                    r["ytd_divs"] = round(ytd_paid_by_ticker.get(r["ticker"], 0), 2)
                     r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
     # For single-profile queries, compute reinvested/not-reinvested splits.
     # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
@@ -26541,6 +26546,72 @@ def _etf_provider_fund_facts(conn, tickers):
     return facts
 
 
+def _known_fund_assets(conn, tickers):
+    """AUM from the feeds ETF Compare and Security Research already use.
+
+    An official issuer profile wins, matching Security Research. Otherwise the
+    number is NEOS assets, Yahoo total assets, then the provider catalog,
+    which is the ETF Compare order.
+    """
+    symbols = []
+    seen = set()
+    for raw in tickers or []:
+        symbol = str(raw or "").strip().upper()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+    if not symbols:
+        return {}
+    catalog = _etf_provider_fund_facts(conn, symbols)
+    try:
+        neos = _neos_fund_facts_batch(symbols, timeout_sec=4)
+    except Exception:
+        neos = {}
+    assets_by_ticker = {}
+    for symbol in symbols:
+        assets = None
+        profile = None
+        try:
+            if _is_xfunds_fund(symbol):
+                profile = _fetch_xfunds_etf_profile(symbol)
+            elif _is_tappalpha_fund(symbol):
+                profile = _fetch_tappalpha_etf_profile(symbol)
+        except Exception:
+            profile = None
+        if isinstance(profile, dict):
+            assets = profile.get("total_assets") or profile.get("assets")
+        if not assets:
+            assets = (neos.get(symbol) or {}).get("assets")
+        if not assets:
+            try:
+                info = _cached_yf_info(_yf_ticker(symbol), symbol) or {}
+            except Exception:
+                info = {}
+            assets = info.get("totalAssets") or info.get("totalNetAssets")
+        if not assets:
+            assets = (catalog.get(symbol) or {}).get("assets")
+        value = _json_float(assets)
+        if value and value > 0:
+            assets_by_ticker[symbol] = value
+    return assets_by_ticker
+
+
+def _attach_known_fund_assets(conn, rows):
+    # The at-risk table is the only place this AUM is shown.
+    symbols = [
+        row.get("ticker")
+        for row in rows or []
+        if (row.get("safety_score_model") or row.get("score_model")) in {"fund", "option_income", "bdc"}
+        and (row.get("safety_risk_level") or row.get("risk_level")) in {"High", "Elevated"}
+    ]
+    assets = _known_fund_assets(conn, symbols)
+    for row in rows or []:
+        symbol = str(row.get("ticker") or "").strip().upper()
+        if symbol in assets:
+            row["aum"] = assets[symbol]
+    return rows
+
+
 def _yf_ticker_info_cached_or_fetch(ticker, timeout_sec=4):
     """Yahoo .info with the 24h cache, timed so a hung quote cannot stall grades.
 
@@ -31053,6 +31124,163 @@ def _nav_adjusted_erosion_ratio(close, divs_series, benchmark_close):
         return None
 
 
+def _income_payment_profile_ids(conn, is_aggregate, profile_ids):
+    """Accounts whose recorded dividends belong to this portfolio view.
+
+    Owner reads the accounts linked to it. An aggregate reads its members.
+    A single account reads itself. The Dashboard YTD Dividends card uses
+    this same scope.
+    """
+    ids = []
+    for pid in profile_ids or [1]:
+        try:
+            ids.append(int(pid))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids)) or [1]
+    if not is_aggregate and len(ids) == 1 and ids[0] == 1:
+        source_ids = _get_owner_source_profile_ids(conn)
+        if source_ids:
+            return list(dict.fromkeys(int(pid) for pid in source_ids))
+    return ids
+
+
+def _recorded_dividend_amounts_by_ticker(conn, profile_ids, start_date, end_date):
+    """Broker-confirmed dividend cash in a date range, keyed by ticker.
+
+    refresh_estimate rows are projections written by price refresh, not cash
+    a broker confirmed, so they stay out of year-to-date income.
+    """
+    ids = []
+    for pid in profile_ids or []:
+        try:
+            ids.append(int(pid))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids))
+    if not ids:
+        return {}, 0
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker,
+                   COALESCE(SUM(amount), 0) AS amount,
+                   COUNT(*) AS payment_rows
+            FROM dividend_payments
+            WHERE profile_id IN ({placeholders})
+              AND payment_date >= ? AND payment_date <= ?
+              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
+            GROUP BY ticker""",
+        ids + [start_date, end_date],
+    ).fetchall()
+    by_ticker = {}
+    payment_rows = 0
+    for row in rows:
+        payment_rows += int(row["payment_rows"] or 0)
+        ticker = str(row["ticker"] or "").strip().upper()
+        if ticker:
+            by_ticker[ticker] = by_ticker.get(ticker, 0.0) + _num_or_zero(row["amount"])
+    return by_ticker, payment_rows
+
+
+def _portfolio_ytd_dividend_income(conn, is_aggregate, profile_ids, today=None):
+    """Year-to-date dividend cash for the Dashboard and Dividend Analysis.
+
+    Recorded broker payments win, including cash from positions sold earlier
+    this year. With no recorded payments, a complete monthly-payout history
+    is used, then the amounts stored on the open holdings.
+    """
+    import datetime
+    today = today or datetime.date.today()
+    ids = []
+    for pid in profile_ids or [1]:
+        try:
+            ids.append(int(pid))
+        except (TypeError, ValueError):
+            continue
+    ids = list(dict.fromkeys(ids)) or [1]
+    placeholders = ",".join("?" * len(ids))
+    holdings = conn.execute(
+        f"""SELECT ytd_divs, quantity, div, ex_div_date, div_frequency, purchase_date
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND quantity IS NOT NULL AND quantity > 0""",
+        ids,
+    ).fetchall()
+    stored_ytd = 0.0
+    for row in holdings:
+        holding = dict(row)
+        stored = holding.get("ytd_divs")
+        stored_ytd += _estimate_ytd_income(holding) if stored is None else float(stored or 0)
+
+    payment_ids = _income_payment_profile_ids(conn, is_aggregate, ids)
+    year_start = today.replace(month=1, day=1).isoformat()
+    today_iso = today.isoformat()
+    month_start = today.replace(day=1).isoformat()
+    by_ticker, payment_rows = _recorded_dividend_amounts_by_ticker(
+        conn, payment_ids, year_start, today_iso
+    )
+    if payment_rows:
+        return {
+            "ytd_income": round(sum(by_ticker.values()), 2),
+            "source": "dividend_payments",
+            "payment_rows": payment_rows,
+            "by_ticker": by_ticker,
+        }
+
+    payment_placeholders = ",".join("?" * len(payment_ids))
+    payment_month = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) AS amount, COUNT(*) AS rows
+            FROM dividend_payments
+            WHERE profile_id IN ({payment_placeholders})
+              AND payment_date >= ? AND payment_date <= ?
+              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'""",
+        payment_ids + [month_start, today_iso],
+    ).fetchone()
+    paid_month_to_date = None
+    if payment_month and payment_month["rows"]:
+        paid_month_to_date = float(payment_month["amount"] or 0)
+
+    if paid_month_to_date is not None:
+        completed = conn.execute(
+            f"""SELECT COALESCE(SUM(amount), 0) AS amount,
+                       COUNT(DISTINCT month) AS months
+                FROM monthly_payouts
+                WHERE profile_id IN ({placeholders})
+                  AND year = ? AND month < ?""",
+            ids + [today.year, today.month],
+        ).fetchone()
+        if int(completed["months"] or 0) >= today.month - 1:
+            return {
+                "ytd_income": round(float(completed["amount"] or 0) + paid_month_to_date, 2),
+                "source": "monthly_payouts",
+                "payment_rows": 0,
+                "by_ticker": None,
+            }
+
+    payout_ytd = conn.execute(
+        f"""SELECT COALESCE(SUM(amount), 0) AS amount,
+                   COUNT(DISTINCT month) AS months
+            FROM monthly_payouts
+            WHERE profile_id IN ({placeholders})
+              AND year = ? AND month <= ?""",
+        ids + [today.year, today.month],
+    ).fetchone()
+    if paid_month_to_date is None and payout_ytd and int(payout_ytd["months"] or 0) >= today.month:
+        return {
+            "ytd_income": round(float(payout_ytd["amount"] or 0), 2),
+            "source": "monthly_payouts",
+            "payment_rows": 0,
+            "by_ticker": None,
+        }
+
+    return {
+        "ytd_income": round(stored_ytd, 2),
+        "source": "holding_estimates",
+        "payment_rows": 0,
+        "by_ticker": None,
+    }
+
+
 # ── Income Summary ────────────────────────────────────────────────────────────
 
 @app.route("/api/income-summary", methods=["GET"])
@@ -31128,20 +31356,10 @@ def income_summary():
         current_month_income_source = "dividend_payments"
         total_month = paid_month_to_date
 
-    payment_ytd = conn.execute(
-        f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
-            FROM dividend_payments
-            WHERE profile_id IN ({payment_placeholders})
-              AND payment_date >= ? AND payment_date <= ?
-              AND LOWER(COALESCE(source, '')) != 'refresh_estimate'""",
-        payment_pids + [today.replace(month=1, day=1).isoformat(), today_iso],
-    ).fetchone()
-    ytd_income_source = "holding_estimates"
-    ytd_payment_rows = 0
-    if payment_ytd and payment_ytd["rows"]:
-        total_ytd = float(payment_ytd["amount"] or 0)
-        ytd_payment_rows = int(payment_ytd["rows"] or 0)
-        ytd_income_source = "dividend_payments"
+    ytd_result = _portfolio_ytd_dividend_income(conn, is_agg, pids, today)
+    total_ytd = ytd_result["ytd_income"]
+    ytd_income_source = ytd_result["source"]
+    ytd_payment_rows = ytd_result["payment_rows"]
 
     payout_month = conn.execute(
         f"""SELECT COALESCE(SUM(amount), 0) as amount, COUNT(*) as rows
@@ -31153,40 +31371,6 @@ def income_summary():
     if paid_month_to_date is None and payout_month and payout_month["rows"]:
         total_month = float(payout_month["amount"] or 0)
         current_month_income_source = "monthly_payouts"
-
-    completed_payout_ytd = conn.execute(
-        f"""SELECT COALESCE(SUM(amount), 0) as amount,
-                   COUNT(DISTINCT month) as months
-            FROM monthly_payouts
-            WHERE profile_id IN ({placeholders})
-              AND year = ? AND month < ?""",
-        pids + [today.year, today.month],
-    ).fetchone()
-    if (
-        not ytd_payment_rows
-        and
-        paid_month_to_date is not None
-        and int(completed_payout_ytd["months"] or 0) >= today.month - 1
-    ):
-        total_ytd = float(completed_payout_ytd["amount"] or 0) + paid_month_to_date
-        ytd_income_source = "monthly_payouts"
-
-    payout_ytd = conn.execute(
-        f"""SELECT COALESCE(SUM(amount), 0) as amount,
-                   COUNT(DISTINCT month) as months
-            FROM monthly_payouts
-            WHERE profile_id IN ({placeholders})
-              AND year = ? AND month <= ?""",
-        pids + [today.year, today.month],
-    ).fetchone()
-    if (
-        not ytd_payment_rows
-        and paid_month_to_date is None
-        and payout_ytd
-        and int(payout_ytd["months"] or 0) >= today.month
-    ):
-        total_ytd = float(payout_ytd["amount"] or 0)
-        ytd_income_source = "monthly_payouts"
 
     lifetime_income = _lifetime_dividend_income(conn, payment_pids, today_iso)
     # Some legacy profiles only have current-year payout summaries. Until
@@ -32378,6 +32562,25 @@ def dividend_analysis_data():
     today_d = datetime.date.today()
     month_label = today_d.strftime("%b %Y")
     totals["current_month_label"] = month_label
+    # Same year-to-date cash as the Dashboard YTD Dividends card. The stored
+    # holding column can lag the payment ledger, especially on Owner, whose
+    # cash is recorded on the linked accounts.
+    is_agg, income_pids = get_profile_filter()
+    ytd_result = _portfolio_ytd_dividend_income(conn, is_agg, income_pids, today_d)
+    if ytd_result["by_ticker"] is not None:
+        recorded_ytd = ytd_result["by_ticker"]
+        df["ytd_divs"] = [
+            round(recorded_ytd.get(str(ticker).strip().upper(), 0.0), 2)
+            for ticker in df["ticker"]
+        ]
+    if cat_ids or sub_ids:
+        totals["ytd_divs"] = _clean(float(pd.to_numeric(df["ytd_divs"], errors="coerce").fillna(0).sum()))
+    else:
+        totals["ytd_divs"] = ytd_result["ytd_income"]
+        # Lifetime cash uses the same accounts as the Dashboard Lifetime Income card.
+        payment_ids = _income_payment_profile_ids(conn, is_agg, income_pids)
+        lifetime = _lifetime_dividend_income(conn, payment_ids, today_d.isoformat())
+        totals["total_divs_received"] = max(lifetime, float(totals["ytd_divs"] or 0))
     try:
         actual_row = conn.execute(
             "SELECT amount FROM monthly_payouts WHERE year = ? AND month = ? AND profile_id = ?",
@@ -32436,6 +32639,7 @@ def dividend_analysis_data():
             "debt_to_equity": _clean(safety.get("debt_to_equity")),
             "safety_score_model": safety.get("score_model") or "unknown",
         })
+    _attach_known_fund_assets(conn, table_rows)
     safety_summary = summarize_dividend_safety(table_rows)
     totals["dividend_safety"] = safety_summary
 
@@ -32916,6 +33120,7 @@ def dividend_safety_data():
         merged = dict(holding)
         merged.update(payload)
         out.append(merged)
+    _attach_known_fund_assets(conn, out)
     summary = summarize_dividend_safety(out)
     conn.close()
     return jsonify(rows=out, summary=summary)
