@@ -6574,6 +6574,10 @@ th.col-drag-target {
 .home-watchlist { padding: 0.85rem 1rem 1rem; margin-bottom: 1rem; }
 .home-watchlist-head { display: flex; justify-content: space-between; gap: 0.8rem; align-items: baseline; margin-bottom: 0.55rem; }
 .home-watchlist-head h3 { margin: 0; color: var(--accent-2); font-size: 1rem; }
+.home-watchlist-actions { display: inline-flex; align-items: baseline; gap: 0.9rem; }
+.home-watchlist-hide { background: none; border: none; padding: 0; color: var(--text-dim); font-size: 0.85rem; cursor: pointer; }
+.home-watchlist-hide:hover { color: var(--text); text-decoration: underline; }
+.wl-home-toggle { display: inline-flex; align-items: center; gap: 0.45rem; margin-top: 0.4rem; font-size: 0.88rem; color: var(--text-muted); cursor: pointer; }
 .home-watchlist-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .home-watchlist-table th, .home-watchlist-table td { text-align: left; padding: 0.35rem 0.45rem; border-bottom: 1px solid var(--grid-line); }
 .home-watchlist-table th { color: var(--text-dim); font-weight: 600; }
