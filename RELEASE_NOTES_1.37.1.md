@@ -1,4 +1,4 @@
-# Portfolio Tracking Client v1.37.0
+# Portfolio Tracking Client v1.37.1
 
 This release adds the changes made since the September 25 v1.36.3 deployment: a new ETF Overlap page, named watchlists, adjustable grading and signal formulas, a hybrid Tiingo data provider, license activation, and the dividend, cost-basis and chart fixes described below.
 
@@ -63,4 +63,4 @@ Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Ma
 - **macOS Intel:** `.dmg` installer (x64)
 - **macOS Apple Silicon:** `.dmg` installer (arm64)
 
-**Changes since the last deployment**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.36.3...v1.37.0
+**Changes since the last deployment**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.36.3...v1.37.1

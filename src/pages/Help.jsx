@@ -3,7 +3,7 @@ import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
 
-const APP_VERSION = '1.37.0'
+const APP_VERSION = '1.37.1'
 
 const GROUPS = [
   {
