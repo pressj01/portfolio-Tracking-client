@@ -3,7 +3,7 @@ import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
 
-const APP_VERSION = '1.37.4'
+const APP_VERSION = '1.37.5'
 
 const GROUPS = [
   {
@@ -7092,24 +7092,30 @@ function DividendCalculatorHelp() {
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator with the ticker bar across the top, the goal and settings controls in the left column, and on the right a reached Portfolio Goal banner, the Portfolio Growth chart with nominal, today's dollars and target lines, and the result bubbles" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/dividend-calculator/dividend-calculator-overview.png" alt="Dividend Calculator with the ticker bar across the top, the Portfolio Target and calculation controls in the left column, and on the right the Growth chart toggle, reached-goal banner, ending values, Portfolio Growth chart, and result bubbles" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Goal and Income Goal</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Portfolio Growth and Income Growth</h3>
       <p style={{ marginBottom: '0.5rem' }}>
-        The first card in the left column sets what you are aiming for. Choose a goal type and enter a target:
+        Use the <strong>Growth chart</strong> toggle above the visualization to swap between the two projections.
+        The target card in the left column changes with the selected view, and the calculator remembers a separate
+        target for each chart. You can move back and forth without re-entering either number:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Portfolio Goal</strong> — <strong>Target Portfolio Value</strong>. The chart plots the combined value of the holdings each year.</li>
-        <li><strong>Income Goal</strong> — <strong>Target Annual Income</strong>. The chart plots the gross annual dividend income run-rate each year; the note under the field shows the monthly equivalent.</li>
+        <li><strong>Portfolio Growth</strong> — The card shows <strong>Target Portfolio Value</strong>, and the chart plots the combined value of the holdings each year.</li>
+        <li><strong>Income Growth</strong> — The card shows <strong>Target Annual Income</strong>, and the chart plots the gross annual dividend income run-rate each year. The note under the field also shows the monthly equivalent.</li>
       </ul>
       <p style={{ marginBottom: '0.75rem' }}>
         The goal chart draws the target as a dotted line across the plot, the projection as a solid line
         (<strong>Nominal value</strong> or <strong>Nominal income</strong>), and, when inflation is above 0, a dashed
-        <strong> Today&apos;s dollars</strong> line showing the same projection in today&apos;s purchasing power. Change
-        any input and the lines glide to their new position, so you can watch the projection close in on the
-        target or fall away from it. Hover the chart (or focus it and use the arrow keys) to read each year&apos;s
-        values and how far along the target that year is.
+        <strong> Today&apos;s dollars</strong> line showing the same projection in today&apos;s purchasing power. Both
+        views use the same line-drawing animation. Switching charts, changing a target, or changing another input
+        animates the projection to its new position so you can see it move toward or away from the goal.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Year N Ending</strong> boxes above the plot keep the final nominal and Today&apos;s dollars values
+        visible without hovering and keep the labels clear of the target line. Hover the plot (or focus it and use
+        the arrow keys) when you want the values and target progress for an earlier year.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
         The banner above the chart states the outcome: the year the goal is first reached and how much the final
@@ -7119,6 +7125,20 @@ function DividendCalculatorHelp() {
         price erodes — the banner says the goal was reached but not held. With inflation above 0 the goal is
         judged against the Today&apos;s dollars line, and the banner is labelled inflation-adjusted.
       </p>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/growth-chart-portfolio.jpg" alt="Portfolio Growth selected, showing its saved portfolio target, reached-goal banner, Year 10 ending nominal and today's-dollar values above the chart, animated projection lines, target line, goal marker, and final result bubbles" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>
+          Portfolio Growth: the ending-value boxes remain above the plot, while the ring marks the first year the inflation-adjusted projection reaches the target.
+        </p>
+      </div>
+
+      <div style={{ marginBottom: '1.5rem' }}>
+        <img src="./help-screenshots/dividend-calculator/growth-chart-income.jpg" alt="Income Growth selected, showing its saved annual-income target, reached-goal banner, Year 10 ending nominal and today's-dollar income above the chart, animated projection lines, target line, goal marker, and final result bubbles" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <p style={{ fontSize: '0.9rem', color: 'var(--p-aaa)', marginTop: '0.5rem' }}>
+          Income Growth: the toggle swaps in annual dividend income and its own target while preserving the Portfolio Growth target for the next switch back.
+        </p>
+      </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Calculation Settings</h3>
       <p style={{ marginBottom: '0.5rem' }}>
@@ -7167,7 +7187,7 @@ function DividendCalculatorHelp() {
         With one or two tickers the cards are open; with three or more they start collapsed to a one-line
         summary (value, yield, payout frequency, DRIP %) — click a ticker&apos;s name to open or close its card.
         Click the <strong>x</strong> on a chip or the <strong> Remove</strong> button on the card to drop a
-        ticker. <strong>Reset</strong> clears everything back to defaults, including the goal and target.
+        ticker. <strong>Reset</strong> clears everything back to defaults, including both saved chart targets.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Per-Ticker Inputs</h3>
@@ -7190,7 +7210,7 @@ function DividendCalculatorHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Results</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Goal Chart</strong> — Portfolio Growth or Annual Income Growth against your target, at the top of the right column, with the goal banner above it and the result bubbles below.</li>
+        <li><strong>Goal Chart</strong> — Toggle between Portfolio Growth and Annual Income Growth at the top of the right column. Each view has its own saved target, animated nominal and Today&apos;s dollars lines, always-visible final values, a goal banner above, and result bubbles below.</li>
         <li><strong>Summary Stats</strong> — Ending Wealth (final portfolio value plus uncollected cash dividends), Annual / Monthly Dividend Income at the final year, Yield on Cost, and total Estimated Dividend Taxes after Return of Capital adjustments.</li>
         <li><strong>Portfolio &amp; Income Chart</strong> — Combined view of portfolio value (filled area), cumulative dividends, and annual income on a secondary axis.</li>
         <li><strong>Shares Over Time</strong> — One line per ticker when multiple are loaded, or a single line for one ticker. Shows how DRIP grows your share count year by year.</li>
