@@ -12,6 +12,7 @@ Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Ma
 - See the final nominal and today's-dollar amounts in a dedicated ending-value summary above the chart, without hovering or covering the plotted lines.
 - Improved responsive chart sizing keeps the graph aligned with its container across window sizes and display-scaling settings.
 - Refreshed Dividend Calculator Help with current Portfolio Growth and Income Growth screenshots and guidance for the toggle, independent targets, animation, ending values, and goal markers.
+- Added a direct Gumroad purchase link to the app's license activation screen.
 
 ## Installers
 

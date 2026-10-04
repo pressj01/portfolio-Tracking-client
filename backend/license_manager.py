@@ -38,7 +38,7 @@ from config import DB_PATH
 # license key per sale", and copy the product_id shown in that section.
 GUMROAD_PRODUCT_ID = "0rro9W8meLpAlFfbSeRhuA=="
 # Where the activation screen's "Buy a license" link points.
-GUMROAD_PRODUCT_URL = ""
+GUMROAD_PRODUCT_URL = "https://pressjive.gumroad.com/l/portfolio-tracker"
 
 GUMROAD_VERIFY_URL = "https://api.gumroad.com/v2/licenses/verify"
 GUMROAD_LIBRARY_URL = "https://app.gumroad.com/library"
