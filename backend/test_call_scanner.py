@@ -27,7 +27,7 @@ def synthetic_frame(daily_sigma=0.012, drift=0.0, days=300, run_pct=None,
         per_day = math.log(1.0 + run_pct / 100.0) / run_days
         rets[-run_days:] = per_day
     close = 100.0 * np.exp(np.cumsum(rets))
-    index = pd.bdate_range(end=date.today(), periods=days)
+    index = pd.bdate_range(end=pd.offsets.BDay().rollback(pd.Timestamp(date.today())), periods=days)
     return pd.DataFrame({
         "Open": close * 0.999,
         "High": close * 1.008,

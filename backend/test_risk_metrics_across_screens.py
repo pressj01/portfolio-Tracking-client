@@ -25,7 +25,7 @@ def _market(n=400, seed=7):
     Anchored on today: the research helper defaults to a trailing 1Y window, so
     a fixture ending in the past would trim to an empty series.
     """
-    idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=n)
+    idx = pd.bdate_range(end=pd.offsets.BDay().rollback(pd.Timestamp.today().normalize()), periods=n)
     rng = np.random.default_rng(seed)
     spy = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.010, n)), index=idx)
     qqq = pd.Series(400 * np.cumprod(1 + rng.normal(5e-4, 0.015, n)), index=idx)
@@ -388,7 +388,7 @@ class ResearchRiskWindowTest(unittest.TestCase):
     """
 
     def setUp(self):
-        idx = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=900)
+        idx = pd.bdate_range(end=pd.offsets.BDay().rollback(pd.Timestamp.today().normalize()), periods=900)
         rng = np.random.default_rng(23)
         spy = pd.Series(100 * np.cumprod(1 + rng.normal(4e-4, 0.010, 900)), index=idx)
         qqq = pd.Series(400 * np.cumprod(1 + rng.normal(5e-4, 0.015, 900)), index=idx)

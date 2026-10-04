@@ -75,7 +75,9 @@ class NavCoverageOutageTest(unittest.TestCase):
         app_module._PORTFOLIO_COVERAGE_CACHE.clear()
 
     def _run(self, frames, cache_key=("test", "nav")):
-        with patch(
+        # The NAV severity bands are read from the request's query string, so
+        # the builder only ever runs inside a request.
+        with app_module.app.test_request_context(), patch(
             "yfinance.Ticker",
             side_effect=lambda symbol, *a, **k: FakeTicker(symbol, frames),
         ):
@@ -156,7 +158,7 @@ class NavCoverageOutageTest(unittest.TestCase):
             calls.append(symbol)
             return FakeTicker(symbol, frames)
 
-        with patch("yfinance.Ticker", side_effect=_make):
+        with app_module.app.test_request_context(), patch("yfinance.Ticker", side_effect=_make):
             payload = app_module._build_nav_coverage_payload(self.ticker_info, None)
 
         self.assertEqual(
