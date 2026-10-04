@@ -11110,6 +11110,11 @@ function EtfOverlapHelp() {
         weight. Two funds can share most of their tickers and still be quite different
         investments, or look different by name and turn out to be nearly the same basket.
       </p>
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/pick-funds.png"
+        alt="The Pick two funds card with SPYI entered as Fund A and QQQI as Fund B, Swap and Compare buttons, and six popular pairs underneath"
+        caption="Type two tickers and press Compare, or click a popular pair to run it straight away."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How the Overlap Is Calculated</h3>
       <p style={{ marginBottom: '0.75rem' }}>
@@ -11118,6 +11123,11 @@ function EtfOverlapHelp() {
         of Apple, not 8%. A result of 40% means about two-fifths of each fund sits in the same
         names at similar size.
       </p>
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/overlap-summary.png"
+        alt="SPYI vs QQQI: a diagram with 414 holdings only in SPYI, 88 shared and 15 only in QQQI, a 54% overlap by weight, and 88 overlapping holdings"
+        caption="SPYI and QQQI share 88 holdings worth 54% of each fund. Almost all of QQQI (95%) is in companies SPYI also owns; only about half of SPYI is in companies QQQI owns."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
@@ -11127,6 +11137,21 @@ function EtfOverlapHelp() {
         <li><strong>Overweight / underweight</strong> — the individual holdings where the two funds differ most.</li>
         <li><strong>Holdings table</strong> — switch between shared holdings and those held by only one fund. Each row shows the holding's sector and industry beside both weights. Search by ticker or name, set a minimum weight, filter by sector or industry, and click a column heading to sort.</li>
       </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/sector-drift.png"
+        alt="The Sector drift chart for SPYI vs QQQI with the Financials row highlighted and a readout showing SPYI 12.3%, QQQI 0.2%, and a difference of -12.0%"
+        caption="Sector drift with the pointer on Financials: SPYI holds 12.3% and QQQI 0.2%, so the bar points left, toward SPYI."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/over-underweight.png"
+        alt="Two lists side by side: SPYI overweight led by JPM at +1.5%, and SPYI underweight led by MU at -2.8%"
+        caption="The holdings behind the difference. Each line gives both funds’ weights, so a name one fund does not hold at all reads as 0.0%."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/holdings-table.png"
+        alt="The filter bar, the Shared, Only SPYI and Only QQQI tabs, and the first ten shared holdings with their sector, industry, both weights and overlap"
+        caption="Shared holdings, largest overlap first. The Overlap column is the smaller of the two weights."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reading the Result</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
@@ -11136,6 +11161,16 @@ function EtfOverlapHelp() {
         <li><strong>Sector and industry fill in shortly after the first comparison.</strong> They are looked up in the background for each fund's 60 largest holdings the first time it is compared, and remembered afterwards. Smaller holdings show a dash.</li>
         <li><strong>A single stock or a money-market fund cannot be compared</strong> — it has no holdings list. If a real fund reports no holdings data, its holdings can be entered on Fund Definitions.</li>
       </ul>
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/partial-disclosure.png"
+        alt="JEPI vs JEPQ showing a 15% overlap with a warning underneath that only 40.4% of JEPI and 64.3% of JEPQ is disclosed"
+        caption="JEPI and JEPQ publish only their largest positions here, so the 15% is a minimum and the page says so."
+      />
+      <HelpScreenshot
+        src="./help-screenshots/etf-overlap/no-stock-holdings.png"
+        alt="A message reading: KGLD holds only cash, Treasury bills and option positions, so it has no stock holdings to compare"
+        caption="A fund with nothing to compare gets a plain explanation in place of a result."
+      />
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
