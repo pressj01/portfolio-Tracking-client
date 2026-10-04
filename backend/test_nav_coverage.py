@@ -7,6 +7,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from app import (
+    app,
     _build_nav_coverage_payload,
     _nav_accounting_rates,
     _nav_aggregate_severity,
@@ -116,7 +117,9 @@ class NavCoverageAggregationTest(unittest.TestCase):
                 "nav_benchmark_override": "SPY",
             }
         }
-        with patch("yfinance.Ticker", FakeTicker):
+        # The NAV severity bands are read from the request's query string, so
+        # the builder only ever runs inside a request.
+        with app.test_request_context(), patch("yfinance.Ticker", FakeTicker):
             payload = _build_nav_coverage_payload(info, use_cache=False)
 
         row = payload["results"][0]
