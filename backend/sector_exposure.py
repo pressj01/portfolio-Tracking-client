@@ -286,7 +286,7 @@ def fetch_sector_profile(ticker):
     sym = (ticker or "").strip().upper()
     blank = {"ticker": sym, "kind": "none", "asset_class": None, "weights": {},
              "covered_pct": 0.0, "source": None, "quote_type": None,
-             "category": None, "note": None}
+             "category": None, "note": None, "industry": None}
     if not sym:
         return blank
 
@@ -317,6 +317,8 @@ def fetch_sector_profile(ticker):
     category = info.get("category") or None
     blank["quote_type"] = quote_type
     blank["category"] = category
+    # Only an equity quote carries one; a fund's is simply absent.
+    blank["industry"] = info.get("industry") or None
 
     # A money-market fund has no sector weights and no category; its quote type
     # is the only signal that it is cash rather than an unresolvable fund.
@@ -388,12 +390,13 @@ def load_sector_cache(conn):
     profiles = {}
     for row in conn.execute(
         "SELECT ticker, kind, asset_class, covered_pct, source, quote_type, "
-        "category, note, updated_at FROM security_sector_profile"
+        "category, note, updated_at, industry FROM security_sector_profile"
     ).fetchall():
         profiles[row[0]] = {"ticker": row[0], "kind": row[1], "asset_class": row[2],
                             "covered_pct": row[3], "source": row[4],
                             "quote_type": row[5], "category": row[6],
-                            "note": row[7], "updated_at": row[8], "weights": {}}
+                            "note": row[7], "updated_at": row[8],
+                            "industry": row[9], "weights": {}}
     for tkr, sector, pct in conn.execute(
         "SELECT ticker, sector, weight_pct FROM security_sector_weights"
     ).fetchall():
@@ -407,15 +410,17 @@ def store_sector_profile(conn, profile):
     cur = conn.cursor()
     cur.execute(
         "INSERT INTO security_sector_profile "
-        "(ticker, kind, asset_class, covered_pct, source, quote_type, category, note, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?) "
+        "(ticker, kind, asset_class, covered_pct, source, quote_type, category, note, "
+        "updated_at, industry) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(ticker) DO UPDATE SET kind=excluded.kind, "
         "asset_class=excluded.asset_class, covered_pct=excluded.covered_pct, "
         "source=excluded.source, quote_type=excluded.quote_type, "
-        "category=excluded.category, note=excluded.note, updated_at=excluded.updated_at",
+        "category=excluded.category, note=excluded.note, updated_at=excluded.updated_at, "
+        "industry=excluded.industry",
         (tkr, profile["kind"], profile["asset_class"], profile["covered_pct"],
          profile["source"], profile["quote_type"], profile["category"],
-         profile["note"], _now()),
+         profile["note"], _now(), profile.get("industry")),
     )
     cur.execute("DELETE FROM security_sector_weights WHERE ticker=?", (tkr,))
     for sector, pct in (profile.get("weights") or {}).items():

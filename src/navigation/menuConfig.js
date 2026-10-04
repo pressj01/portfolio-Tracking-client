@@ -62,6 +62,7 @@ export const NAVIGATION_ITEMS = [
         link('security-research', 'Security Research', '/security-research'),
         link('stock-etf-analysis', 'Stock and ETF Analysis', '/etf-screen'),
         link('etf-comparer', 'ETF Comparer', '/etf-comparer'),
+        link('etf-overlap', 'ETF Overlap', '/etf-overlap'),
         link('stock-comparer', 'Stock Comparer', '/stock-comparer'),
         link('stock-valuation', 'Stock Valuation (DCF)', '/stock-valuation'),
         link('distribution-compare', 'Distribution Compare', '/dist-compare'),

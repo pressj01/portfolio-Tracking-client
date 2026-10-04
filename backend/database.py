@@ -1733,9 +1733,15 @@ def ensure_tables_exist(conn=None):
             quote_type  TEXT,
             category    TEXT,
             note        TEXT,
-            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP
+            updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+            industry    TEXT
         )
     """)
+    _ssp_cols = {r[1] for r in cur.execute("PRAGMA table_info(security_sector_profile)").fetchall()}
+    if "industry" not in _ssp_cols:
+        # A single stock's industry (Semiconductors, Banks - Diversified), one
+        # level below its sector. Only equities have one; funds leave it NULL.
+        cur.execute("ALTER TABLE security_sector_profile ADD COLUMN industry TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS security_sector_weights (
             ticker     TEXT NOT NULL,
