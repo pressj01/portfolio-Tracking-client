@@ -46,6 +46,7 @@ import DividendCompare from './pages/DividendCompare'
 import ConsolidationAnalysis from './pages/ConsolidationAnalysis'
 import Diversification from './pages/Diversification'
 import FundDefinitions from './pages/FundDefinitions'
+import EtfOverlap from './pages/EtfOverlap'
 import MacroRegimeDashboard from './pages/MacroRegimeDashboard'
 import IncomeGrowthSim from './pages/IncomeGrowthSim'
 import GrowthIncomeFreedom from './pages/GrowthIncomeFreedom'
@@ -153,6 +154,7 @@ export const PAGE_GROUPS = [
       { path: '/security-research', label: 'Security Research', element: <SecurityResearch /> },
       { path: '/etf-screen', label: 'Stock and ETF Analysis', element: <ETFScreen /> },
       { path: '/etf-comparer', label: 'ETF Comparer', element: <ETFComparer /> },
+      { path: '/etf-overlap', label: 'ETF Overlap', element: <EtfOverlap /> },
       { path: '/stock-comparer', label: 'Stock Comparer', element: <StockComparer /> },
       { path: '/stock-valuation', label: 'Stock Valuation (DCF)', element: <StockValuation /> },
       { path: '/dist-compare', label: 'Distribution Compare', element: <DistributionCompare /> },

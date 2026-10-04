@@ -98,6 +98,7 @@ const GROUPS = [
       { id: 'security-research', label: 'Security Research' },
       { id: 'etf-screen', label: 'Stock & ETF Analysis' },
       { id: 'etf-comparer', label: 'ETF Comparer' },
+      { id: 'etf-overlap', label: 'ETF Overlap' },
       { id: 'stock-comparer', label: 'Stock Comparer' },
       { id: 'stock-valuation', label: 'Stock Valuation (DCF)' },
       { id: 'dist-compare', label: 'Distribution Compare' },
@@ -11099,6 +11100,53 @@ function ETFComparerHelp() {
   )
 }
 
+function EtfOverlapHelp() {
+  return (
+    <div>
+      <h2>ETF Overlap</h2>
+      <p style={{ marginBottom: '1rem' }}>
+        ETF Overlap answers one question before you buy a second fund: how much of it do you
+        already own? Enter two fund tickers and the page compares what each one holds, by
+        weight. Two funds can share most of their tickers and still be quite different
+        investments, or look different by name and turn out to be nearly the same basket.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>How the Overlap Is Calculated</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        For every holding both funds own, the smaller of the two weights is taken, and those
+        values are added up. If one fund holds 8% Apple and the other 0.5%, the two share 0.5%
+        of Apple, not 8%. A result of 40% means about two-fifths of each fund sits in the same
+        names at similar size.
+      </p>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>What the Page Shows</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>Overlap by weight</strong> — the headline number, with a diagram counting the holdings only in the first fund, in both, and only in the second.</li>
+        <li><strong>Weight in shared names</strong> — for each fund, how much of it is invested in companies the other fund also holds, whatever the size.</li>
+        <li><strong>Sector drift</strong> — one bar per sector. A bar to the left means the first fund is heavier in that sector; to the right, the second. Hover a bar to see both funds' weights and the difference.</li>
+        <li><strong>Overweight / underweight</strong> — the individual holdings where the two funds differ most.</li>
+        <li><strong>Holdings table</strong> — switch between shared holdings and those held by only one fund. Search by ticker or name, set a minimum weight, filter by sector, and click a column heading to sort.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reading the Result</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li><strong>The overlap can be a minimum.</strong> Holdings come from the same look-through data as the Diversification page. Where a fund publishes only its largest positions, the rest cannot be matched, and the page says how much of the fund is disclosed. The true overlap may then be higher.</li>
+        <li><strong>Cash and option positions are left out.</strong> Option-income funds file Treasury bills and option legs alongside their stocks. Two funds that both hold Treasury bills do not share an investment, so those rows are reported separately and not compared.</li>
+        <li><strong>Wrapper funds are opened up.</strong> A fund that mostly holds another ETF is compared on that ETF's holdings.</li>
+        <li><strong>Sectors fill in shortly after the first comparison.</strong> The sector of each large holding is looked up in the background the first time a fund is compared and remembered afterwards.</li>
+        <li><strong>A single stock or a money-market fund cannot be compared</strong> — it has no holdings list. If a real fund reports no holdings data, its holdings can be entered on Fund Definitions.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>When to Use It</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8' }}>
+        <li>Use ETF Overlap to check whether two funds duplicate each other before holding both.</li>
+        <li>Use ETF Comparer to compare the same funds on returns, yield and distributions.</li>
+        <li>Use Diversification to see the combined look-through of your whole portfolio.</li>
+      </ul>
+    </div>
+  )
+}
+
 function StockComparerHelp() {
   return (
     <div>
@@ -12632,6 +12680,7 @@ const CONTENT_MAP = {
   'security-research': SecurityResearchHelp,
   'etf-screen': ETFScreenHelp,
   'etf-comparer': ETFComparerHelp,
+  'etf-overlap': EtfOverlapHelp,
   'stock-comparer': StockComparerHelp,
   'stock-valuation': StockValuationHelp,
   'stock-buying-checklist': StockBuyingChecklistHelp,
