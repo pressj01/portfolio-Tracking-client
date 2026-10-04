@@ -16,6 +16,7 @@ export default function HomeWatchlist() {
   const [entry, setEntry] = useState(null)
   const [market, setMarket] = useState({})
   const [hidden, setHidden] = useState(readHomeWatchlistHidden)
+  const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
     // A hidden card asks for nothing: no list, no quotes.
@@ -29,6 +30,7 @@ export default function HomeWatchlist() {
         const home = lists.find(list => list.is_default) || lists[0] || null
         setEntry(home)
         setMarket(data.market || {})
+        setLoaded(true)
         const tickers = (home?.items || []).map(item => item.ticker).slice(0, 40)
         if (!tickers.length) return
         pf('/api/watchlist/market/refresh', {
@@ -53,7 +55,43 @@ export default function HomeWatchlist() {
     setHidden(true)
   }
 
-  if (hidden || !entry || !entry.items?.length) return null
+  const show = () => {
+    writeHomeWatchlistHidden(false)
+    setLoaded(false)
+    setHidden(false)
+  }
+
+  // Hidden is the default, so this link is the only trace of the feature on
+  // the Dashboard. It is plain text: no request is made until it is clicked.
+  if (hidden) {
+    return (
+      <div className="home-watchlist-show">
+        <button type="button" onClick={show} title="Show your Home watchlist on the Dashboard">
+          Show watchlist
+        </button>
+      </div>
+    )
+  }
+
+  if (!loaded) return null
+
+  // Turned on with nothing to show: say so, or the link would simply vanish.
+  if (!entry || !entry.items?.length) {
+    return (
+      <div className="card home-watchlist">
+        <div className="home-watchlist-head">
+          <h3>Watchlist</h3>
+          <span className="home-watchlist-actions">
+            <Link to="/watchlist">{entry ? 'Add tickers' : 'Create a watchlist'}</Link>
+            <button type="button" className="home-watchlist-hide" onClick={hide}>Hide</button>
+          </span>
+        </div>
+        <p className="home-watchlist-more">
+          {entry ? `${entry.name} has no tickers yet.` : 'You have no watchlists yet.'}
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="card home-watchlist">
@@ -65,7 +103,7 @@ export default function HomeWatchlist() {
             type="button"
             className="home-watchlist-hide"
             onClick={hide}
-            title="Remove the watchlist from the Dashboard. Turn it back on from the Watchlists page."
+            title="Remove the watchlist from the Dashboard. Show watchlist brings it back."
           >
             Hide
           </button>
