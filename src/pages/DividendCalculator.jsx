@@ -100,8 +100,8 @@ const projectionYears = (years) => Math.min(
 )
 
 const GOAL_MODE_OPTIONS = [
-  { value: 'portfolio', label: 'Portfolio Goal' },
-  { value: 'income', label: 'Income Goal' },
+  { value: 'portfolio', label: 'Portfolio Growth' },
+  { value: 'income', label: 'Income Growth' },
 ]
 
 function contributionWindowMonths(years, mode, value, unit) {
@@ -325,6 +325,25 @@ function Toggle({ checked, onChange, label }) {
         <span className="dc-toggle-thumb" />
       </span>
     </label>
+  )
+}
+
+function GoalModeToggle({ value, onChange }) {
+  return (
+    <div className="dc-goal-mode-toggle" role="radiogroup" aria-label="Growth chart">
+      {GOAL_MODE_OPTIONS.map(option => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          className={value === option.value ? 'active' : ''}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
   )
 }
 
@@ -1602,19 +1621,11 @@ export default function DividendCalculator() {
       <div className="dc-workspace">
         <div className="dc-side">
           <div className="dc-shared-card dc-goal-card">
-            <div className="dc-frequency-options" role="radiogroup" aria-label="Goal type">
-              {GOAL_MODE_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="radio"
-                  aria-checked={goalMode === option.value}
-                  className={goalMode === option.value ? 'active' : ''}
-                  onClick={() => setGoalMode(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
+            <div className="dc-card-head">
+              <div>
+                <h3>{goalIsIncome ? 'Income Target' : 'Portfolio Target'}</h3>
+                <p className="dc-muted">Sets the target line for the selected growth chart.</p>
+              </div>
             </div>
             <div className="dc-field">
               <label>{goalIsIncome ? 'Target Annual Income' : 'Target Portfolio Value'}</label>
@@ -1647,7 +1658,7 @@ export default function DividendCalculator() {
                     and redraws whenever you change an input — there is nothing to recalculate.
                   </li>
                   <li>
-                    Pick <strong>Portfolio Goal</strong> or <strong>Income Goal</strong> and enter a target. The
+                    Pick <strong>Portfolio Growth</strong> or <strong>Income Growth</strong> above the chart and enter a target. The
                     chart draws the target as a dotted line, and the banner above it says which year the goal is
                     reached, or how far short the projection ends. Change any input and watch the line move toward
                     or away from the target.
@@ -2132,6 +2143,13 @@ export default function DividendCalculator() {
         </div>
 
         <div className="dc-visual">
+          <div className="dc-goal-mode-bar">
+            <div>
+              <span>Growth chart</span>
+              <small>Switch views without losing either target.</small>
+            </div>
+            <GoalModeToggle value={goalMode} onChange={setGoalMode} />
+          </div>
           {goal ? (
             <>
               <GoalBanner goal={goal} isIncome={goalIsIncome} inflationAdjusted={inflationPct > 0} />

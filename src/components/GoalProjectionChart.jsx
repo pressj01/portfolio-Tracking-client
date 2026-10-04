@@ -144,12 +144,17 @@ export default function GoalProjectionChart({
     const el = plotRef.current
     if (!el) return undefined
     const measure = () => {
-      const rect = el.getBoundingClientRect()
-      if (!(rect.width > 0 && rect.height > 0)) return
+      // Use layout dimensions instead of getBoundingClientRect(). The latter
+      // includes ancestor transforms/display scaling and can report a much
+      // shorter box than the CSS layout actually reserves, leaving the SVG
+      // compressed at the top of a tall chart container.
+      const nextWidth = el.clientWidth
+      const nextHeight = el.clientHeight
+      if (!(nextWidth > 0 && nextHeight > 0)) return
       setSize(prev => (
-        Math.abs(prev.width - rect.width) < 0.5 && Math.abs(prev.height - rect.height) < 0.5
+        Math.abs(prev.width - nextWidth) < 0.5 && Math.abs(prev.height - nextHeight) < 0.5
           ? prev
-          : { width: rect.width, height: rect.height }
+          : { width: nextWidth, height: nextHeight }
       ))
     }
     measure()
@@ -217,6 +222,9 @@ export default function GoalProjectionChart({
   const lastYear = goal.nominal.length - 1
   const hovered = hoverYear == null ? null : clamp(hoverYear, 0, lastYear)
   const hoverJudged = hovered == null ? null : (goal.real || goal.nominal)[hovered]
+  const endpointNominal = valueAt(frame.nominal, frame.xMax)
+  const endpointReal = frame.real ? valueAt(frame.real, frame.xMax) : null
+  const endpointSummaryOpacity = clamp((reveal - 0.72) / 0.28, 0, 1)
 
   const moveTo = (event) => {
     const bounds = event.currentTarget.getBoundingClientRect()
@@ -237,6 +245,25 @@ export default function GoalProjectionChart({
 
   return (
     <div className="dc-goal-chart">
+      <div
+        className="dc-goal-end-summary"
+        style={{ opacity: endpointSummaryOpacity }}
+        aria-label={`Ending projected values at Year ${lastYear}`}
+      >
+        <span className="dc-goal-end-summary-title">Year {lastYear} ending</span>
+        <span className="dc-goal-end-summary-item">
+          <i className="dc-goal-key nominal" aria-hidden="true" />
+          <span>{nominalLabel}</span>
+          <strong>{formatValue(endpointNominal)}</strong>
+        </span>
+        {endpointReal != null && (
+          <span className="dc-goal-end-summary-item">
+            <i className="dc-goal-key real" aria-hidden="true" />
+            <span>{realLabel}</span>
+            <strong>{formatValue(endpointReal)}</strong>
+          </span>
+        )}
+      </div>
       <div
         className="dc-goal-plot"
         ref={plotRef}
@@ -298,7 +325,6 @@ export default function GoalProjectionChart({
               r={4.5}
             />
           )}
-
           {hovered != null && (
             <g>
               <line className="dc-goal-crosshair" x1={xOf(hovered)} x2={xOf(hovered)} y1={MARGIN.top} y2={baseY} />

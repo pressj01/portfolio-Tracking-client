@@ -8154,8 +8154,68 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 }
 .dc-field-wide { grid-column: 1 / -1; }
 .dc-grid[hidden] { display: none; }
-.dc-goal-card .dc-frequency-options { margin-bottom: 0.85rem; }
-.dc-goal-card .dc-frequency-options button { min-height: 36px; font-size: 0.88rem; }
+.dc-goal-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 8px;
+}
+.dc-goal-mode-bar > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.dc-goal-mode-bar > div:first-child > span {
+  color: var(--text-strong);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+.dc-goal-mode-bar small { color: var(--text-faint-2); font-size: 0.74rem; }
+.dc-goal-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.3rem;
+  min-width: min(100%, 320px);
+  padding: 0.25rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 6px;
+}
+.dc-goal-mode-toggle button {
+  min-height: 34px;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.dc-goal-mode-toggle button:hover {
+  color: var(--text-strong);
+  background: rgba(126, 207, 255, 0.08);
+}
+.dc-goal-mode-toggle button:focus-visible {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 1px;
+}
+.dc-goal-mode-toggle button.active {
+  color: var(--p-08111f);
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+@media (max-width: 620px) {
+  .dc-goal-mode-bar { align-items: stretch; flex-direction: column; }
+  .dc-goal-mode-toggle { min-width: 0; width: 100%; }
+}
 .dc-subhead {
   margin: 1rem 0 0.7rem;
   padding-top: 0.85rem;
@@ -8254,6 +8314,44 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 }
 
 .dc-goal-chart-card h3 { margin: 0 0 0.6rem; color: var(--text-strong); font-size: 1rem; }
+.dc-goal-end-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem 0.55rem;
+  min-height: 34px;
+  margin: -0.2rem 0 0.45rem;
+  transition: opacity 180ms ease-out;
+}
+.dc-goal-end-summary-title {
+  color: var(--text-faint-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dc-goal-end-summary-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 30px;
+  padding: 0.3rem 0.55rem;
+  background: var(--surface-sunken);
+  border: 1px solid var(--p-1a4480);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+.dc-goal-end-summary-item strong {
+  color: var(--text-strong);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 620px) {
+  .dc-goal-end-summary { justify-content: flex-start; }
+  .dc-goal-end-summary-title { width: 100%; }
+}
 /* Sized off the window so the banner, chart and result bubbles fit on screen
    together without scrolling. */
 .dc-goal-plot {
