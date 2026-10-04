@@ -6,6 +6,7 @@ import { chartTheme } from '../utils/chartTheme'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
 import { signalReading } from '../utils/readingLabels'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
+import { readHomeWatchlistHidden, writeHomeWatchlistHidden } from '../utils/homeWatchlistPreference'
 import {
   GRADING_PREFERENCES_EVENT,
   loadGradingPreferences,
@@ -289,6 +290,7 @@ export default function Watchlist() {
   const [market, setMarket] = useState({})
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [showOnDashboard, setShowOnDashboard] = useState(() => !readHomeWatchlistHidden())
   const [updating, setUpdating] = useState(false)
   const [activeId, setActiveId] = useState(() => {
     try { return Number(sessionStorage.getItem(ACTIVE_KEY)) || null } catch { return null }
@@ -583,7 +585,18 @@ export default function Watchlist() {
       <header className="wl-top">
         <div>
           <h1>Watchlists</h1>
-          <p>Your default list syncs to Home. Edit here and it updates on the dashboard.</p>
+          <p>Your default list can be shown on the Dashboard. It is off until you turn it on here.</p>
+          <label className="wl-home-toggle">
+            <input
+              type="checkbox"
+              checked={showOnDashboard}
+              onChange={event => {
+                writeHomeWatchlistHidden(!event.target.checked)
+                setShowOnDashboard(event.target.checked)
+              }}
+            />
+            Show the watchlist on the Dashboard
+          </label>
         </div>
         <button type="button" className="btn btn-primary" onClick={openWizard}>+ New Watchlist</button>
       </header>
@@ -594,7 +607,7 @@ export default function Watchlist() {
         <section className="wl-empty-card">
           <button type="button" className="wl-empty-plus" onClick={openWizard} aria-label="New watchlist">+</button>
           <h2>No watchlists yet</h2>
-          <p>Create a list and it will appear on your Home dashboard.</p>
+          <p>Create a list here. You can then choose to show it on the Dashboard.</p>
           <button type="button" className="btn btn-primary" onClick={openWizard}>+ New Watchlist</button>
         </section>
       )}

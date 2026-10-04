@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
+import { readHomeWatchlistHidden, writeHomeWatchlistHidden } from '../utils/homeWatchlistPreference'
 
 function signedPct(value) {
   if (value == null || value === '') return '—'
@@ -14,8 +15,11 @@ export default function HomeWatchlist() {
   const pf = useProfileFetch()
   const [entry, setEntry] = useState(null)
   const [market, setMarket] = useState({})
+  const [hidden, setHidden] = useState(readHomeWatchlistHidden)
 
   useEffect(() => {
+    // A hidden card asks for nothing: no list, no quotes.
+    if (hidden) return undefined
     let cancelled = false
     pf('/api/watchlists')
       .then(response => response.json())
@@ -42,15 +46,30 @@ export default function HomeWatchlist() {
       })
       .catch(() => {})
     return () => { cancelled = true }
-  }, [pf])
+  }, [pf, hidden])
 
-  if (!entry || !entry.items?.length) return null
+  const hide = () => {
+    writeHomeWatchlistHidden(true)
+    setHidden(true)
+  }
+
+  if (hidden || !entry || !entry.items?.length) return null
 
   return (
     <div className="card home-watchlist">
       <div className="home-watchlist-head">
         <h3>Watchlist · {entry.name}</h3>
-        <Link to="/watchlist">Edit list</Link>
+        <span className="home-watchlist-actions">
+          <Link to="/watchlist">Edit list</Link>
+          <button
+            type="button"
+            className="home-watchlist-hide"
+            onClick={hide}
+            title="Remove the watchlist from the Dashboard. Turn it back on from the Watchlists page."
+          >
+            Hide
+          </button>
+        </span>
       </div>
       <table className="home-watchlist-table">
         <thead>

@@ -156,6 +156,25 @@ def quote_yield_pct(trailing, stated):
     return round(max(choices), 2)
 
 
+def distribution_yield_pct(app_module, symbol, price):
+    """Percent yield from the fund's own payment history, or None.
+
+    Yahoo's quote yield is unreliable for option-income funds -- it reports
+    0.09% for QQQI, which pays about 13%. What the fund actually distributed,
+    annualized at its current cadence, does not depend on that field.
+    """
+    if price is None or price <= 0:
+        return None
+    try:
+        dividends = app_module._cached_yf_dividends(app_module._yf_ticker(symbol), symbol)
+        value, _source = app_module._expected_annual_distribution_yield_pct(
+            symbol, price, dividends
+        )
+    except Exception:
+        return None
+    return value if value is not None and value > 0 else None
+
+
 def quote_for_ticker(ticker):
     """One symbol's fast columns. Failures leave the missing cells empty."""
     import app as app_module
@@ -196,6 +215,11 @@ def quote_for_ticker(ticker):
         assets = as_float(info.get("totalAssets") or info.get("totalNetAssets"))
         if assets:
             row["aum"] = assets
+    if row["div_yield"] is None:
+        paid = distribution_yield_pct(app_module, symbol, change_price)
+        if paid is not None:
+            row["div_yield"] = paid
+            row["div_yield_source"] = "Dividend history"
     if row["div_yield"] is None:
         trailing = as_float(info.get("trailingAnnualDividendYield"))
         stated = as_float(info.get("dividendYield"))

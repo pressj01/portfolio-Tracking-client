@@ -131,6 +131,38 @@ class WatchlistListsTest(unittest.TestCase):
         self.assertEqual(quote_yield_pct(None, 0.37), 0.37)
         self.assertIsNone(five_year_dividend_growth(pd.Series([1.0], index=pd.to_datetime(["2024-06-01"]))))
 
+    def test_quote_yield_comes_from_payments_not_the_quote_field(self):
+        # Yahoo's quote reports dividendYield 0.09 for QQQI, a fund paying
+        # roughly 13%. The payments it actually made are the evidence.
+        import types
+        import pandas as pd
+        import watchlist_market
+
+        today = pd.Timestamp.today().normalize()
+        months = pd.date_range(end=today, periods=12, freq="30D")
+        paid = pd.Series([0.62] * 12, index=months)
+        seen = {}
+
+        def expected(symbol, price, dividends):
+            seen["args"] = (symbol, price, len(dividends))
+            return round(float(dividends.sum()) / price * 100, 2), "trailing_12_month"
+
+        fake_app = types.SimpleNamespace(
+            _yf_ticker=lambda symbol: symbol,
+            _cached_yf_dividends=lambda obj, symbol: paid,
+            _expected_annual_distribution_yield_pct=expected,
+        )
+        value = watchlist_market.distribution_yield_pct(fake_app, "QQQI", 56.08)
+        self.assertEqual(seen["args"], ("QQQI", 56.08, 12))
+        self.assertAlmostEqual(value, 13.27, places=2)
+        # No price, no payments, or a failing lookup all fall through to the
+        # quote field instead of raising.
+        self.assertIsNone(watchlist_market.distribution_yield_pct(fake_app, "QQQI", None))
+        fake_app._expected_annual_distribution_yield_pct = lambda *a: (None, None)
+        self.assertIsNone(watchlist_market.distribution_yield_pct(fake_app, "QQQI", 56.08))
+        fake_app._cached_yf_dividends = lambda obj, symbol: 1 / 0
+        self.assertIsNone(watchlist_market.distribution_yield_pct(fake_app, "QQQI", 56.08))
+
     def test_clearing_home_promotes_another_list(self):
         from watchlist_lists import update_watchlist
 
