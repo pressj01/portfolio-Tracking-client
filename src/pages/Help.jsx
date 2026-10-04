@@ -11125,7 +11125,7 @@ function EtfOverlapHelp() {
         <li><strong>Weight in shared names</strong> — for each fund, how much of it is invested in companies the other fund also holds, whatever the size.</li>
         <li><strong>Sector drift</strong> — one bar per sector. A bar to the left means the first fund is heavier in that sector; to the right, the second. Hover a bar to see both funds' weights and the difference.</li>
         <li><strong>Overweight / underweight</strong> — the individual holdings where the two funds differ most.</li>
-        <li><strong>Holdings table</strong> — switch between shared holdings and those held by only one fund. Search by ticker or name, set a minimum weight, filter by sector, and click a column heading to sort.</li>
+        <li><strong>Holdings table</strong> — switch between shared holdings and those held by only one fund. Each row shows the holding's sector and industry beside both weights. Search by ticker or name, set a minimum weight, filter by sector or industry, and click a column heading to sort.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.25rem', marginBottom: '0.5rem' }}>Reading the Result</h3>
@@ -11133,7 +11133,7 @@ function EtfOverlapHelp() {
         <li><strong>The overlap can be a minimum.</strong> Holdings come from the same look-through data as the Diversification page. Where a fund publishes only its largest positions, the rest cannot be matched, and the page says how much of the fund is disclosed. The true overlap may then be higher.</li>
         <li><strong>Cash and option positions are left out.</strong> Option-income funds file Treasury bills and option legs alongside their stocks. Two funds that both hold Treasury bills do not share an investment, so those rows are reported separately and not compared.</li>
         <li><strong>Wrapper funds are opened up.</strong> A fund that mostly holds another ETF is compared on that ETF's holdings.</li>
-        <li><strong>Sectors fill in shortly after the first comparison.</strong> The sector of each large holding is looked up in the background the first time a fund is compared and remembered afterwards.</li>
+        <li><strong>Sector and industry fill in shortly after the first comparison.</strong> They are looked up in the background for each fund's 60 largest holdings the first time it is compared, and remembered afterwards. Smaller holdings show a dash.</li>
         <li><strong>A single stock or a money-market fund cannot be compared</strong> — it has no holdings list. If a real fund reports no holdings data, its holdings can be entered on Fund Definitions.</li>
       </ul>
 

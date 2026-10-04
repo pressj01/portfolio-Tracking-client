@@ -30,11 +30,12 @@ def _add_fund(conn, ticker, rows, status="resolved", source="test"):
     conn.commit()
 
 
-def _set_profile(conn, ticker, weights):
+def _set_profile(conn, ticker, weights, source="test", industry=None):
     sx.store_sector_profile(conn, {
         "ticker": ticker, "kind": "sectors", "asset_class": None,
         "weights": weights, "covered_pct": sum(weights.values()),
-        "source": "test", "quote_type": None, "category": None, "note": None,
+        "source": source, "quote_type": None, "category": None, "note": None,
+        "industry": industry,
     })
 
 
@@ -148,6 +149,51 @@ class SectorTests(unittest.TestCase):
         _set_profile(conn, "NVDA", {"Information Technology": 100.0})
         out = eo.build_overlap(conn, "AAA", "BBB")
         self.assertEqual(eo._sector_fill_targets(out, sx.load_sector_cache(conn)), ["JPM"])
+
+    def test_failed_lookup_does_not_erase_a_known_sector(self):
+        # Re-asking for a stock's industry can be throttled. The empty answer
+        # must not replace the sector the stock already had.
+        conn = _memory_db()
+        _set_profile(conn, "CRWD", {"Information Technology": 100.0}, source="yahoo_quote")
+        empty = {"ticker": "CRWD", "kind": "none", "asset_class": None, "weights": {},
+                 "covered_pct": 0.0, "source": None, "quote_type": None,
+                 "category": None, "note": "rate limited", "industry": None}
+        self.assertFalse(eo._store_lookup(conn, empty, sx.load_sector_cache(conn)))
+        kept = sx.load_sector_cache(conn)["CRWD"]
+        self.assertEqual(kept["weights"], {"Information Technology": 100.0})
+
+        # A stock with nothing cached still records the miss, as before.
+        empty_new = {**empty, "ticker": "ZZZZ"}
+        self.assertTrue(eo._store_lookup(conn, empty_new, sx.load_sector_cache(conn)))
+        self.assertEqual(sx.load_sector_cache(conn)["ZZZZ"]["kind"], "none")
+
+    def test_industry_is_reported_per_holding(self):
+        conn = _memory_db()
+        _add_fund(conn, "AAA", [("NVDA", "NVIDIA Corp", 8.0), ("JPM", "JPMorgan", 2.0)])
+        _add_fund(conn, "BBB", [("NVDA", "NVIDIA Corp", 6.0)])
+        _set_profile(conn, "NVDA", {"Information Technology": 100.0},
+                     source="yahoo_quote", industry="Semiconductors")
+        out = eo.build_overlap(conn, "AAA", "BBB")
+        by = {r["symbol"]: r for r in out["holdings"]}
+        self.assertEqual(by["NVDA"]["industry"], "Semiconductors")
+        self.assertIsNone(by["JPM"]["industry"])
+
+    def test_stocks_profiled_before_industry_existed_are_looked_up_again(self):
+        # Every stock already in the cache has a sector and no industry. Without
+        # this the column would stay blank for exactly the largest holdings.
+        conn = _memory_db()
+        _add_fund(conn, "AAA", [("NVDA", "NVIDIA Corp", 8.0), ("AAPL", "Apple Inc", 7.0),
+                                ("VOO", "Vanguard S&P 500 ETF", 5.0)])
+        _add_fund(conn, "BBB", [("NVDA", "NVIDIA Corp", 6.0)])
+        _set_profile(conn, "NVDA", {"Information Technology": 100.0}, source="yahoo_quote")
+        _set_profile(conn, "AAPL", {"Information Technology": 100.0},
+                     source="yahoo_quote", industry="Consumer Electronics")
+        # A fund has sector weights but can never have an industry; asking
+        # again would spend a request on every comparison for nothing.
+        _set_profile(conn, "VOO", {"Information Technology": 60.0, "Financials": 40.0},
+                     source="yahoo_fund_sectors")
+        out = eo.build_overlap(conn, "AAA", "BBB")
+        self.assertEqual(eo._sector_fill_targets(out, sx.load_sector_cache(conn)), ["NVDA"])
 
 
 if __name__ == "__main__":

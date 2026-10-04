@@ -11,7 +11,8 @@ const PAGE_SIZE = 20
 // A fund this well covered is treated as complete; issuer files land a hair
 // either side of 100% because of rounding, cash and short option legs.
 const FULL_COVERAGE = 97
-// How long to keep re-asking while per-stock sectors are still being looked up.
+// How long to keep re-asking while per-stock sectors and industries are still
+// being looked up.
 const SECTOR_POLL_MS = 4000
 const SECTOR_POLL_LIMIT = 6
 
@@ -23,6 +24,8 @@ const POPULAR_PAIRS = [
   ['VTI', 'VOO', 'Total market vs S&P 500'],
   ['SPYI', 'QQQI', 'NEOS S&P 500 vs Nasdaq-100 income'],
 ]
+
+const TEXT_COLUMNS = new Set(['symbol', 'name', 'sector', 'industry'])
 
 const MIN_WEIGHTS = [[0, 'Any'], [0.5, '≥ 0.5%'], [1, '≥ 1%'], [2, '≥ 2%']]
 
@@ -237,6 +240,7 @@ export default function EtfOverlap() {
   const [search, setSearch] = useState('')
   const [minWeight, setMinWeight] = useState(0)
   const [sector, setSector] = useState('')
+  const [industry, setIndustry] = useState('')
   const [sort, setSort] = useState({ key: 'overlap', dir: -1 })
   const [limit, setLimit] = useState(PAGE_SIZE)
 
@@ -266,8 +270,8 @@ export default function EtfOverlap() {
       })
   }, [])
 
-  // Per-stock sectors are looked up in the background the first time a fund is
-  // compared; re-ask a few times, quietly, so the Sector column fills in.
+  // Per-stock sectors and industries are looked up in the background the first
+  // time a fund is compared; re-ask a few times, quietly, so those columns fill in.
   useEffect(() => {
     if (!data?.sectors_pending || sectorPolls.current >= SECTOR_POLL_LIMIT) return undefined
     const timer = setTimeout(() => {
@@ -292,6 +296,7 @@ export default function EtfOverlap() {
     setSort({ key: 'overlap', dir: -1 })
     setLimit(PAGE_SIZE)
     setSector('')
+    setIndustry('')
     setSearch('')
     sectorPolls.current = 0
     fetchPair(a, b)
@@ -321,11 +326,22 @@ export default function EtfOverlap() {
     return [...seen].sort()
   }, [byTab, tab])
 
+  // Narrowed by the chosen sector, so the list only offers industries that can
+  // still match something.
+  const industryOptions = useMemo(() => {
+    const seen = new Set()
+    for (const r of byTab[tab]) {
+      if (r.industry && (!sector || r.sector === sector)) seen.add(r.industry)
+    }
+    return [...seen].sort()
+  }, [byTab, tab, sector])
+
   const filtered = useMemo(() => {
     const needle = search.trim().toUpperCase()
     const rows = byTab[tab].filter(r => {
       if (r[tabWeight] < minWeight) return false
       if (sector && r.sector !== sector) return false
+      if (industry && r.industry !== industry) return false
       if (needle && !(`${r.symbol} ${r.name}`.toUpperCase().includes(needle))) return false
       return true
     })
@@ -334,9 +350,12 @@ export default function EtfOverlap() {
       const vx = x[key] ?? ''
       const vy = y[key] ?? ''
       if (typeof vx === 'number' && typeof vy === 'number') return (vx - vy) * dir
+      // A blank sector or industry sorts last in either direction, so sorting
+      // the column never leads with a page of dashes.
+      if (!vx !== !vy) return vx ? -1 : 1
       return String(vx).localeCompare(String(vy)) * dir
     })
-  }, [byTab, tab, tabWeight, minWeight, sector, search, sort])
+  }, [byTab, tab, tabWeight, minWeight, sector, industry, search, sort])
 
   const overweight = useMemo(
     () => (holdings || []).filter(r => r.diff >= 0.05).sort((x, y) => y.diff - x.diff).slice(0, 8),
@@ -352,12 +371,13 @@ export default function EtfOverlap() {
     setSort({ key: next === 'shared' ? 'overlap' : next === 'onlyA' ? 'weight_a' : 'weight_b', dir: -1 })
     setLimit(PAGE_SIZE)
     setSector('')
+    setIndustry('')
   }
 
   const sortBy = (key) => {
     setSort(prev => (prev.key === key
       ? { key, dir: -prev.dir }
-      : { key, dir: key === 'symbol' || key === 'sector' || key === 'name' ? 1 : -1 }))
+      : { key, dir: TEXT_COLUMNS.has(key) ? 1 : -1 }))
   }
 
   const sortMark = (key) => (sort.key === key ? (sort.dir === 1 ? ' ↑' : ' ↓') : '')
@@ -374,6 +394,7 @@ export default function EtfOverlap() {
     ['symbol', 'Stock', 'left'],
     ['name', 'Name', 'left'],
     ['sector', 'Sector', 'left'],
+    ['industry', 'Industry', 'left'],
     ['weight_a', `Wt ${a}`, 'right'],
     ['weight_b', `Wt ${b}`, 'right'],
     ['overlap', 'Overlap', 'right'],
@@ -562,9 +583,16 @@ export default function EtfOverlap() {
             </div>
             <label style={{ margin: 0 }}>
               <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Sector</span>
-              <select value={sector} onChange={e => { setSector(e.target.value); setLimit(PAGE_SIZE) }}>
+              <select value={sector} onChange={e => { setSector(e.target.value); setIndustry(''); setLimit(PAGE_SIZE) }}>
                 <option value="">All sectors</option>
                 {sectorOptions.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <label style={{ margin: 0 }}>
+              <span style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>Industry</span>
+              <select value={industry} onChange={e => { setIndustry(e.target.value); setLimit(PAGE_SIZE) }}>
+                <option value="">All industries</option>
+                {industryOptions.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </label>
             <span style={{ marginLeft: 'auto', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
@@ -608,6 +636,7 @@ export default function EtfOverlap() {
                     <td style={{ fontWeight: 700 }}>{r.symbol || '—'}</td>
                     <td style={{ color: 'var(--text-muted)' }}>{r.name}</td>
                     <td style={{ color: 'var(--text-muted)' }}>{r.sector || '—'}</td>
+                    <td style={{ color: 'var(--text-muted)' }}>{r.industry || '—'}</td>
                     <td style={{ textAlign: 'right' }}>{r.weight_a > 0 ? pct(r.weight_a, 2) : '—'}</td>
                     <td style={{ textAlign: 'right' }}>{r.weight_b > 0 ? pct(r.weight_b, 2) : '—'}</td>
                     <td style={{ textAlign: 'right', fontWeight: 700 }}>{r.overlap > 0 ? pct(r.overlap, 2) : '—'}</td>

@@ -44,8 +44,9 @@ from diversification import (
 # A constituent this large may itself be a fund (TSPY is ~100% VOO), and is
 # worth one lookup so the wrapper is compared on what it really holds.
 _NESTED_MIN_WEIGHT = 20.0
-# How many of the largest holdings get a per-stock sector looked up. The tail
-# of a 500-row index is rounding noise and not worth a quote request each.
+# How many of the largest holdings get a per-stock sector and industry looked
+# up. The tail of a 500-row index is rounding noise and not worth a quote
+# request each.
 _SECTOR_FILL_LIMIT = 60
 _LOOKUP_SYM_PAT = re.compile(r"^[A-Z]{1,6}$")
 
@@ -100,6 +101,20 @@ def _row_sector(sym, sector_cache):
             return next(iter(prof["weights"]))
         return "Fund"
     return None
+
+
+def _row_industry(sym, sector_cache):
+    prof = sector_cache.get(sym) if sym else None
+    return (prof or {}).get("industry") or None
+
+
+def _needs_lookup(prof):
+    """Whether a holding's sector or industry is still worth asking for."""
+    if not prof or prof["kind"] == "none":
+        return True
+    # Stocks profiled before industry was recorded have a sector and nothing
+    # else. Only an equity quote can supply one, so funds are left alone.
+    return prof.get("source") == "yahoo_quote" and not prof.get("industry")
 
 
 def _fund_sectors(ticker, holdings, meta, name_idx, sector_cache):
@@ -190,6 +205,7 @@ def build_overlap(conn, ticker_a, ticker_b):
             "overlap": round(common, 4),
             "diff": round(wa - wb, 4),
             "sector": _row_sector(sym, sector_cache),
+            "industry": _row_industry(sym, sector_cache),
         })
     rows.sort(key=lambda r: (-r["overlap"], -max(r["weight_a"], r["weight_b"])))
 
@@ -266,23 +282,36 @@ def _sector_fill_targets(result, sector_cache):
         sym = r["symbol"]
         if not sym or not _LOOKUP_SYM_PAT.match(sym):
             continue
-        prof = sector_cache.get(sym)
-        if prof and prof["kind"] != "none":
-            continue
-        out.append(sym)
+        if _needs_lookup(sector_cache.get(sym)):
+            out.append(sym)
     return out
+
+
+def _store_lookup(conn, prof, cached):
+    """Store a looked-up profile unless it would erase a better cached one.
+
+    Stocks that already have a sector are asked about again to pick up their
+    industry. If that request is throttled the answer is an empty profile, and
+    writing it would trade a known sector for nothing.
+    """
+    prior = cached.get(prof["ticker"])
+    if prof["kind"] == "none" and prior and prior["kind"] != "none":
+        return False
+    sx.store_sector_profile(conn, prof)
+    return True
 
 
 def _fill_sectors(symbols):
     conn = None
     try:
         conn = get_connection()
+        cached = sx.load_sector_cache(conn)
         # Fetched in parallel, written from this thread only: sqlite
         # connections are not shared across threads.
         with ThreadPoolExecutor(max_workers=4) as ex:
             for prof in ex.map(sx._safe_fetch, symbols):
                 try:
-                    sx.store_sector_profile(conn, prof)
+                    _store_lookup(conn, prof, cached)
                 except Exception:
                     pass
     finally:
@@ -296,7 +325,7 @@ def _fill_sectors(symbols):
 
 
 def _start_sector_fill(targets):
-    """Look up missing per-stock sectors in the background.
+    """Look up missing per-stock sectors and industries in the background.
 
     Returns how many of `targets` are still being fetched, so the page knows
     whether asking again is worthwhile.
