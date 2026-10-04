@@ -1,4 +1,4 @@
-# Portfolio Tracking Client v1.37.3
+# Portfolio Tracking Client v1.37.4
 
 This release makes the Dashboard watchlist optional and corrects the yield it shows. It includes everything in v1.37.1.
 
@@ -9,6 +9,7 @@ Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Ma
 ### Dashboard Watchlist
 
 - The watchlist card on the Dashboard is now off by default. Turn it on with the **Show watchlist** link on the Dashboard, or with **Show the watchlist on the Dashboard** at the top of the Watchlists page. Turn it off again with the **Hide** link on the card or by unticking the box.
+- With more than one watchlist, the card's title is a picker for choosing which list it shows. Choosing a list there makes it the Home list, the same as ticking **Show this list on Home** on the Watchlists page.
 - While the card is hidden the Dashboard does not load the watchlist or its quotes, so it adds nothing to the Dashboard's load time.
 - If you were using the card before this update, it will be hidden after updating until you turn it back on. The choice is remembered on each computer.
 
@@ -28,4 +29,4 @@ Desktop installers are available for Windows PC, Intel Mac, and Apple-silicon Ma
 - **macOS Intel:** `.dmg` installer (x64)
 - **macOS Apple Silicon:** `.dmg` installer (arm64)
 
-**Changes since the last deployment**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.37.1...v1.37.3
+**Changes since the last deployment**: https://github.com/pressj01/portfolio-Tracking-client/compare/v1.37.1...v1.37.4
