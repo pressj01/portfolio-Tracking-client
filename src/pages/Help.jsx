@@ -11130,6 +11130,12 @@ function EtfOverlapHelp() {
         weight. Two funds can share most of their tickers and still be quite different
         investments, or look different by name and turn out to be nearly the same basket.
       </p>
+      <p style={{ marginBottom: '1rem' }}>
+        Each ticker box also lists the funds in the portfolio you are currently viewing: click
+        the box or its ▾, type to narrow the list, and pick one. Any other ticker can still be
+        typed in. A collapsed <strong>What everything on this screen means</strong> panel at the
+        top of the page explains each number and control.
+      </p>
       <HelpScreenshot
         src="./help-screenshots/etf-overlap/pick-funds.png"
         alt="The Pick two funds card with SPYI entered as Fund A and QQQI as Fund B, Swap and Compare buttons, and six popular pairs underneath"

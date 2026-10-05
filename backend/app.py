@@ -58208,7 +58208,7 @@ register_option_dashboard_routes(
 )
 register_diversification_routes(app)
 register_sector_exposure_routes(app)
-register_etf_overlap_routes(app)
+register_etf_overlap_routes(app, get_profile_filter=get_profile_filter)
 register_option_trade_routes(app, get_profile_filter=get_profile_filter, get_profile_id=get_profile_id)
 register_put_scanner_routes(app)
 register_call_scanner_routes(app)
