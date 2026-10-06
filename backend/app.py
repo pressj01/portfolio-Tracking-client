@@ -4660,8 +4660,18 @@ def _cumulative_invested_cost_by_ticker(conn, profile_ids):
     return {row["ticker"]: _num_or_zero(row["invested"]) for row in rows}
 
 
-def _realized_gains_by_ticker(conn, profile_ids):
+def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
     """Sum realized gains per ticker, scoped to the current holding lot.
+
+    all_time=True is the Snowball-style figure: every sale of the ticker, with no
+    purchase_date scoping and no per-account join. Snowball attributes realized
+    P&L to the ticker, not to the lots still open, so a ticker sold down to zero
+    and later re-bought keeps the earlier sales. The caller only ever reads the
+    tickers it is still holding, so dropping the join is also what lets a sale
+    made in one account count toward a ticker that is still held in another
+    selected account — the combined-portfolio behaviour. The default stays
+    lot-scoped because invested cost and dividends are scoped that way, and
+    Total profit needs all three on the same footing.
 
     all_account_info.realized_gains is a running total accumulated across a
     ticker+profile's ENTIRE transaction history by _rollup_transactions, with
@@ -4685,6 +4695,18 @@ def _realized_gains_by_ticker(conn, profile_ids):
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))
+    if all_time:
+        rows = conn.execute(
+            f"""SELECT t.ticker, COALESCE(SUM(t.realized_gain), 0) AS realized
+                FROM transactions t
+                WHERE t.profile_id IN ({placeholders})
+                  AND UPPER(COALESCE(t.transaction_type, '')) = 'SELL'
+                  AND t.realized_gain IS NOT NULL
+                  AND INSTR(LOWER(COALESCE(t.notes, '')), '[transfer') = 0
+                GROUP BY t.ticker""",
+            ids,
+        ).fetchall()
+        return {row["ticker"]: _num_or_zero(row["realized"]) for row in rows}
     rows = conn.execute(
         f"""SELECT t.ticker, COALESCE(SUM(t.realized_gain), 0) AS realized
             FROM transactions t
@@ -5049,7 +5071,8 @@ def _ensure_basis_columns(conn):
 _PFI_NO_TXN_MAX_RATIO = 10.0  # i.e. 1000%
 
 
-def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_ticker=None):
+def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_ticker=None,
+                                  realized_all_time_by_ticker=None):
     """Expose selected basis through the legacy price_paid/purchase_value fields."""
     mode = _basis_mode()
     for r in results:
@@ -5113,6 +5136,13 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_
         r["total_return_realized_component"] = _num_or_zero(
             realized_by_ticker.get(r.get("ticker")) if realized_by_ticker else 0.0
         )
+        # Display-only: Snowball-style realized P&L over every sale of the ticker.
+        # Deliberately NOT part of total_return_* — those stay lot-scoped so the
+        # numerator, the dividends and the invested-cost denominator agree.
+        if realized_all_time_by_ticker is not None:
+            r["realized_all_time"] = _num_or_zero(
+                realized_all_time_by_ticker.get(r.get("ticker"))
+            )
     return results
 
 
@@ -20556,6 +20586,7 @@ def list_holdings():
         results,
         _cumulative_invested_cost_by_ticker(conn, payment_profile_ids),
         _realized_gains_by_ticker(conn, payment_profile_ids),
+        _realized_gains_by_ticker(conn, payment_profile_ids, all_time=True),
     )
     _apply_holding_display_quantities(results)
 
