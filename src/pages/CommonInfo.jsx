@@ -23,6 +23,9 @@ const ADOPTED_COLUMNS = {
     { key: 'beta', after: 'unrealizedPct' },
     { key: 'alpha', after: 'beta' },
   ],
+  returns: [
+    { key: 'realizedAllTime', after: 'realizedProfit' },
+  ],
 }
 
 const VIEW_COLUMNS = {
@@ -41,7 +44,7 @@ const VIEW_COLUMNS = {
   ],
   returns: [
     'holding', 'category', 'subcategory', 'costBasis', 'currentValue', 'divsReceived', 'paidForItself',
-    'capitalGain', 'realizedProfit', 'totalProfit', 'shareOfPortfolio', 'nav',
+    'capitalGain', 'realizedProfit', 'realizedAllTime', 'totalProfit', 'shareOfPortfolio', 'nav',
   ],
 }
 
@@ -110,7 +113,19 @@ const COLUMN_HELP = {
   beta: 'Column: price-return beta over the Dashboard Shared Performance Date Range, measured against whichever of SPY or QQQ the ticker tracks most closely. 1.00 moves with that benchmark; above 1.00 amplifies it. Sold rows show a dash.',
   alpha: 'Column: annualized CAPM alpha over the Dashboard Shared Performance Date Range — return above or below what the ticker beta predicts, against the same benchmark shown in the Beta column. Positive means it beat its own risk exposure. Sold rows show a dash.',
   capitalGain: 'Column: current value minus cost basis for open holdings; proceeds minus cost for sold rows.',
-  realizedProfit: 'Column: profit or loss already locked in from shares that were sold.',
+  realizedProfit: 'Column: OUR realized P&L — profit or loss locked in by sales since your oldest remaining lot was bought. Sales from before that point are left out: lots you have already sold off, or an earlier position you sold out of before buying the ticker back, never color the position you hold now. Sold-out rows show every sale. Compare the Realized P&L (all-time) column, which counts every sale the way Snowball does. Hover a cell to see both numbers.',
+  realizedAllTime: 'Column: SNOWBALL-STYLE realized P&L — profit or loss from every sale of this ticker, ever, whichever lots are still open and including sales made before you sold out and bought back in. Same first-in-first-out matching and the same sales as ours; only the set of sales counted differs. The footer covers tickers you still own, as Snowball does. Hover a cell to see both numbers.',
+}
+
+// Why the two realized columns can disagree on a ticker you still own, with the
+// one example that makes it concrete. Kept beside the column help so the Field
+// help and the header rollovers cannot drift into describing different rules.
+const REALIZED_COMPARE_HELP = 'Both columns use first-in-first-out lots and the same sales. They differ only in which sales count for a ticker you still own. Ours counts sales since your oldest remaining lot was bought, so lots you have already sold off, or an earlier position you sold out of before re-buying, are left out. Snowball counts every sale of the ticker, whichever lots are still open, and its total covers only tickers you still own; a sold-out ticker\'s own row still shows its result. Example: buy in January, sell everything in March at a loss, re-buy in June and still hold. Ours shows the June position only; Snowball also carries the March loss. Commissions are inside our cost and tracked separately by Snowball, so expect a few cents per sale even when the sales match. A sale whose cost cannot be established is counted in neither.'
+
+const REALIZED_FOOTER_TEXT = 'Open tickers only: tickers you have completely sold out of are left out of this total, as Snowball does. A sold-out ticker still shows its own result on its row.'
+const REALIZED_FOOTER_HELP = {
+  realizedProfit: REALIZED_FOOTER_TEXT,
+  realizedAllTime: REALIZED_FOOTER_TEXT,
 }
 
 const HELP_ITEMS = [
@@ -143,7 +158,9 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Beta', body: COLUMN_HELP.beta.replace('Column: ', '') },
   { kind: 'Table column', label: 'Alpha', body: COLUMN_HELP.alpha.replace('Column: ', '') },
   { kind: 'Table column', label: 'Capital gain', body: COLUMN_HELP.capitalGain.replace('Column: ', '') },
-  { kind: 'Table column', label: 'Realized P&L', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Realized P&L (ours)', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
+  { kind: 'Table column', label: 'Realized P&L (all-time, Snowball-style)', body: COLUMN_HELP.realizedAllTime.replace('Column: ', '') },
+  { kind: 'Ours vs Snowball', label: 'Realized P&L', body: REALIZED_COMPARE_HELP },
   { kind: 'Table column', label: 'NAV', body: COLUMN_HELP.nav.replace('Column: ', '') },
 ]
 
@@ -238,6 +255,28 @@ function hasDefinedSubcategory(row) {
   const name = String(row.subcategoryName || '').trim()
   if (row.subcategoryId !== null && row.subcategoryId !== undefined && row.subcategoryId !== '') return true
   return Boolean(name)
+}
+
+// Rollover shared by both realized columns, so whichever one the user hovers
+// they get the same side-by-side and the reason the two differ on this row.
+function realizedCompareTitle(row) {
+  const ours = num(row.realizedProfit)
+  const allTime = num(row.realizedAllTime)
+  const gap = allTime - ours
+  const lines = [
+    `Ours (since your oldest remaining lot): ${signedMoney(ours)}`,
+    `Snowball-style (every sale, all-time): ${signedMoney(allTime)}`,
+  ]
+  if (row.sold) {
+    lines.push('Sold out: both views count every sale of this ticker, so they agree.')
+  } else if (Math.abs(gap) < 0.005) {
+    lines.push('They agree: every sale of this ticker happened on your current position.')
+  } else {
+    lines.push(
+      `Difference ${signedMoney(gap)}: sales made before your oldest remaining lot was bought — lots you have since sold off, or a position you sold out of and re-bought. Ours leaves those out; Snowball keeps them.`,
+    )
+  }
+  return lines.join('\n')
 }
 
 function StackValue({ primary, secondary, tone, title }) {
@@ -470,6 +509,9 @@ function activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth) {
   const parts = holdingLifetimeReturnParts(holding)
   const totalDivs = parts.distributions
   const realizedProfit = parts.realized
+  // Older backends do not send the all-time figure; fall back to ours so the two
+  // columns agree rather than the new one reading as a false zero.
+  const realizedAllTime = finite(holding.realized_all_time) ?? realizedProfit
   const capitalGain = parts.gainLoss
   const capitalGainPct = costBasis > 0 ? capitalGain / costBasis : null
   const totalProfit = parts.totalReturnDollar
@@ -502,6 +544,7 @@ function activeRow(holding, categoryLookup, totalActiveValue, dividendGrowth) {
     capitalGain,
     capitalGainPct,
     realizedProfit,
+    realizedAllTime,
     totalProfit,
     totalProfitPct,
     profitBasis,
@@ -549,6 +592,7 @@ function soldRows(realizedRows, openTickers, categoryLookup, dividendGrowth = {}
       capitalGain: 0,
       capitalGainPct: null,
       realizedProfit: 0,
+      realizedAllTime: 0,
       totalProfit: 0,
       totalProfitPct: null,
       profitBasis: 0,
@@ -569,6 +613,9 @@ function soldRows(realizedRows, openTickers, categoryLookup, dividendGrowth = {}
     current.totalDivs += num(row.divs_received)
     current.capitalGain += num(row.price_gl)
     current.realizedProfit += num(row.price_gl)
+    // A sold-out ticker has no current position to scope to: every sale counts
+    // under both definitions, so the two columns agree on these rows.
+    current.realizedAllTime += num(row.price_gl)
     current.totalProfit += num(row.total_gl)
     current.sellDate = latestDate(current.sellDate, row.sell_date)
     current.currentPrice = num(row.sell_price) || current.currentPrice
@@ -832,7 +879,21 @@ const COLUMN_DEFS = {
     label: 'Realized P&L',
     align: 'right',
     sortValue: row => row.realizedProfit,
-    render: row => <span className={valueTone(row.realizedProfit)}>{signedMoney(row.realizedProfit)}</span>,
+    render: row => (
+      <span className={valueTone(row.realizedProfit)} title={realizedCompareTitle(row)}>
+        {signedMoney(row.realizedProfit)}
+      </span>
+    ),
+  },
+  realizedAllTime: {
+    label: 'Realized P&L (all-time)',
+    align: 'right',
+    sortValue: row => row.realizedAllTime,
+    render: row => (
+      <span className={valueTone(row.realizedAllTime)} title={realizedCompareTitle(row)}>
+        {signedMoney(row.realizedAllTime)}
+      </span>
+    ),
   },
   nav: {
     label: 'NAV',
@@ -874,6 +935,8 @@ function footerValue(key, index, totals, filteredRows) {
     case 'unrealizedGain': return signedMoney(totals.unrealizedGain)
     case 'unrealizedPct': return pct(totals.unrealizedPct, { signed: true })
     case 'totalProfit': return signedMoney(totals.visibleTotalProfit)
+    case 'realizedProfit': return signedMoney(totals.realizedOurs)
+    case 'realizedAllTime': return signedMoney(totals.realizedAllTime)
     case 'paidForItself': return pct(totals.paidForItself)
     case 'divsReceived': return money(filteredRows.reduce((sum, row) => sum + row.totalDivs, 0))
     default: return index === 0 ? 'Totals' : ''
@@ -952,13 +1015,18 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
               <tr>
                 {activeColumns.map((column, index) => (
                   <td key={column.key} className={cellClass(column, index)}>
-                    <strong className={
-                      column.key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
-                        : column.key === 'paidForItself' ? pfiTone(totals.paidForItself)
-                          : column.key === 'unrealizedGain' || column.key === 'unrealizedPct'
-                            ? valueTone(totals.unrealizedGain)
-                            : ''
-                    }>{footerValue(column.key, index, totals, filteredRows)}</strong>
+                    <strong
+                      title={REALIZED_FOOTER_HELP[column.key]}
+                      className={
+                        column.key === 'totalProfit' ? valueTone(totals.visibleTotalProfit)
+                          : column.key === 'paidForItself' ? pfiTone(totals.paidForItself)
+                            : column.key === 'unrealizedGain' || column.key === 'unrealizedPct'
+                              ? valueTone(totals.unrealizedGain)
+                              : column.key === 'realizedProfit' ? valueTone(totals.realizedOurs)
+                                : column.key === 'realizedAllTime' ? valueTone(totals.realizedAllTime)
+                                  : ''
+                      }
+                    >{footerValue(column.key, index, totals, filteredRows)}</strong>
                   </td>
                 ))}
               </tr>
@@ -1210,6 +1278,10 @@ export function CommonInfoPanel({
     const annualIncome = activeRows.reduce((sum, row) => sum + row.annualDividends, 0)
     const unrealizedGain = activeRows.reduce((sum, row) => sum + row.capitalGain, 0)
     const totalProfit = activeRows.reduce((sum, row) => sum + row.totalProfit, 0)
+    // Open tickers only, like Snowball's total: a sold-out ticker's own row still
+    // shows its result, but it is not folded into the footer.
+    const realizedOurs = activeRows.reduce((sum, row) => sum + row.realizedProfit, 0)
+    const realizedAllTime = activeRows.reduce((sum, row) => sum + row.realizedAllTime, 0)
     const profitBasis = activeRows.reduce((sum, row) => sum + (row.profitBasis || row.costBasis), 0)
     const visibleTotalProfit = filteredRows.reduce((sum, row) => sum + row.totalProfit, 0)
     const passiveYield = currentValue > 0 ? annualIncome / currentValue : null
@@ -1226,6 +1298,8 @@ export function CommonInfoPanel({
       unrealizedPct: costBasis > 0 ? unrealizedGain / costBasis : null,
       totalProfit,
       visibleTotalProfit,
+      realizedOurs,
+      realizedAllTime,
       profitBasis,
       passiveYield,
       profitPct,

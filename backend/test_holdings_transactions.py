@@ -2835,6 +2835,69 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(row["total_return_realized_component"], 0.0)
         self.assertAlmostEqual(total_return, price_return, places=8)
 
+    def test_holdings_realized_all_time_keeps_sales_from_before_a_rebuy(self):
+        # Sold out of REBUY in 2025 at a loss, bought it back in June 2026. The
+        # lot-scoped component belongs to the current position only; the
+        # all-time figure is Snowball's, which counts every sale of the ticker.
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Rebuy Acct', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
+            "current_price, current_value, gain_or_loss, total_divs_received, "
+            "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+            "VALUES ('REBUY', 20, 'Rebuy Fund', 10, 9, 90, '2026-06-29', 10, 100, 10, 0, 0, 'N', 0, 0)"
+        )
+        txns = [
+            ("BUY", "2025-01-01", 100, 10, "", None),
+            ("SELL", "2025-09-01", 100, 8, "", -200.0),
+            ("BUY", "2026-06-29", 10, 9, "", None),
+            ("SELL", "2026-07-15", 2, 11, "", 4.0),
+            # Neither of these is a realized result: a transfer is not a sale,
+            # and a NULL gain means the cost could not be established.
+            ("SELL", "2026-07-16", 1, 0, "[Transfer out] TRANSFER", -99.0),
+            ("SELL", "2026-07-17", 1, 11, "", None),
+        ]
+        for txn_type, date, shares, price, notes, gain in txns:
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+                "VALUES ('REBUY', 20, ?, ?, ?, ?, 0, ?, ?)",
+                (txn_type, date, shares, price, notes, gain),
+            )
+
+        res = self.client.get("/api/holdings?profile_id=20")
+
+        self.assertEqual(res.status_code, 200)
+        row = res.get_json()[0]
+        self.assertEqual(row["total_return_realized_component"], 4.0)
+        self.assertEqual(row["realized_all_time"], -196.0)
+
+    def test_realized_all_time_counts_a_sale_in_an_account_that_sold_out(self):
+        # A ticker still held in one account keeps the sales an account that has
+        # sold out of it made — the combined-portfolio reading. The lot-scoped
+        # query joins on the live holding row, so it cannot see those sales.
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Still Holds', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Sold Out', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('SPLIT', 20, 'Split Fund', 5, 10, 50, '2026-01-01')"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('SPLIT', 21, 'SELL', '2026-03-01', 5, 12, 0, '', 50.0)"
+        )
+        conn = self._get_connection()
+        try:
+            lot_scoped = app_module._realized_gains_by_ticker(conn, [20, 21])
+            all_time = app_module._realized_gains_by_ticker(conn, [20, 21], all_time=True)
+        finally:
+            conn.close()
+
+        self.assertEqual(lot_scoped.get("SPLIT", 0.0), 0.0)
+        self.assertEqual(all_time["SPLIT"], 50.0)
+
     def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")
         self._execute(
