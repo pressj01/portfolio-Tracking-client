@@ -7677,8 +7677,16 @@ def _ensure_db():
     """Create tables on first request if they don't exist."""
     if not getattr(app, '_db_initialized', False):
         conn = get_connection()
-        ensure_tables_exist(conn)
-        conn.close()
+        try:
+            ensure_tables_exist(conn)
+            # A portfolio saved by an older build can already contain valid
+            # specific-lot selections while original_* still describes the
+            # pre-selection FIFO queue. Repair it on first use as well as in
+            # the normal __main__ startup path (the settings key makes this a
+            # one-time replay).
+            _repair_specific_lot_basis(conn)
+        finally:
+            conn.close()
         app._db_initialized = True
 
 
@@ -9071,6 +9079,8 @@ def api_import_generic():
                     pid = r["profile_id"]
                     if as_txns:
                         _import_as_transactions(pid, pre_snaps.get(pid, {}))
+                    else:
+                        _finalize_generic_positions_snapshot(pid)
                     populate_holdings(pid)
                     populate_dividends(pid)
                     populate_income_tracking(pid)
@@ -9094,6 +9104,8 @@ def api_import_generic():
             _preserve_standalone_owner_import(profile_id)
             if as_txns:
                 _import_as_transactions(profile_id, pre_snap)
+            else:
+                _finalize_generic_positions_snapshot(profile_id)
             populate_holdings(profile_id)
             populate_dividends(profile_id)
             populate_income_tracking(profile_id)
@@ -10109,6 +10121,64 @@ def api_import_transactions_preview():
             pass
 
 
+def _finalize_positions_snapshot(profile_id, conn, tickers=None):
+    """Give an imported positions snapshot ownership of the current holding.
+
+    Every broker parser and the generic positions uploader must finish here.
+    The snapshot owns quantity and broker basis; transaction history supplies
+    original basis and realized gains only when its open lots reconcile to the
+    snapshot. Keeping this rule in one place prevents a later transaction
+    replay from replacing an imported position with a FIFO-derived holding.
+    """
+    _ensure_basis_columns(conn)
+    _set_profile_positions_managed(profile_id, True, conn)
+
+    if tickers is None:
+        rows = conn.execute(
+            "SELECT ticker FROM all_account_info WHERE profile_id = ?",
+            (profile_id,),
+        ).fetchall()
+        tickers = [row["ticker"] if isinstance(row, dict) else row[0] for row in rows]
+
+    results = {
+        "updated": 0,
+        "share_mismatch": 0,
+        "no_transactions": 0,
+    }
+    for ticker in sorted({str(value or "").strip().upper() for value in tickers if value}):
+        # Generic uploads historically did not populate the split basis
+        # columns. Initialize only missing values so a real original/broker
+        # distinction already on the row is never flattened.
+        conn.execute(
+            """UPDATE all_account_info
+                  SET broker_price_paid = COALESCE(broker_price_paid, price_paid),
+                      broker_purchase_value = COALESCE(broker_purchase_value, purchase_value),
+                      original_price_paid = COALESCE(original_price_paid, price_paid),
+                      original_purchase_value = COALESCE(original_purchase_value, purchase_value)
+                WHERE ticker = ? AND profile_id = ?""",
+            (ticker, profile_id),
+        )
+        result = _refresh_original_basis_from_transactions(ticker, profile_id, conn)
+        status = result.get("status")
+        if status in results:
+            results[status] += 1
+        _sync_preserved_position_purchase_date(ticker, profile_id, conn)
+        _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
+
+    return results
+
+
+def _finalize_generic_positions_snapshot(profile_id):
+    """Apply the shared broker-position finalizer to a generic upload."""
+    conn = get_connection()
+    try:
+        result = _finalize_positions_snapshot(profile_id, conn)
+        conn.commit()
+        return result
+    finally:
+        conn.close()
+
+
 def _import_positions(parsed, profile_id, nav_date=None):
     """Import holdings from a positions-based file (e.g. Schwab Positions CSV).
 
@@ -10289,6 +10359,16 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 _delete_profile_ticker_records(conn, profile_id, row["ticker"])
                 removed += 1
 
+        # All broker formats (including multi-account variants, which route
+        # through this function) share this allocation-aware reconciliation.
+        # It also repairs a self-consistent but wrong FIFO original basis when
+        # a positions snapshot is re-imported after specific lots were chosen.
+        basis_reconciliation = _finalize_positions_snapshot(
+            profile_id,
+            conn,
+            imported_tickers,
+        )
+
         touched_tickers = set(imported_tickers)
         touched_tickers.update(
             row["ticker"] if isinstance(row, dict) else row[0]
@@ -10358,6 +10438,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
             "inserted": inserted,
             "removed": removed,
             "preserved_quantity": preserved_quantity,
+            "basis_reconciliation": basis_reconciliation,
             **category_stats,
         })
 
@@ -21662,6 +21743,77 @@ def _refresh_original_basis_from_transactions(ticker, profile_id, conn):
 
 
 _BASIS_TOTALS_REPAIR_KEY = "basis_totals_follow_position_v1"
+_SPECIFIC_LOT_BASIS_REPAIR_KEY = "specific_lot_original_basis_v1"
+
+
+def _repair_specific_lot_basis(conn):
+    """One-time replay of saved lot selections from builds that left FIFO basis.
+
+    The bad value is internally self-consistent (quantity x FIFO average), so
+    the older stale-total repair cannot recognize it. The allocation rows are
+    proof that a non-FIFO replay is required. Only original basis and realized
+    gains are refreshed; imported quantities and broker basis stay authoritative.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    if conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        (_SPECIFIC_LOT_BASIS_REPAIR_KEY,),
+    ).fetchone():
+        return 0
+
+    _ensure_basis_columns(conn)
+    rows = conn.execute(
+        """SELECT DISTINCT t.ticker, t.profile_id
+             FROM transaction_lot_allocations a
+             JOIN transactions t ON t.id = a.sell_txn_id
+             JOIN all_account_info h
+               ON h.ticker = t.ticker AND h.profile_id = t.profile_id
+            ORDER BY t.profile_id, t.ticker"""
+    ).fetchall()
+
+    changes = []
+    for row in rows:
+        ticker = row["ticker"] if isinstance(row, dict) else row[0]
+        profile_id = row["profile_id"] if isinstance(row, dict) else row[1]
+        before = conn.execute(
+            """SELECT original_price_paid, original_purchase_value
+                 FROM all_account_info
+                WHERE ticker = ? AND profile_id = ?""",
+            (ticker, profile_id),
+        ).fetchone()
+        result = _refresh_original_basis_from_transactions(ticker, profile_id, conn)
+        after = conn.execute(
+            """SELECT original_price_paid, original_purchase_value
+                 FROM all_account_info
+                WHERE ticker = ? AND profile_id = ?""",
+            (ticker, profile_id),
+        ).fetchone()
+        before_values = tuple(before) if before else (None, None)
+        after_values = tuple(after) if after else (None, None)
+        if result.get("status") == "updated" and before_values != after_values:
+            changes.append({
+                "profile_id": profile_id,
+                "ticker": ticker,
+                "before": {
+                    "original_price_paid": before_values[0],
+                    "original_purchase_value": before_values[1],
+                },
+                "after": {
+                    "original_price_paid": after_values[0],
+                    "original_purchase_value": after_values[1],
+                },
+            })
+
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (_SPECIFIC_LOT_BASIS_REPAIR_KEY, json.dumps(changes)),
+    )
+    conn.commit()
+    if changes:
+        for profile_id in {change["profile_id"] for change in changes}:
+            populate_holdings(profile_id)
+        _auto_reconcile_owner()
+    return len(changes)
 
 
 def _basis_total_is_stale(total, price, quantity, base_quantity=None):
@@ -59869,6 +60021,16 @@ if __name__ == "__main__":
         except Exception as _basis_problem:
             conn.rollback()
             print(f"Cost basis total repair failed: {_basis_problem}")
+        try:
+            _lot_basis_repaired = _repair_specific_lot_basis(conn)
+            if _lot_basis_repaired:
+                print(
+                    "[startup] replayed specific-lot basis for "
+                    f"{_lot_basis_repaired} holding(s)"
+                )
+        except Exception as _lot_basis_problem:
+            conn.rollback()
+            print(f"Specific-lot basis repair failed: {_lot_basis_problem}")
     finally:
         conn.close()
     # The stored "reuse recent prices" preference has to reach the gateway

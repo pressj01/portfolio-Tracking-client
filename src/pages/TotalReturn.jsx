@@ -35,6 +35,8 @@ import {
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
+import OpenLotsView from '../components/OpenLotsView'
+import LotTransactionHistory from '../components/LotTransactionHistory'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -95,7 +97,7 @@ function MetricCard({ label, value, range, className, children, title }) {
 export default function TotalReturn() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
-  const { selection, basisMode, profileQueryString } = useProfile()
+  const { selection, basisMode, profileQueryString, profiles } = useProfile()
   const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
   const [subcategories, setSubcategories] = useState([])
@@ -113,6 +115,39 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [positionView, setPositionView] = useState('unrealized')
+  const [lotDetails, setLotDetails] = useState({})
+  const toggleLotDetails = async ticker => {
+    if (lotDetails[ticker]) {
+      setLotDetails(current => {
+        const next = { ...current }
+        delete next[ticker]
+        return next
+      })
+      return
+    }
+    setLotDetails(current => ({ ...current, [ticker]: { loading: true, view: 'open' } }))
+    try {
+      const response = await pf(`/api/holdings/${encodeURIComponent(ticker)}/transactions?include_dividends=true`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data?.error || `Could not load lot details for ${ticker}`)
+      setLotDetails(current => ({
+        ...current,
+        [ticker]: { loading: false, view: 'open', transactions: data },
+      }))
+    } catch (error) {
+      setLotDetails(current => ({
+        ...current,
+        [ticker]: { loading: false, view: 'open', error: String(error?.message || error) },
+      }))
+    }
+  }
+  const setLotDetailView = (ticker, view) => {
+    setLotDetails(current => ({
+      ...current,
+      [ticker]: { ...current[ticker], view },
+    }))
+  }
+  useEffect(() => setLotDetails({}), [selection, basisMode])
   // A Distributions figure nobody can take apart is one nobody can check.
   const [distDetail, setDistDetail] = useState(null)
   const openDistributions = async (ticker) => {
@@ -156,9 +191,13 @@ export default function TotalReturn() {
 
   const dashboardRows = useMemo(() => {
     if (isLifetimePerformancePeriod(dashboardPeriod) && chartData?.performance_rows) {
+      const holdingByTicker = new Map(
+        (summary?.rows || []).map(row => [String(row.ticker || '').toUpperCase(), row]),
+      )
       return chartData.performance_rows.map(row => ({
+        ...holdingByTicker.get(String(row.ticker || '').toUpperCase()),
         ...row,
-        period_range: 'Lifetime',
+        period_range: 'Open position',
       }))
     }
     if (!summary?.rows || !chartData?.performance_rows) return []
@@ -737,22 +776,23 @@ export default function TotalReturn() {
     })
   }, [enrichedRows, realizedRows])
 
+  const lifetimeView = isLifetimePerformancePeriod(dashboardPeriod)
   const unrealizedColumns = [
     { key: 'ticker', label: 'Ticker' },
     { key: 'category_name', label: 'Category' },
     { key: 'price_paid', label: 'Cost/Share', title: 'Average purchase price of the shares you still hold — the same figure Schwab labels Cost/Share. Not the market price at the start of the range.', fmt, numeric: true },
-    { key: 'start_price', label: 'Price at Start', title: 'Market close on the first day of this holding\'s effective range (for YTD, the last session on or before Jan 1). This is not cost basis.', fmt, numeric: true },
+    { key: 'start_price', label: lifetimeView ? 'Cost / Share' : 'Price at Start', title: lifetimeView ? 'Selected cost basis per share for shares still held.' : 'Market close on the first day of this holding\'s effective range (for YTD, the last session on or before Jan 1). This is not cost basis.', fmt, numeric: true },
     { key: 'end_price', label: 'Current Price', title: 'Market price on the last day of this holding\'s effective range. A range that ends today uses a live quote when available.', fmt, numeric: true },
-    { key: 'start_value', label: 'Start Value', fmt, numeric: true },
-    { key: 'end_value', label: 'End Value', fmt, numeric: true },
-    { key: 'price_return_dollar', label: 'Period Price Return', title: 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
-    { key: 'price_return_pct', label: 'Period Price Ret %', title: 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'distribution_dollar', label: 'Distributions', title: 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. Click a figure to see every payment behind it.', fmt, numeric: true },
-    { key: 'total_return_dollar', label: 'Period Total Return', fmt, numeric: true, gl: true },
-    { key: 'total_return_pct', label: 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'period_range', label: 'Effective Range' },
+    { key: 'start_value', label: lifetimeView ? 'Open Cost Basis' : 'Start Value', fmt, numeric: true },
+    { key: 'end_value', label: lifetimeView ? 'Current Open Value' : 'End Value', fmt, numeric: true },
+    { key: 'price_return_dollar', label: lifetimeView ? 'Open Position G/L' : 'Period Price Return', title: lifetimeView ? 'Current value minus selected cost basis for shares still held. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
+    { key: 'price_return_pct', label: lifetimeView ? 'Open Position G/L %' : 'Period Price Ret %', title: lifetimeView ? 'Open Position G/L divided by selected cost basis. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'distribution_dollar', label: lifetimeView ? 'Lifetime Distributions' : 'Distributions', title: lifetimeView ? 'Recorded distributions included in Lifetime Total G/L.' : 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. Click a figure to see every payment behind it.', fmt, numeric: true },
+    { key: 'total_return_dollar', label: lifetimeView ? 'Lifetime Total G/L' : 'Period Total Return', fmt, numeric: true, gl: true },
+    { key: 'total_return_pct', label: lifetimeView ? 'Lifetime Total G/L %' : 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
+    { key: 'period_range', label: lifetimeView ? 'Scope' : 'Effective Range' },
     { key: 'ret_vs_yld', label: 'RvY', sortKey: 'ret_vs_yld_sort' },
-  ]
+  ].filter(column => !(lifetimeView && column.key === 'start_price'))
   const realizedColumns = [
     { key: 'ticker', label: 'Ticker' },
     { key: 'category_name', label: 'Category' },
@@ -882,7 +922,6 @@ export default function TotalReturn() {
     )
   }
 
-  const lifetimeView = isLifetimePerformancePeriod(dashboardPeriod)
   const lifetimeReady = lifetimeView && !!chartData && !chartLoading
   const trackerReady = !!summary && !!chartData && !summaryLoading && !chartLoading
 
@@ -1110,7 +1149,7 @@ export default function TotalReturn() {
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
           {isLifetimePerformancePeriod(dashboardPeriod) && (
             <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+              <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
             </div>
           )}
         </div>
@@ -1146,7 +1185,7 @@ export default function TotalReturn() {
         <p className="tracker-help-footer">
           For market periods, every card in the summary strip comes from one replay of your dated buy
           and sell history, priced at each day&apos;s market observation: a live quote when available today,
-          otherwise that day&apos;s close. <strong>Life</strong> is different: it is cost-basis accounting for
+          otherwise that day&apos;s close. <strong>Open G/L</strong> is different: it is cost-basis accounting for
           current holding lots from purchase through today, including any profit or loss already realized
           by trimming those positions.
         </p>
@@ -1154,13 +1193,13 @@ export default function TotalReturn() {
           <section>
             <h3>Value and return cards</h3>
             <ul>
-              <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash, on <strong>any</strong> period — Life is not an exception.</li>
+              <li><strong>Start Value / End Value:</strong> for market ranges, the portfolio&apos;s holdings priced at the first and last market observation. Open G/L instead labels these cards Open Cost Basis and Current Open Value.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown on every period, not just Life, as long as the range runs through today and no ticker filter is active — it drops away only for a Custom range that ends in the past, a ticker filter, or an account with neither cash nor an open option. The cash in it is a <strong>dated snapshot</strong>, not a live balance: a broker import writes it and it stands until something writes it again, so the card names the day it came from. When this card lags your broker, that date is usually why — set the balance on the Portfolios page, or re-import.</li>
               <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
-              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Choose <strong>Life</strong> instead when comparing current value with the cost basis of shares still held.</li>
+              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Choose <strong>Open G/L</strong> instead when comparing current value with the cost basis of shares still held.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
               <li><strong>Realized Profit &amp; Loss (Life only):</strong> profit or loss locked in by sales that trimmed a position you still own. Fully closed positions remain available on Gains &amp; Losses.</li>
-              <li><strong>Life Total Return:</strong> Life Price G/L plus Distributions plus Realized Profit &amp; Loss. A realized loss is negative, so it reduces the total.</li>
+              <li><strong>Lifetime Total G/L:</strong> Open Position G/L plus lifetime Distributions plus Realized Profit &amp; Loss. A realized loss is negative, so it reduces the total. This is broader than the broker&apos;s open-position unrealized G/L.</li>
               <li><strong>SPY:</strong> the S&amp;P 500's own return over this portfolio's actual market-observation dates, for comparison.</li>
             </ul>
           </section>
@@ -1260,10 +1299,10 @@ export default function TotalReturn() {
           <p className="tr-note">
             {lifetimeView ? (
               <>
-                <strong>Lifetime:</strong> cost-basis G/L matching the Holdings table
+                <strong>Open Position G/L:</strong> cost-basis gain/loss matching Holdings
                 {dashboardCardRange ? ` (${dashboardCardRange})` : ''}.
-                Start Value is what you paid for shares you still hold; End Value is those shares at the current price;
-                Price Return is current value minus cost basis.
+                Open Cost Basis is the selected basis for shares you still hold; Current Open Value is those shares at the current price;
+                Open Position G/L is current value minus that basis. Use Broker-adjusted basis and the same quote to compare with Fidelity or Schwab.
               </>
             ) : (
               <>
@@ -1485,16 +1524,16 @@ export default function TotalReturn() {
             {/* Say what these measure. Only when something is actually left out,
                 so an account with no cash and no options is not told twice that
                 it has neither. */}
-            <MetricCard label="Start Value" value={partialValue(fmtInt(t.start_value))} range={startValueAsOf}
-              title="Holdings only — cash is never counted here, on any period including Life. See Account Value for the figure with cash added back.">
+            <MetricCard label={lifetimeView ? 'Open Cost Basis' : 'Start Value'} value={partialValue(fmtInt(t.start_value))} range={startValueAsOf}
+              title="Holdings only — cash is never counted here, including Open G/L. See Account Value for the figure with cash added back.">
               {partialNote}
               {coverageIsSevere && (
                 <div className="summary-sub">Would have read {fmtInt(t.start_value)} on the positions that priced</div>
               )}
               {t.account_reconciliation && <div className="summary-sub">Holdings only — no cash</div>}
             </MetricCard>
-            <MetricCard label="End Value" value={partialValue(fmtInt(t.end_value))} range={endValueAsOf}
-              title="Holdings only — cash is never counted here, on any period including Life. See Account Value for the figure with cash added back.">
+            <MetricCard label={lifetimeView ? 'Current Open Value' : 'End Value'} value={partialValue(fmtInt(t.end_value))} range={endValueAsOf}
+              title="Holdings only — cash is never counted here, including Open G/L. See Account Value for the figure with cash added back.">
               {partialNote}
               {coverageIsSevere && (
                 <div className="summary-sub">Would have read {fmtInt(t.end_value)} on the positions that priced</div>
@@ -1525,7 +1564,7 @@ export default function TotalReturn() {
                 matching Growth's Vs market tab. The open-lot cards surface the
                 already-calculated current-position replay that was previously
                 available only in the table footer. */}
-            <MetricCard label={lifetimeView ? 'Life Price G/L' : 'Tracker Price Return'} range={dashboardCardRange}
+            <MetricCard label={lifetimeView ? 'Open Position G/L' : 'Tracker Price Return'} range={dashboardCardRange}
               value={partialValue(
                 <span style={{ color: (t.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(t.price_return_dollar)}</span>,
               )}>
@@ -1533,9 +1572,9 @@ export default function TotalReturn() {
               {coverageIsSevere && (
                 <div className="summary-sub">{fmtInt(t.price_return_dollar)} on the positions that priced</div>
               )}
-              <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L — current value minus cost basis' : TRACKER_SCOPE_NOTE}</div>
+              <div className="summary-sub">{lifetimeView ? 'Matches Holdings — current value minus selected cost basis' : TRACKER_SCOPE_NOTE}</div>
             </MetricCard>
-            <MetricCard label={lifetimeView ? 'Life Price G/L %' : 'Tracker Price Return %'} range={dashboardCardRange}
+            <MetricCard label={lifetimeView ? 'Open Position G/L %' : 'Tracker Price Return %'} range={dashboardCardRange}
               value={partialValue(
                 <span style={{ color: (t.price_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(t.price_return_pct)}</span>,
               )}>
@@ -1543,7 +1582,7 @@ export default function TotalReturn() {
               {coverageIsSevere && (
                 <div className="summary-sub">{fmtPct(t.price_return_pct)} on the positions that priced</div>
               )}
-              <div className="summary-sub">{lifetimeView ? 'Matches Holdings Life G/L %' : TRACKER_SCOPE_NOTE}</div>
+              <div className="summary-sub">{lifetimeView ? 'Matches Holdings Open Position G/L %' : TRACKER_SCOPE_NOTE}</div>
               {!lifetimeView && <div className="summary-sub">Same number as Growth Price Return %</div>}
             </MetricCard>
             {!lifetimeView && (
@@ -1556,7 +1595,7 @@ export default function TotalReturn() {
                   <div className="summary-sub">{fmtInt(openPositionTotals.price_return_dollar)} on the positions that priced</div>
                 )}
                 <div className="summary-sub">Currently held positions only — fully closed positions excluded</div>
-                <div className="summary-sub">Selected-period return; choose Life for cost-basis G/L</div>
+                <div className="summary-sub">Selected-period return; choose Open G/L for cost-basis G/L</div>
               </MetricCard>
             )}
             {!lifetimeView && (
@@ -1603,7 +1642,7 @@ export default function TotalReturn() {
                 <div className="summary-sub">Includes positions fully closed during this range</div>
               </MetricCard>
             )}
-            <MetricCard label={lifetimeView ? 'Life Total Return' : 'Tracker Total Return %'} range={dashboardCardRange}
+            <MetricCard label={lifetimeView ? 'Lifetime Total G/L' : 'Tracker Total Return %'} range={dashboardCardRange}
               value={partialValue(
                 <span style={{ color: ((lifetimeView ? t.total_return_dollar : t.total_return_pct) || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
                   {lifetimeView
@@ -1625,7 +1664,7 @@ export default function TotalReturn() {
                   {' + realized P/L '}{fmtInt(t.realized_return_dollar)}
                 </div>
               )}
-              <div className="summary-sub">{lifetimeView ? 'Cost-basis total return, not time-weighted' : 'Time-weighted — timing-neutral performance'}</div>
+              <div className="summary-sub">{lifetimeView ? 'Open G/L + distributions + realized sales; not the broker unrealized figure' : 'Time-weighted — timing-neutral performance'}</div>
               <div className="summary-sub">Same calculation as Dashboard, Growth &amp; Gains/Losses{lifetimeView ? '' : '; separately read live quotes can differ until close'}</div>
             </MetricCard>
             {!lifetimeView && (
@@ -1671,7 +1710,7 @@ export default function TotalReturn() {
       {chartData && !chartLoading && (
         <>
           <h2 style={{ marginTop: '1.5rem', marginBottom: '0.25rem' }}>
-            {lifetimeView ? 'Life Price G/L %' : 'Total Return %'} by Ticker <span className="tr-period-inline">— {chartData.period_label}</span>
+            {lifetimeView ? 'Open Position G/L %' : 'Total Return %'} by Ticker <span className="tr-period-inline">— {chartData.period_label}</span>
           </h2>
           <p className="tr-note">
             {lifetimeView
@@ -1836,7 +1875,7 @@ export default function TotalReturn() {
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', marginTop: '1.5rem', marginBottom: '0.25rem' }}>
             <h2 style={{ margin: 0 }}>
               {positionView === 'realized' ? 'Closed Positions' : positionView === 'combined' ? 'Open + Closed Positions' : 'Holdings'}
-              {' — '}{chartData?.period_label || 'Selected period'} Total Return Summary
+              {' — '}{lifetimeView ? 'Open Position G/L Summary' : `${chartData?.period_label || 'Selected period'} Total Return Summary`}
             </h2>
             <div className="growth-filter-group" style={{ alignItems: 'flex-start' }}>
               <label>Positions</label>
@@ -1859,7 +1898,7 @@ export default function TotalReturn() {
           <p style={{ color: 'var(--text-dim)', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
             Requested range: <strong>{dashboardRequestedRange || dashboardActualRange}</strong>.{' '}
             {positionView === 'unrealized' && (lifetimeView
-              ? 'Lifetime cost-basis G/L for open positions — current value minus what you paid. These rows and the Open Position Total match the Holdings table sums.'
+              ? 'Open-position cost-basis G/L — current value minus the selected basis. These rows and the Open Position Total match Holdings and, with Broker-adjusted basis and the same quote, the broker.'
               : 'Each row, the Open lots only footer, and the Open Lots Price and Total Return cards are current holdings. Fully closed positions are left out. The Tracker Price and Total Return cards retain positions closed during the range as part of portfolio history. Neither figure is lifetime cost-basis G/L.')}
             {positionView === 'realized' && `Sales that settled inside this range, priced off the recorded buy and sell. Distributions are the dividends those shares earned before the sale.${realizedTotals.sale_count ? ` ${realizedTotals.sale_count} sale${realizedTotals.sale_count === 1 ? '' : 's'}.` : ''}`}
             {positionView === 'combined' && 'Open and closed legs summed per ticker. Net Ret % is money-weighted over basis (period start value plus realized cost), so it will not match the time-weighted Total Ret % in the Unrealized view.'}
@@ -1913,13 +1952,31 @@ export default function TotalReturn() {
               </thead>
               <tbody>
                 {sortedRows.map((row, rowIndex) => (
-                  <tr key={positionView === 'realized' ? `${row.ticker}-${row.sell_date}-${rowIndex}` : row.ticker}>
+                  <React.Fragment key={positionView === 'realized' ? `${row.ticker}-${row.sell_date}-${rowIndex}` : row.ticker}>
+                  <tr>
                     {columns.map(col => {
                       const val = row[col.key]
                       let display = col.fmt ? col.fmt(val) : (val ?? '')
                       let style = { textAlign: columnAlign(col) }
 
-                      if (col.key === 'ticker') display = <strong>{val}</strong>
+                      if (col.key === 'ticker') {
+                        display = (
+                          <span className="tr-ticker-lot-toggle">
+                            {positionView === 'unrealized' && (
+                              <button
+                                type="button"
+                                aria-label={`${lotDetails[row.ticker] ? 'Collapse' : 'Expand'} ${row.ticker} lot details`}
+                                aria-expanded={!!lotDetails[row.ticker]}
+                                title="Show current lots and transaction history"
+                                onClick={() => toggleLotDetails(row.ticker)}
+                              >
+                                {lotDetails[row.ticker] ? '\u25BC' : '\u25B6'}
+                              </button>
+                            )}
+                            <strong>{val}</strong>
+                          </span>
+                        )
+                      }
                       if (col.key === 'sell_date') display = formatComparisonDate(val) || (val ?? '')
                       if (col.gl) {
                         // A missing value is not a gain — don't paint its
@@ -1991,16 +2048,71 @@ export default function TotalReturn() {
                       )
                     })}
                   </tr>
+                  {positionView === 'unrealized' && lotDetails[row.ticker] && (
+                    <tr className="tr-lot-detail-row">
+                      <td colSpan={columns.length}>
+                        <div className="mh-lot-panel">
+                          <div className="mh-lot-toolbar">
+                            <div className="mh-lot-toolbar-main">
+                              <strong>{row.ticker} lot details</strong>
+                              <div className="mh-lot-view-tabs" role="tablist" aria-label={`${row.ticker} lot detail view`}>
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={(lotDetails[row.ticker].view || 'open') === 'open'}
+                                  className={(lotDetails[row.ticker].view || 'open') === 'open' ? 'active' : undefined}
+                                  onClick={() => setLotDetailView(row.ticker, 'open')}
+                                >Open lots</button>
+                                <button
+                                  type="button"
+                                  role="tab"
+                                  aria-selected={lotDetails[row.ticker].view === 'history'}
+                                  className={lotDetails[row.ticker].view === 'history' ? 'active' : undefined}
+                                  onClick={() => setLotDetailView(row.ticker, 'history')}
+                                >Transaction history</button>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="btn btn-secondary"
+                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
+                            >Manage transactions</button>
+                          </div>
+                          {lotDetails[row.ticker].loading ? (
+                            <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
+                          ) : lotDetails[row.ticker].error ? (
+                            <div className="alert alert-error" style={{ margin: '0.75rem 1rem' }}>{lotDetails[row.ticker].error}</div>
+                          ) : lotDetails[row.ticker].view === 'history' ? (
+                            <LotTransactionHistory transactions={lotDetails[row.ticker].transactions} profiles={profiles} />
+                          ) : (
+                            <OpenLotsView
+                              transactions={lotDetails[row.ticker].transactions}
+                              holding={{
+                                ticker: row.ticker,
+                                quantity: row.quantity,
+                                purchase_value: row.purchase_value,
+                                current_price: row.current_price,
+                                current_value: row.current_value,
+                                basis_mode: basisMode,
+                              }}
+                              profiles={profiles}
+                            />
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 ))}
               </tbody>
               <tfoot>
                 <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface)' }}>
                   {positionView === 'unrealized' && (
                     <>
-                      <td className="tr-frozen-ticker" title={OPEN_LOT_SCOPE_NOTE}><strong>Open lots only</strong></td>
+                      <td className="tr-frozen-ticker" title={OPEN_LOT_SCOPE_NOTE}><strong>{lifetimeView ? 'Open position total' : 'Open lots only'}</strong></td>
                       <td></td>
                       <td></td>
-                      <td></td>
+                      {!lifetimeView && <td></td>}
                       <td></td>
                       <td style={{ textAlign: 'right' }}>
                         {footerInferredShares > 0

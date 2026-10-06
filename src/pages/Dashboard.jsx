@@ -2107,7 +2107,7 @@ export default function Dashboard() {
         )}
         <SummaryCard
           className="dashboard-headline-card"
-          label={isLifetimePerformancePeriod(gradePeriod) ? 'Life Total Return' : 'Tracker Total Return %'}
+          label={isLifetimePerformancePeriod(gradePeriod) ? 'Lifetime Total G/L' : 'Tracker Total Return %'}
           value={trackerPerformanceLoading ? 'Loading...' : trackerTotalReturnValue}
           color={gradeColor(fullTrackerTotalReturn)}
           sub={[trackerPerformance?.period_label || 'Selected Period', trackerPerformanceRange].filter(Boolean).join(' · ')}
@@ -2278,7 +2278,7 @@ export default function Dashboard() {
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
           {isLifetimePerformancePeriod(gradePeriod) && (
             <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+              <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
             </div>
           )}
           <p className="tr-note" style={{ marginTop: '0.45rem' }}>{GRADE_WINDOW_NOTE}</p>
@@ -2481,7 +2481,7 @@ export default function Dashboard() {
       {isLifetimePerformancePeriod(gradePeriod) ? (
         <div className="alert alert-info" style={{ marginTop: 0 }}>
           <strong>Grade cannot be computed for the Lifetime setting.</strong>{' '}
-          Life is cost-basis G/L, not a daily price series, so Portfolio Grade, beta, Sharpe,
+          Open G/L is cost-basis G/L, not a daily price series, so Portfolio Grade, beta, Sharpe,
           Sortino, Calmar, Omega, and Ulcer stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom
           to grade that market window.
         </div>
@@ -2846,7 +2846,7 @@ export default function Dashboard() {
       <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
         <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>Grade & Exposure Guide</summary>
         <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.75rem 0 0' }}>
-          When Life is selected, Portfolio Grade and the risk indexes stay blank. Expand this guide
+          When Open G/L is selected, Portfolio Grade and the risk indexes stay blank. Expand this guide
           for how long Lifetime is, which filters grade, and why 5Y and All work but Life does not.
         </p>
         <GradePeriodHelp variant="dashboard" />

@@ -51,13 +51,13 @@ export const PERFORMANCE_PERIODS = [
   },
   {
     key: 'all',
-    label: 'All',
+    label: 'All Market',
     hint: "The portfolio's own first recorded trade, purchase, or import — never a benchmark's older quote history. This is still a time-weighted replay, not Holdings cost-basis G/L.",
   },
   {
     key: 'lifetime',
-    label: 'Life',
-    hint: 'Cost-basis gain/loss since purchase: current value minus what you paid. Matches the Holdings table totals. This is not the time-weighted All-range replay.',
+    label: 'Open G/L',
+    hint: 'Open-position cost-basis gain/loss: current value minus the selected cost basis for shares still held. Matches Holdings. This is not the time-weighted All Market replay.',
   },
   {
     key: 'custom',
@@ -73,9 +73,10 @@ export const LIFETIME_PERIOD_KEY = 'lifetime'
 export const isLifetimePerformancePeriod = (period) => period === LIFETIME_PERIOD_KEY
 
 export const HOLDINGS_LIFETIME_MATCH_NOTE = (
-  'Lifetime is cost-basis G/L: current value minus what you paid for shares you still hold. '
-  + 'The dollars and percent match the Holdings Life G/L totals. '
-  + 'It is not a time-weighted return — YTD, 1Y, All, and the other buttons still use the tracker replay.'
+  'Open Position G/L is current value minus the selected cost basis for shares still held. '
+  + 'Its dollars and percent match Holdings and the broker when Broker-adjusted basis and the same quote are selected. '
+  + 'Lifetime Total G/L additionally includes recorded distributions and realized sales. '
+  + 'All Market, YTD, 1Y, and the other date buttons are time-weighted tracker replays.'
 )
 
 // Three different measurements that can share a date range. Keep this wording
@@ -92,38 +93,38 @@ export const OPEN_LOT_SCOPE_NOTE = (
   + 'Same Open Lots Price Return as Total Return, Dashboard, Growth, and Gains & Losses.'
 )
 export const COST_BASIS_SCOPE_NOTE = (
-  'Current value minus what you paid for shares you still hold. Not a selected-period return.'
+  'Open Position G/L: current value minus the selected cost basis for shares still held. Not a selected-period return.'
 )
 
 // Grade, beta, and risk ratios are a different question from Price Return.
 // They need a daily price series in a market window — not cost-basis G/L.
 export const GRADE_WINDOW_NOTE = (
   'Portfolio Grade, beta, Sharpe, Sortino, Calmar, Omega, and Ulcer follow the selected market window. '
-  + 'YTD, 1M, 3M, 6M, 1Y, 5Y, All, and Custom re-grade that stretch — a YTD grade is not a lifetime report card. '
+  + 'YTD, 1M, 3M, 6M, 1Y, 5Y, All Market, and Custom re-grade that stretch — a YTD grade is not a lifetime report card. '
   + '1D and 7D usually have too few trading days to annualize those ratios. '
-  + 'Life is cost-basis G/L, not a price series, so it does not produce a grade.'
+  + 'Open G/L is cost-basis G/L, not a price series, so it does not produce a grade.'
 )
 
 export const GRADE_LIFETIME_SKIP_NOTE = (
-  'Grade cannot be computed for the Lifetime setting. Life is cost-basis G/L '
+  'Grade cannot be computed for Open G/L. It is cost-basis G/L '
   + '(current value minus what you paid), not a daily price series. '
-  + 'Pick YTD, 1M, 1Y, 5Y, All, or Custom to grade that market window.'
+  + 'Pick YTD, 1M, 1Y, 5Y, All Market, or Custom to grade that market window.'
 )
 
-export const GRADE_LIFETIME_CARD_NOTE = 'Cannot compute for Lifetime'
+export const GRADE_LIFETIME_CARD_NOTE = 'Cannot compute for Open G/L'
 
 export const GRADE_PERIOD_HELP_ROWS = [
   {
-    filter: '1M, 3M, 6M, YTD, 1Y, 5Y, All, Custom',
-    grade: 'Yes. 5Y and All both work. That window\'s risk-adjusted grade and indexes. A YTD grade is this year\'s result, not a lifetime report card.',
+    filter: '1M, 3M, 6M, YTD, 1Y, 5Y, All Market, Custom',
+    grade: 'Yes. 5Y and All Market both work. That window\'s risk-adjusted grade and indexes. A YTD grade is this year\'s result, not a lifetime report card.',
   },
   {
     filter: '1D, 7D',
     grade: 'Usually no. Too few trading days to annualize those ratios (about 15 trading days are needed).',
   },
   {
-    filter: 'Life',
-    grade: 'No. Grade cannot be computed for the Lifetime setting, and neither can beta, Sharpe, Sortino, Calmar, Omega, or Ulcer. Cost-basis G/L is not a market window.',
+    filter: 'Open G/L',
+    grade: 'No. Grade cannot be computed for Open G/L, and neither can beta, Sharpe, Sortino, Calmar, Omega, or Ulcer. Cost-basis G/L is not a market window.',
   },
 ]
 
@@ -145,7 +146,7 @@ export const LIFE_VS_ALL_HELP_ROWS = [
   },
   {
     topic: 'Price Return',
-    life: 'Current value minus paid. Matches the Holdings Life G/L totals.',
+    life: 'Current value minus selected basis. Matches the Holdings Open Position G/L totals.',
     all: 'Time-weighted price replay',
   },
   {
@@ -161,9 +162,9 @@ export const LIFE_VS_ALL_HELP_ROWS = [
 ]
 
 export const PERFORMANCE_RANGE_NOTE = (
-  'All ranges except Life end at the latest market observation: a live quote when available today, otherwise the most recent close. Presets choose the start; Custom uses both inclusive dates you enter. '
+  'All market ranges end at the latest market observation: a live quote when available today, otherwise the most recent close. Presets choose the start; Custom uses both inclusive dates you enter. '
   + 'Return is measured from the market close on or before the start date, so weekends and holidays use the prior close. '
-  + 'Life is different: it is Holdings cost-basis G/L, not a market window. '
+  + 'Open G/L is different: it is current open-position cost-basis G/L, not a market window. '
   + 'Hover a button for the exact start it resolves to.'
 )
 

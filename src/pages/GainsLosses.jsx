@@ -930,7 +930,7 @@ export default function GainsLosses({ embedded = false }) {
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
           {isLifetimePerformancePeriod(period) && (
             <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+              <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
             </div>
           )}
         </div>
@@ -979,10 +979,10 @@ export default function GainsLosses({ embedded = false }) {
               <li><strong>Start Value / End Value:</strong> the portfolio&apos;s holdings, priced at the market observation on the first and last day of the range. A current-day end value uses a live quote when available; neither includes cash.</li>
               <li><strong>Account Value:</strong> End Value plus your recorded cash and any open option contracts — the figure that lines up with a broker's net liquidating value. Shown only when there is cash or an open option to add.</li>
               <li><strong>Tracker Price Return:</strong> the dollar change from market price alone over the range for the full portfolio history, including positions fully closed during the range.</li>
-              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Use the lifetime cards below, or choose <strong>Life</strong>, for current value versus cost basis.</li>
+              <li><strong>Open Lots Price Return:</strong> the same selected-period price calculation restricted to positions still held now. Fully closed positions are excluded. Use the lifetime cards below, or choose <strong>Open G/L</strong>, for current value versus cost basis.</li>
               <li><strong>Distributions:</strong> dividends and other distributions actually paid during the range, from broker payment history where available.</li>
               <li><strong>Realized Profit &amp; Loss (Life only):</strong> profit or loss already locked in by sales that trimmed a position you still own. Fully closed positions remain in the Lifetime Realized and Combined sections below.</li>
-              <li><strong>Life Total Return:</strong> Life Price G/L plus Distributions plus Realized Profit &amp; Loss. A realized loss is negative, so it reduces the total.</li>
+              <li><strong>Lifetime Total G/L:</strong> Open Position G/L plus Distributions plus Realized Profit &amp; Loss. This is broader than a broker&apos;s open-position unrealized G/L.</li>
               <li><strong>Tracker Total Return:</strong> Tracker Price Return plus Distributions, including positions fully closed during the range.</li>
               <li><strong>Tracker Total Return %:</strong> the shared, dividend-reinvested percentage return. This is the number that should match Total Return, Dashboard, and Growth after the close when the account, holdings filter, and date range match. Separately read live quotes can differ intraday.</li>
             </ul>
@@ -1058,7 +1058,7 @@ export default function GainsLosses({ embedded = false }) {
           <p className="tr-note">
             {isLifetimePerformancePeriod(period) ? (
               <>
-                <strong>Life filter:</strong>{' '}
+                <strong>Open G/L filter:</strong>{' '}
                 {performanceRange || 'effective dates unavailable'}. Price G/L is current value minus
                 the selected cost basis for open holdings; it is not a transaction-aware market replay.
                 The Lifetime cards below stay on cost-basis accounting either way.
@@ -1086,8 +1086,8 @@ export default function GainsLosses({ embedded = false }) {
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             {isLifetimePerformancePeriod(period) ? (
               <>
-                <strong>Reconciliation figure:</strong> <strong>Life Price G/L %</strong> matches the
-                Holdings Life G/L total and the Life setting on Dashboard, Total Return, and Growth
+                <strong>Reconciliation figure:</strong> <strong>Open Position G/L %</strong> matches the
+                Holdings open-position G/L total and the Open G/L setting on Dashboard, Total Return, and Growth
                 when the account and holdings filter match.
               </>
             ) : (
@@ -1113,7 +1113,7 @@ export default function GainsLosses({ embedded = false }) {
             </MetricCard>
             <AccountValueCard data={periodMetrics.account_reconciliation}
               basisLabel={periodAsOf(chartData?.actual_end_date, periodMetrics.priced_at)} />
-            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Tracker Price Return'} range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Open Position G/L' : 'Tracker Price Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.price_return_dollar) }}>{fmtInt(periodMetrics.price_return_dollar)}</span>}>
               <div className="summary-sub">
                 {isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
@@ -1149,7 +1149,7 @@ export default function GainsLosses({ embedded = false }) {
                 <div className="summary-sub">Fully closed positions remain in the Lifetime tables below</div>
               </MetricCard>
             )}
-            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return'} range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Lifetime Total G/L' : 'Tracker Total Return'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_dollar) }}>{fmtInt(periodMetrics.total_return_dollar)}</span>}>
               <div className="summary-sub">
                 Price {fmtInt(periodMetrics.price_return_dollar)} + distributions {fmtInt(periodMetrics.distribution_dollar)}
@@ -1159,7 +1159,7 @@ export default function GainsLosses({ embedded = false }) {
               </div>
               {!isLifetimePerformancePeriod(period) && <div className="summary-sub">Includes positions fully closed during this range</div>}
             </MetricCard>
-            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'} range={performanceRange}
+            <MetricCard label={isLifetimePerformancePeriod(period) ? 'Lifetime Total G/L %' : 'Tracker Total Return %'} range={performanceRange}
               value={<span style={{ color: glColor(periodMetrics.total_return_pct) }}>{fmtPct(periodMetrics.total_return_pct)}</span>}>
               {!isLifetimePerformancePeriod(period) && <div className="summary-sub">Includes positions fully closed during this range</div>}
               <div className="summary-sub">Same calculation as Total Return &amp; Dashboard</div>
