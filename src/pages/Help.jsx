@@ -2,8 +2,12 @@
 import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
+import appPackage from '../../package.json'
 
-const APP_VERSION = '1.37.5'
+// Keep the in-app label tied to the same package metadata electron-builder
+// uses for the installer and executable. A release can no longer ship a
+// correctly versioned installer while the Help page shows an older version.
+const APP_VERSION = appPackage.version
 
 const GROUPS = [
   {
