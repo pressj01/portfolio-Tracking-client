@@ -35,6 +35,7 @@ import {
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTickerResearch } from '../context/TickerResearchContext'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
+import OpenLotsView from '../components/OpenLotsView'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1773,9 +1774,9 @@ const COLUMNS = [
   { key: 'purchase_value', label: 'Cost', type: 'number', width: 92, tip: 'Total original cost basis (price paid × shares)' },
   { key: 'current_value', label: 'Value', type: 'number', width: 92, tip: 'Current market value (current price × shares)' },
   { key: 'gain_or_loss', label: 'G/L $', type: 'number', width: 92, tip: 'Each row is this ticker\'s current lot during the selected range. The Totals row is the portfolio tracker Price Return for the range, including lots you sold — the same figure as Growth and Total Return cards. Not lifetime cost-basis G/L.' },
-  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 84, tip: 'Each row is this ticker\'s current-lot price return for the range. The Totals row is the portfolio tracker Price Return %, including lots you sold — the same figure as Growth. Life G/L % is cost basis instead.' },
-  { key: 'lifetime_gain_or_loss', label: 'Life G/L', type: 'number', width: 88, tip: 'Current value minus what you paid for shares you still hold. Does not follow the date range and does not include sold lots.' },
-  { key: 'lifetime_gain_or_loss_percentage', label: 'Life G/L %', type: 'number', width: 88, tip: 'Lifetime cost-basis G/L as a percent of what you paid for shares you still hold. Does not follow the date range.' },
+  { key: 'gain_or_loss_percentage', label: 'G/L %', type: 'number', width: 84, tip: 'Each row is this ticker\'s current-lot price return for the range. The Totals row is the portfolio tracker Price Return %, including lots you sold — the same figure as Growth. Open G/L % is cost basis instead.' },
+  { key: 'lifetime_gain_or_loss', label: 'Open G/L', type: 'number', width: 88, tip: 'Current value minus the selected cost basis for shares you still hold. Does not follow the date range and does not include sold lots.' },
+  { key: 'lifetime_gain_or_loss_percentage', label: 'Open G/L %', type: 'number', width: 88, tip: 'Open-position cost-basis G/L as a percent of the selected basis for shares you still hold. Does not follow the date range.' },
   { key: 'div', label: 'Div$', type: 'number', width: 76, tip: 'Most recent dividend paid per share' },
   { key: 'div_frequency', label: 'Freq', type: 'string', width: 56, tip: 'Dividend payment frequency (M = Monthly, Q = Quarterly, W = Weekly, A = Annual)' },
   { key: 'ex_div_date', label: 'Ex-Div', type: 'string', width: 80, tip: 'Ex-dividend date — you must own shares before this date to receive the next dividend' },
@@ -2239,11 +2240,13 @@ export default function ManageHoldings() {
     }
   }, [])
   const [expandedTickers, setExpandedTickers] = useState({})  // { ticker: [txns] | 'loading' }
+  const [expandedLotViews, setExpandedLotViews] = useState({}) // { ticker: 'open' | 'history' }
   const [ledgerEditor, setLedgerEditor] = useState(null)
   const [deletingLedgerId, setDeletingLedgerId] = useState(null)
   useEffect(() => {
     setLedgerEditor(null)
     setExpandedTickers({})
+    setExpandedLotViews({})
   }, [selection])
   const [lotSorts, setLotSorts] = useState({})          // { ticker: { key, direction } }
   const [reorderingLotId, setReorderingLotId] = useState(null)
@@ -2605,8 +2608,10 @@ export default function ManageHoldings() {
   const toggleExpand = async (ticker) => {
     if (expandedTickers[ticker]) {
       setExpandedTickers(prev => { const next = { ...prev }; delete next[ticker]; return next })
+      setExpandedLotViews(prev => { const next = { ...prev }; delete next[ticker]; return next })
       return
     }
+    setExpandedLotViews(prev => ({ ...prev, [ticker]: 'open' }))
     setExpandedTickers(prev => ({ ...prev, [ticker]: 'loading' }))
     try {
       await fetchExpandedTransactions(ticker)
@@ -3522,7 +3527,7 @@ export default function ManageHoldings() {
             This range does not hide tickers or change Cost Basis, Value, or shares — those are always the current position.
             {isLifetimeRange
               ? ` Gain/Loss is ${COST_BASIS_SCOPE_NOTE}`
-              : ` Each Gain/Loss row is that ticker's current lot. The Totals row is the portfolio Price Return${trackerPerformanceRange ? ` (${trackerPerformanceRange})` : ''}: ${TRACKER_SCOPE_NOTE} Life G/L is ${COST_BASIS_SCOPE_NOTE}`}
+              : ` Each Gain/Loss row is that ticker's current lot. The Totals row is the portfolio Price Return${trackerPerformanceRange ? ` (${trackerPerformanceRange})` : ''}: ${TRACKER_SCOPE_NOTE} Open G/L is ${COST_BASIS_SCOPE_NOTE}`}
             {performanceRangeError ? ` ${performanceRangeError}` : ''}
             {trackerPerformanceError ? ` ${trackerPerformanceError}` : ''}
             {trackerPerformanceLoading ? ' Loading period Gain/Loss…' : ''}
@@ -3624,14 +3629,38 @@ export default function ManageHoldings() {
                     <td colSpan={activeCols.length + 1} style={{ padding: 0, background: 'rgba(0,0,0,0.2)' }}>
                       <div className="mh-lot-panel">
                       <div className="mh-lot-toolbar">
-                        <strong>{h.ticker} transactions</strong>
+                        <div className="mh-lot-toolbar-main">
+                          <strong>{h.ticker} lot details</strong>
+                          <div className="mh-lot-view-tabs" role="tablist" aria-label={`${h.ticker} lot detail view`}>
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={(expandedLotViews[h.ticker] || 'open') === 'open'}
+                              className={(expandedLotViews[h.ticker] || 'open') === 'open' ? 'active' : undefined}
+                              onClick={() => setExpandedLotViews(prev => ({ ...prev, [h.ticker]: 'open' }))}
+                            >
+                              Open lots
+                            </button>
+                            <button
+                              type="button"
+                              role="tab"
+                              aria-selected={expandedLotViews[h.ticker] === 'history'}
+                              className={expandedLotViews[h.ticker] === 'history' ? 'active' : undefined}
+                              onClick={() => setExpandedLotViews(prev => ({ ...prev, [h.ticker]: 'history' }))}
+                            >
+                              Transaction history
+                            </button>
+                          </div>
+                        </div>
                         <button className="btn btn-primary" onClick={() => setLedgerEditor({ ticker: h.ticker })}>+ Add Transaction</button>
                       </div>
                       {expandedTickers[h.ticker] === 'loading' ? (
                         <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
+                      ) : (expandedLotViews[h.ticker] || 'open') === 'open' ? (
+                        <OpenLotsView transactions={expandedTickers[h.ticker]} holding={h} profiles={profiles} />
                       ) : expandedTickers[h.ticker].length === 0 ? (
                         <div style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--text-dim-2)' }}>
-                          No transaction lots recorded. Use the Txn button to add purchase lots.
+                          No transaction history recorded. Use + Add Transaction to add a purchase lot.
                         </div>
                       ) : (
                         <div style={{ padding: '0.5rem 1rem' }}>

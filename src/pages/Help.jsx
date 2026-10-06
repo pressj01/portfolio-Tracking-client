@@ -2,8 +2,12 @@
 import GradePeriodHelp from '../components/GradePeriodHelp'
 import { NOT_FINANCIAL_ADVICE, PRIVACY_NOTE } from '../content/notFinancialAdvice'
 import { fundVerdictBands } from '../utils/gradingPreferences'
+import appPackage from '../../package.json'
 
-const APP_VERSION = '1.37.5'
+// Keep the in-app label tied to the same package metadata electron-builder
+// uses for the installer and executable. A release can no longer ship a
+// correctly versioned installer while the Help page shows an older version.
+const APP_VERSION = appPackage.version
 
 const GROUPS = [
   {
@@ -1027,16 +1031,16 @@ function HoldingsHelp() {
         <li><strong>Sorting</strong> — Click any column header to sort ascending/descending. An arrow indicates the active sort.</li>
         <li><strong>Frozen columns</strong> — Ticker, Description, Category, and Shares stay visible as you scroll horizontally.</li>
         <li><strong>Totals row</strong> — The footer sums share and dollar columns (Shares, Cost Basis, Value, Gain/Loss, income, dividends, realized G/L). Percentage columns are recomputed from those totals rather than adding the percents: G/L % is total gain ÷ total cost, YOC is estimated annual income ÷ cost, Yield is estimated annual income ÷ current value, and % Acct should total about 100%. Per-share prices (Price Paid, Current, Div/Share) are left blank because summing them is not meaningful.</li>
-        <li><strong>Shared Performance Date Range</strong> — The same 1D / 7D / YTD / 1Y / <em>Life</em> / Custom control used on Total Return, Gains &amp; Losses, Growth, and the Dashboard. Changing it on any of those screens updates the others. <strong>Life</strong> is cost-basis G/L (current value − what you paid) and those screens show a <em>Matches Holdings</em> note with the same totals as this table. The other buttons are the tracker replay and match Total Return Period Price Return.</li>
+        <li><strong>Shared Performance Date Range</strong> — The same 1D / 7D / YTD / 1Y / <em>All Market</em> / <em>Open G/L</em> / Custom control used on Total Return, Gains &amp; Losses, Growth, and the Dashboard. Changing it on any of those screens updates the others. <strong>Open G/L</strong> is current open-position cost-basis G/L and matches Holdings; <strong>All Market</strong> is the time-weighted tracker replay from the first recorded trade.</li>
         <li><strong>Gain/Loss and G/L %</strong> — Follow the shared range. Three different measurements exist, and screens that share a measurement use the same number:
           <ul>
             <li><strong>Portfolio Price Return</strong> (YTD / 1Y / All Totals, Growth Price Return, Total Return cards, Dashboard PrRtn footer, Gains &amp; Losses period cards) — every lot held during the range, including lots already sold.</li>
             <li><strong>Open lots only</strong> (each Holdings row, Total Return table rows and Open lots only footer) — current holdings. Sold lots are left out, so this total can differ from Portfolio Price Return.</li>
-            <li><strong>Lifetime cost basis</strong> (Life, Life G/L) — current value minus what you paid for shares you still hold. Not a selected-period return.</li>
+            <li><strong>Open Position G/L</strong> (Open G/L) — current value minus the selected cost basis for shares you still hold. With Broker-adjusted basis and the same quote, this is the broker-comparable unrealized G/L.</li>
           </ul>
         </li>
         <li><strong>DRIP checkbox</strong> — Toggle dividend reinvestment directly in the table without opening the edit form. When enabled, all future dividends are automatically reinvested as new shares at the ex-dividend date using historical prices. The Holdings page and Historical Dividend History page will automatically calculate the reinvested shares and show the DRIP status.</li>
-        <li><strong>Expand transactions</strong> — Click the small arrow (&#9654;) next to a ticker to expand and see its transaction lots inline. This section reflects transactions recorded for that ticker only.</li>
+        <li><strong>Expand lot details</strong> — Click the small arrow (&#9654;) next to a ticker. <strong>Open lots</strong> shows only shares still held, with per-lot cost basis, market value, G/L $, and G/L %. <strong>Transaction history</strong> retains the complete editable buy, sell, and dividend audit trail.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>

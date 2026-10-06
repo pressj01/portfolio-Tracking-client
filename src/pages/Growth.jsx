@@ -505,11 +505,11 @@ export default function Growth({ embedded = false }) {
           {isLifetimePerformancePeriod(period) && (
             <>
               <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-                <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+                <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
               </div>
               <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-                <strong>Life does not have graphs associated with it.</strong>{' '}
-                Life is cost-basis G/L, not a daily price series, so Portfolio Grade, Sharpe,
+                <strong>Open G/L does not have graphs associated with it.</strong>{' '}
+                Open G/L is cost-basis G/L, not a daily price series, so Portfolio Grade, Sharpe,
                 and Sortino also stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom to graph and
                 grade that market window.
               </div>
@@ -632,7 +632,7 @@ export default function Growth({ embedded = false }) {
                 and diversification—not a simple ranking of the largest percentage return. It is
                 calculated from adjusted prices and the current-value weighting of the selected
                 holdings, so a concentrated position can affect the result more than a small one.
-                Lifetime does not have a grade — Life is cost-basis G/L, so this card stays blank.
+                Open G/L does not have a grade — it is cost-basis G/L, so this card stays blank.
               </li>
               <li>
                 <strong>Tracker Total Return %:</strong> the portfolio&apos;s transaction-aware,
@@ -653,7 +653,7 @@ export default function Growth({ embedded = false }) {
               <li>
                 <strong>Open Lots Price Return:</strong> the same selected-period calculation restricted
                 to positions still held now. It excludes fully closed positions and matches the Open Lots
-                Price Return shown on Total Return, Dashboard, and Gains &amp; Losses. Choose <strong>Life</strong>
+                Price Return shown on Total Return, Dashboard, and Gains &amp; Losses. Choose <strong>Open G/L</strong>
                 when comparing current value with the cost basis of shares still held.
               </li>
               <li>
@@ -790,9 +790,9 @@ export default function Growth({ embedded = false }) {
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             {isLifetimePerformancePeriod(period) ? (
               <>
-                <strong>Lifetime cost-basis standard:</strong> Life Price G/L and Life Price G/L %
+                <strong>Open-position cost-basis standard:</strong> Open Position G/L and Open Position G/L %
                 match Holdings, Dashboard, Gains &amp; Losses, and Total Return when the account and
-                category scope match. Life is not a market-return index, so the risk metrics and
+                category scope match. Open G/L is not a market-return index, so the risk metrics and
                 performance charts are intentionally omitted.
               </>
             ) : (
@@ -829,13 +829,13 @@ export default function Growth({ embedded = false }) {
                 series as that screen's, so it can be checked directly rather
                 than by converting a percentage back into money. */}
             <MetricCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L' : 'Tracker Price Return'}
+              label={isLifetimePerformancePeriod(period) ? 'Open Position G/L' : 'Tracker Price Return'}
               value={<span style={{ color: (data.portfolio_metrics?.price_return_dollar || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtInt(data.portfolio_metrics?.price_return_dollar)}</span>}
               sub={isLifetimePerformancePeriod(period) ? COST_BASIS_SCOPE_NOTE : `${TRACKER_SCOPE_NOTE} Market price only; dividends excluded.`}
               range={cardRange}
             />
             <ReturnCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Price G/L %' : 'Tracker Price Return %'}
+              label={isLifetimePerformancePeriod(period) ? 'Open Position G/L %' : 'Tracker Price Return %'}
               value={data.portfolio_metrics?.price_return_pct}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_price)}
@@ -867,7 +867,7 @@ export default function Growth({ embedded = false }) {
               />
             )}
             <ReturnCard
-              label={isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return %'}
+              label={isLifetimePerformancePeriod(period) ? 'Lifetime Total G/L' : 'Tracker Total Return %'}
               value={data.portfolio_metrics?.total_return_pct}
               dollarValue={isLifetimePerformancePeriod(period) ? data.portfolio_metrics?.total_return_dollar : null}
               benchLabel={data.benchmark_ticker}

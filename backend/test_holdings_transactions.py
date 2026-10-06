@@ -580,6 +580,75 @@ class HoldingsTransactionTest(unittest.TestCase):
             self.assertEqual(app_module._repair_stale_basis_totals(self.conn), 0)
         self.assertEqual(basis()["SLV"][1], 1)
 
+    def test_specific_lot_repair_replaces_self_consistent_fifo_basis(self):
+        # This is the NVDA failure in miniature. FIFO leaves the expensive lot
+        # open ($500), so the bad total still equals quantity x average price
+        # and the older stale-total repair cannot detect it. The saved lot
+        # allocation says the expensive lot was sold, leaving $50 instead.
+        self._seed_profiles_table(1, positions_managed=True)
+        self.conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('NVDA', 1, 5, 10, 50, 100, 500, 10, 50)"
+        )
+        self.conn.executemany(
+            "INSERT INTO transactions "
+            "(id, ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+            "VALUES (?, 'NVDA', 1, ?, ?, 5, ?, 0)",
+            [
+                (1, "BUY", "2024-01-01", 10),
+                (2, "BUY", "2024-02-01", 100),
+                (3, "SELL", "2024-03-01", 120),
+            ],
+        )
+        self.conn.execute(
+            "INSERT INTO transaction_lot_allocations (sell_txn_id, buy_txn_id, shares) "
+            "VALUES (3, 2, 5)"
+        )
+
+        with patch.object(app_module, "_auto_reconcile_owner"):
+            repaired = app_module._repair_specific_lot_basis(self.conn)
+
+        self.assertEqual(repaired, 1)
+        row = self.conn.execute(
+            "SELECT quantity, price_paid, purchase_value, original_price_paid, "
+            "original_purchase_value, broker_price_paid, broker_purchase_value, realized_gains "
+            "FROM all_account_info WHERE ticker = 'NVDA'"
+        ).fetchone()
+        self.assertEqual(row["quantity"], 5)
+        self.assertEqual(row["price_paid"], 10)
+        self.assertEqual(row["purchase_value"], 50)
+        self.assertEqual(row["broker_price_paid"], 10)
+        self.assertEqual(row["broker_purchase_value"], 50)
+        self.assertEqual(row["original_price_paid"], 10)
+        self.assertEqual(row["original_purchase_value"], 50)
+        self.assertEqual(row["realized_gains"], 100)
+
+        # The migration is deliberately idempotent.
+        with patch.object(app_module, "_auto_reconcile_owner"):
+            self.assertEqual(app_module._repair_specific_lot_basis(self.conn), 0)
+
+    def test_generic_positions_use_the_shared_snapshot_finalizer(self):
+        self._seed_profiles_table(1, positions_managed=False)
+        self.conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, quantity, price_paid, purchase_value) "
+            "VALUES ('NVDA', 1, 5, 10, 50)"
+        )
+
+        result = app_module._finalize_positions_snapshot(1, self.conn, {"NVDA"})
+
+        managed = self.conn.execute(
+            "SELECT positions_managed FROM profiles WHERE id = 1"
+        ).fetchone()[0]
+        row = self.conn.execute(
+            "SELECT original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'NVDA'"
+        ).fetchone()
+        self.assertEqual(managed, 1)
+        self.assertEqual(tuple(row), (10, 50, 10, 50))
+        self.assertEqual(result["no_transactions"], 1)
+
     def test_carried_original_basis_follows_the_share_count(self):
         carried = app_module._carried_original_basis
         # First sight, or a position reopened from nothing: take the feed's.
@@ -1492,6 +1561,73 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 )
         finally:
             conn.close()
+
+    def test_specific_lot_edit_refreshes_basis_for_positions_import(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (80, 'Jim Fidelity', 'fidelity', 0, 1)"
+        )
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, "
+            "original_price_paid, original_purchase_value, broker_price_paid, broker_purchase_value) "
+            "VALUES ('NVDA', 80, 5, 10, 50, 100, 500, 10, 50)"
+        )
+        conn = self._get_connection()
+        try:
+            buy_cheap = conn.execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+                "VALUES ('NVDA', 80, 'BUY', '2024-01-01', 5, 10, 0)"
+            ).lastrowid
+            buy_expensive = conn.execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+                "VALUES ('NVDA', 80, 'BUY', '2024-02-01', 5, 100, 0)"
+            ).lastrowid
+            sell_id = conn.execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees) "
+                "VALUES ('NVDA', 80, 'SELL', '2024-03-01', 5, 120, 0)"
+            ).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.put(
+            f"/api/holdings/NVDA/transactions/{sell_id}?profile_id=80",
+            json={
+                "transaction_type": "SELL",
+                "transaction_date": "2024-03-01",
+                "shares": 5,
+                "price_per_share": 120,
+                "fees": 0,
+                "lot_allocations": [
+                    {"buy_txn_id": buy_expensive, "shares": 5},
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        row = self._rows(
+            "SELECT quantity, original_price_paid, original_purchase_value, "
+            "broker_price_paid, broker_purchase_value, realized_gains "
+            "FROM all_account_info WHERE ticker = 'NVDA' AND profile_id = 80"
+        )[0]
+        self.assertEqual(row["quantity"], 5)
+        self.assertEqual(row["original_price_paid"], 10)
+        self.assertEqual(row["original_purchase_value"], 50)
+        self.assertEqual(row["broker_price_paid"], 10)
+        self.assertEqual(row["broker_purchase_value"], 50)
+        self.assertEqual(row["realized_gains"], 100)
+        self.assertEqual(
+            self._scalar(
+                "SELECT buy_txn_id FROM transaction_lot_allocations WHERE sell_txn_id = ?",
+                (sell_id,),
+            ),
+            buy_expensive,
+        )
+        self.assertNotEqual(buy_cheap, buy_expensive)
 
     def test_snowball_holdings_adds_only_missing_portfolio_categories(self):
         import io

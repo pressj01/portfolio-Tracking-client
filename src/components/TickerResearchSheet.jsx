@@ -522,7 +522,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
             <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
             {isLifetimePerformancePeriod(period) && (
               <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-                <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+                <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
               </div>
             )}
           </div>

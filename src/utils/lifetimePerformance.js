@@ -170,7 +170,7 @@ export function lifetimeAccountingProfitFromTotals(totals) {
 function payloadShell(start, end, extra = {}) {
   return {
     period_key: LIFETIME_PERIOD_KEY,
-    period_label: 'Lifetime',
+    period_label: 'Open G/L',
     requested_start_date: start,
     requested_end_date: end,
     actual_start_date: start,
