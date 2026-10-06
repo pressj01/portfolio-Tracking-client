@@ -1,6 +1,6 @@
 {
   "name": "portfolio-tracking-client",
-  "version": "1.37.6",
+  "version": "1.37.7",
   "private": true,
   "description": "Portfolio Tracking Desktop Application",
   "author": "Press",
@@ -75,6 +75,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Portfolio Tracker",
+      "include": "build/installer.nsh",
       "license": "EULA.txt"
     },
     "mac": {
