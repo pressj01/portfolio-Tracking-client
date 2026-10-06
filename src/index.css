@@ -2887,6 +2887,31 @@ th.col-drag-target {
 .sticky-table-wrap.tr-total-return-table-wrap tbody tr:hover td.tr-frozen-ticker {
   background: var(--p-1a2744);
 }
+.tr-ticker-lot-toggle {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.4rem;
+}
+.tr-ticker-lot-toggle button {
+  background: transparent;
+  border: 0;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font-size: 0.7rem;
+  padding: 0.1rem;
+}
+.sticky-table-wrap.tr-total-return-table-wrap .tr-lot-detail-row > td {
+  background: var(--surface-sunken);
+  padding: 0;
+  white-space: normal;
+}
+.sticky-table-wrap.tr-total-return-table-wrap .tr-lot-detail-row:hover > td {
+  background: var(--surface-sunken);
+}
+.tr-lot-detail-row .mh-lot-panel {
+  position: static;
+  width: 100%;
+}
 .split-pane-body .tr-page {
   min-width: 0;
   width: 100%;
@@ -2965,6 +2990,88 @@ th.col-drag-target {
   justify-content: space-between;
   gap: 0.75rem;
   padding: 0.6rem 1rem 0;
+}
+.mh-lot-toolbar-main {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+}
+.mh-lot-view-tabs {
+  display: inline-flex;
+}
+.mh-lot-view-tabs button {
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.3rem 0.55rem;
+}
+.mh-lot-view-tabs button:first-child {
+  border-radius: 5px 0 0 5px;
+}
+.mh-lot-view-tabs button:last-child {
+  border-left: 0;
+  border-radius: 0 5px 5px 0;
+}
+.mh-lot-view-tabs button.active,
+.mh-lot-view-tabs button:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: var(--accent);
+  color: var(--accent-bright);
+}
+.mh-open-lots {
+  padding: 0.5rem 1rem;
+}
+.mh-open-lot-note,
+.mh-open-lot-warning,
+.mh-open-lot-empty {
+  color: var(--text-dim-2);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  margin-bottom: 0.5rem;
+}
+.mh-open-lot-note strong {
+  color: var(--text-strong);
+}
+.mh-open-lot-warning {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 4px;
+  color: var(--warning);
+  padding: 0.4rem 0.55rem;
+}
+.mh-open-lot-empty {
+  margin: 0;
+  padding: 0.75rem 1rem;
+}
+.mh-open-lot-table {
+  font-size: 0.82rem;
+  margin-bottom: 0;
+  min-width: 1040px;
+  width: 100%;
+}
+.mh-open-lot-table th,
+.mh-open-lot-table td {
+  padding: 0.38rem 0.75rem;
+  white-space: nowrap;
+}
+.mh-open-lot-table tbody tr,
+.mh-open-lot-table tfoot tr {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.mh-open-lot-table tfoot td {
+  background: var(--surface-inset);
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+}
+.mh-open-lot-positive {
+  color: var(--pos);
+}
+.mh-open-lot-negative {
+  color: var(--neg);
 }
 .mh-lot-toolbar .btn,
 .mh-lot-actions .btn {

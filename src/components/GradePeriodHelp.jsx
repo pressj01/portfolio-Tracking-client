@@ -64,24 +64,24 @@ export default function GradePeriodHelp({ variant = 'help' }) {
         effective range still reflects the market observations available on those dates.
       </p>
 
-      <h4 style={hStyle}>How long is Lifetime?</h4>
+      <h4 style={hStyle}>Why Open G/L is not a date range</h4>
       <p style={pStyle}>
-        <strong style={strongStyle}>Life is not a length of time.</strong> It is not &quot;5 years&quot;
-        and it is not &quot;since the first trade.&quot; It is cost-basis G/L: current value minus what
-        you paid for shares you still hold.
+        <strong style={strongStyle}>Open G/L is not a length of time.</strong> It is current value minus
+        the selected cost basis for shares you still hold. With Broker-adjusted basis and the same quote,
+        this is the figure to compare with a broker&apos;s unrealized G/L.
       </p>
       <p style={pStyle}>
-        The dates on the Life cards (for example 3/8/2022–8/20/2026) are only a label: the
+        The dates on the Open G/L cards (for example 3/8/2022–8/20/2026) are only a label: the
         <strong style={strongStyle}> earliest purchase or import date among open lots</strong>, through
         {' '}<strong style={strongStyle}>today</strong>. A lot bought last month is mixed in the same way
         as a lot bought years ago. Those dollars are not &quot;return over that window.&quot;
       </p>
 
-      <h4 style={hStyle}>What Life shows that All does not</h4>
+      <h4 style={hStyle}>Open G/L vs All Market</h4>
       <p style={pStyle}>
-        <strong style={strongStyle}>Life shows Holdings cost-basis G/L. All does not.</strong> They can
-        show similar dates and still disagree, because they answer different questions. Life is the
-        number that matches the Holdings table totals. All never shows that, even if the date labels
+        <strong style={strongStyle}>Open G/L shows Holdings cost-basis G/L. All Market does not.</strong> They can
+        show similar dates and still disagree, because they answer different questions. Open G/L is the
+        number that matches the Holdings table totals. All Market never shows that, even if the date labels
         look like &quot;the whole history.&quot;
       </p>
       <table
@@ -96,8 +96,8 @@ export default function GradePeriodHelp({ variant = 'help' }) {
         <thead>
           <tr>
             <th style={{ textAlign: 'left', padding: '0.35rem 0.6rem 0.35rem 0' }} />
-            <th style={{ textAlign: 'left', padding: '0.35rem 0.6rem 0.35rem 0' }}>Life</th>
-            <th style={{ textAlign: 'left', padding: '0.35rem 0' }}>All</th>
+            <th style={{ textAlign: 'left', padding: '0.35rem 0.6rem 0.35rem 0' }}>Open G/L</th>
+            <th style={{ textAlign: 'left', padding: '0.35rem 0' }}>All Market</th>
           </tr>
         </thead>
         <tbody>
@@ -113,17 +113,17 @@ export default function GradePeriodHelp({ variant = 'help' }) {
         </tbody>
       </table>
       <p style={pStyle}>
-        Use <strong style={strongStyle}>Life</strong> to see whether you are up or down vs what you paid.
-        Use <strong style={strongStyle}>All</strong> to see how the book performed as an investment since
+        Use <strong style={strongStyle}>Open G/L</strong> to see whether current shares are up or down vs their selected basis.
+        Use <strong style={strongStyle}>All Market</strong> to see how the book performed as an investment since
         it started.
       </p>
 
-      <h4 style={hStyle}>Grade and the indexes on Life</h4>
+      <h4 style={hStyle}>Grade and the indexes on Open G/L</h4>
       <p style={pStyle}>
-        <strong style={strongStyle}>Grade cannot be computed for the Lifetime setting.</strong>{' '}
+        <strong style={strongStyle}>Grade cannot be computed for Open G/L.</strong>{' '}
         The same is true of the indexes and ratios next to it: <strong style={strongStyle}>beta, Sharpe,
         Sortino, Calmar, Omega, and Ulcer</strong>. They all need daily returns over a market window.
-        Life never produces that series, so those cards stay blank. That is expected, not a failed load.
+        Open G/L never produces that series, so those cards stay blank. That is expected, not a failed load.
       </p>
 
       <h4 style={hStyle}>Which filters produce a grade?</h4>
@@ -154,15 +154,15 @@ export default function GradePeriodHelp({ variant = 'help' }) {
         </tbody>
       </table>
       <p style={pStyle}>
-        <strong style={strongStyle}>5Y and All both work.</strong> If you want a grade for as far back
-        as this portfolio goes, use <strong style={strongStyle}>All</strong>, not Life. All is the
-        market replay from the first recorded trade, including lots you already sold. Life is
+        <strong style={strongStyle}>5Y and All Market both work.</strong> If you want a grade for as far back
+        as this portfolio goes, use <strong style={strongStyle}>All Market</strong>, not Open G/L. All Market is the
+        market replay from the first recorded trade, including lots you already sold. Open G/L is
         remaining-share cost basis.
       </p>
       <p style={pStyle}>
         Click <strong style={strongStyle}>YTD</strong>, <strong style={strongStyle}>1M</strong>,{' '}
         <strong style={strongStyle}>1Y</strong>, <strong style={strongStyle}>5Y</strong>, or{' '}
-        <strong style={strongStyle}>All</strong> to load a grade for that stretch.
+        <strong style={strongStyle}>All Market</strong> to load a grade for that stretch.
       </p>
     </div>
   )

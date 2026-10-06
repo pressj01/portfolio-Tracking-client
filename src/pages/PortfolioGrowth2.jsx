@@ -419,7 +419,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
           <p className="tr-note perf-range-note">{PERFORMANCE_RANGE_NOTE}</p>
           {isLifetimePerformancePeriod(period) && (
             <div className="alert alert-info" style={{ marginTop: '0.65rem' }}>
-              <strong>Matches Holdings:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
+              <strong>Open G/L reconciliation:</strong> {HOLDINGS_LIFETIME_MATCH_NOTE}
             </div>
           )}
         </div>
@@ -461,7 +461,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
         <p className="tracker-help-footer">
           {isLifetimePerformancePeriod(period) ? (
             <>
-              <strong>One lifetime cost-basis result across the app:</strong> Life Price G/L uses
+              <strong>One open-position cost-basis result across the app:</strong> Open Position G/L uses
               current value minus the selected cost basis for the open holdings. It matches Holdings,
               Dashboard, Gains &amp; Losses, Growth, and Total Return for the same ticker scope.
             </>
@@ -582,7 +582,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
           <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
             {isLifetimePerformancePeriod(period) ? (
               <>
-                <strong>Reconcile this page:</strong> Life Price G/L and Life Total Return match the
+                <strong>Reconcile this page:</strong> Open Position G/L and Lifetime Total G/L match the
                 Life setting on the other tracking screens for the same account and ticker scope.
               </>
             ) : (
@@ -618,7 +618,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
               <AccountReconciliation data={data.summary?.account_reconciliation} />
             </div>
             <div className="summary-card">
-              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Life Total Return' : 'Tracker Total Return $'}</div>
+              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Lifetime Total G/L' : 'Tracker Total Return $'}</div>
               <div className="summary-value">{formatMoney(data.summary?.total_profit_amount)}</div>
               <div className="summary-sub">
                 Price {formatMoney(data.summary?.price_return_amount)} + distributions {formatMoney(data.summary?.distribution_amount)}
@@ -629,7 +629,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
             <div className="summary-card">
-              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Life Total Return %' : 'Tracker Total Return %'}</div>
+              <div className="summary-label">{isLifetimePerformancePeriod(period) ? 'Lifetime Total G/L %' : 'Tracker Total Return %'}</div>
               <div className="summary-value">
                 {data.summary?.total_return_pct != null ? `${Number(data.summary.total_return_pct).toFixed(2)}%` : '—'}
               </div>
@@ -639,7 +639,7 @@ export default function PortfolioGrowth2({ embedded = false }) {
           </div>
           {isLifetimePerformancePeriod(period) && (
             <div className="alert alert-info" role="status">
-              <strong>Life does not have graphs associated with it.</strong> It is a current cost-basis
+              <strong>Open G/L does not have graphs associated with it.</strong> It is a current cost-basis
               snapshot of the shares still held, not a replayed market series. Choose <strong>All</strong>
               to graph the full available market history.
             </div>
