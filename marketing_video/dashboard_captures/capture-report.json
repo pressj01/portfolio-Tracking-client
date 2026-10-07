@@ -1,14 +1,14 @@
 {
-  "capturedAt": "2026-09-29T21:00:54.487Z",
+  "capturedAt": "2026-10-05T20:56:19.413Z",
   "initialReadyState": {
     "complete": true,
     "pendingText": [],
     "busyCount": 0,
     "errors": [],
     "missing": [],
-    "holdingsRows": 73,
-    "height": 4722,
-    "signature": "29496:4722:7:30:73"
+    "holdingsRows": 74,
+    "height": 4396,
+    "signature": "28817:4396:7:30:74"
   },
   "captures": [
     {
@@ -20,9 +20,9 @@
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
@@ -34,9 +34,9 @@
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
@@ -48,9 +48,9 @@
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
@@ -62,9 +62,9 @@
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
@@ -76,191 +76,191 @@
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
       "filename": "06-portfolio-value-chart.png",
-      "scrollY": 1350,
+      "scrollY": 1367,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 4722,
-        "signature": "29496:4722:7:30:73"
+        "holdingsRows": 74,
+        "height": 4396,
+        "signature": "28817:4396:7:30:74"
       }
     },
     {
       "filename": "07-grade-exposure-guide.png",
-      "scrollY": 1773,
+      "scrollY": 1790,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6524,
-        "signature": "35892:6524:7:30:73"
+        "holdingsRows": 74,
+        "height": 6199,
+        "signature": "35213:6199:7:30:74"
       }
     },
     {
       "filename": "08-account-alpha-guide.png",
-      "scrollY": 3638,
+      "scrollY": 3656,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6934,
-        "signature": "38833:6934:7:30:73"
+        "holdingsRows": 74,
+        "height": 6609,
+        "signature": "38154:6609:7:30:74"
       }
     },
     {
       "filename": "09-weekly-calendar.png",
-      "scrollY": 4106,
+      "scrollY": 4123,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6934,
-        "signature": "38833:6934:7:30:73"
+        "holdingsRows": 74,
+        "height": 6609,
+        "signature": "38154:6609:7:30:74"
       }
     },
     {
       "filename": "10-portfolio-all-categories.png",
-      "scrollY": 5150,
+      "scrollY": 4824,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6934,
-        "signature": "38833:6934:7:30:73"
+        "holdingsRows": 74,
+        "height": 6609,
+        "signature": "38154:6609:7:30:74"
       }
     },
     {
       "filename": "11-portfolio-category-drilldown.png",
-      "scrollY": 5150,
+      "scrollY": 4824,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "38867:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "38190:6602:7:27:74"
       }
     },
     {
       "filename": "12-portfolio-holdings-drilldown.png",
-      "scrollY": 5150,
+      "scrollY": 4824,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "38891:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "38214:6602:7:27:74"
       }
     },
     {
       "filename": "13-holdings-overview-controls.png",
-      "scrollY": 5549,
+      "scrollY": 5224,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "38891:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "38214:6602:7:27:74"
       }
     },
     {
       "filename": "14-common-table-view.png",
-      "scrollY": 5848,
+      "scrollY": 5522,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "38891:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "38214:6602:7:27:74"
       }
     },
     {
       "filename": "15-general-table-view.png",
-      "scrollY": 5549,
+      "scrollY": 5224,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "35081:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "34360:6602:7:27:74"
       }
     },
     {
       "filename": "16-dividends-table-view.png",
-      "scrollY": 5549,
+      "scrollY": 5224,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "35799:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "35072:6602:7:27:74"
       }
     },
     {
       "filename": "17-returns-table-view.png",
-      "scrollY": 5549,
+      "scrollY": 5224,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "34656:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "33931:6602:7:27:74"
       }
     },
     {
       "filename": "18-table-columns-and-totals.png",
-      "scrollY": 5848,
+      "scrollY": 5522,
       "state": {
         "complete": true,
         "pendingText": [],
         "busyCount": 0,
         "errors": [],
         "missing": [],
-        "holdingsRows": 73,
-        "height": 6928,
-        "signature": "34656:6928:7:27:73"
+        "holdingsRows": 74,
+        "height": 6602,
+        "signature": "33931:6602:7:27:74"
       }
     }
   ]
