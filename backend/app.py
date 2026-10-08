@@ -7005,7 +7005,12 @@ def _tracker_position_profile_ids(conn, profile_ids):
 
 
 def _get_gains_losses_profile_scope(conn):
-    """Return holding and transaction profile scopes for Gains & Losses views."""
+    """Return holding and transaction profile scopes for Gains & Losses views.
+
+    ``account_profile_ids`` are the accounts whose own pages the view adds up.
+    Owner's holdings are a stored rollup copy under profile 1, so its accounts
+    are the members behind that copy rather than profile 1 itself.
+    """
     is_agg, pids = get_profile_filter()
     if is_agg:
         profile_ids = list(dict.fromkeys(pids or [1]))
@@ -7014,6 +7019,7 @@ def _get_gains_losses_profile_scope(conn):
             "primary_profile_id": profile_ids[0],
             "holding_profile_ids": profile_ids,
             "transaction_profile_ids": profile_ids,
+            "account_profile_ids": profile_ids,
         }
 
     profile_id = int(pids[0]) if pids else 1
@@ -7023,6 +7029,7 @@ def _get_gains_losses_profile_scope(conn):
         "primary_profile_id": profile_id,
         "holding_profile_ids": [profile_id],
         "transaction_profile_ids": transaction_profile_ids,
+        "account_profile_ids": _position_history_profile_ids(conn, False, [profile_id]),
     }
 
 
@@ -36453,7 +36460,6 @@ def _gains_losses_dividend_allocation(conn, profile_ids, window=None):
         "sell_dividends": {},
         "open_dividends": {},
         "effective_totals": {},
-        "current_position_keys": set(),
     }
     if not profile_ids:
         return empty
@@ -36669,8 +36675,53 @@ def _gains_losses_dividend_allocation(conn, profile_ids, window=None):
         "sell_dividends": sell_dividends,
         "open_dividends": open_dividends,
         "effective_totals": effective_totals,
-        "current_position_keys": set(holdings),
     }
+
+
+def _gains_losses_open_dividends_by_ticker(conn, scope, dividend_allocation):
+    """Dividends on the shares still held: each account's own figure, added up.
+
+    Owner's rows are a stored copy of its member accounts, and that copy's
+    total_divs_received is never refreshed (see _reconcile_owner_rollup), while
+    the lot replay is keyed by the account that received the cash. Reading the
+    view's own profile therefore handed Owner its stale stored total and threw
+    away every member's allocation: ADX read $104.44 in Owner against $611.63
+    across the two accounts holding it. Working the figure out per account, the
+    way that account's own page does, makes a combined row the sum of its
+    accounts by construction.
+
+    An account counts only where its own page lists the ticker: shares held and
+    a cost basis on file. A ticker none of the accounts lists is left out of
+    the result, and the caller keeps the figure its own row already carries.
+    """
+    account_ids = list(dict.fromkeys(int(pid) for pid in scope["account_profile_ids"]))
+    if not account_ids:
+        return {}
+    basis_total = _basis_total_expr("")
+    placeholders = ",".join("?" * len(account_ids))
+    rows = conn.execute(
+        f"""SELECT ticker, profile_id,
+                   SUM(COALESCE(total_divs_received, 0)) AS total_divs_received
+            FROM all_account_info
+            WHERE {basis_total} IS NOT NULL AND {basis_total} > 0
+              AND COALESCE(quantity, 0) > 1e-9
+              AND profile_id IN ({placeholders})
+            GROUP BY ticker, profile_id""",
+        account_ids,
+    ).fetchall()
+    effective_totals = dividend_allocation["effective_totals"]
+    open_dividends = dividend_allocation["open_dividends"]
+    by_ticker = {}
+    for row in rows:
+        key = (row["ticker"], int(row["profile_id"]))
+        # With neither ledger payments nor a snapshot total there is nothing to
+        # allocate, and the account's stored figure stands.
+        figure = (
+            open_dividends.get(key, 0.0) if key in effective_totals
+            else float(row["total_divs_received"] or 0)
+        )
+        by_ticker[row["ticker"]] = by_ticker.get(row["ticker"], 0.0) + figure
+    return by_ticker
 
 
 # A sold-out ticker is deleted from all_account_info along with its description,
@@ -36830,24 +36881,17 @@ def gains_losses_summary():
         conn,
         set(holding_profile_ids) | set(transaction_profile_ids),
     )
-    allocated_open_by_ticker = {}
-    allocated_open_tickers = set()
-    holding_profile_id_set = set(holding_profile_ids)
-    for key in dividend_allocation["current_position_keys"]:
-        ticker, allocated_profile_id = key
-        if allocated_profile_id not in holding_profile_id_set:
-            continue
-        if key in dividend_allocation["effective_totals"]:
-            allocated_open_tickers.add(ticker)
-            allocated_open_by_ticker[ticker] = (
-                allocated_open_by_ticker.get(ticker, 0.0)
-                + dividend_allocation["open_dividends"].get(key, 0.0)
-            )
-    if not udf.empty and allocated_open_tickers:
-        allocated_mask = udf["ticker"].isin(allocated_open_tickers)
-        udf.loc[allocated_mask, "total_divs_received"] = (
-            udf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
-        )
+    open_dividends_by_ticker = _gains_losses_open_dividends_by_ticker(
+        conn, scope, dividend_allocation,
+    )
+    if not udf.empty:
+        # Rebuilt whole rather than assigned through a mask: a view whose stored
+        # totals are all blank reads back as an integer column, and pandas
+        # refuses to write a figure with cents into one.
+        udf["total_divs_received"] = [
+            open_dividends_by_ticker.get(ticker, stored)
+            for ticker, stored in zip(udf["ticker"], udf["total_divs_received"])
+        ]
 
     # Enrich category names
     if not udf.empty:
@@ -37287,24 +37331,13 @@ def gains_losses_chart():
         conn,
         set(holding_profile_ids) | set(transaction_profile_ids),
     )
-    allocated_open_by_ticker = {}
-    allocated_open_tickers = set()
-    holding_profile_id_set = set(holding_profile_ids)
-    for key in dividend_allocation["current_position_keys"]:
-        ticker, allocated_profile_id = key
-        if allocated_profile_id not in holding_profile_id_set:
-            continue
-        if key in dividend_allocation["effective_totals"]:
-            allocated_open_tickers.add(ticker)
-            allocated_open_by_ticker[ticker] = (
-                allocated_open_by_ticker.get(ticker, 0.0)
-                + dividend_allocation["open_dividends"].get(key, 0.0)
-            )
-    if allocated_open_tickers:
-        allocated_mask = hdf["ticker"].isin(allocated_open_tickers)
-        hdf.loc[allocated_mask, "total_divs_received"] = (
-            hdf.loc[allocated_mask, "ticker"].map(allocated_open_by_ticker).fillna(0.0)
-        )
+    open_dividends_by_ticker = _gains_losses_open_dividends_by_ticker(
+        conn, scope, dividend_allocation,
+    )
+    hdf["total_divs_received"] = [
+        open_dividends_by_ticker.get(ticker, stored)
+        for ticker, stored in zip(hdf["ticker"], hdf["total_divs_received"])
+    ]
 
     # Category / sub-category filter
     if cat_ids or sub_ids:
