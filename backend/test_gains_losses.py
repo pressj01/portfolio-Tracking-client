@@ -461,3 +461,238 @@ class DividendAllocationWindowTest(unittest.TestCase):
             + sum(windowed["open_dividends"].values())
         )
         self.assertAlmostEqual(total, 60.0, places=6)
+
+
+class CombinedViewDividendsTest(unittest.TestCase):
+    """Owner's open-position dividends are its member accounts' figures added up.
+
+    Owner is a stored rollup copy of its members, and that copy's
+    total_divs_received is never refreshed. Gains & Losses read it anyway and
+    dropped the per-lot allocation, which is keyed by the member that received
+    the cash: ADX showed $104.44 in Owner against $611.63 across the two
+    accounts holding it, and BST $0.00 against $668.50.
+    """
+
+    SUMMED_FIELDS = (
+        "quantity", "purchase_value", "current_value", "price_gl",
+        "divs_received", "total_gl",
+    )
+    SUMMED_TOTALS = (
+        "unrealized_divs", "unrealized_total_gl", "realized_divs", "combined_divs",
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        database.ensure_tables_exist(conn)
+        conn.execute("INSERT OR IGNORE INTO profiles (id, name) VALUES (1, 'Owner')")
+        conn.execute("UPDATE profiles SET owner_active = 1 WHERE id = 1")
+        conn.execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Taxable', 1)")
+        conn.execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Roth', 1)")
+        conn.execute("INSERT INTO aggregates (id, name) VALUES (5, 'Both Accounts')")
+        conn.executemany(
+            "INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (5, ?)",
+            [(2,), (3,)],
+        )
+
+        holdings = [
+            # profile, ticker, quantity, cost, current value, stored dividends
+            # Owner's rows carry the members' shares and cost, but a dividend
+            # total left over from an old import (SHARED) or none at all (SOLO).
+            (1, "SHARED", 60, 680, 720, 104.44),
+            (1, "SOLO", 10, 200, 230, None),
+            (2, "SHARED", 40, 400, 480, 0),
+            # A snapshot total ahead of the itemized payments below.
+            (3, "SHARED", 20, 280, 240, 90.50),
+            (3, "SOLO", 10, 200, 230, None),
+        ]
+        for profile_id, ticker, quantity, cost, value, total_divs in holdings:
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, "
+                " current_price, current_value, total_divs_received) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ticker, profile_id, f"{ticker} fund", quantity, cost / quantity,
+                    cost, value / quantity, value, total_divs,
+                ),
+            )
+        transactions = [
+            # Taxable sold 60 of its 100 SHARED, so 60% of the payment below
+            # belongs to the sale and 40% to the shares still held.
+            (2, "SHARED", "BUY", "2025-01-01", 100, 10, None),
+            (2, "SHARED", "SELL", "2026-01-01", 60, 11, 60),
+            (3, "SHARED", "BUY", "2025-02-01", 20, 14, None),
+            (3, "SOLO", "BUY", "2025-03-01", 10, 20, None),
+        ]
+        for profile_id, ticker, kind, date, shares, price, realized in transactions:
+            conn.execute(
+                "INSERT INTO transactions "
+                "(profile_id, ticker, transaction_type, transaction_date, shares, "
+                " price_per_share, realized_gain, fees) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                (profile_id, ticker, kind, date, shares, price, realized),
+            )
+        payments = [
+            (2, "SHARED", "2025-06-01", 100.10),
+            (3, "SHARED", "2025-07-01", 10.25),
+            (3, "SOLO", "2025-09-01", 12.34),
+            (3, "SOLO", "2026-03-01", 21.09),
+        ]
+        for profile_id, ticker, date, amount in payments:
+            conn.execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source) "
+                "VALUES (?, ?, ?, ?, 'broker')",
+                (ticker, profile_id, date, amount),
+            )
+        conn.commit()
+        conn.close()
+
+        self._orig_get_connection = app_module.get_connection
+        self._orig_testing = app_module.app.testing
+        self._orig_db_init = getattr(app_module.app, "_db_initialized", False)
+        app_module.get_connection = self._get_connection
+        app_module.app.testing = True
+        app_module.app._db_initialized = True
+        self.client = app_module.app.test_client()
+
+    def tearDown(self):
+        app_module.get_connection = self._orig_get_connection
+        app_module.app.testing = self._orig_testing
+        app_module.app._db_initialized = self._orig_db_init
+        try:
+            Path(self.db_path).unlink(missing_ok=True)
+        except PermissionError:
+            pass  # Windows can briefly hold the temp file; best-effort cleanup.
+
+    def _get_connection(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def _summary(self, query):
+        response = self.client.get(f"/api/gains-losses/summary?{query}")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        return response.get_json()
+
+    def _assert_view_is_the_sum_of_its_accounts(self, query, account_ids):
+        view = self._summary(query)
+        accounts = [self._summary(f"profile_id={pid}") for pid in account_ids]
+        expected = {}
+        for payload in accounts:
+            for row in payload["unrealized"]:
+                entry = expected.setdefault(row["ticker"], dict.fromkeys(self.SUMMED_FIELDS, 0.0))
+                for field in self.SUMMED_FIELDS:
+                    entry[field] += row[field]
+        rows = {row["ticker"]: row for row in view["unrealized"]}
+
+        self.assertEqual(set(rows), set(expected))
+        for ticker, entry in expected.items():
+            for field in self.SUMMED_FIELDS:
+                self.assertAlmostEqual(
+                    rows[ticker][field], entry[field], places=2, msg=f"{ticker} {field}",
+                )
+        for key in self.SUMMED_TOTALS:
+            self.assertAlmostEqual(
+                view["totals"][key],
+                sum(payload["totals"][key] for payload in accounts),
+                places=2, msg=key,
+            )
+        return rows
+
+    def test_owner_rows_equal_its_accounts_added_up(self):
+        rows = self._assert_view_is_the_sum_of_its_accounts("profile_id=1", [2, 3])
+
+        # $40.04 allocated to Taxable's remaining shares plus Roth's $90.50
+        # snapshot total, not the $104.44 left in Owner's own row.
+        self.assertAlmostEqual(rows["SHARED"]["divs_received"], 130.54, places=2)
+        # Owner's row has no dividend total at all for the ticker one account holds.
+        self.assertAlmostEqual(rows["SOLO"]["divs_received"], 33.43, places=2)
+        self.assertAlmostEqual(rows["SOLO"]["total_gl"], 63.43, places=2)
+
+    def test_owner_combined_tab_carries_the_summed_dividends(self):
+        combined = {row["ticker"]: row for row in self._summary("profile_id=1")["combined"]}
+
+        self.assertAlmostEqual(combined["SHARED"]["unrealized_divs"], 130.54, places=2)
+        # The sold lots' share of Taxable's payment is counted once, as realized.
+        self.assertAlmostEqual(combined["SHARED"]["realized_divs"], 60.06, places=2)
+        self.assertAlmostEqual(combined["SHARED"]["net_divs"], 190.60, places=2)
+
+    def test_owner_with_blank_stored_totals_takes_cents_from_its_accounts(self):
+        # A rollup built by the reconcile alone has no dividend total on any
+        # Owner row, which reads back as a whole-number column.
+        conn = self._get_connection()
+        conn.execute("UPDATE all_account_info SET total_divs_received = NULL WHERE profile_id = 1")
+        conn.commit()
+        conn.close()
+
+        rows = self._assert_view_is_the_sum_of_its_accounts("profile_id=1", [2, 3])
+
+        self.assertAlmostEqual(rows["SHARED"]["divs_received"], 130.54, places=2)
+
+    def test_aggregate_rows_equal_its_accounts_added_up(self):
+        rows = self._assert_view_is_the_sum_of_its_accounts("aggregate_id=5", [2, 3])
+
+        self.assertAlmostEqual(rows["SHARED"]["divs_received"], 130.54, places=2)
+
+    def test_account_without_a_cost_basis_adds_only_what_its_own_page_shows(self):
+        # Roth's SOLO row loses its cost basis, so Roth's own page stops
+        # listing the ticker. Taxable picks up a position the page does list.
+        conn = self._get_connection()
+        conn.execute(
+            "UPDATE all_account_info SET price_paid = NULL, purchase_value = NULL "
+            "WHERE profile_id = 3 AND ticker = 'SOLO'"
+        )
+        conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, "
+            " current_price, current_value, total_divs_received) "
+            "VALUES ('SOLO', 2, 'SOLO fund', 5, 20, 100, 23, 115, 7.5)"
+        )
+        conn.commit()
+        conn.close()
+
+        roth = {row["ticker"] for row in self._summary("profile_id=3")["unrealized"]}
+        owner = {row["ticker"]: row for row in self._summary("profile_id=1")["unrealized"]}
+
+        self.assertNotIn("SOLO", roth)
+        self.assertAlmostEqual(owner["SOLO"]["divs_received"], 7.5, places=2)
+
+    def test_owner_chart_dividends_equal_its_accounts_added_up(self):
+        import pandas as pd
+
+        index = pd.date_range("2026-03-02", periods=3, freq="B")
+        prices = pd.DataFrame(
+            {("Close", "SHARED"): [12.0] * 3, ("Close", "SOLO"): [23.0] * 3},
+            index=index,
+        )
+
+        def chart(query):
+            with patch.object(app_module, "_chunked_yf_download", return_value=prices):
+                response = self.client.get(f"/api/gains-losses/chart?{query}")
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            return response.get_json()
+
+        def dividends_by_ticker(payload):
+            return {
+                row["ticker"]: row["total_gl"] - row["price_gl"]
+                for row in payload["ticker_gl"]
+            }
+
+        owner = chart("profile_id=1")
+        expected = {}
+        for account_id in (2, 3):
+            for ticker, amount in dividends_by_ticker(chart(f"profile_id={account_id}")).items():
+                expected[ticker] = expected.get(ticker, 0.0) + amount
+
+        actual = dividends_by_ticker(owner)
+        self.assertEqual(set(actual), set(expected))
+        for ticker, amount in expected.items():
+            self.assertAlmostEqual(actual[ticker], amount, places=2, msg=ticker)
+        self.assertAlmostEqual(actual["SHARED"], 130.54, places=2)
+        # The line chart spreads the same total across the period.
+        self.assertAlmostEqual(
+            owner["total_gl"][-1] - owner["price_gl"][-1], 163.97, places=2,
+        )
