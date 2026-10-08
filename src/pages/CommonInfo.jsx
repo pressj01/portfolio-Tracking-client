@@ -81,7 +81,7 @@ const GRADE_RANK = {
 
 const SUMMARY_HELP = {
   value: 'Summary card: current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.',
-  totalProfit: 'Summary card: remaining-lot price gain or loss plus dividends received since the oldest remaining lot was bought plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.',
+  totalProfit: 'Summary card: remaining-lot price gain or loss plus dividends received since the oldest remaining lot was bought plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. This is not the Gains & Losses Total Profit card: that one also counts tickers you have fully sold and every dividend ever recorded, so the two differ.',
   passiveIncome: 'Summary card: estimated next-12-month dividends divided by current holdings value. This is a forward yield on open holdings, not income already received and not yield on cash. The lower line is the dollar estimate.',
 }
 
@@ -324,7 +324,7 @@ function MetricCard({ label, value, sub, note, tone, help }) {
 function FieldHelp() {
   const fields = [
     ['Value', 'Current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.'],
-    ['Total profit', 'Remaining-lot price gain or loss plus guarded lifetime dividends plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.'],
+    ['Total profit', 'Remaining-lot price gain or loss plus dividends received since the oldest remaining lot was bought plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. This is not the Gains & Losses Total Profit card: that one also counts tickers you have fully sold and every dividend ever recorded, so the two differ.'],
     ['Passive income', 'Estimated next-12-month dividends divided by current holdings value. This is a forward yield on open holdings, not income already received and not yield on cash. The lower line is the dollar estimate.'],
     ['Holding', 'Security name and ticker. Sold rows are marked Sold and shown with a line through the name.'],
     ['Status', 'Open means currently held. Sold means fully sold.'],
