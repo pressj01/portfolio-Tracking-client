@@ -284,6 +284,76 @@ class StableNavBasisTest(TransferBasisTestCase):
             app_module._untracked_share_basis(self.conn, "ARCC", 7), 18.00, places=2
         )
 
+    def test_a_lone_buy_does_not_price_shares_sold_at_another_price(self):
+        # One reinvested dividend, then a sale of 90 shares the ledger never
+        # saw bought. The reinvestment price says nothing about what those
+        # cost, and it was being reported as a $1,323.98 loss.
+        self._txn("MO", "BUY", "2025-01-10", 1.446, 56.2451, notes="[DRIP] Reinvestment")
+        sell_id = self._txn("MO", "SELL", "2025-03-03", 91.808, 41.83)
+
+        self.assertIsNone(app_module._uniform_buy_price(self.conn, "MO", 7))
+        self.assertIsNone(tax_report._uniform_buy_price(self.conn, "MO", 7))
+
+        _refresh_transaction_realized_gains("MO", 7, self.conn)
+
+        self.assertIsNone(self._gain(sell_id))
+
+    def test_a_single_sweep_purchase_still_supplies_the_basis(self):
+        # One recorded buy is enough when the sales sit at the same price:
+        # that is a fund that only ever trades at one price.
+        self._txn("FDRXX", "BUY", "2024-09-24", 1000, 1.00)
+        self._txn("FDRXX", "SELL", "2025-01-02", 5000, 1.00)
+
+        self.assertAlmostEqual(
+            app_module._uniform_buy_price(self.conn, "FDRXX", 7), 1.00, places=4
+        )
+        self.assertAlmostEqual(
+            tax_report._uniform_buy_price(self.conn, "FDRXX", 7), 1.00, places=4
+        )
+
+    def test_a_priced_transfer_out_is_not_a_sale_at_another_price(self):
+        self._spaxx_ledger()
+        self._txn("SPAXX", "SELL", "2025-06-01", 100, 30.00, notes="[Transfer out] ACAT")
+
+        self.assertAlmostEqual(
+            app_module._uniform_buy_price(self.conn, "SPAXX", 7), 1.00, places=4
+        )
+        self.assertAlmostEqual(
+            tax_report._uniform_buy_price(self.conn, "SPAXX", 7), 1.00, places=4
+        )
+
+    def test_replay_blanks_a_gain_costed_at_a_lone_purchase_exactly_once(self):
+        self._txn("MO", "BUY", "2025-01-10", 1.446, 56.2451)
+        mo_sell = self._txn("MO", "SELL", "2025-03-03", 91.808, 41.83)
+        # What the old rule left on the row.
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = -1323.98 WHERE id = ?", (mo_sell,)
+        )
+        # A position priced from its own holding never used the lone buy, and a
+        # stable-price fund is costed exactly as before. Neither is replayed, so
+        # a value planted on them survives.
+        self._holding("ARCC", price_paid=18.00)
+        self._txn("ARCC", "BUY", "2024-01-02", 10, 20.00)
+        arcc_sell = self._txn("ARCC", "SELL", "2024-06-03", 50, 25.00)
+        self._txn("FDRXX", "BUY", "2024-09-24", 1000, 1.00)
+        sweep_sell = self._txn("FDRXX", "SELL", "2025-01-02", 5000, 1.00)
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = 123.45 WHERE id IN (?, ?)",
+            (arcc_sell, sweep_sell),
+        )
+
+        self.assertEqual(app_module._repair_lone_buy_basis_gains(self.conn), 1)
+
+        self.assertIsNone(self._gain(mo_sell))
+        self.assertEqual(self._gain(arcc_sell), 123.45)
+        self.assertEqual(self._gain(sweep_sell), 123.45)
+        # The marker makes it a one-time pass.
+        self.conn.execute(
+            "UPDATE transactions SET realized_gain = -1323.98 WHERE id = ?", (mo_sell,)
+        )
+        self.assertEqual(app_module._repair_lone_buy_basis_gains(self.conn), 0)
+        self.assertEqual(self._gain(mo_sell), -1323.98)
+
     def test_tax_report_does_not_bill_a_sweep_sale_as_gain(self):
         self._spaxx_ledger()
         self._txn("SPAXX", "SELL", "2025-01-02", 716617.79, 1.00)

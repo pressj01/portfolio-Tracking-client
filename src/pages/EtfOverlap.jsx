@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { API_BASE } from '../config'
+import { useProfile, useProfileFetch } from '../context/ProfileContext'
+import { formatMoneyWhole } from '../utils/money'
 
 // One colour per fund, used everywhere a number belongs to that fund so the
 // Venn, the drift bars and the over/underweight lists read as one legend.
@@ -223,6 +225,133 @@ function TiltList({ title, subtitle, rows, a, b, color, sign }) {
   )
 }
 
+// A ticker box that also offers the current portfolio's funds. What is typed is
+// always kept as typed: the list narrows to match it but never has to contain it.
+function FundPicker({ label, color, value, placeholder, funds, portfolioName, exclude, onChange }) {
+  const [open, setOpen] = useState(false)
+  // Opening the list on a box that already holds a ticker shows every fund;
+  // it only narrows once the user starts typing.
+  const [narrow, setNarrow] = useState(false)
+  const [active, setActive] = useState(-1)
+  const listRef = useRef(null)
+
+  const options = useMemo(() => {
+    const needle = narrow ? value.trim().toUpperCase() : ''
+    return funds.filter(f => f.ticker !== exclude
+      && (!needle || `${f.ticker} ${f.description}`.toUpperCase().includes(needle)))
+  }, [funds, exclude, narrow, value])
+
+  useEffect(() => {
+    if (active >= 0) listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' })
+  }, [active])
+
+  const close = () => { setOpen(false); setNarrow(false); setActive(-1) }
+  const choose = (ticker) => { onChange(ticker); close() }
+
+  const onKeyDown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) { setOpen(true); return }
+      if (!options.length) return
+      const step = e.key === 'ArrowDown' ? 1 : -1
+      setActive(i => (i + step + options.length) % options.length)
+    } else if (e.key === 'Enter' && open && active >= 0 && options[active]) {
+      // Enter on a highlighted fund picks it; otherwise it submits the form.
+      e.preventDefault()
+      choose(options[active].ticker)
+    } else if (e.key === 'Escape' && open) {
+      e.preventDefault()
+      close()
+    }
+  }
+
+  return (
+    <div
+      style={{ flex: '1 1 220px', position: 'relative' }}
+      onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) close() }}
+    >
+      <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
+        <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: color, marginRight: 6 }} />
+        {label}
+      </span>
+      <div style={{ display: 'flex', gap: '0.3rem' }}>
+        <input
+          type="text"
+          value={value}
+          onChange={e => { onChange(e.target.value.toUpperCase()); setOpen(true); setNarrow(true); setActive(-1) }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          maxLength={10}
+          spellCheck={false}
+          autoComplete="off"
+          style={{ flex: 1, minWidth: 0, fontSize: '1.05rem', fontWeight: 600 }}
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-label={`${label} ticker`}
+        />
+        <button
+          type="button"
+          className="btn btn-secondary"
+          // Keep focus in the box so the list does not close under the click.
+          onMouseDown={e => e.preventDefault()}
+          onClick={e => {
+            if (open) close()
+            else { setOpen(true); e.currentTarget.previousSibling.focus() }
+          }}
+          title={`Choose from the funds in ${portfolioName}`}
+          aria-label={`Choose ${label} from ${portfolioName}`}
+          style={{ padding: '0 0.7rem' }}
+        >
+          ▾
+        </button>
+      </div>
+
+      {open && (
+        <div style={{
+          position: 'absolute', zIndex: 20, top: '100%', left: 0, right: 0, marginTop: 4,
+          background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8,
+          boxShadow: '0 6px 20px rgba(0,0,0,0.35)', overflow: 'hidden',
+        }}>
+          <div style={{ padding: '0.4rem 0.7rem', fontSize: '0.72rem', letterSpacing: '0.04em', color: 'var(--text-muted)', borderBottom: '1px solid var(--border)' }}>
+            FUNDS IN {String(portfolioName || 'this portfolio').toUpperCase()}
+          </div>
+          <div ref={listRef} role="listbox" style={{ maxHeight: 260, overflowY: 'auto' }}>
+            {options.map((f, i) => (
+              <div
+                key={f.ticker}
+                role="option"
+                aria-selected={i === active}
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => choose(f.ticker)}
+                onMouseEnter={() => setActive(i)}
+                style={{
+                  display: 'flex', alignItems: 'baseline', gap: '0.6rem', padding: '0.4rem 0.7rem', cursor: 'pointer',
+                  background: i === active ? 'var(--surface-2, rgba(127,127,127,0.18))' : 'transparent',
+                }}
+              >
+                <strong style={{ minWidth: '4.2rem' }}>{f.ticker}</strong>
+                <span style={{ flex: 1, minWidth: 0, color: 'var(--text-muted)', fontSize: '0.8rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {f.description}
+                </span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>{formatMoneyWhole(f.current_value)}</span>
+              </div>
+            ))}
+            {options.length === 0 && (
+              <div style={{ padding: '0.6rem 0.7rem', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                {funds.length === 0
+                  ? `No funds found in ${portfolioName}. Type any ticker instead.`
+                  : `Nothing in ${portfolioName} matches “${value.trim()}”. It can still be compared — any fund ticker works.`}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function coverageNote(fund) {
   const coverage = Number(fund.coverage_pct || 0)
   if (coverage >= FULL_COVERAGE) return null
@@ -231,7 +360,10 @@ function coverageNote(fund) {
 }
 
 export default function EtfOverlap() {
+  const pf = useProfileFetch()
+  const { currentProfileName } = useProfile()
   const [inputs, setInputs] = useState(loadLastPair)
+  const [portfolioFunds, setPortfolioFunds] = useState([])
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
@@ -248,6 +380,17 @@ export default function EtfOverlap() {
   // would otherwise let a slow earlier answer land on top of the current one.
   const requestId = useRef(0)
   const sectorPolls = useRef(0)
+
+  // The active portfolio's funds, offered in both ticker boxes. Re-read when
+  // the portfolio changes; a failure just leaves the boxes as plain inputs.
+  useEffect(() => {
+    const controller = new AbortController()
+    pf('/api/etf-overlap/portfolio-funds', { signal: controller.signal })
+      .then(r => r.json())
+      .then(d => setPortfolioFunds(Array.isArray(d?.funds) ? d.funds : []))
+      .catch(e => { if (e.name !== 'AbortError') setPortfolioFunds([]) })
+    return () => controller.abort()
+  }, [pf])
 
   const fetchPair = useCallback((a, b, quiet = false) => {
     const id = ++requestId.current
@@ -409,26 +552,83 @@ export default function EtfOverlap() {
         lists. Useful before buying two funds that might simply duplicate each other's risk.
       </p>
 
+      {/* Collapsed by default; shares the Blended Yield help styling. */}
+      <details className="by-help">
+        <summary>What everything on this screen means</summary>
+        <div className="by-help-grid">
+          <section className="by-help-wide">
+            <h3>Picking the two funds</h3>
+            <ul>
+              <li><strong>Fund A / Fund B</strong> — type any fund ticker, or click the box (or its <strong>▾</strong>) to choose from the funds held in {currentProfileName}. The list narrows as you type and shows each holding's current value; single stocks and money-market funds are left out because they have no holdings to compare. A ticker that is not in the list is still compared.</li>
+              <li><strong>⇄ Swap</strong> — exchanges the two funds. The overlap is the same either way; only which fund is "left" and "right" changes.</li>
+              <li><strong>Compare</strong> — runs the comparison. The first time a fund is read it can take several seconds; afterwards it is remembered.</li>
+              <li><strong>Popular pairs</strong> — one click fills both boxes and compares.</li>
+              <li><strong>Colours</strong> — <span style={{ color: COLOR_A, fontWeight: 700 }}>blue</span> is always Fund A and <span style={{ color: COLOR_B, fontWeight: 700 }}>green</span> is always Fund B, in every chart and list.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>The summary</h3>
+            <ul>
+              <li><strong>Circles</strong> — a count of holdings: only in Fund A, in both (Shared), only in Fund B. Counts, not weights.</li>
+              <li><strong>Overlap by weight</strong> — the headline. For each shared holding the smaller of the two weights is taken, and those are added up. 40% means about two-fifths of each fund is the same investment at similar size.</li>
+              <li><strong>"…of its weight is in names the other also holds"</strong> — how much of each fund sits in shared companies, whatever size the other fund holds them at. Always at least as large as the overlap, and usually different for the two funds.</li>
+              <li><strong># Overlapping holdings</strong> — how many holdings appear in both, out of each fund's total.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Notes under the summary</h3>
+            <ul>
+              <li><strong>"The overlap is a minimum"</strong> — shown when a fund publishes only part of its portfolio. Undisclosed holdings cannot be matched, so the real overlap may be higher.</li>
+              <li><strong>Cash, Treasury bills and option positions</strong> — reported for option-income funds but kept out of the comparison: two funds holding T-bills do not share an investment.</li>
+            </ul>
+          </section>
+          <section>
+            <h3>Sector drift</h3>
+            <p>
+              One bar per sector, sized by the difference between the two funds' sector weights.
+              A bar to the <strong>left</strong> means Fund A is heavier there; to the <strong>right</strong>,
+              Fund B. Hover a row for both weights and the gap. <strong>Unclassified</strong> is
+              weight whose sector is not known yet.
+            </p>
+          </section>
+          <section>
+            <h3>Overweight / underweight</h3>
+            <p>
+              The eight individual holdings where the funds differ most. <strong>Overweight</strong>:
+              Fund A holds more than Fund B. <strong>Underweight</strong>: Fund A holds less. The
+              figure is the gap in percentage points; the line beneath gives both weights, so
+              0.0% means that fund does not hold it.
+            </p>
+          </section>
+          <section className="by-help-wide">
+            <h3>Holdings table</h3>
+            <ul>
+              <li><strong>Shared / Only A / Only B</strong> — which holdings to list. The number on each tab is the count.</li>
+              <li><strong>Wt</strong> — the holding's weight in that fund, as a percent of the fund. A dash means the fund does not hold it.</li>
+              <li><strong>Overlap</strong> — the smaller of the two weights: what this one holding adds to the headline number.</li>
+              <li><strong>Sector / Industry</strong> — looked up in the background for each fund's 60 largest holdings, so they fill in shortly after a first comparison. Smaller holdings show a dash.</li>
+              <li><strong>Search, Min weight, Sector, Industry</strong> — filters on the current tab. Min weight uses Overlap on the Shared tab and the fund's own weight on the other two. <strong>Shown</strong> is how many rows pass.</li>
+              <li><strong>Column headings</strong> — click to sort; click again to reverse.</li>
+            </ul>
+          </section>
+        </div>
+      </details>
+
       <form className="card" onSubmit={e => { e.preventDefault(); compare(inputs.a, inputs.b) }}>
         <h2>Pick two funds</h2>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'flex-end' }}>
           {[['a', 'Fund A', COLOR_A], ['b', 'Fund B', COLOR_B]].map(([key, label, color]) => (
-            <label key={key} style={{ flex: '1 1 220px', margin: 0 }}>
-              <span style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.3rem' }}>
-                <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 4, background: color, marginRight: 6 }} />
-                {label}
-              </span>
-              <input
-                type="text"
-                value={inputs[key]}
-                onChange={e => setInputs(prev => ({ ...prev, [key]: e.target.value.toUpperCase() }))}
-                placeholder={key === 'a' ? 'SPYI' : 'VOO'}
-                maxLength={10}
-                spellCheck={false}
-                style={{ width: '100%', fontSize: '1.05rem', fontWeight: 600 }}
-                aria-label={`${label} ticker`}
-              />
-            </label>
+            <FundPicker
+              key={key}
+              label={label}
+              color={color}
+              value={inputs[key]}
+              placeholder={key === 'a' ? 'SPYI' : 'VOO'}
+              funds={portfolioFunds}
+              portfolioName={currentProfileName}
+              exclude={inputs[key === 'a' ? 'b' : 'a'].trim()}
+              onChange={next => setInputs(prev => ({ ...prev, [key]: next }))}
+            />
           ))}
           <button
             type="button"

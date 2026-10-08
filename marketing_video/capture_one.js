@@ -9,8 +9,9 @@ const output = path.resolve('marketing_video/overview_captures', filename)
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 async function main() {
-  const targets = await (await fetch('http://127.0.0.1:9229/json')).json()
-  const page = targets.find(target => target.type === 'page')
+  const debugPort = Number(process.env.PORTFOLIO_CAPTURE_DEBUG_PORT || 9229)
+  const targets = await (await fetch(`http://127.0.0.1:${debugPort}/json`)).json()
+  const page = targets.find(target => target.type === 'page' && /^https?:\/\/(localhost|127\.0\.0\.1):5173\//.test(target.url))
   if (!page?.webSocketDebuggerUrl) throw new Error('No debuggable page found')
 
   const ws = new WebSocket(page.webSocketDebuggerUrl)

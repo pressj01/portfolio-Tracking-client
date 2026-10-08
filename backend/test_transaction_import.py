@@ -628,6 +628,58 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual([txn["date"] for txn in dividends], ["2025-04-02", "2025-05-01"])
         self.assertEqual([txn["dividend_amount"] for txn in dividends], [356.40, 882.49])
 
+    def test_fidelity_transactions_tag_each_row_with_its_account(self):
+        # An All Accounts history download lists every account's trades in one
+        # file. The rows have to say which account they belong to, or the
+        # importer cannot keep one account's sales out of another's ledger.
+        content = "\n".join([
+            "Run Date,Account,Account Number,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            "01/05/2026,ROTH IRA,222222222,YOU BOUGHT,KSLV,KURV SILVER,Cash,100,20.00,0,0,-2000.00",
+            "03/02/2026,ROTH IRA,222222222,YOU SOLD,KSLV,KURV SILVER,Cash,-100,30.00,0,0,3000.00",
+            "01/06/2026,Individual - TOD,X11111111,YOU BOUGHT,KSLV,KURV SILVER,Cash,50,21.00,0,0,-1050.00",
+            "01/07/2026,Individual - TOD,X11111111,Electronic Funds Transfer Received,,,Cash,,,0,0,500.00",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "Accounts_History.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+
+        self.assertEqual(
+            [(txn["type"], txn["_account_name"], txn["_account_number"]) for txn in result["transactions"]],
+            [
+                ("BUY", "ROTH IRA", "222222222"),
+                ("SELL", "ROTH IRA", "222222222"),
+                ("BUY", "Individual - TOD", "X11111111"),
+            ],
+        )
+        self.assertEqual(
+            {txn["_account_label"] for txn in result["transactions"]},
+            {"ROTH IRA ...2222", "Individual - TOD ...1111"},
+        )
+        self.assertEqual(
+            [row.get("_account_name") for row in result["account_activity"]],
+            ["Individual - TOD"],
+        )
+
+    def test_fidelity_single_account_history_rows_stay_untagged(self):
+        content = "\n".join([
+            "Run Date,Action,Symbol,Description,Type,Quantity,Price ($),Commission ($),Fees ($),Amount ($)",
+            "01/05/2026,YOU BOUGHT,KSLV,KURV SILVER,Cash,100,20.00,0,0,-2000.00",
+        ])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "History.csv"
+            path.write_text(content, encoding="utf-8")
+
+            result = parse_fidelity_transactions_xlsx(str(path), path.name)
+
+        self.assertEqual(len(result["transactions"]), 1)
+        self.assertFalse(
+            [key for key in result["transactions"][0] if key.startswith("_account")]
+        )
+
     def test_fidelity_transactions_imports_cap_gain_and_return_of_capital(self):
         # Roundhill-style payouts arrive as several Fidelity action lines on
         # the same day. The calendar uses shares × full DPS ($2,315.81); the

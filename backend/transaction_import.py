@@ -1478,6 +1478,7 @@ _FIDELITY_POSITION_ALIASES = {
 _FIDELITY_TRANSACTION_ALIASES = {
     "Run Date": ["Date", "Settlement Date", "Trade Date", "Activity Date"],
     "Account": ["Account Name", "Account Nickname"],
+    "Account Number": ["Account #", "Account No", "Acct Number"],
     "Action": ["Transaction Type", "Type", "Activity Type"],
     "Symbol": ["Ticker"],
     "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
@@ -1959,6 +1960,27 @@ def _fidelity_distribution_type_label(action_upper):
     return "Dividend Received"
 
 
+def _fidelity_activity_account_tag(account_name, account_number):
+    """Mark a parsed activity row with the account it came from.
+
+    A single-account history export has no account columns, and its rows stay
+    untagged. An All Accounts export carries every account's trades in one
+    file; without this the rows were indistinguishable and all of them landed
+    in whichever portfolio the file was imported into, so one account's sales
+    showed up as realized gains in another. The keys are the private ones the
+    importer strips once it has routed the rows.
+    """
+    name = str(account_name or "").strip()
+    number = str(account_number or "").strip()
+    if not name and not number:
+        return {}
+    return {
+        "_account_label": _fidelity_account_label(name, number),
+        "_account_name": name,
+        "_account_number": number,
+    }
+
+
 def parse_fidelity_transactions_xlsx(file_path, filename):
     """Parse a Fidelity transactions XLSX/XLS/CSV export."""
     rows = _fidelity_read_rows(file_path, filename, "Transactions")
@@ -1987,6 +2009,9 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
         action = (str(record.get("Action") or "")).strip()
         symbol = (str(record.get("Symbol") or "")).strip().upper()
         valid_symbol = bool(symbol and TICKER_RE.match(symbol))
+        account_tag = _fidelity_activity_account_tag(
+            record.get("Account"), record.get("Account Number"),
+        )
 
         date_str = _parse_date_str(record.get("Run Date"))
         if not date_str:
@@ -2016,6 +2041,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "fees": total_fees,
                 "dividend_amount": None,
                 "notes": "[DRIP] Reinvestment",
+                **account_tag,
             })
             continue
 
@@ -2034,6 +2060,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "notes": _fidelity_distribution_note(
                     action_upper, record.get("Account"),
                 ),
+                **account_tag,
             })
             continue
 
@@ -2050,6 +2077,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "fees": total_fees,
                 "dividend_amount": None,
                 "notes": "",
+                **account_tag,
             })
             continue
 
@@ -2066,6 +2094,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
                 "fees": total_fees,
                 "dividend_amount": None,
                 "notes": "",
+                **account_tag,
             })
             continue
 
@@ -2080,6 +2109,7 @@ def parse_fidelity_transactions_xlsx(file_path, filename):
             description=record.get("Description"),
         )
         if activity_row is not None:
+            activity_row.update(account_tag)
             account_activity.append(activity_row)
         else:
             filtered_count += 1

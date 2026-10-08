@@ -341,7 +341,46 @@ def _start_sector_fill(targets):
     return pending
 
 
-def register_routes(app):
+def portfolio_funds(conn, profile_ids):
+    """Current holdings that can be compared, largest position first.
+
+    A holding the look-through cache already knows to be a single stock or a
+    money-market fund is left out. One never looked up is kept: it may well be
+    a fund, and comparing it is what finds out.
+    """
+    if not profile_ids:
+        return []
+    placeholders = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"""SELECT a.ticker,
+                   MAX(a.description) AS description,
+                   SUM(a.current_value) AS current_value
+              FROM all_account_info a
+              LEFT JOIN fund_holdings_meta m ON m.fund_ticker = UPPER(a.ticker)
+             WHERE a.profile_id IN ({placeholders})
+               AND a.current_value > 0
+               AND COALESCE(m.status, '') NOT IN ('self', 'cash')
+          GROUP BY a.ticker
+          ORDER BY current_value DESC""",
+        list(profile_ids),
+    ).fetchall()
+    return [{"ticker": (r[0] or "").strip().upper(),
+             "description": (r[1] or "").strip(),
+             "current_value": float(r[2] or 0)}
+            for r in rows if (r[0] or "").strip()]
+
+
+def register_routes(app, get_profile_filter=None):
+
+    @app.route("/api/etf-overlap/portfolio-funds", methods=["GET"])
+    def api_etf_overlap_portfolio_funds():
+        _, pids = get_profile_filter() if get_profile_filter else (False, [1])
+        conn = get_connection()
+        try:
+            _ensure_bootstrapped(conn)
+            return jsonify({"funds": portfolio_funds(conn, pids)})
+        finally:
+            conn.close()
 
     @app.route("/api/etf-overlap", methods=["GET"])
     def api_etf_overlap():

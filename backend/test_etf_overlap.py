@@ -196,5 +196,43 @@ class SectorTests(unittest.TestCase):
         self.assertEqual(eo._sector_fill_targets(out, sx.load_sector_cache(conn)), ["NVDA"])
 
 
+class PortfolioFundsTests(unittest.TestCase):
+    def _hold(self, conn, ticker, value, profile_id=1, description=""):
+        conn.execute(
+            "INSERT INTO all_account_info (ticker, profile_id, description, current_value) VALUES (?,?,?,?)",
+            (ticker, profile_id, description, value),
+        )
+
+    def _mark(self, conn, ticker, status):
+        conn.execute(
+            "INSERT INTO fund_holdings_meta (fund_ticker, status) VALUES (?,?)", (ticker, status))
+
+    def test_lists_this_portfolios_funds_largest_first(self):
+        conn = _memory_db()
+        self._hold(conn, "SCHD", 500.0, description="Schwab US Dividend Equity")
+        self._hold(conn, "SPYI", 900.0)
+        self._hold(conn, "AAPL", 2000.0)
+        self._hold(conn, "SWVXX", 3000.0)
+        self._hold(conn, "NEWF", 100.0)       # never looked up: may be a fund
+        self._hold(conn, "GONE", 0.0)         # closed position
+        self._hold(conn, "JEPI", 700.0, profile_id=2)
+        self._mark(conn, "SCHD", "resolved")
+        self._mark(conn, "SPYI", "unresolved")
+        self._mark(conn, "AAPL", "self")
+        self._mark(conn, "SWVXX", "cash")
+
+        out = eo.portfolio_funds(conn, [1])
+        self.assertEqual([f["ticker"] for f in out], ["SPYI", "SCHD", "NEWF"])
+        self.assertEqual(out[1]["description"], "Schwab US Dividend Equity")
+
+    def test_a_rollup_adds_the_same_fund_across_accounts(self):
+        conn = _memory_db()
+        self._hold(conn, "SCHD", 500.0, profile_id=1)
+        self._hold(conn, "SCHD", 250.0, profile_id=2)
+        out = eo.portfolio_funds(conn, [1, 2])
+        self.assertEqual(len(out), 1)
+        self.assertAlmostEqual(out[0]["current_value"], 750.0)
+
+
 if __name__ == "__main__":
     unittest.main()

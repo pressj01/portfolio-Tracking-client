@@ -2153,6 +2153,116 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             app_module.populate_income_tracking = orig_income
             app_module._snapshot_nav_after_profile_update = orig_snapshot
 
+    _FIDELITY_ALL_ACCOUNTS_HISTORY = (
+        "Run Date,Account,Account Number,Action,Symbol,Description,Type,Quantity,Price ($),"
+        "Commission ($),Fees ($),Amount ($)\n"
+        "01/05/2026,ROTH IRA,222222222,YOU BOUGHT,KSLV,KURV SILVER,Cash,100,20.00,0,0,-2000.00\n"
+        "03/02/2026,ROTH IRA,222222222,YOU SOLD,KSLV,KURV SILVER,Cash,-100,30.00,0,0,3000.00\n"
+        "01/06/2026,Individual - TOD,X11111111,YOU BOUGHT,KSLV,KURV SILVER,Cash,50,21.00,0,0,-1050.00\n"
+    )
+
+    def _import_fidelity_history(self, profile_id, content=None):
+        import io
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        orig_backup = app_module._create_import_backup
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        app_module._create_import_backup = lambda profile_id: None
+        try:
+            return self.client.post(
+                f"/api/import/transactions?profile_id={profile_id}",
+                data={
+                    "format": "fidelity_transactions",
+                    "file": (
+                        io.BytesIO((content or self._FIDELITY_ALL_ACCOUNTS_HISTORY).encode()),
+                        "Accounts_History.csv",
+                    ),
+                },
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+            app_module._create_import_backup = orig_backup
+
+    def _fidelity_ledger(self, profile_id):
+        return [
+            (row["transaction_type"], row["shares"], row["price_per_share"])
+            for row in self._rows(
+                "SELECT transaction_type, shares, price_per_share FROM transactions "
+                "WHERE profile_id = ? AND ticker = 'KSLV' ORDER BY transaction_date, id",
+                (profile_id,),
+            )
+        ]
+
+    def test_fidelity_all_accounts_history_loads_only_the_selected_portfolios_account(self):
+        # One file, two accounts. Each portfolio must end up with its own
+        # account's trades: the Roth's sale is not the Individual account's.
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (47, 'Roth IRA', 'fidelity', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (48, 'Individual', 'fidelity', 0, 0)"
+        )
+
+        individual = self._import_fidelity_history(48)
+        roth = self._import_fidelity_history(47)
+
+        self.assertEqual(individual.status_code, 200, individual.get_data(as_text=True))
+        self.assertEqual(roth.status_code, 200, roth.get_data(as_text=True))
+        self.assertEqual(self._fidelity_ledger(48), [("BUY", 50.0, 21.0)])
+        self.assertEqual(
+            self._fidelity_ledger(47), [("BUY", 100.0, 20.0), ("SELL", 100.0, 30.0)]
+        )
+        self.assertIsNone(
+            self._scalar(
+                "SELECT SUM(realized_gain) FROM transactions WHERE profile_id = 48"
+            ),
+            "the other account's sale must not become this portfolio's realized gain",
+        )
+
+    def test_fidelity_all_accounts_history_is_refused_when_no_single_account_fits(self):
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (49, 'Brokerage', 'fidelity', 0, 0)"
+        )
+
+        response = self._import_fidelity_history(49)
+
+        self.assertEqual(response.status_code, 400, response.get_data(as_text=True))
+        error = response.get_json()["error"]
+        self.assertIn("contains 2 accounts", error)
+        self.assertIn("ROTH IRA ...2222", error)
+        self.assertIn("Individual - TOD ...1111", error)
+        self.assertEqual(self._fidelity_ledger(49), [])
+
+    def test_fidelity_all_accounts_history_follows_the_saved_account_routing(self):
+        # The routing confirmed by an All Accounts positions import decides,
+        # whatever the portfolio happens to be called.
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (49, 'Brokerage', 'fidelity', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (48, 'Individual', 'fidelity', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO settings (key, value) VALUES ('fidelity_account_profile_map', ?)",
+            ('{"num:222222222": 49, "num:X11111111": 48}',),
+        )
+
+        response = self._import_fidelity_history(49)
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(
+            self._fidelity_ledger(49), [("BUY", 100.0, 20.0), ("SELL", 100.0, 30.0)]
+        )
+
     def test_layered_snowball_then_fidelity_dedupes_drips_with_feed_price_differences(self):
         """The same DRIP can carry a different effective price in each feed.
 
@@ -2897,6 +3007,94 @@ class HoldingsTransactionApiTest(unittest.TestCase):
 
         self.assertEqual(lot_scoped.get("SPLIT", 0.0), 0.0)
         self.assertEqual(all_time["SPLIT"], 50.0)
+
+    def _seed_owner_with_a_member_that_sold_out(self):
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Still Holds', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Sold Out', 1)")
+        for profile_id in (1, 20):
+            self._execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date) "
+                "VALUES ('SPLIT', ?, 'Split Fund', 5, 10, 50, '2026-01-01')",
+                (profile_id,),
+            )
+        for profile_id, gain in ((20, 7.0), (21, 50.0)):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+                "VALUES ('SPLIT', ?, 'SELL', '2026-03-01', 5, 12, 0, '', ?)",
+                (profile_id, gain),
+            )
+
+    def test_owner_all_time_realized_names_the_account_behind_each_part(self):
+        # Owner's figure includes a sale made in an account that has since sold
+        # out, which that account's own page no longer lists. The split is what
+        # lets the combined number be traced.
+        self._seed_owner_with_a_member_that_sold_out()
+
+        owner = self.client.get("/api/holdings?profile_id=1")
+        member = self.client.get("/api/holdings?profile_id=20")
+
+        self.assertEqual(owner.status_code, 200, owner.get_data(as_text=True))
+        row = owner.get_json()[0]
+        self.assertEqual(row["realized_all_time"], 57.0)
+        self.assertEqual(
+            row["realized_all_time_accounts"],
+            [
+                {"profile_id": 20, "account": "Still Holds", "realized": 7.0, "holds": True},
+                {"profile_id": 21, "account": "Sold Out", "realized": 50.0, "holds": False},
+            ],
+        )
+        self.assertEqual(
+            sum(part["realized"] for part in row["realized_all_time_accounts"]),
+            row["realized_all_time"],
+        )
+        # A single account has nothing to split.
+        member_row = member.get_json()[0]
+        self.assertEqual(member_row["realized_all_time"], 7.0)
+        self.assertNotIn("realized_all_time_accounts", member_row)
+
+    def test_hand_edits_to_a_member_refresh_the_owner_rollup(self):
+        # Owner stores a copy of its members' positions. A trade typed in by
+        # hand or a cleared member used to leave that copy as it was, listing
+        # shares no account held any more.
+        self._seed_owner_with_a_member_that_sold_out()
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (30, 'Outside', 0)")
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date) "
+            "VALUES ('SPLIT', 30, 'Split Fund', 5, 10, 50, '2026-01-01')"
+        )
+        trade = {
+            "transaction_type": "BUY",
+            "transaction_date": "2026-04-01",
+            "shares": 1,
+            "price_per_share": 12,
+        }
+        orig_backup = app_module._create_import_backup
+        app_module._create_import_backup = lambda pid: None
+        try:
+            with patch.object(app_module, "_auto_reconcile_owner") as reconcile:
+                outside = self.client.post(
+                    "/api/holdings/SPLIT/transactions?profile_id=30", json=trade
+                )
+                self.assertEqual(outside.status_code, 201, outside.get_data(as_text=True))
+                reconcile.assert_not_called()
+
+                added = self.client.post(
+                    "/api/holdings/SPLIT/transactions?profile_id=20", json=trade
+                )
+                self.assertEqual(added.status_code, 201, added.get_data(as_text=True))
+                self.assertEqual(reconcile.call_count, 1)
+
+                cleared = self.client.post(
+                    "/api/profiles/20/clear", json={"confirm_name": "Still Holds"}
+                )
+                self.assertEqual(cleared.status_code, 200, cleared.get_data(as_text=True))
+                self.assertEqual(reconcile.call_count, 2)
+        finally:
+            app_module._create_import_backup = orig_backup
 
     def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")

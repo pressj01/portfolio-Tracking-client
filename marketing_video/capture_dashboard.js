@@ -1,7 +1,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const DEBUG_PORT = 9229
+const DEBUG_PORT = Number(process.env.PORTFOLIO_CAPTURE_DEBUG_PORT || 9229)
 const BASE_URL = 'http://localhost:5173/'
 const OUT_DIR = path.resolve('marketing_video/dashboard_captures')
 const REPORT_PATH = path.join(OUT_DIR, 'capture-report.json')
@@ -97,6 +97,9 @@ async function main() {
   })()`)
 
   const getReadyState = () => evaluate(`(() => {
+    if (!document.body) {
+      return { complete: false, pendingText: [], busyCount: 0, errors: [], missing: ['document body'], holdingsRows: 0, height: 0, signature: 'loading' }
+    }
     const visible = element => {
       const style = getComputedStyle(element)
       const rect = element.getBoundingClientRect()
@@ -108,7 +111,10 @@ async function main() {
       .filter(Boolean)
     const pendingText = leaves.filter(text => /^(loading|fetching|refreshing|updating|calculating|recording|backfilling|repairing)(…|\\.{3})?$/i.test(text))
     const busy = [...document.querySelectorAll('[aria-busy="true"], .spinner, .loading-spinner, .skeleton, .ci-loading')].filter(visible)
-    const errors = [...document.querySelectorAll('.alert-error')].filter(visible).map(node => node.innerText.trim())
+    const errors = [...document.querySelectorAll('.alert-error')]
+      .filter(visible)
+      .map(node => node?.innerText?.trim())
+      .filter(Boolean)
     const bodyText = document.body.innerText || ''
     const requiredText = [
       'Portfolio Dashboard',

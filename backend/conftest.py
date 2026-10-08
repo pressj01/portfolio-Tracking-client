@@ -1,9 +1,40 @@
 """Shared test fixtures for the backend suite."""
+import atexit
+import os
+import shutil
 import sys
+import tempfile
 
-import pytest
+# Point the whole suite at a throwaway database, and do it before anything
+# imports config: DB_PATH is fixed at import. Most tests swap app.get_connection
+# for their own file, but that swap does not reach the modules that import
+# get_connection straight from config (market_data_provider, yahoo_gateway, ...)
+# or the before_request migrations, and those were landing on the developer's
+# real portfolio.db. That is how a suite run read a live Tiingo key and made
+# real requests with it, ran startup repairs on real holdings, and left a
+# gigabyte of "pre-import" snapshots in backups/, pushing real ones out of the
+# retention window. The file is created empty so config does not treat the temp
+# folder as a fresh install and copy the real database into it.
+_SUITE_DB_DIR = tempfile.mkdtemp(prefix="portfolio-tests-")
+open(os.path.join(_SUITE_DB_DIR, "portfolio.db"), "wb").close()
+os.environ["PORTFOLIO_DB_DIR"] = _SUITE_DB_DIR
+atexit.register(shutil.rmtree, _SUITE_DB_DIR, ignore_errors=True)
 
-import yahoo_gateway
+import pytest  # noqa: E402
+
+import yahoo_gateway  # noqa: E402
+from config import get_connection  # noqa: E402
+from database import ensure_tables_exist  # noqa: E402
+
+# Several suites reach the shared database through the real connection and
+# expect its tables to be there already, as they are on a machine that has run
+# the app. Build the schema once so a first run behaves the same as a later one.
+_suite_conn = get_connection()
+try:
+    ensure_tables_exist(_suite_conn)
+    _suite_conn.commit()
+finally:
+    _suite_conn.close()
 
 
 @pytest.fixture(autouse=True)
