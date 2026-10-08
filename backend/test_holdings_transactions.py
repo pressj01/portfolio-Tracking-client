@@ -2983,9 +2983,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(row["realized_all_time"], -196.0)
 
     def test_realized_all_time_counts_a_sale_in_an_account_that_sold_out(self):
-        # A ticker still held in one account keeps the sales an account that has
-        # sold out of it made — the combined-portfolio reading. The lot-scoped
-        # query joins on the live holding row, so it cannot see those sales.
+        # Asked for several accounts at once, the all-time query adds every
+        # one's sales, including an account that has sold out of the ticker.
+        # The lot-scoped query joins on the live holding row, so it cannot see
+        # those sales. (The holdings list adds accounts one at a time instead.)
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Still Holds', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Sold Out', 0)")
         self._execute(
@@ -3028,9 +3029,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             )
 
     def test_owner_all_time_realized_names_the_account_behind_each_part(self):
-        # Owner's figure includes a sale made in an account that has since sold
-        # out, which that account's own page no longer lists. The split is what
-        # lets the combined number be traced.
+        # Owner's figure is the account that holds the ticker, so the two pages
+        # agree. A sale made in an account that has since sold out is left out
+        # of it, since that account's own page no longer lists the ticker; the
+        # split is what keeps that sale visible from Owner.
         self._seed_owner_with_a_member_that_sold_out()
 
         owner = self.client.get("/api/holdings?profile_id=1")
@@ -3038,7 +3040,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
 
         self.assertEqual(owner.status_code, 200, owner.get_data(as_text=True))
         row = owner.get_json()[0]
-        self.assertEqual(row["realized_all_time"], 57.0)
+        self.assertEqual(row["realized_all_time"], 7.0)
         self.assertEqual(
             row["realized_all_time_accounts"],
             [
@@ -3047,7 +3049,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            sum(part["realized"] for part in row["realized_all_time_accounts"]),
+            sum(part["realized"] for part in row["realized_all_time_accounts"] if part["holds"]),
             row["realized_all_time"],
         )
         # A single account has nothing to split.
@@ -3095,6 +3097,170 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 self.assertEqual(reconcile.call_count, 2)
         finally:
             app_module._create_import_backup = orig_backup
+
+    # The money columns of a combined holdings row. Each has to equal what the
+    # accounts in the view show for the ticker, added up.
+    _ACCOUNT_SUMMED_FIELDS = (
+        "purchase_value", "gain_or_loss", "total_divs_received", "ytd_divs",
+        "current_month_income", "total_return_basis",
+        "total_return_divs_component", "total_return_realized_component",
+        "realized_all_time",
+    )
+
+    def _holding_row(self, query, ticker):
+        res = self.client.get(f"/api/holdings?{query}")
+        self.assertEqual(res.status_code, 200, res.get_data(as_text=True))
+        return {row["ticker"]: row for row in res.get_json()}[ticker]
+
+    def _assert_row_is_the_sum_of_its_accounts(self, combined_query, account_ids, ticker):
+        combined = self._holding_row(combined_query, ticker)
+        accounts = [self._holding_row(f"profile_id={pid}", ticker) for pid in account_ids]
+        for field in self._ACCOUNT_SUMMED_FIELDS:
+            self.assertAlmostEqual(
+                combined[field] or 0,
+                sum(row[field] or 0 for row in accounts),
+                places=2,
+                msg=field,
+            )
+        return combined, accounts
+
+    def _seed_owner_ticker_held_in_one_account(self):
+        # The account's stored dividend total includes $30 paid before the
+        # purchase date of the lot it holds now; the ledger since then is $40.
+        # Owner's stored copy carries the position but no dividend total. A
+        # second member has LONE sales in its history and no position in it.
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Holds It', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Does Not Hold It', 1)")
+        for profile_id, gain in ((20, 12.0), (21, 500.0)):
+            self._execute(
+                "INSERT INTO transactions "
+                "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+                "VALUES ('LONE', ?, 'SELL', '2026-02-01', 5, 12, 0, '', ?)",
+                (profile_id, gain),
+            )
+        for profile_id, total_divs in ((1, None), (20, 100.0)):
+            self._execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
+                "current_price, current_value, gain_or_loss, total_divs_received, "
+                "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+                "VALUES ('LONE', ?, 'Lone Fund', 10, 10, 100, '2026-03-01', 12, 120, 20, ?, 0, 'N', 0, 0)",
+                (profile_id, total_divs),
+            )
+        for payment_date, amount in (("2026-01-15", 30.0), ("2026-04-15", 40.0)):
+            self._execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES ('LONE', 20, ?, ?, 'import', '')",
+                (payment_date, amount),
+            )
+
+    def test_owner_row_matches_the_only_account_holding_the_ticker(self):
+        # Owner rebuilt dividends from the ledger since the purchase date and
+        # showed $40 where the one account holding LONE showed its stored $100,
+        # so Total profit differed for a ticker a single account owned.
+        self._seed_owner_ticker_held_in_one_account()
+
+        owner, (account,) = self._assert_row_is_the_sum_of_its_accounts("profile_id=1", [20], "LONE")
+
+        self.assertEqual(account["total_divs_received"], 100.0)
+        self.assertEqual(owner["total_divs_received"], 100.0)
+        self.assertEqual(owner["gain_or_loss"] + owner["total_return_divs_component"], 120.0)
+        self.assertEqual(owner["paid_for_itself"], account["paid_for_itself"])
+        # The other member's $500 of LONE sales used to land on Owner's row,
+        # $512 against the $12 the account holding LONE shows.
+        self.assertEqual(account["realized_all_time"], 12.0)
+        self.assertEqual(owner["realized_all_time"], 12.0)
+        self.assertEqual(
+            [(part["account"], part["realized"], part["holds"]) for part in owner["realized_all_time_accounts"]],
+            [("Holds It", 12.0, True), ("Does Not Hold It", 500.0, False)],
+        )
+
+    def test_owner_total_return_summary_matches_the_account_dividends(self):
+        self._seed_owner_ticker_held_in_one_account()
+
+        owner = self.client.get("/api/total-return/summary?profile_id=1")
+        account = self.client.get("/api/total-return/summary?profile_id=20")
+
+        self.assertEqual(owner.status_code, 200, owner.get_data(as_text=True))
+        self.assertEqual(account.get_json()["rows"][0]["total_divs_received"], 100.0)
+        self.assertEqual(owner.get_json()["rows"][0]["total_divs_received"], 100.0)
+        self.assertEqual(
+            owner.get_json()["rows"][0]["total_return_dollar"],
+            account.get_json()["rows"][0]["total_return_dollar"],
+        )
+
+    def test_aggregate_row_is_the_sum_of_its_accounts(self):
+        # Three ways an aggregate used to drift from the accounts it adds up:
+        # one "larger of stored total and ledger" taken on the combined
+        # dividends instead of per account; cost basis rebuilt as quantity x
+        # average price instead of the stored totals; and, once the Owner
+        # spreadsheet import had been used, Owner's own stored dividend total
+        # borrowed by an aggregate Owner is not part of.
+        conn = self._get_connection()
+        try:
+            for column, column_type in (
+                ("withdraw_8pct_cost_annually", "REAL"), ("withdraw_8pct_per_month", "REAL"),
+                ("cash_not_reinvested", "REAL"), ("shares_bought_in_year", "REAL"),
+                ("shares_in_month", "REAL"), ("nav_erosion_scope", "TEXT"),
+                ("nav_benchmark_override", "TEXT"),
+            ):
+                conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {column} {column_type}")
+            conn.commit()
+        finally:
+            conn.close()
+        self._execute("INSERT INTO settings (key, value) VALUES ('owner_import_used', 'true')")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'Ledger Ahead', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Stored Ahead', 0)")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 2)")
+        self._execute("INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, 3)")
+        holdings = [
+            # profile, quantity, price paid, stored cost, current value, stored dividends
+            (1, 99, 10, 990, 990, 999.0),
+            # Stored cost of $105 is not 10 shares x $10.
+            (2, 10, 10, 105, 130, 50.0),
+            (3, 20, 10, 200, 260, 90.0),
+        ]
+        for profile_id, quantity, price, cost, value, total_divs in holdings:
+            self._execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
+                "current_price, current_value, gain_or_loss, total_divs_received, "
+                "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+                "VALUES ('PAIR', ?, 'Pair Fund', ?, ?, ?, '2026-01-01', 13, ?, ?, ?, 0, 'N', 0, 0)",
+                (profile_id, quantity, price, cost, value, value - cost, total_divs),
+            )
+        for profile_id, amount in ((2, 80.0), (3, 10.0)):
+            self._execute(
+                "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+                "VALUES ('PAIR', ?, '2026-02-15', ?, 'import', '')",
+                (profile_id, amount),
+            )
+        # Account 2 trimmed a larger position, so the cash it put in ($400) is
+        # its total-return basis rather than the $105 still held.
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('PAIR', 2, 'BUY', '2026-01-02', 40, 10, 0, '', NULL)"
+        )
+        self._execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes, realized_gain) "
+            "VALUES ('PAIR', 2, 'SELL', '2026-03-02', 30, 11, 0, '', 30.0)"
+        )
+
+        combined, _ = self._assert_row_is_the_sum_of_its_accounts("aggregate_id=1", [2, 3], "PAIR")
+
+        self.assertEqual(combined["quantity"], 30)
+        self.assertEqual(combined["purchase_value"], 305.0)
+        self.assertEqual(combined["gain_or_loss"], 85.0)
+        # $80 (ledger ahead) + $90 (stored ahead), not the larger of $140 and $90.
+        self.assertEqual(combined["total_divs_received"], 170.0)
+        # $400 + $200, not the larger of $305 and $400.
+        self.assertEqual(combined["total_return_basis"], 600.0)
+        self.assertEqual(combined["total_return_realized_component"], 30.0)
+        self.assertAlmostEqual(combined["paid_for_itself"], 170.0 / 600.0, places=6)
 
     def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")

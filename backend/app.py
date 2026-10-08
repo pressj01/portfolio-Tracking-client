@@ -4666,12 +4666,12 @@ def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
     all_time=True is the Snowball-style figure: every sale of the ticker, with no
     purchase_date scoping and no per-account join. Snowball attributes realized
     P&L to the ticker, not to the lots still open, so a ticker sold down to zero
-    and later re-bought keeps the earlier sales. The caller only ever reads the
-    tickers it is still holding, so dropping the join is also what lets a sale
-    made in one account count toward a ticker that is still held in another
-    selected account — the combined-portfolio behaviour. The default stays
-    lot-scoped because invested cost and dividends are scoped that way, and
-    Total profit needs all three on the same footing.
+    and later re-bought keeps the earlier sales. Given several accounts it adds
+    every one's sales, including an account that has sold out of a ticker still
+    held in another; the holdings list does not show that total for a combined
+    view, it adds the accounts one at a time (_holding_figures_summed_by_account).
+    The default stays lot-scoped because invested cost and dividends are scoped
+    that way, and Total profit needs all three on the same footing.
 
     all_account_info.realized_gains is a running total accumulated across a
     ticker+profile's ENTIRE transaction history by _rollup_transactions, with
@@ -4724,16 +4724,16 @@ def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
 
 
 def _realized_all_time_accounts_by_ticker(conn, profile_ids):
-    """Split the all-time realized figure by the account that made the sales.
+    """Every account's all-time realized result for a ticker, held or sold out.
 
-    In a combined view the all-time figure counts a sale made in any selected
-    account, including one that has since sold out of the ticker. That account
-    no longer lists the ticker, so its own page never shows the sale and the
-    combined number looks like it came from nowhere: Owner reported -$6,384.21
-    on PBDC while the one account still holding it showed -$2,647.49, the rest
-    sitting in three accounts that had sold out. This is the same sum as
-    _realized_gains_by_ticker(all_time=True), kept per account and marked with
-    whether that account still holds the ticker, so the figure can be traced.
+    A combined row adds the accounts that still hold the ticker, so it equals
+    their own pages. An account that has sold out of it no longer lists the
+    ticker, and its sales are left out of the row: Owner used to report
+    -$6,384.21 on PBDC while the one account still holding it showed
+    -$2,647.49, the rest sitting in three accounts that had sold out. Each
+    entry is marked with whether that account still holds the ticker, so the
+    row can be traced to the accounts behind it and the sales it leaves out
+    stay visible somewhere in the combined view.
     """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if len(ids) < 2:
@@ -4918,9 +4918,9 @@ def _basis_mode():
     return "broker_adjusted" if mode in {"broker", "broker_adjusted", "adjusted"} else "original"
 
 
-def _basis_total_expr(alias="a"):
+def _basis_total_expr(alias="a", mode=None):
     prefix = f"{alias}." if alias else ""
-    if _basis_mode() == "broker_adjusted":
+    if (mode or _basis_mode()) == "broker_adjusted":
         price = f"COALESCE({prefix}broker_price_paid, {prefix}price_paid, {prefix}original_price_paid)"
         stored = f"COALESCE({prefix}broker_purchase_value, {prefix}purchase_value, {prefix}original_purchase_value)"
     else:
@@ -5191,6 +5191,145 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_
         if realized_all_time_accounts_by_ticker:
             r["realized_all_time_accounts"] = (
                 realized_all_time_accounts_by_ticker.get(r.get("ticker")) or []
+            )
+    return results
+
+
+def _apply_recorded_dividend_income(conn, rows, profile_ids):
+    """Year-to-date and current-month dividend cash from the payment ledger."""
+    profile_ids = [int(pid) for pid in (profile_ids or [])]
+    if not profile_ids:
+        return rows
+    mph = ",".join("?" * len(profile_ids))
+    today_d = datetime.date.today()
+    month_start = today_d.replace(day=1).isoformat()
+    year_start = today_d.replace(month=1, day=1).isoformat()
+    today_iso = today_d.isoformat()
+    pay_rows = conn.execute(
+        f"""SELECT ticker,
+                   COALESCE(SUM(amount), 0) as ytd_amount,
+                   COALESCE(SUM(CASE WHEN payment_date >= ? THEN amount ELSE 0 END), 0) as month_amount
+            FROM dividend_payments
+            WHERE profile_id IN ({mph})
+              AND payment_date >= ? AND payment_date <= ?
+            GROUP BY ticker""",
+        [month_start] + profile_ids + [year_start, today_iso],
+    ).fetchall()
+    recorded_ytd, recorded_rows = _recorded_dividend_amounts_by_ticker(
+        conn, profile_ids, year_start, today_iso
+    )
+    if recorded_rows:
+        for r in rows:
+            ticker = str(r.get("ticker") or "").strip().upper()
+            r["ytd_divs"] = round(recorded_ytd.get(ticker, 0.0), 2)
+    if pay_rows:
+        month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
+        for r in rows:
+            r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
+    return rows
+
+
+def _holdings_scope_is_combined(profile_ids, account_ids):
+    """Whether a holdings view adds up more than one account's own page.
+
+    account_ids is the view with Owner replaced by the accounts it rolls up, so
+    Owner counts as combined even when it has a single member.
+    """
+    return len(account_ids) > 1 or list(account_ids) != [int(pid) for pid in profile_ids]
+
+
+# What a combined holdings row takes from its accounts instead of working out
+# for itself. Each is the figure the account's own page shows, added up.
+_ACCOUNT_SUMMED_HOLDING_FIELDS = (
+    "purchase_value", "gain_or_loss",
+    "total_divs_received", "ytd_divs", "current_month_income",
+    "total_return_basis", "total_return_divs_component",
+    "total_return_realized_component", "realized_all_time",
+)
+
+
+def _holding_figures_summed_by_account(conn, account_ids, require_basis=False):
+    """Per-ticker money figures for a combined view: each account's own, added.
+
+    Owner and custom aggregates used to apply the single-account rules once, to
+    numbers that were already combined, and that is not the same sum. Dividends
+    received are the larger of the stored total and the payment ledger, and the
+    total-return basis is the larger of the remaining cost and the cash put in;
+    "the larger of" taken once on the totals disagrees with taking it account
+    by account whenever the accounts differ on which side is larger. Owner also
+    read dividends off its own stored row, which no reconcile refreshes, so a
+    ticker held in one account could show a Total profit that account did not:
+    FSCO read $496.79 of dividends in Owner against $535.48 in the only account
+    holding it. Running every account through the same steps its own page uses
+    is what makes the combined row their sum by construction.
+
+    The all-time realized figure is summed the same way, so it covers the
+    accounts that still hold the ticker. Counting every member's sales instead
+    gave Owner a result for a ticker that the one account holding it did not
+    show, and a footer far above its accounts' footers added together; the
+    sales left out are named by _realized_all_time_accounts_by_ticker.
+
+    require_basis leaves out an account's row when it has no cost basis, for
+    the Total Return table, which does not list such a row either.
+    """
+    figures = {}
+    for account_id in account_ids:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM all_account_info WHERE profile_id = ? AND COALESCE(quantity, 0) > 1e-9",
+            (account_id,),
+        ).fetchall())
+        _apply_dividend_payment_total_floor(
+            rows, _dividend_payment_totals_by_ticker(conn, [account_id])
+        )
+        _apply_basis_mode_to_holdings(
+            rows,
+            _cumulative_invested_cost_by_ticker(conn, [account_id]),
+            _realized_gains_by_ticker(conn, [account_id]),
+            _realized_gains_by_ticker(conn, [account_id], all_time=True),
+        )
+        for r in rows:
+            if r.get("current_month_income") is None:
+                r["current_month_income"] = _estimate_current_month_income(r)
+            if r.get("ytd_divs") is None:
+                r["ytd_divs"] = _estimate_ytd_income(r)
+        _apply_recorded_dividend_income(conn, rows, [account_id])
+        for r in rows:
+            if require_basis and _num_or_zero(r.get("purchase_value")) <= 0:
+                continue
+            entry = figures.setdefault(r["ticker"], {"paid_for_itself_known": False})
+            for field in _ACCOUNT_SUMMED_HOLDING_FIELDS:
+                # A figure no account has (no cost basis on file, say) stays
+                # blank in the combined row rather than turning into a zero.
+                if r.get(field) is not None:
+                    entry[field] = entry.get(field, 0.0) + _num_or_zero(r.get(field))
+            # None is the single-account guard against dividends earned on
+            # shares that were sold without a buy history to size them by.
+            if r.get("paid_for_itself") is not None:
+                entry["paid_for_itself_known"] = True
+    return figures
+
+
+def _apply_account_summed_holding_figures(results, figures_by_ticker):
+    """Replace a combined row's own arithmetic with the sum of its accounts."""
+    for r in results:
+        figures = figures_by_ticker.get(r.get("ticker"))
+        if not figures:
+            continue
+        for field in _ACCOUNT_SUMMED_HOLDING_FIELDS:
+            r[field] = round(figures[field], 2) if field in figures else None
+        cost = _num_or_zero(r["purchase_value"])
+        annual = r.get("estim_payment_per_year")
+        if cost > 0 and r["gain_or_loss"] is not None:
+            gain_pct = round(r["gain_or_loss"] / cost, 6)
+            r["gain_or_loss_percentage"] = gain_pct
+            r["percent_change"] = gain_pct
+        if cost > 0 and annual is not None:
+            r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
+        basis = _num_or_zero(r["total_return_basis"])
+        if basis > 0:
+            r["paid_for_itself"] = (
+                round(_num_or_zero(r["total_return_divs_component"]) / basis, 6)
+                if figures["paid_for_itself_known"] else None
             )
     return results
 
@@ -20663,29 +20802,16 @@ def list_holdings():
         conn.commit()
 
     if is_agg and len(pids) > 1:
-        # Check if Owner import was used — if so, prefer Owner's per-ticker
-        # income/dividend data since the Owner spreadsheet is authoritative.
-        # For generic-only imports (no Owner), just SUM across sub-profiles.
-        _oiu = conn.execute(
-            "SELECT value FROM settings WHERE key = 'owner_import_used'"
-        ).fetchone()
-        use_owner = _oiu and _oiu[0] == "true"
+        # Each account's stored total is authoritative for that account (see
+        # _basis_total_expr), so the combined total is their sum. Rebuilding it
+        # as quantity x average price put AITX $27.80 under the two accounts
+        # that hold it.
+        original_total = _basis_total_expr("a", "original")
+        broker_total = _basis_total_expr("a", "broker_adjusted")
 
-        def _own_or_sum(field):
-            """COALESCE from Owner if Owner import exists, else plain SUM."""
-            if use_owner:
-                return (f"COALESCE((SELECT o.{field} FROM all_account_info o "
-                        f"WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.{field}))")
-            return f"SUM(a.{field})"
-
-        # Income fields are recalculated by refresh for all profiles, so just SUM.
-        # Payout history fields (ytd, total divs, current month) only exist in
-        # Owner, so COALESCE from Owner when available.
-        ytd = _own_or_sum("ytd_divs")
-        tot_div = _own_or_sum("total_divs_received")
-        cur_mo = _own_or_sum("current_month_income")
-
-        # Aggregate: combine duplicate tickers across portfolios
+        # Aggregate: combine duplicate tickers across portfolios. The payout
+        # history columns (ytd, total divs, current month) are placeholders
+        # here; _apply_account_summed_holding_figures replaces them below.
         rows = conn.execute(
             f"""SELECT
                    a.ticker,
@@ -20696,9 +20822,9 @@ def list_holdings():
                    MAX(a.current_price) as current_price,
                    SUM({basis_total}) as purchase_value,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as original_price_paid,
-                   SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) as original_purchase_value,
+                   SUM({original_total}) as original_purchase_value,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as broker_price_paid,
-                   SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) as broker_purchase_value,
+                   SUM({broker_total}) as broker_purchase_value,
                    SUM(a.current_value) as current_value,
                    SUM(a.current_value) - SUM({basis_total}) as gain_or_loss,
                    CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as gain_or_loss_percentage,
@@ -20727,12 +20853,12 @@ def list_holdings():
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
                    SUM(a.shares_in_month) as shares_in_month,
-                   {ytd} as ytd_divs,
-                   {tot_div} as total_divs_received,
-                   CASE WHEN SUM({basis_total}) > 0 THEN {tot_div} / SUM({basis_total}) ELSE 0 END as paid_for_itself,
+                   SUM(a.ytd_divs) as ytd_divs,
+                   SUM(a.total_divs_received) as total_divs_received,
+                   CASE WHEN SUM({basis_total}) > 0 THEN SUM(a.total_divs_received) / SUM({basis_total}) ELSE 0 END as paid_for_itself,
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
-                   {cur_mo} as current_month_income,
+                   SUM(a.current_month_income) as current_month_income,
                    CASE
                        WHEN SUM(CASE WHEN a.nav_erosion_scope = 'test' THEN 1 ELSE 0 END) > 0 THEN 'test'
                        WHEN SUM(CASE WHEN a.nav_erosion_scope = 'skip' THEN 1 ELSE 0 END) = COUNT(*) THEN 'skip'
@@ -20853,40 +20979,13 @@ def list_holdings():
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
-    if not is_agg and len(pids) == 1:
-        import datetime
-        payment_profile_ids = pids
-        if pids[0] == 1:
-            owner_source_ids = _get_owner_source_profile_ids(conn)
-            if owner_source_ids:
-                payment_profile_ids = owner_source_ids
-        if payment_profile_ids:
-            mph = ",".join("?" * len(payment_profile_ids))
-            today_d = datetime.date.today()
-            month_start = today_d.replace(day=1).isoformat()
-            year_start = today_d.replace(month=1, day=1).isoformat()
-            today_iso = today_d.isoformat()
-            pay_rows = conn.execute(
-                f"""SELECT ticker,
-                           COALESCE(SUM(amount), 0) as ytd_amount,
-                           COALESCE(SUM(CASE WHEN payment_date >= ? THEN amount ELSE 0 END), 0) as month_amount
-                    FROM dividend_payments
-                    WHERE profile_id IN ({mph})
-                      AND payment_date >= ? AND payment_date <= ?
-                    GROUP BY ticker""",
-                [month_start] + payment_profile_ids + [year_start, today_iso],
-            ).fetchall()
-            recorded_ytd, recorded_rows = _recorded_dividend_amounts_by_ticker(
-                conn, payment_profile_ids, year_start, today_iso
-            )
-            if recorded_rows:
-                for r in results:
-                    ticker = str(r.get("ticker") or "").strip().upper()
-                    r["ytd_divs"] = round(recorded_ytd.get(ticker, 0.0), 2)
-            if pay_rows:
-                month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
-                for r in results:
-                    r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
+    if _holdings_scope_is_combined(pids, payment_profile_ids):
+        _apply_account_summed_holding_figures(
+            results,
+            _holding_figures_summed_by_account(conn, payment_profile_ids),
+        )
+    else:
+        _apply_recorded_dividend_income(conn, results, payment_profile_ids)
     # For single-profile queries, compute reinvested/not-reinvested splits.
     # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
     # flag may be stale.  Sub-accounts use their own flag directly.
@@ -35287,10 +35386,21 @@ def total_return_summary():
         })
 
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
-    payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
-    if payment_totals:
-        df["payment_total_divs_received"] = df["ticker"].map(payment_totals).fillna(0)
-        df["total_divs_received"] = df[["total_divs_received", "payment_total_divs_received"]].max(axis=1)
+    if _holdings_scope_is_combined(profile_ids, payment_profile_ids):
+        # Same sum the holdings list shows: each account's own dividend total,
+        # ledger floor already applied, rather than one floor on the combined row.
+        account_figures = _holding_figures_summed_by_account(
+            conn, payment_profile_ids, require_basis=True
+        )
+        df["total_divs_received"] = [
+            account_figures.get(ticker, {}).get("total_divs_received", stored)
+            for ticker, stored in zip(df["ticker"], df["total_divs_received"])
+        ]
+    else:
+        payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
+        if payment_totals:
+            df["payment_total_divs_received"] = df["ticker"].map(payment_totals).fillna(0)
+            df["total_divs_received"] = df[["total_divs_received", "payment_total_divs_received"]].max(axis=1)
 
     # Enrich category names
     try:

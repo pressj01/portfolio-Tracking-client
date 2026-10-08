@@ -114,7 +114,7 @@ const COLUMN_HELP = {
   alpha: 'Column: annualized CAPM alpha over the Dashboard Shared Performance Date Range — return above or below what the ticker beta predicts, against the same benchmark shown in the Beta column. Positive means it beat its own risk exposure. Sold rows show a dash.',
   capitalGain: 'Column: current value minus cost basis for open holdings; proceeds minus cost for sold rows.',
   realizedProfit: 'Column: OUR realized P&L — profit or loss locked in by sales since your oldest remaining lot was bought. Sales from before that point are left out: lots you have already sold off, or an earlier position you sold out of before buying the ticker back, never color the position you hold now. Sold-out rows show every sale. Compare the Realized P&L (all-time) column, which counts every sale the way Snowball does. Hover a cell to see both numbers.',
-  realizedAllTime: 'Column: SNOWBALL-STYLE realized P&L — profit or loss from every sale of this ticker, ever, whichever lots are still open and including sales made before you sold out and bought back in. Same first-in-first-out matching and the same sales as ours; only the set of sales counted differs. In a combined view (Owner or an aggregate) it also counts sales made in an account that has since sold out of the ticker, which that account\'s own page no longer lists. The footer covers tickers you still own, as Snowball does. Hover a cell to see both numbers and, in a combined view, the split by account.',
+  realizedAllTime: 'Column: SNOWBALL-STYLE realized P&L — profit or loss from every sale of this ticker, ever, whichever lots are still open and including sales made before you sold out and bought back in. Same first-in-first-out matching and the same sales as ours; only the set of sales counted differs. In a combined view (Owner or an aggregate) each row adds up the accounts that hold the ticker, so it matches those accounts\' own pages and the footer equals their footers added together. Sales made in an account that has since sold out of the ticker are left out, because that account no longer lists it; the hover names them. The footer covers tickers you still own, as Snowball does. Hover a cell to see both numbers and, in a combined view, the split by account.',
 }
 
 // Why the two realized columns can disagree on a ticker you still own, with the
@@ -267,33 +267,35 @@ function realizedCompareTitle(row) {
     `Ours (since your oldest remaining lot): ${signedMoney(ours)}`,
     `Snowball-style (every sale, all-time): ${signedMoney(allTime)}`,
   ]
-  // Only a combined view sends the per-account split. An account that has sold
-  // out of the ticker no longer lists it, so this rollover is the one place its
-  // sales can be traced from the combined number.
-  const accounts = row.realizedAllTimeAccounts || []
-  const soldOut = accounts.filter(account => !account.holds)
-  const soldOutTotal = soldOut.reduce((sum, account) => sum + num(account.realized), 0)
   if (row.sold) {
     lines.push('Sold out: both views count every sale of this ticker, so they agree.')
   } else if (Math.abs(gap) < 0.005) {
     lines.push('They agree: every sale of this ticker happened on your current position.')
-  } else if (soldOut.length && Math.abs(gap - soldOutTotal) < 0.005) {
-    lines.push(
-      `Difference ${signedMoney(gap)}: sales made in ${soldOut.length === 1 ? 'an account' : 'accounts'} in this view that ${soldOut.length === 1 ? 'has' : 'have'} since sold out of ${row.ticker}. ${soldOut.length === 1 ? 'That account no longer lists' : 'Those accounts no longer list'} it, so the result shows only here. Ours leaves those sales out; Snowball keeps them.`,
-    )
-  } else if (soldOut.length) {
-    lines.push(
-      `Difference ${signedMoney(gap)}: ${signedMoney(soldOutTotal)} from accounts in this view that have since sold out of ${row.ticker}, the rest from sales made before your oldest remaining lot was bought. Ours leaves both out; Snowball keeps them.`,
-    )
   } else {
     lines.push(
       `Difference ${signedMoney(gap)}: sales made before your oldest remaining lot was bought — lots you have since sold off, or a position you sold out of and re-bought. Ours leaves those out; Snowball keeps them.`,
     )
   }
-  if (!row.sold && (accounts.length > 1 || soldOut.length)) {
+  // Only a combined view sends the per-account split. The row adds the accounts
+  // that hold the ticker, so it matches their own pages. An account that has
+  // sold out of it no longer lists it, and this rollover is the one place its
+  // sales still show in the combined view.
+  const accounts = row.sold ? [] : (row.realizedAllTimeAccounts || [])
+  const holding = accounts.filter(account => account.holds)
+  const soldOut = accounts.filter(account => !account.holds)
+  if (holding.length > 1 || soldOut.length) {
     lines.push('All-time by account:')
-    accounts.forEach(account => {
-      lines.push(`  ${account.account}: ${signedMoney(account.realized)}${account.holds ? '' : ' (sold out of it)'}`)
+    holding.forEach(account => {
+      lines.push(`  ${account.account}: ${signedMoney(account.realized)}`)
+    })
+  }
+  if (soldOut.length) {
+    const soldOutTotal = soldOut.reduce((sum, account) => sum + num(account.realized), 0)
+    lines.push(
+      `Not counted above (${signedMoney(soldOutTotal)}): ${soldOut.length === 1 ? 'an account' : 'accounts'} in this view that ${soldOut.length === 1 ? 'has' : 'have'} sold out of ${row.ticker} and no longer ${soldOut.length === 1 ? 'lists' : 'list'} it.`,
+    )
+    soldOut.forEach(account => {
+      lines.push(`  ${account.account}: ${signedMoney(account.realized)}`)
     })
   }
   return lines.join('\n')
