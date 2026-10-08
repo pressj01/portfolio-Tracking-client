@@ -139,7 +139,7 @@ from market_calendar import (
     eastern_now,
     market_has_closed,
 )
-from nav_history import activity_flows, build_nav_history_payload, dividend_outflows
+from nav_history import activity_flows, build_nav_history_payload, dividend_outflows, flow_coverage_gaps
 from refresh_sessions import (
     QUOTE_URL as _YAHOO_QUOTE_URL,
     align_to_sessions,
@@ -12044,6 +12044,30 @@ def _nav_history_flows(conn, profile_ids, first_date, last_date):
     return flows
 
 
+def _nav_history_flow_gaps(conn, profile_ids, first_date, last_date):
+    """Broker accounts whose imported deposit/withdrawal record misses the chart.
+
+    Only broker-synced accounts count: a manual portfolio's Total Return line
+    rests on its dividend ledger, not on imported account activity.
+    """
+    managed = [pid for pid in profile_ids if _profile_is_positions_managed(pid, conn)]
+    if not managed:
+        return []
+    spans = {pid: [] for pid in managed}
+    try:
+        placeholders = ",".join("?" * len(managed))
+        for row in conn.execute(
+            f"""SELECT profile_id, start_date, end_date FROM account_activity_coverage
+                WHERE profile_id IN ({placeholders})""",
+            managed,
+        ).fetchall():
+            spans[int(row["profile_id"])].append((row["start_date"], row["end_date"]))
+    except sqlite3.OperationalError:
+        # Older databases have no coverage table: no deposit history either.
+        pass
+    return flow_coverage_gaps(first_date, last_date, spans, _load_profile_name_map(conn, managed))
+
+
 @app.route("/api/nav/history", methods=["GET"])
 def api_nav_history():
     """Return portfolio NAV snapshots for the current profile."""
@@ -12060,7 +12084,8 @@ def api_nav_history():
             return []
         dates = sorted(str(row["nav_date"])[:10] for row in trading_day_rows)
         flows = _nav_history_flows(conn, flow_profile_ids, dates[0], dates[-1])
-        return build_nav_history_payload(trading_day_rows, flows)
+        gaps = _nav_history_flow_gaps(conn, flow_profile_ids, dates[0], dates[-1])
+        return build_nav_history_payload(trading_day_rows, flows, gaps)
 
     conn = get_connection()
     try:

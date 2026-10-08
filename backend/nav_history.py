@@ -1,6 +1,14 @@
 """Helpers for the Dashboard portfolio-value history chart."""
 
-from account_performance import flow_value
+import datetime
+
+from account_performance import (
+    COVERAGE_MAX_GAP_DAYS,
+    as_date,
+    coverage_for_window,
+    flow_value,
+    merge_coverage,
+)
 
 
 NON_ACTUAL_DIVIDEND_SOURCES = {
@@ -79,7 +87,44 @@ def activity_flows(activity_rows, price_on=None):
     return flows, unvalued
 
 
-def build_nav_history_payload(nav_rows, flows=()):
+# Activity files are imported in batches, so the newest few days of a chart
+# always sit past the last import. Two weeks of that lag is normal; more means
+# deposits may have gone unrecorded.
+TRAILING_LAG_DAYS = 14
+
+
+def flow_coverage_gaps(first_date, last_date, spans_by_profile, names=None):
+    """Broker accounts whose deposit/withdrawal record misses part of the chart.
+
+    The Total Return line can only tell a deposit from a gain when the broker
+    activity holding that deposit was imported. ``spans_by_profile`` maps a
+    broker-synced profile id to its imported ``(start, end)`` activity spans.
+    An account is a gap unless one continuous run covers the whole chart, give
+    or take the few quiet days an export leaves at the start and the normal
+    import lag at the end. An
+    account with no import at all reports ``None`` for both covered dates.
+    """
+    if not first_date or not last_date or str(first_date)[:10] >= str(last_date)[:10]:
+        return []
+    first, last = as_date(first_date), as_date(last_date)
+    lead = datetime.timedelta(days=COVERAGE_MAX_GAP_DAYS)
+    lag = datetime.timedelta(days=TRAILING_LAG_DAYS)
+    gaps = []
+    for profile_id, spans in spans_by_profile.items():
+        runs = merge_coverage(spans)
+        if any(start <= first + lead and end >= last - lag for start, end in runs):
+            continue
+        best = coverage_for_window(spans, first, last)
+        gaps.append({
+            "profile_id": profile_id,
+            "name": (names or {}).get(profile_id) or f"Account {profile_id}",
+            "covered_from": best[0].isoformat() if best else None,
+            "covered_to": best[1].isoformat() if best else None,
+        })
+    return gaps
+
+
+def build_nav_history_payload(nav_rows, flows=(), flow_gaps=()):
     """Add a total-return value to each NAV point, anchored at the latest one.
 
     ``flows`` is ``[(date, amount)]`` with money in positive: deposits and
@@ -92,6 +137,10 @@ def build_nav_history_payload(nav_rows, flows=()):
     change from any point to today is investment gain, never a deposit or a
     withdrawal. A flow belongs to the first recorded value on or after its
     date, since a recorded value is taken after that day's activity.
+
+    ``flow_gaps`` (see ``flow_coverage_gaps``) names the accounts whose
+    deposit record misses part of the chart. The list rides on the first
+    point: the line is only as good as the deposits it knows about.
     """
     points = []
     for row in nav_rows:
@@ -134,4 +183,6 @@ def build_nav_history_payload(nav_rows, flows=()):
             "source": source,
         })
     payload.reverse()
+    if flow_gaps:
+        payload[0]["flow_gaps"] = list(flow_gaps)
     return payload

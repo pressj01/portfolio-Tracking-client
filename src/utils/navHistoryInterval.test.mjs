@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { navHistoryCallouts, resampleNavHistory, withLiveNavPoint } from './navHistoryInterval.js'
+import { navHistoryCallouts, resampleNavHistory, totalReturnGapLines, withLiveNavPoint } from './navHistoryInterval.js'
 
 const point = (date, value) => ({ date, value })
 const dates = points => points.map(item => item.date)
@@ -161,4 +161,24 @@ test('no live date, a stale live date, or an empty history change nothing', () =
   assert.equal(withLiveNavPoint(history, { date: null, value: 112 }), history)
   assert.equal(withLiveNavPoint(history, { date: '2026-09-25', value: 90 }), history)
   assert.deepEqual(withLiveNavPoint([], { date: '2026-09-28', value: 112 }), [])
+})
+
+test('total-return gap lines name each account and what its history covers', () => {
+  const lines = totalReturnGapLines([{
+    date: '2026-05-19',
+    flow_gaps: [
+      { name: 'Etrade Trading', covered_from: '2026-06-29', covered_to: '2026-09-24' },
+      { name: 'Roth IRA', covered_from: null, covered_to: null },
+    ],
+  }, { date: '2026-05-20' }])
+
+  assert.deepEqual(lines, [
+    'Etrade Trading: history only covers Jun 29, 2026 to Sep 24, 2026',
+    'Roth IRA: no deposit or withdrawal history imported',
+  ])
+})
+
+test('no flow gaps means no total-return notice', () => {
+  assert.deepEqual(totalReturnGapLines([{ date: '2026-05-19' }]), [])
+  assert.deepEqual(totalReturnGapLines([]), [])
 })
