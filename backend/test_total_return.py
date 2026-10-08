@@ -286,6 +286,13 @@ class TotalReturnPeriodTest(unittest.TestCase):
 
 
 class TotalReturnComparisonTest(unittest.TestCase):
+    def setUp(self):
+        self._original_db_initialized = getattr(app, "_db_initialized", False)
+        app._db_initialized = True
+
+    def tearDown(self):
+        app._db_initialized = self._original_db_initialized
+
     def test_max_range_keeps_newer_ticker_aligned_to_shared_dates(self):
         dates = pd.to_datetime(["2020-01-02", "2021-01-04", "2022-01-03"])
         close = pd.DataFrame(
@@ -433,6 +440,13 @@ class TotalReturnComparisonTest(unittest.TestCase):
 
 
 class TotalReturnDashboardPeriodTest(unittest.TestCase):
+    def setUp(self):
+        self._original_db_initialized = getattr(app, "_db_initialized", False)
+        app._db_initialized = True
+
+    def tearDown(self):
+        app._db_initialized = self._original_db_initialized
+
     def test_dashboard_cards_and_rows_share_transaction_aware_period(self):
         dates = pd.to_datetime(["2025-12-31", "2026-01-02", "2026-01-05"])
         close = pd.DataFrame({
