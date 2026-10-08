@@ -64,22 +64,37 @@ def _uniform_buy_price(conn, ticker, profile_id):
     """The single price every purchase of this position was made at, if there is one.
 
     Mirrors app._uniform_buy_price; see that docstring for why stable-NAV cash
-    funds need it. Zero-priced buys are excluded so a transferred-in lot stays
-    unknown rather than resolving to free.
+    funds need it, and why the sales have to sit at that price too. Zero-priced
+    buys are excluded so a transferred-in lot stays unknown rather than
+    resolving to free.
     """
     rows = conn.execute(
-        """SELECT DISTINCT price_per_share FROM transactions
+        """SELECT UPPER(COALESCE(transaction_type, 'BUY')) AS side,
+                  price_per_share, notes
+             FROM transactions
             WHERE ticker = ? AND profile_id = ?
-              AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+              AND UPPER(COALESCE(transaction_type, 'BUY')) IN ('BUY', 'SELL')
               AND price_per_share IS NOT NULL
               AND price_per_share > 0""",
         (ticker, profile_id),
     ).fetchall()
-    if len(rows) != 1:
+    buy_prices, sell_prices = set(), set()
+    for row in rows:
+        side = row["side"] if hasattr(row, "keys") else row[0]
+        raw_price = row["price_per_share"] if hasattr(row, "keys") else row[1]
+        notes = row["notes"] if hasattr(row, "keys") else row[2]
+        try:
+            price = round(float(raw_price), 6)
+        except (TypeError, ValueError):
+            return None
+        if side == "BUY":
+            buy_prices.add(price)
+        elif not _is_transfer_note(notes):
+            sell_prices.add(price)
+    if len(buy_prices) != 1:
         return None
-    try:
-        price = float(rows[0]["price_per_share"] if hasattr(rows[0], "keys") else rows[0][0])
-    except (TypeError, ValueError):
+    price = next(iter(buy_prices))
+    if sell_prices - {price}:
         return None
     return price if price > 0 else None
 

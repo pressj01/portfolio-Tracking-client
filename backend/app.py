@@ -4723,6 +4723,50 @@ def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
     return {row["ticker"]: _num_or_zero(row["realized"]) for row in rows}
 
 
+def _realized_all_time_accounts_by_ticker(conn, profile_ids):
+    """Split the all-time realized figure by the account that made the sales.
+
+    In a combined view the all-time figure counts a sale made in any selected
+    account, including one that has since sold out of the ticker. That account
+    no longer lists the ticker, so its own page never shows the sale and the
+    combined number looks like it came from nowhere: Owner reported -$6,384.21
+    on PBDC while the one account still holding it showed -$2,647.49, the rest
+    sitting in three accounts that had sold out. This is the same sum as
+    _realized_gains_by_ticker(all_time=True), kept per account and marked with
+    whether that account still holds the ticker, so the figure can be traced.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if len(ids) < 2:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT t.ticker, t.profile_id,
+                   COALESCE(SUM(t.realized_gain), 0) AS realized,
+                   MAX(CASE WHEN COALESCE(a.quantity, 0) > 1e-9 THEN 1 ELSE 0 END) AS holds
+            FROM transactions t
+            LEFT JOIN all_account_info a
+              ON a.ticker = t.ticker AND a.profile_id = t.profile_id
+            WHERE t.profile_id IN ({placeholders})
+              AND UPPER(COALESCE(t.transaction_type, '')) = 'SELL'
+              AND t.realized_gain IS NOT NULL
+              AND INSTR(LOWER(COALESCE(t.notes, '')), '[transfer') = 0
+            GROUP BY t.ticker, t.profile_id
+            ORDER BY t.ticker, t.profile_id""",
+        ids,
+    ).fetchall()
+    names = _load_profile_name_map(conn, ids)
+    accounts = {}
+    for row in rows:
+        profile_id = int(row["profile_id"])
+        accounts.setdefault(row["ticker"], []).append({
+            "profile_id": profile_id,
+            "account": names.get(profile_id) or f"Portfolio {profile_id}",
+            "realized": round(_num_or_zero(row["realized"]), 2),
+            "holds": bool(row["holds"]),
+        })
+    return accounts
+
+
 def _resolve_aggregate_profile(ticker, profile_ids):
     """For aggregate writes, find the profile with the largest position for a ticker."""
     conn = get_connection()
@@ -5072,7 +5116,8 @@ _PFI_NO_TXN_MAX_RATIO = 10.0  # i.e. 1000%
 
 
 def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_ticker=None,
-                                  realized_all_time_by_ticker=None):
+                                  realized_all_time_by_ticker=None,
+                                  realized_all_time_accounts_by_ticker=None):
     """Expose selected basis through the legacy price_paid/purchase_value fields."""
     mode = _basis_mode()
     for r in results:
@@ -5142,6 +5187,10 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_
         if realized_all_time_by_ticker is not None:
             r["realized_all_time"] = _num_or_zero(
                 realized_all_time_by_ticker.get(r.get("ticker"))
+            )
+        if realized_all_time_accounts_by_ticker:
+            r["realized_all_time_accounts"] = (
+                realized_all_time_accounts_by_ticker.get(r.get("ticker")) or []
             )
     return results
 
@@ -6722,6 +6771,103 @@ def _filter_shear_group_result_for_profile(parsed, profile_id):
     return parsed
 
 
+def _filter_fidelity_activity_for_profile(parsed, profile_id):
+    """Keep one portfolio's account out of a Fidelity All Accounts history file.
+
+    Fidelity's history download for all accounts lists every account's trades
+    in one file. The importer read past the account columns, so the whole file
+    went into whichever portfolio was selected — and into each portfolio it was
+    imported into again. Sales made in one account then sat in another's
+    ledger, where the Owner rollup counted them as realized gains that no
+    single account could explain.
+
+    A file with one account (or none named) is untouched. With several, the
+    rows kept are those of the account routed to this portfolio: by the routing
+    saved from an All Accounts positions import when there is one, otherwise by
+    name, and only when exactly one account fits. Anything less certain is
+    refused, because guessing loads another account's history silently.
+    """
+    if (parsed.get("source_format") or "").strip().lower() != "fidelity_transactions":
+        return parsed
+
+    transactions = parsed.get("transactions") or []
+    account_activity = parsed.get("account_activity") or []
+    accounts = {}
+    for item in [*transactions, *account_activity]:
+        label = item.get("_account_label")
+        if label and label not in accounts:
+            accounts[label] = {
+                "account_label": label,
+                "account_name": item.get("_account_name"),
+                "account_number": item.get("_account_number"),
+            }
+
+    if len(accounts) > 1:
+        profile_name = _get_profile_name(profile_id)
+        conn = get_connection()
+        try:
+            saved = _load_multi_account_map(conn, "fidelity")
+        finally:
+            conn.close()
+        routed = {
+            label: saved.get(_multi_account_key(account, "fidelity"))
+            for label, account in accounts.items()
+        }
+        matched = {label for label, pid in routed.items() if pid == int(profile_id)}
+        if not matched:
+            # An account already routed to a different portfolio is not a
+            # candidate here, however alike the names are.
+            scores = {
+                label: _multi_account_match_score(account, profile_name, "fidelity")
+                for label, account in accounts.items()
+                if routed[label] is None
+            }
+            best = max(scores.values(), default=0.0)
+            if best >= _MULTI_ACCOUNT_MATCH_MIN_SCORE:
+                top = {label for label, score in scores.items() if score == best}
+                if len(top) == 1:
+                    matched = top
+        if not matched:
+            available = ", ".join(sorted(accounts))
+            raise ValueError(
+                f"This Fidelity activity file contains {len(accounts)} accounts, and "
+                f"'{profile_name}' could not be matched to exactly one of them. Download "
+                "the history for one account at a time, or import a Fidelity All Accounts "
+                "positions file first so each account is routed to its own portfolio. "
+                f"Accounts in this file: {available}"
+            )
+
+        kept_transactions = [t for t in transactions if t.get("_account_label") in matched]
+        kept_activity = [a for a in account_activity if a.get("_account_label") in matched]
+        skipped = (
+            len(transactions) + len(account_activity)
+            - len(kept_transactions) - len(kept_activity)
+        )
+        parsed["transactions"] = kept_transactions
+        parsed["account_activity"] = kept_activity
+        summary = parsed.setdefault("summary", {})
+        summary["buys"] = sum(1 for t in kept_transactions if t.get("type") == "BUY")
+        summary["sells"] = sum(1 for t in kept_transactions if t.get("type") == "SELL")
+        summary["dividends"] = sum(1 for t in kept_transactions if t.get("type") == "DIVIDEND")
+        summary["drip_detected"] = sum(
+            1 for t in kept_transactions
+            if t.get("type") == "BUY" and "[DRIP]" in (t.get("notes") or "")
+        )
+        summary["account_activity"] = len(kept_activity)
+        summary["account_count"] = len(matched)
+        summary["other_accounts_skipped"] = skipped
+        parsed["target_profile_name"] = profile_name
+        parsed["account_match"] = {
+            "matched": True,
+            "reason": "fidelity_account_filter",
+            "matched_accounts": sorted(matched),
+        }
+
+    _strip_shear_group_account_fields(parsed.get("transactions"))
+    _strip_shear_group_account_fields(parsed.get("account_activity"))
+    return parsed
+
+
 def _saved_price_timestamp(profile_ids):
     """When the stored holdings prices these screens read were last refreshed.
 
@@ -7566,16 +7712,25 @@ def _auto_reconcile_owner():
     Owner-only data (ytd_divs, total_divs_received, paid_for_itself,
     current_month_income).
     """
+    conn = get_connection()
+    try:
+        _reconcile_owner_rollup(conn)
+    finally:
+        # A reconcile that raised used to leave this connection open, holding
+        # whatever it had written so far and keeping the database file locked.
+        conn.close()
+
+
+def _reconcile_owner_rollup(conn):
+    """Body of _auto_reconcile_owner, on a connection the caller closes."""
     from datetime import date as _date
 
-    conn = get_connection()
     owner_id = 1
 
     # New databases keep an inactive compatibility row at profile 1 until the
     # user explicitly creates Owner. Normal broker imports must never wake or
     # populate that hidden row.
     if not _owner_profile_is_active(conn):
-        conn.close()
         return
 
     # Get all non-Owner profiles that are marked for inclusion
@@ -7592,7 +7747,6 @@ def _auto_reconcile_owner():
             _clear_profile_data(conn, owner_id)
             conn.execute("DELETE FROM settings WHERE key = 'owner_rollup_snapshot'")
             conn.commit()
-        conn.close()
         return
 
     conn.execute(
@@ -7697,7 +7851,39 @@ def _auto_reconcile_owner():
     populate_dividends(owner_id)
     populate_income_tracking(owner_id)
 
-    conn.close()
+
+def _profile_feeds_owner(conn, profile_id):
+    """Whether this account's positions are summed into an active Owner rollup."""
+    if int(profile_id) == 1 or not _owner_profile_is_active(conn):
+        return False
+    try:
+        row = conn.execute(
+            "SELECT include_in_owner FROM profiles WHERE id = ?", (int(profile_id),)
+        ).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return bool(row and (row["include_in_owner"] if isinstance(row, dict) else row[0]))
+
+
+def _reconcile_owner_after_member_change(conn, profile_id):
+    """Carry a change made to a member account outside an import into Owner.
+
+    Owner's rows are a stored copy of its members' positions, refreshed after
+    imports and price refreshes. A sale typed in by hand, or a member that was
+    cleared, left that copy alone, so Owner went on listing shares no account
+    held any more — an open position, with its sales' realized result in the
+    footer, for a ticker that appears in none of the member portfolios.
+    `conn` must have nothing uncommitted; the reconcile opens its own.
+    """
+    if not _profile_feeds_owner(conn, profile_id):
+        return
+    try:
+        _auto_reconcile_owner()
+    except Exception as problem:
+        # The member's own change is already saved. Reporting it as failed
+        # would invite a retry that duplicates it; the next import or price
+        # refresh reconciles Owner again.
+        print(f"Owner rollup refresh after a change to portfolio {profile_id} failed: {problem}")
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────
@@ -7715,6 +7901,13 @@ def _ensure_db():
             # the normal __main__ startup path (the settings key makes this a
             # one-time replay).
             _repair_specific_lot_basis(conn)
+            try:
+                _repair_lone_buy_basis_gains(conn)
+            except Exception as _lone_buy_problem:
+                # A replay that cannot run must not take the first request
+                # down with it; the marker stays unset so it is tried again.
+                conn.rollback()
+                print(f"Lone-buy realized gain replay failed: {_lone_buy_problem}")
         finally:
             conn.close()
         app._db_initialized = True
@@ -7965,6 +8158,8 @@ def delete_profile(pid):
     conn = get_connection()
     try:
         name = _profile_name_or_none(conn, pid)
+        # Read now: once the profile row is gone there is nothing to ask.
+        fed_owner = name is not None and _profile_feeds_owner(conn, pid)
         if pid == 1:
             if not _owner_profile_is_active(conn):
                 return jsonify({"error": "Owner does not exist"}), 404
@@ -8019,6 +8214,9 @@ def delete_profile(pid):
         conn.commit()
     finally:
         conn.close()
+    if fed_owner:
+        # Owner still holds a copy of the deleted account's positions.
+        _auto_reconcile_owner()
     return jsonify({
         "deleted": pid,
         "profile_name": name,
@@ -8274,6 +8472,7 @@ def clear_profile_data(pid):
     try:
         _clear_profile_data(conn, pid)
         conn.commit()
+        _reconcile_owner_after_member_change(conn, pid)
     finally:
         conn.close()
     return jsonify({
@@ -8611,6 +8810,7 @@ def reset_profile_for_reimport(pid):
         _set_profile_cash_value(conn, pid, 0, source="profile_reset")
         _set_profile_positions_managed(pid, False, conn)
         conn.commit()
+        _reconcile_owner_after_member_change(conn, pid)
     finally:
         conn.close()
 
@@ -10094,6 +10294,7 @@ def api_import_transactions_preview():
     try:
         result = TXN_PARSERS[fmt](path, f.filename)
         result = _filter_shear_group_result_for_profile(result, profile_id)
+        result = _filter_fidelity_activity_for_profile(result, profile_id)
         if result.get("format_type") in {"positions_multi", "transactions_multi"}:
             return jsonify(_annotate_multi_account_import(result))
         if result.get("format_type") == "categories":
@@ -11337,6 +11538,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         try:
             parsed = TXN_PARSERS[fmt](path, f.filename)
             parsed = _filter_shear_group_result_for_profile(parsed, profile_id)
+            parsed = _filter_fidelity_activity_for_profile(parsed, profile_id)
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -20587,6 +20789,7 @@ def list_holdings():
         _cumulative_invested_cost_by_ticker(conn, payment_profile_ids),
         _realized_gains_by_ticker(conn, payment_profile_ids),
         _realized_gains_by_ticker(conn, payment_profile_ids, all_time=True),
+        _realized_all_time_accounts_by_ticker(conn, payment_profile_ids),
     )
     _apply_holding_display_quantities(results)
 
@@ -21847,6 +22050,83 @@ def _repair_specific_lot_basis(conn):
     return len(changes)
 
 
+_LONE_BUY_BASIS_REPLAY_KEY = "lone_buy_basis_gain_replay_v1"
+
+
+def _repair_lone_buy_basis_gains(conn):
+    """One-time replay of sale gains that were costed at a lone purchase price.
+
+    _uniform_buy_price used to accept any position with one distinct buy price,
+    which a single purchase always satisfies. Sold shares the ledger had no
+    purchase for were then costed at that one price and stored as a gain or
+    loss. The rule now also requires the sales to sit at that price, but a
+    stored realized_gain only changes when its position is next replayed — and
+    these are mostly positions that have since been sold out, which nothing
+    replays. So walk exactly the positions the old rule could have priced and
+    the new one will not, and recompute them once. Their unmatched sales come
+    back as basis-unknown, which is what the cost-basis tools then list.
+    """
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    if conn.execute(
+        "SELECT 1 FROM settings WHERE key = ?",
+        (_LONE_BUY_BASIS_REPLAY_KEY,),
+    ).fetchone():
+        return 0
+
+    sell_gain_sql = (
+        "SELECT COALESCE(SUM(realized_gain), 0), "
+        "SUM(CASE WHEN realized_gain IS NULL THEN 1 ELSE 0 END) "
+        "FROM transactions WHERE ticker = ? AND profile_id = ? "
+        "AND UPPER(COALESCE(transaction_type, '')) = 'SELL' "
+        "AND INSTR(LOWER(COALESCE(notes, '')), '[transfer') = 0"
+    )
+    candidates = conn.execute(
+        """SELECT ticker, profile_id
+             FROM transactions
+            WHERE UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+              AND price_per_share IS NOT NULL
+              AND price_per_share > 0
+            GROUP BY ticker, profile_id
+           HAVING COUNT(DISTINCT price_per_share) = 1
+            ORDER BY profile_id, ticker"""
+    ).fetchall()
+
+    changes = []
+    for row in candidates:
+        ticker = row["ticker"] if isinstance(row, dict) else row[0]
+        profile_id = row["profile_id"] if isinstance(row, dict) else row[1]
+        # A holding basis outranked the uniform price, and a position that
+        # still qualifies as stable-NAV is priced the same as before.
+        if _untracked_share_basis(conn, ticker, profile_id) is not None:
+            continue
+        before = conn.execute(sell_gain_sql, (ticker, profile_id)).fetchone()
+        _refresh_transaction_realized_gains(ticker, profile_id, conn)
+        after = conn.execute(sell_gain_sql, (ticker, profile_id)).fetchone()
+        before_total, before_blank = float(before[0] or 0), int(before[1] or 0)
+        after_total, after_blank = float(after[0] or 0), int(after[1] or 0)
+        if abs(before_total - after_total) <= 0.005 and before_blank == after_blank:
+            continue
+        # The holding row carries the same sum as a running total.
+        conn.execute(
+            "UPDATE all_account_info SET realized_gains = ? WHERE ticker = ? AND profile_id = ?",
+            (round(after_total, 2), ticker, profile_id),
+        )
+        changes.append({
+            "profile_id": profile_id,
+            "ticker": ticker,
+            "realized_before": round(before_total, 2),
+            "realized_after": round(after_total, 2),
+            "sales_now_basis_unknown": after_blank - before_blank,
+        })
+
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (_LONE_BUY_BASIS_REPLAY_KEY, json.dumps(changes)),
+    )
+    conn.commit()
+    return len(changes)
+
+
 def _basis_total_is_stale(total, price, quantity, base_quantity=None):
     """True when a stored basis total no longer describes the shares held.
 
@@ -22352,8 +22632,8 @@ def _untracked_share_basis(conn, ticker, profile_id):
 
     The broker's own cost per share on the surviving position is the best
     available basis for those shares, so charge the uncovered remainder at that
-    rate instead of at zero. Failing that, a position whose every purchase
-    happened at one single price has that price as its basis by definition —
+    rate instead of at zero. Failing that, a position that has only ever
+    traded at one single price has that price as its basis by definition —
     see _uniform_buy_price. Returns None when neither is available, which
     preserves the old behaviour rather than inventing a number.
     """
@@ -22398,26 +22678,47 @@ def _uniform_buy_price(conn, ticker, profile_id):
     gains across ten money-market positions, on funds that mathematically
     cannot produce one.
 
-    Uniform purchase price answers it without special-casing cash. When every
-    recorded buy is at the same price, that price is the cost of any share the
-    queue lost track of — true of a $1.00 sweep fund, and equally true of any
-    position bought repeatedly at one price. Zero-priced buys are excluded so
-    a transferred-in lot stays 'basis unknown' instead of resolving to free.
+    Uniform price answers it without special-casing cash. When every recorded
+    trade — buys and sales alike — is at the same price, that price is the
+    cost of any share the queue lost track of. Zero-priced buys are excluded
+    so a transferred-in lot stays 'basis unknown' instead of resolving to free.
+
+    The sales have to agree as well as the buys. One buy is trivially "every
+    purchase at one price", and a lone 1.446-share dividend reinvestment at
+    $56.25 was being used to cost 90 shares of MO that the ledger never saw
+    bought, reporting a $1,323.98 loss nobody could vouch for. A security that
+    sells at any other price is not stable-NAV, so what its untracked shares
+    cost is unknown rather than inferable.
     """
     rows = conn.execute(
-        """SELECT DISTINCT price_per_share FROM transactions
+        """SELECT UPPER(COALESCE(transaction_type, 'BUY')) AS side,
+                  price_per_share, notes
+             FROM transactions
             WHERE ticker = ? AND profile_id = ?
-              AND UPPER(COALESCE(transaction_type, 'BUY')) = 'BUY'
+              AND UPPER(COALESCE(transaction_type, 'BUY')) IN ('BUY', 'SELL')
               AND price_per_share IS NOT NULL
               AND price_per_share > 0""",
         (ticker, profile_id),
     ).fetchall()
-    if len(rows) != 1:
+    buy_prices, sell_prices = set(), set()
+    for row in rows:
+        side = row["side"] if hasattr(row, "keys") else row[0]
+        raw_price = row["price_per_share"] if hasattr(row, "keys") else row[1]
+        notes = row["notes"] if hasattr(row, "keys") else row[2]
+        try:
+            price = round(float(raw_price), 6)
+        except (TypeError, ValueError):
+            return None
+        if side == "BUY":
+            buy_prices.add(price)
+        elif not _is_transfer_txn(notes):
+            # A transfer-out is not a trade, so the value a broker happens to
+            # print on it says nothing about what the security sells for.
+            sell_prices.add(price)
+    if len(buy_prices) != 1:
         return None
-    price = rows[0]["price_per_share"] if hasattr(rows[0], "keys") else rows[0][0]
-    try:
-        price = float(price)
-    except (TypeError, ValueError):
+    price = next(iter(buy_prices))
+    if sell_prices - {price}:
         return None
     return price if price > 0 else None
 
@@ -23783,6 +24084,7 @@ def holding_opening_lot(ticker):
         conn.commit()
         _rollup_transactions(ticker, profile_id, conn)
         conn.commit()
+        _reconcile_owner_after_member_change(conn, profile_id)
         holding_after = conn.execute(
             "SELECT quantity, price_paid, purchase_value "
             "FROM all_account_info WHERE UPPER(ticker) = ? AND profile_id = ?",
@@ -23928,6 +24230,7 @@ def add_transaction(ticker):
 
     # Rollup into all_account_info
     _rollup_transactions(ticker, profile_id, conn)
+    _reconcile_owner_after_member_change(conn, profile_id)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction added for {ticker}"}), 201
 
@@ -24038,6 +24341,7 @@ def reorder_transactions(ticker):
             )
         _rollup_transactions(ticker, profile_id, conn)
         conn.commit()
+        _reconcile_owner_after_member_change(conn, profile_id)
         _clear_total_return_caches()
         return jsonify({
             "ticker": ticker,
@@ -24188,6 +24492,7 @@ def update_transaction(ticker, txn_id):
         and abs((_optional_float(data["price_per_share"]) or 0.0) - float(existing_price or 0)) > 1e-9
     )
     _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=seed_repriced)
+    _reconcile_owner_after_member_change(conn, profile_id)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} updated"})
 
@@ -24227,6 +24532,7 @@ def delete_transaction(ticker, txn_id):
     cnt = remaining["cnt"] if isinstance(remaining, dict) else remaining[0]
     if cnt > 0:
         _rollup_transactions(ticker, profile_id, conn)
+        _reconcile_owner_after_member_change(conn, profile_id)
     # If no transactions left, the holding stays as-is (user can manage via edit modal)
 
     conn.close()
@@ -60062,6 +60368,16 @@ if __name__ == "__main__":
         except Exception as _lot_basis_problem:
             conn.rollback()
             print(f"Specific-lot basis repair failed: {_lot_basis_problem}")
+        try:
+            _lone_buy_replayed = _repair_lone_buy_basis_gains(conn)
+            if _lone_buy_replayed:
+                print(
+                    "[startup] recomputed realized gains costed at a lone purchase "
+                    f"for {_lone_buy_replayed} position(s)"
+                )
+        except Exception as _lone_buy_problem:
+            conn.rollback()
+            print(f"Lone-buy realized gain replay failed: {_lone_buy_problem}")
     finally:
         conn.close()
     # The stored "reuse recent prices" preference has to reach the gateway
