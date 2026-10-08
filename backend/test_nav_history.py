@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from nav_history import activity_flows, build_nav_history_payload, dividend_outflows
+from nav_history import activity_flows, build_nav_history_payload, dividend_outflows, flow_coverage_gaps
 
 
 class NavHistoryPayloadTest(unittest.TestCase):
@@ -38,6 +38,56 @@ class NavHistoryPayloadTest(unittest.TestCase):
         payload = build_nav_history_payload([("2026-07-01", 1000), ("2026-07-02", 1010)])
 
         self.assertEqual([row["total_return_value"] for row in payload], [1000.0, 1010.0])
+
+
+class FlowCoverageGapsTest(unittest.TestCase):
+    def test_full_coverage_is_not_a_gap_and_quiet_edge_days_are_tolerated(self):
+        gaps = flow_coverage_gaps(
+            "2026-05-19", "2026-10-08",
+            {6: [("2026-05-01", "2026-10-05")]},
+            {6: "Schwab"},
+        )
+
+        self.assertEqual(gaps, [])
+
+    def test_history_that_starts_late_or_stops_early_is_a_gap(self):
+        gaps = flow_coverage_gaps(
+            "2026-05-19", "2026-10-08",
+            {19: [("2026-06-29", "2026-09-24")], 6: [("2026-05-01", "2026-10-08")]},
+            {19: "Etrade Trading", 6: "Schwab"},
+        )
+
+        self.assertEqual(gaps, [{
+            "profile_id": 19, "name": "Etrade Trading",
+            "covered_from": "2026-06-29", "covered_to": "2026-09-24",
+        }])
+
+    def test_history_that_stops_well_before_the_chart_ends_is_a_gap(self):
+        gaps = flow_coverage_gaps(
+            "2026-05-19", "2026-10-08", {6: [("2026-05-01", "2026-09-01")]}, {6: "Schwab"},
+        )
+
+        self.assertEqual([gap["name"] for gap in gaps], ["Schwab"])
+
+    def test_an_account_with_no_import_reports_no_dates(self):
+        gaps = flow_coverage_gaps("2026-05-19", "2026-10-08", {9: []}, {9: "Roth IRA"})
+
+        self.assertEqual(gaps, [{
+            "profile_id": 9, "name": "Roth IRA", "covered_from": None, "covered_to": None,
+        }])
+
+    def test_a_single_point_has_no_flows_to_miss(self):
+        self.assertEqual(flow_coverage_gaps("2026-10-08", "2026-10-08", {9: []}), [])
+
+    def test_gaps_ride_on_the_first_point_only(self):
+        gap = {"profile_id": 9, "name": "Roth IRA", "covered_from": None, "covered_to": None}
+        payload = build_nav_history_payload(
+            [("2026-07-01", 1000), ("2026-07-02", 1010)], flow_gaps=[gap],
+        )
+
+        self.assertEqual(payload[0]["flow_gaps"], [gap])
+        self.assertNotIn("flow_gaps", payload[1])
+        self.assertNotIn("flow_gaps", build_nav_history_payload([("2026-07-01", 1000)])[0])
 
 
 class DividendOutflowsTest(unittest.TestCase):
@@ -105,6 +155,10 @@ class NavHistoryFlowScopeTest(unittest.TestCase):
                 ticker TEXT, quantity REAL, price_per_share REAL, performance_treatment TEXT
             );
             CREATE TABLE all_account_info (profile_id INTEGER, ticker TEXT, current_price REAL);
+            CREATE TABLE account_activity_coverage (
+                profile_id INTEGER, start_date TEXT, end_date TEXT, source_format TEXT
+            );
+            INSERT INTO account_activity_coverage VALUES (6, '2026-06-29', '2026-07-05', 'schwab_transactions');
             INSERT INTO profiles VALUES (6, 'Schwab', 1), (14, 'Manual', 0);
             INSERT INTO dividend_payments VALUES
                 (6, 'JEPI', '2026-07-02', 40, 'schwab_transactions'),
@@ -126,6 +180,16 @@ class NavHistoryFlowScopeTest(unittest.TestCase):
         flows = app_module._nav_history_flows(self.conn, [6, 14], "2026-07-01", "2026-07-06")
 
         self.assertEqual(sorted(flows), [("2026-07-02", -500.0), ("2026-07-02", -15.0)])
+
+    def test_only_broker_accounts_are_checked_for_missing_deposit_history(self):
+        import app as app_module
+
+        gaps = app_module._nav_history_flow_gaps(self.conn, [6, 14], "2026-05-19", "2026-07-06")
+
+        self.assertEqual(
+            gaps,
+            [{"profile_id": 6, "name": "Schwab", "covered_from": "2026-06-29", "covered_to": "2026-07-05"}],
+        )
 
 
 if __name__ == "__main__":

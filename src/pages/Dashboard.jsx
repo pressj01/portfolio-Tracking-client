@@ -50,6 +50,7 @@ import {
   isNavHistoryInterval,
   navHistoryCallouts,
   resampleNavHistory,
+  totalReturnGapLines,
   withLiveNavPoint,
 } from '../utils/navHistoryInterval'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
@@ -1816,6 +1817,7 @@ export default function Dashboard() {
   // point follows it on a market day until the official close is recorded.
   const liveNavDate = portfolioValue?.live_nav_date || null
   const liveAccountValue = portfolioValue?.account_value ?? null
+  const totalReturnGaps = useMemo(() => totalReturnGapLines(navHistory), [navHistory])
 
   useEffect(() => {
     const el = navChartRef.current
@@ -2835,6 +2837,24 @@ export default function Dashboard() {
             </button>
           )}
         </div>
+        {navReturnMode === 'total' && totalReturnGaps.length > 0 && navHistory.length >= 1 && (
+          <div
+            role="note"
+            style={{
+              margin: '0 0 0.5rem', padding: '0.5rem 0.75rem', fontSize: '0.82rem', lineHeight: 1.45,
+              color: 'var(--warning-text)', background: 'rgba(249, 168, 37, 0.08)',
+              border: '1px solid var(--warning)', borderRadius: 4,
+            }}
+          >
+            <strong>Total Return may be overstated.</strong> Where deposit and withdrawal history is
+            missing, money you added shows up as investment gain, so this line can look the same as
+            Price Return.
+            <ul style={{ margin: '0.25rem 0', paddingLeft: '1.25rem' }}>
+              {totalReturnGaps.map(line => <li key={line}>{line}</li>)}
+            </ul>
+            Import the broker's full transaction history, including deposits and withdrawals, to fix it.
+          </div>
+        )}
         {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
           <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '1rem 0' }}>
             No NAV snapshots yet. Click "Record NAV" or import data to start tracking.

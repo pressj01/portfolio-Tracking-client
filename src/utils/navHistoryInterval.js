@@ -161,3 +161,23 @@ export const withLiveNavPoint = (history = [], live = null) => {
   }
   return [...history, livePoint]
 }
+
+const gapDate = value => {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+// Total Return can only tell a deposit from a gain where the broker's activity
+// was imported. The history endpoint names the broker accounts whose record
+// misses part of the chart (on its first point); this turns them into the
+// lines the chart notice lists, one per account.
+export const totalReturnGapLines = (history = []) => {
+  const gaps = history?.[0]?.flow_gaps
+  if (!Array.isArray(gaps)) return []
+  return gaps.map(gap => {
+    const name = gap?.name || 'An account'
+    if (!gap?.covered_from || !gap?.covered_to) return `${name}: no deposit or withdrawal history imported`
+    return `${name}: history only covers ${gapDate(gap.covered_from)} to ${gapDate(gap.covered_to)}`
+  })
+}
