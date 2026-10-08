@@ -4555,18 +4555,61 @@ def _dividend_payment_totals_by_ticker(conn, profile_ids):
     }
 
 
-def _apply_dividend_payment_total_floor(rows, payment_totals):
-    if not payment_totals:
+def _dividend_payments_before_purchase_by_ticker(conn, profile_ids):
+    """Recorded dividend cash paid before the current holding lot was bought.
+
+    The other half of _dividend_payment_totals_by_ticker: the same join on the
+    live holding row, for the payments on the far side of purchase_date. A
+    stored total_divs_received may or may not include them. The transaction
+    imports write every payment the account ever recorded for the ticker,
+    while the repair and hand-edit flows write only those since purchase_date,
+    so the stored figure alone cannot say which it is.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT dp.ticker, COALESCE(SUM(dp.amount), 0) AS paid_before
+            FROM dividend_payments dp
+            JOIN all_account_info a
+              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+            WHERE dp.profile_id IN ({placeholders})
+              AND a.purchase_date IS NOT NULL
+              AND dp.payment_date < a.purchase_date
+              AND LOWER(COALESCE(dp.source, '')) != 'refresh_estimate'
+            GROUP BY dp.ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["paid_before"]) for row in rows}
+
+
+def _apply_dividend_payment_total_floor(rows, payment_totals, paid_before_purchase=None):
+    """Put a holding's dividends on the footing of its current lot.
+
+    payment_totals is the ledger since purchase_date and is a floor: a stored
+    total below it is behind the ledger. paid_before_purchase comes off the
+    stored total first, because a total written by a transaction import
+    carries the dividends of lots that were sold before the oldest remaining
+    one was bought. Left in, they sat in Total profit beside a realized result
+    and an invested cost that both start at purchase_date: FSCO, sold out and
+    bought back, showed $535.48 of dividends when $80.41 had been paid on the
+    position held. A stored total that never included them only falls to the
+    floor, which is the same ledger.
+    """
+    paid_before_purchase = paid_before_purchase or {}
+    if not payment_totals and not paid_before_purchase:
         return rows
     for row in rows:
         ticker = row.get("ticker")
-        payment_total = _num_or_zero(payment_totals.get(ticker))
-        if payment_total <= 0:
+        payment_total = _num_or_zero(payment_totals.get(ticker)) if payment_totals else 0.0
+        paid_before = _num_or_zero(paid_before_purchase.get(ticker))
+        if payment_total <= 0 and paid_before <= 0:
             continue
-        row["total_divs_received"] = max(
-            _num_or_zero(row.get("total_divs_received")),
-            payment_total,
-        )
+        stored = _num_or_zero(row.get("total_divs_received"))
+        if paid_before > 0:
+            stored = max(round(stored - paid_before, 2), 0.0)
+        row["total_divs_received"] = max(stored, payment_total)
     return rows
 
 
@@ -5279,7 +5322,9 @@ def _holding_figures_summed_by_account(conn, account_ids, require_basis=False):
             (account_id,),
         ).fetchall())
         _apply_dividend_payment_total_floor(
-            rows, _dividend_payment_totals_by_ticker(conn, [account_id])
+            rows,
+            _dividend_payment_totals_by_ticker(conn, [account_id]),
+            _dividend_payments_before_purchase_by_ticker(conn, [account_id]),
         )
         _apply_basis_mode_to_holdings(
             rows,
@@ -7847,9 +7892,9 @@ def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
     Runs for active Owner portfolios with member accounts. Syncs quantities,
-    prices, yield, and income fields while preserving
-    Owner-only data (ytd_divs, total_divs_received, paid_for_itself,
-    current_month_income).
+    prices, yield, and income fields, and the payout history (ytd_divs,
+    total_divs_received, paid_for_itself, current_month_income) wherever the
+    member accounts track it.
     """
     conn = get_connection()
     try:
@@ -7945,9 +7990,9 @@ def _reconcile_owner_rollup(conn):
     ).fetchall()
     owner_tickers = {r["ticker"] for r in owner_rows}
 
-    # Sync these fields from sub-profiles.  Owner-only payout history fields
-    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
-    # are preserved since sub-profiles don't track those.
+    # Sync these fields from sub-profiles. The payout history fields (ytd_divs,
+    # total_divs_received, paid_for_itself, current_month_income) are refreshed
+    # separately below, once the positions are in place.
     sync_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
@@ -7982,6 +8027,14 @@ def _reconcile_owner_rollup(conn):
             "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, owner_id),
         )
+
+    # Payout history used to be left as Owner had it, because member accounts
+    # did not track it. They do now, and nothing else writes Owner's copy while
+    # it is a rollup, so it froze at whatever it held when the ticker first
+    # reached Owner: ARCC read $197.67 of dividends against $3,360.69 across
+    # the three accounts holding it. Every screen that reads the stored figure
+    # for Owner (Dividend Analysis, the dividends list) showed that.
+    _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
 
     conn.commit()
 
@@ -9253,9 +9306,9 @@ def reconcile_owner():
     updated = 0
     removed = 0
 
-    # Fields to sync from sub-profiles to Owner.
-    # Owner-only payout history fields are preserved: ytd_divs,
-    # total_divs_received, paid_for_itself, current_month_income.
+    # Fields to sync from sub-profiles to Owner. The payout history fields
+    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
+    # are refreshed after the positions, below.
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
@@ -9272,7 +9325,7 @@ def reconcile_owner():
 
     for ticker, agg in agg_map.items():
         if ticker in owner_tickers:
-            # Sync quantity/income fields from sub-portfolios, preserve Owner-only fields
+            # Sync quantity/income fields from sub-portfolios
             sets = []
             vals = []
             for f in update_fields:
@@ -9304,6 +9357,9 @@ def reconcile_owner():
             (ticker, owner_id),
         )
         removed += 1
+
+    # Same refresh the automatic reconcile does; see _reconcile_owner_rollup.
+    _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
 
     conn.commit()
 
@@ -15171,8 +15227,14 @@ def _recompute_dividend_fields_from_payments(
     }
 
 
-def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1):
-    """For repair flows, rebuild Owner dividend actuals from repaired source rows."""
+def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1, only_tracked=False):
+    """Rebuild Owner's dividend actuals from its member accounts' rows.
+
+    only_tracked leaves a ticker alone when no member holding it carries any
+    dividend actuals. That is the one case the old "Owner-only payout history"
+    rule still protects: an Owner spreadsheet imported before the members
+    tracked payouts, whose figures the members cannot replace.
+    """
     source_ids = [int(pid) for pid in source_ids if pid is not None and int(pid) != owner_id]
     if not source_ids:
         return 0
@@ -15202,6 +15264,11 @@ def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1):
             source = next(iter(source_set))
         elif len(source_set) > 1:
             source = "mixed"
+        if only_tracked and not source_set and not any(
+            _num_or_zero(row[field]) > 0
+            for field in ("total_divs_received", "ytd_divs", "current_month_income")
+        ):
+            continue
 
         before = conn.total_changes
         conn.execute(
@@ -20934,6 +21001,7 @@ def list_holdings():
     _apply_dividend_payment_total_floor(
         results,
         _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
+        _dividend_payments_before_purchase_by_ticker(conn, payment_profile_ids),
     )
     _apply_basis_mode_to_holdings(
         results,
@@ -35397,10 +35465,13 @@ def total_return_summary():
             for ticker, stored in zip(df["ticker"], df["total_divs_received"])
         ]
     else:
-        payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
-        if payment_totals:
-            df["payment_total_divs_received"] = df["ticker"].map(payment_totals).fillna(0)
-            df["total_divs_received"] = df[["total_divs_received", "payment_total_divs_received"]].max(axis=1)
+        # One account: the same rule the holdings list applies to its rows.
+        floored = _apply_dividend_payment_total_floor(
+            df[["ticker", "total_divs_received"]].to_dict("records"),
+            _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
+            _dividend_payments_before_purchase_by_ticker(conn, payment_profile_ids),
+        )
+        df["total_divs_received"] = [row["total_divs_received"] for row in floored]
 
     # Enrich category names
     try:

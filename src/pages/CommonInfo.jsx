@@ -81,7 +81,7 @@ const GRADE_RANK = {
 
 const SUMMARY_HELP = {
   value: 'Summary card: current market value of the open holdings shown after filters. Cash is not included; Dashboard Portfolio Value is holdings plus cash. The lower line is their active cost basis.',
-  totalProfit: 'Summary card: remaining-lot price gain or loss plus guarded lifetime dividends plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.',
+  totalProfit: 'Summary card: remaining-lot price gain or loss plus dividends received since the oldest remaining lot was bought plus realized gain or loss on shares trimmed from still-open tickers. The percent is that total versus invested/profit basis, not versus current value. Cash and fully sold tickers are not included. Same number as Gains & Losses Total Profit.',
   passiveIncome: 'Summary card: estimated next-12-month dividends divided by current holdings value. This is a forward yield on open holdings, not income already received and not yield on cash. The lower line is the dollar estimate.',
 }
 
@@ -100,9 +100,9 @@ const COLUMN_HELP = {
   dividendYield: 'Column: upper value is current yield. Lower value is yield on cost.',
   estimatedYield: 'Column: forward yield estimate based on next-12-month dividends and current value.',
   dividendGrowth: 'Column: five-year dividend growth when available from the source data.',
-  totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares.',
+  totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares. Dividends and realized profit both count from when your oldest remaining lot was bought, so an earlier position you sold out of before buying back does not carry over.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
-  paidForItself: 'Column: lifetime distributions received as a percent of original cost. 100% means dividends have paid back the amount invested.',
+  paidForItself: 'Column: distributions received on the position you hold now, counted from when its oldest remaining lot was bought, as a percent of original cost. 100% means dividends have paid back the amount invested.',
   nav: 'Column: benchmark-adjusted NAV erosion. Auto/Test/Skip chooses whether to test this ticker. The box assigns a benchmark such as QQQ or BTC-USD.',
   nextPayment: 'Column: next listed dividend payment date.',
   exDividend: 'Column: the listed ex-dividend date.',

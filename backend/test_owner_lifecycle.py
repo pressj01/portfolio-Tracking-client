@@ -281,6 +281,63 @@ class OwnerLifecycleTest(unittest.TestCase):
         ).fetchone()[0], 1)
         conn.close()
 
+    def test_reconcile_refreshes_owner_payout_history_from_its_accounts(self):
+        # Owner's payout history was left as it stood when a ticker first
+        # reached Owner, so it fell behind the accounts. A ticker the accounts
+        # track now follows them; one they carry nothing for keeps the figure
+        # Owner already had, from a spreadsheet imported before they tracked it.
+        self.client.post("/api/owner")
+        members = []
+        for name in ("First", "Second"):
+            member = self.client.post(
+                "/api/profiles", json={"name": name, "broker_source": "schwab"}
+            ).get_json()
+            self.client.put(
+                f"/api/profiles/{member['id']}/include-in-owner", json={"include": True}
+            )
+            members.append(member["id"])
+        first, second = members
+        holdings = [
+            # profile, ticker, shares, cost, lifetime, year to date, this month, source
+            (first, "TRK", 10, 100, 60.0, 20.0, 5.0, "schwab_transactions"),
+            (second, "TRK", 5, 50, 40.0, 10.0, 0.0, "schwab_transactions"),
+            (first, "OLD", 1, 10, None, None, None, None),
+            (1, "TRK", 15, 150, 7.0, 1.0, 0.0, "schwab"),
+            (1, "OLD", 1, 10, 99.0, 9.0, 0.0, "schwab"),
+        ]
+        conn = self._get_connection()
+        conn.execute("DELETE FROM all_account_info")
+        for row in holdings:
+            conn.execute(
+                "INSERT INTO all_account_info "
+                "(profile_id, ticker, quantity, purchase_value, price_paid, current_price, current_value, "
+                "total_divs_received, ytd_divs, current_month_income, dividend_actuals_source) "
+                "VALUES (?, ?, ?, ?, 10, 10, ?, ?, ?, ?, ?)",
+                (*row[:4], row[2] * 10, *row[4:]),
+            )
+        conn.commit()
+        conn.close()
+
+        app_module._auto_reconcile_owner()
+
+        conn = self._get_connection()
+        owner = {
+            row["ticker"]: row
+            for row in conn.execute(
+                "SELECT ticker, total_divs_received, ytd_divs, current_month_income, "
+                "paid_for_itself, dividend_actuals_source "
+                "FROM all_account_info WHERE profile_id = 1"
+            ).fetchall()
+        }
+        conn.close()
+        self.assertEqual(owner["TRK"]["total_divs_received"], 100.0)
+        self.assertEqual(owner["TRK"]["ytd_divs"], 30.0)
+        self.assertEqual(owner["TRK"]["current_month_income"], 5.0)
+        self.assertAlmostEqual(owner["TRK"]["paid_for_itself"], 100.0 / 150.0, places=6)
+        self.assertEqual(owner["TRK"]["dividend_actuals_source"], "schwab_transactions")
+        self.assertEqual(owner["OLD"]["total_divs_received"], 99.0)
+        self.assertEqual(owner["OLD"]["ytd_divs"], 9.0)
+
     def test_direct_import_replaces_a_stale_rollup_marker(self):
         self.client.post("/api/owner")
         conn = self._get_connection()

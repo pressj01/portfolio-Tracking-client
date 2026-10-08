@@ -3124,11 +3124,14 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             )
         return combined, accounts
 
-    def _seed_owner_ticker_held_in_one_account(self):
-        # The account's stored dividend total includes $30 paid before the
-        # purchase date of the lot it holds now; the ledger since then is $40.
-        # Owner's stored copy carries the position but no dividend total. A
-        # second member has LONE sales in its history and no position in it.
+    def _seed_owner_ticker_held_in_one_account(
+        self, stored_total=100.0, payments=(("2026-04-15", 40.0),),
+    ):
+        # The account's stored dividend total ($100) is ahead of its payment
+        # ledger ($40 since the purchase date), as a positions file that
+        # reports lifetime dividends leaves it. Owner's stored copy carries the
+        # position but no dividend total. A second member has LONE sales in its
+        # history and no position in it.
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Holds It', 1)")
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Does Not Hold It', 1)")
@@ -3139,7 +3142,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 "VALUES ('LONE', ?, 'SELL', '2026-02-01', 5, 12, 0, '', ?)",
                 (profile_id, gain),
             )
-        for profile_id, total_divs in ((1, None), (20, 100.0)):
+        for profile_id, total_divs in ((1, None), (20, stored_total)):
             self._execute(
                 "INSERT INTO all_account_info "
                 "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
@@ -3148,7 +3151,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 "VALUES ('LONE', ?, 'Lone Fund', 10, 10, 100, '2026-03-01', 12, 120, 20, ?, 0, 'N', 0, 0)",
                 (profile_id, total_divs),
             )
-        for payment_date, amount in (("2026-01-15", 30.0), ("2026-04-15", 40.0)):
+        for payment_date, amount in payments:
             self._execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
                 "VALUES ('LONE', 20, ?, ?, 'import', '')",
@@ -3156,7 +3159,7 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             )
 
     def test_owner_row_matches_the_only_account_holding_the_ticker(self):
-        # Owner rebuilt dividends from the ledger since the purchase date and
+        # Owner took dividends from its own stored row and the ledger, and
         # showed $40 where the one account holding LONE showed its stored $100,
         # so Total profit differed for a ticker a single account owned.
         self._seed_owner_ticker_held_in_one_account()
@@ -3174,6 +3177,45 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(
             [(part["account"], part["realized"], part["holds"]) for part in owner["realized_all_time_accounts"]],
             [("Holds It", 12.0, True), ("Does Not Hold It", 500.0, False)],
+        )
+
+    def test_dividends_from_before_the_purchase_date_stay_out_of_total_profit(self):
+        # A transaction import stores every payment the account ever recorded
+        # for the ticker: $30 on a lot sold before this one was bought and $40
+        # since. Realized P&L and invested cost both start at the purchase
+        # date, so Total profit counted $70 of dividends on a position that
+        # had been paid $40.
+        self._seed_owner_ticker_held_in_one_account(
+            stored_total=70.0,
+            payments=(("2026-01-15", 30.0), ("2026-04-15", 40.0)),
+        )
+        # Bought back in March with nothing paid since: its dividends are zero.
+        self._execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date, "
+            "current_price, current_value, gain_or_loss, total_divs_received, "
+            "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+            "VALUES ('BACK', 20, 'Bought Back', 10, 10, 100, '2026-03-01', 10, 100, 0, 25, 0, 'N', 0, 0)"
+        )
+        self._execute(
+            "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
+            "VALUES ('BACK', 20, '2026-01-15', 25, 'import', '')"
+        )
+
+        account = self._holding_row("profile_id=20", "LONE")
+        bought_back = self._holding_row("profile_id=20", "BACK")
+        summary = self.client.get("/api/total-return/summary?profile_id=20").get_json()
+        owner, _ = self._assert_row_is_the_sum_of_its_accounts("profile_id=1", [20], "LONE")
+
+        self.assertEqual(account["total_divs_received"], 40.0)
+        self.assertEqual(account["total_return_divs_component"], 40.0)
+        self.assertEqual(account["paid_for_itself"], 0.4)
+        self.assertEqual(bought_back["total_divs_received"], 0.0)
+        self.assertEqual(bought_back["total_return_divs_component"], 0.0)
+        self.assertEqual(owner["total_divs_received"], 40.0)
+        self.assertEqual(
+            {row["ticker"]: row["total_divs_received"] for row in summary["rows"]},
+            {"BACK": 0.0, "LONE": 40.0},
         )
 
     def test_owner_total_return_summary_matches_the_account_dividends(self):
