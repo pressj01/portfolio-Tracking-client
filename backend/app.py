@@ -4555,18 +4555,61 @@ def _dividend_payment_totals_by_ticker(conn, profile_ids):
     }
 
 
-def _apply_dividend_payment_total_floor(rows, payment_totals):
-    if not payment_totals:
+def _dividend_payments_before_purchase_by_ticker(conn, profile_ids):
+    """Recorded dividend cash paid before the current holding lot was bought.
+
+    The other half of _dividend_payment_totals_by_ticker: the same join on the
+    live holding row, for the payments on the far side of purchase_date. A
+    stored total_divs_received may or may not include them. The transaction
+    imports write every payment the account ever recorded for the ticker,
+    while the repair and hand-edit flows write only those since purchase_date,
+    so the stored figure alone cannot say which it is.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT dp.ticker, COALESCE(SUM(dp.amount), 0) AS paid_before
+            FROM dividend_payments dp
+            JOIN all_account_info a
+              ON a.ticker = dp.ticker AND a.profile_id = dp.profile_id
+            WHERE dp.profile_id IN ({placeholders})
+              AND a.purchase_date IS NOT NULL
+              AND dp.payment_date < a.purchase_date
+              AND LOWER(COALESCE(dp.source, '')) != 'refresh_estimate'
+            GROUP BY dp.ticker""",
+        ids,
+    ).fetchall()
+    return {row["ticker"]: _num_or_zero(row["paid_before"]) for row in rows}
+
+
+def _apply_dividend_payment_total_floor(rows, payment_totals, paid_before_purchase=None):
+    """Put a holding's dividends on the footing of its current lot.
+
+    payment_totals is the ledger since purchase_date and is a floor: a stored
+    total below it is behind the ledger. paid_before_purchase comes off the
+    stored total first, because a total written by a transaction import
+    carries the dividends of lots that were sold before the oldest remaining
+    one was bought. Left in, they sat in Total profit beside a realized result
+    and an invested cost that both start at purchase_date: FSCO, sold out and
+    bought back, showed $535.48 of dividends when $80.41 had been paid on the
+    position held. A stored total that never included them only falls to the
+    floor, which is the same ledger.
+    """
+    paid_before_purchase = paid_before_purchase or {}
+    if not payment_totals and not paid_before_purchase:
         return rows
     for row in rows:
         ticker = row.get("ticker")
-        payment_total = _num_or_zero(payment_totals.get(ticker))
-        if payment_total <= 0:
+        payment_total = _num_or_zero(payment_totals.get(ticker)) if payment_totals else 0.0
+        paid_before = _num_or_zero(paid_before_purchase.get(ticker))
+        if payment_total <= 0 and paid_before <= 0:
             continue
-        row["total_divs_received"] = max(
-            _num_or_zero(row.get("total_divs_received")),
-            payment_total,
-        )
+        stored = _num_or_zero(row.get("total_divs_received"))
+        if paid_before > 0:
+            stored = max(round(stored - paid_before, 2), 0.0)
+        row["total_divs_received"] = max(stored, payment_total)
     return rows
 
 
@@ -4666,12 +4709,12 @@ def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
     all_time=True is the Snowball-style figure: every sale of the ticker, with no
     purchase_date scoping and no per-account join. Snowball attributes realized
     P&L to the ticker, not to the lots still open, so a ticker sold down to zero
-    and later re-bought keeps the earlier sales. The caller only ever reads the
-    tickers it is still holding, so dropping the join is also what lets a sale
-    made in one account count toward a ticker that is still held in another
-    selected account — the combined-portfolio behaviour. The default stays
-    lot-scoped because invested cost and dividends are scoped that way, and
-    Total profit needs all three on the same footing.
+    and later re-bought keeps the earlier sales. Given several accounts it adds
+    every one's sales, including an account that has sold out of a ticker still
+    held in another; the holdings list does not show that total for a combined
+    view, it adds the accounts one at a time (_holding_figures_summed_by_account).
+    The default stays lot-scoped because invested cost and dividends are scoped
+    that way, and Total profit needs all three on the same footing.
 
     all_account_info.realized_gains is a running total accumulated across a
     ticker+profile's ENTIRE transaction history by _rollup_transactions, with
@@ -4724,16 +4767,16 @@ def _realized_gains_by_ticker(conn, profile_ids, all_time=False):
 
 
 def _realized_all_time_accounts_by_ticker(conn, profile_ids):
-    """Split the all-time realized figure by the account that made the sales.
+    """Every account's all-time realized result for a ticker, held or sold out.
 
-    In a combined view the all-time figure counts a sale made in any selected
-    account, including one that has since sold out of the ticker. That account
-    no longer lists the ticker, so its own page never shows the sale and the
-    combined number looks like it came from nowhere: Owner reported -$6,384.21
-    on PBDC while the one account still holding it showed -$2,647.49, the rest
-    sitting in three accounts that had sold out. This is the same sum as
-    _realized_gains_by_ticker(all_time=True), kept per account and marked with
-    whether that account still holds the ticker, so the figure can be traced.
+    A combined row adds the accounts that still hold the ticker, so it equals
+    their own pages. An account that has sold out of it no longer lists the
+    ticker, and its sales are left out of the row: Owner used to report
+    -$6,384.21 on PBDC while the one account still holding it showed
+    -$2,647.49, the rest sitting in three accounts that had sold out. Each
+    entry is marked with whether that account still holds the ticker, so the
+    row can be traced to the accounts behind it and the sales it leaves out
+    stay visible somewhere in the combined view.
     """
     ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
     if len(ids) < 2:
@@ -4918,9 +4961,9 @@ def _basis_mode():
     return "broker_adjusted" if mode in {"broker", "broker_adjusted", "adjusted"} else "original"
 
 
-def _basis_total_expr(alias="a"):
+def _basis_total_expr(alias="a", mode=None):
     prefix = f"{alias}." if alias else ""
-    if _basis_mode() == "broker_adjusted":
+    if (mode or _basis_mode()) == "broker_adjusted":
         price = f"COALESCE({prefix}broker_price_paid, {prefix}price_paid, {prefix}original_price_paid)"
         stored = f"COALESCE({prefix}broker_purchase_value, {prefix}purchase_value, {prefix}original_purchase_value)"
     else:
@@ -5191,6 +5234,147 @@ def _apply_basis_mode_to_holdings(results, invested_by_ticker=None, realized_by_
         if realized_all_time_accounts_by_ticker:
             r["realized_all_time_accounts"] = (
                 realized_all_time_accounts_by_ticker.get(r.get("ticker")) or []
+            )
+    return results
+
+
+def _apply_recorded_dividend_income(conn, rows, profile_ids):
+    """Year-to-date and current-month dividend cash from the payment ledger."""
+    profile_ids = [int(pid) for pid in (profile_ids or [])]
+    if not profile_ids:
+        return rows
+    mph = ",".join("?" * len(profile_ids))
+    today_d = datetime.date.today()
+    month_start = today_d.replace(day=1).isoformat()
+    year_start = today_d.replace(month=1, day=1).isoformat()
+    today_iso = today_d.isoformat()
+    pay_rows = conn.execute(
+        f"""SELECT ticker,
+                   COALESCE(SUM(amount), 0) as ytd_amount,
+                   COALESCE(SUM(CASE WHEN payment_date >= ? THEN amount ELSE 0 END), 0) as month_amount
+            FROM dividend_payments
+            WHERE profile_id IN ({mph})
+              AND payment_date >= ? AND payment_date <= ?
+            GROUP BY ticker""",
+        [month_start] + profile_ids + [year_start, today_iso],
+    ).fetchall()
+    recorded_ytd, recorded_rows = _recorded_dividend_amounts_by_ticker(
+        conn, profile_ids, year_start, today_iso
+    )
+    if recorded_rows:
+        for r in rows:
+            ticker = str(r.get("ticker") or "").strip().upper()
+            r["ytd_divs"] = round(recorded_ytd.get(ticker, 0.0), 2)
+    if pay_rows:
+        month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
+        for r in rows:
+            r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
+    return rows
+
+
+def _holdings_scope_is_combined(profile_ids, account_ids):
+    """Whether a holdings view adds up more than one account's own page.
+
+    account_ids is the view with Owner replaced by the accounts it rolls up, so
+    Owner counts as combined even when it has a single member.
+    """
+    return len(account_ids) > 1 or list(account_ids) != [int(pid) for pid in profile_ids]
+
+
+# What a combined holdings row takes from its accounts instead of working out
+# for itself. Each is the figure the account's own page shows, added up.
+_ACCOUNT_SUMMED_HOLDING_FIELDS = (
+    "purchase_value", "gain_or_loss",
+    "total_divs_received", "ytd_divs", "current_month_income",
+    "total_return_basis", "total_return_divs_component",
+    "total_return_realized_component", "realized_all_time",
+)
+
+
+def _holding_figures_summed_by_account(conn, account_ids, require_basis=False):
+    """Per-ticker money figures for a combined view: each account's own, added.
+
+    Owner and custom aggregates used to apply the single-account rules once, to
+    numbers that were already combined, and that is not the same sum. Dividends
+    received are the larger of the stored total and the payment ledger, and the
+    total-return basis is the larger of the remaining cost and the cash put in;
+    "the larger of" taken once on the totals disagrees with taking it account
+    by account whenever the accounts differ on which side is larger. Owner also
+    read dividends off its own stored row, which no reconcile refreshes, so a
+    ticker held in one account could show a Total profit that account did not:
+    FSCO read $496.79 of dividends in Owner against $535.48 in the only account
+    holding it. Running every account through the same steps its own page uses
+    is what makes the combined row their sum by construction.
+
+    The all-time realized figure is summed the same way, so it covers the
+    accounts that still hold the ticker. Counting every member's sales instead
+    gave Owner a result for a ticker that the one account holding it did not
+    show, and a footer far above its accounts' footers added together; the
+    sales left out are named by _realized_all_time_accounts_by_ticker.
+
+    require_basis leaves out an account's row when it has no cost basis, for
+    the Total Return table, which does not list such a row either.
+    """
+    figures = {}
+    for account_id in account_ids:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM all_account_info WHERE profile_id = ? AND COALESCE(quantity, 0) > 1e-9",
+            (account_id,),
+        ).fetchall())
+        _apply_dividend_payment_total_floor(
+            rows,
+            _dividend_payment_totals_by_ticker(conn, [account_id]),
+            _dividend_payments_before_purchase_by_ticker(conn, [account_id]),
+        )
+        _apply_basis_mode_to_holdings(
+            rows,
+            _cumulative_invested_cost_by_ticker(conn, [account_id]),
+            _realized_gains_by_ticker(conn, [account_id]),
+            _realized_gains_by_ticker(conn, [account_id], all_time=True),
+        )
+        for r in rows:
+            if r.get("current_month_income") is None:
+                r["current_month_income"] = _estimate_current_month_income(r)
+            if r.get("ytd_divs") is None:
+                r["ytd_divs"] = _estimate_ytd_income(r)
+        _apply_recorded_dividend_income(conn, rows, [account_id])
+        for r in rows:
+            if require_basis and _num_or_zero(r.get("purchase_value")) <= 0:
+                continue
+            entry = figures.setdefault(r["ticker"], {"paid_for_itself_known": False})
+            for field in _ACCOUNT_SUMMED_HOLDING_FIELDS:
+                # A figure no account has (no cost basis on file, say) stays
+                # blank in the combined row rather than turning into a zero.
+                if r.get(field) is not None:
+                    entry[field] = entry.get(field, 0.0) + _num_or_zero(r.get(field))
+            # None is the single-account guard against dividends earned on
+            # shares that were sold without a buy history to size them by.
+            if r.get("paid_for_itself") is not None:
+                entry["paid_for_itself_known"] = True
+    return figures
+
+
+def _apply_account_summed_holding_figures(results, figures_by_ticker):
+    """Replace a combined row's own arithmetic with the sum of its accounts."""
+    for r in results:
+        figures = figures_by_ticker.get(r.get("ticker"))
+        if not figures:
+            continue
+        for field in _ACCOUNT_SUMMED_HOLDING_FIELDS:
+            r[field] = round(figures[field], 2) if field in figures else None
+        cost = _num_or_zero(r["purchase_value"])
+        annual = r.get("estim_payment_per_year")
+        if cost > 0 and r["gain_or_loss"] is not None:
+            gain_pct = round(r["gain_or_loss"] / cost, 6)
+            r["gain_or_loss_percentage"] = gain_pct
+            r["percent_change"] = gain_pct
+        if cost > 0 and annual is not None:
+            r["annual_yield_on_cost"] = round(float(annual) / cost, 6)
+        basis = _num_or_zero(r["total_return_basis"])
+        if basis > 0:
+            r["paid_for_itself"] = (
+                round(_num_or_zero(r["total_return_divs_component"]) / basis, 6)
+                if figures["paid_for_itself_known"] else None
             )
     return results
 
@@ -7715,9 +7899,9 @@ def _auto_reconcile_owner():
     """Silently reconcile Owner (profile 1) from sub-profiles after any import.
 
     Runs for active Owner portfolios with member accounts. Syncs quantities,
-    prices, yield, and income fields while preserving
-    Owner-only data (ytd_divs, total_divs_received, paid_for_itself,
-    current_month_income).
+    prices, yield, and income fields, and the payout history (ytd_divs,
+    total_divs_received, paid_for_itself, current_month_income) wherever the
+    member accounts track it.
     """
     conn = get_connection()
     try:
@@ -7813,9 +7997,9 @@ def _reconcile_owner_rollup(conn):
     ).fetchall()
     owner_tickers = {r["ticker"] for r in owner_rows}
 
-    # Sync these fields from sub-profiles.  Owner-only payout history fields
-    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
-    # are preserved since sub-profiles don't track those.
+    # Sync these fields from sub-profiles. The payout history fields (ytd_divs,
+    # total_divs_received, paid_for_itself, current_month_income) are refreshed
+    # separately below, once the positions are in place.
     sync_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
@@ -7850,6 +8034,14 @@ def _reconcile_owner_rollup(conn):
             "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
             (ticker, owner_id),
         )
+
+    # Payout history used to be left as Owner had it, because member accounts
+    # did not track it. They do now, and nothing else writes Owner's copy while
+    # it is a rollup, so it froze at whatever it held when the ticker first
+    # reached Owner: ARCC read $197.67 of dividends against $3,360.69 across
+    # the three accounts holding it. Every screen that reads the stored figure
+    # for Owner (Dividend Analysis, the dividends list) showed that.
+    _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
 
     conn.commit()
 
@@ -9121,9 +9313,9 @@ def reconcile_owner():
     updated = 0
     removed = 0
 
-    # Fields to sync from sub-profiles to Owner.
-    # Owner-only payout history fields are preserved: ytd_divs,
-    # total_divs_received, paid_for_itself, current_month_income.
+    # Fields to sync from sub-profiles to Owner. The payout history fields
+    # (ytd_divs, total_divs_received, paid_for_itself, current_month_income)
+    # are refreshed after the positions, below.
     update_fields = [
         "description", "classification_type", "quantity", "price_paid",
         "current_price", "purchase_value", "original_price_paid", "original_purchase_value",
@@ -9140,7 +9332,7 @@ def reconcile_owner():
 
     for ticker, agg in agg_map.items():
         if ticker in owner_tickers:
-            # Sync quantity/income fields from sub-portfolios, preserve Owner-only fields
+            # Sync quantity/income fields from sub-portfolios
             sets = []
             vals = []
             for f in update_fields:
@@ -9172,6 +9364,9 @@ def reconcile_owner():
             (ticker, owner_id),
         )
         removed += 1
+
+    # Same refresh the automatic reconcile does; see _reconcile_owner_rollup.
+    _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id, only_tracked=True)
 
     conn.commit()
 
@@ -15039,8 +15234,14 @@ def _recompute_dividend_fields_from_payments(
     }
 
 
-def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1):
-    """For repair flows, rebuild Owner dividend actuals from repaired source rows."""
+def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1, only_tracked=False):
+    """Rebuild Owner's dividend actuals from its member accounts' rows.
+
+    only_tracked leaves a ticker alone when no member holding it carries any
+    dividend actuals. That is the one case the old "Owner-only payout history"
+    rule still protects: an Owner spreadsheet imported before the members
+    tracked payouts, whose figures the members cannot replace.
+    """
     source_ids = [int(pid) for pid in source_ids if pid is not None and int(pid) != owner_id]
     if not source_ids:
         return 0
@@ -15070,6 +15271,11 @@ def _sync_owner_dividend_actuals_from_sources(conn, source_ids, owner_id=1):
             source = next(iter(source_set))
         elif len(source_set) > 1:
             source = "mixed"
+        if only_tracked and not source_set and not any(
+            _num_or_zero(row[field]) > 0
+            for field in ("total_divs_received", "ytd_divs", "current_month_income")
+        ):
+            continue
 
         before = conn.total_changes
         conn.execute(
@@ -20670,29 +20876,16 @@ def list_holdings():
         conn.commit()
 
     if is_agg and len(pids) > 1:
-        # Check if Owner import was used — if so, prefer Owner's per-ticker
-        # income/dividend data since the Owner spreadsheet is authoritative.
-        # For generic-only imports (no Owner), just SUM across sub-profiles.
-        _oiu = conn.execute(
-            "SELECT value FROM settings WHERE key = 'owner_import_used'"
-        ).fetchone()
-        use_owner = _oiu and _oiu[0] == "true"
+        # Each account's stored total is authoritative for that account (see
+        # _basis_total_expr), so the combined total is their sum. Rebuilding it
+        # as quantity x average price put AITX $27.80 under the two accounts
+        # that hold it.
+        original_total = _basis_total_expr("a", "original")
+        broker_total = _basis_total_expr("a", "broker_adjusted")
 
-        def _own_or_sum(field):
-            """COALESCE from Owner if Owner import exists, else plain SUM."""
-            if use_owner:
-                return (f"COALESCE((SELECT o.{field} FROM all_account_info o "
-                        f"WHERE o.ticker = a.ticker AND o.profile_id = 1), SUM(a.{field}))")
-            return f"SUM(a.{field})"
-
-        # Income fields are recalculated by refresh for all profiles, so just SUM.
-        # Payout history fields (ytd, total divs, current month) only exist in
-        # Owner, so COALESCE from Owner when available.
-        ytd = _own_or_sum("ytd_divs")
-        tot_div = _own_or_sum("total_divs_received")
-        cur_mo = _own_or_sum("current_month_income")
-
-        # Aggregate: combine duplicate tickers across portfolios
+        # Aggregate: combine duplicate tickers across portfolios. The payout
+        # history columns (ytd, total divs, current month) are placeholders
+        # here; _apply_account_summed_holding_figures replaces them below.
         rows = conn.execute(
             f"""SELECT
                    a.ticker,
@@ -20703,9 +20896,9 @@ def list_holdings():
                    MAX(a.current_price) as current_price,
                    SUM({basis_total}) as purchase_value,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as original_price_paid,
-                   SUM(a.quantity * COALESCE(a.original_price_paid, a.price_paid)) as original_purchase_value,
+                   SUM({original_total}) as original_purchase_value,
                    CASE WHEN SUM(a.quantity) > 0 THEN SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) / SUM(a.quantity) ELSE 0 END as broker_price_paid,
-                   SUM(a.quantity * COALESCE(a.broker_price_paid, a.price_paid)) as broker_purchase_value,
+                   SUM({broker_total}) as broker_purchase_value,
                    SUM(a.current_value) as current_value,
                    SUM(a.current_value) - SUM({basis_total}) as gain_or_loss,
                    CASE WHEN SUM({basis_total}) > 0 THEN (SUM(a.current_value) - SUM({basis_total})) / SUM({basis_total}) ELSE 0 END as gain_or_loss_percentage,
@@ -20734,12 +20927,12 @@ def list_holdings():
                    SUM(a.shares_bought_from_dividend) as shares_bought_from_dividend,
                    SUM(a.shares_bought_in_year) as shares_bought_in_year,
                    SUM(a.shares_in_month) as shares_in_month,
-                   {ytd} as ytd_divs,
-                   {tot_div} as total_divs_received,
-                   CASE WHEN SUM({basis_total}) > 0 THEN {tot_div} / SUM({basis_total}) ELSE 0 END as paid_for_itself,
+                   SUM(a.ytd_divs) as ytd_divs,
+                   SUM(a.total_divs_received) as total_divs_received,
+                   CASE WHEN SUM({basis_total}) > 0 THEN SUM(a.total_divs_received) / SUM({basis_total}) ELSE 0 END as paid_for_itself,
                    MAX(a.import_date) as import_date,
                    MIN(a.purchase_date) as purchase_date,
-                   {cur_mo} as current_month_income,
+                   SUM(a.current_month_income) as current_month_income,
                    CASE
                        WHEN SUM(CASE WHEN a.nav_erosion_scope = 'test' THEN 1 ELSE 0 END) > 0 THEN 'test'
                        WHEN SUM(CASE WHEN a.nav_erosion_scope = 'skip' THEN 1 ELSE 0 END) = COUNT(*) THEN 'skip'
@@ -20815,6 +21008,7 @@ def list_holdings():
     _apply_dividend_payment_total_floor(
         results,
         _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
+        _dividend_payments_before_purchase_by_ticker(conn, payment_profile_ids),
     )
     _apply_basis_mode_to_holdings(
         results,
@@ -20860,40 +21054,13 @@ def list_holdings():
             r["current_month_income"] = _estimate_current_month_income(r)
         if r.get("ytd_divs") is None:
             r["ytd_divs"] = _estimate_ytd_income(r)
-    if not is_agg and len(pids) == 1:
-        import datetime
-        payment_profile_ids = pids
-        if pids[0] == 1:
-            owner_source_ids = _get_owner_source_profile_ids(conn)
-            if owner_source_ids:
-                payment_profile_ids = owner_source_ids
-        if payment_profile_ids:
-            mph = ",".join("?" * len(payment_profile_ids))
-            today_d = datetime.date.today()
-            month_start = today_d.replace(day=1).isoformat()
-            year_start = today_d.replace(month=1, day=1).isoformat()
-            today_iso = today_d.isoformat()
-            pay_rows = conn.execute(
-                f"""SELECT ticker,
-                           COALESCE(SUM(amount), 0) as ytd_amount,
-                           COALESCE(SUM(CASE WHEN payment_date >= ? THEN amount ELSE 0 END), 0) as month_amount
-                    FROM dividend_payments
-                    WHERE profile_id IN ({mph})
-                      AND payment_date >= ? AND payment_date <= ?
-                    GROUP BY ticker""",
-                [month_start] + payment_profile_ids + [year_start, today_iso],
-            ).fetchall()
-            recorded_ytd, recorded_rows = _recorded_dividend_amounts_by_ticker(
-                conn, payment_profile_ids, year_start, today_iso
-            )
-            if recorded_rows:
-                for r in results:
-                    ticker = str(r.get("ticker") or "").strip().upper()
-                    r["ytd_divs"] = round(recorded_ytd.get(ticker, 0.0), 2)
-            if pay_rows:
-                month_paid_by_ticker = {r["ticker"]: float(r["month_amount"] or 0) for r in pay_rows}
-                for r in results:
-                    r["current_month_income"] = round(month_paid_by_ticker.get(r["ticker"], 0), 2)
+    if _holdings_scope_is_combined(pids, payment_profile_ids):
+        _apply_account_summed_holding_figures(
+            results,
+            _holding_figures_summed_by_account(conn, payment_profile_ids),
+        )
+    else:
+        _apply_recorded_dividend_income(conn, results, payment_profile_ids)
     # For single-profile queries, compute reinvested/not-reinvested splits.
     # Owner (profile_id=1) uses sub-account DRIP ratios since the Owner
     # flag may be stale.  Sub-accounts use their own flag directly.
@@ -35294,10 +35461,24 @@ def total_return_summary():
         })
 
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
-    payment_totals = _dividend_payment_totals_by_ticker(conn, payment_profile_ids)
-    if payment_totals:
-        df["payment_total_divs_received"] = df["ticker"].map(payment_totals).fillna(0)
-        df["total_divs_received"] = df[["total_divs_received", "payment_total_divs_received"]].max(axis=1)
+    if _holdings_scope_is_combined(profile_ids, payment_profile_ids):
+        # Same sum the holdings list shows: each account's own dividend total,
+        # ledger floor already applied, rather than one floor on the combined row.
+        account_figures = _holding_figures_summed_by_account(
+            conn, payment_profile_ids, require_basis=True
+        )
+        df["total_divs_received"] = [
+            account_figures.get(ticker, {}).get("total_divs_received", stored)
+            for ticker, stored in zip(df["ticker"], df["total_divs_received"])
+        ]
+    else:
+        # One account: the same rule the holdings list applies to its rows.
+        floored = _apply_dividend_payment_total_floor(
+            df[["ticker", "total_divs_received"]].to_dict("records"),
+            _dividend_payment_totals_by_ticker(conn, payment_profile_ids),
+            _dividend_payments_before_purchase_by_ticker(conn, payment_profile_ids),
+        )
+        df["total_divs_received"] = [row["total_divs_received"] for row in floored]
 
     # Enrich category names
     try:
@@ -35461,6 +35642,10 @@ def total_return_distributions(ticker):
     # payment. Total Return drops them on purpose; the export does not, which
     # is its own reason a hand-checked ledger total can disagree.
     non_actual = {"refresh_estimate", "projection", "estimate", "estimated"}
+    # The open-positions row counts cash paid to the accounts that still hold
+    # the ticker. In Owner or an aggregate, an account that has sold out of it
+    # keeps its cash with its own closed position.
+    open_view = request.args.get("view", "").strip().lower() == "open"
 
     conn = get_connection()
     try:
@@ -35473,6 +35658,16 @@ def total_return_distributions(ticker):
             })
         placeholders = ",".join("?" * len(payment_profile_ids))
         names = _load_profile_name_map(conn, payment_profile_ids)
+        holding_profile_ids = {
+            int(row["profile_id"])
+            for row in conn.execute(
+                f"""SELECT profile_id, ticker FROM all_account_info
+                    WHERE profile_id IN ({placeholders})
+                      AND COALESCE(quantity, 0) > 0""",
+                payment_profile_ids,
+            ).fetchall()
+            if _accounting_symbol_for_ticker(row["ticker"]) == ticker
+        } if open_view else set()
         rows = conn.execute(
             f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id
                 FROM dividend_payments d
@@ -35501,6 +35696,9 @@ def total_return_distributions(ticker):
             reason = f"paid after {end_date}"
         elif source.lower() in non_actual:
             reason = f"estimated payment ({source}), not a recorded one"
+        elif open_view and int(row.get("profile_id") or 0) not in holding_profile_ids:
+            account = names.get(int(row.get("profile_id") or 0)) or "an account"
+            reason = f"paid to {account}, which no longer holds {ticker}"
         else:
             reason = None
         if reason is None:
@@ -35699,7 +35897,14 @@ def total_return_charts():
     portfolio_holdings = []
     portfolio_symbols = []
     filter_is_active = bool(cat_ids or sub_ids)
-    payment_covered_tickers = set()
+    # Keyed by position, (account, ticker), like the replay itself. Whether
+    # broker payments or Yahoo market history supplies a position's cash is
+    # settled account by account. Deciding it once per ticker let one account's
+    # payment history switch the fallback off for another account that had none
+    # (Owner showed MO at $0.00 against $291.64 in the account holding it), and
+    # put cash paid to an account that had since sold out on the row for shares
+    # still open somewhere else.
+    payment_covered_positions = set()
     period_payment_totals = {}
     payment_sources = set()
     non_actual_payment_sources = {
@@ -35718,7 +35923,8 @@ def total_return_charts():
         source = str(row.get("source") or "").strip()
         if source.lower() in non_actual_payment_sources:
             continue
-        payment_covered_tickers.add(accounting_ticker)
+        position = (row.get("profile_id"), accounting_ticker)
+        payment_covered_positions.add(position)
         payment_date = str(row.get("payment_date") or "")[:10]
         if period_range["start_date"] and payment_date < period_range["start_date"]:
             continue
@@ -35728,8 +35934,8 @@ def total_return_charts():
             amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             amount = 0
-        period_payment_totals[accounting_ticker] = (
-            period_payment_totals.get(accounting_ticker, 0) + amount
+        period_payment_totals[position] = (
+            period_payment_totals.get(position, 0) + amount
         )
         if source:
             payment_sources.add(source)
@@ -35815,10 +36021,24 @@ def total_return_charts():
         for row in portfolio_holdings:
             holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
 
+        # The open set is what the rows and the open-lots footer cover; the
+        # historical set adds positions closed somewhere in the replayed ledger.
+        open_positions_by_ticker = {}
+        historical_positions_by_ticker = {}
+        for row in portfolio_holdings:
+            open_positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
+        for row in portfolio_transactions:
+            historical_positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
+        for ticker, positions in open_positions_by_ticker.items():
+            historical_positions_by_ticker.setdefault(ticker, set()).update(positions)
+
         ticker_result_cache = {}
 
-        def ticker_result_for(ticker, open_only=True):
-            cache_key = (ticker, open_only)
+        def ticker_result_for(ticker, open_only=True, positions=None):
+            cache_key = (
+                ticker, open_only,
+                frozenset(positions) if positions is not None else None,
+            )
             if cache_key in ticker_result_cache:
                 return ticker_result_cache[cache_key]
             accounting_ticker = _accounting_symbol_for_ticker(ticker)
@@ -35831,13 +36051,22 @@ def total_return_charts():
                 if open_only
                 else historical_transactions_by_ticker
             )
+            ticker_transactions = transactions.get(accounting_ticker, [])
+            ticker_holdings = holdings_by_ticker.get(accounting_ticker, [])
+            if positions is not None:
+                ticker_transactions = [
+                    row for row in ticker_transactions if row["position_key"] in positions
+                ]
+                ticker_holdings = [
+                    row for row in ticker_holdings if row["position_key"] in positions
+                ]
             result = _build_transaction_aware_portfolio_series(
                 close[[market_symbol]],
                 adjusted_close[[market_symbol]] if adjusted_close is not None and market_symbol in adjusted_close.columns else None,
                 dividends[[market_symbol]] if market_symbol in dividends.columns else None,
                 capital_gains[[market_symbol]] if market_symbol in capital_gains.columns else None,
-                transactions.get(accounting_ticker, []),
-                holdings_by_ticker.get(accounting_ticker, []),
+                ticker_transactions,
+                ticker_holdings,
                 stock_splits=(
                     stock_splits[[market_symbol]]
                     if market_symbol in stock_splits.columns
@@ -35846,6 +36075,35 @@ def total_return_charts():
             )
             ticker_result_cache[cache_key] = result
             return result
+
+        def position_distributions(ticker, positions, open_only):
+            """Period cash for some of one ticker's positions.
+
+            Returns (dollars, used broker history, used the Yahoo fallback).
+            Positions with payment history take their recorded payments; the
+            rest are replayed on their own against Yahoo's distribution
+            history, which is what each account's own page does.
+            """
+            covered = positions & payment_covered_positions
+            uncovered = positions - covered
+            total = sum(period_payment_totals.get(position, 0) for position in covered)
+            used_fallback = False
+            if uncovered or not positions:
+                # With nothing covered this is the whole ticker, the same
+                # replay the row itself is built from.
+                ticker_result = ticker_result_for(
+                    ticker, open_only=open_only,
+                    positions=uncovered if covered else None,
+                )
+                ticker_metrics = (
+                    _portfolio_period_metrics(ticker_result)
+                    if ticker_result is not None
+                    else None
+                )
+                if ticker_metrics is not None:
+                    total += float(ticker_metrics.get("distribution_dollar") or 0)
+                    used_fallback = True
+            return total, bool(covered), used_fallback
 
         performance_rows = []
         for ticker in tickers_list:
@@ -35856,13 +36114,49 @@ def total_return_charts():
             if metrics is None:
                 continue
             accounting_ticker = _accounting_symbol_for_ticker(ticker)
-            if accounting_ticker in payment_covered_tickers:
-                metrics["distribution_dollar"] = round(
-                    period_payment_totals.get(accounting_ticker, 0), 4,
+            open_positions = open_positions_by_ticker.get(accounting_ticker, set())
+            if len(open_positions) > 1:
+                # An account's own row starts on the first day that account
+                # held the ticker in the range. One replay of the accounts
+                # together starts on the earliest of those days and treats the
+                # others' first purchases as money added later, so Start Value
+                # came out below the accounts added up (CHPY: $18,311 against
+                # $25,053 across four accounts). Start each account on its own.
+                position_starts = []
+                for position in open_positions:
+                    position_result = ticker_result_for(ticker, positions={position})
+                    position_metrics = (
+                        _portfolio_period_metrics(position_result)
+                        if position_result is not None
+                        else None
+                    )
+                    if position_metrics and position_metrics.get("start_value") is not None:
+                        position_starts.append(position_metrics["start_value"])
+                if position_starts:
+                    metrics["start_value"] = round(sum(position_starts), 4)
+            distribution, broker_history, yahoo_fallback = position_distributions(
+                accounting_ticker, open_positions, open_only=True,
+            )
+            if broker_history:
+                metrics["distribution_dollar"] = round(distribution, 4)
+                metrics["distribution_source"] = "Broker payment history" + (
+                    " with Yahoo market history for an account that has none"
+                    if yahoo_fallback else ""
                 )
-                metrics["distribution_source"] = "Broker payment history"
             else:
                 metrics["distribution_source"] = "Yahoo market history"
+            # Cash the ticker paid in the range to accounts in this view that
+            # no longer hold it. It belongs to their closed positions, not to
+            # this row; the by-ticker table needs it to count the range's cash
+            # once. Always zero for a single account.
+            closed_positions = (
+                historical_positions_by_ticker.get(accounting_ticker, set())
+                - open_positions
+            )
+            metrics["closed_account_distribution_dollar"] = round(
+                sum(period_payment_totals.get(position, 0) for position in closed_positions),
+                4,
+            )
             metrics["total_return_dollar"] = round(
                 float(metrics.get("price_return_dollar") or 0)
                 + float(metrics.get("distribution_dollar") or 0),
@@ -35905,25 +36199,17 @@ def total_return_charts():
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         open_position_metrics = _portfolio_period_metrics(open_position_result)
 
-        def apply_distribution_metrics(metrics, tickers, open_only):
+        def apply_distribution_metrics(metrics, positions_by_ticker, open_only):
             if metrics is None:
                 return
             distribution_total = 0.0
             yahoo_fallback_tickers = 0
-            for ticker in tickers:
-                if ticker in payment_covered_tickers:
-                    distribution_total += period_payment_totals.get(ticker, 0)
-                    continue
-                ticker_result = ticker_result_for(ticker, open_only=open_only)
-                ticker_metrics = (
-                    _portfolio_period_metrics(ticker_result)
-                    if ticker_result is not None
-                    else None
+            for ticker, positions in positions_by_ticker.items():
+                distribution, _, yahoo_fallback = position_distributions(
+                    ticker, positions, open_only,
                 )
-                if ticker_metrics is not None:
-                    distribution_total += float(
-                        ticker_metrics.get("distribution_dollar") or 0
-                    )
+                distribution_total += distribution
+                if yahoo_fallback:
                     yahoo_fallback_tickers += 1
             metrics["distribution_dollar"] = round(distribution_total, 4)
             metrics["total_return_dollar"] = round(
@@ -35936,24 +36222,18 @@ def total_return_charts():
                 + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
                    f"{'' if yahoo_fallback_tickers == 1 else 's'}"
                    if yahoo_fallback_tickers else "")
-                if payment_covered_tickers
+                if payment_covered_positions
                 else "Yahoo market history"
             )
 
-        historical_portfolio_tickers = (
-            set(historical_transactions_by_ticker) | set(holdings_by_ticker)
-        )
-        open_position_tickers = (
-            set(open_transactions_by_ticker) | set(holdings_by_ticker)
-        )
         apply_distribution_metrics(
             portfolio_metrics,
-            historical_portfolio_tickers,
+            historical_positions_by_ticker,
             open_only=False,
         )
         apply_distribution_metrics(
             open_position_metrics,
-            open_position_tickers,
+            open_positions_by_ticker,
             open_only=True,
         )
         if portfolio_metrics is not None:
@@ -58876,7 +59156,7 @@ def growth_2_data():
     }
     payment_source_sql = "source" if "source" in dividend_payment_columns else "NULL AS source"
     div_rows = conn.execute(
-        f"""SELECT ticker, payment_date, amount, {payment_source_sql}
+        f"""SELECT ticker, profile_id, payment_date, amount, {payment_source_sql}
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
             ORDER BY payment_date""",
@@ -59170,14 +59450,16 @@ def growth_2_data():
     portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
 
     # Use the same distribution-dollar policy as Total Return: actual broker
-    # payment history wins for a covered ticker, with Yahoo market history only
-    # filling tickers that have no broker payment history. This keeps the
-    # dollar result on this page reconcilable with the reference dashboard.
+    # payment history wins for a covered position, with Yahoo market history
+    # only filling positions that have no broker payment history. This keeps
+    # the dollar result on this page reconcilable with the reference dashboard.
+    # A position is (account, ticker): settling it per ticker let one account's
+    # payment history switch the fallback off for another account's shares.
     non_actual_payment_sources = {
         "refresh_estimate", "projection", "estimate", "estimated",
     }
-    payment_covered_tickers = set()
-    payment_events_by_ticker = {}
+    payment_covered_positions = set()
+    payment_events_by_position = {}
     payment_sources = set()
     for raw_row in div_rows:
         row = dict(raw_row)
@@ -59187,7 +59469,8 @@ def growth_2_data():
         source = str(row.get("source") or "").strip()
         if source.lower() in non_actual_payment_sources:
             continue
-        payment_covered_tickers.add(ticker)
+        position = (row.get("profile_id", profile_ids[0]), ticker)
+        payment_covered_positions.add(position)
         payment_date = str(row.get("payment_date") or "")[:10]
         if period_range["start_date"] and payment_date < period_range["start_date"]:
             continue
@@ -59198,7 +59481,7 @@ def growth_2_data():
             payment_amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             continue
-        payment_events_by_ticker.setdefault(ticker, []).append(
+        payment_events_by_position.setdefault(position, []).append(
             (payment_timestamp, payment_amount),
         )
         if source:
@@ -59206,47 +59489,67 @@ def growth_2_data():
 
     transactions_by_ticker = {}
     holdings_by_ticker = {}
+    positions_by_ticker = {}
     for row in return_transactions:
         transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
+        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
     for row in return_holdings:
         holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
+        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
 
     ticker_return_cache = {}
 
-    def ticker_return_result(ticker):
-        if ticker in ticker_return_cache:
-            return ticker_return_cache[ticker]
+    def ticker_return_result(ticker, positions=None):
+        cache_key = (ticker, frozenset(positions) if positions is not None else None)
+        if cache_key in ticker_return_cache:
+            return ticker_return_cache[cache_key]
         if ticker not in return_close.columns:
-            ticker_return_cache[ticker] = None
+            ticker_return_cache[cache_key] = None
             return None
+        ticker_transactions = transactions_by_ticker.get(ticker, [])
+        ticker_holdings = holdings_by_ticker.get(ticker, [])
+        if positions is not None:
+            ticker_transactions = [
+                row for row in ticker_transactions if row["position_key"] in positions
+            ]
+            ticker_holdings = [
+                row for row in ticker_holdings if row["position_key"] in positions
+            ]
         ticker_result = _build_transaction_aware_portfolio_series(
             return_close[[ticker]],
             return_adj[[ticker]] if ticker in return_adj.columns else None,
             return_divs[[ticker]] if ticker in return_divs.columns else None,
             return_cap_gains[[ticker]] if ticker in return_cap_gains.columns else None,
-            transactions_by_ticker.get(ticker, []),
-            holdings_by_ticker.get(ticker, []),
+            ticker_transactions,
+            ticker_holdings,
             stock_splits=(
                 return_splits[[ticker]] if ticker in return_splits.columns else None
             ),
         )
-        ticker_return_cache[ticker] = ticker_result
+        ticker_return_cache[cache_key] = ticker_result
         return ticker_result
 
     distribution_series = pd.Series(0.0, index=return_close.index)
     yahoo_fallback_tickers = 0
     for ticker in return_scope_tickers:
-        if ticker in payment_covered_tickers:
+        positions = positions_by_ticker.get(ticker, set())
+        covered = positions & payment_covered_positions
+        uncovered = positions - covered
+        if covered:
             ticker_payments = pd.Series(0.0, index=return_close.index)
-            for payment_timestamp, payment_amount in payment_events_by_ticker.get(ticker, []):
-                market_index = return_close.index.searchsorted(
-                    payment_timestamp, side="left",
-                )
-                if market_index < len(return_close.index):
-                    ticker_payments.iloc[market_index] += payment_amount
+            for position in covered:
+                for payment_timestamp, payment_amount in payment_events_by_position.get(position, []):
+                    market_index = return_close.index.searchsorted(
+                        payment_timestamp, side="left",
+                    )
+                    if market_index < len(return_close.index):
+                        ticker_payments.iloc[market_index] += payment_amount
             distribution_series += ticker_payments.cumsum()
-            continue
-        ticker_result = ticker_return_result(ticker)
+            if not uncovered:
+                continue
+        # With nothing covered this is the whole ticker, as before; otherwise
+        # only the accounts that have no payment history of their own.
+        ticker_result = ticker_return_result(ticker, uncovered if covered else None)
         if ticker_result is None:
             continue
         ticker_distribution = pd.to_numeric(
@@ -59274,7 +59577,7 @@ def growth_2_data():
             + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
                f"{'' if yahoo_fallback_tickers == 1 else 's'}"
                if yahoo_fallback_tickers else "")
-            if payment_covered_tickers
+            if payment_covered_positions
             else "Yahoo market history"
         )
         portfolio_return_metrics["payment_sources"] = sorted(payment_sources)

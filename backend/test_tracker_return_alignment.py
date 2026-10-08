@@ -221,6 +221,160 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
             tracker_open["price_return_dollar"],
         )
 
+    def _seed_owner_with_two_accounts(self, second_aaa_buy=("2024-01-02", 10)):
+        # AAA is held in both accounts; only account 6 has broker payment
+        # history for it, so account 7's cash comes from Yahoo's distribution
+        # history ($0.50 a share). BBB is held in account 7 only; account 6
+        # was paid on it and has since sold out.
+        self.market_data.loc[pd.Timestamp("2024-12-31"), ("Dividends", "AAA")] = 0.5
+        buy_date, buy_price = second_aaa_buy
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT INTO all_account_info VALUES "
+            "('AAA', 7, 'Example', 'Stock', 4, 48, ?, ?, ?, NULL)",
+            (4 * buy_price, buy_price, buy_date),
+        )
+        conn.execute(
+            "INSERT INTO transactions VALUES (2, 'AAA', 7, 'BUY', ?, 4, ?, 0, 0, '')",
+            (buy_date, buy_price),
+        )
+        conn.executescript(
+            """
+            ALTER TABLE profiles ADD COLUMN include_in_owner INTEGER DEFAULT 0;
+            UPDATE profiles SET include_in_owner = 1 WHERE id = 6;
+            INSERT INTO profiles (id, name, cash_value, include_in_owner)
+                VALUES (1, 'Owner', 0, 0);
+            INSERT INTO profiles (id, name, cash_value, include_in_owner)
+                VALUES (7, 'Second', 0, 1);
+            INSERT INTO all_account_info VALUES (
+                'BBB', 7, 'Other', 'Stock', 1, 18, 20, 20, '2024-01-02', NULL
+            );
+            INSERT INTO all_account_info VALUES (
+                'AAA', 1, 'Example', 'Stock', 6, 72, 60, 10, '2024-01-02', NULL
+            );
+            INSERT INTO all_account_info VALUES (
+                'BBB', 1, 'Other', 'Stock', 1, 18, 20, 20, '2024-01-02', NULL
+            );
+            INSERT INTO transactions
+                VALUES (3, 'BBB', 7, 'BUY', '2024-01-02', 1, 20, 0, 0, '');
+            INSERT INTO transactions
+                VALUES (4, 'BBB', 6, 'BUY', '2024-01-02', 1, 20, 0, 0, '');
+            INSERT INTO transactions
+                VALUES (5, 'BBB', 6, 'SELL', '2024-12-31', 1, 18, 0, -2, '');
+            INSERT INTO dividend_payments
+                VALUES ('AAA', 6, '2024-06-28', 3.0, 'schwab');
+            INSERT INTO dividend_payments
+                VALUES ('BBB', 6, '2024-03-28', 1.25, 'schwab');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+    def test_owner_distributions_are_its_accounts_added_up(self):
+        # Broker history or Yahoo history used to be chosen once per ticker for
+        # the whole view. Account 6's AAA payments switched the Yahoo fallback
+        # off for account 7's AAA shares, and account 6's BBB cash landed on
+        # the row for the BBB share only account 7 holds.
+        self._seed_owner_with_two_accounts()
+
+        def charts(profile_id):
+            res = self.client.get(f"/api/total-return/charts?profile_id={profile_id}&period=all")
+            self.assertEqual(res.status_code, 200, res.get_json())
+            return res.get_json()
+
+        def dollars(profile_id):
+            res = self.client.get(f"/api/growth-2/data?profile_id={profile_id}&period=all")
+            self.assertEqual(res.status_code, 200, res.get_json())
+            return res.get_json()["summary"]["distribution_amount"]
+
+        owner, first, second = charts(1), charts(6), charts(7)
+        rows = lambda payload: {row["ticker"]: row for row in payload["performance_rows"]}
+
+        self.assertEqual(rows(first)["AAA"]["distribution_dollar"], 3.0)
+        self.assertEqual(rows(second)["AAA"]["distribution_dollar"], 2.0)
+        self.assertEqual(rows(owner)["AAA"]["distribution_dollar"], 5.0)
+        self.assertEqual(rows(second)["BBB"]["distribution_dollar"], 0.0)
+        self.assertEqual(rows(owner)["BBB"]["distribution_dollar"], 0.0)
+        # Still BBB's cash for the range, kept for the by-ticker table.
+        self.assertEqual(rows(owner)["BBB"]["closed_account_distribution_dollar"], 1.25)
+        self.assertEqual(rows(first)["AAA"]["closed_account_distribution_dollar"], 0.0)
+        for block in ("portfolio_metrics", "open_position_metrics"):
+            self.assertAlmostEqual(
+                owner[block]["distribution_dollar"],
+                first[block]["distribution_dollar"] + second[block]["distribution_dollar"],
+                places=4,
+                msg=block,
+            )
+        self.assertEqual(owner["open_position_metrics"]["distribution_dollar"], 5.0)
+        self.assertEqual(owner["portfolio_metrics"]["distribution_dollar"], 6.25)
+        self.assertAlmostEqual(dollars(1), dollars(6) + dollars(7), places=2)
+        self.assertAlmostEqual(dollars(1), 6.25, places=2)
+
+    def test_owner_start_value_adds_up_accounts_that_opened_on_different_days(self):
+        # Account 6 held AAA all year; account 7 bought it in June. Replayed
+        # together the row started in January on account 6's shares alone and
+        # counted account 7's purchase as money added later, so Owner's Start
+        # Value was $20 against the $20 + $44 the two accounts show.
+        dates = pd.to_datetime(["1972-01-03", "2024-01-02", "2024-06-28", "2024-12-31"])
+        close = pd.DataFrame(
+            {
+                "AAA": [1.0, 10.0, 11.0, 12.0],
+                "BBB": [1.0, 20.0, 19.0, 18.0],
+                "SPY": [2.0, 100.0, 105.0, 110.0],
+            },
+            index=dates,
+        )
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        self.market_data = pd.concat({
+            "Close": close,
+            "Adj Close": close,
+            "Dividends": zeros,
+            "Capital Gains": zeros,
+            "Stock Splits": zeros,
+        }, axis=1)
+        self._seed_owner_with_two_accounts(second_aaa_buy=("2024-06-28", 11))
+
+        def aaa_row(profile_id):
+            res = self.client.get(f"/api/total-return/charts?profile_id={profile_id}&period=all")
+            self.assertEqual(res.status_code, 200, res.get_json())
+            return next(row for row in res.get_json()["performance_rows"] if row["ticker"] == "AAA")
+
+        owner, first, second = aaa_row(1), aaa_row(6), aaa_row(7)
+
+        self.assertEqual(first["start_value"], 20.0)
+        self.assertEqual(second["start_value"], 44.0)
+        self.assertEqual(owner["start_value"], 64.0)
+        for key in ("end_value", "price_return_dollar", "distribution_dollar", "total_return_dollar"):
+            self.assertAlmostEqual(owner[key], first[key] + second[key], places=4, msg=key)
+
+    def test_open_row_itemization_leaves_out_an_account_that_sold_out(self):
+        self._seed_owner_with_two_accounts()
+        conn = self._get_connection()
+        # The itemization reads two columns this fixture's ledger leaves out.
+        conn.executescript(
+            """
+            ALTER TABLE dividend_payments ADD COLUMN id INTEGER;
+            ALTER TABLE dividend_payments ADD COLUMN notes TEXT;
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        everything = self.client.get(
+            "/api/total-return/distributions/BBB?profile_id=1&period=all"
+        ).get_json()
+        open_row = self.client.get(
+            "/api/total-return/distributions/BBB?profile_id=1&period=all&view=open"
+        ).get_json()
+
+        self.assertEqual(everything["counted_total"], 1.25)
+        self.assertEqual(open_row["counted_total"], 0)
+        self.assertEqual(open_row["excluded_total"], 1.25)
+        self.assertEqual(
+            open_row["payments"][0]["excluded_reason"],
+            "paid to Test, which no longer holds BBB",
+        )
+
     def test_portfolio_tester_actual_history_reuses_tracker_total_return(self):
         history = app_module._portfolio_tester_actual_history(
             [6],
