@@ -36961,12 +36961,13 @@ def _gains_losses_dividend_allocation(conn, profile_ids, window=None):
 def _gains_losses_open_dividends_by_ticker(conn, scope, dividend_allocation):
     """Dividends on the shares still held: each account's own figure, added up.
 
-    Owner's rows are a stored copy of its member accounts, and that copy's
-    total_divs_received is never refreshed (see _reconcile_owner_rollup), while
-    the lot replay is keyed by the account that received the cash. Reading the
-    view's own profile therefore handed Owner its stale stored total and threw
-    away every member's allocation: ADX read $104.44 in Owner against $611.63
-    across the two accounts holding it. Working the figure out per account, the
+    Owner's rows are a stored copy of its member accounts. That copy's
+    total_divs_received is the members' stored totals as of the last reconcile
+    (see _reconcile_owner_rollup), not this allocation, and the lot replay is
+    keyed by the account that received the cash. Reading the view's own profile
+    therefore handed Owner its stored total and threw away every member's
+    allocation: ADX read $104.44 in Owner against $611.63 across the two
+    accounts holding it. Working the figure out per account, the
     way that account's own page does, makes a combined row the sum of its
     accounts by construction.
 
