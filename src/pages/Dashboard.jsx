@@ -64,6 +64,7 @@ const SHORT_WINDOW_MIN_TRADING_DAYS = 15
 const OVERVIEW_RETURN_MODE_KEY = 'dashboard_overview_return_mode_v1'
 const NAV_RETURN_MODE_KEY = 'dashboard_nav_return_mode_v1'
 const NAV_HISTORY_INTERVAL_KEY = 'dashboard_nav_history_interval_v1'
+const NAV_TOTAL_RETURN_WARNING_HIDDEN_KEY = 'dashboard_nav_total_return_warning_hidden_v1'
 const IMPORT_DISMISS_KEY = 'dashboard_import_warning_dismissed_v1'
 const IRR_EXCLUSIONS_KEY_PREFIX = 'dashboard_irr_exclusions_v1_'
 const validSp500 = value => value?.price != null && Number.isFinite(Number(value.price))
@@ -130,6 +131,22 @@ const persistNavReturnMode = (mode) => {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(NAV_RETURN_MODE_KEY, mode)
+  } catch {}
+}
+
+const readTotalReturnWarningHidden = () => {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(NAV_TOTAL_RETURN_WARNING_HIDDEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+const persistTotalReturnWarningHidden = (hidden) => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(NAV_TOTAL_RETURN_WARNING_HIDDEN_KEY, hidden ? '1' : '0')
   } catch {}
 }
 
@@ -842,6 +859,7 @@ export default function Dashboard() {
   const [dailyChange, setDailyChange] = useState(null)
   const [navHistory, setNavHistory] = useState([])
   const [navReturnMode, setNavReturnMode] = useState(readNavReturnMode)
+  const [totalReturnWarningHidden, setTotalReturnWarningHidden] = useState(readTotalReturnWarningHidden)
   const [navHistoryInterval, setNavHistoryInterval] = useState(readNavHistoryInterval)
   const [navSnapping, setNavSnapping] = useState(false)
   const [navBackfilling, setNavBackfilling] = useState(false)
@@ -2745,6 +2763,23 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
+          {navReturnMode === 'total' && totalReturnGaps.length > 0 && (
+            <button
+              type="button"
+              className={`btn btn-sm${totalReturnWarningHidden ? '' : ' btn-active'}`}
+              aria-pressed={!totalReturnWarningHidden}
+              title={totalReturnWarningHidden
+                ? 'Show the note about missing deposit and withdrawal history'
+                : 'Hide the note about missing deposit and withdrawal history'}
+              onClick={() => {
+                const hidden = !totalReturnWarningHidden
+                setTotalReturnWarningHidden(hidden)
+                persistTotalReturnWarningHidden(hidden)
+              }}
+            >
+              Data warning: {totalReturnWarningHidden ? 'Off' : 'On'}
+            </button>
+          )}
           <button
             className="btn btn-secondary"
             style={{ fontSize: '0.8rem', padding: '0.25rem 0.6rem' }}
@@ -2837,7 +2872,7 @@ export default function Dashboard() {
             </button>
           )}
         </div>
-        {navReturnMode === 'total' && totalReturnGaps.length > 0 && navHistory.length >= 1 && (
+        {navReturnMode === 'total' && totalReturnGaps.length > 0 && !totalReturnWarningHidden && navHistory.length >= 1 && (
           <div
             role="note"
             style={{
@@ -2853,6 +2888,21 @@ export default function Dashboard() {
               {totalReturnGaps.map(line => <li key={line}>{line}</li>)}
             </ul>
             Import the broker's full transaction history, including deposits and withdrawals, to fix it.
+            <div style={{ marginTop: '0.35rem' }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  setTotalReturnWarningHidden(true)
+                  persistTotalReturnWarningHidden(true)
+                }}
+              >
+                Hide this note
+              </button>
+              <span style={{ marginLeft: '0.5rem', color: 'var(--text-dim)' }}>
+                Turn "Data warning" back on above the chart to see it again.
+              </span>
+            </div>
           </div>
         )}
         {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
