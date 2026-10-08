@@ -155,6 +155,9 @@ export default function TotalReturn() {
     try {
       const params = new URLSearchParams({ period: dashboardPeriod })
       addCustomRangeParams(params, dashboardPeriod, customStart, customEnd)
+      // The open-positions row counts the accounts that still hold the ticker,
+      // so its itemization has to leave out the same payments the row does.
+      if (positionView === 'unrealized') params.set('view', 'open')
       const res = await pf(`/api/total-return/distributions/${encodeURIComponent(ticker)}?${params}`)
       const data = await res.json()
       setDistDetail({ ticker, ...(data.error ? { error: data.error } : { data }) })
@@ -745,7 +748,11 @@ export default function TotalReturn() {
       entry.isOpen = true
       entry.net_basis += row.start_value || 0
       entry.unrealized_total_dollar += row.total_return_dollar || 0
-      entry.open_distribution_dollar += row.distribution_dollar || 0
+      // In Owner or an aggregate the open row leaves out cash paid to an
+      // account that has since sold out of the ticker. It is still this
+      // ticker's cash for the range, so it is added back here, once.
+      entry.open_distribution_dollar += (row.distribution_dollar || 0)
+        + (row.closed_account_distribution_dollar || 0)
     })
     realizedRows.forEach(row => {
       const entry = entryFor(row)
@@ -787,7 +794,7 @@ export default function TotalReturn() {
     { key: 'end_value', label: lifetimeView ? 'Current Open Value' : 'End Value', fmt, numeric: true },
     { key: 'price_return_dollar', label: lifetimeView ? 'Open Position G/L' : 'Period Price Return', title: lifetimeView ? 'Current value minus selected cost basis for shares still held. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
     { key: 'price_return_pct', label: lifetimeView ? 'Open Position G/L %' : 'Period Price Ret %', title: lifetimeView ? 'Open Position G/L divided by selected cost basis. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'distribution_dollar', label: lifetimeView ? 'Lifetime Distributions' : 'Distributions', title: lifetimeView ? 'Recorded distributions included in Lifetime Total G/L.' : 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. Click a figure to see every payment behind it.', fmt, numeric: true },
+    { key: 'distribution_dollar', label: lifetimeView ? 'Lifetime Distributions' : 'Distributions', title: lifetimeView ? 'Recorded distributions included in Lifetime Total G/L.' : 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. In Owner or an aggregate this adds up the accounts that still hold the ticker, so it matches their own pages; cash paid to an account that has since sold out of it is counted with that account\'s closed position. Click a figure to see every payment behind it.', fmt, numeric: true },
     { key: 'total_return_dollar', label: lifetimeView ? 'Lifetime Total G/L' : 'Period Total Return', fmt, numeric: true, gl: true },
     { key: 'total_return_pct', label: lifetimeView ? 'Lifetime Total G/L %' : 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
     { key: 'period_range', label: lifetimeView ? 'Scope' : 'Effective Range' },

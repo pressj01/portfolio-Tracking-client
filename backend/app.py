@@ -35564,6 +35564,10 @@ def total_return_distributions(ticker):
     # payment. Total Return drops them on purpose; the export does not, which
     # is its own reason a hand-checked ledger total can disagree.
     non_actual = {"refresh_estimate", "projection", "estimate", "estimated"}
+    # The open-positions row counts cash paid to the accounts that still hold
+    # the ticker. In Owner or an aggregate, an account that has sold out of it
+    # keeps its cash with its own closed position.
+    open_view = request.args.get("view", "").strip().lower() == "open"
 
     conn = get_connection()
     try:
@@ -35576,6 +35580,16 @@ def total_return_distributions(ticker):
             })
         placeholders = ",".join("?" * len(payment_profile_ids))
         names = _load_profile_name_map(conn, payment_profile_ids)
+        holding_profile_ids = {
+            int(row["profile_id"])
+            for row in conn.execute(
+                f"""SELECT profile_id, ticker FROM all_account_info
+                    WHERE profile_id IN ({placeholders})
+                      AND COALESCE(quantity, 0) > 0""",
+                payment_profile_ids,
+            ).fetchall()
+            if _accounting_symbol_for_ticker(row["ticker"]) == ticker
+        } if open_view else set()
         rows = conn.execute(
             f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id
                 FROM dividend_payments d
@@ -35604,6 +35618,9 @@ def total_return_distributions(ticker):
             reason = f"paid after {end_date}"
         elif source.lower() in non_actual:
             reason = f"estimated payment ({source}), not a recorded one"
+        elif open_view and int(row.get("profile_id") or 0) not in holding_profile_ids:
+            account = names.get(int(row.get("profile_id") or 0)) or "an account"
+            reason = f"paid to {account}, which no longer holds {ticker}"
         else:
             reason = None
         if reason is None:
@@ -35802,7 +35819,14 @@ def total_return_charts():
     portfolio_holdings = []
     portfolio_symbols = []
     filter_is_active = bool(cat_ids or sub_ids)
-    payment_covered_tickers = set()
+    # Keyed by position, (account, ticker), like the replay itself. Whether
+    # broker payments or Yahoo market history supplies a position's cash is
+    # settled account by account. Deciding it once per ticker let one account's
+    # payment history switch the fallback off for another account that had none
+    # (Owner showed MO at $0.00 against $291.64 in the account holding it), and
+    # put cash paid to an account that had since sold out on the row for shares
+    # still open somewhere else.
+    payment_covered_positions = set()
     period_payment_totals = {}
     payment_sources = set()
     non_actual_payment_sources = {
@@ -35821,7 +35845,8 @@ def total_return_charts():
         source = str(row.get("source") or "").strip()
         if source.lower() in non_actual_payment_sources:
             continue
-        payment_covered_tickers.add(accounting_ticker)
+        position = (row.get("profile_id"), accounting_ticker)
+        payment_covered_positions.add(position)
         payment_date = str(row.get("payment_date") or "")[:10]
         if period_range["start_date"] and payment_date < period_range["start_date"]:
             continue
@@ -35831,8 +35856,8 @@ def total_return_charts():
             amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             amount = 0
-        period_payment_totals[accounting_ticker] = (
-            period_payment_totals.get(accounting_ticker, 0) + amount
+        period_payment_totals[position] = (
+            period_payment_totals.get(position, 0) + amount
         )
         if source:
             payment_sources.add(source)
@@ -35918,10 +35943,24 @@ def total_return_charts():
         for row in portfolio_holdings:
             holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
 
+        # The open set is what the rows and the open-lots footer cover; the
+        # historical set adds positions closed somewhere in the replayed ledger.
+        open_positions_by_ticker = {}
+        historical_positions_by_ticker = {}
+        for row in portfolio_holdings:
+            open_positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
+        for row in portfolio_transactions:
+            historical_positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
+        for ticker, positions in open_positions_by_ticker.items():
+            historical_positions_by_ticker.setdefault(ticker, set()).update(positions)
+
         ticker_result_cache = {}
 
-        def ticker_result_for(ticker, open_only=True):
-            cache_key = (ticker, open_only)
+        def ticker_result_for(ticker, open_only=True, positions=None):
+            cache_key = (
+                ticker, open_only,
+                frozenset(positions) if positions is not None else None,
+            )
             if cache_key in ticker_result_cache:
                 return ticker_result_cache[cache_key]
             accounting_ticker = _accounting_symbol_for_ticker(ticker)
@@ -35934,13 +35973,22 @@ def total_return_charts():
                 if open_only
                 else historical_transactions_by_ticker
             )
+            ticker_transactions = transactions.get(accounting_ticker, [])
+            ticker_holdings = holdings_by_ticker.get(accounting_ticker, [])
+            if positions is not None:
+                ticker_transactions = [
+                    row for row in ticker_transactions if row["position_key"] in positions
+                ]
+                ticker_holdings = [
+                    row for row in ticker_holdings if row["position_key"] in positions
+                ]
             result = _build_transaction_aware_portfolio_series(
                 close[[market_symbol]],
                 adjusted_close[[market_symbol]] if adjusted_close is not None and market_symbol in adjusted_close.columns else None,
                 dividends[[market_symbol]] if market_symbol in dividends.columns else None,
                 capital_gains[[market_symbol]] if market_symbol in capital_gains.columns else None,
-                transactions.get(accounting_ticker, []),
-                holdings_by_ticker.get(accounting_ticker, []),
+                ticker_transactions,
+                ticker_holdings,
                 stock_splits=(
                     stock_splits[[market_symbol]]
                     if market_symbol in stock_splits.columns
@@ -35949,6 +35997,35 @@ def total_return_charts():
             )
             ticker_result_cache[cache_key] = result
             return result
+
+        def position_distributions(ticker, positions, open_only):
+            """Period cash for some of one ticker's positions.
+
+            Returns (dollars, used broker history, used the Yahoo fallback).
+            Positions with payment history take their recorded payments; the
+            rest are replayed on their own against Yahoo's distribution
+            history, which is what each account's own page does.
+            """
+            covered = positions & payment_covered_positions
+            uncovered = positions - covered
+            total = sum(period_payment_totals.get(position, 0) for position in covered)
+            used_fallback = False
+            if uncovered or not positions:
+                # With nothing covered this is the whole ticker, the same
+                # replay the row itself is built from.
+                ticker_result = ticker_result_for(
+                    ticker, open_only=open_only,
+                    positions=uncovered if covered else None,
+                )
+                ticker_metrics = (
+                    _portfolio_period_metrics(ticker_result)
+                    if ticker_result is not None
+                    else None
+                )
+                if ticker_metrics is not None:
+                    total += float(ticker_metrics.get("distribution_dollar") or 0)
+                    used_fallback = True
+            return total, bool(covered), used_fallback
 
         performance_rows = []
         for ticker in tickers_list:
@@ -35959,13 +36036,49 @@ def total_return_charts():
             if metrics is None:
                 continue
             accounting_ticker = _accounting_symbol_for_ticker(ticker)
-            if accounting_ticker in payment_covered_tickers:
-                metrics["distribution_dollar"] = round(
-                    period_payment_totals.get(accounting_ticker, 0), 4,
+            open_positions = open_positions_by_ticker.get(accounting_ticker, set())
+            if len(open_positions) > 1:
+                # An account's own row starts on the first day that account
+                # held the ticker in the range. One replay of the accounts
+                # together starts on the earliest of those days and treats the
+                # others' first purchases as money added later, so Start Value
+                # came out below the accounts added up (CHPY: $18,311 against
+                # $25,053 across four accounts). Start each account on its own.
+                position_starts = []
+                for position in open_positions:
+                    position_result = ticker_result_for(ticker, positions={position})
+                    position_metrics = (
+                        _portfolio_period_metrics(position_result)
+                        if position_result is not None
+                        else None
+                    )
+                    if position_metrics and position_metrics.get("start_value") is not None:
+                        position_starts.append(position_metrics["start_value"])
+                if position_starts:
+                    metrics["start_value"] = round(sum(position_starts), 4)
+            distribution, broker_history, yahoo_fallback = position_distributions(
+                accounting_ticker, open_positions, open_only=True,
+            )
+            if broker_history:
+                metrics["distribution_dollar"] = round(distribution, 4)
+                metrics["distribution_source"] = "Broker payment history" + (
+                    " with Yahoo market history for an account that has none"
+                    if yahoo_fallback else ""
                 )
-                metrics["distribution_source"] = "Broker payment history"
             else:
                 metrics["distribution_source"] = "Yahoo market history"
+            # Cash the ticker paid in the range to accounts in this view that
+            # no longer hold it. It belongs to their closed positions, not to
+            # this row; the by-ticker table needs it to count the range's cash
+            # once. Always zero for a single account.
+            closed_positions = (
+                historical_positions_by_ticker.get(accounting_ticker, set())
+                - open_positions
+            )
+            metrics["closed_account_distribution_dollar"] = round(
+                sum(period_payment_totals.get(position, 0) for position in closed_positions),
+                4,
+            )
             metrics["total_return_dollar"] = round(
                 float(metrics.get("price_return_dollar") or 0)
                 + float(metrics.get("distribution_dollar") or 0),
@@ -36008,25 +36121,17 @@ def total_return_charts():
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         open_position_metrics = _portfolio_period_metrics(open_position_result)
 
-        def apply_distribution_metrics(metrics, tickers, open_only):
+        def apply_distribution_metrics(metrics, positions_by_ticker, open_only):
             if metrics is None:
                 return
             distribution_total = 0.0
             yahoo_fallback_tickers = 0
-            for ticker in tickers:
-                if ticker in payment_covered_tickers:
-                    distribution_total += period_payment_totals.get(ticker, 0)
-                    continue
-                ticker_result = ticker_result_for(ticker, open_only=open_only)
-                ticker_metrics = (
-                    _portfolio_period_metrics(ticker_result)
-                    if ticker_result is not None
-                    else None
+            for ticker, positions in positions_by_ticker.items():
+                distribution, _, yahoo_fallback = position_distributions(
+                    ticker, positions, open_only,
                 )
-                if ticker_metrics is not None:
-                    distribution_total += float(
-                        ticker_metrics.get("distribution_dollar") or 0
-                    )
+                distribution_total += distribution
+                if yahoo_fallback:
                     yahoo_fallback_tickers += 1
             metrics["distribution_dollar"] = round(distribution_total, 4)
             metrics["total_return_dollar"] = round(
@@ -36039,24 +36144,18 @@ def total_return_charts():
                 + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
                    f"{'' if yahoo_fallback_tickers == 1 else 's'}"
                    if yahoo_fallback_tickers else "")
-                if payment_covered_tickers
+                if payment_covered_positions
                 else "Yahoo market history"
             )
 
-        historical_portfolio_tickers = (
-            set(historical_transactions_by_ticker) | set(holdings_by_ticker)
-        )
-        open_position_tickers = (
-            set(open_transactions_by_ticker) | set(holdings_by_ticker)
-        )
         apply_distribution_metrics(
             portfolio_metrics,
-            historical_portfolio_tickers,
+            historical_positions_by_ticker,
             open_only=False,
         )
         apply_distribution_metrics(
             open_position_metrics,
-            open_position_tickers,
+            open_positions_by_ticker,
             open_only=True,
         )
         if portfolio_metrics is not None:
@@ -58953,7 +59052,7 @@ def growth_2_data():
     }
     payment_source_sql = "source" if "source" in dividend_payment_columns else "NULL AS source"
     div_rows = conn.execute(
-        f"""SELECT ticker, payment_date, amount, {payment_source_sql}
+        f"""SELECT ticker, profile_id, payment_date, amount, {payment_source_sql}
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
             ORDER BY payment_date""",
@@ -59247,14 +59346,16 @@ def growth_2_data():
     portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
 
     # Use the same distribution-dollar policy as Total Return: actual broker
-    # payment history wins for a covered ticker, with Yahoo market history only
-    # filling tickers that have no broker payment history. This keeps the
-    # dollar result on this page reconcilable with the reference dashboard.
+    # payment history wins for a covered position, with Yahoo market history
+    # only filling positions that have no broker payment history. This keeps
+    # the dollar result on this page reconcilable with the reference dashboard.
+    # A position is (account, ticker): settling it per ticker let one account's
+    # payment history switch the fallback off for another account's shares.
     non_actual_payment_sources = {
         "refresh_estimate", "projection", "estimate", "estimated",
     }
-    payment_covered_tickers = set()
-    payment_events_by_ticker = {}
+    payment_covered_positions = set()
+    payment_events_by_position = {}
     payment_sources = set()
     for raw_row in div_rows:
         row = dict(raw_row)
@@ -59264,7 +59365,8 @@ def growth_2_data():
         source = str(row.get("source") or "").strip()
         if source.lower() in non_actual_payment_sources:
             continue
-        payment_covered_tickers.add(ticker)
+        position = (row.get("profile_id", profile_ids[0]), ticker)
+        payment_covered_positions.add(position)
         payment_date = str(row.get("payment_date") or "")[:10]
         if period_range["start_date"] and payment_date < period_range["start_date"]:
             continue
@@ -59275,7 +59377,7 @@ def growth_2_data():
             payment_amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             continue
-        payment_events_by_ticker.setdefault(ticker, []).append(
+        payment_events_by_position.setdefault(position, []).append(
             (payment_timestamp, payment_amount),
         )
         if source:
@@ -59283,47 +59385,67 @@ def growth_2_data():
 
     transactions_by_ticker = {}
     holdings_by_ticker = {}
+    positions_by_ticker = {}
     for row in return_transactions:
         transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
+        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
     for row in return_holdings:
         holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
+        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
 
     ticker_return_cache = {}
 
-    def ticker_return_result(ticker):
-        if ticker in ticker_return_cache:
-            return ticker_return_cache[ticker]
+    def ticker_return_result(ticker, positions=None):
+        cache_key = (ticker, frozenset(positions) if positions is not None else None)
+        if cache_key in ticker_return_cache:
+            return ticker_return_cache[cache_key]
         if ticker not in return_close.columns:
-            ticker_return_cache[ticker] = None
+            ticker_return_cache[cache_key] = None
             return None
+        ticker_transactions = transactions_by_ticker.get(ticker, [])
+        ticker_holdings = holdings_by_ticker.get(ticker, [])
+        if positions is not None:
+            ticker_transactions = [
+                row for row in ticker_transactions if row["position_key"] in positions
+            ]
+            ticker_holdings = [
+                row for row in ticker_holdings if row["position_key"] in positions
+            ]
         ticker_result = _build_transaction_aware_portfolio_series(
             return_close[[ticker]],
             return_adj[[ticker]] if ticker in return_adj.columns else None,
             return_divs[[ticker]] if ticker in return_divs.columns else None,
             return_cap_gains[[ticker]] if ticker in return_cap_gains.columns else None,
-            transactions_by_ticker.get(ticker, []),
-            holdings_by_ticker.get(ticker, []),
+            ticker_transactions,
+            ticker_holdings,
             stock_splits=(
                 return_splits[[ticker]] if ticker in return_splits.columns else None
             ),
         )
-        ticker_return_cache[ticker] = ticker_result
+        ticker_return_cache[cache_key] = ticker_result
         return ticker_result
 
     distribution_series = pd.Series(0.0, index=return_close.index)
     yahoo_fallback_tickers = 0
     for ticker in return_scope_tickers:
-        if ticker in payment_covered_tickers:
+        positions = positions_by_ticker.get(ticker, set())
+        covered = positions & payment_covered_positions
+        uncovered = positions - covered
+        if covered:
             ticker_payments = pd.Series(0.0, index=return_close.index)
-            for payment_timestamp, payment_amount in payment_events_by_ticker.get(ticker, []):
-                market_index = return_close.index.searchsorted(
-                    payment_timestamp, side="left",
-                )
-                if market_index < len(return_close.index):
-                    ticker_payments.iloc[market_index] += payment_amount
+            for position in covered:
+                for payment_timestamp, payment_amount in payment_events_by_position.get(position, []):
+                    market_index = return_close.index.searchsorted(
+                        payment_timestamp, side="left",
+                    )
+                    if market_index < len(return_close.index):
+                        ticker_payments.iloc[market_index] += payment_amount
             distribution_series += ticker_payments.cumsum()
-            continue
-        ticker_result = ticker_return_result(ticker)
+            if not uncovered:
+                continue
+        # With nothing covered this is the whole ticker, as before; otherwise
+        # only the accounts that have no payment history of their own.
+        ticker_result = ticker_return_result(ticker, uncovered if covered else None)
         if ticker_result is None:
             continue
         ticker_distribution = pd.to_numeric(
@@ -59351,7 +59473,7 @@ def growth_2_data():
             + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
                f"{'' if yahoo_fallback_tickers == 1 else 's'}"
                if yahoo_fallback_tickers else "")
-            if payment_covered_tickers
+            if payment_covered_positions
             else "Yahoo market history"
         )
         portfolio_return_metrics["payment_sources"] = sorted(payment_sources)
