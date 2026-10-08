@@ -55,6 +55,7 @@ class ManualHoldingEditApiTest(unittest.TestCase):
                 ytd_divs REAL,
                 total_divs_received REAL,
                 paid_for_itself REAL,
+                dividend_actuals_source TEXT,
                 cash_not_reinvested REAL,
                 total_cash_reinvested REAL,
                 shares_bought_from_dividend REAL,
