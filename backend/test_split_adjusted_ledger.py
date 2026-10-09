@@ -191,6 +191,26 @@ class AsTradedBrokerHistoryStillConvertsTest(unittest.TestCase):
         self.assertEqual(result["inferred_opening_detail"], [])
         self.assertEqual(result["inferred_closing_positions"], 0)
 
+    def test_buy_on_the_split_day_is_already_in_post_split_units(self):
+        # Yahoo dates a split on the first day shares trade in the new units,
+        # so only trades before that day are still in the old ones.
+        close, zeros, splits = _frames(
+            {"NVDA": {"2024-06-07": 120.73, "2024-06-10": 122.14, "2024-07-16": 125.62}},
+            {"2024-06-10": {"NVDA": 10.0}},
+        )
+        transactions = [
+            _txn("NVDA", "BUY", "2024-06-07", 5, 1207.27),
+            _txn("NVDA", "BUY", "2024-06-10", 34, 122.14),
+        ]
+        holdings = [_holding("NVDA", 84, "2024-06-07")]
+
+        result = _series(close, transactions, holdings, splits)
+
+        self.assertAlmostEqual(result["market_value"][0], 50 * 120.73, places=2)
+        self.assertAlmostEqual(result["market_value"][1], 84 * 122.14, places=2)
+        self.assertEqual(result["split_adjusted_transactions"], 1)
+        self.assertEqual(result["inferred_opening_detail"], [])
+
 
 class SnowballAdjustedLotsMustNotConvertAgainTest(unittest.TestCase):
     """Stored lots already in today's units: Yahoo conversion overstates start."""

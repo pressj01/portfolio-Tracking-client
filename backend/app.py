@@ -2141,23 +2141,43 @@ def _build_transaction_aware_portfolio_series(
     split_adjusted_positions = set()
     last_market_timestamp = pd.Timestamp(last_market_date)
 
+    import bisect
+
     split_factor_cache = {}
+    # A symbol's real splits up to the last market day, in date order: the
+    # frame is scanned once per symbol, so each trade costs a bisect instead of
+    # a scan of its own. Built on first use, so an index that cannot be compared
+    # with a date still fails only when a trade needs it.
+    split_events_by_symbol = {}
+
+    def split_events_for(symbol):
+        if symbol not in split_events_by_symbol:
+            split_dates, split_values = [], []
+            if symbol in split_history.columns:
+                series = split_history[symbol]
+                applicable = series[
+                    (series.index <= last_market_timestamp)
+                    & (series > 0)
+                    & (series != 1)
+                ]
+                split_dates = list(applicable.index)
+                split_values = [float(value) for value in applicable]
+            split_events_by_symbol[symbol] = (split_dates, split_values)
+        return split_events_by_symbol[symbol]
 
     def split_factor_after(symbol, event_date):
+        split_dates, split_values = split_events_for(symbol)
+        if not split_values:
+            return 1.0
         cache_key = (symbol, event_date)
         if cache_key in split_factor_cache:
             return split_factor_cache[cache_key]
+        # Multiply the later splits oldest first, as the frame scan did, so the
+        # product is the same float.
         factor = 1.0
-        if symbol in split_history.columns:
-            series = split_history[symbol]
-            applicable = series[
-                (series.index > pd.Timestamp(event_date))
-                & (series.index <= last_market_timestamp)
-                & (series > 0)
-                & (series != 1)
-            ]
-            for value in applicable:
-                factor *= float(value)
+        first_later = bisect.bisect_right(split_dates, pd.Timestamp(event_date))
+        for value in split_values[first_later:]:
+            factor *= value
         split_factor_cache[cache_key] = factor
         return factor
 
@@ -2424,8 +2444,6 @@ def _build_transaction_aware_portfolio_series(
         events.append((event_date, position_key, symbol, shares))
         fallback_positions += 1
         fallback_date_sources[date_source] += 1
-
-    import bisect
 
     import numpy as np
 
