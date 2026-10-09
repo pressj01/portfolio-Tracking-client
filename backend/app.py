@@ -2535,8 +2535,18 @@ def _build_transaction_aware_portfolio_series(
     # every later buy standing as shares the account no longer owns: a same-day
     # SELL/BUY pair ordered sell-first (dates carry no time) ended the replay
     # holding the buy outright. Valuation already ignores non-positive
-    # quantities, so a transient negative simply drops the symbol from those
+    # quantities, so a transient negative simply drops the position from those
     # days instead of inflating the balance forever.
+    #
+    # That is decided per account-position, the way the broker-cash side
+    # already does it, before a symbol's shares are added up. Netting first let
+    # one account's negative balance cancel shares another account really
+    # held: one account's CATX ledger ran 50 shares short for a month, its own
+    # replay ignored them, and Owner's valued 2,000 CATX against the 2,050 the
+    # other two accounts held. Owner's price return came out $240.00 away from
+    # its accounts added up, and with payment history its total return put
+    # 2,050 shares' ending value over 2,000 shares' starting value every day of
+    # that month (43.76% over five years against 38.93%).
     position_indexes = {}
     if use_resolved_distributions:
         for _, position_key, _, _ in events:
@@ -2548,6 +2558,7 @@ def _build_transaction_aware_portfolio_series(
         (row_count, len(position_indexes)), -1, dtype=np.intp,
     )
     running_symbol_shares = np.zeros(len(symbols))
+    symbol_position_balances = {}
     running_position_shares = np.zeros(len(position_indexes))
     running_position_columns = np.full(len(position_indexes), -1, dtype=np.intp)
     settled_rows = 0
@@ -2564,7 +2575,11 @@ def _build_transaction_aware_portfolio_series(
         symbol_index = symbol_indexes.get(symbol)
         if symbol_index is None:
             continue
-        running_symbol_shares[symbol_index] += delta
+        balances = symbol_position_balances.setdefault(symbol_index, {})
+        balances[position_key] = balances.get(position_key, 0.0) + delta
+        running_symbol_shares[symbol_index] = sum(
+            max(balance, 0.0) for balance in balances.values()
+        )
         if use_resolved_distributions:
             position_index = position_indexes[position_key]
             running_position_shares[position_index] += delta

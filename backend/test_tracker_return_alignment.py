@@ -440,6 +440,85 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         for key in ("end_value", "price_return_dollar", "distribution_dollar", "total_return_dollar"):
             self.assertAlmostEqual(owner[key], first[key] + second[key], places=4, msg=key)
 
+    def test_owner_price_return_adds_up_when_one_account_runs_short_of_shares(self):
+        # Account 6's AAA ledger sells three shares against the two it holds
+        # and buys them back a month later; account 7 holds four throughout.
+        # Account 6's own replay leaves its negative balance out. Owner's
+        # netted it against account 7's shares first and valued three for that
+        # month, so its price return read $39 against the $10 + $32 its
+        # accounts show. With broker cash on record the total return was worse:
+        # four shares' ending value over three shares' starting value, a gain
+        # nobody earned, compounded into the index (237.78% against 90%).
+        self._market(
+            ["2024-01-02", "2024-03-01", "2024-03-15", "2024-04-01", "2024-12-31"],
+            [10.0, 12.0, 16.0, 15.0, 18.0],
+        )
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            ALTER TABLE profiles ADD COLUMN include_in_owner INTEGER DEFAULT 0;
+            UPDATE profiles SET include_in_owner = 1 WHERE id = 6;
+            INSERT INTO profiles (id, name, cash_value, include_in_owner)
+                VALUES (1, 'Owner', 0, 0);
+            INSERT INTO profiles (id, name, cash_value, include_in_owner)
+                VALUES (7, 'Second', 0, 1);
+            INSERT INTO all_account_info VALUES (
+                'AAA', 7, 'Example', 'Stock', 4, 72, 40, 10, '2024-01-02', NULL
+            );
+            INSERT INTO all_account_info VALUES (
+                'AAA', 1, 'Example', 'Stock', 6, 108, 60, 10, '2024-01-02', NULL
+            );
+            INSERT INTO transactions
+                VALUES (2, 'AAA', 6, 'SELL', '2024-03-01', 3, 12, 0, 0, '');
+            INSERT INTO transactions
+                VALUES (3, 'AAA', 6, 'BUY', '2024-04-01', 3, 15, 0, 0, '');
+            INSERT INTO transactions
+                VALUES (4, 'AAA', 7, 'BUY', '2024-01-02', 4, 10, 0, 0, '');
+            INSERT INTO dividend_payments
+                VALUES ('AAA', 7, '2024-12-31', 6.0, 'schwab');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        def figures(profile_id):
+            params = f"profile_id={profile_id}&period=all"
+            charts = self.client.get(f"/api/total-return/charts?{params}")
+            growth = self.client.get(f"/api/growth/data?{params}&benchmark=SPY")
+            dollars = self.client.get(f"/api/growth-2/data?{params}")
+            for response in (charts, growth, dollars):
+                self.assertEqual(response.status_code, 200, response.get_json())
+            return (
+                charts.get_json()["portfolio_metrics"],
+                growth.get_json()["portfolio_metrics"],
+                dollars.get_json()["summary"],
+            )
+
+        owner, first, second = figures(1), figures(6), figures(7)
+
+        for page, name in ((0, "Total Return"), (1, "Growth")):
+            # An account's own figures are what they were before.
+            self.assertEqual(first[page]["price_return_dollar"], 10.0, name)
+            self.assertEqual(second[page]["price_return_dollar"], 32.0, name)
+            self.assertEqual(first[page]["total_return_pct"], 44.0, name)
+            self.assertEqual(second[page]["total_return_pct"], 95.0, name)
+            self.assertEqual(owner[page]["price_return_dollar"], 42.0, name)
+            for key in ("price_return_dollar", "distribution_dollar", "total_return_dollar", "end_value"):
+                self.assertAlmostEqual(
+                    owner[page][key],
+                    first[page][key] + second[page][key],
+                    places=4,
+                    msg=f"{name} {key}",
+                )
+            # AAA went from $10 to $18 and the $6 landed on a $90 day at an
+            # index of 150: 80 points of price and 10 of cash.
+            self.assertEqual(owner[page]["price_return_pct"], 80.0, name)
+            self.assertEqual(owner[page]["total_return_pct"], 90.0, name)
+        self.assertEqual(first[2]["price_return_amount"], 10.0)
+        self.assertEqual(second[2]["price_return_amount"], 32.0)
+        self.assertEqual(owner[2]["price_return_amount"], 42.0)
+        self.assertEqual(owner[2]["total_return_pct"], 90.0)
+
     def _market(self, dates, aaa):
         dates = pd.to_datetime(dates)
         close = pd.DataFrame({
