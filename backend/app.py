@@ -45,7 +45,7 @@ class NanSafeJSONProvider(DefaultJSONProvider):
 from config import get_connection, DB_PATH
 import fred_provider
 from license_manager import register_routes as register_license_routes
-from database import ensure_tables_exist
+from database import ensure_tables_exist, expand_owner_rollup_profile_ids
 from db_backup import remove_sidecars, sqlite_backup, sqlite_restore
 from snowball_assign import apply_snowball_assignment, ensure_snowball_category
 from transaction_identity import (
@@ -3711,12 +3711,10 @@ def get_profile_filter():
     agg_id = _request_aggregate_id()
     if agg_id is not None:
         conn = get_connection()
-        rows = conn.execute(
-            "SELECT member_profile_id FROM aggregate_config WHERE aggregate_id = ? ORDER BY member_profile_id",
-            (agg_id,),
-        ).fetchall()
-        conn.close()
-        ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+        try:
+            ids = _get_aggregate_member_profile_ids(conn, agg_id)
+        finally:
+            conn.close()
         return True, ids if ids else [1]
     pid = int(request.args.get("profile_id", session.get("profile_id", 1)))
     return False, [pid]
@@ -6275,10 +6273,13 @@ def _position_history_profile_ids(conn, is_aggregate, profile_ids):
     return ids
 
 
-def _get_aggregate_member_profile_ids(conn, aggregate_id=None):
+def _get_aggregate_member_profile_ids(conn, aggregate_id=None, *, expand_owner=True):
     """Return profile ids that feed an aggregate portfolio.
 
     If aggregate_id is None, returns the distinct union of members across all aggregates.
+    Read scopes expand Owner to its source accounts so Owner's stored rollup and
+    those accounts cannot both contribute the same positions. Pass
+    ``expand_owner=False`` when returning the literal saved configuration.
     """
     if aggregate_id is None:
         rows = conn.execute(
@@ -6289,7 +6290,8 @@ def _get_aggregate_member_profile_ids(conn, aggregate_id=None):
             "SELECT member_profile_id FROM aggregate_config WHERE aggregate_id = ? ORDER BY member_profile_id",
             (aggregate_id,),
         ).fetchall()
-    return [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+    ids = [r["member_profile_id"] if isinstance(r, dict) else r[0] for r in rows]
+    return expand_owner_rollup_profile_ids(conn, ids) if expand_owner else ids
 
 
 def _list_aggregates(conn):
@@ -6303,7 +6305,7 @@ def _list_aggregates(conn):
     for row in agg_rows:
         aid = row["id"] if isinstance(row, dict) else row[0]
         name = row["name"] if isinstance(row, dict) else row[1]
-        members = _get_aggregate_member_profile_ids(conn, aid)
+        members = _get_aggregate_member_profile_ids(conn, aid, expand_owner=False)
         aggregates.append({
             "id": aid,
             "name": name,
@@ -9598,7 +9600,7 @@ def update_aggregate(agg_id):
         conn.commit()
         name_row = conn.execute("SELECT name FROM aggregates WHERE id = ?", (agg_id,)).fetchone()
         name = name_row["name"] if isinstance(name_row, dict) else name_row[0]
-        members = _get_aggregate_member_profile_ids(conn, agg_id)
+        members = _get_aggregate_member_profile_ids(conn, agg_id, expand_owner=False)
         return jsonify({"id": agg_id, "name": name, "member_ids": members})
     finally:
         conn.close()

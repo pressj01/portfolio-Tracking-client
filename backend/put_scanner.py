@@ -40,6 +40,7 @@ import yahoo_gateway
 from flask import jsonify, request
 
 from config import get_connection
+from database import expand_owner_rollup_profile_ids
 from option_probability import profit_probability_schedule
 from option_selection import (SELECTION_DEFAULTS, selection_settings, expiration_choices,
                               price_leg, income_metrics, candidate_reasons, selection_rank,
@@ -1698,6 +1699,7 @@ def _profile_scope(profile_id, aggregate_id):
                 (aggregate_id,),
             ).fetchall()
             ids = [r[0] for r in rows]
+            ids = expand_owner_rollup_profile_ids(conn, ids)
         if not ids:
             ids = [profile_id or 1]
         placeholders = ",".join("?" for _ in ids)

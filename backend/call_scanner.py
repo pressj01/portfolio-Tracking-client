@@ -56,6 +56,7 @@ import yahoo_gateway
 from flask import jsonify, request
 
 from config import get_connection
+from database import expand_owner_rollup_profile_ids
 from option_probability import profit_probability_schedule
 from option_skew_history import calculate_skew_metrics, record_skew_snapshot
 from option_strike_targets import strike_for_delta
@@ -1113,6 +1114,7 @@ def _scope_profile_ids(conn, profile_id, aggregate_id) -> list[int]:
             (aggregate_id,),
         ).fetchall()
         ids = [r[0] for r in rows]
+        ids = expand_owner_rollup_profile_ids(conn, ids)
     return ids or [profile_id or 1]
 
 

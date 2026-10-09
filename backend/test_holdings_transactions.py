@@ -3315,6 +3315,51 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(combined["total_return_realized_component"], 30.0)
         self.assertAlmostEqual(combined["paid_for_itself"], 170.0 / 600.0, places=6)
 
+    def test_aggregate_does_not_double_count_owner_source_accounts(self):
+        conn = self._get_connection()
+        try:
+            conn.execute("ALTER TABLE profiles ADD COLUMN owner_active INTEGER DEFAULT 0")
+            for column, column_type in (
+                ("withdraw_8pct_cost_annually", "REAL"), ("withdraw_8pct_per_month", "REAL"),
+                ("cash_not_reinvested", "REAL"), ("shares_bought_in_year", "REAL"),
+                ("shares_in_month", "REAL"), ("nav_erosion_scope", "TEXT"),
+                ("nav_benchmark_override", "TEXT"),
+            ):
+                conn.execute(f"ALTER TABLE all_account_info ADD COLUMN {column} {column_type}")
+            conn.commit()
+        finally:
+            conn.close()
+        self._execute(
+            "INSERT INTO profiles (id, name, include_in_owner, owner_active) "
+            "VALUES (1, 'Owner', 0, 1)"
+        )
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (2, 'IRA', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (3, 'Taxable', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (4, 'Outside', 0)")
+        self._execute("INSERT INTO aggregates (id, name) VALUES (1, 'Legacy Combined')")
+        for profile_id in (1, 2, 3, 4):
+            self._execute(
+                "INSERT INTO aggregate_config (aggregate_id, member_profile_id) VALUES (1, ?)",
+                (profile_id,),
+            )
+
+        # Owner is the stored rollup copy of profiles 2 and 3. A literal read of
+        # all four configured members would report 37 shares instead of 22.
+        for profile_id, quantity in ((1, 15), (2, 10), (3, 5), (4, 7)):
+            self._execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, "
+                "current_price, current_value, gain_or_loss, total_divs_received, "
+                "estim_payment_per_year, reinvest, shares_bought_from_dividend, total_cash_reinvested) "
+                "VALUES ('ONCE', ?, 'Count Once Fund', ?, 10, ?, 10, ?, 0, 0, 0, 'N', 0, 0)",
+                (profile_id, quantity, quantity * 10, quantity * 10),
+            )
+
+        combined = self._holding_row("aggregate_id=1", "ONCE")
+
+        self.assertEqual(combined["quantity"], 22)
+        self.assertEqual(combined["current_value"], 220)
+
     def test_total_return_summary_uses_dividend_payment_history_as_total_dividend_floor(self):
         self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'Etrade Trading', 0)")
         self._execute(

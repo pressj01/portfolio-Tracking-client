@@ -1,5 +1,6 @@
 import hashlib
 import os
+import sqlite3
 import sys
 
 from config import get_connection
@@ -20,6 +21,41 @@ def _seed_db_candidates():
 
 
 ETF_PROVIDER_SEED_KEY = "etf_provider_seed_sha256"
+
+
+def expand_owner_rollup_profile_ids(conn, profile_ids):
+    """Replace Owner in a read scope with its source accounts, without duplicates.
+
+    Owner stores a rollup copy of the holdings in profiles marked
+    ``include_in_owner``.  Legacy aggregate configurations can still contain
+    both Owner and one or more of those source profiles, which would otherwise
+    count the copied position and the source position separately.
+    """
+    ids = list(dict.fromkeys(int(profile_id) for profile_id in (profile_ids or [])))
+    if 1 not in ids:
+        return ids
+
+    try:
+        rows = conn.execute(
+            "SELECT id FROM profiles "
+            "WHERE id != 1 AND include_in_owner = 1 ORDER BY id"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Narrow tests and migration-time callers may use a partial schema that
+        # cannot represent an Owner rollup. Keep their literal scope intact.
+        return ids
+
+    source_ids = [int(row[0]) for row in rows]
+    if not source_ids:
+        return ids
+
+    expanded = []
+    for profile_id in ids:
+        candidates = source_ids if profile_id == 1 else [profile_id]
+        for candidate in candidates:
+            if candidate not in expanded:
+                expanded.append(candidate)
+    return expanded
 
 
 def _file_sha256(path):
