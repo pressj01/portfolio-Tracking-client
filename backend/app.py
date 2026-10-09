@@ -1530,6 +1530,115 @@ def _market_coverage_shortfall(
     }
 
 
+_NON_ACTUAL_DISTRIBUTION_SOURCES = {
+    "refresh_estimate", "projection", "estimate", "estimated",
+}
+
+
+def _distribution_payment_policy(payment_rows, period_range, allowed_tickers=None):
+    """Normalize actual broker distributions for the shared tracker engine.
+
+    Coverage is keyed by ``(profile_id, accounting_ticker)``. An account with
+    actual payment history must not make another account holding the same
+    ticker look covered, and refresh-generated estimates must never displace
+    market-history fallback. Coverage is intentionally established from the
+    whole ledger while events are restricted to the requested period: once an
+    account-position has an actual ledger, a quiet period correctly reports
+    zero instead of inventing a market payment.
+    """
+    allowed = (
+        {
+            _accounting_symbol_for_ticker(ticker)
+            for ticker in allowed_tickers
+            if str(ticker or "").strip()
+        }
+        if allowed_tickers is not None
+        else None
+    )
+    start_date = (period_range or {}).get("start_date")
+    end_date = (period_range or {}).get("end_date")
+    covered_positions = set()
+    events = []
+    totals_by_position = {}
+    sources = set()
+
+    for raw_row in payment_rows or []:
+        row = dict(raw_row)
+        ticker = _accounting_symbol_for_ticker(row.get("ticker"))
+        if not ticker or (allowed is not None and ticker not in allowed):
+            continue
+        source = str(row.get("source") or "").strip()
+        if source.lower() in _NON_ACTUAL_DISTRIBUTION_SOURCES:
+            continue
+        position_key = (row.get("profile_id"), ticker)
+        covered_positions.add(position_key)
+
+        payment_date = str(row.get("payment_date") or "")[:10]
+        if not payment_date:
+            continue
+        if start_date and payment_date < start_date:
+            continue
+        if end_date and payment_date > end_date:
+            continue
+        try:
+            amount = float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(amount):
+            continue
+        events.append({
+            "position_key": position_key,
+            "ticker": ticker,
+            "payment_date": payment_date,
+            "amount": amount,
+        })
+        totals_by_position[position_key] = (
+            totals_by_position.get(position_key, 0.0) + amount
+        )
+        if source:
+            sources.add(source)
+
+    return {
+        "covered_positions": covered_positions,
+        "events": events,
+        "totals_by_position": totals_by_position,
+        "sources": sorted(sources),
+    }
+
+
+def _tracker_position_keys(transactions, holdings):
+    """Return canonical account-position keys represented by a tracker run."""
+    keys = set()
+    for row in list(transactions or []) + list(holdings or []):
+        if not isinstance(row, dict):
+            continue
+        explicit = row.get("position_key")
+        if isinstance(explicit, (tuple, list)) and len(explicit) > 1:
+            keys.add((explicit[0], _accounting_symbol_for_ticker(explicit[1])))
+        else:
+            keys.add((
+                row.get("profile_id"),
+                _accounting_symbol_for_ticker(row.get("ticker")),
+            ))
+    return {key for key in keys if key[1]}
+
+
+def _distribution_source_label(covered_positions, transactions, holdings):
+    """Describe the actual/market mix for one tracker scope."""
+    positions = _tracker_position_keys(transactions, holdings)
+    covered = positions & set(covered_positions or [])
+    if not covered:
+        return "Yahoo market history"
+    uncovered_count = len(positions - covered)
+    if not uncovered_count:
+        return "Broker payment history"
+    return (
+        "Broker payment history with Yahoo market history for "
+        f"{uncovered_count} uncovered account-position"
+        f"{'' if uncovered_count == 1 else 's'}"
+    )
+
+
 def _build_transaction_aware_portfolio_series(
     close,
     adjusted_close,
@@ -1538,6 +1647,8 @@ def _build_transaction_aware_portfolio_series(
     transactions,
     current_holdings,
     stock_splits=None,
+    actual_distribution_events=None,
+    actual_distribution_covered_positions=None,
 ):
     """Build cash-flow-adjusted portfolio return indexes.
 
@@ -1591,6 +1702,13 @@ def _build_transaction_aware_portfolio_series(
     # shortfall in the full ledger, and offering it for a clip-only gap would
     # double-count shares that are already on record.
     raw_transactions = list(transactions or [])
+    included_position_keys = _tracker_position_keys(
+        raw_transactions,
+        current_holdings,
+    )
+    covered_distribution_positions = (
+        set(actual_distribution_covered_positions or []) & included_position_keys
+    )
     transactions = _transactions_aligned_to_current_lots(
         raw_transactions, current_holdings,
     )
@@ -1875,7 +1993,7 @@ def _build_transaction_aware_portfolio_series(
         )
         if symbol not in prices.columns or event_date > last_market_date:
             continue
-        events.append((event_date, symbol, signed_shares))
+        events.append((event_date, position_key, symbol, signed_shares))
         valid_transaction_events += 1
 
     # Broker transaction exports frequently begin with a DRIP or SELL for a
@@ -1913,7 +2031,7 @@ def _build_transaction_aware_portfolio_series(
             seed_date = first_activity - datetime.timedelta(days=1)
             if seed_date > last_market_date:
                 continue
-            events.append((seed_date, symbol, opening_quantity))
+            events.append((seed_date, position_key, symbol, opening_quantity))
             full_net = unclipped_deltas.get(position_key, 0.0)
             true_gap = snapshot_quantity - full_net
             if true_gap <= 1e-8:
@@ -1949,7 +2067,7 @@ def _build_transaction_aware_portfolio_series(
                 last_transaction_dates.get(position_key, last_market_date),
             )
             close_date = max(first_market_date, close_date)
-            events.append((close_date, symbol, opening_quantity))
+            events.append((close_date, position_key, symbol, opening_quantity))
             inferred_closing_positions += 1
             # A count alone cannot answer the only question a reader has:
             # which positions, and is the ledger actually wrong? The clipped
@@ -2022,7 +2140,7 @@ def _build_transaction_aware_portfolio_series(
             date_source = "current_snapshot"
         if event_date > last_market_date:
             continue
-        events.append((event_date, symbol, shares))
+        events.append((event_date, position_key, symbol, shares))
         fallback_positions += 1
         fallback_date_sources[date_source] += 1
 
@@ -2032,15 +2150,44 @@ def _build_transaction_aware_portfolio_series(
     symbols = list(prices.columns)
     symbol_indexes = {symbol: index for index, symbol in enumerate(symbols)}
     quantities = np.zeros(len(symbols), dtype=float)
+    position_quantities = {}
+    position_symbols = {}
     price_matrix = prices.to_numpy(dtype=float)
     adjusted_matrix = adjusted.to_numpy(dtype=float)
     distribution_matrix = distributions.to_numpy(dtype=float)
     event_index = 0
+    actual_distributions_by_row = {}
+    for raw_event in actual_distribution_events or []:
+        if not isinstance(raw_event, dict):
+            continue
+        position_key = raw_event.get("position_key")
+        if isinstance(position_key, list):
+            position_key = tuple(position_key)
+        if position_key not in covered_distribution_positions:
+            continue
+        payment_date = _portfolio_event_date(raw_event.get("payment_date"))
+        try:
+            amount = float(raw_event.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
+        if payment_date is None or not math.isfinite(amount):
+            continue
+        payment_timestamp = pd.Timestamp(payment_date)
+        if prices.index.tz is not None:
+            payment_timestamp = payment_timestamp.tz_localize(prices.index.tz)
+        market_row = int(prices.index.searchsorted(payment_timestamp, side="left"))
+        if market_row >= len(prices.index):
+            continue
+        actual_distributions_by_row[market_row] = (
+            actual_distributions_by_row.get(market_row, 0.0) + amount
+        )
+
+    use_resolved_distributions = bool(covered_distribution_positions)
 
     def apply_events_through(day):
         nonlocal event_index
         while event_index < len(events) and events[event_index][0] <= day:
-            _, symbol, delta = events[event_index]
+            _, position_key, symbol, delta = events[event_index]
             symbol_index = symbol_indexes.get(symbol)
             if symbol_index is not None:
                 # A running total that dips below zero must stay negative until
@@ -2052,6 +2199,10 @@ def _build_transaction_aware_portfolio_series(
                 # quantities, so a transient negative simply drops the symbol
                 # from those days instead of inflating the balance forever.
                 quantities[symbol_index] += delta
+                position_quantities[position_key] = (
+                    position_quantities.get(position_key, 0.0) + delta
+                )
+                position_symbols[position_key] = symbol
             event_index += 1
 
     def portfolio_value_at(row_index):
@@ -2092,6 +2243,8 @@ def _build_transaction_aware_portfolio_series(
                 price_index = total_index = 100.0
                 price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
                 market_values[row_index] = round(opening_value, 4)
+                if use_resolved_distributions:
+                    distribution_dollar += actual_distributions_by_row.get(0, 0.0)
                 record_dollar_returns(row_index)
             continue
 
@@ -2115,24 +2268,71 @@ def _build_transaction_aware_portfolio_series(
             distribution_matrix[row_index][valid],
             nan=0.0,
         )
-        distribution_value = float(np.sum(valid_quantities * row_distributions))
+        if use_resolved_distributions:
+            # Actual broker cash replaces market-implied income only for the
+            # account-position it covers. Uncovered accounts holding the same
+            # ticker retain Yahoo's adjusted-return history. This makes Owner
+            # the sum of its source accounts instead of letting one member's
+            # payment history switch fallback off for every member.
+            distribution_value = actual_distributions_by_row.get(row_index, 0.0)
+            end_total_value = distribution_value
+            for position_key, position_quantity in position_quantities.items():
+                if position_quantity <= 0:
+                    continue
+                symbol_index = symbol_indexes.get(position_symbols.get(position_key))
+                if symbol_index is None:
+                    continue
+                previous_price = previous_prices[symbol_index]
+                current_price = current_prices[symbol_index]
+                if (
+                    not np.isfinite(previous_price)
+                    or not np.isfinite(current_price)
+                    or previous_price <= 0
+                    or current_price <= 0
+                ):
+                    continue
+                position_start = position_quantity * previous_price
+                if position_key in covered_distribution_positions:
+                    end_total_value += position_quantity * current_price
+                    continue
+                market_distribution = distribution_matrix[row_index][symbol_index]
+                if not np.isfinite(market_distribution):
+                    market_distribution = 0.0
+                distribution_value += position_quantity * market_distribution
+                previous_adjusted = adjusted_matrix[row_index - 1][symbol_index]
+                current_adjusted = adjusted_matrix[row_index][symbol_index]
+                if (
+                    np.isfinite(previous_adjusted)
+                    and np.isfinite(current_adjusted)
+                    and previous_adjusted > 0
+                    and current_adjusted > 0
+                ):
+                    end_total_value += (
+                        position_start * current_adjusted / previous_adjusted
+                    )
+                else:
+                    end_total_value += position_quantity * (
+                        current_price + market_distribution
+                    )
+        else:
+            distribution_value = float(np.sum(valid_quantities * row_distributions))
 
-        previous_adjusted = adjusted_matrix[row_index - 1][valid]
-        current_adjusted = adjusted_matrix[row_index][valid]
-        valid_adjusted = (
-            np.isfinite(previous_adjusted)
-            & np.isfinite(current_adjusted)
-            & (previous_adjusted > 0)
-            & (current_adjusted > 0)
-        )
-        total_factors = (
-            valid_current_prices + row_distributions
-        ) / valid_previous_prices
-        total_factors[valid_adjusted] = (
-            current_adjusted[valid_adjusted]
-            / previous_adjusted[valid_adjusted]
-        )
-        end_total_value = float(np.sum(position_starts * total_factors))
+            previous_adjusted = adjusted_matrix[row_index - 1][valid]
+            current_adjusted = adjusted_matrix[row_index][valid]
+            valid_adjusted = (
+                np.isfinite(previous_adjusted)
+                & np.isfinite(current_adjusted)
+                & (previous_adjusted > 0)
+                & (current_adjusted > 0)
+            )
+            total_factors = (
+                valid_current_prices + row_distributions
+            ) / valid_previous_prices
+            total_factors[valid_adjusted] = (
+                current_adjusted[valid_adjusted]
+                / previous_adjusted[valid_adjusted]
+            )
+            end_total_value = float(np.sum(position_starts * total_factors))
 
         if price_index is not None and total_index is not None and start_value > 0:
             previous_price_index = price_index
@@ -35904,41 +36104,15 @@ def total_return_charts():
     # (Owner showed MO at $0.00 against $291.64 in the account holding it), and
     # put cash paid to an account that had since sold out on the row for shares
     # still open somewhere else.
-    payment_covered_positions = set()
-    period_payment_totals = {}
-    payment_sources = set()
-    non_actual_payment_sources = {
-        "refresh_estimate", "projection", "estimate", "estimated",
-    }
-
-    for raw_row in payment_rows:
-        row = dict(raw_row)
-        raw_ticker = str(row.get("ticker") or "").strip().upper()
-        if not raw_ticker or (
-            filter_is_active
-            and _accounting_symbol_for_ticker(raw_ticker) not in allowed_accounting_tickers
-        ):
-            continue
-        accounting_ticker = _accounting_symbol_for_ticker(raw_ticker)
-        source = str(row.get("source") or "").strip()
-        if source.lower() in non_actual_payment_sources:
-            continue
-        position = (row.get("profile_id"), accounting_ticker)
-        payment_covered_positions.add(position)
-        payment_date = str(row.get("payment_date") or "")[:10]
-        if period_range["start_date"] and payment_date < period_range["start_date"]:
-            continue
-        if period_range["end_date"] and payment_date > period_range["end_date"]:
-            continue
-        try:
-            amount = float(row.get("amount") or 0)
-        except (TypeError, ValueError):
-            amount = 0
-        period_payment_totals[position] = (
-            period_payment_totals.get(position, 0) + amount
-        )
-        if source:
-            payment_sources.add(source)
+    payment_policy = _distribution_payment_policy(
+        payment_rows,
+        period_range,
+        allowed_tickers=(allowed_accounting_tickers if filter_is_active else None),
+    )
+    payment_covered_positions = payment_policy["covered_positions"]
+    payment_events = payment_policy["events"]
+    period_payment_totals = payment_policy["totals_by_position"]
+    payment_sources = set(payment_policy["sources"])
 
     for raw_row in historical_transaction_records:
         row = dict(raw_row)
@@ -36072,6 +36246,8 @@ def total_return_charts():
                     if market_symbol in stock_splits.columns
                     else None
                 ),
+                actual_distribution_events=payment_events,
+                actual_distribution_covered_positions=payment_covered_positions,
             )
             ticker_result_cache[cache_key] = result
             return result
@@ -36186,6 +36362,8 @@ def total_return_charts():
             portfolio_transactions,
             portfolio_holdings,
             stock_splits=stock_splits,
+            actual_distribution_events=payment_events,
+            actual_distribution_covered_positions=payment_covered_positions,
         )
         open_position_result = _build_transaction_aware_portfolio_series(
             close,
@@ -36195,6 +36373,8 @@ def total_return_charts():
             open_portfolio_transactions,
             portfolio_holdings,
             stock_splits=stock_splits,
+            actual_distribution_events=payment_events,
+            actual_distribution_covered_positions=payment_covered_positions,
         )
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         open_position_metrics = _portfolio_period_metrics(open_position_result)
@@ -38255,6 +38435,30 @@ def growth_data():
            ORDER BY transaction_date, {_transaction_order_expression(conn)}, id""",
         position_profile_ids,
     ).fetchall()
+    payment_rows = []
+    try:
+        payment_profile_ids = _dividend_payment_profile_ids_for_read(
+            conn, profile_ids,
+        )
+        payment_placeholders = ",".join("?" * len(payment_profile_ids))
+        dividend_payment_columns = _table_columns(conn, "dividend_payments")
+        payment_source_sql = (
+            "source"
+            if "source" in dividend_payment_columns
+            else "NULL AS source"
+        )
+        payment_rows = conn.execute(
+            f"""SELECT ticker, profile_id, payment_date, amount,
+                       {payment_source_sql}
+                  FROM dividend_payments
+                 WHERE profile_id IN ({payment_placeholders})
+                   AND payment_date IS NOT NULL""",
+            payment_profile_ids,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Narrow unit fixtures and legacy read-only databases may not carry the
+        # optional ledger yet. They retain market-history behavior.
+        payment_rows = []
     filtered_transactions = []
     for raw_row in transaction_rows:
         row = dict(raw_row)
@@ -38309,6 +38513,13 @@ def growth_data():
             if str(row.get("ticker") or "").strip()
         }
     )
+    payment_policy = _distribution_payment_policy(
+        payment_rows,
+        period_range,
+        allowed_tickers=portfolio_tickers,
+    )
+    payment_covered_positions = payment_policy["covered_positions"]
+    payment_events = payment_policy["events"]
     quantities = {
         ticker: sum(
             float(row["quantity"] or 0)
@@ -38461,8 +38672,17 @@ def growth_data():
         close_aligned, adjusted_aligned, divs_aligned, cap_gains_aligned,
         canonical_transactions, canonical_holdings,
         stock_splits=canonical_stock_splits,
+        actual_distribution_events=payment_events,
+        actual_distribution_covered_positions=payment_covered_positions,
     )
     canonical_metrics = _portfolio_period_metrics(canonical_result)
+    if canonical_metrics is not None:
+        canonical_metrics["distribution_source"] = _distribution_source_label(
+            payment_covered_positions,
+            canonical_transactions,
+            canonical_holdings,
+        )
+        canonical_metrics["payment_sources"] = payment_policy["sources"]
     # Keep the same two explicit scopes exposed by Total Return. The canonical
     # result retains transaction-only position keys that were fully closed in
     # the selected range; the open-position result removes them while keeping
@@ -38475,8 +38695,17 @@ def growth_data():
         close_aligned, adjusted_aligned, divs_aligned, cap_gains_aligned,
         open_position_transactions, canonical_holdings,
         stock_splits=canonical_stock_splits,
+        actual_distribution_events=payment_events,
+        actual_distribution_covered_positions=payment_covered_positions,
     )
     open_position_metrics = _portfolio_period_metrics(open_position_result)
+    if open_position_metrics is not None:
+        open_position_metrics["distribution_source"] = _distribution_source_label(
+            payment_covered_positions,
+            open_position_transactions,
+            canonical_holdings,
+        )
+        open_position_metrics["payment_sources"] = payment_policy["sources"]
     canonical_indexes = [
         index for index, value in enumerate(canonical_result["total"])
         if value is not None
@@ -38527,6 +38756,8 @@ def growth_data():
             [tx for tx in canonical_transactions if tx.get("market_symbol") == t],
             [holding for holding in canonical_holdings if holding.get("market_symbol") == t],
             stock_splits=stock_splits.reindex(columns=[t]).fillna(0),
+            actual_distribution_events=payment_events,
+            actual_distribution_covered_positions=payment_covered_positions,
         )
         ticker_metrics = _portfolio_period_metrics(ticker_result)
         ticker_returns.append({
@@ -59439,6 +59670,14 @@ def growth_2_data():
         row["position_key"] = (row.get("profile_id", profile_ids[0]), ticker)
         return_holdings.append(row)
 
+    payment_policy = _distribution_payment_policy(
+        div_rows,
+        period_range,
+        allowed_tickers=return_scope_tickers,
+    )
+    payment_covered_positions = payment_policy["covered_positions"]
+    payment_events = payment_policy["events"]
+
     portfolio_return_result = _build_transaction_aware_portfolio_series(
         return_close,
         return_adj,
@@ -59447,46 +59686,26 @@ def growth_2_data():
         return_transactions,
         return_holdings,
         stock_splits=return_splits,
+        actual_distribution_events=payment_events,
+        actual_distribution_covered_positions=payment_covered_positions,
     )
     portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
 
     # Use the same distribution-dollar policy as Total Return: actual broker
     # payment history wins for a covered position, with Yahoo market history
     # only filling positions that have no broker payment history. This keeps
-    # the dollar result on this page reconcilable with the reference dashboard.
+    # the consolidated Growth Dollars result reconcilable with Total Return.
     # A position is (account, ticker): settling it per ticker let one account's
     # payment history switch the fallback off for another account's shares.
-    non_actual_payment_sources = {
-        "refresh_estimate", "projection", "estimate", "estimated",
-    }
-    payment_covered_positions = set()
     payment_events_by_position = {}
-    payment_sources = set()
-    for raw_row in div_rows:
-        row = dict(raw_row)
-        ticker = _accounting_symbol_for_ticker(row.get("ticker"))
-        if ticker not in return_scope_tickers:
-            continue
-        source = str(row.get("source") or "").strip()
-        if source.lower() in non_actual_payment_sources:
-            continue
-        position = (row.get("profile_id", profile_ids[0]), ticker)
-        payment_covered_positions.add(position)
-        payment_date = str(row.get("payment_date") or "")[:10]
-        if period_range["start_date"] and payment_date < period_range["start_date"]:
-            continue
-        if period_range["end_date"] and payment_date > period_range["end_date"]:
-            continue
-        try:
-            payment_timestamp = pd.Timestamp(payment_date).normalize()
-            payment_amount = float(row.get("amount") or 0)
-        except (TypeError, ValueError):
-            continue
-        payment_events_by_position.setdefault(position, []).append(
-            (payment_timestamp, payment_amount),
-        )
-        if source:
-            payment_sources.add(source)
+    payment_sources = set(payment_policy["sources"])
+    for event in payment_events:
+        payment_events_by_position.setdefault(
+            event["position_key"], [],
+        ).append((
+            pd.Timestamp(event["payment_date"]).normalize(),
+            float(event["amount"]),
+        ))
 
     transactions_by_ticker = {}
     holdings_by_ticker = {}

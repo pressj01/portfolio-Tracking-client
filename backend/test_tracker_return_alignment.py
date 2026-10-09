@@ -144,6 +144,54 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         self.assertEqual(growth_dollar, total_return_dollar)
         self.assertEqual(growth_dollar, growth_2_dollar)
 
+    def test_broker_payments_drive_every_tracker_return_measure(self):
+        conn = self._get_connection()
+        conn.executemany(
+            "INSERT INTO dividend_payments VALUES (?, ?, ?, ?, ?)",
+            [
+                ("AAA", 6, "2024-12-31", 3.0, "schwab"),
+                ("AAA", 6, "2024-12-31", 100.0, "refresh_estimate"),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+        params = "profile_id=6&period=all"
+        growth = self.client.get(f"/api/growth/data?{params}&benchmark=SPY")
+        growth_dollars = self.client.get(f"/api/growth-2/data?{params}")
+        total_return = self.client.get(f"/api/total-return/charts?{params}")
+
+        self.assertEqual(growth.status_code, 200, growth.get_json())
+        self.assertEqual(
+            growth_dollars.status_code, 200, growth_dollars.get_json(),
+        )
+        self.assertEqual(total_return.status_code, 200, total_return.get_json())
+
+        growth_data = growth.get_json()
+        growth_dollars_data = growth_dollars.get_json()
+        total_return_data = total_return.get_json()
+        metrics = [
+            growth_data["portfolio_metrics"],
+            growth_dollars_data["summary"],
+            total_return_data["portfolio_metrics"],
+        ]
+        for metric in metrics:
+            distribution_key = (
+                "distribution_amount"
+                if "distribution_amount" in metric
+                else "distribution_dollar"
+            )
+            self.assertEqual(metric[distribution_key], 3.0)
+            self.assertEqual(metric["total_return_pct"], 35.0)
+            self.assertIn("Broker payment history", metric["distribution_source"])
+
+        self.assertEqual(growth_data["portfolio_total"]["values"][-1], 135.0)
+        self.assertEqual(total_return_data["portfolio_series"]["total"][-1], 135.0)
+        self.assertEqual(growth_data["ticker_returns"], [{
+            "ticker": "AAA",
+            "return_pct": 35.0,
+        }])
+
     def test_category_scope_matches_between_dashboard_growth_and_total_return(self):
         conn = self._get_connection()
         conn.executescript(
@@ -287,6 +335,13 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
             self.assertEqual(res.status_code, 200, res.get_json())
             return res.get_json()["summary"]["distribution_amount"]
 
+        def growth(profile_id):
+            res = self.client.get(
+                f"/api/growth/data?profile_id={profile_id}&period=all&benchmark=SPY"
+            )
+            self.assertEqual(res.status_code, 200, res.get_json())
+            return res.get_json()["portfolio_metrics"]
+
         owner, first, second = charts(1), charts(6), charts(7)
         rows = lambda payload: {row["ticker"]: row for row in payload["performance_rows"]}
 
@@ -309,6 +364,22 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         self.assertEqual(owner["portfolio_metrics"]["distribution_dollar"], 6.25)
         self.assertAlmostEqual(dollars(1), dollars(6) + dollars(7), places=2)
         self.assertAlmostEqual(dollars(1), 6.25, places=2)
+        owner_growth, first_growth, second_growth = growth(1), growth(6), growth(7)
+        for key in ("distribution_dollar", "total_return_dollar"):
+            self.assertAlmostEqual(
+                owner_growth[key],
+                first_growth[key] + second_growth[key],
+                places=4,
+                msg=key,
+            )
+        self.assertEqual(
+            owner_growth["distribution_dollar"],
+            owner["portfolio_metrics"]["distribution_dollar"],
+        )
+        self.assertEqual(
+            owner_growth["total_return_pct"],
+            owner["portfolio_metrics"]["total_return_pct"],
+        )
 
     def test_owner_start_value_adds_up_accounts_that_opened_on_different_days(self):
         # Account 6 held AAA all year; account 7 bought it in June. Replayed

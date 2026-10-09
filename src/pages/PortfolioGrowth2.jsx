@@ -626,6 +626,9 @@ export default function PortfolioGrowth2({ embedded = false }) {
                   ? ` + realized trims ${formatMoney(data.summary.realized_return_amount)}`
                   : ''}
               </div>
+              {data.summary?.distribution_source && (
+                <div className="summary-sub">Distribution source: {data.summary.distribution_source}</div>
+              )}
               {trackerCardRange && <div className="summary-sub">Range: {trackerCardRange}</div>}
             </div>
             <div className="summary-card">

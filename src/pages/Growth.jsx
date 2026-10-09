@@ -862,7 +862,7 @@ export default function Growth({ embedded = false }) {
               <MetricCard
                 label="Open Lots Total Return %"
                 value={<span style={{ color: (data.open_position_metrics?.total_return_pct || 0) >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{fmtPct(data.open_position_metrics?.total_return_pct)}</span>}
-                sub="Fully closed positions excluded · Same open-position calculation as Total Return, Dashboard, and Gains & Losses"
+                sub={`Fully closed positions excluded · Same open-position calculation as Total Return, Dashboard, and Gains & Losses${data.open_position_metrics?.distribution_source ? ` · Distributions: ${data.open_position_metrics.distribution_source}` : ''}`}
                 range={cardRange}
               />
             )}
@@ -872,7 +872,9 @@ export default function Growth({ embedded = false }) {
               dollarValue={isLifetimePerformancePeriod(period) ? data.portfolio_metrics?.total_return_dollar : null}
               benchLabel={data.benchmark_ticker}
               benchValue={lastIndexReturn(data.benchmark_total)}
-              sub={isLifetimePerformancePeriod(period) ? 'Price gain/loss plus lifetime distributions paid' : 'Includes positions fully closed during this range'}
+              sub={isLifetimePerformancePeriod(period)
+                ? 'Price gain/loss plus lifetime distributions paid'
+                : `Includes positions fully closed during this range${data.portfolio_metrics?.distribution_source ? ` · Distributions: ${data.portfolio_metrics.distribution_source}` : ''}`}
               range={cardRange}
             />
             {!isLifetimePerformancePeriod(period) && (
