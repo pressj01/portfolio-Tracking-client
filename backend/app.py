@@ -1683,6 +1683,10 @@ def _merge_distribution_coverage_spans(spans):
     for start, end in spans or []:
         start_date = _portfolio_event_date(start) if start else None
         end_date = _portfolio_event_date(end) if end else None
+        if (start and start_date is None) or (end and end_date is None):
+            # None means open-ended. A date that cannot be read is not that:
+            # treating it so would claim broker coverage for all of history.
+            continue
         if start_date and end_date and end_date < start_date:
             start_date, end_date = end_date, start_date
         normalized.append((start_date, end_date))
@@ -2456,6 +2460,11 @@ def _build_transaction_aware_portfolio_series(
         ]
         for position, spans in distribution_coverage_by_position.items()
     }
+    import bisect
+
+    # Sorted with the index, so a date range is two bisects instead of a walk
+    # over every row for every payment and every position.
+    row_days = [timestamp.date() for timestamp in prices.index]
     actual_distributions_by_row = {}
     actual_replacement_rows = {}
     matched_market_rows = {}
@@ -2501,35 +2510,41 @@ def _build_transaction_aware_portfolio_series(
             if symbol_index is not None:
                 earliest = payment_date - datetime.timedelta(days=120)
                 already_matched = matched_market_rows.setdefault(position_key, set())
-                candidates = []
-                for candidate_index, candidate_timestamp in enumerate(prices.index):
-                    candidate_day = candidate_timestamp.date()
-                    if candidate_day < earliest or candidate_day > payment_date:
+                first_candidate = bisect.bisect_left(row_days, earliest)
+                last_candidate = bisect.bisect_right(row_days, payment_date) - 1
+                for candidate_index in range(last_candidate, first_candidate - 1, -1):
+                    if candidate_index in already_matched:
                         continue
                     market_distribution = distribution_matrix[candidate_index][symbol_index]
                     if (
-                        candidate_index not in already_matched
-                        and np.isfinite(market_distribution)
+                        np.isfinite(market_distribution)
                         and abs(float(market_distribution)) > 1e-12
                     ):
-                        candidates.append(candidate_index)
-                if candidates:
-                    matched_row = candidates[-1]
-                    already_matched.add(matched_row)
-                    actual_replacement_rows.setdefault(position_key, set()).add(matched_row)
+                        already_matched.add(candidate_index)
+                        actual_replacement_rows.setdefault(position_key, set()).add(candidate_index)
+                        break
 
     use_resolved_distributions = bool(
         covered_distribution_positions or actual_distributions_by_row
     )
 
+    # One boolean per row, built the first time a position is asked about: a
+    # migrated ledger has a point span per payment, and testing every span on
+    # every row made a five-year range 80 times slower than the market replay.
+    actual_history_rows = {}
+
     def position_uses_actual_history(position_key, row_index):
-        if row_index in actual_replacement_rows.get(position_key, set()):
-            return True
-        day = prices.index[row_index].date()
-        return any(
-            (start is None or day >= start) and (end is None or day <= end)
-            for start, end in coverage_dates_by_position.get(position_key, [])
-        )
+        rows = actual_history_rows.get(position_key)
+        if rows is None:
+            rows = np.zeros(len(row_days), dtype=bool)
+            for start, end in coverage_dates_by_position.get(position_key, []):
+                first_row = 0 if start is None else bisect.bisect_left(row_days, start)
+                last_row = len(row_days) if end is None else bisect.bisect_right(row_days, end)
+                rows[first_row:last_row] = True
+            for replaced_row in actual_replacement_rows.get(position_key, ()):
+                rows[replaced_row] = True
+            actual_history_rows[position_key] = rows
+        return bool(rows[row_index])
 
     def apply_events_through(day):
         nonlocal event_index
@@ -2586,12 +2601,12 @@ def _build_transaction_aware_portfolio_series(
         if row_index == 0:
             apply_events_through(day)
             opening_value = portfolio_value_at(row_index)
+            if use_resolved_distributions:
+                distribution_dollar += actual_distributions_by_row.get(0, 0.0)
             if opening_value > 0:
                 price_index = total_index = 100.0
                 price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
                 market_values[row_index] = round(opening_value, 4)
-                if use_resolved_distributions:
-                    distribution_dollar += actual_distributions_by_row.get(0, 0.0)
                 record_dollar_returns(row_index)
             continue
 
@@ -2693,6 +2708,20 @@ def _build_transaction_aware_portfolio_series(
             pricediv_values[row_index] = round(price_index + distribution_cash, 4)
             total_values[row_index] = round(total_index, 4)
             record_dollar_returns(row_index)
+        elif use_resolved_distributions:
+            # Recorded cash is income whether or not the replay held shares on
+            # the day it posted: a dividend paid after the last share was sold,
+            # or during a cycle that closed before the lot held now was bought.
+            # Counting it only on days with a balance dropped it from a
+            # single-ticker replay but kept it in a whole-portfolio one, so
+            # Total Return's dollars disagreed with Growth and a row disagreed
+            # with its own payment list. It cannot move the index, which has
+            # no base that day, but it belongs in the dollars.
+            row_cash = actual_distributions_by_row.get(row_index, 0.0)
+            if row_cash:
+                distribution_dollar += row_cash
+                if price_index is not None:
+                    record_dollar_returns(row_index)
 
         # End-of-day flow convention: today's trades affect tomorrow's weights,
         # but never create a jump in today's return index.
@@ -3709,6 +3738,25 @@ def _field_symbol_market_frame(frame, symbols):
     return normalized
 
 
+def _market_batch_is_mostly_unpriced(frame, symbols):
+    """Whether half or more of a downloaded batch has no closing price at all.
+
+    That is what a throttled feed looks like: one or two symbols Yahoo does not
+    list are normal and settle as unpriced, a batch that is mostly blank is an
+    outage. A batch of two or three is too small to tell the two apart, and
+    re-asking for it on every request would give up the stable quote the
+    snapshot exists for.
+    """
+    if len(symbols) < 4 or not isinstance(frame.columns, pd.MultiIndex):
+        return False
+    priced = set()
+    for field, symbol in frame.columns:
+        if str(field) == "Close" and bool(frame[(field, symbol)].notna().any()):
+            priced.add(str(symbol).strip().upper())
+    unpriced = [symbol for symbol in symbols if symbol not in priced]
+    return len(unpriced) * 2 >= len(symbols)
+
+
 def _total_return_market_download(tickers, **kwargs):
     """Download one stable, short-lived market snapshot for Total Return.
 
@@ -3767,16 +3815,24 @@ def _total_return_market_download(tickers, **kwargs):
                 # this successful batch as the page's answer even if Yahoo left
                 # one member all-NaN; re-querying it immediately would make two
                 # account totals use different points in time.
-                fetched_symbols.update(missing)
-                _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE[window_key] = (
-                    created_at, snapshot.copy(deep=True), frozenset(fetched_symbols),
-                )
-                while (
-                    len(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE)
-                    > _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS
-                ):
-                    oldest = next(iter(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE))
-                    _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(oldest, None)
+                #
+                # A throttled batch is not an answer, though. Yahoo fills the
+                # symbols it refused with NaN instead of dropping them, and
+                # keeping that for ten minutes would show most of the page as
+                # unpriced long after the feed recovered. When half or more of
+                # the batch came back without a single price, serve this
+                # request from it and leave the snapshot as it was.
+                if not _market_batch_is_mostly_unpriced(normalized, missing):
+                    fetched_symbols.update(missing)
+                    _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE[window_key] = (
+                        created_at, snapshot.copy(deep=True), frozenset(fetched_symbols),
+                    )
+                    while (
+                        len(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE)
+                        > _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS
+                    ):
+                        oldest = next(iter(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE))
+                        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(oldest, None)
             elif snapshot.empty:
                 return pd.DataFrame()
 
@@ -10888,8 +10944,16 @@ def _import_portfolio_export_workbook(
         workbook_txns = parsed.get("transactions", []) if want_transactions else []
         non_div_txns = [txn for txn in workbook_txns if txn.get("type") != "DIVIDEND"]
         div_txns = [txn for txn in workbook_txns if txn.get("type") == "DIVIDEND"]
+        # Each account's span comes from its own rows. The workbook's account
+        # activity covers every profile in it, so adding all of it to each
+        # account let one account's deposits stretch another's coverage back
+        # over dates its own history never reached, where Yahoo should still
+        # fill in.
+        workbook_activity = (
+            (parsed.get("account_activity") or []) if want_transactions else []
+        )
         import_rows_by_profile = {}
-        for txn in workbook_txns:
+        for txn in [*workbook_txns, *workbook_activity]:
             profile_key = str(txn.get("profile") or "").strip().lower()
             target_profile_id = profile_by_name.get(
                 profile_key, transaction_profile_fallback,
@@ -10897,7 +10961,8 @@ def _import_portfolio_export_workbook(
             import_rows_by_profile.setdefault(target_profile_id, []).append(txn)
         import_coverage_by_profile = {
             target_profile_id: _distribution_import_coverage(
-                parsed, transactions=profile_rows,
+                {"distribution_coverage": parsed.get("distribution_coverage")},
+                transactions=profile_rows,
             )
             for target_profile_id, profile_rows in import_rows_by_profile.items()
         }
@@ -37131,7 +37196,9 @@ def total_return_charts():
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         open_position_metrics = _portfolio_period_metrics(open_position_result)
 
-        def apply_distribution_metrics(metrics, positions_by_ticker, open_only):
+        def apply_distribution_metrics(
+            metrics, positions_by_ticker, open_only, sum_ticker_replays=True,
+        ):
             if metrics is None:
                 return
             distribution_total = 0.0
@@ -37143,12 +37210,13 @@ def total_return_charts():
                 distribution_total += distribution
                 if yahoo_fallback:
                     yahoo_fallback_tickers += 1
-            metrics["distribution_dollar"] = round(distribution_total, 4)
-            metrics["total_return_dollar"] = round(
-                float(metrics.get("price_return_dollar") or 0)
-                + distribution_total,
-                4,
-            )
+            if sum_ticker_replays:
+                metrics["distribution_dollar"] = round(distribution_total, 4)
+                metrics["total_return_dollar"] = round(
+                    float(metrics.get("price_return_dollar") or 0)
+                    + distribution_total,
+                    4,
+                )
             metrics["distribution_source"] = (
                 "Broker payment history"
                 + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
@@ -37158,10 +37226,17 @@ def total_return_charts():
                 else "Yahoo market history"
             )
 
+        # The all-positions card keeps the whole-portfolio replay's own dollars,
+        # the figure Growth shows. Adding up one replay per ticker left out
+        # recorded cash on a closed position that could no longer be priced,
+        # which has no replay of its own: Owner's year-to-date card read
+        # $357.74 below Growth, exactly what three delisted tickers had paid.
+        # The open-lots footer still adds up the rows above it.
         apply_distribution_metrics(
             portfolio_metrics,
             historical_positions_by_ticker,
             open_only=False,
+            sum_ticker_replays=False,
         )
         apply_distribution_metrics(
             open_position_metrics,

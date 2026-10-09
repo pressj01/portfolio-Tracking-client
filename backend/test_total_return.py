@@ -97,6 +97,40 @@ class TotalReturnMarketSnapshotTest(unittest.TestCase):
         self.assertEqual(float(second[("Close", "RDGL")].iloc[-1]), 11.0)
         self.assertEqual(first.attrs["market_snapshot_at"], second.attrs["market_snapshot_at"])
 
+    def test_a_throttled_batch_is_not_kept_as_the_snapshot(self):
+        # Yahoo answers a throttled request with a column of NaN for each symbol
+        # it refused. Keeping that as the page's answer left most positions
+        # unpriced for ten minutes after the feed came back.
+        dates = pd.to_datetime(["2026-10-07", "2026-10-08"])
+        symbols = ["AAA", "BBB", "CCC", "DDD"]
+        calls = []
+
+        def download(tickers, **_kwargs):
+            calls.append(list(tickers))
+            throttled = len(calls) == 1
+            data = {
+                ("Close", symbol): (
+                    [float("nan"), float("nan")]
+                    if throttled and symbol != "AAA" else [10.0, 11.0]
+                )
+                for symbol in tickers
+            }
+            frame = pd.DataFrame(data, index=dates)
+            frame.columns = pd.MultiIndex.from_tuples(frame.columns)
+            return frame
+
+        kwargs = {"period": "1y", "auto_adjust": False, "actions": True}
+        with patch("app._chunked_yf_download", side_effect=download):
+            first = _total_return_market_download(symbols, **kwargs)
+            second = _total_return_market_download(symbols, **kwargs)
+            third = _total_return_market_download(symbols, **kwargs)
+
+        self.assertTrue(first[("Close", "BBB")].isna().all())
+        self.assertEqual(float(second[("Close", "BBB")].iloc[-1]), 11.0)
+        # Asked again after the outage, then served from the snapshot.
+        self.assertEqual(calls, [symbols, symbols])
+        self.assertEqual(float(third[("Close", "DDD")].iloc[-1]), 11.0)
+
 
 class TotalReturnPeriodTest(unittest.TestCase):
     def setUp(self):

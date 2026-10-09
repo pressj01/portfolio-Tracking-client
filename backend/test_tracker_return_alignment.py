@@ -440,6 +440,128 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         for key in ("end_value", "price_return_dollar", "distribution_dollar", "total_return_dollar"):
             self.assertAlmostEqual(owner[key], first[key] + second[key], places=4, msg=key)
 
+    def _market(self, dates, aaa):
+        dates = pd.to_datetime(dates)
+        close = pd.DataFrame({
+            "AAA": aaa,
+            "BBB": [20.0] * len(dates),
+            "SPY": [100.0 + step for step in range(len(dates))],
+        }, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        self.market_data = pd.concat({
+            "Close": close,
+            "Adj Close": close,
+            "Dividends": zeros,
+            "Capital Gains": zeros,
+            "Stock Splits": zeros,
+        }, axis=1)
+
+    def _distribution_figures(self):
+        charts = self.client.get("/api/total-return/charts?profile_id=6&period=all")
+        growth = self.client.get("/api/growth/data?profile_id=6&period=all&benchmark=SPY")
+        dollars = self.client.get("/api/growth-2/data?profile_id=6&period=all")
+        for response in (charts, growth, dollars):
+            self.assertEqual(response.status_code, 200, response.get_json())
+        return charts.get_json(), growth.get_json(), dollars.get_json()
+
+    def test_cash_paid_before_a_rebuy_stays_on_the_row_and_in_its_itemization(self):
+        # AAA was sold in March and bought back in June. The replay follows the
+        # lot held now, so on the day the first cycle's $3 posted it held
+        # nothing, and the engine counted recorded cash only on days with a
+        # balance: the row read $4 while its own payment list said the row
+        # total was $7.
+        self._market(
+            ["1972-01-03", "2024-01-02", "2024-02-15", "2024-03-01",
+             "2024-06-03", "2024-09-16", "2024-12-31"],
+            [1.0, 10.0, 10.5, 11.0, 11.0, 11.5, 12.0],
+        )
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            ALTER TABLE dividend_payments ADD COLUMN id INTEGER;
+            ALTER TABLE dividend_payments ADD COLUMN notes TEXT;
+            UPDATE all_account_info SET purchase_date = '2024-06-03' WHERE ticker = 'AAA';
+            INSERT INTO transactions VALUES (2, 'AAA', 6, 'SELL', '2024-03-01', 2, 11, 0, 2, '');
+            INSERT INTO transactions VALUES (3, 'AAA', 6, 'BUY', '2024-06-03', 2, 11, 0, 0, '');
+            INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source)
+                VALUES ('AAA', 6, '2024-02-15', 3.0, 'schwab');
+            INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source)
+                VALUES ('AAA', 6, '2024-09-16', 4.0, 'schwab');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        charts, growth, dollars = self._distribution_figures()
+        itemized = self.client.get(
+            "/api/total-return/distributions/AAA?profile_id=6&period=all&view=open"
+        ).get_json()
+        row = next(item for item in charts["performance_rows"] if item["ticker"] == "AAA")
+
+        self.assertEqual(itemized["counted_total"], 7.0)
+        self.assertEqual(row["distribution_dollar"], 7.0)
+        self.assertEqual(charts["open_position_metrics"]["distribution_dollar"], 7.0)
+        self.assertEqual(growth["portfolio_metrics"]["distribution_dollar"], 7.0)
+        self.assertEqual(dollars["summary"]["distribution_amount"], 7.0)
+
+    def test_a_dividend_paid_after_the_last_share_was_sold_is_counted_everywhere(self):
+        # BBB was sold on 03-01 and paid its last dividend on 03-15. Total
+        # Return adds up one replay per ticker, and BBB's held nothing that
+        # day, so its card read $0.00 where Growth, replaying the whole
+        # portfolio with AAA still in it, read $1.25.
+        self._market(
+            ["1972-01-03", "2024-01-02", "2024-03-01", "2024-03-15", "2024-12-31"],
+            [1.0, 10.0, 11.0, 11.0, 12.0],
+        )
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            INSERT INTO transactions VALUES (2, 'BBB', 6, 'BUY', '2024-01-02', 1, 20, 0, 0, '');
+            INSERT INTO transactions VALUES (3, 'BBB', 6, 'SELL', '2024-03-01', 1, 20, 0, 0, '');
+            INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source)
+                VALUES ('BBB', 6, '2024-03-15', 1.25, 'schwab');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        charts, growth, dollars = self._distribution_figures()
+
+        self.assertEqual(charts["portfolio_metrics"]["distribution_dollar"], 1.25)
+        self.assertEqual(growth["portfolio_metrics"]["distribution_dollar"], 1.25)
+        self.assertEqual(dollars["summary"]["distribution_amount"], 1.25)
+        self.assertEqual(
+            charts["portfolio_metrics"]["total_return_dollar"],
+            growth["portfolio_metrics"]["total_return_dollar"],
+        )
+
+    def test_cash_on_a_closed_ticker_that_cannot_be_priced_matches_growth(self):
+        # GONE was sold and has since been delisted, so no screen can price
+        # it. Its recorded dividend is still income for the range. Total
+        # Return added up one replay per ticker and GONE has none, so its
+        # all-positions card left the cash out while Growth counted it.
+        conn = self._get_connection()
+        conn.executescript(
+            """
+            INSERT INTO transactions VALUES (2, 'GONE', 6, 'BUY', '2024-01-02', 5, 4, 0, 0, '');
+            INSERT INTO transactions VALUES (3, 'GONE', 6, 'SELL', '2024-06-03', 5, 4, 0, 0, '');
+            INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source)
+                VALUES ('GONE', 6, '2024-03-15', 2.5, 'schwab');
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        charts, growth, dollars = self._distribution_figures()
+
+        self.assertEqual(growth["portfolio_metrics"]["distribution_dollar"], 2.5)
+        self.assertEqual(charts["portfolio_metrics"]["distribution_dollar"], 2.5)
+        self.assertEqual(dollars["summary"]["distribution_amount"], 2.5)
+        self.assertEqual(
+            charts["portfolio_metrics"]["total_return_dollar"],
+            growth["portfolio_metrics"]["total_return_dollar"],
+        )
+
     def test_open_row_itemization_leaves_out_an_account_that_sold_out(self):
         self._seed_owner_with_two_accounts()
         conn = self._get_connection()
