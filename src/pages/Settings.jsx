@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
-import { useTheme } from '../context/ThemeContext'
+import { useTheme, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP } from '../context/ThemeContext'
 import { useCurrency } from '../context/CurrencyContext'
 import { useAdviceNoticeVisibility } from '../components/NotFinancialAdviceNotice'
 import LicenseSettingsCard from '../components/LicenseSettingsCard'
@@ -71,7 +71,7 @@ const FRED_TERMS_URL = 'https://fred.stlouisfed.org/docs/api/terms_of_use.html'
 export default function Settings() {
   const pf = useProfileFetch()
   const { selection, currentProfileName, isAggregate } = useProfile()
-  const { theme, setTheme, isDark } = useTheme()
+  const { theme, setTheme, isDark, fontScale, setFontScale } = useTheme()
   const { displayCurrency, usdToCadRate, rateAsOf, rateInfo, loading: currencyLoading, setDisplayCurrency, refreshCadRate, setCadManualRate } = useCurrency()
   const [adviceNoticesVisible, setAdviceNoticesVisible] = useAdviceNoticeVisibility()
   const [stats, setStats] = useState(null)
@@ -832,6 +832,30 @@ export default function Settings() {
           >
             ☀️ Light
           </button>
+        </div>
+        <div style={{ borderTop: '1px solid var(--border)', marginTop: '1rem', paddingTop: '0.9rem' }}>
+          <strong style={{ color: 'var(--text-strong)' }}>Text size</strong>
+          <p style={{ color: 'var(--text-dim-2)', margin: '0.25rem 0 0.5rem', fontSize: '0.9rem' }}>
+            Scale text up or down. Shortcuts: Ctrl + / Ctrl − / Ctrl 0, or hold Ctrl and scroll the mouse wheel.
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontSize: '0.8rem' }}>A</span>
+            <input
+              type="range"
+              min={FONT_SCALE_MIN}
+              max={FONT_SCALE_MAX}
+              step={FONT_SCALE_STEP}
+              value={fontScale}
+              onChange={e => setFontScale(e.target.value)}
+              aria-label="Text size"
+              style={{ flex: 1, maxWidth: 320 }}
+            />
+            <span style={{ fontSize: '1.2rem' }}>A</span>
+            <span style={{ minWidth: 48 }}>{fontScale}%</span>
+            <button type="button" className="btn btn-secondary" onClick={() => setFontScale(100)} disabled={fontScale === 100}>
+              Reset
+            </button>
+          </div>
         </div>
         <div style={{ borderTop: '1px solid var(--border)', marginTop: '1rem', paddingTop: '0.9rem' }}>
           <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.65rem', cursor: 'pointer' }}>
