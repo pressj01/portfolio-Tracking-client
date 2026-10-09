@@ -185,3 +185,62 @@ export function themedPlotlyLayout(layout = {}, isDark, options = {}) {
   })
   return themed
 }
+
+// ---- Text-size scaling -----------------------------------------------------
+// Plotly sizes text in px, so the root-font (rem) scale doesn't reach it. These
+// helpers multiply every explicit font size in a layout/trace by the scale.
+
+const FONT_KEY = /font$/i
+const isObj = v => v && typeof v === 'object' && !Array.isArray(v)
+
+export function currentFontScale() {
+  const pct = parseFloat(typeof document !== 'undefined' ? document.documentElement.style.fontSize : '')
+  return Number.isFinite(pct) && pct > 0 ? pct / 100 : 1
+}
+
+// Copy of `node` with every `*font.size` multiplied by k (non-font data untouched).
+function scaleFontsIn(node, k, depth = 0) {
+  if (depth > 6) return node
+  if (Array.isArray(node)) {
+    return node.some(isObj) ? node.map(n => (isObj(n) ? scaleFontsIn(n, k, depth + 1) : n)) : node
+  }
+  if (!isObj(node)) return node
+  const out = { ...node }
+  for (const key of Object.keys(out)) {
+    const v = out[key]
+    if (FONT_KEY.test(key) && isObj(v)) {
+      out[key] = typeof v.size === 'number' ? { ...v, size: v.size * k } : v
+    } else if (isObj(v) || (Array.isArray(v) && v.some(isObj))) {
+      out[key] = scaleFontsIn(v, k, depth + 1)
+    }
+  }
+  return out
+}
+
+export function scalePlotlyLayout(layout, k = currentFontScale()) {
+  if (!layout || k === 1) return layout
+  const out = scaleFontsIn(layout, k)
+  out.font = { ...(out.font || {}), size: (layout.font?.size ?? 12) * k }
+  return out
+}
+
+export function scalePlotlyData(data, k = currentFontScale()) {
+  if (!Array.isArray(data) || k === 1) return data
+  return data.map(t => (isObj(t) ? scaleFontsIn(t, k) : t))
+}
+
+// Flat Plotly update paths ({ 'xaxis.tickfont.size': 14 }) for every explicit font size
+// in `node`, each multiplied by `ratio` — used to rescale a chart that is already drawn.
+export function fontSizePaths(node, ratio, prefix = '', out = {}, depth = 0) {
+  if (depth > 6) return out
+  const entries = Array.isArray(node) ? node.map((v, i) => [i, v]) : isObj(node) ? Object.entries(node) : []
+  for (const [key, v] of entries) {
+    const path = prefix ? `${prefix}${Array.isArray(node) ? `[${key}]` : `.${key}`}` : String(key)
+    if (!Array.isArray(node) && FONT_KEY.test(key) && isObj(v)) {
+      if (typeof v.size === 'number') out[`${path}.size`] = v.size * ratio
+    } else if (isObj(v) || (Array.isArray(v) && v.some(isObj))) {
+      fontSizePaths(v, ratio, path, out, depth + 1)
+    }
+  }
+  return out
+}

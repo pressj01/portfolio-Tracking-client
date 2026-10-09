@@ -4,7 +4,7 @@ import './index.css'
 import DialogProvider from './components/DialogProvider'
 import ProfileProvider, { useProfile } from './context/ProfileContext'
 import ThemeProvider, { useTheme } from './context/ThemeContext'
-import { chartTheme, themedPlotlyLayout } from './utils/chartTheme'
+import { chartTheme, themedPlotlyLayout, scalePlotlyLayout, scalePlotlyData, fontSizePaths, currentFontScale } from './utils/chartTheme'
 import { convertPlotlyCurrency } from './utils/money'
 import MarketRefreshProvider from './context/MarketRefreshContext'
 import MenuOrderProvider, { useMenuOrder } from './context/MenuOrderContext'
@@ -19,7 +19,7 @@ import { visibleNavigation } from './navigation/menuConfig'
 import { openCommandPalette, paletteShortcutLabel } from './utils/commandPalette'
 
 function PlotlyThemeBridge() {
-  const { isDark } = useTheme()
+  const { isDark, fontScale } = useTheme()
 
   useEffect(() => {
     if (!window.Plotly || window.Plotly.__portfolioThemePatched) return
@@ -28,13 +28,15 @@ function PlotlyThemeBridge() {
     if (originalNewPlot) {
       window.Plotly.newPlot = (el, data, layout, config) => {
         const converted = convertPlotlyCurrency(data, layout)
-        return originalNewPlot(el, converted.data, themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light'), config)
+        el.__fontScale = currentFontScale()
+        return originalNewPlot(el, scalePlotlyData(converted.data), scalePlotlyLayout(themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light')), config)
       }
     }
     if (originalReact) {
       window.Plotly.react = (el, data, layout, config) => {
         const converted = convertPlotlyCurrency(data, layout)
-        return originalReact(el, converted.data, themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light'), config)
+        el.__fontScale = currentFontScale()
+        return originalReact(el, scalePlotlyData(converted.data), scalePlotlyLayout(themedPlotlyLayout(converted.layout, document.documentElement.dataset.theme !== 'light')), config)
       }
     }
     window.Plotly.__portfolioThemePatched = true
@@ -56,6 +58,27 @@ function PlotlyThemeBridge() {
       }).catch(() => {})
     })
   }, [isDark])
+
+  // Rescale charts that are already drawn when the text-size setting changes.
+  useEffect(() => {
+    if (!window.Plotly?.relayout) return
+    const k = fontScale / 100
+    document.querySelectorAll('.js-plotly-plot').forEach(el => {
+      const ratio = k / (el.__fontScale ?? 1)
+      if (Math.abs(ratio - 1) < 1e-6 || !el.layout) return
+      el.__fontScale = k
+      const layoutUpdate = fontSizePaths(el.layout, ratio)
+      if (el.layout.font?.size == null) layoutUpdate['font.size'] = 12 * k
+      window.Plotly.relayout(el, layoutUpdate).catch(() => {})
+      ;(el.data || []).forEach((trace, i) => {
+        const paths = fontSizePaths(trace, ratio)
+        if (!Object.keys(paths).length) return
+        const update = {}
+        Object.entries(paths).forEach(([path, v]) => { update[path] = [v] })
+        window.Plotly.restyle(el, update, [i]).catch(() => {})
+      })
+    })
+  }, [fontScale])
 
   return null
 }

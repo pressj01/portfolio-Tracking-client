@@ -43,8 +43,11 @@ export default function ThemeProvider({ children }) {
   const [fontScale, setFontScaleRaw] = useState(readInitialFontScale)
   const setFontScale = useCallback(v => setFontScaleRaw(clampFontScale(v)), [])
 
+  // Applied during render (idempotent) so charts redrawn by child components in
+  // this same commit already see the new scale.
+  if (typeof document !== 'undefined') document.documentElement.style.fontSize = `${fontScale}%`
+
   useEffect(() => {
-    document.documentElement.style.fontSize = `${fontScale}%`
     try { localStorage.setItem(FONT_SCALE_KEY, String(fontScale)) } catch { /* ignore */ }
   }, [fontScale])
 
