@@ -2425,18 +2425,16 @@ def _build_transaction_aware_portfolio_series(
         fallback_positions += 1
         fallback_date_sources[date_source] += 1
 
+    import bisect
+
     import numpy as np
 
     events.sort(key=lambda item: item[0])
     symbols = list(prices.columns)
     symbol_indexes = {symbol: index for index, symbol in enumerate(symbols)}
-    quantities = np.zeros(len(symbols), dtype=float)
-    position_quantities = {}
-    position_symbols = {}
     price_matrix = prices.to_numpy(dtype=float)
     adjusted_matrix = adjusted.to_numpy(dtype=float)
     distribution_matrix = distributions.to_numpy(dtype=float)
-    event_index = 0
     position_market_symbols = {}
     for row in [*raw_transactions, *(current_holdings or [])]:
         if not isinstance(row, dict):
@@ -2460,8 +2458,6 @@ def _build_transaction_aware_portfolio_series(
         ]
         for position, spans in distribution_coverage_by_position.items()
     }
-    import bisect
-
     # Sorted with the index, so a date range is two bisects instead of a walk
     # over every row for every payment and every position.
     row_days = [timestamp.date() for timestamp in prices.index]
@@ -2528,212 +2524,221 @@ def _build_transaction_aware_portfolio_series(
         covered_distribution_positions or actual_distributions_by_row
     )
 
-    # One boolean per row, built the first time a position is asked about: a
-    # migrated ledger has a point span per payment, and testing every span on
-    # every row made a five-year range 80 times slower than the market replay.
-    actual_history_rows = {}
+    # Shares held once each row's trades are in: by symbol always, and by
+    # account-position when broker cash decides whose income a row counts. One
+    # walk over the dated events fills both, so the return math below runs on
+    # whole columns. Asking every position about every day in Python made a
+    # five-year range ten times slower with payment history than without it.
+    #
+    # A running total that dips below zero must stay negative until the
+    # offsetting buy arrives. Clamping it at zero absorbed the sale and left
+    # every later buy standing as shares the account no longer owns: a same-day
+    # SELL/BUY pair ordered sell-first (dates carry no time) ended the replay
+    # holding the buy outright. Valuation already ignores non-positive
+    # quantities, so a transient negative simply drops the symbol from those
+    # days instead of inflating the balance forever.
+    position_indexes = {}
+    if use_resolved_distributions:
+        for _, position_key, _, _ in events:
+            position_indexes.setdefault(position_key, len(position_indexes))
+    symbol_shares = np.zeros((row_count, len(symbols)))
+    position_shares = np.zeros((row_count, len(position_indexes)))
+    # The price column each position last traded under; -1 before its first trade.
+    position_columns = np.full(
+        (row_count, len(position_indexes)), -1, dtype=np.intp,
+    )
+    running_symbol_shares = np.zeros(len(symbols))
+    running_position_shares = np.zeros(len(position_indexes))
+    running_position_columns = np.full(len(position_indexes), -1, dtype=np.intp)
+    settled_rows = 0
+    for event_date, position_key, symbol, delta in events:
+        # A trade dated between two quotes lands on the later one.
+        event_row = bisect.bisect_left(row_days, event_date)
+        if event_row >= row_count:
+            break
+        if event_row > settled_rows:
+            symbol_shares[settled_rows:event_row] = running_symbol_shares
+            position_shares[settled_rows:event_row] = running_position_shares
+            position_columns[settled_rows:event_row] = running_position_columns
+            settled_rows = event_row
+        symbol_index = symbol_indexes.get(symbol)
+        if symbol_index is None:
+            continue
+        running_symbol_shares[symbol_index] += delta
+        if use_resolved_distributions:
+            position_index = position_indexes[position_key]
+            running_position_shares[position_index] += delta
+            running_position_columns[position_index] = symbol_index
+    symbol_shares[settled_rows:] = running_symbol_shares
+    position_shares[settled_rows:] = running_position_shares
+    position_columns[settled_rows:] = running_position_columns
 
-    def position_uses_actual_history(position_key, row_index):
-        rows = actual_history_rows.get(position_key)
-        if rows is None:
-            rows = np.zeros(len(row_days), dtype=bool)
+    # A symbol counts on a row only with shares held and a usable quote: the
+    # same test for a closing balance and for a day's return.
+    priced = np.isfinite(price_matrix) & (price_matrix > 0)
+    quotes = np.where(priced, price_matrix, 0.0)
+    closing_values = (
+        np.where(symbol_shares > 0, symbol_shares, 0.0) * quotes
+    ).sum(axis=1)
+
+    # End-of-day flow convention: today's trades affect tomorrow's weights,
+    # but never create a jump in today's return index. A row's return is
+    # earned by the shares carried in from the row before it, on symbols
+    # quoted at both ends of the day, so row 0 has none.
+    quoted_both_days = priced[:-1] & priced[1:]
+    carried_shares = np.where(
+        (symbol_shares[:-1] > 0) & quoted_both_days, symbol_shares[:-1], 0.0,
+    )
+    position_starts = carried_shares * quotes[:-1]
+    start_values = np.zeros(row_count)
+    end_price_values = np.zeros(row_count)
+    distribution_values = np.zeros(row_count)
+    end_total_values = np.zeros(row_count)
+    start_values[1:] = position_starts.sum(axis=1)
+    end_price_values[1:] = (carried_shares * quotes[1:]).sum(axis=1)
+
+    recorded_cash = np.zeros(row_count)
+    for cash_row, cash in actual_distributions_by_row.items():
+        recorded_cash[cash_row] = cash
+
+    def usable_on_both_days(matrix):
+        return (
+            np.isfinite(matrix[:-1]) & np.isfinite(matrix[1:])
+            & (matrix[:-1] > 0) & (matrix[1:] > 0)
+        )
+
+    if use_resolved_distributions:
+        # Actual broker cash replaces market-implied income only for the
+        # account-position it covers. Uncovered accounts holding the same
+        # ticker retain Yahoo's adjusted-return history. This makes Owner
+        # the sum of its source accounts instead of letting one member's
+        # payment history switch fallback off for every member.
+        uses_actual_history = np.zeros(
+            (len(position_indexes), row_count), dtype=bool,
+        )
+        for position_key, position_index in position_indexes.items():
+            covered_rows = uses_actual_history[position_index]
             for start, end in coverage_dates_by_position.get(position_key, []):
                 first_row = 0 if start is None else bisect.bisect_left(row_days, start)
-                last_row = len(row_days) if end is None else bisect.bisect_right(row_days, end)
-                rows[first_row:last_row] = True
+                last_row = row_count if end is None else bisect.bisect_right(row_days, end)
+                covered_rows[first_row:last_row] = True
             for replaced_row in actual_replacement_rows.get(position_key, ()):
-                rows[replaced_row] = True
-            actual_history_rows[position_key] = rows
-        return bool(rows[row_index])
+                covered_rows[replaced_row] = True
+        on_broker_cash = uses_actual_history.T[1:]
 
-    def apply_events_through(day):
-        nonlocal event_index
-        while event_index < len(events) and events[event_index][0] <= day:
-            _, position_key, symbol, delta = events[event_index]
-            symbol_index = symbol_indexes.get(symbol)
-            if symbol_index is not None:
-                # A running total that dips below zero must stay negative until
-                # the offsetting buy arrives. Clamping it at zero here absorbed
-                # the sale and left every later buy standing as shares the
-                # account no longer owns: a same-day SELL/BUY pair ordered
-                # sell-first (dates carry no time) ended the replay holding the
-                # buy outright. Valuation already ignores non-positive
-                # quantities, so a transient negative simply drops the symbol
-                # from those days instead of inflating the balance forever.
-                quantities[symbol_index] += delta
-                position_quantities[position_key] = (
-                    position_quantities.get(position_key, 0.0) + delta
-                )
-                position_symbols[position_key] = symbol
-            event_index += 1
+        columns = np.maximum(position_columns[:-1], 0)
 
-    def portfolio_value_at(row_index):
-        row_prices = price_matrix[row_index]
-        valid = (
-            (quantities > 0)
-            & np.isfinite(row_prices)
-            & (row_prices > 0)
+        def for_positions(matrix):
+            return np.take_along_axis(matrix, columns, axis=1)
+
+        earning = (
+            (position_shares[:-1] > 0)
+            & (position_columns[:-1] >= 0)
+            & for_positions(quoted_both_days)
         )
-        return float(np.sum(quantities[valid] * row_prices[valid]))
-
-    price_values = [None] * len(prices.index)
-    pricediv_values = [None] * len(prices.index)
-    total_values = [None] * len(prices.index)
-    market_values = [None] * len(prices.index)
-    price_index = None
-    total_index = None
-    distribution_cash = 0.0
-    price_gain_dollar = 0.0
-    distribution_dollar = 0.0
-    price_gain_dollar_series = [None] * len(prices.index)
-    distribution_dollar_series = [None] * len(prices.index)
-    total_gain_dollar_series = [None] * len(prices.index)
-
-    def record_dollar_returns(row_index):
-        price_gain_dollar_series[row_index] = round(price_gain_dollar, 4)
-        distribution_dollar_series[row_index] = round(distribution_dollar, 4)
-        total_gain_dollar_series[row_index] = round(
-            price_gain_dollar + distribution_dollar, 4,
+        shares = np.where(earning, position_shares[:-1], 0.0)
+        previous_prices = for_positions(price_matrix[:-1])
+        current_prices = for_positions(price_matrix[1:])
+        market_distributions = for_positions(distribution_matrix[1:])
+        market_distributions = np.where(
+            np.isfinite(market_distributions), market_distributions, 0.0,
         )
-
-    for row_index, timestamp in enumerate(prices.index):
-        day = timestamp.date()
-        if row_index == 0:
-            apply_events_through(day)
-            opening_value = portfolio_value_at(row_index)
-            if use_resolved_distributions:
-                distribution_dollar += actual_distributions_by_row.get(0, 0.0)
-            if opening_value > 0:
-                price_index = total_index = 100.0
-                price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
-                market_values[row_index] = round(opening_value, 4)
-                record_dollar_returns(row_index)
-            continue
-
-        previous_prices = price_matrix[row_index - 1]
-        current_prices = price_matrix[row_index]
-        valid = (
-            (quantities > 0)
-            & np.isfinite(previous_prices)
-            & np.isfinite(current_prices)
-            & (previous_prices > 0)
-            & (current_prices > 0)
-        )
-        valid_quantities = quantities[valid]
-        valid_previous_prices = previous_prices[valid]
-        valid_current_prices = current_prices[valid]
-        position_starts = valid_quantities * valid_previous_prices
-        start_value = float(np.sum(position_starts))
-        end_price_value = float(np.sum(valid_quantities * valid_current_prices))
-
-        row_distributions = np.nan_to_num(
-            distribution_matrix[row_index][valid],
-            nan=0.0,
-        )
-        if use_resolved_distributions:
-            # Actual broker cash replaces market-implied income only for the
-            # account-position it covers. Uncovered accounts holding the same
-            # ticker retain Yahoo's adjusted-return history. This makes Owner
-            # the sum of its source accounts instead of letting one member's
-            # payment history switch fallback off for every member.
-            distribution_value = actual_distributions_by_row.get(row_index, 0.0)
-            end_total_value = distribution_value
-            for position_key, position_quantity in position_quantities.items():
-                if position_quantity <= 0:
-                    continue
-                symbol_index = symbol_indexes.get(position_symbols.get(position_key))
-                if symbol_index is None:
-                    continue
-                previous_price = previous_prices[symbol_index]
-                current_price = current_prices[symbol_index]
-                if (
-                    not np.isfinite(previous_price)
-                    or not np.isfinite(current_price)
-                    or previous_price <= 0
-                    or current_price <= 0
-                ):
-                    continue
-                position_start = position_quantity * previous_price
-                if position_uses_actual_history(position_key, row_index):
-                    end_total_value += position_quantity * current_price
-                    continue
-                market_distribution = distribution_matrix[row_index][symbol_index]
-                if not np.isfinite(market_distribution):
-                    market_distribution = 0.0
-                distribution_value += position_quantity * market_distribution
-                previous_adjusted = adjusted_matrix[row_index - 1][symbol_index]
-                current_adjusted = adjusted_matrix[row_index][symbol_index]
-                if (
-                    np.isfinite(previous_adjusted)
-                    and np.isfinite(current_adjusted)
-                    and previous_adjusted > 0
-                    and current_adjusted > 0
-                ):
-                    end_total_value += (
-                        position_start * current_adjusted / previous_adjusted
-                    )
-                else:
-                    end_total_value += position_quantity * (
-                        current_price + market_distribution
-                    )
-        else:
-            distribution_value = float(np.sum(valid_quantities * row_distributions))
-
-            previous_adjusted = adjusted_matrix[row_index - 1][valid]
-            current_adjusted = adjusted_matrix[row_index][valid]
-            valid_adjusted = (
-                np.isfinite(previous_adjusted)
-                & np.isfinite(current_adjusted)
-                & (previous_adjusted > 0)
-                & (current_adjusted > 0)
+        adjusted_both_days = for_positions(usable_on_both_days(adjusted_matrix))
+        # Shares that are not earning are zero here, and zero times a missing
+        # quote is not a number until the last line masks it out.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            market_ends = np.where(
+                adjusted_both_days,
+                shares * previous_prices
+                * for_positions(adjusted_matrix[1:])
+                / for_positions(adjusted_matrix[:-1]),
+                shares * (current_prices + market_distributions),
             )
-            total_factors = (
-                valid_current_prices + row_distributions
-            ) / valid_previous_prices
-            total_factors[valid_adjusted] = (
-                current_adjusted[valid_adjusted]
-                / previous_adjusted[valid_adjusted]
+            position_ends = np.where(
+                on_broker_cash, shares * current_prices, market_ends,
             )
-            end_total_value = float(np.sum(position_starts * total_factors))
+        distribution_values[1:] = recorded_cash[1:] + np.where(
+            on_broker_cash, 0.0, shares * market_distributions,
+        ).sum(axis=1)
+        end_total_values[1:] = recorded_cash[1:] + np.where(
+            earning, position_ends, 0.0,
+        ).sum(axis=1)
+    else:
+        market_distributions = np.nan_to_num(distribution_matrix[1:], nan=0.0)
+        distribution_values[1:] = (carried_shares * market_distributions).sum(axis=1)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            total_factors = np.where(
+                usable_on_both_days(adjusted_matrix),
+                adjusted_matrix[1:] / adjusted_matrix[:-1],
+                (price_matrix[1:] + market_distributions) / price_matrix[:-1],
+            )
+            end_total_values[1:] = np.where(
+                carried_shares > 0, position_starts * total_factors, 0.0,
+            ).sum(axis=1)
 
-        if price_index is not None and total_index is not None and start_value > 0:
-            previous_price_index = price_index
-            price_index *= end_price_value / start_value
-            total_index *= end_total_value / start_value
-            # Price + Divs holds distributions as cash instead of reinvesting.
-            distribution_cash += previous_price_index * (distribution_value / start_value)
-            price_gain_dollar += end_price_value - start_value
-            distribution_dollar += distribution_value
-            price_values[row_index] = round(price_index, 4)
-            pricediv_values[row_index] = round(price_index + distribution_cash, 4)
-            total_values[row_index] = round(total_index, 4)
-            record_dollar_returns(row_index)
-        elif use_resolved_distributions:
-            # Recorded cash is income whether or not the replay held shares on
-            # the day it posted: a dividend paid after the last share was sold,
-            # or during a cycle that closed before the lot held now was bought.
-            # Counting it only on days with a balance dropped it from a
-            # single-ticker replay but kept it in a whole-portfolio one, so
-            # Total Return's dollars disagreed with Growth and a row disagreed
-            # with its own payment list. It cannot move the index, which has
-            # no base that day, but it belongs in the dollars.
-            row_cash = actual_distributions_by_row.get(row_index, 0.0)
-            if row_cash:
-                distribution_dollar += row_cash
-                if price_index is not None:
-                    record_dollar_returns(row_index)
+    # The index opens at 100 on the first close with a priced balance and is
+    # never re-based. After that a row moves it only when shares were carried
+    # into the day; a day entered with nothing held leaves it where it was and
+    # leaves the row blank.
+    holding_rows = np.flatnonzero(closing_values > 0)
+    opening_row = int(holding_rows[0]) if holding_rows.size else row_count
+    earning_rows = start_values > 0
+    earning_rows[:opening_row + 1] = False
+    plotted_rows = earning_rows.copy()
+    plotted_rows[opening_row:opening_row + 1] = True
 
-        # End-of-day flow convention: today's trades affect tomorrow's weights,
-        # but never create a jump in today's return index.
-        apply_events_through(day)
-        closing_value = portfolio_value_at(row_index)
-        if price_index is None and closing_value > 0:
-            price_index = total_index = 100.0
-            distribution_cash = 0.0
-            price_values[row_index] = pricediv_values[row_index] = total_values[row_index] = 100.0
-            record_dollar_returns(row_index)
-        if price_index is not None:
-            market_values[row_index] = round(closing_value, 4)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        price_steps = np.where(earning_rows, end_price_values / start_values, 1.0)
+        total_steps = np.where(earning_rows, end_total_values / start_values, 1.0)
+        distribution_yields = np.where(
+            earning_rows, distribution_values / start_values, 0.0,
+        )
+    price_steps[opening_row:opening_row + 1] = 100.0
+    total_steps[opening_row:opening_row + 1] = 100.0
+    # cumprod and cumsum work through the rows in order, so each level is the
+    # one before it times (or plus) that day's step, as a daily replay has it.
+    price_index = np.cumprod(price_steps)
+    total_index = np.cumprod(total_steps)
+    # Price + Divs holds distributions as cash instead of reinvesting.
+    distribution_cash = np.zeros(row_count)
+    distribution_cash[1:] = price_index[:-1] * distribution_yields[1:]
+    distribution_cash = np.cumsum(distribution_cash)
+    price_gain_running = np.cumsum(
+        np.where(earning_rows, end_price_values - start_values, 0.0)
+    )
+    # Recorded cash is income whether or not the replay held shares on the day
+    # it posted: a dividend paid after the last share was sold, or during a
+    # cycle that closed before the lot held now was bought. Counting it only
+    # on days with a balance dropped it from a single-ticker replay but kept
+    # it in a whole-portfolio one, so Total Return's dollars disagreed with
+    # Growth and a row disagreed with its own payment list. It cannot move
+    # the index, which has no base that day, but it belongs in the dollars.
+    distribution_running = np.cumsum(np.where(
+        earning_rows,
+        distribution_values,
+        recorded_cash if use_resolved_distributions else 0.0,
+    ))
+    price_gain_dollar = float(price_gain_running[-1])
+    distribution_dollar = float(distribution_running[-1])
+    dollar_rows = plotted_rows.copy()
+    if use_resolved_distributions:
+        dollar_rows[opening_row + 1:] |= recorded_cash[opening_row + 1:] != 0
+
+    def plotted(values, shown_rows):
+        return [
+            round(value, 4) if shown else None
+            for value, shown in zip(values.tolist(), shown_rows.tolist())
+        ]
+
+    price_values = plotted(price_index, plotted_rows)
+    pricediv_values = plotted(price_index + distribution_cash, plotted_rows)
+    total_values = plotted(total_index, plotted_rows)
+    market_values = plotted(closing_values, np.arange(row_count) >= opening_row)
+    price_gain_dollar_series = plotted(price_gain_running, dollar_rows)
+    distribution_dollar_series = plotted(distribution_running, dollar_rows)
+    total_gain_dollar_series = plotted(
+        price_gain_running + distribution_running, dollar_rows,
+    )
 
     plotted_dates = [
         prices.index[index].date().isoformat()
@@ -3595,7 +3600,14 @@ _TOTAL_RETURN_DASHBOARD_TTL_SEC = 10 * 60
 _TOTAL_RETURN_COMPARISON_CACHE = {}
 _TOTAL_RETURN_COMPARISON_TTL_SEC = 10 * 60
 _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE = {}
+# Guards the snapshot's bookkeeping and nothing slower. Saving an edit clears
+# the snapshot, so holding this across a price download made the save wait for
+# Yahoo.
 _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK = threading.Lock()
+# Symbols a request is downloading right now, by market window. A second request
+# that needs one of them waits for that download and reads the quote it stored,
+# which is what keeps two account views on the same prices.
+_TOTAL_RETURN_MARKET_SNAPSHOT_PENDING = {}
 _TOTAL_RETURN_MARKET_SNAPSHOT_TTL_SEC = 10 * 60
 _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS = 12
 _STOCK_SPLIT_HISTORY_CACHE = {}
@@ -3770,6 +3782,12 @@ def _total_return_market_download(tickers, **kwargs):
     This is intentionally separate from the user's optional global price-reuse
     preference: reconciling figures on one analytical page is a correctness
     boundary, not a request to make every screen use stale quotes.
+
+    The lock is held to read and update the snapshot, never to download. A
+    request claims the symbols it is about to fetch and lets go of the lock; a
+    request that needs one of them waits on that claim, then reads the quote
+    the first one stored. Views loaded together still agree, and nothing else
+    that touches the snapshot queues behind Yahoo.
     """
     if isinstance(tickers, str):
         tickers = tickers.split()
@@ -3783,36 +3801,53 @@ def _total_return_market_download(tickers, **kwargs):
 
     provider_key = market_data_provider.active_mode()
     window_key = (provider_key, _download_kwargs_key(kwargs))
-    now = time.time()
+    requested_at = time.time()
+    # What this request fetched itself. It answers from here when the snapshot
+    # did not keep a batch, or was cleared by an edit before the request ended.
+    downloaded = pd.DataFrame()
+    asked = set()
 
-    with _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK:
-        expired = [
-            key for key, entry in _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.items()
-            if now - entry[0] > _TOTAL_RETURN_MARKET_SNAPSHOT_TTL_SEC
-        ]
-        for key in expired:
-            _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(key, None)
+    while True:
+        with _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK:
+            now = time.time()
+            expired = [
+                key for key, entry in _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.items()
+                if now - entry[0] > _TOTAL_RETURN_MARKET_SNAPSHOT_TTL_SEC
+            ]
+            for key in expired:
+                _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(key, None)
 
-        entry = _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.get(window_key)
-        if entry is None:
-            created_at = now
-            snapshot = pd.DataFrame()
-            fetched_symbols = set()
-        else:
-            created_at, snapshot, fetched_symbols = entry
-            snapshot = snapshot.copy(deep=True)
-            fetched_symbols = set(fetched_symbols)
+            created_at, snapshot, fetched_symbols = (
+                _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.get(window_key)
+                or (requested_at, pd.DataFrame(), frozenset())
+            )
+            pending = _TOTAL_RETURN_MARKET_SNAPSHOT_PENDING.get(window_key, {})
+            needed = [
+                symbol for symbol in symbols
+                if symbol not in fetched_symbols and symbol not in asked
+            ]
+            in_flight = {pending[symbol] for symbol in needed if symbol in pending}
+            claimed = [symbol for symbol in needed if symbol not in pending]
+            if claimed:
+                finished = threading.Event()
+                pending.update((symbol, finished) for symbol in claimed)
+                _TOTAL_RETURN_MARKET_SNAPSHOT_PENDING[window_key] = pending
 
-        missing = [symbol for symbol in symbols if symbol not in fetched_symbols]
-        if missing:
-            fresh = _chunked_yf_download(missing, **kwargs)
-            normalized = _field_symbol_market_frame(fresh, missing)
-            if normalized is not None and not normalized.empty:
-                snapshot = _merge_download_frames(
-                    [frame for frame in (snapshot, normalized) if not frame.empty]
+        if not claimed and not in_flight:
+            break
+
+        if claimed:
+            asked.update(claimed)
+            normalized = None
+            keep = False
+            try:
+                normalized = _field_symbol_market_frame(
+                    _chunked_yf_download(claimed, **kwargs), claimed,
                 )
+                if normalized.empty:
+                    normalized = None
                 # The guarded downloader already retries dropped symbols. Mark
-                # this successful batch as the page's answer even if Yahoo left
+                # a successful batch as the page's answer even if Yahoo left
                 # one member all-NaN; re-querying it immediately would make two
                 # account totals use different points in time.
                 #
@@ -3822,35 +3857,71 @@ def _total_return_market_download(tickers, **kwargs):
                 # unpriced long after the feed recovered. When half or more of
                 # the batch came back without a single price, serve this
                 # request from it and leave the snapshot as it was.
-                if not _market_batch_is_mostly_unpriced(normalized, missing):
-                    fetched_symbols.update(missing)
-                    _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE[window_key] = (
-                        created_at, snapshot.copy(deep=True), frozenset(fetched_symbols),
-                    )
-                    while (
-                        len(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE)
-                        > _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS
-                    ):
-                        oldest = next(iter(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE))
-                        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(oldest, None)
-            elif snapshot.empty:
-                return pd.DataFrame()
+                keep = normalized is not None and not _market_batch_is_mostly_unpriced(
+                    normalized, claimed,
+                )
+            finally:
+                # Whatever happened, let go of the claim: a request waiting on
+                # it would otherwise wait for good.
+                with _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK:
+                    for symbol in claimed:
+                        del pending[symbol]
+                    if not pending:
+                        _TOTAL_RETURN_MARKET_SNAPSHOT_PENDING.pop(window_key, None)
+                    if keep:
+                        # Read again: other requests may have added symbols, or
+                        # an edit cleared the snapshot, while this one was out.
+                        created_at, snapshot, fetched_symbols = (
+                            _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.get(window_key)
+                            or (requested_at, pd.DataFrame(), frozenset())
+                        )
+                        # A stored frame is never changed in place. Growing the
+                        # snapshot builds a new one, and callers get a copy.
+                        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE[window_key] = (
+                            created_at,
+                            _merge_download_frames(
+                                [frame for frame in (snapshot, normalized) if not frame.empty]
+                            ),
+                            fetched_symbols | frozenset(claimed),
+                        )
+                        while (
+                            len(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE)
+                            > _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS
+                        ):
+                            oldest = next(iter(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE))
+                            _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(oldest, None)
+                finished.set()
+            if normalized is not None:
+                downloaded = _merge_download_frames(
+                    [frame for frame in (downloaded, normalized) if not frame.empty]
+                )
 
-        if snapshot.empty or not isinstance(snapshot.columns, pd.MultiIndex):
-            return snapshot.copy(deep=True)
-        ticker_level = _ticker_level(snapshot.columns)
-        if ticker_level is None:
-            return snapshot.copy(deep=True)
-        wanted = set(symbols)
-        positions = [
-            index for index, column in enumerate(snapshot.columns)
-            if str(column[ticker_level]).strip().upper() in wanted
-        ]
-        result = snapshot.iloc[:, positions].copy(deep=True)
-        result.attrs["market_snapshot_at"] = datetime.datetime.fromtimestamp(
-            created_at
-        ).isoformat(timespec="seconds")
-        return result
+        for other_request in in_flight:
+            other_request.wait()
+
+    # The snapshot's quote wins wherever it has one, so this request reads the
+    # same price as every other view of the window.
+    frames = [snapshot] if not snapshot.empty else []
+    if not downloaded.empty and not asked <= fetched_symbols:
+        frames.append(downloaded)
+    if not frames:
+        return pd.DataFrame()
+    available = _merge_download_frames(frames)
+    if not isinstance(available.columns, pd.MultiIndex):
+        return available.copy(deep=True)
+    ticker_level = _ticker_level(available.columns)
+    if ticker_level is None:
+        return available.copy(deep=True)
+    wanted = set(symbols)
+    positions = [
+        index for index, column in enumerate(available.columns)
+        if str(column[ticker_level]).strip().upper() in wanted
+    ]
+    result = available.iloc[:, positions].copy(deep=True)
+    result.attrs["market_snapshot_at"] = datetime.datetime.fromtimestamp(
+        created_at
+    ).isoformat(timespec="seconds")
+    return result
 
 
 def _clear_market_data_memory_caches():

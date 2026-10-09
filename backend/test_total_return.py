@@ -1,4 +1,5 @@
 import sys
+import threading
 import unittest
 import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from app import (
     _anchor_from_prior_close,
     _annotate_transaction_rows,
     _build_transaction_aware_portfolio_series,
+    _clear_total_return_caches,
     _distribution_payment_policy,
     _normalize_prices_to_100,
     _portfolio_period_metrics,
@@ -130,6 +132,123 @@ class TotalReturnMarketSnapshotTest(unittest.TestCase):
         # Asked again after the outage, then served from the snapshot.
         self.assertEqual(calls, [symbols, symbols])
         self.assertEqual(float(third[("Close", "DDD")].iloc[-1]), 11.0)
+
+    _KWARGS = {"period": "1y", "auto_adjust": False, "actions": True}
+
+    @staticmethod
+    def _quotes(symbols, last):
+        dates = pd.to_datetime(["2026-10-07", "2026-10-08"])
+        frame = pd.DataFrame(
+            {("Close", symbol): [last - 1.0, last] for symbol in symbols},
+            index=dates,
+        )
+        frame.columns = pd.MultiIndex.from_tuples(frame.columns)
+        return frame
+
+    def _request_in_thread(self, symbols, results):
+        thread = threading.Thread(
+            target=lambda: results.append(
+                _total_return_market_download(symbols, **self._KWARGS)
+            ),
+            daemon=True,
+        )
+        thread.start()
+        return thread
+
+    def test_a_save_does_not_wait_for_a_price_download(self):
+        # The snapshot lock was held for the whole download, and saving an
+        # edit takes that lock to clear the snapshot: the save sat behind
+        # Yahoo until the page that was loading had its prices.
+        downloading, release = threading.Event(), threading.Event()
+
+        def download(tickers, **_kwargs):
+            downloading.set()
+            release.wait(timeout=10)
+            return self._quotes(list(tickers), 11.0)
+
+        results = []
+        with patch("app._chunked_yf_download", side_effect=download):
+            request = self._request_in_thread(["AAA"], results)
+            self.assertTrue(downloading.wait(timeout=5))
+            save = threading.Thread(target=_clear_total_return_caches, daemon=True)
+            save.start()
+            save.join(timeout=2)
+            saved_during_download = not save.is_alive()
+            release.set()
+            request.join(timeout=5)
+            save.join(timeout=5)
+
+        self.assertTrue(saved_during_download)
+        self.assertEqual(float(results[0][("Close", "AAA")].iloc[-1]), 11.0)
+
+    def test_a_view_loaded_during_another_download_reads_the_same_quote(self):
+        # With the lock no longer held across the download, a second view
+        # must still not fetch a symbol the first is already fetching: the
+        # aggregate would be priced a moment after its accounts.
+        calls = []
+        first_downloading, second_downloaded, release = (
+            threading.Event(), threading.Event(), threading.Event(),
+        )
+
+        def download(tickers, **_kwargs):
+            symbols = list(tickers)
+            calls.append(symbols)
+            request_number = len(calls)
+            if request_number == 1:
+                first_downloading.set()
+                release.wait(timeout=10)
+            else:
+                second_downloaded.set()
+            return self._quotes(symbols, request_number * 10.0)
+
+        first_result, second_result = [], []
+        with patch("app._chunked_yf_download", side_effect=download):
+            first = self._request_in_thread(["AAA", "BBB"], first_result)
+            self.assertTrue(first_downloading.wait(timeout=5))
+            second = self._request_in_thread(["BBB", "CCC"], second_result)
+            self.assertTrue(second_downloaded.wait(timeout=5))
+            second.join(timeout=0.5)
+            waited_for_the_first = second.is_alive()
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        self.assertTrue(waited_for_the_first)
+        self.assertEqual(calls, [["AAA", "BBB"], ["CCC"]])
+        self.assertEqual(float(first_result[0][("Close", "BBB")].iloc[-1]), 10.0)
+        self.assertEqual(float(second_result[0][("Close", "BBB")].iloc[-1]), 10.0)
+        self.assertEqual(float(second_result[0][("Close", "CCC")].iloc[-1]), 20.0)
+
+    def test_an_edit_saved_mid_download_leaves_the_request_whole(self):
+        # AAA is already in the snapshot when a request for AAA and BBB starts
+        # fetching BBB. A save clears the snapshot before BBB arrives. The
+        # request must still answer for both symbols, not only the one it
+        # happened to be holding.
+        calls = []
+        downloading, release = threading.Event(), threading.Event()
+
+        def download(tickers, **_kwargs):
+            symbols = list(tickers)
+            calls.append(symbols)
+            if len(calls) == 2:
+                downloading.set()
+                release.wait(timeout=10)
+            return self._quotes(symbols, len(calls) * 10.0)
+
+        results = []
+        with patch("app._chunked_yf_download", side_effect=download):
+            _total_return_market_download(["AAA"], **self._KWARGS)
+            request = self._request_in_thread(["AAA", "BBB"], results)
+            self.assertTrue(downloading.wait(timeout=5))
+            _clear_total_return_caches()
+            release.set()
+            request.join(timeout=5)
+            later = _total_return_market_download(["AAA", "BBB"], **self._KWARGS)
+
+        self.assertEqual(calls, [["AAA"], ["BBB"], ["AAA"]])
+        for frame in (results[0], later):
+            self.assertEqual(float(frame[("Close", "AAA")].iloc[-1]), 30.0)
+            self.assertEqual(float(frame[("Close", "BBB")].iloc[-1]), 20.0)
 
 
 class TotalReturnPeriodTest(unittest.TestCase):
