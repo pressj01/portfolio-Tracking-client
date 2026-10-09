@@ -8,6 +8,7 @@ import {
   formatAccountingCoverage,
   formatCoverageShortfall,
   formatCoveragePartialTag,
+  portfolioCoverageFromMetrics,
 } from './performancePeriods.js'
 
 // The screens react to the backend's grade rather than re-deriving one, so
@@ -142,6 +143,31 @@ test('a closing-side ledger deficit is still counted as a real gap', () => {
 
   assert.match(label, /genuine gap between the full transaction ledger/i)
   assert.doesNotMatch(label, /None of them indicate/i)
+})
+
+test('reused portfolio coverage keeps the closed-ticker classification', () => {
+  const metrics = {
+    missing_market_symbols: ['AOTS', 'ASGIRT', 'TUGN'],
+    inferred_closing_positions: 1,
+    inferred_closing_detail: [{
+      ledger_gap: false,
+      ledger_net_shares: 0,
+      snapshot_quantity: 0,
+    }],
+    coverage_shortfall: {
+      closed_unpriced_symbols: ['AOTS', 'ASGIRT', 'TUGN'],
+      held_unpriced_symbols: [],
+      cash_equivalent_symbols: [],
+    },
+  }
+
+  const label = formatAccountingCoverage(portfolioCoverageFromMetrics(metrics))
+
+  assert.match(label, /AOTS, ASGIRT, TUGN/)
+  assert.match(label, /held in this range/i)
+  assert.match(label, /no longer held/i)
+  assert.doesNotMatch(label, /Market history is unavailable/)
+  assert.doesNotMatch(label, /detail is unavailable/i)
 })
 
 test('partially classified missing symbols retain the generic warning', () => {

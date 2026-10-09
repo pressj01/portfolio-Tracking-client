@@ -1877,5 +1877,162 @@ class WeekendStartAnchorTest(unittest.TestCase):
         self.assertAlmostEqual(result["distribution_dollar"], 300.0)
 
 
+class ClosedUnpricedWindowTest(unittest.TestCase):
+    """A closed name is unpriced for this range only when its shares overlapped it.
+
+    Total Return and Growth both print this list. Counting every historical
+    delisting makes a year-to-date page name tickers that were already flat
+    years earlier, and the two pages then disagree about the hole.
+    """
+
+    @staticmethod
+    def _close():
+        index = pd.bdate_range("2026-01-02", periods=10)
+        return pd.DataFrame({"GOOD": [100.0] * 10}, index=index)
+
+    @staticmethod
+    def _held():
+        return [{
+            "ticker": "GOOD",
+            "market_symbol": "GOOD",
+            "position_key": (6, "GOOD"),
+            "quantity": 10,
+            "current_value": 1000,
+            "purchase_date": "2025-06-01",
+        }]
+
+    @staticmethod
+    def _txn(ticker, date, kind, shares, profile=6):
+        return {
+            "ticker": ticker,
+            "market_symbol": ticker,
+            "profile_id": profile,
+            "position_key": (profile, ticker),
+            "transaction_type": kind,
+            "transaction_date": date,
+            "shares": shares,
+        }
+
+    def _series(self, transactions, holdings=None, close=None):
+        return _build_transaction_aware_portfolio_series(
+            close if close is not None else self._close(),
+            None,
+            None,
+            None,
+            transactions,
+            self._held() if holdings is None else holdings,
+        )
+
+    def test_names_closed_before_the_window_are_not_listed(self):
+        result = self._series([
+            self._txn("HMBL", "2022-12-01", "SELL", 900),
+            self._txn("LEG", "2022-04-18", "BUY", 1.313),
+            self._txn("LEG", "2022-06-08", "SELL", 50),
+            self._txn("LEG", "2022-07-15", "BUY", 0.745),
+            self._txn("LEG", "2022-09-30", "SELL", 0.273),
+            self._txn("LEG", "2022-09-30", "SELL", 63),
+            self._txn("AOTS", "2026-01-02", "BUY", 110),
+            self._txn("AOTS", "2026-03-06", "SELL", 110),
+            self._txn("ASGIRT", "2026-01-08", "SELL", 111),
+            self._txn("TUGN", "2026-01-06", "BUY", 220),
+        ])
+
+        self.assertEqual(
+            result["missing_market_symbols"],
+            ["AOTS", "ASGIRT", "TUGN"],
+        )
+        self.assertEqual(
+            result["coverage_shortfall"]["closed_unpriced_symbols"],
+            ["AOTS", "ASGIRT", "TUGN"],
+        )
+
+    def test_a_sale_after_the_window_still_covers_the_range(self):
+        # No opening buy, and the only sale is later: the shares were held
+        # through this window.
+        result = self._series([
+            self._txn("LATER", "2026-04-01", "SELL", 40),
+        ])
+
+        self.assertEqual(result["missing_market_symbols"], ["LATER"])
+
+    def test_a_sale_of_an_older_lot_inside_the_window_stays_listed(self):
+        result = self._series([
+            self._txn("CARRY", "2024-06-03", "BUY", 8),
+            self._txn("CARRY", "2026-01-06", "SELL", 8),
+        ])
+
+        self.assertEqual(result["missing_market_symbols"], ["CARRY"])
+
+    def test_a_later_round_trip_does_not_fill_the_gap(self):
+        result = self._series([
+            self._txn("GAP", "2020-01-02", "BUY", 10),
+            self._txn("GAP", "2020-06-01", "SELL", 10),
+            self._txn("GAP", "2027-02-01", "BUY", 10),
+            self._txn("GAP", "2027-03-02", "SELL", 10),
+        ])
+
+        self.assertEqual(result["missing_market_symbols"], [])
+
+    def test_one_account_still_in_range_keeps_the_symbol(self):
+        result = self._series([
+            self._txn("BOTH", "2020-01-02", "BUY", 10, profile=1),
+            self._txn("BOTH", "2020-06-01", "SELL", 10, profile=1),
+            self._txn("BOTH", "2026-01-05", "BUY", 4, profile=2),
+            self._txn("BOTH", "2026-01-06", "SELL", 4, profile=2),
+        ])
+
+        self.assertEqual(result["missing_market_symbols"], ["BOTH"])
+
+    def test_a_held_unpriced_name_stays_listed(self):
+        holdings = self._held() + [{
+            "ticker": "DEAD",
+            "market_symbol": "DEAD",
+            "position_key": (6, "DEAD"),
+            "quantity": 5,
+            "current_value": 50,
+            "purchase_date": "2020-01-02",
+        }]
+        result = self._series(
+            [self._txn("DEAD", "2020-01-02", "BUY", 5)],
+            holdings=holdings,
+        )
+
+        self.assertEqual(result["missing_market_symbols"], ["DEAD"])
+        self.assertEqual(
+            result["coverage_shortfall"]["held_unpriced_symbols"],
+            ["DEAD"],
+        )
+
+    def test_undated_activity_stays_listed(self):
+        result = self._series([
+            self._txn("MYSTERY", None, "SELL", 10),
+        ])
+
+        self.assertEqual(result["missing_market_symbols"], ["MYSTERY"])
+
+    def test_an_empty_price_frame_still_drops_names_closed_before_it(self):
+        index = pd.bdate_range("2026-01-02", periods=10)
+        close = pd.DataFrame({
+            "OLD": [float("nan")] * 10,
+            "NOW": [float("nan")] * 10,
+        }, index=index)
+        result = self._series(
+            [
+                self._txn("OLD", "2022-01-03", "BUY", 1),
+                self._txn("OLD", "2022-02-01", "SELL", 1),
+                self._txn("NOW", "2026-01-05", "BUY", 1),
+                self._txn("NOW", "2026-01-06", "SELL", 1),
+            ],
+            holdings=[],
+            close=close,
+        )
+
+        self.assertEqual(result["missing_market_symbols"], ["NOW"])
+        self.assertEqual(
+            result["coverage_shortfall"]["closed_unpriced_symbols"],
+            ["NOW"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

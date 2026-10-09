@@ -384,6 +384,27 @@ const hasLedgerGap = (lot) => {
   return !!lot?.ledger_surplus
 }
 
+// The comparison chart reuses the dashboard metrics when it is showing the
+// portfolio alone. The note reads the shortfall and the closing detail, so
+// both have to travel with the missing symbols. Leaving them behind turns a
+// closed ticker into a generic hole and claims the ledger detail is missing.
+export const portfolioCoverageFromMetrics = (metrics) => {
+  const source = metrics || {}
+  return {
+    transaction_count: source.transaction_count || 0,
+    fallback_positions: source.fallback_positions || 0,
+    inferred_opening_positions: source.inferred_opening_positions || 0,
+    inferred_opening_detail: source.inferred_opening_detail || [],
+    inferred_closing_positions: source.inferred_closing_positions || 0,
+    inferred_closing_detail: source.inferred_closing_detail || [],
+    split_adjusted_transactions: source.split_adjusted_transactions || 0,
+    split_adjusted_positions: source.split_adjusted_positions || 0,
+    missing_market_symbols: source.missing_market_symbols || [],
+    coverage_shortfall: source.coverage_shortfall || {},
+    fallback_date_sources: source.fallback_date_sources || {},
+  }
+}
+
 export const formatAccountingCoverage = (metrics) => {
   if (!metrics) return ''
   const parts = []
@@ -447,7 +468,7 @@ export const formatAccountingCoverage = (metrics) => {
     }
     if (closedUnpriced.length > 0) {
       parts.push(
-        `${listSymbols(closedUnpriced)} ${closedUnpriced.length === 1 ? 'has' : 'have'} no downloadable price history — delisted, renamed, or never quoted — and ${closedUnpriced.length === 1 ? 'is' : 'are'} no longer held, so ${closedUnpriced.length === 1 ? 'its' : 'their'} price moves are not in Tracker Return. Realized gains and dividends already recorded are unaffected.`,
+        `${listSymbols(closedUnpriced)} ${closedUnpriced.length === 1 ? 'was' : 'were'} held in this range but ${closedUnpriced.length === 1 ? 'has' : 'have'} no usable price history — delisted, renamed, or never quoted — and ${closedUnpriced.length === 1 ? 'is' : 'are'} no longer held, so ${closedUnpriced.length === 1 ? 'its' : 'their'} price moves are not in Tracker Return. Realized gains and dividends already recorded are unaffected.`,
       )
     }
     if (heldUnpriced.length > 0) {

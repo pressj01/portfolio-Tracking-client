@@ -1530,6 +1530,121 @@ def _market_coverage_shortfall(
     }
 
 
+def _symbols_closed_outside_price_window(
+    transactions,
+    current_holdings,
+    window_start,
+    window_end,
+):
+    """Market symbols whose shares were flat for this whole price window.
+
+    A closed ticker that last traded years earlier was never part of the
+    replay, so naming it as unpriced makes Total Return and Growth disagree
+    about a hole that this range does not have. Held symbols always stay.
+    A symbol also stays when any of its positions lacks a dated buy or sell
+    the replay could follow, because that ledger cannot prove the shares
+    were already gone. A sell with no earlier buy closes shares that were
+    already held. A later round trip does not stretch an earlier one across
+    the gap between them.
+    """
+    if window_start is None or window_end is None:
+        return set()
+
+    held = set()
+    for row in current_holdings or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            quantity = float(row.get("quantity") or 0)
+        except (TypeError, ValueError):
+            quantity = 0.0
+        if quantity <= 1e-9:
+            continue
+        symbol = str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
+        if symbol:
+            held.add(symbol)
+
+    positions = {}
+    for raw in transactions or []:
+        if not isinstance(raw, dict):
+            continue
+        symbol = str(raw.get("market_symbol") or raw.get("ticker") or "").strip().upper()
+        if not symbol or symbol in held:
+            continue
+        explicit = raw.get("position_key")
+        if isinstance(explicit, list):
+            explicit = tuple(explicit)
+        if not (isinstance(explicit, tuple) and explicit):
+            explicit = (
+                raw.get("profile_id"),
+                str(raw.get("ticker") or "").strip().upper(),
+            )
+        entry = positions.setdefault(
+            explicit, {"symbol": symbol, "events": [], "unproven": False},
+        )
+        if entry["symbol"] != symbol:
+            entry["unproven"] = True
+        event_date = _portfolio_event_date(raw.get("transaction_date"))
+        try:
+            shares = abs(float(raw.get("shares") or 0))
+        except (TypeError, ValueError):
+            shares = 0.0
+        txn_type = str(raw.get("transaction_type") or "BUY").strip().upper()
+        if shares <= 0:
+            continue
+        if event_date is None or txn_type not in {"BUY", "SELL"}:
+            entry["unproven"] = True
+            continue
+        signed = shares if txn_type == "BUY" else -shares
+        entry["events"].append((event_date, signed))
+
+    outside = set()
+    by_symbol = {}
+    for entry in positions.values():
+        by_symbol.setdefault(entry["symbol"], []).append(entry)
+    for symbol, entries in by_symbol.items():
+        if any(entry["unproven"] or not entry["events"] for entry in entries):
+            continue
+        overlaps = False
+        for entry in entries:
+            running = 0.0
+            opened = None
+            for event_date, signed in sorted(entry["events"], key=lambda item: item[0]):
+                if signed < 0 and running <= 1e-9:
+                    # Already held, with no opening row. Flat only after the sale,
+                    # so a sale on or after the window still covers this range.
+                    if event_date >= window_start:
+                        overlaps = True
+                        break
+                    running = 0.0
+                    opened = None
+                    continue
+                previous = running
+                running = previous + signed
+                if previous <= 1e-9 and running > 1e-9:
+                    opened = event_date
+                elif previous > 1e-9 and running <= 1e-9:
+                    start = opened
+                    if (
+                        (start is None or start <= window_end)
+                        and event_date >= window_start
+                    ):
+                        overlaps = True
+                        break
+                    running = 0.0
+                    opened = None
+            if overlaps:
+                break
+            if running > 1e-9:
+                start = opened
+                if start is None or start <= window_end:
+                    overlaps = True
+                    break
+        if not overlaps:
+            outside.add(symbol)
+    return outside
+
+
 _NON_ACTUAL_DISTRIBUTION_SOURCES = {
     "refresh_estimate", "projection", "estimate", "estimated",
 }
@@ -1893,6 +2008,18 @@ def _build_transaction_aware_portfolio_series(
     # directly so the requirement scales with the window instead of hardening
     # into a demand for perfection.
     row_count = int(len(prices.index))
+    # Closed names whose shares never overlapped this downloaded window were
+    # not part of the replay. Dropping them here keeps Total Return, Growth,
+    # and Growth in dollars naming the same in-range tickers.
+    outside_window = _symbols_closed_outside_price_window(
+        transactions,
+        current_holdings,
+        prices.index[0].date(),
+        prices.index[-1].date(),
+    )
+
+    def reported_missing(symbols):
+        return sorted(set(symbols) - outside_window)
 
     def _has_return_coverage(column):
         observed = prices[column].notna()
@@ -1926,16 +2053,17 @@ def _build_transaction_aware_portfolio_series(
     ]
     prices = prices[valid_price_columns].ffill()
     if prices.empty:
+        missing_market_symbols = reported_missing(requested_market_symbols)
         return {
             **empty,
-            "missing_market_symbols": requested_market_symbols,
+            "missing_market_symbols": missing_market_symbols,
             "coverage_shortfall": _market_coverage_shortfall(
-                requested_market_symbols,
+                missing_market_symbols,
                 current_holdings,
                 synthetic_cash_equivalent_symbols,
             ),
         }
-    missing_market_symbols = sorted(
+    missing_market_symbols = reported_missing(
         set(requested_market_symbols) - {
             str(column).strip().upper() for column in prices.columns
         }

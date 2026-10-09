@@ -17,6 +17,7 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatAccountingCoverage,
+  portfolioCoverageFromMetrics,
   formatCoverageShortfall,
   formatCoveragePartialTag,
   isCoverageMaterial,
@@ -540,16 +541,7 @@ export default function TotalReturn() {
           total: { PORTFOLIO: portfolioSeries.total },
           tickers: ['PORTFOLIO'],
           labels: { PORTFOLIO: 'Entire Portfolio' },
-          portfolio_coverage: {
-            transaction_count: metrics.transaction_count || 0,
-            fallback_positions: metrics.fallback_positions || 0,
-            inferred_opening_positions: metrics.inferred_opening_positions || 0,
-            inferred_closing_positions: metrics.inferred_closing_positions || 0,
-            split_adjusted_transactions: metrics.split_adjusted_transactions || 0,
-            split_adjusted_positions: metrics.split_adjusted_positions || 0,
-            missing_market_symbols: metrics.missing_market_symbols || [],
-            fallback_date_sources: metrics.fallback_date_sources || {},
-          },
+          portfolio_coverage: portfolioCoverageFromMetrics(metrics),
           portfolio_method: (
             'Daily time-weighted return from dated BUY/SELL quantities. '
             + 'Trades change portfolio weights without changing the return index.'
@@ -1491,8 +1483,8 @@ export default function TotalReturn() {
                     {closedUnpricedSymbols.length > 0 && (
                       <li>
                         <strong>Closed and no longer quoted.</strong>{' '}
-                        {closedUnpricedSymbols.join(', ')}. These appear in your transactions but you
-                        do not hold them now, and no price history comes back for the symbol — typically
+                        {closedUnpricedSymbols.join(', ')}. These were held during the selected range, but you
+                        do not hold them now, and there is no usable price history for the symbol — typically
                         a delisting, a bankruptcy, an acquisition, or a ticker that changed. Their market
                         moves are not in Tracker Return, but the realized gain and the dividends already
                         recorded against them are untouched, so Gains &amp; Losses still reports them in
