@@ -3437,6 +3437,10 @@ _TOTAL_RETURN_DASHBOARD_CACHE = {}
 _TOTAL_RETURN_DASHBOARD_TTL_SEC = 10 * 60
 _TOTAL_RETURN_COMPARISON_CACHE = {}
 _TOTAL_RETURN_COMPARISON_TTL_SEC = 10 * 60
+_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE = {}
+_TOTAL_RETURN_MARKET_SNAPSHOT_LOCK = threading.Lock()
+_TOTAL_RETURN_MARKET_SNAPSHOT_TTL_SEC = 10 * 60
+_TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS = 12
 _STOCK_SPLIT_HISTORY_CACHE = {}
 _STOCK_SPLIT_HISTORY_TTL_SEC = 6 * 60 * 60
 
@@ -3549,6 +3553,120 @@ def _clear_total_return_caches():
     """
     _TOTAL_RETURN_DASHBOARD_CACHE.clear()
     _TOTAL_RETURN_COMPARISON_CACHE.clear()
+    with _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK:
+        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear()
+
+
+def _field_symbol_market_frame(frame, symbols):
+    """Normalize a market download to ``(field, symbol)`` columns.
+
+    A one-symbol yfinance response has flat field columns while a batch has a
+    MultiIndex. Total Return's shared market snapshot grows as different
+    account scopes request overlapping baskets, so it needs one internal shape
+    before those responses can be merged safely.
+    """
+    if frame is None or getattr(frame, "empty", True):
+        return pd.DataFrame()
+    normalized = frame.copy(deep=True)
+    if not isinstance(normalized.columns, pd.MultiIndex):
+        if len(symbols) != 1:
+            return normalized
+        normalized.columns = pd.MultiIndex.from_tuples(
+            [(column, symbols[0]) for column in normalized.columns]
+        )
+        return normalized
+    ticker_level = _ticker_level(normalized.columns)
+    if ticker_level == 0:
+        normalized.columns = normalized.columns.swaplevel(0, 1)
+    return normalized
+
+
+def _total_return_market_download(tickers, **kwargs):
+    """Download one stable, short-lived market snapshot for Total Return.
+
+    Dashboard response caches are account-scoped. Without a market-level
+    snapshot, loading two accounts and then their aggregate downloads the same
+    ticker three times, so an intraday quote can make the aggregate differ from
+    the accounts by a few dollars. This cache is keyed by the requested market
+    window, grows by symbol, and returns the first quote observed for every
+    overlapping symbol throughout the ten-minute page window.
+
+    This is intentionally separate from the user's optional global price-reuse
+    preference: reconciling figures on one analytical page is a correctness
+    boundary, not a request to make every screen use stale quotes.
+    """
+    if isinstance(tickers, str):
+        tickers = tickers.split()
+    symbols = list(dict.fromkeys(
+        str(ticker or "").strip().upper()
+        for ticker in (tickers or [])
+        if str(ticker or "").strip()
+    ))
+    if not symbols:
+        return pd.DataFrame()
+
+    provider_key = market_data_provider.active_mode()
+    window_key = (provider_key, _download_kwargs_key(kwargs))
+    now = time.time()
+
+    with _TOTAL_RETURN_MARKET_SNAPSHOT_LOCK:
+        expired = [
+            key for key, entry in _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.items()
+            if now - entry[0] > _TOTAL_RETURN_MARKET_SNAPSHOT_TTL_SEC
+        ]
+        for key in expired:
+            _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(key, None)
+
+        entry = _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.get(window_key)
+        if entry is None:
+            created_at = now
+            snapshot = pd.DataFrame()
+            fetched_symbols = set()
+        else:
+            created_at, snapshot, fetched_symbols = entry
+            snapshot = snapshot.copy(deep=True)
+            fetched_symbols = set(fetched_symbols)
+
+        missing = [symbol for symbol in symbols if symbol not in fetched_symbols]
+        if missing:
+            fresh = _chunked_yf_download(missing, **kwargs)
+            normalized = _field_symbol_market_frame(fresh, missing)
+            if normalized is not None and not normalized.empty:
+                snapshot = _merge_download_frames(
+                    [frame for frame in (snapshot, normalized) if not frame.empty]
+                )
+                # The guarded downloader already retries dropped symbols. Mark
+                # this successful batch as the page's answer even if Yahoo left
+                # one member all-NaN; re-querying it immediately would make two
+                # account totals use different points in time.
+                fetched_symbols.update(missing)
+                _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE[window_key] = (
+                    created_at, snapshot.copy(deep=True), frozenset(fetched_symbols),
+                )
+                while (
+                    len(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE)
+                    > _TOTAL_RETURN_MARKET_SNAPSHOT_MAX_WINDOWS
+                ):
+                    oldest = next(iter(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE))
+                    _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.pop(oldest, None)
+            elif snapshot.empty:
+                return pd.DataFrame()
+
+        if snapshot.empty or not isinstance(snapshot.columns, pd.MultiIndex):
+            return snapshot.copy(deep=True)
+        ticker_level = _ticker_level(snapshot.columns)
+        if ticker_level is None:
+            return snapshot.copy(deep=True)
+        wanted = set(symbols)
+        positions = [
+            index for index, column in enumerate(snapshot.columns)
+            if str(column[ticker_level]).strip().upper() in wanted
+        ]
+        result = snapshot.iloc[:, positions].copy(deep=True)
+        result.attrs["market_snapshot_at"] = datetime.datetime.fromtimestamp(
+            created_at
+        ).isoformat(timespec="seconds")
+        return result
 
 
 def _clear_market_data_memory_caches():
@@ -36299,6 +36417,13 @@ def total_return_distributions(ticker):
     # the ticker. In Owner or an aggregate, an account that has sold out of it
     # keeps its cash with its own closed position.
     open_view = request.args.get("view", "").strip().lower() == "open"
+    row_source = request.args.get("row_source", "").strip()
+    try:
+        row_total = float(request.args.get("row_total", ""))
+        if not math.isfinite(row_total):
+            row_total = None
+    except (TypeError, ValueError):
+        row_total = None
 
     conn = get_connection()
     try:
@@ -36321,14 +36446,20 @@ def total_return_distributions(ticker):
             ).fetchall()
             if _accounting_symbol_for_ticker(row["ticker"]) == ticker
         } if open_view else set()
+        payment_columns = {
+            str(column[1])
+            for column in conn.execute("PRAGMA table_info(dividend_payments)").fetchall()
+        }
+        notes_sql = "d.notes" if "notes" in payment_columns else "NULL AS notes"
+        id_order_sql = ", d.id" if "id" in payment_columns else ""
         payment_metadata_sql = _distribution_payment_metadata_select(conn, "d")
         rows = conn.execute(
-            f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id,
+            f"""SELECT d.payment_date, d.amount, d.source, {notes_sql}, d.profile_id,
                        {payment_metadata_sql}
                 FROM dividend_payments d
                 WHERE d.profile_id IN ({placeholders})
                   AND UPPER(d.ticker) = ?
-                ORDER BY d.payment_date, d.id""",
+                ORDER BY d.payment_date{id_order_sql}""",
             [*payment_profile_ids, ticker],
         ).fetchall()
     finally:
@@ -36374,11 +36505,45 @@ def total_return_distributions(ticker):
             "excluded_reason": reason,
         })
 
+    recorded_counted_total = counted_total
+    estimated_total = 0.0
+    # The selected-period row is calculated by the transaction-aware market
+    # replay. For an account-position with incomplete broker history, that
+    # replay fills the uncovered span from Yahoo's distribution history. The
+    # ledger query above cannot enumerate those dollars, so carry the exact
+    # clicked row total into this audit response and show the difference as an
+    # explicit aggregate estimate instead of presenting a smaller total as if
+    # it explained the row.
+    if row_total is not None and "yahoo" in row_source.lower():
+        estimate = row_total - recorded_counted_total
+        if estimate > 0.00005:
+            estimated_total = estimate
+            counted_total += estimate
+            payments.append({
+                "payment_date": None,
+                "ex_date": None,
+                "performance_date": None,
+                "amount": round(estimate, 4),
+                "source": "Yahoo market history estimate",
+                "account": None,
+                "notes": (
+                    "Aggregate fallback for the portion of this row not covered "
+                    "by recorded broker payments."
+                ),
+                "counted": True,
+                "estimated": True,
+                "excluded_reason": None,
+            })
+
     return jsonify({
         "ticker": ticker,
         "payments": payments,
         "counted_total": round(counted_total, 4),
+        "recorded_counted_total": round(recorded_counted_total, 4),
+        "estimated_total": round(estimated_total, 4),
         "excluded_total": round(excluded_total, 4),
+        "row_total": round(row_total, 4) if row_total is not None else None,
+        "row_source": row_source or None,
         "start_date": start_date,
         "end_date": end_date,
         "period_label": period_range["label"],
@@ -36614,7 +36779,7 @@ def total_return_charts():
             _yahoo_symbol_for_ticker(ticker) or ticker for ticker in tickers_list
         ] + extra))
 
-        raw = _chunked_yf_download(
+        raw = _total_return_market_download(
             " ".join(all_dl), **period_range["yf_kwargs"],
             progress=False, auto_adjust=False, actions=True,
         )
@@ -36883,7 +37048,10 @@ def total_return_charts():
             # When the range ends today that last point is the live price, not a
             # settled close, so stamp when it was read: it is the other half of
             # why this screen and Gains & Losses disagree intraday.
-            portfolio_metrics["priced_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+            portfolio_metrics["priced_at"] = (
+                raw.attrs.get("market_snapshot_at")
+                or datetime.datetime.now().isoformat(timespec="seconds")
+            )
             # position_profile_ids, not profile_ids: Owner's own refresh marker
             # can be months old while the source accounts that actually hold the
             # shares refreshed minutes ago.
@@ -37155,7 +37323,7 @@ def total_return_compare():
         return jsonify({"error": "No portfolio securities with market symbols were found"}), 404
 
     try:
-        raw = _chunked_yf_download(
+        raw = _total_return_market_download(
             " ".join(download_tickers), **yf_kwargs,
             auto_adjust=False, actions=True, progress=False,
         )

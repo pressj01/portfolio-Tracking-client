@@ -18,6 +18,7 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
         # The production cache keys include DB mtimes. Temporary files created
         # within the same clock tick can otherwise reuse a prior test's payload.
         app_module._TOTAL_RETURN_DASHBOARD_CACHE.clear()
+        app_module._TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear()
         self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         self.tmp.close()
         self.db_path = self.tmp.name
@@ -466,6 +467,22 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
             open_row["payments"][0]["excluded_reason"],
             "paid to Test, which no longer holds BBB",
         )
+
+    def test_itemization_names_the_yahoo_fallback_behind_the_clicked_row(self):
+        response = self.client.get(
+            "/api/total-return/distributions/AAA?profile_id=6&period=all&view=open"
+            "&row_total=2.5&row_source=Yahoo%20market%20history"
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_json())
+        payload = response.get_json()
+        self.assertEqual(payload["recorded_counted_total"], 0)
+        self.assertEqual(payload["estimated_total"], 2.5)
+        self.assertEqual(payload["counted_total"], 2.5)
+        estimate = next(row for row in payload["payments"] if row.get("estimated"))
+        self.assertEqual(estimate["amount"], 2.5)
+        self.assertEqual(estimate["source"], "Yahoo market history estimate")
+        self.assertTrue(estimate["counted"])
 
     def test_portfolio_tester_actual_history_reuses_tracker_total_return(self):
         history = app_module._portfolio_tester_actual_history(

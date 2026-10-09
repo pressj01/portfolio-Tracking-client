@@ -17,6 +17,8 @@ from app import (
     _portfolio_period_metrics,
     _resolve_total_return_period,
     _stock_split_history_for_period,
+    _total_return_market_download,
+    _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE,
     _transactions_for_current_positions,
     _market_coverage_shortfall,
     _money_market_symbols,
@@ -62,6 +64,38 @@ class TotalReturnNormalizationTest(unittest.TestCase):
         self.assertFalse(result.columns.has_duplicates)
         self.assertEqual(result.columns.tolist(), ["AAA"])
         self.assertEqual(result["AAA"].tolist(), [100.0, 125.0])
+
+
+class TotalReturnMarketSnapshotTest(unittest.TestCase):
+    def setUp(self):
+        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear()
+        self.addCleanup(_TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear)
+
+    def test_overlapping_account_requests_reuse_the_same_ticker_quote(self):
+        dates = pd.to_datetime(["2026-10-07", "2026-10-08"])
+        calls = []
+
+        def download(tickers, **_kwargs):
+            symbols = list(tickers)
+            calls.append(symbols)
+            request_number = len(calls)
+            data = {}
+            for offset, symbol in enumerate(symbols):
+                last = request_number * 10.0 + offset
+                data[("Close", symbol)] = [last - 1.0, last]
+            frame = pd.DataFrame(data, index=dates)
+            frame.columns = pd.MultiIndex.from_tuples(frame.columns)
+            return frame
+
+        kwargs = {"period": "1y", "auto_adjust": False, "actions": True}
+        with patch("app._chunked_yf_download", side_effect=download):
+            first = _total_return_market_download(["PDPR", "RDGL"], **kwargs)
+            second = _total_return_market_download(["RDGL", "SPY"], **kwargs)
+
+        self.assertEqual(calls, [["PDPR", "RDGL"], ["SPY"]])
+        self.assertEqual(float(first[("Close", "RDGL")].iloc[-1]), 11.0)
+        self.assertEqual(float(second[("Close", "RDGL")].iloc[-1]), 11.0)
+        self.assertEqual(first.attrs["market_snapshot_at"], second.attrs["market_snapshot_at"])
 
 
 class TotalReturnPeriodTest(unittest.TestCase):
@@ -288,6 +322,7 @@ class TotalReturnPeriodTest(unittest.TestCase):
 
 class TotalReturnComparisonTest(unittest.TestCase):
     def setUp(self):
+        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear()
         self._original_db_initialized = getattr(app, "_db_initialized", False)
         app._db_initialized = True
 
@@ -442,6 +477,7 @@ class TotalReturnComparisonTest(unittest.TestCase):
 
 class TotalReturnDashboardPeriodTest(unittest.TestCase):
     def setUp(self):
+        _TOTAL_RETURN_MARKET_SNAPSHOT_CACHE.clear()
         self._original_db_initialized = getattr(app, "_db_initialized", False)
         app._db_initialized = True
 

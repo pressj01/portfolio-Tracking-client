@@ -150,7 +150,8 @@ export default function TotalReturn() {
   useEffect(() => setLotDetails({}), [selection, basisMode])
   // A Distributions figure nobody can take apart is one nobody can check.
   const [distDetail, setDistDetail] = useState(null)
-  const openDistributions = async (ticker) => {
+  const openDistributions = async (row, rowTotal) => {
+    const ticker = row?.ticker
     setDistDetail({ ticker, loading: true })
     try {
       const params = new URLSearchParams({ period: dashboardPeriod })
@@ -158,6 +159,10 @@ export default function TotalReturn() {
       // The open-positions row counts the accounts that still hold the ticker,
       // so its itemization has to leave out the same payments the row does.
       if (positionView === 'unrealized') params.set('view', 'open')
+      if (Number.isFinite(Number(rowTotal)) && row?.distribution_source) {
+        params.set('row_total', String(Number(rowTotal)))
+        params.set('row_source', row.distribution_source)
+      }
       const res = await pf(`/api/total-return/distributions/${encodeURIComponent(ticker)}?${params}`)
       const data = await res.json()
       setDistDetail({ ticker, ...(data.error ? { error: data.error } : { data }) })
@@ -735,6 +740,7 @@ export default function TotalReturn() {
           open_distribution_dollar: 0,
           realized_distribution_dollar: 0,
           net_distribution_dollar: 0,
+          distribution_source: null,
           isOpen: false,
           isClosed: false,
         }
@@ -748,6 +754,7 @@ export default function TotalReturn() {
       entry.isOpen = true
       entry.net_basis += row.start_value || 0
       entry.unrealized_total_dollar += row.total_return_dollar || 0
+      entry.distribution_source = row.distribution_source || entry.distribution_source
       // In Owner or an aggregate the open row leaves out cash paid to an
       // account that has since sold out of the ticker. It is still this
       // ticker's cash for the range, so it is added back here, once.
@@ -794,7 +801,7 @@ export default function TotalReturn() {
     { key: 'end_value', label: lifetimeView ? 'Current Open Value' : 'End Value', fmt, numeric: true },
     { key: 'price_return_dollar', label: lifetimeView ? 'Open Position G/L' : 'Period Price Return', title: lifetimeView ? 'Current value minus selected cost basis for shares still held. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. This contributes to the Open Lots Price Return card, not the Tracker Price Return card. Not cost-basis G/L.', fmt, numeric: true, gl: true },
     { key: 'price_return_pct', label: lifetimeView ? 'Open Position G/L %' : 'Period Price Ret %', title: lifetimeView ? 'Open Position G/L divided by selected cost basis. This matches Holdings.' : 'This ticker\'s current open lot during the selected range. The Open Position Total and Open Lots Price Return card exclude fully closed positions.', fmt: fmtPct, numeric: true, gl: true },
-    { key: 'distribution_dollar', label: lifetimeView ? 'Lifetime Distributions' : 'Distributions', title: lifetimeView ? 'Recorded distributions included in Lifetime Total G/L.' : 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded. In Owner or an aggregate this adds up the accounts that still hold the ticker, so it matches their own pages; cash paid to an account that has since sold out of it is counted with that account\'s closed position. Click a figure to see every payment behind it.', fmt, numeric: true },
+    { key: 'distribution_dollar', label: lifetimeView ? 'Lifetime Distributions' : 'Distributions', title: lifetimeView ? 'Recorded distributions included in Lifetime Total G/L.' : 'Cash this ticker paid inside the selected range — not since purchase. Estimated payments the refresh job wrote ahead of the real one are excluded; Yahoo market history fills any range without complete broker history and is identified in the click-through. In Owner or an aggregate this adds up the accounts that still hold the ticker, so it matches their own pages; cash paid to an account that has since sold out of it is counted with that account\'s closed position. Click a figure to see every payment behind it.', fmt, numeric: true },
     { key: 'total_return_dollar', label: lifetimeView ? 'Lifetime Total G/L' : 'Period Total Return', fmt, numeric: true, gl: true },
     { key: 'total_return_pct', label: lifetimeView ? 'Lifetime Total G/L %' : 'Period Total Ret %', fmt: fmtPct, numeric: true, gl: true },
     { key: 'period_range', label: lifetimeView ? 'Scope' : 'Effective Range' },
@@ -2025,11 +2032,11 @@ export default function TotalReturn() {
                             role="button"
                             tabIndex={0}
                             title={`Show the individual payments behind ${row.ticker}'s ${fmt(val)}`}
-                            onClick={() => openDistributions(row.ticker)}
+                            onClick={() => openDistributions(row, val)}
                             onKeyDown={e => {
                               if (e.key === 'Enter' || e.key === ' ') {
                                 e.preventDefault()
-                                openDistributions(row.ticker)
+                                openDistributions(row, val)
                               }
                             }}
                             style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}
@@ -2200,7 +2207,8 @@ export default function TotalReturn() {
                   <p style={{ color: 'var(--text-dim)', marginTop: 0 }}>
                     {d.period_label}: {formatPerformanceDate(d.start_date) || d.start_date}
                     {' – '}{formatPerformanceDate(d.end_date) || d.end_date}.
-                    {' '}Every payment recorded for {d.ticker}, and why each one is in or out.
+                    {' '}Every payment recorded for {d.ticker}, plus any Yahoo fallback needed
+                    to reconcile the selected row.
                   </p>
                   <table className="data-table" style={{ width: '100%' }}>
                     <thead>
@@ -2215,11 +2223,11 @@ export default function TotalReturn() {
                     <tbody>
                       {counted.map((p, i) => (
                         <tr key={`c${i}`}>
-                          <td>{p.payment_date}</td>
-                          <td>{p.performance_date}{p.ex_date ? ' (ex-date)' : ''}</td>
+                          <td>{p.payment_date || 'Estimated'}</td>
+                          <td>{p.performance_date || d.period_label}{p.ex_date ? ' (ex-date)' : ''}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(p.amount)}</td>
                           <td style={{ color: 'var(--text-dim)' }}>{p.source || '—'}</td>
-                          <td style={{ color: 'var(--pos)' }}>counted</td>
+                          <td style={{ color: 'var(--pos)' }}>{p.estimated ? 'counted estimate' : 'counted'}</td>
                         </tr>
                       ))}
                       <tr style={{ borderTop: '2px solid var(--border)' }}>
@@ -2239,6 +2247,13 @@ export default function TotalReturn() {
                       ))}
                     </tbody>
                   </table>
+                  {d.estimated_total > 0 && (
+                    <p style={{ color: 'var(--text-dim)' }}>
+                      {fmt(d.recorded_counted_total)} comes from recorded broker payments and{' '}
+                      {fmt(d.estimated_total)} comes from Yahoo market history for the uncovered
+                      account or date range. Together they equal the figure clicked in the table.
+                    </p>
+                  )}
                   {excluded.length > 0 && (
                     <p style={{ color: 'var(--text-dim)' }}>
                       {fmt(d.excluded_total)} across {excluded.length} payment
