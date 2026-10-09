@@ -788,6 +788,22 @@ class TransactionImportParserTest(unittest.TestCase):
         self.assertEqual(result["transactions"][2]["notes"], "[DRIP] Reinvested shares")
         self.assertEqual(result["transactions"][3]["fees"], 0.05)
 
+    def test_generic_transactions_parses_ex_date_and_declared_coverage(self):
+        content = "\n".join([
+            "Date,Ex Date,Coverage Start,Coverage End,Type,Ticker,Dividend Amount",
+            "2026-02-10,2026-02-02,2026-01-01,2026-03-31,DIVIDEND,SCHD,8.25",
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "generic-transactions.csv"
+            path.write_text(content, encoding="utf-8")
+            result = parse_generic_transactions(str(path), path.name)
+
+        self.assertEqual(result["transactions"][0]["ex_date"], "2026-02-02")
+        self.assertEqual(
+            result["distribution_coverage"],
+            {"start_date": "2026-01-01", "end_date": "2026-03-31"},
+        )
+
     def test_generic_transactions_xlsx_accepts_friendly_header_aliases(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "generic-transactions.xlsx"

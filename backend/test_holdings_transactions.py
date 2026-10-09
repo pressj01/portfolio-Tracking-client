@@ -988,9 +988,12 @@ class HoldingsTransactionApiTest(unittest.TestCase):
                 ticker TEXT,
                 profile_id INTEGER,
                 payment_date TEXT,
+                ex_date TEXT,
                 amount REAL,
                 source TEXT,
                 notes TEXT,
+                coverage_start_date TEXT,
+                coverage_end_date TEXT,
                 created_at TEXT,
                 UNIQUE (ticker, profile_id, payment_date)
             );
@@ -1935,11 +1938,11 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             "VALUES (40, 'Manual Transactions', 'other', 0, 0)"
         )
         content = (
-            "Date,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
-            "2026-01-15,BUY,ABC,10,20.00,0,,Initial purchase\n"
-            "2026-02-01,BUY,ABC,5,22.00,0,,Second lot\n"
-            "2026-03-01,SELL,ABC,3,25.00,0,,Partial sale\n"
-            "2026-03-15,DIVIDEND,ABC,,,,6.00,Cash dividend\n"
+            "Date,Ex Date,Coverage Start,Coverage End,Type,Ticker,Shares,Price Per Share,Fees,Dividend Amount,Notes\n"
+            "2026-01-15,,2026-01-01,2026-03-31,BUY,ABC,10,20.00,0,,Initial purchase\n"
+            "2026-02-01,,2026-01-01,2026-03-31,BUY,ABC,5,22.00,0,,Second lot\n"
+            "2026-03-01,,2026-01-01,2026-03-31,SELL,ABC,3,25.00,0,,Partial sale\n"
+            "2026-03-15,2026-03-10,2026-01-01,2026-03-31,DIVIDEND,ABC,,,,6.00,Cash dividend\n"
         )
 
         orig_income = app_module.populate_income_tracking
@@ -1999,6 +2002,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             dividend_count = conn.execute(
                 "SELECT COUNT(*) FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 40"
             ).fetchone()[0]
+            dividend_metadata = conn.execute(
+                "SELECT ex_date, coverage_start_date, coverage_end_date "
+                "FROM dividend_payments WHERE ticker = 'ABC' AND profile_id = 40"
+            ).fetchone()
         finally:
             conn.close()
 
@@ -2010,6 +2017,10 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(holding["dividend_actuals_source"], "generic_transactions")
         self.assertEqual(txn_count, 3)
         self.assertEqual(dividend_count, 1)
+        self.assertEqual(
+            tuple(dividend_metadata),
+            ("2026-03-10", "2026-01-01", "2026-03-31"),
+        )
 
     def test_clear_lets_a_corrected_transaction_file_replace_the_bad_ledger(self):
         """Covers every broker: they all share this one insert/dedupe path.
@@ -2351,8 +2362,8 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(
             headers,
             [
-                "Date", "Type", "Ticker", "Shares", "Price Per Share",
-                "Fees", "Amount", "Notes",
+                "Date", "Ex Date", "Coverage Start", "Coverage End", "Type",
+                "Ticker", "Shares", "Price Per Share", "Fees", "Amount", "Notes",
             ],
         )
 
@@ -4229,6 +4240,38 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(self._scalar('SELECT total_divs_received FROM all_account_info WHERE profile_id = 2'), 0)
         self.assertEqual(self._scalar('SELECT total_divs_received FROM all_account_info WHERE profile_id = 1'), 0)
         self.assertEqual(self._scalar('SELECT COUNT(*) FROM transactions'), 1)
+
+    def test_dividend_edit_uses_ex_date_without_widening_import_coverage(self):
+        self._seed_editable_dividends()
+        self._execute(
+            "INSERT INTO dividend_payments "
+            "(ticker, profile_id, payment_date, ex_date, amount, source, "
+            "coverage_start_date, coverage_end_date) "
+            "VALUES ('ABC', 2, '2026-02-10', '2026-02-02', 10, 'schwab', "
+            "'2026-01-01', '2026-03-31')"
+        )
+        payment_id = self._scalar("SELECT id FROM dividend_payments")
+
+        res = self.client.put(
+            f'/api/holdings/ABC/dividend-payments/{payment_id}?profile_id=2',
+            json={
+                'payment_date': '2026-04-10',
+                'ex_date': '2026-04-01',
+                'amount': 12,
+                'notes': 'Corrected broker payment',
+            },
+        )
+
+        self.assertEqual(res.status_code, 200, res.get_json())
+        row = self._rows(
+            "SELECT payment_date, ex_date, coverage_start_date, coverage_end_date "
+            "FROM dividend_payments WHERE id = ?",
+            (payment_id,),
+        )[0]
+        self.assertEqual(
+            tuple(row),
+            ('2026-04-10', '2026-04-01', '2026-01-01', '2026-03-31'),
+        )
 
     def test_dividend_mutation_rejects_wrong_account_and_ticker(self):
         self._seed_editable_dividends()

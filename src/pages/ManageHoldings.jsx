@@ -1380,6 +1380,7 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
     payment_date: transaction?.transaction_date || '',
+    ex_date: transaction?.ex_date || '',
     amount: transaction?.dividend_amount ?? '',
     notes: transaction?.raw_notes ?? transaction?.notes ?? '',
   })
@@ -1462,6 +1463,12 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
               <label htmlFor="ledger-payment-date">Payment date</label>
               <input id="ledger-payment-date" type="date" min="1900-01-01" max="2099-12-31" required value={form.payment_date}
                 onChange={event => setForm({ ...form, payment_date: event.target.value })} />
+            </div>
+            <div className="form-group">
+              <label htmlFor="ledger-ex-date">Ex-dividend date <span style={{ color: 'var(--text-dim-2)' }}>(optional)</span></label>
+              <input id="ledger-ex-date" type="date" min="1900-01-01" max="2099-12-31" value={form.ex_date}
+                onChange={event => setForm({ ...form, ex_date: event.target.value })} />
+              <small style={{ color: 'var(--text-dim-2)' }}>Used for investment-performance timing; cash totals still use the payment date.</small>
             </div>
             <div className="form-group">
               <label htmlFor="ledger-amount">Cash amount ($)</label>

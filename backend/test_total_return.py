@@ -12,6 +12,7 @@ from app import (
     _anchor_from_prior_close,
     _annotate_transaction_rows,
     _build_transaction_aware_portfolio_series,
+    _distribution_payment_policy,
     _normalize_prices_to_100,
     _portfolio_period_metrics,
     _resolve_total_return_period,
@@ -631,6 +632,29 @@ class TotalReturnDashboardPeriodTest(unittest.TestCase):
 
 
 class PortfolioReturnSeriesTest(unittest.TestCase):
+    def test_payment_policy_separates_performance_date_from_cash_date(self):
+        position = (1, "AAA")
+        policy = _distribution_payment_policy(
+            [{
+                "ticker": "AAA",
+                "profile_id": 1,
+                "payment_date": "2026-04-10",
+                "ex_date": "2026-03-15",
+                "amount": 5.0,
+                "source": "generic_transactions",
+                "coverage_start_date": "2026-03-01",
+                "coverage_end_date": "2026-03-31",
+                "coverage_metadata_available": 1,
+            }],
+            {"start_date": "2026-03-01", "end_date": "2026-03-31"},
+        )
+
+        self.assertEqual(policy["coverage_by_position"][position], [("2026-03-01", "2026-03-31")])
+        self.assertEqual(policy["fully_covered_positions"], {position})
+        self.assertEqual(policy["totals_by_position"], {position: 5.0})
+        self.assertEqual(policy["cash_totals_by_position"], {})
+        self.assertEqual(policy["events"][0]["effective_date"], "2026-03-15")
+
     def test_current_position_scope_matches_account_and_ticker(self):
         transactions = [
             {"profile_id": 1, "ticker": "AAA", "transaction_type": "BUY"},
@@ -936,6 +960,111 @@ class PortfolioReturnSeriesTest(unittest.TestCase):
         self.assertEqual(metrics["price_return_pct"], -10.0)
         self.assertEqual(metrics["pricediv_return_pct"], 0.0)
         self.assertEqual(metrics["total_return_pct"], 0.0)
+
+    def test_broker_payment_after_final_market_session_lands_on_final_row(self):
+        dates = pd.to_datetime(["2026-07-02", "2026-07-03"])
+        close = pd.DataFrame({"AAA": [100.0, 100.0]}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        position = (1, "AAA")
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            [{
+                "ticker": "AAA", "market_symbol": "AAA", "position_key": position,
+                "transaction_type": "BUY", "transaction_date": "2026-07-02", "shares": 1,
+            }],
+            [{"ticker": "AAA", "market_symbol": "AAA", "position_key": position, "quantity": 1}],
+            actual_distribution_events=[{
+                "position_key": position,
+                "ticker": "AAA",
+                "payment_date": "2026-07-04",
+                "effective_date": "2026-07-04",
+                "amount": 5.0,
+            }],
+            actual_distribution_covered_positions={position},
+            actual_distribution_coverage={position: [("2026-07-04", "2026-07-04")]},
+        )
+
+        self.assertEqual(result["distribution_dollar"], 5.0)
+        self.assertEqual(result["distribution_dollar_series"], [0.0, 5.0])
+        self.assertEqual(result["total"][-1], 105.0)
+        self.assertEqual(_portfolio_period_metrics(result)["total_return_pct"], 5.0)
+
+    def test_partial_broker_coverage_uses_yahoo_outside_imported_span(self):
+        dates = pd.to_datetime(["2026-01-02", "2026-03-02", "2026-06-01"])
+        close = pd.DataFrame({"AAA": [100.0, 100.0, 100.0]}, index=dates)
+        adjusted = pd.DataFrame({"AAA": [100.0, 105.0, 112.0]}, index=dates)
+        dividends = pd.DataFrame({"AAA": [0.0, 5.0, 7.0]}, index=dates)
+        position = (1, "AAA")
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            adjusted,
+            dividends,
+            pd.DataFrame(0.0, index=dates, columns=close.columns),
+            [{
+                "ticker": "AAA", "market_symbol": "AAA", "position_key": position,
+                "transaction_type": "BUY", "transaction_date": "2026-01-02", "shares": 1,
+            }],
+            [{"ticker": "AAA", "market_symbol": "AAA", "position_key": position, "quantity": 1}],
+            actual_distribution_events=[{
+                "position_key": position,
+                "ticker": "AAA",
+                "payment_date": "2026-03-10",
+                "ex_date": "2026-03-02",
+                "effective_date": "2026-03-02",
+                "amount": 4.0,
+            }],
+            actual_distribution_covered_positions={position},
+            actual_distribution_coverage={position: [("2026-03-01", "2026-03-31")]},
+        )
+
+        self.assertEqual(result["distribution_dollar"], 11.0)
+        self.assertEqual(result["distribution_dollar_series"], [0.0, 4.0, 11.0])
+        self.assertAlmostEqual(result["total"][-1], 110.9333, places=4)
+
+    def test_ex_date_times_performance_before_a_later_purchase(self):
+        dates = pd.to_datetime([
+            "2026-01-02", "2026-01-03", "2026-01-06", "2026-01-07",
+        ])
+        close = pd.DataFrame({"AAA": [100.0] * 4}, index=dates)
+        zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+        position = (1, "AAA")
+
+        result = _build_transaction_aware_portfolio_series(
+            close,
+            close,
+            zeros,
+            zeros,
+            [
+                {
+                    "ticker": "AAA", "market_symbol": "AAA", "position_key": position,
+                    "transaction_type": "BUY", "transaction_date": "2026-01-02", "shares": 1,
+                },
+                {
+                    "ticker": "AAA", "market_symbol": "AAA", "position_key": position,
+                    "transaction_type": "BUY", "transaction_date": "2026-01-06", "shares": 1,
+                },
+            ],
+            [{"ticker": "AAA", "market_symbol": "AAA", "position_key": position, "quantity": 2}],
+            actual_distribution_events=[{
+                "position_key": position,
+                "ticker": "AAA",
+                "payment_date": "2026-01-07",
+                "ex_date": "2026-01-03",
+                "effective_date": "2026-01-03",
+                "amount": 10.0,
+            }],
+            actual_distribution_covered_positions={position},
+            actual_distribution_coverage={position: [("2026-01-03", "2026-01-03")]},
+        )
+
+        self.assertEqual(result["distribution_dollar"], 10.0)
+        self.assertEqual(result["distribution_dollar_series"], [0.0, 10.0, 10.0, 10.0])
+        self.assertEqual(_portfolio_period_metrics(result)["total_return_pct"], 10.0)
 
     def test_undated_fallback_holding_begins_on_import_date_not_first_quote(self):
         dates = pd.to_datetime(["2011-05-18", "2026-07-09", "2026-07-10"])

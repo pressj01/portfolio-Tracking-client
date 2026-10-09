@@ -2206,6 +2206,7 @@ export default function TotalReturn() {
                     <thead>
                       <tr>
                         <th style={{ textAlign: 'left' }}>Pay date</th>
+                        <th style={{ textAlign: 'left' }}>Performance date</th>
                         <th style={{ textAlign: 'right' }}>Amount</th>
                         <th style={{ textAlign: 'left' }}>Source</th>
                         <th style={{ textAlign: 'left' }}>Counted?</th>
@@ -2215,6 +2216,7 @@ export default function TotalReturn() {
                       {counted.map((p, i) => (
                         <tr key={`c${i}`}>
                           <td>{p.payment_date}</td>
+                          <td>{p.performance_date}{p.ex_date ? ' (ex-date)' : ''}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(p.amount)}</td>
                           <td style={{ color: 'var(--text-dim)' }}>{p.source || '—'}</td>
                           <td style={{ color: 'var(--pos)' }}>counted</td>
@@ -2222,12 +2224,14 @@ export default function TotalReturn() {
                       ))}
                       <tr style={{ borderTop: '2px solid var(--border)' }}>
                         <td><strong>Total shown on the row</strong></td>
+                        <td />
                         <td style={{ textAlign: 'right' }}><strong>{fmt(d.counted_total)}</strong></td>
                         <td colSpan={2} />
                       </tr>
                       {excluded.map((p, i) => (
                         <tr key={`x${i}`} style={{ opacity: 0.7 }}>
                           <td>{p.payment_date}</td>
+                          <td>{p.performance_date}{p.ex_date ? ' (ex-date)' : ''}</td>
                           <td style={{ textAlign: 'right' }}>{fmt(p.amount)}</td>
                           <td style={{ color: 'var(--text-dim)' }}>{p.source || '—'}</td>
                           <td style={{ color: 'var(--warn, #ffb86c)' }}>{p.excluded_reason}</td>

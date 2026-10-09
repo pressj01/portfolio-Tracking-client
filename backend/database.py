@@ -1335,12 +1335,35 @@ def ensure_tables_exist(conn=None):
             ticker          TEXT NOT NULL,
             profile_id      INTEGER NOT NULL DEFAULT 1,
             payment_date    TEXT NOT NULL,
+            ex_date         TEXT,
             amount          REAL NOT NULL,
             source          TEXT DEFAULT 'manual',
             notes           TEXT,
+            coverage_start_date TEXT,
+            coverage_end_date   TEXT,
             created_at      TEXT DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (ticker, profile_id, payment_date)
         )
+    """)
+    _dividend_payment_cols = {
+        row[1] for row in cur.execute("PRAGMA table_info(dividend_payments)").fetchall()
+    }
+    for column in ("ex_date", "coverage_start_date", "coverage_end_date"):
+        if column not in _dividend_payment_cols:
+            cur.execute(f"ALTER TABLE dividend_payments ADD COLUMN {column} TEXT")
+
+    # Older payment rows did not say what part of the broker history had been
+    # imported. Backfill the only coverage each row proves: its own event date.
+    # New imports attach their actual statement/file span below, but inferring a
+    # continuous span between legacy payments could hide Yahoo events in a gap
+    # between two partial imports.
+    cur.execute("""
+        UPDATE dividend_payments
+           SET coverage_start_date = COALESCE(coverage_start_date, payment_date),
+               coverage_end_date = COALESCE(coverage_end_date, payment_date)
+         WHERE (coverage_start_date IS NULL OR coverage_end_date IS NULL)
+           AND LOWER(COALESCE(source, '')) NOT IN
+               ('refresh_estimate', 'projection', 'estimate', 'estimated')
     """)
     cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_div_payments_ticker_profile

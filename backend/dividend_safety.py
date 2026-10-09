@@ -351,7 +351,9 @@ def _cache_get(conn, ticker, refresh=False):
         as_of = _dt.datetime.fromisoformat(row["as_of"])
     except Exception:
         return None
-    age = _dt.datetime.utcnow() - as_of
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=_dt.timezone.utc)
+    age = _dt.datetime.now(_dt.timezone.utc) - as_of.astimezone(_dt.timezone.utc)
     if age.total_seconds() > SAFETY_CACHE_TTL_HOURS * 3600:
         return None
     payload = _safe_json_loads(row["payload"])
@@ -370,7 +372,11 @@ def _cache_set(conn, ticker, payload):
             as_of = excluded.as_of,
             payload = excluded.payload
         """,
-        (ticker, _dt.datetime.utcnow().isoformat(timespec="seconds"), json.dumps(payload)),
+        (
+            ticker,
+            _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            json.dumps(payload),
+        ),
     )
 
 

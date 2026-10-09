@@ -1535,16 +1535,100 @@ _NON_ACTUAL_DISTRIBUTION_SOURCES = {
 }
 
 
+def _distribution_payment_metadata_select(conn, alias=""):
+    """SQL projection for optional payment-performance metadata.
+
+    Tests and read-only databases can predate these columns.  The explicit
+    legacy flag lets the policy preserve their former whole-ledger behavior,
+    while initialized databases use the coverage dates backfilled by the
+    migration in ``database.ensure_tables_exist``.
+    """
+    columns = _table_columns(conn, "dividend_payments")
+    prefix = f"{alias}." if alias else ""
+
+    def expression(column):
+        return (
+            f"{prefix}{column} AS {column}"
+            if column in columns
+            else f"NULL AS {column}"
+        )
+
+    coverage_available = int({"coverage_start_date", "coverage_end_date"} <= columns)
+    return ", ".join([
+        expression("ex_date"),
+        expression("coverage_start_date"),
+        expression("coverage_end_date"),
+        f"{coverage_available} AS coverage_metadata_available",
+    ])
+
+
+def _merge_distribution_coverage_spans(spans):
+    """Merge inclusive ISO-date spans; ``None`` is an unbounded endpoint."""
+    normalized = []
+    for start, end in spans or []:
+        start_date = _portfolio_event_date(start) if start else None
+        end_date = _portfolio_event_date(end) if end else None
+        if start_date and end_date and end_date < start_date:
+            start_date, end_date = end_date, start_date
+        normalized.append((start_date, end_date))
+    if not normalized:
+        return []
+    normalized.sort(key=lambda span: span[0] or datetime.date.min)
+    merged = []
+    for start, end in normalized:
+        if not merged:
+            merged.append([start, end])
+            continue
+        previous_start, previous_end = merged[-1]
+        contiguous = (
+            previous_end is None
+            or start is None
+            or start <= previous_end + datetime.timedelta(days=1)
+        )
+        if not contiguous:
+            merged.append([start, end])
+            continue
+        if previous_end is None or end is None:
+            merged[-1][1] = None
+        elif end > previous_end:
+            merged[-1][1] = end
+    return [
+        (
+            start.isoformat() if start else None,
+            end.isoformat() if end else None,
+        )
+        for start, end in merged
+    ]
+
+
+def _distribution_coverage_contains_window(spans, start, end):
+    """Whether merged inclusive spans cover the complete requested window."""
+    window_start = _portfolio_event_date(start) if start else None
+    window_end = _portfolio_event_date(end) if end else None
+    for span_start, span_end in _merge_distribution_coverage_spans(spans):
+        parsed_start = _portfolio_event_date(span_start) if span_start else None
+        parsed_end = _portfolio_event_date(span_end) if span_end else None
+        starts_early_enough = parsed_start is None or (
+            window_start is not None and parsed_start <= window_start
+        )
+        ends_late_enough = parsed_end is None or (
+            window_end is not None and parsed_end >= window_end
+        )
+        if starts_early_enough and ends_late_enough:
+            return True
+    return False
+
+
 def _distribution_payment_policy(payment_rows, period_range, allowed_tickers=None):
     """Normalize actual broker distributions for the shared tracker engine.
 
     Coverage is keyed by ``(profile_id, accounting_ticker)``. An account with
     actual payment history must not make another account holding the same
     ticker look covered, and refresh-generated estimates must never displace
-    market-history fallback. Coverage is intentionally established from the
-    whole ledger while events are restricted to the requested period: once an
-    account-position has an actual ledger, a quiet period correctly reports
-    zero instead of inventing a market payment.
+    market-history fallback. Coverage is date-bounded: actual cash replaces
+    Yahoo only inside periods a broker import says it covers, while Yahoo keeps
+    filling the rest of a partial history. Performance events use ex-date when
+    known and payment date otherwise; cash totals remain payment-date based.
     """
     allowed = (
         {
@@ -1558,8 +1642,10 @@ def _distribution_payment_policy(payment_rows, period_range, allowed_tickers=Non
     start_date = (period_range or {}).get("start_date")
     end_date = (period_range or {}).get("end_date")
     covered_positions = set()
+    coverage_by_position = {}
     events = []
     totals_by_position = {}
+    cash_totals_by_position = {}
     sources = set()
 
     for raw_row in payment_rows or []:
@@ -1574,11 +1660,27 @@ def _distribution_payment_policy(payment_rows, period_range, allowed_tickers=Non
         covered_positions.add(position_key)
 
         payment_date = str(row.get("payment_date") or "")[:10]
-        if not payment_date:
-            continue
-        if start_date and payment_date < start_date:
-            continue
-        if end_date and payment_date > end_date:
+        ex_date = str(row.get("ex_date") or "")[:10]
+        effective_date = ex_date or payment_date
+        coverage_start = str(row.get("coverage_start_date") or "")[:10] or None
+        coverage_end = str(row.get("coverage_end_date") or "")[:10] or None
+        if not row.get("coverage_metadata_available"):
+            # Old read-only schemas cannot carry completeness metadata. Keep
+            # their established behavior; initialized databases are migrated
+            # to explicit, conservative spans before this function is called.
+            coverage_start = coverage_end = None
+        elif not coverage_start or not coverage_end:
+            # A lone/manual payment proves that event, not the position's whole
+            # history. This point span also prevents double-counting its market
+            # distribution while leaving every other date on Yahoo fallback.
+            coverage_start = coverage_end = effective_date or payment_date
+        coverage_by_position.setdefault(position_key, []).append(
+            (coverage_start, coverage_end)
+        )
+
+        if source:
+            sources.add(source)
+        if not payment_date or not effective_date:
             continue
         try:
             amount = float(row.get("amount") or 0)
@@ -1586,22 +1688,45 @@ def _distribution_payment_policy(payment_rows, period_range, allowed_tickers=Non
             continue
         if not math.isfinite(amount):
             continue
+
+        if (
+            (not start_date or payment_date >= start_date)
+            and (not end_date or payment_date <= end_date)
+        ):
+            cash_totals_by_position[position_key] = (
+                cash_totals_by_position.get(position_key, 0.0) + amount
+            )
+        if start_date and effective_date < start_date:
+            continue
+        if end_date and effective_date > end_date:
+            continue
         events.append({
             "position_key": position_key,
             "ticker": ticker,
             "payment_date": payment_date,
+            "ex_date": ex_date or None,
+            "effective_date": effective_date,
             "amount": amount,
         })
         totals_by_position[position_key] = (
             totals_by_position.get(position_key, 0.0) + amount
         )
-        if source:
-            sources.add(source)
+    coverage_by_position = {
+        position: _merge_distribution_coverage_spans(spans)
+        for position, spans in coverage_by_position.items()
+    }
+    fully_covered_positions = {
+        position for position, spans in coverage_by_position.items()
+        if _distribution_coverage_contains_window(spans, start_date, end_date)
+    }
 
     return {
         "covered_positions": covered_positions,
+        "fully_covered_positions": fully_covered_positions,
+        "coverage_by_position": coverage_by_position,
         "events": events,
         "totals_by_position": totals_by_position,
+        "cash_totals_by_position": cash_totals_by_position,
         "sources": sorted(sources),
     }
 
@@ -1623,18 +1748,28 @@ def _tracker_position_keys(transactions, holdings):
     return {key for key in keys if key[1]}
 
 
-def _distribution_source_label(covered_positions, transactions, holdings):
+def _distribution_source_label(
+    covered_positions,
+    transactions,
+    holdings,
+    fully_covered_positions=None,
+):
     """Describe the actual/market mix for one tracker scope."""
     positions = _tracker_position_keys(transactions, holdings)
     covered = positions & set(covered_positions or [])
     if not covered:
         return "Yahoo market history"
-    uncovered_count = len(positions - covered)
+    complete = (
+        set(fully_covered_positions)
+        if fully_covered_positions is not None
+        else covered
+    )
+    uncovered_count = len(positions - complete)
     if not uncovered_count:
         return "Broker payment history"
     return (
         "Broker payment history with Yahoo market history for "
-        f"{uncovered_count} uncovered account-position"
+        f"{uncovered_count} partially covered or uncovered account-position"
         f"{'' if uncovered_count == 1 else 's'}"
     )
 
@@ -1649,6 +1784,7 @@ def _build_transaction_aware_portfolio_series(
     stock_splits=None,
     actual_distribution_events=None,
     actual_distribution_covered_positions=None,
+    actual_distribution_coverage=None,
 ):
     """Build cash-flow-adjusted portfolio return indexes.
 
@@ -1706,9 +1842,22 @@ def _build_transaction_aware_portfolio_series(
         raw_transactions,
         current_holdings,
     )
-    covered_distribution_positions = (
-        set(actual_distribution_covered_positions or []) & included_position_keys
-    )
+    distribution_coverage_by_position = {}
+    for raw_position, spans in (actual_distribution_coverage or {}).items():
+        position = tuple(raw_position) if isinstance(raw_position, list) else raw_position
+        if position not in included_position_keys:
+            continue
+        distribution_coverage_by_position[position] = (
+            _merge_distribution_coverage_spans(spans)
+        )
+    # Backward-compatible callers supplied only a set, which meant complete
+    # coverage for the whole window. New database-backed callers always pass
+    # explicit spans so a partial import cannot silence Yahoo for every date.
+    for position in set(actual_distribution_covered_positions or []):
+        position = tuple(position) if isinstance(position, list) else position
+        if position in included_position_keys:
+            distribution_coverage_by_position.setdefault(position, [(None, None)])
+    covered_distribution_positions = set(distribution_coverage_by_position)
     transactions = _transactions_aligned_to_current_lots(
         raw_transactions, current_holdings,
     )
@@ -2156,33 +2305,103 @@ def _build_transaction_aware_portfolio_series(
     adjusted_matrix = adjusted.to_numpy(dtype=float)
     distribution_matrix = distributions.to_numpy(dtype=float)
     event_index = 0
+    position_market_symbols = {}
+    for row in [*raw_transactions, *(current_holdings or [])]:
+        if not isinstance(row, dict):
+            continue
+        position_key = row.get("position_key")
+        if isinstance(position_key, list):
+            position_key = tuple(position_key)
+        if position_key not in included_position_keys:
+            continue
+        symbol = str(row.get("market_symbol") or row.get("ticker") or "").strip().upper()
+        if symbol:
+            position_market_symbols[position_key] = symbol
+
+    coverage_dates_by_position = {
+        position: [
+            (
+                _portfolio_event_date(start) if start else None,
+                _portfolio_event_date(end) if end else None,
+            )
+            for start, end in spans
+        ]
+        for position, spans in distribution_coverage_by_position.items()
+    }
     actual_distributions_by_row = {}
+    actual_replacement_rows = {}
+    matched_market_rows = {}
     for raw_event in actual_distribution_events or []:
         if not isinstance(raw_event, dict):
             continue
         position_key = raw_event.get("position_key")
         if isinstance(position_key, list):
             position_key = tuple(position_key)
-        if position_key not in covered_distribution_positions:
+        if position_key not in included_position_keys:
             continue
         payment_date = _portfolio_event_date(raw_event.get("payment_date"))
+        ex_date = _portfolio_event_date(raw_event.get("ex_date"))
+        effective_date = _portfolio_event_date(
+            raw_event.get("effective_date") or ex_date or payment_date
+        )
         try:
             amount = float(raw_event.get("amount") or 0)
         except (TypeError, ValueError):
             continue
-        if payment_date is None or not math.isfinite(amount):
+        if effective_date is None or not math.isfinite(amount):
             continue
-        payment_timestamp = pd.Timestamp(payment_date)
+        payment_timestamp = pd.Timestamp(effective_date)
         if prices.index.tz is not None:
             payment_timestamp = payment_timestamp.tz_localize(prices.index.tz)
         market_row = int(prices.index.searchsorted(payment_timestamp, side="left"))
         if market_row >= len(prices.index):
-            continue
+            # Broker ledgers can post cash on a weekend/holiday after the final
+            # quote in the requested window. The final market observation is
+            # the only row that can represent that in-period cash event.
+            market_row = len(prices.index) - 1
         actual_distributions_by_row[market_row] = (
             actual_distributions_by_row.get(market_row, 0.0) + amount
         )
+        actual_replacement_rows.setdefault(position_key, set()).add(market_row)
 
-    use_resolved_distributions = bool(covered_distribution_positions)
+        # A legacy broker row without ex-date still needs to replace (not add
+        # to) its corresponding Yahoo distribution. Match the most recent
+        # unmatched market event before payment, but keep the actual cash timed
+        # on payment date until an explicit ex-date is available.
+        if ex_date is None and payment_date is not None:
+            symbol_index = symbol_indexes.get(position_market_symbols.get(position_key))
+            if symbol_index is not None:
+                earliest = payment_date - datetime.timedelta(days=120)
+                already_matched = matched_market_rows.setdefault(position_key, set())
+                candidates = []
+                for candidate_index, candidate_timestamp in enumerate(prices.index):
+                    candidate_day = candidate_timestamp.date()
+                    if candidate_day < earliest or candidate_day > payment_date:
+                        continue
+                    market_distribution = distribution_matrix[candidate_index][symbol_index]
+                    if (
+                        candidate_index not in already_matched
+                        and np.isfinite(market_distribution)
+                        and abs(float(market_distribution)) > 1e-12
+                    ):
+                        candidates.append(candidate_index)
+                if candidates:
+                    matched_row = candidates[-1]
+                    already_matched.add(matched_row)
+                    actual_replacement_rows.setdefault(position_key, set()).add(matched_row)
+
+    use_resolved_distributions = bool(
+        covered_distribution_positions or actual_distributions_by_row
+    )
+
+    def position_uses_actual_history(position_key, row_index):
+        if row_index in actual_replacement_rows.get(position_key, set()):
+            return True
+        day = prices.index[row_index].date()
+        return any(
+            (start is None or day >= start) and (end is None or day <= end)
+            for start, end in coverage_dates_by_position.get(position_key, [])
+        )
 
     def apply_events_through(day):
         nonlocal event_index
@@ -2292,7 +2511,7 @@ def _build_transaction_aware_portfolio_series(
                 ):
                     continue
                 position_start = position_quantity * previous_price
-                if position_key in covered_distribution_positions:
+                if position_uses_actual_history(position_key, row_index):
                     end_total_value += position_quantity * current_price
                     continue
                 market_distribution = distribution_matrix[row_index][symbol_index]
@@ -6944,6 +7163,7 @@ def _import_transactions_multi(parsed, nav_date=None, account_map=None):
         single = {
             "transactions": account.get("transactions") or [],
             "account_activity": account.get("account_activity") or [],
+            "distribution_coverage": account.get("distribution_coverage"),
             "summary": dict(account.get("summary") or {}),
             "source_format": source_format,
         }
@@ -10202,6 +10422,17 @@ def _parse_portfolio_export_workbook(path, filename=None):
                         "ticker": ticker,
                         "type": "DIVIDEND",
                         "date": transaction_date,
+                        "ex_date": _combined_export_clean_date(
+                            row.get(colmap.get("ex date")) if colmap.get("ex date") else None
+                        ) or None,
+                        "coverage_start_date": _combined_export_clean_date(
+                            row.get(colmap.get("coverage start"))
+                            if colmap.get("coverage start") else None
+                        ) or None,
+                        "coverage_end_date": _combined_export_clean_date(
+                            row.get(colmap.get("coverage end"))
+                            if colmap.get("coverage end") else None
+                        ) or None,
                         "sort_order": None,
                         "shares": None,
                         "price_per_share": None,
@@ -10409,6 +10640,19 @@ def _import_portfolio_export_workbook(
         workbook_txns = parsed.get("transactions", []) if want_transactions else []
         non_div_txns = [txn for txn in workbook_txns if txn.get("type") != "DIVIDEND"]
         div_txns = [txn for txn in workbook_txns if txn.get("type") == "DIVIDEND"]
+        import_rows_by_profile = {}
+        for txn in workbook_txns:
+            profile_key = str(txn.get("profile") or "").strip().lower()
+            target_profile_id = profile_by_name.get(
+                profile_key, transaction_profile_fallback,
+            )
+            import_rows_by_profile.setdefault(target_profile_id, []).append(txn)
+        import_coverage_by_profile = {
+            target_profile_id: _distribution_import_coverage(
+                parsed, transactions=profile_rows,
+            )
+            for target_profile_id, profile_rows in import_rows_by_profile.items()
+        }
 
         for txn in div_txns:
             profile_key = str(txn.get("profile") or "").strip().lower()
@@ -10419,6 +10663,14 @@ def _import_portfolio_export_workbook(
             if not ticker or not date_str or amount is None:
                 continue
             notes = txn.get("notes") or "Imported from portfolio export"
+            fallback_start, fallback_end = import_coverage_by_profile.get(
+                profile_id, (None, None),
+            )
+            coverage_start = txn.get("coverage_start_date") or fallback_start
+            coverage_end = txn.get("coverage_end_date") or fallback_end
+            ex_date = _resolve_imported_dividend_ex_date(
+                conn, ticker, profile_id, date_str, txn.get("ex_date"),
+            )
             div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             existing = conn.execute(
                 "SELECT id, source, amount FROM dividend_payments "
@@ -10437,14 +10689,28 @@ def _import_portfolio_export_workbook(
                     dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
                 else:
                     duplicates_skipped += 1
+                _update_dividend_payment_metadata(
+                    conn,
+                    existing["id"],
+                    ex_date=ex_date,
+                    coverage_start_date=coverage_start,
+                    coverage_end_date=coverage_end,
+                )
                 _prune_superseded_refresh_estimates(
                     conn, ticker, profile_id, date_str, div_freq
                 )
                 continue
-            conn.execute(
+            payment_id = conn.execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (ticker, profile_id, date_str, round(amount, 2), "portfolio_export", notes),
+            ).lastrowid
+            _update_dividend_payment_metadata(
+                conn,
+                payment_id,
+                ex_date=ex_date,
+                coverage_start_date=coverage_start,
+                coverage_end_date=coverage_end,
             )
             dividends_applied += 1
             dividend_tickers_by_profile.setdefault(profile_id, set()).add(ticker)
@@ -11244,6 +11510,115 @@ def _merge_dividend_import_notes(*parts):
         if text and text not in merged:
             merged.append(text)
     return "; ".join(merged)
+
+
+def _distribution_import_coverage(parsed, transactions=None):
+    """Return the conservative date span represented by one activity import."""
+    explicit = (parsed or {}).get("distribution_coverage") or {}
+    explicit_start = str(explicit.get("start_date") or "")[:10]
+    explicit_end = str(explicit.get("end_date") or "")[:10]
+    if _portfolio_event_date(explicit_start) and _portfolio_event_date(explicit_end):
+        return tuple(sorted((explicit_start, explicit_end)))
+
+    rows = list(transactions if transactions is not None else (parsed or {}).get("transactions") or [])
+    rows.extend((parsed or {}).get("account_activity") or [])
+    dates = sorted({
+        date.isoformat()
+        for row in rows
+        if (date := _portfolio_event_date(row.get("date"))) is not None
+    })
+    return (dates[0], dates[-1]) if dates else (None, None)
+
+
+def _update_dividend_payment_metadata(
+    conn,
+    payment_id,
+    *,
+    ex_date=None,
+    coverage_start_date=None,
+    coverage_end_date=None,
+    replace_coverage=False,
+):
+    """Merge optional timing/completeness metadata into one payment row."""
+    columns = _table_columns(conn, "dividend_payments")
+    available = {
+        name for name in ("ex_date", "coverage_start_date", "coverage_end_date")
+        if name in columns
+    }
+    if not available:
+        return
+    selected = ", ".join(sorted(available))
+    existing = conn.execute(
+        f"SELECT {selected} FROM dividend_payments WHERE id = ?",
+        (payment_id,),
+    ).fetchone()
+    if not existing:
+        return
+    existing = dict(existing)
+    updates = {}
+    parsed_ex_date = _portfolio_event_date(ex_date)
+    if parsed_ex_date is not None and "ex_date" in available:
+        updates["ex_date"] = parsed_ex_date.isoformat()
+
+    incoming_start = _portfolio_event_date(coverage_start_date)
+    incoming_end = _portfolio_event_date(coverage_end_date)
+    if incoming_start and incoming_end and incoming_end < incoming_start:
+        incoming_start, incoming_end = incoming_end, incoming_start
+    if "coverage_start_date" in available and "coverage_end_date" in available:
+        old_start = _portfolio_event_date(existing.get("coverage_start_date"))
+        old_end = _portfolio_event_date(existing.get("coverage_end_date"))
+        if replace_coverage:
+            merged_start, merged_end = incoming_start, incoming_end
+        else:
+            merged_start = min(
+                (date for date in (old_start, incoming_start) if date is not None),
+                default=None,
+            )
+            merged_end = max(
+                (date for date in (old_end, incoming_end) if date is not None),
+                default=None,
+            )
+        if merged_start is not None and merged_end is not None:
+            updates["coverage_start_date"] = merged_start.isoformat()
+            updates["coverage_end_date"] = merged_end.isoformat()
+    if not updates:
+        return
+    conn.execute(
+        "UPDATE dividend_payments SET "
+        + ", ".join(f"{column} = ?" for column in updates)
+        + " WHERE id = ?",
+        [*updates.values(), payment_id],
+    )
+
+
+def _resolve_imported_dividend_ex_date(conn, ticker, profile_id, payment_date, explicit=None):
+    """Use an imported ex-date, then an exact saved schedule match."""
+    parsed = _portfolio_event_date(explicit)
+    if parsed is not None:
+        return parsed.isoformat()
+    try:
+        row = conn.execute(
+            "SELECT ex_div_date FROM dividend_schedule_history "
+            "WHERE UPPER(ticker) = UPPER(?) AND profile_id = ? AND pay_date = ? "
+            "ORDER BY ex_div_date DESC LIMIT 1",
+            (ticker, profile_id, payment_date),
+        ).fetchone()
+        if row and _portfolio_event_date(row[0]):
+            return _portfolio_event_date(row[0]).isoformat()
+    except sqlite3.OperationalError:
+        pass
+    try:
+        row = conn.execute(
+            "SELECT ex_div_date FROM all_account_info "
+            "WHERE UPPER(ticker) = UPPER(?) AND profile_id = ? AND div_pay_date = ? "
+            "AND ex_div_date IS NOT NULL LIMIT 1",
+            (ticker, profile_id, payment_date),
+        ).fetchone()
+        if row and _portfolio_event_date(row[0]):
+            return _portfolio_event_date(row[0]).isoformat()
+    except sqlite3.OperationalError:
+        pass
+    return None
 
 
 def _prune_superseded_refresh_estimates(conn, ticker, profile_id, pay_date, frequency):
@@ -12055,7 +12430,10 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
     # Pre-aggregate dividends by (ticker, date) so multiple distribution types
     # on the same day (Cash Div + Non-Qual Div, etc.) become a single row.
     from collections import defaultdict
-    div_agg = defaultdict(lambda: {"amount": 0.0, "notes_parts": []})
+    import_coverage_start, import_coverage_end = _distribution_import_coverage(parsed)
+    div_agg = defaultdict(
+        lambda: {"amount": 0.0, "notes_parts": [], "ex_dates": set()}
+    )
     non_div_txns = []
     for txn in parsed["transactions"]:
         if txn["type"] == "DIVIDEND":
@@ -12063,12 +12441,22 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             div_agg[key]["amount"] += txn["dividend_amount"] or 0
             if txn.get("notes"):
                 div_agg[key]["notes_parts"].append(txn["notes"])
+            if _portfolio_event_date(txn.get("ex_date")):
+                div_agg[key]["ex_dates"].add(
+                    _portfolio_event_date(txn.get("ex_date")).isoformat()
+                )
         else:
             non_div_txns.append(txn)
 
     try:
         # Insert aggregated dividends
         for (ticker, date_str), info in div_agg.items():
+            explicit_ex_date = (
+                next(iter(info["ex_dates"])) if len(info["ex_dates"]) == 1 else None
+            )
+            ex_date = _resolve_imported_dividend_ex_date(
+                conn, ticker, profile_id, date_str, explicit_ex_date,
+            )
             div_freq = _ticker_div_frequency(conn, ticker, profile_id)
             dup = conn.execute(
                 "SELECT id, source, amount, notes FROM dividend_payments "
@@ -12102,6 +12490,13 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                     tickers_with_divs.add(ticker)
                 else:
                     duplicates_skipped += 1
+                _update_dividend_payment_metadata(
+                    conn,
+                    dup["id"],
+                    ex_date=ex_date,
+                    coverage_start_date=import_coverage_start,
+                    coverage_end_date=import_coverage_end,
+                )
                 _prune_superseded_refresh_estimates(
                     conn, ticker, profile_id, date_str, div_freq
                 )
@@ -12120,10 +12515,17 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                 continue
 
             notes = "; ".join(dict.fromkeys(info["notes_parts"]))  # dedupe note parts
-            conn.execute(
+            payment_id = conn.execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (ticker, profile_id, date_str, round(info["amount"], 2), fmt, notes),
+            ).lastrowid
+            _update_dividend_payment_metadata(
+                conn,
+                payment_id,
+                ex_date=ex_date,
+                coverage_start_date=import_coverage_start,
+                coverage_end_date=import_coverage_end,
             )
             dividends_applied += 1
             tickers_with_divs.add(ticker)
@@ -23835,9 +24237,11 @@ def _dividend_transaction_events(conn, profile_ids, ticker=None):
     placeholders = ",".join("?" * len(ids))
     columns = _table_columns(conn, "dividend_payments")
     created_at_expr = "created_at" if "created_at" in columns else "NULL"
+    payment_metadata_sql = _distribution_payment_metadata_select(conn)
     query = (
         "SELECT id, ticker, profile_id, payment_date, amount, source, notes, "
-        f"{created_at_expr} AS created_at FROM dividend_payments "
+        f"{created_at_expr} AS created_at, {payment_metadata_sql} "
+        "FROM dividend_payments "
         f"WHERE profile_id IN ({placeholders}) "
         "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'"
     )
@@ -23852,7 +24256,8 @@ def _dividend_transaction_events(conn, profile_ids, ticker=None):
         item = dict(row) if hasattr(row, "keys") else {
             "id": row[0], "ticker": row[1], "profile_id": row[2],
             "payment_date": row[3], "amount": row[4], "source": row[5],
-            "notes": row[6], "created_at": row[7],
+            "notes": row[6], "created_at": row[7], "ex_date": row[8],
+            "coverage_start_date": row[9], "coverage_end_date": row[10],
         }
         payment_id = item.get("id")
         events.append({
@@ -23863,6 +24268,7 @@ def _dividend_transaction_events(conn, profile_ids, ticker=None):
             "profile_id": item.get("profile_id"),
             "transaction_type": "DIVIDEND",
             "transaction_date": item.get("payment_date"),
+            "ex_date": item.get("ex_date"),
             "shares": None,
             "price_per_share": None,
             "fees": None,
@@ -24068,11 +24474,15 @@ def mutate_dividend_payment(ticker, payment_id=None):
             return jsonify({"error": "Cash amount must be a finite, non-negative number"}), 400
         if data.get("notes") is not None and not isinstance(data["notes"], str):
             return jsonify({"error": "Notes must be text"}), 400
+        ex_date = data.get("ex_date") or None
+        ex_date_error = _transaction_date_error(ex_date) if ex_date else None
+        if ex_date_error:
+            return jsonify({"error": f"Ex-dividend date: {ex_date_error}"}), 400
     conn = get_connection()
     try:
         if payment_id is not None:
             existing = conn.execute(
-                "SELECT id FROM dividend_payments WHERE id = ? AND ticker = ? AND profile_id = ? "
+                "SELECT id, source FROM dividend_payments WHERE id = ? AND ticker = ? AND profile_id = ? "
                 "AND LOWER(COALESCE(source, '')) != 'refresh_estimate'",
                 (payment_id, ticker, profile_id),
             ).fetchone()
@@ -24089,12 +24499,43 @@ def mutate_dividend_payment(ticker, payment_id=None):
                 "UPDATE dividend_payments SET payment_date = ?, amount = ?, notes = ? WHERE id = ?",
                 (payment_date, amount, data.get("notes"), payment_id),
             )
+            if "ex_date" in _table_columns(conn, "dividend_payments"):
+                conn.execute(
+                    "UPDATE dividend_payments SET ex_date = ? WHERE id = ?",
+                    (ex_date, payment_id),
+                )
+            effective_date = ex_date or payment_date
+            _update_dividend_payment_metadata(
+                conn,
+                payment_id,
+                ex_date=ex_date,
+                coverage_start_date=(
+                    effective_date
+                    if str(existing["source"] or "").lower() == "manual"
+                    else None
+                ),
+                coverage_end_date=(
+                    effective_date
+                    if str(existing["source"] or "").lower() == "manual"
+                    else None
+                ),
+                replace_coverage=(str(existing["source"] or "").lower() == "manual"),
+            )
         else:
             payment_id = conn.execute(
                 "INSERT INTO dividend_payments (ticker, profile_id, payment_date, amount, source, notes) "
                 "VALUES (?, ?, ?, ?, 'manual', ?)",
                 (ticker, profile_id, payment_date, amount, data.get("notes")),
             ).lastrowid
+            effective_date = ex_date or payment_date
+            _update_dividend_payment_metadata(
+                conn,
+                payment_id,
+                ex_date=ex_date,
+                coverage_start_date=effective_date,
+                coverage_end_date=effective_date,
+                replace_coverage=True,
+            )
         _refresh_edited_dividend_totals(conn, ticker, profile_id)
         conn.commit()
     except sqlite3.IntegrityError:
@@ -25623,7 +26064,8 @@ def export_holdings_csv():
 
 _TRANSACTION_EXPORT_HEADERS = [
     "Transaction ID", "Profile", "Ticker", "Type", "Date", "Same-day Order", "Shares",
-    "Price/Share", "Fees", "Realized Gain", "Dividend Amount", "Notes", "Created At",
+    "Price/Share", "Fees", "Realized Gain", "Dividend Amount", "Ex Date",
+    "Coverage Start", "Coverage End", "Notes", "Created At",
 ]
 
 
@@ -25685,13 +26127,18 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
             "Fees": row["fees"] if row["fees"] is not None else "",
             "Realized Gain": row["realized_gain"] if row["realized_gain"] is not None else "",
             "Dividend Amount": "",
+            "Ex Date": "",
+            "Coverage Start": "",
+            "Coverage End": "",
             "Notes": notes,
             "Created At": row["created_at"] or "",
         })
+    payment_metadata_sql = _distribution_payment_metadata_select(conn, "d")
     div_rows = conn.execute(
         f"""
         SELECT d.id, d.profile_id, p.name AS profile_name, d.ticker,
-               d.payment_date, d.amount, d.source, d.notes, d.created_at
+               d.payment_date, d.amount, d.source, d.notes, d.created_at,
+               {payment_metadata_sql}
           FROM dividend_payments d
           LEFT JOIN profiles p ON p.id = d.profile_id
          WHERE d.profile_id IN ({pid_placeholders})
@@ -25717,6 +26164,9 @@ def _read_transaction_export_rows(conn, is_agg, profile_ids):
             "Fees": "",
             "Realized Gain": "",
             "Dividend Amount": row["amount"] if row["amount"] is not None else "",
+            "Ex Date": row["ex_date"] or "",
+            "Coverage Start": row["coverage_start_date"] or "",
+            "Coverage End": row["coverage_end_date"] or "",
             "Notes": notes,
             "Created At": row["created_at"] or "",
         })
@@ -25852,7 +26302,8 @@ def export_holdings_transactions():
     widths = {
         "Transaction ID": 16, "Profile": 22, "Ticker": 12, "Type": 12,
         "Date": 14, "Shares": 12, "Price/Share": 14, "Fees": 12,
-        "Realized Gain": 16, "Notes": 48, "Created At": 22,
+        "Realized Gain": 16, "Ex Date": 14, "Coverage Start": 16,
+        "Coverage End": 16, "Notes": 48, "Created At": 22,
     }
     for i, header in enumerate(_TRANSACTION_EXPORT_HEADERS, 1):
         tx_ws.column_dimensions[get_column_letter(i)].width = widths.get(header, 16)
@@ -35868,8 +36319,10 @@ def total_return_distributions(ticker):
             ).fetchall()
             if _accounting_symbol_for_ticker(row["ticker"]) == ticker
         } if open_view else set()
+        payment_metadata_sql = _distribution_payment_metadata_select(conn, "d")
         rows = conn.execute(
-            f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id
+            f"""SELECT d.payment_date, d.amount, d.source, d.notes, d.profile_id,
+                       {payment_metadata_sql}
                 FROM dividend_payments d
                 WHERE d.profile_id IN ({placeholders})
                   AND UPPER(d.ticker) = ?
@@ -35885,15 +36338,17 @@ def total_return_distributions(ticker):
     for raw in rows:
         row = dict(raw)
         day = str(row.get("payment_date") or "")[:10]
+        ex_date = str(row.get("ex_date") or "")[:10] or None
+        performance_day = ex_date or day
         source = str(row.get("source") or "").strip()
         try:
             amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             amount = 0.0
-        if start_date and day < start_date:
-            reason = f"paid before {start_date}"
-        elif end_date and day > end_date:
-            reason = f"paid after {end_date}"
+        if start_date and performance_day < start_date:
+            reason = f"performance date before {start_date}"
+        elif end_date and performance_day > end_date:
+            reason = f"performance date after {end_date}"
         elif source.lower() in non_actual:
             reason = f"estimated payment ({source}), not a recorded one"
         elif open_view and int(row.get("profile_id") or 0) not in holding_profile_ids:
@@ -35907,6 +36362,8 @@ def total_return_distributions(ticker):
             excluded_total += amount
         payments.append({
             "payment_date": day,
+            "ex_date": ex_date,
+            "performance_date": performance_day,
             "amount": round(amount, 4),
             "source": source,
             "account": names.get(int(row.get("profile_id") or 0)),
@@ -36037,8 +36494,10 @@ def total_return_charts():
     ).fetchall()
     payment_profile_ids = _dividend_payment_profile_ids_for_read(conn, profile_ids)
     payment_placeholders = ",".join("?" * len(payment_profile_ids))
+    payment_metadata_sql = _distribution_payment_metadata_select(conn)
     payment_rows = conn.execute(
-        f"""SELECT ticker, profile_id, payment_date, amount, source
+        f"""SELECT ticker, profile_id, payment_date, amount, source,
+                   {payment_metadata_sql}
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
               AND payment_date IS NOT NULL""",
@@ -36110,6 +36569,8 @@ def total_return_charts():
         allowed_tickers=(allowed_accounting_tickers if filter_is_active else None),
     )
     payment_covered_positions = payment_policy["covered_positions"]
+    payment_fully_covered_positions = payment_policy["fully_covered_positions"]
+    payment_coverage = payment_policy["coverage_by_position"]
     payment_events = payment_policy["events"]
     period_payment_totals = payment_policy["totals_by_position"]
     payment_sources = set(payment_policy["sources"])
@@ -36248,6 +36709,7 @@ def total_return_charts():
                 ),
                 actual_distribution_events=payment_events,
                 actual_distribution_covered_positions=payment_covered_positions,
+                actual_distribution_coverage=payment_coverage,
             )
             ticker_result_cache[cache_key] = result
             return result
@@ -36256,30 +36718,23 @@ def total_return_charts():
             """Period cash for some of one ticker's positions.
 
             Returns (dollars, used broker history, used the Yahoo fallback).
-            Positions with payment history take their recorded payments; the
-            rest are replayed on their own against Yahoo's distribution
-            history, which is what each account's own page does.
+            The shared replay now resolves this date by date: broker cash wins
+            inside imported coverage spans and Yahoo fills dates outside them.
             """
-            covered = positions & payment_covered_positions
-            uncovered = positions - covered
-            total = sum(period_payment_totals.get(position, 0) for position in covered)
-            used_fallback = False
-            if uncovered or not positions:
-                # With nothing covered this is the whole ticker, the same
-                # replay the row itself is built from.
-                ticker_result = ticker_result_for(
-                    ticker, open_only=open_only,
-                    positions=uncovered if covered else None,
-                )
-                ticker_metrics = (
-                    _portfolio_period_metrics(ticker_result)
-                    if ticker_result is not None
-                    else None
-                )
-                if ticker_metrics is not None:
-                    total += float(ticker_metrics.get("distribution_dollar") or 0)
-                    used_fallback = True
-            return total, bool(covered), used_fallback
+            ticker_result = ticker_result_for(
+                ticker,
+                open_only=open_only,
+                positions=positions if positions else None,
+            )
+            ticker_metrics = (
+                _portfolio_period_metrics(ticker_result)
+                if ticker_result is not None
+                else None
+            )
+            total = float(ticker_metrics.get("distribution_dollar") or 0) if ticker_metrics else 0.0
+            used_broker = bool(positions & payment_covered_positions)
+            used_fallback = bool(positions - payment_fully_covered_positions) if positions else True
+            return total, used_broker, used_fallback
 
         performance_rows = []
         for ticker in tickers_list:
@@ -36316,7 +36771,7 @@ def total_return_charts():
             if broker_history:
                 metrics["distribution_dollar"] = round(distribution, 4)
                 metrics["distribution_source"] = "Broker payment history" + (
-                    " with Yahoo market history for an account that has none"
+                    " with Yahoo market history outside complete broker coverage"
                     if yahoo_fallback else ""
                 )
             else:
@@ -36364,6 +36819,7 @@ def total_return_charts():
             stock_splits=stock_splits,
             actual_distribution_events=payment_events,
             actual_distribution_covered_positions=payment_covered_positions,
+            actual_distribution_coverage=payment_coverage,
         )
         open_position_result = _build_transaction_aware_portfolio_series(
             close,
@@ -36375,6 +36831,7 @@ def total_return_charts():
             stock_splits=stock_splits,
             actual_distribution_events=payment_events,
             actual_distribution_covered_positions=payment_covered_positions,
+            actual_distribution_coverage=payment_coverage,
         )
         portfolio_metrics = _portfolio_period_metrics(portfolio_result)
         open_position_metrics = _portfolio_period_metrics(open_position_result)
@@ -38447,9 +38904,10 @@ def growth_data():
             if "source" in dividend_payment_columns
             else "NULL AS source"
         )
+        payment_metadata_sql = _distribution_payment_metadata_select(conn)
         payment_rows = conn.execute(
             f"""SELECT ticker, profile_id, payment_date, amount,
-                       {payment_source_sql}
+                       {payment_source_sql}, {payment_metadata_sql}
                   FROM dividend_payments
                  WHERE profile_id IN ({payment_placeholders})
                    AND payment_date IS NOT NULL""",
@@ -38519,6 +38977,8 @@ def growth_data():
         allowed_tickers=portfolio_tickers,
     )
     payment_covered_positions = payment_policy["covered_positions"]
+    payment_fully_covered_positions = payment_policy["fully_covered_positions"]
+    payment_coverage = payment_policy["coverage_by_position"]
     payment_events = payment_policy["events"]
     quantities = {
         ticker: sum(
@@ -38674,6 +39134,7 @@ def growth_data():
         stock_splits=canonical_stock_splits,
         actual_distribution_events=payment_events,
         actual_distribution_covered_positions=payment_covered_positions,
+        actual_distribution_coverage=payment_coverage,
     )
     canonical_metrics = _portfolio_period_metrics(canonical_result)
     if canonical_metrics is not None:
@@ -38681,6 +39142,7 @@ def growth_data():
             payment_covered_positions,
             canonical_transactions,
             canonical_holdings,
+            payment_fully_covered_positions,
         )
         canonical_metrics["payment_sources"] = payment_policy["sources"]
     # Keep the same two explicit scopes exposed by Total Return. The canonical
@@ -38697,6 +39159,7 @@ def growth_data():
         stock_splits=canonical_stock_splits,
         actual_distribution_events=payment_events,
         actual_distribution_covered_positions=payment_covered_positions,
+        actual_distribution_coverage=payment_coverage,
     )
     open_position_metrics = _portfolio_period_metrics(open_position_result)
     if open_position_metrics is not None:
@@ -38704,6 +39167,7 @@ def growth_data():
             payment_covered_positions,
             open_position_transactions,
             canonical_holdings,
+            payment_fully_covered_positions,
         )
         open_position_metrics["payment_sources"] = payment_policy["sources"]
     canonical_indexes = [
@@ -38758,6 +39222,7 @@ def growth_data():
             stock_splits=stock_splits.reindex(columns=[t]).fillna(0),
             actual_distribution_events=payment_events,
             actual_distribution_covered_positions=payment_covered_positions,
+            actual_distribution_coverage=payment_coverage,
         )
         ticker_metrics = _portfolio_period_metrics(ticker_result)
         ticker_returns.append({
@@ -39794,7 +40259,15 @@ def etf_screen_data():
                 is_fresh = False
                 try:
                     if updated_at:
-                        age = datetime.datetime.utcnow() - datetime.datetime.fromisoformat(str(updated_at).replace("Z", "+00:00").replace("+00:00", ""))
+                        updated_dt = datetime.datetime.fromisoformat(
+                            str(updated_at).replace("Z", "+00:00")
+                        )
+                        if updated_dt.tzinfo is None:
+                            updated_dt = updated_dt.replace(tzinfo=datetime.timezone.utc)
+                        age = (
+                            datetime.datetime.now(datetime.timezone.utc)
+                            - updated_dt.astimezone(datetime.timezone.utc)
+                        )
                         is_fresh = age.days <= 7
                 except Exception:
                     is_fresh = False
@@ -59387,8 +59860,10 @@ def growth_2_data():
         row[1] for row in conn.execute("PRAGMA table_info(dividend_payments)").fetchall()
     }
     payment_source_sql = "source" if "source" in dividend_payment_columns else "NULL AS source"
+    payment_metadata_sql = _distribution_payment_metadata_select(conn)
     div_rows = conn.execute(
-        f"""SELECT ticker, profile_id, payment_date, amount, {payment_source_sql}
+        f"""SELECT ticker, profile_id, payment_date, amount, {payment_source_sql},
+                   {payment_metadata_sql}
             FROM dividend_payments
             WHERE profile_id IN ({payment_placeholders})
             ORDER BY payment_date""",
@@ -59676,6 +60151,8 @@ def growth_2_data():
         allowed_tickers=return_scope_tickers,
     )
     payment_covered_positions = payment_policy["covered_positions"]
+    payment_fully_covered_positions = payment_policy["fully_covered_positions"]
+    payment_coverage = payment_policy["coverage_by_position"]
     payment_events = payment_policy["events"]
 
     portfolio_return_result = _build_transaction_aware_portfolio_series(
@@ -59688,100 +60165,22 @@ def growth_2_data():
         stock_splits=return_splits,
         actual_distribution_events=payment_events,
         actual_distribution_covered_positions=payment_covered_positions,
+        actual_distribution_coverage=payment_coverage,
     )
     portfolio_return_metrics = _portfolio_period_metrics(portfolio_return_result)
 
-    # Use the same distribution-dollar policy as Total Return: actual broker
-    # payment history wins for a covered position, with Yahoo market history
-    # only filling positions that have no broker payment history. This keeps
-    # the consolidated Growth Dollars result reconcilable with Total Return.
-    # A position is (account, ticker): settling it per ticker let one account's
-    # payment history switch the fallback off for another account's shares.
-    payment_events_by_position = {}
     payment_sources = set(payment_policy["sources"])
-    for event in payment_events:
-        payment_events_by_position.setdefault(
-            event["position_key"], [],
-        ).append((
-            pd.Timestamp(event["payment_date"]).normalize(),
-            float(event["amount"]),
-        ))
 
-    transactions_by_ticker = {}
-    holdings_by_ticker = {}
-    positions_by_ticker = {}
-    for row in return_transactions:
-        transactions_by_ticker.setdefault(row.get("ticker"), []).append(row)
-        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
-    for row in return_holdings:
-        holdings_by_ticker.setdefault(row.get("ticker"), []).append(row)
-        positions_by_ticker.setdefault(row.get("ticker"), set()).add(row["position_key"])
-
-    ticker_return_cache = {}
-
-    def ticker_return_result(ticker, positions=None):
-        cache_key = (ticker, frozenset(positions) if positions is not None else None)
-        if cache_key in ticker_return_cache:
-            return ticker_return_cache[cache_key]
-        if ticker not in return_close.columns:
-            ticker_return_cache[cache_key] = None
-            return None
-        ticker_transactions = transactions_by_ticker.get(ticker, [])
-        ticker_holdings = holdings_by_ticker.get(ticker, [])
-        if positions is not None:
-            ticker_transactions = [
-                row for row in ticker_transactions if row["position_key"] in positions
-            ]
-            ticker_holdings = [
-                row for row in ticker_holdings if row["position_key"] in positions
-            ]
-        ticker_result = _build_transaction_aware_portfolio_series(
-            return_close[[ticker]],
-            return_adj[[ticker]] if ticker in return_adj.columns else None,
-            return_divs[[ticker]] if ticker in return_divs.columns else None,
-            return_cap_gains[[ticker]] if ticker in return_cap_gains.columns else None,
-            ticker_transactions,
-            ticker_holdings,
-            stock_splits=(
-                return_splits[[ticker]] if ticker in return_splits.columns else None
-            ),
-        )
-        ticker_return_cache[cache_key] = ticker_result
-        return ticker_result
-
-    distribution_series = pd.Series(0.0, index=return_close.index)
-    yahoo_fallback_tickers = 0
-    for ticker in return_scope_tickers:
-        positions = positions_by_ticker.get(ticker, set())
-        covered = positions & payment_covered_positions
-        uncovered = positions - covered
-        if covered:
-            ticker_payments = pd.Series(0.0, index=return_close.index)
-            for position in covered:
-                for payment_timestamp, payment_amount in payment_events_by_position.get(position, []):
-                    market_index = return_close.index.searchsorted(
-                        payment_timestamp, side="left",
-                    )
-                    if market_index < len(return_close.index):
-                        ticker_payments.iloc[market_index] += payment_amount
-            distribution_series += ticker_payments.cumsum()
-            if not uncovered:
-                continue
-        # With nothing covered this is the whole ticker, as before; otherwise
-        # only the accounts that have no payment history of their own.
-        ticker_result = ticker_return_result(ticker, uncovered if covered else None)
-        if ticker_result is None:
-            continue
-        ticker_distribution = pd.to_numeric(
-            pd.Series(
-                ticker_result.get("distribution_dollar_series") or [],
-                index=return_close.index,
-            ),
-            errors="coerce",
-        ).ffill().fillna(0)
-        distribution_series += ticker_distribution
-        yahoo_fallback_tickers += 1
-
+    # The replay already resolves actual-vs-Yahoo income per account and date.
+    # Reusing its cumulative dollar series prevents a second implementation
+    # from dropping a weekend/holiday payment beyond the final quote.
+    distribution_series = pd.to_numeric(
+        pd.Series(
+            portfolio_return_result.get("distribution_dollar_series") or [],
+            index=return_close.index,
+        ),
+        errors="coerce",
+    ).ffill().fillna(0)
     if portfolio_return_metrics is not None:
         portfolio_distribution = float(distribution_series.iloc[-1])
         portfolio_return_metrics["distribution_dollar"] = round(
@@ -59792,13 +60191,11 @@ def growth_2_data():
             + portfolio_distribution,
             4,
         )
-        portfolio_return_metrics["distribution_source"] = (
-            "Broker payment history"
-            + (f" with Yahoo fallback for {yahoo_fallback_tickers} ticker"
-               f"{'' if yahoo_fallback_tickers == 1 else 's'}"
-               if yahoo_fallback_tickers else "")
-            if payment_covered_positions
-            else "Yahoo market history"
+        portfolio_return_metrics["distribution_source"] = _distribution_source_label(
+            payment_covered_positions,
+            return_transactions,
+            return_holdings,
+            payment_fully_covered_positions,
         )
         portfolio_return_metrics["payment_sources"] = sorted(payment_sources)
 

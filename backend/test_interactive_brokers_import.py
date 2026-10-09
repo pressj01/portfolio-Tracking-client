@@ -64,6 +64,10 @@ class InteractiveBrokersImportTest(unittest.TestCase):
         self.assertGreaterEqual(result["summary"]["drip_detected"], 1)
         self.assertEqual(result["summary"]["filtered"], 0)
         self.assertEqual(result["summary"]["account_activity"], 1)
+        self.assertEqual(
+            result["distribution_coverage"],
+            {"start_date": "2026-02-23", "end_date": "2026-08-25"},
+        )
         self.assertEqual(result["account_activity"][0]["activity_type"], "INTEREST")
         self.assertEqual(result["account_activity"][0]["direction"], "OUT")
         self.assertEqual(result["account_activity"][0]["performance_treatment"], "EXPENSE")

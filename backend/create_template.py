@@ -267,6 +267,9 @@ def create_generic_transactions_template():
 
     headers = [
         "Date",
+        "Ex Date",
+        "Coverage Start",
+        "Coverage End",
         "Type",
         "Ticker",
         "Shares",
@@ -275,14 +278,16 @@ def create_generic_transactions_template():
         "Amount",
         "Notes",
     ]
+    coverage_start = date(2026, 1, 14)
+    coverage_end = date(2026, 3, 12)
     sample_rows = [
-        [date(2026, 1, 14), "DEPOSIT", None, None, None, None, 5000.00, "Transfer from checking"],
-        [date(2026, 1, 15), "BUY", "SCHD", 10, 27.50, 0.00, None, "Initial purchase"],
-        [date(2026, 2, 3), "DIVIDEND", "SCHD", None, None, None, 8.25, "Cash dividend received"],
-        [date(2026, 2, 3), "DRIP", "SCHD", 0.30, 27.50, 0.00, None, "Dividend reinvestment shares"],
-        [date(2026, 2, 20), "TRANSFER IN", "JEPI", 20, None, None, None, "Shares moved from another broker"],
-        [date(2026, 3, 10), "SELL", "SCHD", 2, 29.00, 0.05, None, "Partial sale"],
-        [date(2026, 3, 12), "WITHDRAWAL", None, None, None, None, 250.00, "Transfer to checking"],
+        [date(2026, 1, 14), None, coverage_start, coverage_end, "DEPOSIT", None, None, None, None, 5000.00, "Transfer from checking"],
+        [date(2026, 1, 15), None, coverage_start, coverage_end, "BUY", "SCHD", 10, 27.50, 0.00, None, "Initial purchase"],
+        [date(2026, 2, 3), date(2026, 1, 30), coverage_start, coverage_end, "DIVIDEND", "SCHD", None, None, None, 8.25, "Cash dividend received"],
+        [date(2026, 2, 3), None, coverage_start, coverage_end, "DRIP", "SCHD", 0.30, 27.50, 0.00, None, "Dividend reinvestment shares"],
+        [date(2026, 2, 20), None, coverage_start, coverage_end, "TRANSFER IN", "JEPI", 20, None, None, None, "Shares moved from another broker"],
+        [date(2026, 3, 10), None, coverage_start, coverage_end, "SELL", "SCHD", 2, 29.00, 0.05, None, "Partial sale"],
+        [date(2026, 3, 12), None, coverage_start, coverage_end, "WITHDRAWAL", None, None, None, None, 250.00, "Transfer to checking"],
     ]
 
     header_fill = PatternFill(start_color="0F3D63", end_color="0F3D63", fill_type="solid")
@@ -302,23 +307,27 @@ def create_generic_transactions_template():
             cell.font = input_font
             cell.border = bottom_border
             cell.alignment = Alignment(
-                horizontal="left" if col_idx in {2, 3, 8} else "right"
+                horizontal="left" if col_idx in {5, 6, 11} else "right"
             )
 
-    ws.auto_filter.ref = f"A1:H{len(sample_rows) + 1}"
+    ws.auto_filter.ref = f"A1:K{len(sample_rows) + 1}"
     ws.column_dimensions["A"].width = 14
-    ws.column_dimensions["B"].width = 16
-    ws.column_dimensions["C"].width = 12
-    ws.column_dimensions["D"].width = 14
-    ws.column_dimensions["E"].width = 18
+    ws.column_dimensions["B"].width = 14
+    ws.column_dimensions["C"].width = 16
+    ws.column_dimensions["D"].width = 16
+    ws.column_dimensions["E"].width = 16
     ws.column_dimensions["F"].width = 12
-    ws.column_dimensions["G"].width = 19
-    ws.column_dimensions["H"].width = 34
+    ws.column_dimensions["G"].width = 14
+    ws.column_dimensions["H"].width = 18
+    ws.column_dimensions["I"].width = 12
+    ws.column_dimensions["J"].width = 19
+    ws.column_dimensions["K"].width = 34
     ws.column_dimensions["A"].number_format = "yyyy-mm-dd"
     for row_idx in range(2, len(sample_rows) + 2):
-        ws.cell(row=row_idx, column=1).number_format = "yyyy-mm-dd"
-        ws.cell(row=row_idx, column=4).number_format = "#,##0.0000"
-        for col_idx in (5, 6, 7):
+        for col_idx in (1, 2, 3, 4):
+            ws.cell(row=row_idx, column=col_idx).number_format = "yyyy-mm-dd"
+        ws.cell(row=row_idx, column=7).number_format = "#,##0.0000"
+        for col_idx in (8, 9, 10):
             ws.cell(row=row_idx, column=col_idx).number_format = "$#,##0.00;[Red]($#,##0.00);-"
 
     type_validation = DataValidation(
@@ -334,7 +343,7 @@ def create_generic_transactions_template():
     type_validation.prompt = "Select the kind of transaction."
     type_validation.promptTitle = "Transaction type"
     ws.add_data_validation(type_validation)
-    type_validation.add("B2:B1001")
+    type_validation.add("E2:E1001")
 
     ins = wb.create_sheet("Instructions")
     ins.sheet_view.showGridLines = False
@@ -359,6 +368,9 @@ def create_generic_transactions_template():
     instruction_headers = ["Column", "Required", "How it is used", "Accepted values / example"]
     instruction_rows = [
         ["Date", "Yes", "Transaction, trade, or payment date.", "2026-01-15 or 01/15/2026"],
+        ["Ex Date", "Dividends (recommended)", "Ex-dividend date used for investment-performance timing; cash totals still use Date.", "2026-01-30"],
+        ["Coverage Start", "Recommended", "First date for which this file contains complete broker activity and distributions.", "2026-01-01"],
+        ["Coverage End", "Recommended", "Last date for which this file contains complete broker activity and distributions.", "2026-03-31"],
         [
             "Type", "Yes", "Determines how the row affects holdings, income, and account cash flows.",
             "BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, or INTEREST",
@@ -401,7 +413,7 @@ def create_generic_transactions_template():
             cell.border = bottom_border
             cell.alignment = Alignment(wrap_text=True, vertical="top")
 
-    note_row = 15
+    note_row = len(instruction_rows) + 7
     ins.merge_cells(start_row=note_row, start_column=1, end_row=note_row, end_column=4)
     ins.cell(row=note_row, column=1, value=(
         "BUY, SELL, and DRIP rows update positions when the transaction ledger is the "

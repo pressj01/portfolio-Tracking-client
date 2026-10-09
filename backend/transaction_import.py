@@ -1491,6 +1491,9 @@ _FIDELITY_TRANSACTION_ALIASES = {
 
 _GENERIC_TRANSACTION_ALIASES = {
     "Date": ["Transaction Date", "Trade Date", "Activity Date", "Payment Date"],
+    "Ex Date": ["Ex-Date", "Ex Dividend Date", "Ex-dividend Date"],
+    "Coverage Start": ["History Start", "Statement Start", "Period Start"],
+    "Coverage End": ["History End", "Statement End", "Period End"],
     "Type": ["Transaction Type", "Action", "Activity", "Event"],
     "Ticker": ["Symbol", "Stock", "ETF"],
     "Shares": ["Quantity", "Qty", "Units"],
@@ -1541,6 +1544,8 @@ def parse_generic_transactions(file_path, filename):
     kept = []
     account_activity = []
     filtered_count = 0
+    coverage_starts = []
+    coverage_ends = []
 
     for row in rows[header_idx + 1:]:
         if not _row_has_values(row):
@@ -1551,6 +1556,13 @@ def parse_generic_transactions(file_path, filename):
         action_key = re.sub(r"[^a-z0-9]+", " ", action.casefold()).strip()
         ticker = str(record.get("Ticker") or "").strip().upper()
         date_str = _parse_date_str(record.get("Date"))
+        ex_date = _parse_date_str(record.get("Ex Date"))
+        coverage_start = _parse_date_str(record.get("Coverage Start"))
+        coverage_end = _parse_date_str(record.get("Coverage End"))
+        if coverage_start:
+            coverage_starts.append(coverage_start)
+        if coverage_end:
+            coverage_ends.append(coverage_end)
         shares = _safe_float(record.get("Shares"))
         price = _safe_float(record.get("Price Per Share"))
         fees = abs(_safe_float(record.get("Fees")) or 0.0)
@@ -1627,6 +1639,7 @@ def parse_generic_transactions(file_path, filename):
                 "type": "DIVIDEND",
                 "ticker": ticker,
                 "date": date_str,
+                "ex_date": ex_date,
                 "shares": None,
                 "price_per_share": None,
                 "fees": 0.0,
@@ -1652,7 +1665,7 @@ def parse_generic_transactions(file_path, filename):
         if txn["type"] == "BUY" and "[DRIP]" in (txn["notes"] or "")
     )
 
-    return {
+    result = {
         "transactions": kept,
         "account_activity": account_activity,
         "summary": {
@@ -1666,6 +1679,12 @@ def parse_generic_transactions(file_path, filename):
         },
         "source_format": "generic_transactions",
     }
+    if coverage_starts and coverage_ends:
+        result["distribution_coverage"] = {
+            "start_date": min(coverage_starts),
+            "end_date": max(coverage_ends),
+        }
+    return result
 
 
 def _fidelity_positions_from_records(records):
@@ -3733,22 +3752,32 @@ def _ib_account_fields(rows):
     return account_name, name, number
 
 
-def _ib_statement_as_of(rows):
-    """Return the ending date of the IB statement period, when present."""
+def _ib_statement_period(rows):
+    """Return the declared IB statement start/end dates, when present."""
     period = str(_ib_kv_section(rows, "Statement").get("Period") or "").strip()
     if not period:
-        return None
+        return None, None
     candidates = [part.strip() for part in re.split(r"\s+-\s+", period) if part.strip()]
-    for candidate in reversed(candidates):
+    parsed_dates = []
+    for candidate in candidates:
         parsed = _parse_date_str(candidate)
         if parsed:
-            return parsed
+            parsed_dates.append(parsed)
+            continue
         for fmt in ("%B %d, %Y", "%b %d, %Y"):
             try:
-                return datetime.strptime(candidate, fmt).date().isoformat()
+                parsed_dates.append(datetime.strptime(candidate, fmt).date().isoformat())
+                break
             except ValueError:
                 continue
-    return None
+    if not parsed_dates:
+        return None, None
+    return min(parsed_dates), max(parsed_dates)
+
+
+def _ib_statement_as_of(rows):
+    """Return the ending date of the IB statement period, when present."""
+    return _ib_statement_period(rows)[1]
 
 
 def _ib_merge_positions(positions):
@@ -4152,7 +4181,7 @@ def parse_interactive_brokers_transactions(file_path, filename):
     buys = sum(1 for t in kept if t["type"] == "BUY")
     sells = sum(1 for t in kept if t["type"] == "SELL")
     divs = sum(1 for t in kept if t["type"] == "DIVIDEND")
-    return {
+    result = {
         "account_name": account_name,
         "account_number": account_number,
         "transactions": kept,
@@ -4168,6 +4197,13 @@ def parse_interactive_brokers_transactions(file_path, filename):
         },
         "source_format": "interactive_brokers_transactions",
     }
+    coverage_start, coverage_end = _ib_statement_period(rows)
+    if coverage_start and coverage_end:
+        result["distribution_coverage"] = {
+            "start_date": coverage_start,
+            "end_date": coverage_end,
+        }
+    return result
 
 
 PARSERS = {

@@ -192,6 +192,27 @@ class TrackerReturnAlignmentTest(unittest.TestCase):
             "return_pct": 35.0,
         }])
 
+    def test_payment_after_final_quote_is_in_every_tracker_series_and_percentage(self):
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT INTO dividend_payments VALUES (?, ?, ?, ?, ?)",
+            ("AAA", 6, "2025-01-04", 3.0, "schwab"),
+        )
+        conn.commit()
+        conn.close()
+
+        params = "profile_id=6&period=all"
+        growth = self.client.get(f"/api/growth/data?{params}&benchmark=SPY").get_json()
+        growth_dollars = self.client.get(f"/api/growth-2/data?{params}").get_json()
+        total_return = self.client.get(f"/api/total-return/charts?{params}").get_json()
+
+        self.assertEqual(growth["portfolio_total"]["values"][-1], 135.0)
+        self.assertEqual(total_return["portfolio_series"]["total"][-1], 135.0)
+        self.assertEqual(growth["portfolio_metrics"]["total_return_pct"], 35.0)
+        self.assertEqual(total_return["portfolio_metrics"]["total_return_pct"], 35.0)
+        self.assertEqual(growth_dollars["summary"]["total_return_pct"], 35.0)
+        self.assertEqual(growth_dollars["summary"]["distribution_amount"], 3.0)
+
     def test_category_scope_matches_between_dashboard_growth_and_total_return(self):
         conn = self._get_connection()
         conn.executescript(
