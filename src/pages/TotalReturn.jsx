@@ -36,8 +36,8 @@ import {
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
-import OpenLotsView from '../components/OpenLotsView'
-import LotTransactionHistory from '../components/LotTransactionHistory'
+import LotDetailsPanel from '../components/LotDetailsPanel'
+import useLotDetails from '../utils/useLotDetails'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -122,39 +122,8 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [positionView, setPositionView] = useState('unrealized')
-  const [lotDetails, setLotDetails] = useState({})
-  const toggleLotDetails = async ticker => {
-    if (lotDetails[ticker]) {
-      setLotDetails(current => {
-        const next = { ...current }
-        delete next[ticker]
-        return next
-      })
-      return
-    }
-    setLotDetails(current => ({ ...current, [ticker]: { loading: true, view: 'open' } }))
-    try {
-      const response = await pf(`/api/holdings/${encodeURIComponent(ticker)}/transactions?include_dividends=true`)
-      const data = await response.json()
-      if (!response.ok) throw new Error(data?.error || `Could not load lot details for ${ticker}`)
-      setLotDetails(current => ({
-        ...current,
-        [ticker]: { loading: false, view: 'open', transactions: data },
-      }))
-    } catch (error) {
-      setLotDetails(current => ({
-        ...current,
-        [ticker]: { loading: false, view: 'open', error: String(error?.message || error) },
-      }))
-    }
-  }
-  const setLotDetailView = (ticker, view) => {
-    setLotDetails(current => ({
-      ...current,
-      [ticker]: { ...current[ticker], view },
-    }))
-  }
-  useEffect(() => setLotDetails({}), [selection, basisMode])
+  const { lotDetails, toggleLotDetails, setLotDetailView, clearLotDetails } = useLotDetails(pf)
+  useEffect(() => clearLotDetails(), [selection, basisMode, clearLotDetails])
   // A Distributions figure nobody can take apart is one nobody can check.
   const [distDetail, setDistDetail] = useState(null)
   const openDistributions = async (row, rowTotal) => {
@@ -2060,54 +2029,21 @@ export default function TotalReturn() {
                   {positionView === 'unrealized' && lotDetails[row.ticker] && (
                     <tr className="tr-lot-detail-row">
                       <td colSpan={columns.length}>
-                        <div className="mh-lot-panel">
-                          <div className="mh-lot-toolbar">
-                            <div className="mh-lot-toolbar-main">
-                              <strong>{row.ticker} lot details</strong>
-                              <div className="mh-lot-view-tabs" role="tablist" aria-label={`${row.ticker} lot detail view`}>
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={(lotDetails[row.ticker].view || 'open') === 'open'}
-                                  className={(lotDetails[row.ticker].view || 'open') === 'open' ? 'active' : undefined}
-                                  onClick={() => setLotDetailView(row.ticker, 'open')}
-                                >Open lots</button>
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={lotDetails[row.ticker].view === 'history'}
-                                  className={lotDetails[row.ticker].view === 'history' ? 'active' : undefined}
-                                  onClick={() => setLotDetailView(row.ticker, 'history')}
-                                >Transaction history</button>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
-                            >Manage transactions</button>
-                          </div>
-                          {lotDetails[row.ticker].loading ? (
-                            <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
-                          ) : lotDetails[row.ticker].error ? (
-                            <div className="alert alert-error" style={{ margin: '0.75rem 1rem' }}>{lotDetails[row.ticker].error}</div>
-                          ) : lotDetails[row.ticker].view === 'history' ? (
-                            <LotTransactionHistory transactions={lotDetails[row.ticker].transactions} profiles={profiles} />
-                          ) : (
-                            <OpenLotsView
-                              transactions={lotDetails[row.ticker].transactions}
-                              holding={{
-                                ticker: row.ticker,
-                                quantity: row.quantity,
-                                purchase_value: row.purchase_value,
-                                current_price: row.current_price,
-                                current_value: row.current_value,
-                                basis_mode: basisMode,
-                              }}
-                              profiles={profiles}
-                            />
-                          )}
-                        </div>
+                        <LotDetailsPanel
+                          ticker={row.ticker}
+                          detail={lotDetails[row.ticker]}
+                          holding={{
+                            ticker: row.ticker,
+                            quantity: row.quantity,
+                            purchase_value: row.purchase_value,
+                            current_price: row.current_price,
+                            current_value: row.current_value,
+                            basis_mode: basisMode,
+                          }}
+                          profiles={profiles}
+                          onViewChange={view => setLotDetailView(row.ticker, view)}
+                          onManage={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
+                        />
                       </td>
                     </tr>
                   )}

@@ -44,6 +44,21 @@ test('selected broker basis is allocated across reconciled open lots', () => {
   assert.ok(Math.abs(result.totals.gain_loss - 111) < 1e-9)
 })
 
+test('a holding share count rounded upstream still reconciles to its lots', () => {
+  const lots = [
+    { id: 1, transaction_type: 'BUY', shares: 1.234567, shares_remaining: 1.234567, price_per_share: 40 },
+    { id: 2, transaction_type: 'BUY', shares: 0.000021, shares_remaining: 0.000021, price_per_share: 40 },
+  ]
+  const holding = { quantity: 1.2346, purchase_value: 50, current_price: 100, current_value: 123.46 }
+
+  assert.equal(buildOpenLotMetrics(lots, holding).shares_match_holding, false)
+
+  const result = buildOpenLotMetrics(lots, { ...holding, share_tolerance: 0.0001 })
+  assert.equal(result.shares_match_holding, true)
+  assert.ok(Math.abs(result.totals.cost_basis - 50) < 1e-9)
+  assert.ok(Math.abs(result.totals.market_value - 123.46) < 1e-9)
+})
+
 test('an incomplete ledger is not stretched to the holding basis', () => {
   const result = buildOpenLotMetrics([
     { id: 1, transaction_type: 'BUY', shares: 1, shares_remaining: 1, price_per_share: 40 },

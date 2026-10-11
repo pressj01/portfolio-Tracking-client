@@ -2908,9 +2908,17 @@ th.col-drag-target {
 .sticky-table-wrap.tr-total-return-table-wrap .tr-lot-detail-row:hover > td {
   background: var(--surface-sunken);
 }
-.tr-lot-detail-row .mh-lot-panel {
+.tr-lot-detail-row .mh-lot-panel,
+.gl-lot-detail-row .mh-lot-panel {
   position: static;
   width: 100%;
+}
+/* Gains & Losses — open lots expanded under an Unrealized ticker row */
+.sticky-table-wrap .gl-lot-detail-row > td,
+.sticky-table-wrap .gl-lot-detail-row:hover > td {
+  background: var(--surface-sunken);
+  padding: 0;
+  white-space: normal;
 }
 .split-pane-body .tr-page {
   min-width: 0;
@@ -3066,6 +3074,25 @@ th.col-drag-target {
   background: var(--surface-inset);
   border-top: 1px solid var(--border);
   font-weight: 700;
+}
+.mh-lot-sort {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  gap: 0.25rem;
+  padding: 0;
+  white-space: nowrap;
+}
+.mh-lot-sort span {
+  font-size: 0.65rem;
+  opacity: 0.55;
+}
+.mh-lot-sort span.is-active {
+  opacity: 1;
 }
 .mh-open-lot-positive {
   color: var(--pos);

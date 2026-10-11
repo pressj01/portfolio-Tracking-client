@@ -1,8 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { formatMoney } from '../utils/money'
+import { nextLotSort, sortLotRows } from '../utils/lotTableSort'
+import LotSortHeader from './LotSortHeader'
+
+const typeOf = transaction => String(transaction?.transaction_type || 'BUY').toUpperCase()
 
 const cashAmount = transaction => {
-  const type = String(transaction?.transaction_type || 'BUY').toUpperCase()
+  const type = typeOf(transaction)
   if (type === 'DIVIDEND') return Number(transaction?.dividend_amount) || 0
   const shares = Math.abs(Number(transaction?.shares) || 0)
   const price = Number(transaction?.price_per_share) || 0
@@ -10,13 +14,41 @@ const cashAmount = transaction => {
   return type === 'SELL' ? (shares * price) - fees : (shares * price) + fees
 }
 
+// Each column sorts on what its cell shows: a dividend's $0.00 price sorts as
+// zero, and a cell that shows a dash (no remaining shares on a SELL, no
+// realized result on a BUY) has nothing to compare and stays at the bottom.
+const HISTORY_COLUMNS = [
+  { key: 'account', label: 'Account', type: 'string' },
+  { key: 'transaction_type', label: 'Type', type: 'string', value: typeOf },
+  { key: 'transaction_date', label: 'Date', type: 'date' },
+  { key: 'shares', label: 'Shares', type: 'number', value: row => (typeOf(row) === 'DIVIDEND' ? 0 : Number(row.shares || 0)) },
+  { key: 'price_per_share', label: 'Price', type: 'number', value: row => (typeOf(row) === 'DIVIDEND' ? 0 : Number(row.price_per_share || 0)) },
+  { key: 'fees', label: 'Fees', type: 'number', value: row => (typeOf(row) === 'DIVIDEND' ? 0 : Number(row.fees || 0)) },
+  { key: 'cash_amount', label: 'Cost / Proceeds / Amount', type: 'number', value: cashAmount },
+  { key: 'shares_remaining', label: 'Shares Remaining', type: 'number', value: row => (typeOf(row) === 'BUY' ? Number(row.shares_remaining || 0) : null) },
+  { key: 'realized_gain', label: 'Realized G/L', type: 'number', value: row => (typeOf(row) === 'SELL' ? Number(row.realized_gain || 0) : null) },
+  { key: 'notes', label: 'Notes', type: 'string', value: row => row.raw_notes || row.notes || '' },
+]
+
 export default function LotTransactionHistory({ transactions, profiles }) {
   const accountNames = useMemo(
     () => new Map((profiles || []).map(profile => [Number(profile.id), profile.name])),
     [profiles],
   )
+  // No sort is the ledger order the events arrive in.
+  const [sort, setSort] = useState(null)
+  const rows = useMemo(() => sortLotRows(
+    (Array.isArray(transactions) ? transactions : []).map(transaction => ({
+      ...transaction,
+      account: transaction.source_account_name
+        || accountNames.get(Number(transaction.profile_id))
+        || `Account ${transaction.profile_id}`,
+    })),
+    sort,
+    HISTORY_COLUMNS,
+  ), [transactions, accountNames, sort])
 
-  if (!Array.isArray(transactions) || transactions.length === 0) {
+  if (rows.length === 0) {
     return <div className="mh-open-lot-empty">No transaction history is recorded for this ticker.</div>
   }
 
@@ -29,27 +61,22 @@ export default function LotTransactionHistory({ transactions, profiles }) {
         <table className="mh-lot-table mh-open-lot-table mh-transaction-history-table">
           <thead>
             <tr>
-              <th>Account</th>
-              <th>Type</th>
-              <th>Date</th>
-              <th>Shares</th>
-              <th>Price</th>
-              <th>Fees</th>
-              <th>Cost / Proceeds / Amount</th>
-              <th>Shares Remaining</th>
-              <th>Realized G/L</th>
-              <th>Notes</th>
+              {HISTORY_COLUMNS.map(column => (
+                <LotSortHeader
+                  key={column.key}
+                  column={column}
+                  sort={sort}
+                  onSort={key => setSort(current => nextLotSort(current, key))}
+                />
+              ))}
             </tr>
           </thead>
           <tbody>
-            {transactions.map(transaction => {
-              const type = String(transaction.transaction_type || 'BUY').toUpperCase()
-              const account = transaction.source_account_name
-                || accountNames.get(Number(transaction.profile_id))
-                || `Account ${transaction.profile_id}`
+            {rows.map(transaction => {
+              const type = typeOf(transaction)
               return (
                 <tr key={`${transaction.record_type || 'transaction'}-${transaction.id || transaction.dividend_payment_id}`}>
-                  <td>{account}</td>
+                  <td>{transaction.account}</td>
                   <td>{type}</td>
                   <td>{transaction.transaction_date || '-'}</td>
                   <td>{type === 'DIVIDEND' ? '0.000' : Number(transaction.shares || 0).toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 6 })}</td>

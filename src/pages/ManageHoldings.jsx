@@ -36,6 +36,7 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTickerResearch } from '../context/TickerResearchContext'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
 import OpenLotsView from '../components/OpenLotsView'
+import { sortByValue } from '../utils/lotTableSort'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1861,34 +1862,11 @@ const sortLotTransactions = (transactions, holding, sort) => {
   if (!Array.isArray(transactions) || !sort?.key) return transactions || []
   const column = LOT_COLUMNS.find(col => col.key === sort.key)
 
-  return transactions
-    .map((txn, index) => ({ txn, index }))
-    .sort((a, b) => {
-      const av = lotSortValue(a.txn, holding, sort.key)
-      const bv = lotSortValue(b.txn, holding, sort.key)
-      const aMissing = av == null || av === ''
-      const bMissing = bv == null || bv === ''
-      if (aMissing && bMissing) return a.index - b.index
-      if (aMissing) return 1
-      if (bMissing) return -1
-
-      let comparison
-      if (column?.type === 'number') {
-        comparison = Number(av) - Number(bv)
-      } else if (column?.type === 'date') {
-        const aTime = Date.parse(av)
-        const bTime = Date.parse(bv)
-        comparison = Number.isNaN(aTime) || Number.isNaN(bTime)
-          ? String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
-          : aTime - bTime
-      } else {
-        comparison = String(av).localeCompare(String(bv), undefined, { numeric: true, sensitivity: 'base' })
-      }
-
-      if (comparison === 0) return a.index - b.index
-      return sort.direction === 'asc' ? comparison : -comparison
-    })
-    .map(({ txn }) => txn)
+  return sortByValue(transactions, {
+    valueOf: txn => lotSortValue(txn, holding, sort.key),
+    type: column?.type || 'string',
+    direction: sort.direction,
+  })
 }
 
 const DEFAULT_COLUMN_WIDTH = 96
