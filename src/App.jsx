@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react'
 import { HashRouter as Router, NavLink, useLocation } from 'react-router-dom'
 import './index.css'
 import DialogProvider from './components/DialogProvider'
@@ -128,11 +128,40 @@ function NavMenuGroup({ title, children }) {
   )
 }
 
+// The nav bar and the notice strip stay pinned to the top of the window as one
+// block. Its height is published for the page panels that pin beneath it; it
+// changes when the nav wraps on a narrow window, the notice is dismissed, or
+// the text size is changed.
+function AppHeader() {
+  const ref = useRef(null)
+
+  useLayoutEffect(() => {
+    const header = ref.current
+    const root = document.documentElement
+    const publish = () => {
+      root.style.setProperty('--app-header-height', `${header.getBoundingClientRect().height}px`)
+    }
+    publish()
+    const observer = new ResizeObserver(publish)
+    observer.observe(header)
+    return () => {
+      observer.disconnect()
+      root.style.removeProperty('--app-header-height')
+    }
+  }, [])
+
+  return (
+    <div className="app-header" ref={ref}>
+      <Nav />
+      <NotFinancialAdviceBanner />
+    </div>
+  )
+}
+
 function AppFrame() {
   return (
     <TickerResearchProvider>
-      <Nav />
-      <NotFinancialAdviceBanner />
+      <AppHeader />
       <AdviceAcknowledgement />
       <HiddenPageBanner />
       <CommandPalette />

@@ -1896,7 +1896,7 @@ export default function Categories() {
         </div>
 
         {/* Right: Unallocated assets */}
-        <div style={{ flex: '0 0 28%', position: 'sticky', top: '1rem' }}>
+        <div style={{ flex: '0 0 28%', position: 'sticky', top: 'calc(var(--app-header-height) + 1rem)' }}>
           <div className="card" style={{ padding: '1rem', marginBottom: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', marginBottom: '0.45rem' }}>
               <h2 style={{ fontSize: '1rem', margin: 0 }}>Target Allocation</h2>

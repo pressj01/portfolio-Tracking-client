@@ -924,6 +924,21 @@ a:hover {
 }
 
 /* Navigation */
+/* The nav bar and the notice strip stay pinned to the top of the window as one
+   block. It sits above the rows and panels a page pins for itself (42 at most)
+   and below every overlay (60 and up), which have to cover it. A page's own
+   open menu or tooltip (50) can still overlap it, as it always could. */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 45;
+}
+/* Height of that block, measured in App.jsx. A panel that pins to the top of
+   the window adds it to its own `top` so it lands below the header rather than
+   behind it. Split View zeroes it: nothing is pinned above a pane's content. */
+:root { --app-header-height: 0px; }
+/* Keeps a scrollIntoView target, or a field tabbed to, out from under it. */
+html { scroll-padding-top: var(--app-header-height); }
 .nav-bar {
   display: flex;
   align-items: center;
@@ -1197,10 +1212,10 @@ a:hover {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 9px;
-  max-height: calc(100vh - 7rem);
+  max-height: calc(100vh - var(--app-header-height) - 1rem);
   overflow: auto;
   position: sticky;
-  top: 0.5rem;
+  top: calc(var(--app-header-height) + 0.5rem);
 }
 .csf-heading {
   align-items: center;
@@ -1819,7 +1834,7 @@ a:hover {
   gap: 0.3rem;
   padding: 1rem;
   position: sticky;
-  top: 1rem;
+  top: calc(var(--app-header-height) + 1rem);
 }
 .menu-control-sections h2 {
   margin: 0 0 0.5rem 0.45rem;
@@ -6563,7 +6578,9 @@ th.col-drag-target {
 }
 
 /* ── Watchlist ──────────────────────────────────────────────────────────────── */
-.wl-page { padding: 1.5rem 2rem; display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
+/* Fills the window below the pinned app header, so the table's own scroller,
+   not the window, does the scrolling. */
+.wl-page { padding: 1.5rem 2rem; display: flex; flex-direction: column; height: calc(100vh - var(--app-header-height)); min-height: 0; overflow: hidden; }
 .split-pane-body .wl-page {
   height: 100%;
   max-height: 100%;
@@ -7690,7 +7707,7 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
 /* Options analysis workspace */
 .opt-page{max-width:1800px;padding-bottom:3rem}.opt-page button,.opt-page input,.opt-page select{font:inherit}.opt-page-header{align-items:flex-start;display:flex;gap:2rem;justify-content:space-between;margin-bottom:1rem}.opt-page-header h1{font-size:clamp(1.8rem,2.4vw,2.6rem);margin:.12rem 0 .3rem}.opt-page-header p{color:var(--text-muted);font-size:.9rem;line-height:1.55;margin:0;max-width:850px}.opt-eyebrow{color:var(--accent-bright);font-size:.67rem;font-weight:900;letter-spacing:.14em;text-transform:uppercase}.opt-learning-badge{background:color-mix(in srgb,var(--accent) 9%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));border-radius:10px;min-width:255px;padding:.7rem .9rem;text-align:right}.opt-learning-badge strong,.opt-learning-badge span{display:block}.opt-learning-badge strong{color:var(--accent-bright);font-size:.88rem}.opt-learning-badge span{color:var(--text-muted);font-size:.68rem;margin-top:.15rem}
 .opt-market-bar{margin-bottom:.7rem;padding:.8rem 1rem}.opt-symbol-form{align-items:flex-end;display:flex;gap:.55rem}.opt-symbol-form label,.opt-strategy-meta label,.opt-chain-controls label,.opt-risk-controls label,.opt-probability-controls label{display:flex;flex-direction:column;gap:.25rem}.opt-symbol-form label>span,.opt-strategy-meta label>span,.opt-chain-controls label>span,.opt-risk-controls label>span,.opt-probability-controls label>span{color:var(--text-dim);font-size:.65rem;font-weight:800;letter-spacing:.07em;text-transform:uppercase}.opt-symbol-form input{font-size:1.05rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;width:120px}.opt-page input,.opt-page select{background:var(--surface-sunken);border:1px solid var(--border);border-radius:5px;color:var(--text-strong);min-height:34px;padding:.35rem .5rem}.opt-page input:focus,.opt-page select:focus{border-color:var(--accent);outline:none}.opt-quote-strip{align-items:center;border-top:1px solid var(--border);display:grid;gap:.6rem;grid-template-columns:minmax(145px,1.5fr) repeat(6,minmax(85px,1fr));margin-top:.75rem;padding-top:.75rem}.opt-symbol-name strong,.opt-symbol-name span,.opt-quote-metric span,.opt-quote-metric strong{display:block}.opt-symbol-name strong{color:var(--accent-bright);font-size:1.18rem}.opt-symbol-name span{color:var(--text-muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.opt-quote-metric span{color:var(--text-dim);font-size:.62rem;font-weight:700;text-transform:uppercase}.opt-quote-metric strong{color:var(--text-strong);font-size:.82rem;margin-top:.15rem;white-space:nowrap}.opt-positive{color:var(--pos)!important}.opt-negative{color:var(--neg)!important}.opt-loading-line{align-items:center;color:var(--accent-soft);display:flex;font-size:.75rem;gap:.45rem;margin-top:.65rem}.opt-loading-line span{animation:opt-pulse 1s infinite;background:var(--accent);border-radius:50%;height:7px;width:7px}@keyframes opt-pulse{50%{opacity:.25}}.opt-error{background:color-mix(in srgb,var(--neg) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--neg) 45%,var(--border));border-radius:6px;color:var(--neg);font-size:.78rem;margin-top:.65rem;padding:.5rem .65rem}
-.opt-command-row{align-items:center;background:var(--surface-sunken);border:1px solid var(--border);box-shadow:0 5px 16px rgba(0,0,0,.2);display:flex;justify-content:space-between;margin-bottom:.7rem;padding:.35rem;position:sticky;top:0;z-index:20}.opt-workspace-tabs{display:flex;gap:.25rem}.opt-workspace-tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--text-muted);cursor:pointer;font-size:.8rem;font-weight:800;padding:.55rem .8rem}.opt-workspace-tabs button.active{background:color-mix(in srgb,var(--accent) 9%,transparent);border-bottom-color:var(--accent);color:var(--accent-bright)}.opt-save-actions{align-items:center;display:flex;gap:.45rem}.opt-save-actions span{color:var(--text-muted);font-size:.7rem;max-width:200px}.opt-save-actions .btn{font-size:.75rem;padding:.4rem .65rem}
+.opt-command-row{align-items:center;background:var(--surface-sunken);border:1px solid var(--border);box-shadow:0 5px 16px rgba(0,0,0,.2);display:flex;justify-content:space-between;margin-bottom:.7rem;padding:.35rem;position:sticky;top:var(--app-header-height);z-index:20}.opt-workspace-tabs{display:flex;gap:.25rem}.opt-workspace-tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--text-muted);cursor:pointer;font-size:.8rem;font-weight:800;padding:.55rem .8rem}.opt-workspace-tabs button.active{background:color-mix(in srgb,var(--accent) 9%,transparent);border-bottom-color:var(--accent);color:var(--accent-bright)}.opt-save-actions{align-items:center;display:flex;gap:.45rem}.opt-save-actions span{color:var(--text-muted);font-size:.7rem;max-width:200px}.opt-save-actions .btn{font-size:.75rem;padding:.4rem .65rem}
 .opt-strategy-meta{align-items:end;display:grid;gap:.65rem;grid-template-columns:minmax(180px,1.2fr) minmax(150px,.8fr) 95px minmax(220px,1.5fr) minmax(200px,1.1fr) auto;margin-bottom:.7rem;padding:.65rem .8rem}.opt-strategy-meta input,.opt-strategy-meta select{width:100%}.opt-suffix-input,.opt-inline-suffix{align-items:center;display:flex;position:relative}.opt-suffix-input input,.opt-inline-suffix input{padding-right:2.2rem;width:100%}.opt-suffix-input b,.opt-inline-suffix span{color:var(--text-dim);font-size:.67rem;position:absolute;right:.45rem}.opt-delete-saved{background:color-mix(in srgb,var(--neg) 8%,var(--surface));border:1px solid color-mix(in srgb,var(--neg) 45%,var(--border));border-radius:5px;color:var(--neg);cursor:pointer;font-size:.7rem;font-weight:800;min-height:34px;padding:.45rem .65rem;white-space:nowrap}.opt-delete-saved:hover{background:color-mix(in srgb,var(--neg) 16%,var(--surface));border-color:var(--neg)}
 .opt-chain-card{margin-bottom:.7rem;padding:.75rem}.opt-section-heading,.opt-slice-heading{align-items:center;display:flex;gap:1rem;justify-content:space-between;margin-bottom:.65rem}.opt-section-heading>div:first-child>span,.opt-slice-heading>div:first-child>span,.opt-templates>div:first-child>span{color:var(--accent-bright);font-size:.63rem;font-weight:900;letter-spacing:.1em;text-transform:uppercase}.opt-section-heading h2,.opt-slice-heading h3{color:var(--text-strong);font-size:.95rem;margin:.12rem 0 0}.opt-chain-controls{align-items:end;display:flex;flex-wrap:wrap;gap:.6rem}.opt-chain-expiration-jump select{min-width:245px}.opt-chain-help{align-items:center;color:var(--text-muted);display:flex;font-size:.68rem;gap:.35rem;margin-bottom:.45rem}.opt-buy-dot,.opt-sell-dot{border-radius:50%;display:inline-block;height:7px;margin-left:.35rem;width:7px}.opt-buy-dot{background:var(--pos)}.opt-sell-dot{background:var(--neg)}.opt-chain-wrap{max-height:480px;overflow:auto}.opt-chain-table,.opt-legs-table,.opt-slices-table{border-collapse:collapse;font-family:Consolas,Menlo,monospace;font-size:.72rem;width:100%}.opt-chain-table th,.opt-chain-table td,.opt-legs-table th,.opt-legs-table td,.opt-slices-table th,.opt-slices-table td{border-bottom:1px solid var(--border);padding:.31rem .42rem;text-align:right;white-space:nowrap}.opt-chain-table thead th{background:var(--surface);color:var(--text-dim);font-size:.64rem;position:sticky;text-transform:uppercase;top:28px;z-index:2}.opt-chain-table thead tr:first-child th{top:0}.opt-call-head{background:color-mix(in srgb,var(--pos) 10%,var(--surface))!important;color:var(--pos)!important;text-align:center!important}.opt-put-head{background:color-mix(in srgb,var(--neg) 9%,var(--surface))!important;color:var(--neg)!important;text-align:center!important}.opt-strike-head,.opt-strike-cell{background:color-mix(in srgb,var(--accent) 9%,var(--surface))!important;color:var(--accent-bright)!important;text-align:center!important}.opt-strike-cell{font-weight:900}.opt-chain-table td.opt-itm{background:color-mix(in srgb,var(--accent) 22%,var(--surface-sunken));color:var(--text-strong)}.opt-itm-call+.opt-strike-cell,.opt-strike-cell+.opt-itm-put{border-left:2px solid color-mix(in srgb,var(--accent) 70%,var(--border))}.opt-atm-row td{border-bottom:1px dashed var(--accent);border-top:1px dashed var(--accent)}.opt-atm-row .opt-strike-cell{background:color-mix(in srgb,var(--accent) 28%,var(--surface))!important;color:var(--text-strong)!important}.opt-chain-price{background:transparent;border:1px solid transparent;border-radius:3px;color:var(--text-strong);cursor:pointer;font-family:inherit;font-size:.71rem;min-width:48px;padding:.16rem .24rem}.opt-chain-buy:hover{background:color-mix(in srgb,var(--pos) 15%,var(--surface));border-color:var(--pos);color:var(--pos)}.opt-chain-sell:hover{background:color-mix(in srgb,var(--neg) 14%,var(--surface));border-color:var(--neg);color:var(--neg)}.opt-empty-row{color:var(--text-muted);padding:1.4rem!important;text-align:center!important}
 .opt-chain-wrap{isolation:isolate;overscroll-behavior:contain;scrollbar-gutter:stable}.opt-chain-table{border-collapse:separate;border-spacing:0}.opt-chain-table thead tr:first-child th{box-shadow:0 1px 0 var(--border);height:28px;top:0;z-index:6}.opt-chain-table thead tr:nth-child(2) th{box-shadow:0 1px 0 var(--border);height:28px;top:28px;z-index:5}.opt-chain-table tbody td{position:relative;z-index:0}
@@ -8276,9 +8293,9 @@ thead .ne-date-col { z-index: 4; background: var(--surface-sunken); }
      a lower chart or table. */
   .dc-side {
     position: sticky;
-    /* Clears the app-wide notice strip, which is itself pinned to the top. */
-    top: 2.75rem;
-    max-height: calc(100vh - 3.5rem);
+    /* Clears the app header, which is itself pinned to the top. */
+    top: calc(var(--app-header-height) + 0.75rem);
+    max-height: calc(100vh - var(--app-header-height) - 1.5rem);
     overflow-y: auto;
     padding-right: 0.4rem;
     scrollbar-color: var(--p-285996) transparent;
@@ -13085,6 +13102,9 @@ body:has(.split-page) #root *:has(> .split-page) {
   min-height: 0;
   overflow: auto;
   position: relative;
+  /* The app header is outside the pane, so a page's pinned panels start at the
+     pane's own top edge. */
+  --app-header-height: 0px;
 }
 .split-pane-body > * {
   min-width: var(--split-pane-floor, 1000px);
@@ -13203,7 +13223,7 @@ body:has(.split-page) #root *:has(> .split-page) {
 .gos-help-hero span, .gos-help-section > header span { color: var(--accent-bright); font-size: 0.65rem; font-weight: 900; letter-spacing: 0.08em; }
 .gos-help-hero h1 { color: var(--text-strong); font-size: clamp(1.65rem, 3vw, 2.7rem); margin: 0.25rem 0 0.55rem; }
 .gos-help-hero p { color: var(--text-muted); font-size: 0.88rem; line-height: 1.7; margin: 0; }
-.gos-help-jumps { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0.55rem; position: sticky; top: 0.5rem; z-index: 5; }
+.gos-help-jumps { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0.55rem; position: sticky; top: calc(var(--app-header-height) + 0.5rem); z-index: 5; }
 .gos-help-jumps button { background: transparent; border: 0; border-radius: 6px; color: var(--text-muted); cursor: pointer; font-size: 0.67rem; font-weight: 800; padding: 0.42rem 0.65rem; }
 .gos-help-jumps button:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-bright); }
 .gos-help-section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; scroll-margin-top: 4rem; padding: clamp(1rem, 2.5vw, 2rem); }
@@ -13303,9 +13323,8 @@ body:has(.split-page) #root *:has(> .split-page) {
 }
 
 .nfa-banner {
-  position: sticky;
-  top: 0;
-  z-index: 40;
+  /* Pinned by .app-header, which it shares with the nav bar. */
+  position: relative;
   margin: 0;
   padding: 0.45rem 1rem;
   background: color-mix(in srgb, var(--amber) 14%, var(--surface-sunken));
