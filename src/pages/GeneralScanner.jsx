@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfileFetch } from '../context/ProfileContext'
@@ -306,6 +306,9 @@ export default function GeneralScanner() {
   const [chartTicker, setChartTicker] = useState(null)
   const [chartPeriod, setChartPeriod] = useState('1y')
   const [chartLoading, setChartLoading] = useState(false)
+  // A ref, not an id lookup: Split View can mount this page in both panes, and
+  // an id lookup returns the other pane's element.
+  const chartPopupRef = useRef(null)
 
   // Filter state
   const [assetType, setAssetType] = useState('')
@@ -659,20 +662,22 @@ export default function GeneralScanner() {
   useEffect(() => {
     if (!chartTicker) return
     setChartLoading(true)
+    let drawnEl = null
     pf(`/api/general-scanner/chart/${chartTicker}?period=${chartPeriod}`)
       .then(r => r.json())
       .then(d => {
         if (d.error) return
-        const el = document.getElementById('scanner-chart-popup')
+        // Read when the response lands: the popup may have closed meanwhile.
+        const el = chartPopupRef.current
         if (el && window.Plotly) {
+          drawnEl = el
           window.Plotly.newPlot(el, d.fig_data, themedPlotlyLayout({ ...d.fig_layout, autosize: true }, isDark), { responsive: true })
         }
       })
       .catch(() => {})
       .finally(() => setChartLoading(false))
     return () => {
-      const el = document.getElementById('scanner-chart-popup')
-      if (el && window.Plotly) window.Plotly.purge(el)
+      if (drawnEl && window.Plotly) window.Plotly.purge(drawnEl)
     }
   }, [chartTicker, chartPeriod, pf, isDark])
 
@@ -1274,7 +1279,7 @@ export default function GeneralScanner() {
                 &times;
               </button>
             </div>
-            <div id="scanner-chart-popup" style={{ width: '100%', minHeight: '780px' }} />
+            <div ref={chartPopupRef} id="scanner-chart-popup" style={{ width: '100%', minHeight: '780px' }} />
           </div>
         </div>
       )}

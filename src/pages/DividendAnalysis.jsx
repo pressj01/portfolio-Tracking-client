@@ -760,6 +760,10 @@ export default function DividendAnalysis() {
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // The chart containers are found inside this page's own grid, never by a
+  // document-wide id: Split View can mount this page in both panes, and an
+  // id lookup returns the other pane's element.
+  const chartGridRef = useRef(null)
   const [sortCol, setSortCol] = useState(null)
   const [sortAsc, setSortAsc] = useState(true)
   const [yieldMetric, setYieldMetric] = useState('yield_pct')
@@ -818,7 +822,7 @@ export default function DividendAnalysis() {
     if (!data || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
-    const ids = []
+    const drawn = []
 
     const chartMap = {
       annual_income: 'da-chart-annual-income',
@@ -829,19 +833,16 @@ export default function DividendAnalysis() {
     }
 
     Object.entries(chartMap).forEach(([key, elId]) => {
-      const el = document.getElementById(elId)
+      const el = chartGridRef.current?.querySelector(`#${elId}`)
       if (!el || !data.charts[key]) return
-      ids.push(elId)
+      drawn.push(el)
       const fig = JSON.parse(data.charts[key])
       Plotly.newPlot(el, fig.data, themedPlotlyLayout(fig.layout, isDark), cfg)
     })
 
-    return () => {
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
-    }
+    // Purge the elements this effect drew into. Looking them up again here
+    // finds nothing once the page has unmounted — or finds the other pane's.
+    return () => { drawn.forEach(el => Plotly.purge(el)) }
   }, [data, isDark])
 
   const handleSort = (col) => {
@@ -1045,7 +1046,7 @@ export default function DividendAnalysis() {
           </div>
 
           {/* Charts */}
-          <div className="da-chart-grid">
+          <div className="da-chart-grid" ref={chartGridRef}>
             {data.charts.annual_income && <div className="da-chart-panel"><div id="da-chart-annual-income" className="da-chart-div" /></div>}
             {data.charts.projected_monthly && <div className="da-chart-panel"><div id="da-chart-projected-monthly" className="da-chart-div" /></div>}
             <DividendPipelineChart pipeline={data.dividend_pipeline} />

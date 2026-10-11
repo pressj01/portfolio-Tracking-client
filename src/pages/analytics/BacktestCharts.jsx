@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useTheme } from '../../context/ThemeContext'
 import { themedPlotlyLayout } from '../../utils/chartTheme'
 import { useProfileFetch } from '../../context/ProfileContext'
@@ -19,6 +19,13 @@ export default function BacktestCharts({ tickers, result, period }) {
   // Backtest-local controls (independent of the main Analyze period)
   const [btPeriod, setBtPeriod] = useState(period || '1y')
   const [btBenchmark, setBtBenchmark] = useState('SPY')
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element.
+  const growthRef = useRef(null)
+  const riskContribRef = useRef(null)
+  const rollingSharpeRef = useRef(null)
+  const rollingSortinoRef = useRef(null)
 
   // Keep backtest period in sync if the user changes the main period
   useEffect(() => { if (period) setBtPeriod(period) }, [period])
@@ -49,7 +56,7 @@ export default function BacktestCharts({ tickers, result, period }) {
   // Render backtest chart
   useEffect(() => {
     if (!backtestData?.series?.length || !window.Plotly) return
-    const el = document.getElementById('backtest-growth')
+    const el = growthRef.current
     if (!el) return
     const traces = backtestData.series.map((s, i) => (
       s.is_benchmark
@@ -78,7 +85,7 @@ export default function BacktestCharts({ tickers, result, period }) {
   // Render risk contribution bar chart
   useEffect(() => {
     if (!result?.risk_contribution?.length || !window.Plotly) return
-    const el = document.getElementById('backtest-risk-contrib')
+    const el = riskContribRef.current
     if (!el) return
     const rc = result.risk_contribution
     const weights = result.metrics || []
@@ -104,7 +111,7 @@ export default function BacktestCharts({ tickers, result, period }) {
   useEffect(() => {
     if (!rollingData || !window.Plotly) return
 
-    const sharpeEl = document.getElementById('backtest-rolling-sharpe')
+    const sharpeEl = rollingSharpeRef.current
     if (sharpeEl && rollingData.sharpe?.length) {
       const traces = rollingData.sharpe.map((s, i) => ({
         x: rollingData.dates, y: s.values, name: s.ticker, type: 'scatter', mode: 'lines',
@@ -122,7 +129,7 @@ export default function BacktestCharts({ tickers, result, period }) {
       }, isDark), { responsive: true })
     }
 
-    const sortinoEl = document.getElementById('backtest-rolling-sortino')
+    const sortinoEl = rollingSortinoRef.current
     if (sortinoEl && rollingData.sortino?.length) {
       const traces = rollingData.sortino.map((s, i) => ({
         x: rollingData.dates, y: s.values, name: s.ticker, type: 'scatter', mode: 'lines',
@@ -175,7 +182,7 @@ export default function BacktestCharts({ tickers, result, period }) {
         {backtestLoading ? (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading backtest...</div>
         ) : backtestData?.series?.length ? (
-          <div id="backtest-growth" />
+          <div ref={growthRef} id="backtest-growth" />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No backtest data available.</div>
         )}
@@ -184,7 +191,7 @@ export default function BacktestCharts({ tickers, result, period }) {
       {/* Risk Contribution */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         {result?.risk_contribution?.length ? (
-          <div id="backtest-risk-contrib" />
+          <div ref={riskContribRef} id="backtest-risk-contrib" />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>
             Risk contribution requires 2+ tickers with portfolio weights. Run analysis with your portfolio loaded.
@@ -209,8 +216,8 @@ export default function BacktestCharts({ tickers, result, period }) {
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading rolling metrics...</div>
         ) : rollingData?.sharpe?.length ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-            <div id="backtest-rolling-sharpe" />
-            <div id="backtest-rolling-sortino" />
+            <div ref={rollingSharpeRef} id="backtest-rolling-sharpe" />
+            <div ref={rollingSortinoRef} id="backtest-rolling-sortino" />
           </div>
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No rolling metrics data available.</div>

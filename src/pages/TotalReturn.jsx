@@ -104,6 +104,12 @@ export default function TotalReturn() {
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element, so one portfolio's chart would draw over the other's.
+  const barChartRef = useRef(null)
+  const scatterChartRef = useRef(null)
+  const compareChartRef = useRef(null)
 
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
@@ -318,7 +324,7 @@ export default function TotalReturn() {
     if (!chartData || chartLoading || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
-    const ids = []
+    const drawn = []
     const chartRange = formatPerformanceChartRange(
       chartData.requested_start_date,
       chartData.requested_end_date,
@@ -336,9 +342,9 @@ export default function TotalReturn() {
     }
 
     // --- Bar chart: color each bar + ticker label to match its line ---
-    const barEl = document.getElementById('tr-chart-bar')
+    const barEl = barChartRef.current
     if (barEl && isLifetimePerformancePeriod(dashboardPeriod) && chartData.performance_rows?.length) {
-      ids.push('tr-chart-bar')
+      drawn.push(barEl)
       const rows = [...chartData.performance_rows]
         .filter(row => row.price_return_pct != null)
         .sort((a, b) => a.price_return_pct - b.price_return_pct)
@@ -362,7 +368,7 @@ export default function TotalReturn() {
         plot_bgcolor: 'rgba(255,255,255,0.03)',
       }, isDark), cfg)
     } else if (barEl && chartData.bar) {
-      ids.push('tr-chart-bar')
+      drawn.push(barEl)
       const bar = JSON.parse(JSON.stringify(chartData.bar))
       if (bar.data?.[0]?.y) {
         const tickers = bar.data[0].y
@@ -403,19 +409,16 @@ export default function TotalReturn() {
       Plotly.newPlot(barEl, bar.data, themedPlotlyLayout(bar.layout, isDark), cfg)
     }
 
-    return () => {
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
-    }
+    // Purge the elements this effect drew into. Looking them up again here
+    // finds nothing once the page has unmounted — or finds the other pane's.
+    return () => { drawn.forEach(el => Plotly.purge(el)) }
   }, [chartData, chartLoading, isDark, dashboardPeriod])
 
   // Render scatter chart
   useEffect(() => {
     if (chartLoading || !dashboardRows.length || !window.Plotly) return
     const Plotly = window.Plotly
-    const el = document.getElementById('tr-chart-scatter')
+    const el = scatterChartRef.current
     if (!el) return
 
     const rows = dashboardRows
@@ -601,7 +604,7 @@ export default function TotalReturn() {
   useEffect(() => {
     if (!cmpData || !window.Plotly) return
     const Plotly = window.Plotly
-    const el = document.getElementById('tr-chart-compare')
+    const el = compareChartRef.current
     if (!el) return
 
     const traceKeys = cmpMode === 'both' ? ['total', 'price'] : [cmpMode]
@@ -1724,7 +1727,7 @@ export default function TotalReturn() {
               : <>Portfolio range: <strong>{dashboardCardRange}</strong>. Each holding starts no earlier than the date it was actually held;
             hover a bar for that ticker's effective range. Green = positive, Red = negative. Gold dashed line = SPY.</>}
           </p>
-          <div id="tr-chart-bar" style={{ minHeight: '400px', marginBottom: '2rem' }} />
+          <div ref={barChartRef} id="tr-chart-bar" style={{ minHeight: '400px', marginBottom: '2rem' }} />
         </>
       )}
 
@@ -1848,7 +1851,7 @@ export default function TotalReturn() {
         {!cmpData && !cmpLoading && !cmpError && (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) && (
           <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select Entire Portfolio, portfolio tickers, or external tickers to see the comparison chart.</p>
         )}
-        <div id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
+        <div ref={compareChartRef} id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
       </div>}
 
       {/* Scatter chart */}
@@ -1871,7 +1874,7 @@ export default function TotalReturn() {
             </div>
           </div>
           <p className="tr-note">Range: <strong>{dashboardCardRange}</strong>. Bubble size = ending position value. X = current annual yield on cost.</p>
-          <div id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
+          <div ref={scatterChartRef} id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
         </>
       )}
 

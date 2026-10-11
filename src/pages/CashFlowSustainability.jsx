@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import Plot from '../components/ThemedPlot'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -108,6 +108,10 @@ function SummaryTile({ label, value, sub, detail, tone = '' }) {
 }
 
 function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const [detailsOpen, setDetailsOpen] = useState(false)
   const isEdit = Boolean(value.id)
   const categories = kind === 'expense' ? EXPENSE_CATEGORIES : INCOME_CATEGORIES
@@ -168,12 +172,12 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
         <label>
           <span>Category <em>optional</em></span>
           <input
-            list={`cf-${kind}-categories`}
+            list={`${uid}-cf-${kind}-categories`}
             value={value.category}
             onChange={e => set('category', e.target.value)}
             placeholder="Choose or type"
           />
-          <datalist id={`cf-${kind}-categories`}>
+          <datalist id={`${uid}-cf-${kind}-categories`}>
             {categories.map(category => <option key={category} value={category} />)}
           </datalist>
         </label>

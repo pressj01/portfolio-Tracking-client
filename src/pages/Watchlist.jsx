@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { useTheme } from '../context/ThemeContext'
@@ -104,6 +104,10 @@ function erosionStyle(level) {
 }
 
 function SymbolSearch({ pf, picked, onAdd }) {
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState([])
   const [searching, setSearching] = useState(false)
@@ -144,11 +148,11 @@ function SymbolSearch({ pf, picked, onAdd }) {
 
   return (
     <div className="wl-search">
-      <label className="wl-label" htmlFor="wl-symbol-search">Find a symbol</label>
+      <label className="wl-label" htmlFor={`${uid}-wl-symbol-search`}>Find a symbol</label>
       <div className="wl-search-box">
         <span aria-hidden="true">⌕</span>
         <input
-          id="wl-symbol-search"
+          id={`${uid}-wl-symbol-search`}
           value={query}
           placeholder="Search by symbol or name"
           onChange={event => setQuery(event.target.value)}
@@ -194,6 +198,9 @@ function WatchlistTickerModal({ ticker, onClose }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
+  // A ref, not an id lookup: Split View can mount this page in both panes, and
+  // an id lookup returns the other pane's element.
+  const chartRef = useRef(null)
 
   useEffect(() => {
     if (!ticker) return undefined
@@ -238,7 +245,7 @@ function WatchlistTickerModal({ ticker, onClose }) {
 
   useEffect(() => {
     if (!data || !window.Plotly) return undefined
-    const el = document.getElementById('wl-ticker-chart')
+    const el = chartRef.current
     if (!el) return undefined
     const ct = chartTheme(isDark)
     const traces = [
@@ -275,7 +282,7 @@ function WatchlistTickerModal({ ticker, onClose }) {
         {data && (
           <>
             <h2 style={{ color: 'var(--accent-bright)', marginBottom: '0.25rem' }}>{data.ticker} — {data.description}</h2>
-            <div id="wl-ticker-chart" style={{ height: '400px' }} />
+            <div ref={chartRef} id="wl-ticker-chart" style={{ height: '400px' }} />
           </>
         )}
       </div>
@@ -285,6 +292,10 @@ function WatchlistTickerModal({ ticker, onClose }) {
 
 export default function Watchlist() {
   const pf = useProfileFetch()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const dialog = useDialog()
   const [lists, setLists] = useState([])
   const [market, setMarket] = useState({})
@@ -712,10 +723,10 @@ export default function Watchlist() {
 
             {wizard.step === 1 && (
               <>
-                <label className="wl-label" htmlFor="wl-new-name">Watchlist Name</label>
-                <input id="wl-new-name" className="wl-input wl-input-wide" value={wizard.name} onChange={event => setWizard({ ...wizard, name: event.target.value })} autoFocus />
-                <label className="wl-label" htmlFor="wl-new-desc">Description (optional)</label>
-                <input id="wl-new-desc" className="wl-input wl-input-wide" placeholder="Optional description" value={wizard.description} onChange={event => setWizard({ ...wizard, description: event.target.value })} />
+                <label className="wl-label" htmlFor={`${uid}-wl-new-name`}>Watchlist Name</label>
+                <input id={`${uid}-wl-new-name`} className="wl-input wl-input-wide" value={wizard.name} onChange={event => setWizard({ ...wizard, name: event.target.value })} autoFocus />
+                <label className="wl-label" htmlFor={`${uid}-wl-new-desc`}>Description (optional)</label>
+                <input id={`${uid}-wl-new-desc`} className="wl-input wl-input-wide" placeholder="Optional description" value={wizard.description} onChange={event => setWizard({ ...wizard, description: event.target.value })} />
                 <div className="wl-modal-actions">
                   <button type="button" className="btn btn-primary" onClick={() => wizard.name.trim() ? setWizard({ ...wizard, step: 2 }) : dialog.alert('Enter a watchlist name.')}>Next</button>
                 </div>
@@ -818,10 +829,10 @@ export default function Watchlist() {
           <div className="modal-content wl-modal" role="dialog" aria-modal="true" onClick={event => event.stopPropagation()}>
             <button type="button" className="modal-close" onClick={() => setListEditor(null)} aria-label="Close">&times;</button>
             <h2>Edit Watchlist</h2>
-            <label className="wl-label" htmlFor="wl-edit-name">Watchlist Name</label>
-            <input id="wl-edit-name" className="wl-input wl-input-wide" value={listEditor.name} onChange={event => setListEditor({ ...listEditor, name: event.target.value })} />
-            <label className="wl-label" htmlFor="wl-edit-desc">Description (optional)</label>
-            <input id="wl-edit-desc" className="wl-input wl-input-wide" value={listEditor.description || ''} onChange={event => setListEditor({ ...listEditor, description: event.target.value })} />
+            <label className="wl-label" htmlFor={`${uid}-wl-edit-name`}>Watchlist Name</label>
+            <input id={`${uid}-wl-edit-name`} className="wl-input wl-input-wide" value={listEditor.name} onChange={event => setListEditor({ ...listEditor, name: event.target.value })} />
+            <label className="wl-label" htmlFor={`${uid}-wl-edit-desc`}>Description (optional)</label>
+            <input id={`${uid}-wl-edit-desc`} className="wl-input wl-input-wide" value={listEditor.description || ''} onChange={event => setListEditor({ ...listEditor, description: event.target.value })} />
             <p className="wl-label">Icon</p>
             <div className="wl-icon-grid">
               {ICONS.map(icon => (
@@ -854,18 +865,18 @@ export default function Watchlist() {
             <button type="button" className="modal-close" onClick={() => setItemEditor(null)} aria-label="Close">&times;</button>
             <h2>Edit {itemEditor.ticker}</h2>
             <p className="wl-help">{itemEditor.name || itemEditor.ticker}</p>
-            <label className="wl-label" htmlFor="wl-item-note">Note</label>
-            <textarea id="wl-item-note" className="wl-input wl-input-wide" rows={3} maxLength={500} value={itemEditor.notes || ''} onChange={event => setItemEditor({ ...itemEditor, notes: event.target.value })} />
-            <label className="wl-label" htmlFor="wl-item-yield">Yield override (blank uses the calculated yield)</label>
-            <input id="wl-item-yield" className="wl-input" type="number" step="0.01" min="0" value={itemEditor.div_yield_override ?? ''} onChange={event => setItemEditor({ ...itemEditor, div_yield_override: event.target.value })} />
-            <label className="wl-label" htmlFor="wl-item-nav">NAV erosion</label>
-            <select id="wl-item-nav" className="wl-input" value={itemEditor.nav_erosion_scope || 'auto'} onChange={event => setItemEditor({ ...itemEditor, nav_erosion_scope: event.target.value })}>
+            <label className="wl-label" htmlFor={`${uid}-wl-item-note`}>Note</label>
+            <textarea id={`${uid}-wl-item-note`} className="wl-input wl-input-wide" rows={3} maxLength={500} value={itemEditor.notes || ''} onChange={event => setItemEditor({ ...itemEditor, notes: event.target.value })} />
+            <label className="wl-label" htmlFor={`${uid}-wl-item-yield`}>Yield override (blank uses the calculated yield)</label>
+            <input id={`${uid}-wl-item-yield`} className="wl-input" type="number" step="0.01" min="0" value={itemEditor.div_yield_override ?? ''} onChange={event => setItemEditor({ ...itemEditor, div_yield_override: event.target.value })} />
+            <label className="wl-label" htmlFor={`${uid}-wl-item-nav`}>NAV erosion</label>
+            <select id={`${uid}-wl-item-nav`} className="wl-input" value={itemEditor.nav_erosion_scope || 'auto'} onChange={event => setItemEditor({ ...itemEditor, nav_erosion_scope: event.target.value })}>
               <option value="auto">Auto</option>
               <option value="test">Test</option>
               <option value="skip">Skip</option>
             </select>
-            <label className="wl-label" htmlFor="wl-item-bench">Benchmark override</label>
-            <input id="wl-item-bench" className="wl-input wl-input-wide" placeholder="QQQ, SPY, or BTC-USD+GLD" value={itemEditor.nav_benchmark_override || ''} onChange={event => setItemEditor({ ...itemEditor, nav_benchmark_override: event.target.value.toUpperCase() })} />
+            <label className="wl-label" htmlFor={`${uid}-wl-item-bench`}>Benchmark override</label>
+            <input id={`${uid}-wl-item-bench`} className="wl-input wl-input-wide" placeholder="QQQ, SPY, or BTC-USD+GLD" value={itemEditor.nav_benchmark_override || ''} onChange={event => setItemEditor({ ...itemEditor, nav_benchmark_override: event.target.value.toUpperCase() })} />
             <div className="wl-modal-actions">
               <button type="button" className="btn btn-secondary" onClick={() => setItemEditor(null)}>Cancel</button>
               <button type="button" className="btn btn-primary" onClick={saveItem}>Save</button>

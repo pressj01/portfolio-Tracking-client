@@ -846,6 +846,7 @@ const cellStyle = {
 
 export default function SecurityResearch() {
   const pf = useProfileFetch()
+  const pageRef = useRef(null)
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState('lookup')
   const [kind, setKind] = useState('etf')
@@ -930,7 +931,8 @@ export default function SecurityResearch() {
 
   const openChart = () => {
     setChartTicker(data?.ticker || normalizedTicker)
-    setTimeout(() => document.getElementById('annual-chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+    // Scoped to this page: Split View can show Security Research in both panes.
+    setTimeout(() => pageRef.current?.querySelector('#annual-chart')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
   }
 
   const handleKeyDown = (e) => {
@@ -938,7 +940,7 @@ export default function SecurityResearch() {
   }
 
   return (
-    <div className="page security-research-page">
+    <div className="page security-research-page" ref={pageRef}>
       <div className="research-title-row">
         <div>
           <h1>Security Research</h1>

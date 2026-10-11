@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { DefinitionList, HelpSection, helpImage } from '../components/GosHelpKit'
+import { DefinitionList, HelpSection, helpImage, scrollToHelpSection } from '../components/GosHelpKit'
 import { OPTION_SCANNER_GROUPS, generalScannerRoute } from '../utils/optionScannerCatalog'
 import { fieldsForGeneralStrategy, helpForGeneralField } from '../utils/generalOptionScannerConfig'
 
@@ -199,8 +199,8 @@ export default function GeneralOptionScannerStrategyGuide() {
     </header>
 
     <nav className="gos-help-jumps" aria-label="Strategy reference topics">
-      <button type="button" onClick={() => document.getElementById('common')?.scrollIntoView({ behavior: 'smooth' })}>Common to every strategy</button>
-      {OPTION_SCANNER_GROUPS.map(group => <button type="button" key={group.id} onClick={() => document.getElementById(group.id)?.scrollIntoView({ behavior: 'smooth' })}>{group.label}</button>)}
+      <button type="button" onClick={event => scrollToHelpSection(event, 'common')}>Common to every strategy</button>
+      {OPTION_SCANNER_GROUPS.map(group => <button type="button" key={group.id} onClick={event => scrollToHelpSection(event, group.id)}>{group.label}</button>)}
     </nav>
 
     <HelpSection id="common" eyebrow="EVERY STRATEGY" title="The five groups that never change">

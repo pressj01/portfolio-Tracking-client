@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { useTheme } from '../../context/ThemeContext'
 import { themedPlotlyLayout } from '../../utils/chartTheme'
 import { useProfileFetch } from '../../context/ProfileContext'
@@ -13,6 +13,14 @@ export default function IncomeCharts({ tickers, result, period }) {
   const [calendarLoading, setCalendarLoading] = useState(false)
   const [yieldLoading, setYieldLoading] = useState(false)
   const [navLoading, setNavLoading] = useState(false)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element.
+  const sectorPieRef = useRef(null)
+  const typePieRef = useRef(null)
+  const calendarChartRef = useRef(null)
+  const yieldTrendRef = useRef(null)
+  const navErosionRef = useRef(null)
 
   // Fetch income calendar
   useEffect(() => {
@@ -53,7 +61,7 @@ export default function IncomeCharts({ tickers, result, period }) {
     const base = { paper_bgcolor: '#0e1117', plot_bgcolor: '#0e1117' }
     const colors = ['#64b5f6', '#4caf50', '#ffb74d', '#ef5350', '#ab47bc', '#26c6da', '#ff7043', '#66bb6a', '#5c6bc0', '#8d6e63', '#78909c', '#ffa726']
 
-    const sectorEl = document.getElementById('income-sector-pie')
+    const sectorEl = sectorPieRef.current
     if (sectorEl && result.sector_breakdown.by_sector?.length) {
       const d = result.sector_breakdown.by_sector
       window.Plotly.newPlot(sectorEl, [{
@@ -72,7 +80,7 @@ export default function IncomeCharts({ tickers, result, period }) {
       }, isDark), { responsive: true })
     }
 
-    const typeEl = document.getElementById('income-type-pie')
+    const typeEl = typePieRef.current
     if (typeEl && result.sector_breakdown.by_type?.length) {
       const d = result.sector_breakdown.by_type
       window.Plotly.newPlot(typeEl, [{
@@ -98,7 +106,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   // Render income calendar stacked bar
   useEffect(() => {
     if (!calendarData || !window.Plotly) return
-    const el = document.getElementById('income-calendar-chart')
+    const el = calendarChartRef.current
     if (!el) return
     const colors = ['#64b5f6', '#4caf50', '#ffb74d', '#ef5350', '#ab47bc', '#26c6da', '#ff7043', '#66bb6a', '#5c6bc0', '#8d6e63', '#78909c', '#ffa726',
       '#29b6f6', '#9ccc65', '#ffd54f', '#e57373', '#ce93d8', '#4dd0e1', '#ff8a65', '#81c784']
@@ -124,7 +132,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   // Render yield trend
   useEffect(() => {
     if (!yieldData?.series?.length || !window.Plotly) return
-    const el = document.getElementById('income-yield-trend')
+    const el = yieldTrendRef.current
     if (!el) return
     const colors = ['#64b5f6', '#4caf50', '#ffb74d', '#ef5350', '#ab47bc', '#26c6da', '#ff7043', '#66bb6a']
     const traces = yieldData.series.map((s, i) => ({
@@ -146,7 +154,7 @@ export default function IncomeCharts({ tickers, result, period }) {
   // Render NAV erosion chart
   useEffect(() => {
     if (!navData?.series?.length || !window.Plotly) return
-    const el = document.getElementById('income-nav-erosion')
+    const el = navErosionRef.current
     if (!el) return
     const s = navData.series[0]
     const traces = [
@@ -175,8 +183,8 @@ export default function IncomeCharts({ tickers, result, period }) {
       {/* Sector Breakdown */}
       {result?.sector_breakdown && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
-          <div className="card" style={{ padding: '0.75rem 1rem' }}><div id="income-sector-pie" /></div>
-          <div className="card" style={{ padding: '0.75rem 1rem' }}><div id="income-type-pie" /></div>
+          <div className="card" style={{ padding: '0.75rem 1rem' }}><div ref={sectorPieRef} id="income-sector-pie" /></div>
+          <div className="card" style={{ padding: '0.75rem 1rem' }}><div ref={typePieRef} id="income-type-pie" /></div>
         </div>
       )}
       {!result?.sector_breakdown && (
@@ -190,7 +198,7 @@ export default function IncomeCharts({ tickers, result, period }) {
         {calendarLoading ? (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading income calendar...</div>
         ) : calendarData?.tickers?.length ? (
-          <div id="income-calendar-chart" />
+          <div ref={calendarChartRef} id="income-calendar-chart" />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No income calendar data available for selected tickers.</div>
         )}
@@ -201,7 +209,7 @@ export default function IncomeCharts({ tickers, result, period }) {
         {yieldLoading ? (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading yield trends...</div>
         ) : yieldData?.series?.length ? (
-          <div id="income-yield-trend" />
+          <div ref={yieldTrendRef} id="income-yield-trend" />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>No yield trend data available.</div>
         )}
@@ -221,7 +229,7 @@ export default function IncomeCharts({ tickers, result, period }) {
         {navLoading ? (
           <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}><span className="spinner" /> Loading NAV data...</div>
         ) : navData?.series?.length ? (
-          <div id="income-nav-erosion" />
+          <div ref={navErosionRef} id="income-nav-erosion" />
         ) : (
           <div style={{ color: 'var(--text-dim)', fontSize: '0.85rem', padding: '0.5rem' }}>Select a ticker to view NAV erosion analysis.</div>
         )}

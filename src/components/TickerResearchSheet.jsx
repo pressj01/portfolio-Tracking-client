@@ -147,6 +147,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
   const { isDark } = useTheme()
   const dialogRef = useRef(null)
   const closeButtonRef = useRef(null)
+  const chartRef = useRef(null)
   const initialRange = readSharedPerformanceRange()
   const [period, setPeriod] = useState(initialRange.period)
   const [customStart, setCustomStart] = useState(initialRange.start)
@@ -364,7 +365,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
 
   useEffect(() => {
     if (!chart || chart.history_pending || !window.Plotly) return undefined
-    const el = document.getElementById('ticker-research-chart')
+    const el = chartRef.current
     if (!el) return undefined
     const hasTotalReturn = chart.total_return_available !== false && Array.isArray(chart.total_return)
     const traces = hasTotalReturn
@@ -572,7 +573,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
                 )}
                 {endingPriceReturn != null && `; Price Return ${endingPriceReturn.toFixed(2)}%`}
               </div>
-              <div id="ticker-research-chart" style={{ height: '360px' }} />
+              <div ref={chartRef} id="ticker-research-chart" style={{ height: '360px' }} />
             </>
           )}
         </section>

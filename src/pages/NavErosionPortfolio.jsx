@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useId, useMemo, useCallback } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
@@ -79,6 +79,10 @@ function StatTile({ label, value, color, sub, explanation }) {
 
 export default function NavErosionPortfolio() {
   const pf = useProfileFetch()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const { selection } = useProfile()
   const dialog = useDialog()
   const [startDate, setStartDate] = useState('2023-01-01')
@@ -682,7 +686,7 @@ export default function NavErosionPortfolio() {
                       style={{ width: 140, textTransform: 'uppercase' }}
                       maxLength={24}
                       placeholder="Auto"
-                      list="nep-benchmark-choices"
+                      list={`${uid}-nep-benchmark-choices`}
                       title="Benchmark this ticker is compared with. Leave blank to use the mapped default (SPY, QQQ, BTC-USD, …)."
                       aria-label={`Benchmark for ${r.ticker || 'this ticker'}`}
                       value={r.benchmark || ''}
@@ -696,7 +700,7 @@ export default function NavErosionPortfolio() {
               ))}
             </tbody>
           </table>
-          <datalist id="nep-benchmark-choices">
+          <datalist id={`${uid}-nep-benchmark-choices`}>
             {NAV_BENCHMARK_CHOICES.map(b => <option key={b} value={b} />)}
           </datalist>
         </div>
@@ -742,9 +746,9 @@ export default function NavErosionPortfolio() {
                   checked={btOverwrite}
                   onChange={e => setBtOverwrite(e.target.checked)}
                   style={{ accentColor: 'var(--purple)', width: 14, height: 14, cursor: 'pointer' }}
-                  id="nep-bt-overwrite"
+                  id={`${uid}-nep-bt-overwrite`}
                 />
-                <label htmlFor="nep-bt-overwrite" style={{ fontSize: '0.78rem', color: 'var(--p-aaa)', cursor: 'pointer' }}>
+                <label htmlFor={`${uid}-nep-bt-overwrite`} style={{ fontSize: '0.78rem', color: 'var(--p-aaa)', cursor: 'pointer' }}>
                   Overwrite selected backtest (uncheck to save as new)
                 </label>
               </div>
@@ -935,7 +939,7 @@ export default function NavErosionPortfolio() {
                             className="ne-input"
                             style={{ width: 110, textTransform: 'uppercase' }}
                             maxLength={24}
-                            list="nep-benchmark-choices"
+                            list={`${uid}-nep-benchmark-choices`}
                             title="Change the benchmark, then Run Backtest"
                             aria-label={`Benchmark for ${r.ticker}`}
                             value={
@@ -988,7 +992,7 @@ export default function NavErosionPortfolio() {
                           className="ne-input"
                           style={{ width: 110, textTransform: 'uppercase' }}
                           maxLength={24}
-                          list="nep-benchmark-choices"
+                          list={`${uid}-nep-benchmark-choices`}
                           title="Change the benchmark, then Run Backtest"
                           aria-label={`Benchmark for ${r.ticker}`}
                           value={

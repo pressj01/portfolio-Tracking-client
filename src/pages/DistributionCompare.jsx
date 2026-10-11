@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useId, useRef, useCallback, useMemo } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -364,7 +364,7 @@ function makeSide(name, role, source) {
   }
 }
 
-function PortfolioSide({ side, onChange, profilesList, colorKey, onRemove }) {
+function PortfolioSide({ side, onChange, profilesList, tickerListId, colorKey, onRemove }) {
   const color = FUND_COLORS[colorKey] || '#7ecfff'
   const updateLeg = (i, patch) => onChange({ legs: side.legs.map((l, j) => (j === i ? { ...l, ...patch } : l)) })
   const addLeg = () => onChange({ legs: [...side.legs, { ticker: '', amount: 10000 }] })
@@ -421,7 +421,7 @@ function PortfolioSide({ side, onChange, profilesList, colorKey, onRemove }) {
             <label>Tickers</label>
             {side.legs.map((leg, i) => (
               <div key={i} className="dc-ticker-row" style={{ marginBottom: 4 }}>
-                <input type="text" list="dc-portfolio-tickers" value={leg.ticker}
+                <input type="text" list={tickerListId} value={leg.ticker}
                   onChange={e => updateLeg(i, { ticker: e.target.value.toUpperCase() })}
                   placeholder="e.g. SCHD" style={{ flex: 1 }} />
                 {!isEven && (
@@ -454,6 +454,10 @@ function PortfolioSide({ side, onChange, profilesList, colorKey, onRemove }) {
 /* ── Main Component ─────────────────────────────────────────────── */
 export default function DistributionCompare() {
   const { isDark } = useTheme()
+  // A per-instance id for the ticker suggestions: Split View can mount this
+  // page in both panes, and a repeated id would hand one pane the other
+  // portfolio's tickers.
+  const tickerListId = useId()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
@@ -555,6 +559,10 @@ export default function DistributionCompare() {
   })
 
   const chartsRendered = useRef(false)
+  // The chart containers are found inside this page's own results, never by
+  // a document-wide id: Split View can mount this page in both panes, and an
+  // id lookup returns the other pane's element.
+  const chartsRef = useRef(null)
 
   // Fetch portfolio tickers on mount
   useEffect(() => {
@@ -899,7 +907,7 @@ export default function DistributionCompare() {
     ]
 
     charts.forEach(c => {
-      const el = document.getElementById(c.id)
+      const el = chartsRef.current?.querySelector(`#${c.id}`)
       if (!el) return
       Plotly.purge(el)
       const layout = { ...darkLayout, title: { text: c.title, font: { size: 14, color: '#e0e0e0' } } }
@@ -1361,7 +1369,7 @@ export default function DistributionCompare() {
 
       {activeTab === 'portfolios' && (
         <div className="dc-controls">
-          <datalist id="dc-portfolio-tickers">
+          <datalist id={tickerListId}>
             {portfolioTickers.map(t => <option key={t.ticker} value={t.ticker}>{t.description || ''}</option>)}
           </datalist>
 
@@ -1379,10 +1387,10 @@ export default function DistributionCompare() {
 
           {/* Sides */}
           <div className="dc-funds">
-            <PortfolioSide side={pSides.a} onChange={p => updateSide('a', p)} profilesList={profilesList} colorKey="a" />
-            <PortfolioSide side={pSides.b} onChange={p => updateSide('b', p)} profilesList={profilesList} colorKey="b" />
+            <PortfolioSide side={pSides.a} onChange={p => updateSide('a', p)} profilesList={profilesList} tickerListId={tickerListId} colorKey="a" />
+            <PortfolioSide side={pSides.b} onChange={p => updateSide('b', p)} profilesList={profilesList} tickerListId={tickerListId} colorKey="b" />
             {showPSideC && (
-              <PortfolioSide side={pSides.c} onChange={p => updateSide('c', p)} profilesList={profilesList} colorKey="c" onRemove={() => setShowPSideC(false)} />
+              <PortfolioSide side={pSides.c} onChange={p => updateSide('c', p)} profilesList={profilesList} tickerListId={tickerListId} colorKey="c" onRemove={() => setShowPSideC(false)} />
             )}
           </div>
           {!showPSideC && (
@@ -1523,7 +1531,7 @@ export default function DistributionCompare() {
           {gradePanel}
           <TickerAttributionPanel results={results} />
           {summaryCards}
-          <div className="dc-charts">
+          <div className="dc-charts" ref={chartsRef}>
             <div className="dc-chart-wrap"><div id="dc-chart-portfolio" style={{ height: 320 }}></div></div>
             <div className="dc-chart-wrap"><div id="dc-chart-total" style={{ height: 320 }}></div></div>
             <div className="dc-chart-wrap"><div id="dc-chart-distributions" style={{ height: 320 }}></div></div>

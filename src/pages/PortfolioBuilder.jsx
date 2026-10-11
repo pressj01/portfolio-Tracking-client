@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -44,6 +44,10 @@ function fmtN(v, dec = 2) {
 
 export default function PortfolioBuilder() {
   const { isDark } = useTheme()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
@@ -94,6 +98,13 @@ export default function PortfolioBuilder() {
 
 
   const chartsRendered = useRef(false)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element.
+  const scatterRef = useRef(null)
+  const corrRef = useRef(null)
+  const drawdownRef = useRef(null)
+  const radarRef = useRef(null)
 
   // ── Load portfolios ──────────────────────────────────────────────────────
   const loadPortfolios = useCallback(async () => {
@@ -317,7 +328,7 @@ export default function PortfolioBuilder() {
 
     // 1. Risk vs Return scatter
     const hld = (analysisResult.holdings || []).filter(h => h.annual_ret != null && h.annual_vol != null)
-    const scatterEl = document.getElementById('pb-scatter')
+    const scatterEl = scatterRef.current
     if (scatterEl && hld.length) {
       Plotly.purge(scatterEl)
       Plotly.newPlot(scatterEl, [{
@@ -342,7 +353,7 @@ export default function PortfolioBuilder() {
     }
 
     // 2. Correlation heatmap
-    const corrEl = document.getElementById('pb-corr')
+    const corrEl = corrRef.current
     const corr = analysisResult.correlation
     if (corrEl && corr && corr.labels.length > 1) {
       Plotly.purge(corrEl)
@@ -362,7 +373,7 @@ export default function PortfolioBuilder() {
     }
 
     // 3. Drawdown
-    const ddEl = document.getElementById('pb-drawdown')
+    const ddEl = drawdownRef.current
     const dd = analysisResult.drawdown_series
     if (ddEl && dd && dd.dates.length) {
       Plotly.purge(ddEl)
@@ -404,7 +415,7 @@ export default function PortfolioBuilder() {
   useEffect(() => {
     if (!compareResult || !window.Plotly) return
     const Plotly = window.Plotly
-    const radarEl = document.getElementById('pb-radar')
+    const radarEl = radarRef.current
     if (!radarEl) return
     Plotly.purge(radarEl)
 
@@ -809,14 +820,14 @@ export default function PortfolioBuilder() {
                 <h3 style={{ marginBottom: '1rem', color: 'var(--p-ddd)' }}>Risk & Performance Charts</h3>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
                   <div style={{ flex: 1, minWidth: 340 }}>
-                    <div id="pb-scatter" style={{ width: '100%', height: 380 }} />
+                    <div ref={scatterRef} id="pb-scatter" style={{ width: '100%', height: 380 }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 340 }}>
-                    <div id="pb-corr" style={{ width: '100%', height: 380 }} />
+                    <div ref={corrRef} id="pb-corr" style={{ width: '100%', height: 380 }} />
                   </div>
                 </div>
                 <div style={{ marginTop: '1rem' }}>
-                  <div id="pb-drawdown" style={{ width: '100%', height: 240 }} />
+                  <div ref={drawdownRef} id="pb-drawdown" style={{ width: '100%', height: 240 }} />
                 </div>
               </div>
             )}
@@ -874,7 +885,7 @@ export default function PortfolioBuilder() {
                       <span style={{ color: 'var(--text-dim)' }}>Tied: {winners.filter(w => w === -1).length}</span>
                     </div>
                   )}
-                  <div id="pb-radar" style={{ width: '100%', height: 420 }} />
+                  <div ref={radarRef} id="pb-radar" style={{ width: '100%', height: 420 }} />
                   <div className="pb-table-wrap" style={{ marginTop: '1rem' }}>
                     <table className="pb-table">
                       <thead>
@@ -980,7 +991,7 @@ export default function PortfolioBuilder() {
                   <span style={{ color: 'var(--text-dim)' }}>Tied: {winners.filter(w => w === -1).length}</span>
                 </div>
               )}
-              <div id="pb-radar" style={{ width: '100%', height: 420 }} />
+              <div ref={radarRef} id="pb-radar" style={{ width: '100%', height: 420 }} />
               <div className="pb-table-wrap" style={{ marginTop: '1rem' }}>
                 <table className="pb-table">
                   <thead>
@@ -1170,13 +1181,13 @@ export default function PortfolioBuilder() {
                               value={awOverrides[idx] || a.ticker}
                               onChange={e => setAwOverrides(prev => ({ ...prev, [idx]: e.target.value.toUpperCase() }))}
                               style={{ width: 90, textAlign: 'center' }}
-                              list={`aw-opts-${idx}`}
+                              list={`${uid}-aw-opts-${idx}`}
                             />
                           ) : (
                             <span style={{ fontWeight: 600 }}>{a.ticker}</span>
                           )}
                           {awSelectionMode === 'manual' && (
-                            <datalist id={`aw-opts-${idx}`}>
+                            <datalist id={`${uid}-aw-opts-${idx}`}>
                               {(a.candidates || []).map(c => <option key={c} value={c} />)}
                             </datalist>
                           )}

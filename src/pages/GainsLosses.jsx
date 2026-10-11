@@ -118,6 +118,13 @@ export default function GainsLosses({ embedded = false }) {
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element, so one portfolio's chart would draw over the other's.
+  const timeChartRef = useRef(null)
+  const barChartRef = useRef(null)
+  const waterfallChartRef = useRef(null)
+  const realizedChartRef = useRef(null)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -280,7 +287,7 @@ export default function GainsLosses({ embedded = false }) {
     if (!chartData || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
-    const ids = []
+    const drawn = []
     const chartRange = formatPerformanceChartRange(
       chartData.requested_start_date,
       chartData.requested_end_date,
@@ -291,10 +298,10 @@ export default function GainsLosses({ embedded = false }) {
 
     // Chart 1: the exact transaction-aware index used on Total Return, shifted
     // from a 100 baseline to percentage return for a familiar G/L view.
-    const timeEl = document.getElementById('gl-chart-time')
+    const timeEl = timeChartRef.current
     const portfolioSeries = chartData.portfolio_series
     if (timeEl && portfolioSeries?.dates?.length) {
-      ids.push('gl-chart-time')
+      drawn.push(timeEl)
       const priceReturns = (portfolioSeries.price || []).map(value => (
         value == null ? null : Number((Number(value) - 100).toFixed(2))
       ))
@@ -339,9 +346,9 @@ export default function GainsLosses({ embedded = false }) {
 
     // Chart 2: selected-period return by ticker, from the same performance rows
     // rendered on Total Return.
-    const barEl = document.getElementById('gl-chart-bar')
+    const barEl = barChartRef.current
     if (barEl && chartData.performance_rows?.length) {
-      ids.push('gl-chart-bar')
+      drawn.push(barEl)
       const sorted = [...chartData.performance_rows].sort((a, b) => (a.total_return_pct || 0) - (b.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
       const priceVals = sorted.map(r => Number(Number(r.price_return_pct || 0).toFixed(2)))
@@ -377,9 +384,9 @@ export default function GainsLosses({ embedded = false }) {
     }
 
     // Chart 3: selected-period winners vs losers.
-    const watEl = document.getElementById('gl-chart-waterfall')
+    const watEl = waterfallChartRef.current
     if (watEl && chartData.performance_rows?.length) {
-      ids.push('gl-chart-waterfall')
+      drawn.push(watEl)
       const sorted = [...chartData.performance_rows].sort((a, b) => (b.total_return_pct || 0) - (a.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
       const vals = sorted.map(r => Number(Number(r.total_return_pct || 0).toFixed(2)))
@@ -405,9 +412,9 @@ export default function GainsLosses({ embedded = false }) {
     }
 
     // Chart 4: Realized gains timeline
-    const realEl = document.getElementById('gl-chart-realized')
+    const realEl = realizedChartRef.current
     if (realEl && chartData.realized_rows?.length) {
-      ids.push('gl-chart-realized')
+      drawn.push(realEl)
       const events = chartData.realized_rows
       const realTraces = [{
         x: events.map(e => e.sell_date),
@@ -430,12 +437,9 @@ export default function GainsLosses({ embedded = false }) {
       Plotly.newPlot(realEl, realTraces, themedPlotlyLayout(realLayout, isDark), cfg)
     }
 
-    return () => {
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
-    }
+    // Purge the elements this effect drew into. Looking them up again here
+    // finds nothing once the page has unmounted — or finds the other pane's.
+    return () => { drawn.forEach(el => Plotly.purge(el)) }
   }, [chartData, isDark])
 
   // Table sorting
@@ -1348,11 +1352,11 @@ export default function GainsLosses({ embedded = false }) {
         </div>
       )}
 
-      <div id="gl-chart-time" style={{ minHeight: chartData?.portfolio_series?.dates?.length ? '450px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-bar" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-waterfall" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      <div ref={timeChartRef} id="gl-chart-time" style={{ minHeight: chartData?.portfolio_series?.dates?.length ? '450px' : '0', marginBottom: '2rem' }} />
+      <div ref={barChartRef} id="gl-chart-bar" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      <div ref={waterfallChartRef} id="gl-chart-waterfall" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
       {chartData?.realized_rows?.length > 0 && (
-        <div id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
+        <div ref={realizedChartRef} id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
       )}
       {!isLifetimePerformancePeriod(period) && chartData && !chartLoading && !chartData.realized_rows?.length && (
         <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales occurred inside the selected performance range.</p>

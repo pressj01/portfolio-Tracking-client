@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import ThemedPlot from '../components/ThemedPlot'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyCompact } from '../utils/money'
@@ -1160,6 +1160,10 @@ function ProjectedIncomePanel({ strategies, years, scenario }) {
 
 export default function GrowthIncomeFreedom() {
   const pf = useProfileFetch()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const { profiles, aggregates } = useProfile()
   const [strategies, setStrategies] = useState([
     createStrategy('Income Strategy', 'income'),
@@ -1452,9 +1456,9 @@ export default function GrowthIncomeFreedom() {
           same market shocks, while distributions and volatility remain specific to each holding.
         </p>
         <div className="gif-method-horizon">
-          <label htmlFor="gif-simulation-years">Simulation length</label>
+          <label htmlFor={`${uid}-gif-simulation-years`}>Simulation length</label>
           <select
-            id="gif-simulation-years"
+            id={`${uid}-gif-simulation-years`}
             value={years}
             aria-label="Simulation length"
             onChange={event => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import Plot from '../components/ThemedPlot'
@@ -256,7 +256,6 @@ function OverlapTab({ pf, holdings, onSimulate }) {
 // ─── Tab 2: Consolidation Simulator ────────────────────────────────────────────
 
 function SimulatorTab({ pf, holdings, preselectedSell }) {
-  const { isDark } = useTheme()
   const [sellTicker, setSellTicker] = useState('')
   const [buyTicker, setBuyTicker] = useState('')
   const [period, setPeriod] = useState('1y')
@@ -288,38 +287,6 @@ function SimulatorTab({ pf, holdings, preselectedSell }) {
       .catch(e => setError('Request failed: ' + e.message))
       .finally(() => setLoading(false))
   }
-
-  // Plotly chart for total return comparison
-  useEffect(() => {
-    if (!result?.chart || !window.Plotly) return
-    const el = document.getElementById('sim-chart')
-    if (!el) return
-
-    const traces = result.chart.series.map(s => ({
-      x: result.chart.dates,
-      y: s.values,
-      name: s.label,
-      type: 'scatter',
-      mode: 'lines',
-    }))
-
-    window.Plotly.newPlot(el, traces, themedPlotlyLayout({
-      template: 'plotly_dark',
-      paper_bgcolor: '#0e1117',
-      plot_bgcolor: '#0e1117',
-      title: {
-        text: `Total Return Comparison (normalized to 100)`,
-        font: { size: 14, color: '#e0e8f5' },
-      },
-      xaxis: { title: 'Date' },
-      yaxis: { title: 'Value (base 100)' },
-      legend: { orientation: 'h', y: -0.2 },
-      height: 380,
-      margin: { l: 60, r: 30, t: 50, b: 60 },
-    }, isDark), { responsive: true })
-
-    return () => { if (el) window.Plotly.purge(el) }
-  }, [result, isDark])
 
   const tickers = holdings.map(h => h.ticker).sort()
 
@@ -533,6 +500,10 @@ function RegimeTab({ pf, holdings }) {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
   const [showPicker, setShowPicker] = useState(false)
+  // Refs, not id lookups: Split View can mount this page in both panes, and an
+  // id lookup returns the other pane's element.
+  const timelineRef = useRef(null)
+  const regimeBarRef = useRef(null)
 
   const toggleTicker = (t) => {
     setSelected(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t])
@@ -606,7 +577,7 @@ function RegimeTab({ pf, holdings }) {
   // Plotly regime timeline
   useEffect(() => {
     if (!result?.timeline || !window.Plotly) return
-    const el = document.getElementById('regime-timeline')
+    const el = timelineRef.current
     if (!el) return
 
     const regimeColors = { bull: '#2e7d32', bear: '#c62828', sideways: '#757575' }
@@ -649,7 +620,7 @@ function RegimeTab({ pf, holdings }) {
   // Plotly grouped bar chart
   useEffect(() => {
     if (!result?.bar_chart || !window.Plotly) return
-    const el = document.getElementById('regime-bar')
+    const el = regimeBarRef.current
     if (!el) return
 
     const traces = result.bar_chart.regimes.map(regime => ({
@@ -791,7 +762,7 @@ function RegimeTab({ pf, holdings }) {
                 <span style={{ color: 'var(--neg-2)', fontWeight: 600 }}> Red</span> = Bear (&lt;-5%),
                 <span style={{ color: 'var(--p-9e9e9e)', fontWeight: 600 }}> Gray</span> = Sideways.
               </p>
-              <div id="regime-timeline" />
+              <div ref={timelineRef} id="regime-timeline" />
             </div>
           )}
 
@@ -873,7 +844,7 @@ function RegimeTab({ pf, holdings }) {
                 Visual comparison of total return (price + income) by ticker across market conditions.
                 Taller bars = stronger performance in that regime.
               </p>
-              <div id="regime-bar" />
+              <div ref={regimeBarRef} id="regime-bar" />
             </div>
           )}
         </>

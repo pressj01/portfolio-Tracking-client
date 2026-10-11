@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useId, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDialog } from '../components/DialogProvider'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
@@ -1372,6 +1372,10 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
 }
 
 function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, onClose }) {
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const [accounts, setAccounts] = useState([])
   const [accountId, setAccountId] = useState(transaction?.profile_id ? String(transaction.profile_id) : '')
   const [kind, setKind] = useState(transaction?.record_type === 'dividend' ? 'dividend' : 'trade')
@@ -1440,15 +1444,15 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
         {!started ? (
           <form onSubmit={event => { event.preventDefault(); setStarted(true) }}>
             <div className="form-group">
-              <label htmlFor="ledger-account">Account</label>
-              <select id="ledger-account" required value={accountId} onChange={event => setAccountId(event.target.value)}>
+              <label htmlFor={`${uid}-ledger-account`}>Account</label>
+              <select id={`${uid}-ledger-account`} required value={accountId} onChange={event => setAccountId(event.target.value)}>
                 <option value="">Choose an account</option>
                 {accounts.map(account => <option key={account.id} value={account.id}>{account.name}</option>)}
               </select>
             </div>
             <div className="form-group">
-              <label htmlFor="ledger-kind">Transaction type</label>
-              <select id="ledger-kind" value={kind} onChange={event => setKind(event.target.value)}>
+              <label htmlFor={`${uid}-ledger-kind`}>Transaction type</label>
+              <select id={`${uid}-ledger-kind`} value={kind} onChange={event => setKind(event.target.value)}>
                 <option value="trade">Buy / Sell</option><option value="dividend">Dividend payment</option>
               </select>
             </div>
@@ -1460,24 +1464,24 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
             <p>Account: {accountName}</p>
             <p>Record the cash payment here. Reinvested shares are a separate BUY transaction.</p>
             <div className="form-group">
-              <label htmlFor="ledger-payment-date">Payment date</label>
-              <input id="ledger-payment-date" type="date" min="1900-01-01" max="2099-12-31" required value={form.payment_date}
+              <label htmlFor={`${uid}-ledger-payment-date`}>Payment date</label>
+              <input id={`${uid}-ledger-payment-date`} type="date" min="1900-01-01" max="2099-12-31" required value={form.payment_date}
                 onChange={event => setForm({ ...form, payment_date: event.target.value })} />
             </div>
             <div className="form-group">
-              <label htmlFor="ledger-ex-date">Ex-dividend date <span style={{ color: 'var(--text-dim-2)' }}>(optional)</span></label>
-              <input id="ledger-ex-date" type="date" min="1900-01-01" max="2099-12-31" value={form.ex_date}
+              <label htmlFor={`${uid}-ledger-ex-date`}>Ex-dividend date <span style={{ color: 'var(--text-dim-2)' }}>(optional)</span></label>
+              <input id={`${uid}-ledger-ex-date`} type="date" min="1900-01-01" max="2099-12-31" value={form.ex_date}
                 onChange={event => setForm({ ...form, ex_date: event.target.value })} />
               <small style={{ color: 'var(--text-dim-2)' }}>Used for investment-performance timing; cash totals still use the payment date.</small>
             </div>
             <div className="form-group">
-              <label htmlFor="ledger-amount">Cash amount ($)</label>
-              <input id="ledger-amount" type="number" min="0" step="any" required value={form.amount}
+              <label htmlFor={`${uid}-ledger-amount`}>Cash amount ($)</label>
+              <input id={`${uid}-ledger-amount`} type="number" min="0" step="any" required value={form.amount}
                 onChange={event => setForm({ ...form, amount: event.target.value })} />
             </div>
             <div className="form-group">
-              <label htmlFor="ledger-notes">Notes</label>
-              <input id="ledger-notes" value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} />
+              <label htmlFor={`${uid}-ledger-notes`}>Notes</label>
+              <input id={`${uid}-ledger-notes`} value={form.notes} onChange={event => setForm({ ...form, notes: event.target.value })} />
             </div>
             <button className="btn btn-success" disabled={saving}>{saving ? 'Saving…' : 'Save Dividend'}</button>{' '}
             <button type="button" className="btn btn-secondary" disabled={saving} onClick={onClose}>Cancel</button>

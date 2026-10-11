@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import Plot from '../components/ThemedPlot'
@@ -67,6 +67,10 @@ function StatTile({ label, value, color, subtext, explanation }) {
 
 export default function NavErosion() {
   const pf = useProfileFetch()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const { selection } = useProfile()
   const { isDark } = useTheme()
   const [searchParams] = useSearchParams()
@@ -233,12 +237,12 @@ export default function NavErosion() {
             style={{ width: 130, textTransform: 'uppercase' }}
             placeholder="Auto"
             maxLength={40}
-            list="ne-benchmark-choices"
+            list={`${uid}-ne-benchmark-choices`}
             value={benchmark}
             onChange={e => setBenchmark(e.target.value.toUpperCase())}
             title="Leave blank for the automatic underlying benchmark, or enter a ticker such as HODL. A symbol with no price history falls back to the automatic one."
           />
-          <datalist id="ne-benchmark-choices">
+          <datalist id={`${uid}-ne-benchmark-choices`}>
             {NAV_BENCHMARK_CHOICES.map(b => <option key={b} value={b} />)}
           </datalist>
         </div>

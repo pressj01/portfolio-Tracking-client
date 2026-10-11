@@ -58,6 +58,26 @@ export default [
     },
   },
   {
+    // Split View mounts the same page in both panes, so a page's element ids
+    // are not unique in the document. A document-wide lookup returns the first
+    // match — the other pane's element — and one portfolio's chart was drawn
+    // over the other's that way. Reach elements through a ref, or query inside
+    // one. Only the React root is looked up by id.
+    files: ['src/**/*.{js,jsx}'],
+    ignores: ['src/main.jsx'],
+    rules: {
+      'no-restricted-properties': ['error', {
+        object: 'document',
+        property: 'getElementById',
+        message: 'Split View mounts a page in both panes, so ids repeat. Use a ref, or query inside one.',
+      }, {
+        object: 'document',
+        property: 'querySelector',
+        message: 'Split View mounts a page in both panes, so this can match the other pane. Use a ref, or query inside one.',
+      }],
+    },
+  },
+  {
     // Electron main/preload run in Node, not the browser.
     files: ['electron/**/*.js', 'scripts/**/*.js', 'launch.js', '*.config.{js,mjs}'],
     languageOptions: {
