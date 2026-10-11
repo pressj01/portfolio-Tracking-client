@@ -5,6 +5,14 @@ import { themedPlotlyLayout } from '../../utils/chartTheme'
 export default function RiskReturnCharts({ result }) {
   const { isDark } = useTheme()
   const rendered = useRef(false)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element.
+  const scatterRef = useRef(null)
+  const heatmapRef = useRef(null)
+  const drawdownRef = useRef(null)
+  const frontierRef = useRef(null)
+  const incomeScatterRef = useRef(null)
 
   useEffect(() => {
     if (!result || !window.Plotly) return
@@ -15,7 +23,7 @@ export default function RiskReturnCharts({ result }) {
     const grid = '#1a2a3e'
 
     // Risk vs Return scatter
-    const scatterEl = document.getElementById('analytics-scatter')
+    const scatterEl = scatterRef.current
     if (scatterEl && result.metrics?.length > 0) {
       const m = result.metrics
       const scatterTraces = [{
@@ -65,7 +73,7 @@ export default function RiskReturnCharts({ result }) {
     }
 
     // Correlation heatmap
-    const heatEl = document.getElementById('analytics-heatmap')
+    const heatEl = heatmapRef.current
     if (heatEl && result.correlation) {
       const { labels, matrix } = result.correlation
       const reversed = [...labels].reverse()
@@ -99,7 +107,7 @@ export default function RiskReturnCharts({ result }) {
     }
 
     // Drawdown chart
-    const ddEl = document.getElementById('analytics-drawdown')
+    const ddEl = drawdownRef.current
     if (ddEl && result.drawdown_series) {
       const { dates, values } = result.drawdown_series
       Plotly.newPlot(ddEl, [{
@@ -117,7 +125,7 @@ export default function RiskReturnCharts({ result }) {
     }
 
     // Efficient Frontier
-    const frontEl = document.getElementById('analytics-frontier')
+    const frontEl = frontierRef.current
     if (frontEl && result.optimization?.frontier) {
       const { frontier, optimal_point, current_point } = result.optimization
       const traces = [{
@@ -150,7 +158,7 @@ export default function RiskReturnCharts({ result }) {
     }
 
     // Yield vs Risk scatter
-    const incScatterEl = document.getElementById('analytics-income-scatter')
+    const incScatterEl = incomeScatterRef.current
     if (incScatterEl && result.optimization?.scatter) {
       const sc = result.optimization.scatter
       Plotly.newPlot(incScatterEl, [{
@@ -191,8 +199,8 @@ export default function RiskReturnCharts({ result }) {
       {/* Optimization charts */}
       {hasOpt && (
         <>
-          <div id="analytics-frontier" />
-          <div id="analytics-income-scatter" style={{ marginTop: '1rem' }} />
+          <div ref={frontierRef} id="analytics-frontier" />
+          <div ref={incomeScatterRef} id="analytics-income-scatter" style={{ marginTop: '1rem' }} />
         </>
       )}
 
@@ -200,11 +208,11 @@ export default function RiskReturnCharts({ result }) {
       {hasScatter && (
         <div style={{ display: 'grid', gridTemplateColumns: hasHeat ? '1fr 1fr' : '1fr', gap: '1rem', marginTop: '1rem' }}>
           <div className="card" style={{ padding: '0.75rem 1rem' }}>
-            <div id="analytics-scatter" />
+            <div ref={scatterRef} id="analytics-scatter" />
           </div>
           {hasHeat && (
             <div className="card" style={{ padding: '0.75rem 1rem' }}>
-              <div id="analytics-heatmap" />
+              <div ref={heatmapRef} id="analytics-heatmap" />
             </div>
           )}
         </div>
@@ -212,7 +220,7 @@ export default function RiskReturnCharts({ result }) {
 
       {hasDd && (
         <div className="card" style={{ padding: '0.75rem 1rem', marginTop: '1rem' }}>
-          <div id="analytics-drawdown" />
+          <div ref={drawdownRef} id="analytics-drawdown" />
         </div>
       )}
     </>

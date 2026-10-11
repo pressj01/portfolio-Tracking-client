@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { DefinitionList, HelpSection, helpImage } from '../components/GosHelpKit'
+import { DefinitionList, HelpSection, helpImage, scrollToHelpSection } from '../components/GosHelpKit'
 
 const helpTopics = [['quick-start', 'Quick start'], ['universe', 'Underlyings'], ['starting-points', 'Starting points'], ['filters', 'Filters'], ['terms', 'Key terms'], ['condors', 'Condors'], ['results', 'Results'], ['probabilities', 'Probabilities'], ['strategies', 'Every strategy'], ['example', 'Example']]
 
@@ -42,7 +42,7 @@ export default function GeneralOptionScannerHelp() {
     </header>
 
     <nav className="gos-help-jumps" aria-label="Scanner help topics">
-      {helpTopics.map(([id, label]) => <button type="button" key={id} onClick={() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })}>{label}</button>)}
+      {helpTopics.map(([id, label]) => <button type="button" key={id} onClick={event => scrollToHelpSection(event, id)}>{label}</button>)}
     </nav>
 
     <HelpSection id="quick-start" eyebrow="1 · WORKFLOW" title="The scanner in six steps">

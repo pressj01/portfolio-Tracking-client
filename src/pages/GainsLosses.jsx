@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
@@ -6,6 +7,9 @@ import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 import { AccountValueCard } from '../components/AccountReconciliation'
 import ColumnCustomizer from '../components/ColumnCustomizer'
+import LotDetailsPanel from '../components/LotDetailsPanel'
+import useLotDetails from '../utils/useLotDetails'
+import { sortByValue } from '../utils/lotTableSort'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
 import {
@@ -112,12 +116,20 @@ const COMBINED_COLS = [
 
 export default function GainsLosses({ embedded = false }) {
   const pf = useProfileFetch()
-  const { selection, basisMode, profileQueryString } = useProfile()
+  const navigate = useNavigate()
+  const { selection, basisMode, profileQueryString, profiles } = useProfile()
   const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element, so one portfolio's chart would draw over the other's.
+  const timeChartRef = useRef(null)
+  const barChartRef = useRef(null)
+  const waterfallChartRef = useRef(null)
+  const realizedChartRef = useRef(null)
 
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -142,6 +154,10 @@ export default function GainsLosses({ embedded = false }) {
   const [sortAsc, setSortAsc] = useState(false)
   const [rvyMode, setRvyMode] = useState('cur')
   const [expandedRealized, setExpandedRealized] = useState({})
+  // An Unrealized row opens onto the lots behind its total, fetched on demand.
+  // A Realized row already carries its sells in the summary, so it needs none.
+  const { lotDetails, toggleLotDetails, setLotDetailView, clearLotDetails } = useLotDetails(pf)
+  useEffect(() => clearLotDetails(), [selection, basisMode, clearLotDetails])
 
   useSharedPerformanceRange(period, customStart, customEnd, (next) => {
     setPeriod(next.period)
@@ -280,7 +296,7 @@ export default function GainsLosses({ embedded = false }) {
     if (!chartData || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
-    const ids = []
+    const drawn = []
     const chartRange = formatPerformanceChartRange(
       chartData.requested_start_date,
       chartData.requested_end_date,
@@ -291,10 +307,10 @@ export default function GainsLosses({ embedded = false }) {
 
     // Chart 1: the exact transaction-aware index used on Total Return, shifted
     // from a 100 baseline to percentage return for a familiar G/L view.
-    const timeEl = document.getElementById('gl-chart-time')
+    const timeEl = timeChartRef.current
     const portfolioSeries = chartData.portfolio_series
     if (timeEl && portfolioSeries?.dates?.length) {
-      ids.push('gl-chart-time')
+      drawn.push(timeEl)
       const priceReturns = (portfolioSeries.price || []).map(value => (
         value == null ? null : Number((Number(value) - 100).toFixed(2))
       ))
@@ -339,9 +355,9 @@ export default function GainsLosses({ embedded = false }) {
 
     // Chart 2: selected-period return by ticker, from the same performance rows
     // rendered on Total Return.
-    const barEl = document.getElementById('gl-chart-bar')
+    const barEl = barChartRef.current
     if (barEl && chartData.performance_rows?.length) {
-      ids.push('gl-chart-bar')
+      drawn.push(barEl)
       const sorted = [...chartData.performance_rows].sort((a, b) => (a.total_return_pct || 0) - (b.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
       const priceVals = sorted.map(r => Number(Number(r.price_return_pct || 0).toFixed(2)))
@@ -377,9 +393,9 @@ export default function GainsLosses({ embedded = false }) {
     }
 
     // Chart 3: selected-period winners vs losers.
-    const watEl = document.getElementById('gl-chart-waterfall')
+    const watEl = waterfallChartRef.current
     if (watEl && chartData.performance_rows?.length) {
-      ids.push('gl-chart-waterfall')
+      drawn.push(watEl)
       const sorted = [...chartData.performance_rows].sort((a, b) => (b.total_return_pct || 0) - (a.total_return_pct || 0))
       const tickers = sorted.map(r => r.ticker)
       const vals = sorted.map(r => Number(Number(r.total_return_pct || 0).toFixed(2)))
@@ -405,9 +421,9 @@ export default function GainsLosses({ embedded = false }) {
     }
 
     // Chart 4: Realized gains timeline
-    const realEl = document.getElementById('gl-chart-realized')
+    const realEl = realizedChartRef.current
     if (realEl && chartData.realized_rows?.length) {
-      ids.push('gl-chart-realized')
+      drawn.push(realEl)
       const events = chartData.realized_rows
       const realTraces = [{
         x: events.map(e => e.sell_date),
@@ -430,12 +446,9 @@ export default function GainsLosses({ embedded = false }) {
       Plotly.newPlot(realEl, realTraces, themedPlotlyLayout(realLayout, isDark), cfg)
     }
 
-    return () => {
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
-    }
+    // Purge the elements this effect drew into. Looking them up again here
+    // finds nothing once the page has unmounted — or finds the other pane's.
+    return () => { drawn.forEach(el => Plotly.purge(el)) }
   }, [chartData, isDark])
 
   // Table sorting
@@ -449,20 +462,23 @@ export default function GainsLosses({ embedded = false }) {
     return sortAsc ? ' \u25B2' : ' \u25BC'
   }
 
-  const sortRows = (rows) => {
-    if (!sortCol || !rows) return rows
-    const sorted = [...rows]
-    sorted.sort((a, b) => {
-      let av = a[sortCol] ?? '', bv = b[sortCol] ?? ''
-      if (typeof av === 'number' && typeof bv === 'number') return sortAsc ? av - bv : bv - av
-      av = String(av).toLowerCase(); bv = String(bv).toLowerCase()
-      return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av)
-    })
-    return sorted
+  const sortRows = (rows, key = sortCol) => {
+    if (!key || !rows) return rows
+    return sortByValue(rows, { valueOf: row => row[key], direction: sortAsc ? 'asc' : 'desc' })
   }
 
+  // The sells under an expanded ticker follow the same column as the ticker
+  // rows. Sorting only the roll-ups left an account with one ticker with arrows
+  // that moved nothing. A roll-up's Sell Date is a range ordered by its latest
+  // sale; a single sell under it is ordered by its own date.
+  const sortLots = lots => sortRows(lots, sortCol === 'sell_date_sort' ? 'sell_date' : sortCol)
+
   // Reset sort and lot expansion when changing tabs
-  useEffect(() => { setSortCol(null); setExpandedRealized({}) }, [tab])
+  useEffect(() => {
+    setSortCol(null)
+    setExpandedRealized({})
+    clearLotDetails()
+  }, [tab, clearLotDetails])
 
   const toggleLots = (ticker) => setExpandedRealized(prev => {
     const next = { ...prev }
@@ -694,6 +710,22 @@ export default function GainsLosses({ embedded = false }) {
             {expandable && <span className="gl-lot-count">&times;{row.lot_count}</span>}
           </span>
         )
+      } else if (tab === 'unrealized') {
+        const open = !!lotDetails[row.ticker]
+        display = (
+          <span className="tr-ticker-lot-toggle">
+            <button
+              type="button"
+              aria-label={`${open ? 'Collapse' : 'Expand'} ${row.ticker} lot details`}
+              aria-expanded={open}
+              title="Show the open lots and transaction history behind this total"
+              onClick={() => toggleLotDetails(row.ticker)}
+            >
+              {open ? '▼' : '▶'}
+            </button>
+            <strong>{val}</strong>
+          </span>
+        )
       } else {
         display = <strong>{val}</strong>
       }
@@ -830,15 +862,40 @@ export default function GainsLosses({ embedded = false }) {
             </tr>
           </thead>
           <tbody>
-            {activeRows.map((row, i) => (
-              <React.Fragment key={`${row.ticker}-${i}`}>
+            {activeRows.map(row => (
+              // Keyed by ticker alone (each tab has one row per ticker) so an
+              // open lot panel keeps its own sort when the table is re-sorted.
+              <React.Fragment key={row.ticker}>
                 <tr>{renderCells(row)}</tr>
                 {tab === 'realized' && expandedRealized[row.ticker] && row.lots?.length > 1
-                  && row.lots.map((lot, j) => (
-                    <tr key={`${row.ticker}-${i}-lot-${j}`} className="gl-lot-row">
+                  && sortLots(row.lots).map((lot, j) => (
+                    <tr key={`${row.ticker}-lot-${j}`} className="gl-lot-row">
                       {renderCells(lot, true)}
                     </tr>
                   ))}
+                {tab === 'unrealized' && lotDetails[row.ticker] && (
+                  <tr className="gl-lot-detail-row">
+                    <td colSpan={activeCols.length}>
+                      <LotDetailsPanel
+                        ticker={row.ticker}
+                        detail={lotDetails[row.ticker]}
+                        holding={{
+                          ticker: row.ticker,
+                          quantity: row.quantity,
+                          purchase_value: row.purchase_value,
+                          current_price: row.current_price,
+                          current_value: row.current_value,
+                          basis_mode: basisMode,
+                          // The summary reports shares to four decimals.
+                          share_tolerance: 0.0001,
+                        }}
+                        profiles={profiles}
+                        onViewChange={view => setLotDetailView(row.ticker, view)}
+                        onManage={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}`)}
+                      />
+                    </td>
+                  </tr>
+                )}
               </React.Fragment>
             ))}
           </tbody>
@@ -1022,9 +1079,12 @@ export default function GainsLosses({ embedded = false }) {
             <h3>Unrealized / Realized / Combined tables</h3>
             <p>
               The tabs below break the same lifetime accounting down by ticker. <strong>Unrealized</strong>
-              lists what you currently hold; <strong>Realized</strong> lists closed sales, grouped one row
+              lists what you currently hold, one row per ticker; the arrow beside a ticker opens the
+              open lots behind that total, with the full transaction history one click away.
+              <strong> Realized</strong> lists closed sales, grouped one row
               per ticker with the individual sells available behind the expand arrow when there is more
-              than one; <strong>Combined</strong> shows both sides side by side for every ticker you have
+              than one; sorting a column orders those sells as well as the ticker rows.
+              <strong> Combined</strong> shows both sides side by side for every ticker you have
               ever owned. <strong>RvY</strong> (Return vs. Yield, Unrealized tab only) compares each
               holding's Tracker Total Return % for the selected range against its yield scaled to that
               same window — Good means the total return beat the income, Poor means the income alone beat
@@ -1348,11 +1408,11 @@ export default function GainsLosses({ embedded = false }) {
         </div>
       )}
 
-      <div id="gl-chart-time" style={{ minHeight: chartData?.portfolio_series?.dates?.length ? '450px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-bar" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
-      <div id="gl-chart-waterfall" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      <div ref={timeChartRef} id="gl-chart-time" style={{ minHeight: chartData?.portfolio_series?.dates?.length ? '450px' : '0', marginBottom: '2rem' }} />
+      <div ref={barChartRef} id="gl-chart-bar" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
+      <div ref={waterfallChartRef} id="gl-chart-waterfall" style={{ minHeight: chartData?.performance_rows?.length ? '400px' : '0', marginBottom: '2rem' }} />
       {chartData?.realized_rows?.length > 0 && (
-        <div id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
+        <div ref={realizedChartRef} id="gl-chart-realized" style={{ minHeight: '380px', marginBottom: '2rem' }} />
       )}
       {!isLifetimePerformancePeriod(period) && chartData && !chartLoading && !chartData.realized_rows?.length && (
         <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales occurred inside the selected performance range.</p>

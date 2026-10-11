@@ -1041,7 +1041,7 @@ function HoldingsHelp() {
           </ul>
         </li>
         <li><strong>DRIP checkbox</strong> — Toggle dividend reinvestment directly in the table without opening the edit form. When enabled, all future dividends are automatically reinvested as new shares at the ex-dividend date using historical prices. The Holdings page and Historical Dividend History page will automatically calculate the reinvested shares and show the DRIP status.</li>
-        <li><strong>Expand lot details</strong> — Click the small arrow (&#9654;) next to a ticker. <strong>Open lots</strong> shows only shares still held, with per-lot cost basis, market value, G/L $, and G/L %. <strong>Transaction history</strong> retains the complete editable buy, sell, and dividend audit trail.</li>
+        <li><strong>Expand lot details</strong> — Click the small arrow (&#9654;) next to a ticker. <strong>Open lots</strong> shows only shares still held, with per-lot cost basis, market value, G/L $, and G/L %. <strong>Transaction history</strong> retains the complete editable buy, sell, and dividend audit trail. Click a column heading in either view to sort it; click again to reverse the order.</li>
       </ul>
 
       <div style={{ marginBottom: '1.5rem' }}>
@@ -3778,7 +3778,12 @@ function GainsLossesHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Unrealized Tab</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         One row per holding you currently own. Shows each position's cost basis, current value,
-        and gain/loss broken into price-only and total (with dividends).
+        and gain/loss broken into price-only and total (with dividends). Click the small arrow
+        (&#9654;) beside a ticker to see what is behind the total: <strong>Open lots</strong> lists
+        each purchase still held with its own cost basis, market value, and G/L, and
+        <strong> Transaction history</strong> shows every buy, sell, and dividend. Both are read-only
+        here and sort by any column heading; <strong>Manage transactions</strong> opens the ticker on
+        the Holdings page for editing.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker / Description</strong> — The holding and its name.</li>
@@ -3803,7 +3808,8 @@ function GainsLossesHelp() {
         Sales settled inside the selected range, sourced from SELL transactions recorded in the Holdings
         page. Rows are grouped by ticker; click the expand arrow to inspect the individual sell lots when
         a ticker has more than one sale. The group row shows the combined cost basis, proceeds, distributions,
-        and gain/loss for that ticker.
+        and gain/loss for that ticker. Sorting a column orders the individual sells under an expanded
+        ticker as well as the ticker rows.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The symbol sold.</li>

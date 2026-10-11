@@ -36,8 +36,8 @@ import {
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
-import OpenLotsView from '../components/OpenLotsView'
-import LotTransactionHistory from '../components/LotTransactionHistory'
+import LotDetailsPanel from '../components/LotDetailsPanel'
+import useLotDetails from '../utils/useLotDetails'
 
 // 30 bright, high-contrast colors for dark backgrounds
 const PALETTE = [
@@ -104,6 +104,12 @@ export default function TotalReturn() {
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element, so one portfolio's chart would draw over the other's.
+  const barChartRef = useRef(null)
+  const scatterChartRef = useRef(null)
+  const compareChartRef = useRef(null)
 
   const [summary, setSummary] = useState(null)
   const [summaryLoading, setSummaryLoading] = useState(true)
@@ -116,39 +122,8 @@ export default function TotalReturn() {
   const [sortCol, setSortCol] = useState('total_return_pct')
   const [sortAsc, setSortAsc] = useState(false)
   const [positionView, setPositionView] = useState('unrealized')
-  const [lotDetails, setLotDetails] = useState({})
-  const toggleLotDetails = async ticker => {
-    if (lotDetails[ticker]) {
-      setLotDetails(current => {
-        const next = { ...current }
-        delete next[ticker]
-        return next
-      })
-      return
-    }
-    setLotDetails(current => ({ ...current, [ticker]: { loading: true, view: 'open' } }))
-    try {
-      const response = await pf(`/api/holdings/${encodeURIComponent(ticker)}/transactions?include_dividends=true`)
-      const data = await response.json()
-      if (!response.ok) throw new Error(data?.error || `Could not load lot details for ${ticker}`)
-      setLotDetails(current => ({
-        ...current,
-        [ticker]: { loading: false, view: 'open', transactions: data },
-      }))
-    } catch (error) {
-      setLotDetails(current => ({
-        ...current,
-        [ticker]: { loading: false, view: 'open', error: String(error?.message || error) },
-      }))
-    }
-  }
-  const setLotDetailView = (ticker, view) => {
-    setLotDetails(current => ({
-      ...current,
-      [ticker]: { ...current[ticker], view },
-    }))
-  }
-  useEffect(() => setLotDetails({}), [selection, basisMode])
+  const { lotDetails, toggleLotDetails, setLotDetailView, clearLotDetails } = useLotDetails(pf)
+  useEffect(() => clearLotDetails(), [selection, basisMode, clearLotDetails])
   // A Distributions figure nobody can take apart is one nobody can check.
   const [distDetail, setDistDetail] = useState(null)
   const openDistributions = async (row, rowTotal) => {
@@ -318,7 +293,7 @@ export default function TotalReturn() {
     if (!chartData || chartLoading || !window.Plotly) return
     const Plotly = window.Plotly
     const cfg = { responsive: true }
-    const ids = []
+    const drawn = []
     const chartRange = formatPerformanceChartRange(
       chartData.requested_start_date,
       chartData.requested_end_date,
@@ -336,9 +311,9 @@ export default function TotalReturn() {
     }
 
     // --- Bar chart: color each bar + ticker label to match its line ---
-    const barEl = document.getElementById('tr-chart-bar')
+    const barEl = barChartRef.current
     if (barEl && isLifetimePerformancePeriod(dashboardPeriod) && chartData.performance_rows?.length) {
-      ids.push('tr-chart-bar')
+      drawn.push(barEl)
       const rows = [...chartData.performance_rows]
         .filter(row => row.price_return_pct != null)
         .sort((a, b) => a.price_return_pct - b.price_return_pct)
@@ -362,7 +337,7 @@ export default function TotalReturn() {
         plot_bgcolor: 'rgba(255,255,255,0.03)',
       }, isDark), cfg)
     } else if (barEl && chartData.bar) {
-      ids.push('tr-chart-bar')
+      drawn.push(barEl)
       const bar = JSON.parse(JSON.stringify(chartData.bar))
       if (bar.data?.[0]?.y) {
         const tickers = bar.data[0].y
@@ -403,19 +378,16 @@ export default function TotalReturn() {
       Plotly.newPlot(barEl, bar.data, themedPlotlyLayout(bar.layout, isDark), cfg)
     }
 
-    return () => {
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
-    }
+    // Purge the elements this effect drew into. Looking them up again here
+    // finds nothing once the page has unmounted — or finds the other pane's.
+    return () => { drawn.forEach(el => Plotly.purge(el)) }
   }, [chartData, chartLoading, isDark, dashboardPeriod])
 
   // Render scatter chart
   useEffect(() => {
     if (chartLoading || !dashboardRows.length || !window.Plotly) return
     const Plotly = window.Plotly
-    const el = document.getElementById('tr-chart-scatter')
+    const el = scatterChartRef.current
     if (!el) return
 
     const rows = dashboardRows
@@ -601,7 +573,7 @@ export default function TotalReturn() {
   useEffect(() => {
     if (!cmpData || !window.Plotly) return
     const Plotly = window.Plotly
-    const el = document.getElementById('tr-chart-compare')
+    const el = compareChartRef.current
     if (!el) return
 
     const traceKeys = cmpMode === 'both' ? ['total', 'price'] : [cmpMode]
@@ -1724,7 +1696,7 @@ export default function TotalReturn() {
               : <>Portfolio range: <strong>{dashboardCardRange}</strong>. Each holding starts no earlier than the date it was actually held;
             hover a bar for that ticker's effective range. Green = positive, Red = negative. Gold dashed line = SPY.</>}
           </p>
-          <div id="tr-chart-bar" style={{ minHeight: '400px', marginBottom: '2rem' }} />
+          <div ref={barChartRef} id="tr-chart-bar" style={{ minHeight: '400px', marginBottom: '2rem' }} />
         </>
       )}
 
@@ -1848,7 +1820,7 @@ export default function TotalReturn() {
         {!cmpData && !cmpLoading && !cmpError && (!cmpPortfolio && cmpTickers.length === 0 && !cmpExtra) && (
           <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', padding: '2rem 0', textAlign: 'center' }}>Select Entire Portfolio, portfolio tickers, or external tickers to see the comparison chart.</p>
         )}
-        <div id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
+        <div ref={compareChartRef} id="tr-chart-compare" style={{ minHeight: cmpData ? '550px' : '0', marginBottom: '2rem' }} />
       </div>}
 
       {/* Scatter chart */}
@@ -1871,7 +1843,7 @@ export default function TotalReturn() {
             </div>
           </div>
           <p className="tr-note">Range: <strong>{dashboardCardRange}</strong>. Bubble size = ending position value. X = current annual yield on cost.</p>
-          <div id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
+          <div ref={scatterChartRef} id="tr-chart-scatter" style={{ minHeight: '520px', marginBottom: '2rem' }} />
         </>
       )}
 
@@ -2057,54 +2029,21 @@ export default function TotalReturn() {
                   {positionView === 'unrealized' && lotDetails[row.ticker] && (
                     <tr className="tr-lot-detail-row">
                       <td colSpan={columns.length}>
-                        <div className="mh-lot-panel">
-                          <div className="mh-lot-toolbar">
-                            <div className="mh-lot-toolbar-main">
-                              <strong>{row.ticker} lot details</strong>
-                              <div className="mh-lot-view-tabs" role="tablist" aria-label={`${row.ticker} lot detail view`}>
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={(lotDetails[row.ticker].view || 'open') === 'open'}
-                                  className={(lotDetails[row.ticker].view || 'open') === 'open' ? 'active' : undefined}
-                                  onClick={() => setLotDetailView(row.ticker, 'open')}
-                                >Open lots</button>
-                                <button
-                                  type="button"
-                                  role="tab"
-                                  aria-selected={lotDetails[row.ticker].view === 'history'}
-                                  className={lotDetails[row.ticker].view === 'history' ? 'active' : undefined}
-                                  onClick={() => setLotDetailView(row.ticker, 'history')}
-                                >Transaction history</button>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              className="btn btn-secondary"
-                              onClick={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
-                            >Manage transactions</button>
-                          </div>
-                          {lotDetails[row.ticker].loading ? (
-                            <div style={{ padding: '0.75rem', textAlign: 'center' }}><span className="spinner" /></div>
-                          ) : lotDetails[row.ticker].error ? (
-                            <div className="alert alert-error" style={{ margin: '0.75rem 1rem' }}>{lotDetails[row.ticker].error}</div>
-                          ) : lotDetails[row.ticker].view === 'history' ? (
-                            <LotTransactionHistory transactions={lotDetails[row.ticker].transactions} profiles={profiles} />
-                          ) : (
-                            <OpenLotsView
-                              transactions={lotDetails[row.ticker].transactions}
-                              holding={{
-                                ticker: row.ticker,
-                                quantity: row.quantity,
-                                purchase_value: row.purchase_value,
-                                current_price: row.current_price,
-                                current_value: row.current_value,
-                                basis_mode: basisMode,
-                              }}
-                              profiles={profiles}
-                            />
-                          )}
-                        </div>
+                        <LotDetailsPanel
+                          ticker={row.ticker}
+                          detail={lotDetails[row.ticker]}
+                          holding={{
+                            ticker: row.ticker,
+                            quantity: row.quantity,
+                            purchase_value: row.purchase_value,
+                            current_price: row.current_price,
+                            current_value: row.current_value,
+                            basis_mode: basisMode,
+                          }}
+                          profiles={profiles}
+                          onViewChange={view => setLotDetailView(row.ticker, view)}
+                          onManage={() => navigate(`/holdings?txn=${encodeURIComponent(row.ticker)}&return=total-return`)}
+                        />
                       </td>
                     </tr>
                   )}

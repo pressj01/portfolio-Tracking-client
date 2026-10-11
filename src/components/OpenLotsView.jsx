@@ -1,6 +1,8 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { formatMoney } from '../utils/money'
 import { buildOpenLotMetrics } from '../utils/openLotMetrics'
+import { nextLotSort, sortLotRows } from '../utils/lotTableSort'
+import LotSortHeader from './LotSortHeader'
 
 const formatMDY = value => {
   const raw = String(value || '')
@@ -8,6 +10,21 @@ const formatMDY = value => {
   if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`
   return value
 }
+
+const OPEN_LOT_COLUMNS = [
+  { key: 'account', label: 'Account', type: 'string' },
+  { key: 'transaction_date', label: 'Acquired', type: 'date' },
+  { key: 'shares', label: 'Shares', type: 'number' },
+  { key: 'cost_per_share', label: 'Cost / Share', type: 'number' },
+  { key: 'cost_basis', label: 'Cost Basis', type: 'number' },
+  // Every lot is priced at the holding's one current price, so there is no
+  // order to put them in. A sort arrow here would be a button that does nothing.
+  { key: 'current_price', label: 'Current Price', sortable: false, tip: 'The holding’s current price. It is the same for every lot, so this column has nothing to sort.' },
+  { key: 'market_value', label: 'Market Value', type: 'number' },
+  { key: 'gain_loss', label: 'G/L $', type: 'number' },
+  { key: 'gain_loss_pct', label: 'G/L %', type: 'number' },
+  { key: 'lot_notes', label: 'Lot Notes', type: 'string' },
+]
 
 export default function OpenLotsView({ transactions, holding, profiles }) {
   const metrics = useMemo(
@@ -18,6 +35,19 @@ export default function OpenLotsView({ transactions, holding, profiles }) {
     () => new Map((profiles || []).map(profile => [Number(profile.id), profile.name])),
     [profiles],
   )
+  // No sort is the ledger order the lots arrive in: oldest acquisition first.
+  const [sort, setSort] = useState(null)
+  const rows = useMemo(() => sortLotRows(
+    metrics.rows.map(row => ({
+      ...row,
+      account: row.source_account_name
+        || accountNames.get(Number(row.profile_id))
+        || `Account ${row.profile_id}`,
+      lot_notes: row.raw_notes || row.notes || '',
+    })),
+    sort,
+    OPEN_LOT_COLUMNS,
+  ), [metrics, accountNames, sort])
   const basisLabel = holding?.basis_mode === 'broker_adjusted' ? 'Broker-adjusted' : 'Original'
   const pct = value => value == null
     ? '-'
@@ -49,27 +79,22 @@ export default function OpenLotsView({ transactions, holding, profiles }) {
         <table className="mh-lot-table mh-open-lot-table">
           <thead>
             <tr>
-              <th>Account</th>
-              <th>Acquired</th>
-              <th>Shares</th>
-              <th>Cost / Share</th>
-              <th>Cost Basis</th>
-              <th>Current Price</th>
-              <th>Market Value</th>
-              <th>G/L $</th>
-              <th>G/L %</th>
-              <th>Lot Notes</th>
+              {OPEN_LOT_COLUMNS.map(column => (
+                <LotSortHeader
+                  key={column.key}
+                  column={column}
+                  sort={sort}
+                  onSort={key => setSort(current => nextLotSort(current, key))}
+                />
+              ))}
             </tr>
           </thead>
           <tbody>
-            {metrics.rows.map(row => {
-              const account = row.source_account_name
-                || accountNames.get(Number(row.profile_id))
-                || `Account ${row.profile_id}`
+            {rows.map(row => {
               const positive = row.gain_loss >= 0
               return (
                 <tr key={row.id}>
-                  <td>{account}</td>
+                  <td>{row.account}</td>
                   <td>{formatMDY(row.transaction_date) || '-'}</td>
                   <td>{shares(row.shares)}</td>
                   <td>{formatMoney(row.cost_per_share, { digits: 4, fallback: '-' })}</td>
@@ -80,7 +105,7 @@ export default function OpenLotsView({ transactions, holding, profiles }) {
                     {formatMoney(row.gain_loss, { fallback: '-' })}
                   </td>
                   <td className={positive ? 'mh-open-lot-positive' : 'mh-open-lot-negative'}>{pct(row.gain_loss_pct)}</td>
-                  <td title={row.raw_notes || row.notes || undefined}>{row.raw_notes || row.notes || '-'}</td>
+                  <td title={row.lot_notes || undefined}>{row.lot_notes || '-'}</td>
                 </tr>
               )
             })}

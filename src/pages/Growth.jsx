@@ -107,6 +107,13 @@ export default function Growth({ embedded = false }) {
   const [subcategories, setSubcategories] = useState([])
   const [catOpen, setCatOpen] = useState(false)
   const catRef = useRef(null)
+  // Chart containers are reached through refs, never by id: Split View can
+  // mount this page in both panes, and an id lookup returns the other pane's
+  // element, so one portfolio's chart would draw over the other's.
+  const priceChartRef = useRef(null)
+  const totalChartRef = useRef(null)
+  const barChartRef = useRef(null)
+  const treemapRef = useRef(null)
 
   useEffect(() => {
     const handler = (e) => { if (catRef.current && !catRef.current.contains(e.target)) setCatOpen(false) }
@@ -215,7 +222,7 @@ export default function Growth({ embedded = false }) {
         font: { color: ct.title },
       },
     }
-    const ids = []
+    const drawn = []
     // The two index charts open with their unified hover box pinned to the last
     // date so the latest values read without a mouse. Guarded because the plot
     // is purged on cleanup while newPlot's promise may still be in flight.
@@ -223,9 +230,9 @@ export default function Growth({ embedded = false }) {
     const popLastReadout = (el) => { if (!cancelled) hoverLastPoint(el) }
 
     // ── Price-only chart ──
-    const priceEl = document.getElementById('growth-price-chart')
+    const priceEl = priceChartRef.current
     if (priceEl) {
-      ids.push('growth-price-chart')
+      drawn.push(priceEl)
       const traces = [
         { x: data.portfolio_price.dates, y: data.portfolio_price.values, name: 'Portfolio', line: { color: '#7ecfff', width: 2 }, hovertemplate: '%{y:.1f}<extra>Portfolio</extra>' },
       ]
@@ -244,9 +251,9 @@ export default function Growth({ embedded = false }) {
     }
 
     // ── Total return chart ──
-    const totalEl = document.getElementById('growth-total-chart')
+    const totalEl = totalChartRef.current
     if (totalEl) {
-      ids.push('growth-total-chart')
+      drawn.push(totalEl)
       const traces = [
         { x: data.portfolio_total.dates, y: data.portfolio_total.values, name: 'Portfolio', line: { color: '#4dff91', width: 2 }, hovertemplate: '%{y:.1f}<extra>Portfolio</extra>' },
       ]
@@ -265,9 +272,9 @@ export default function Growth({ embedded = false }) {
     }
 
     // ── Performance by ticker (grouped horizontal bars) ──
-    const barEl = document.getElementById('growth-bar-chart')
+    const barEl = barChartRef.current
     if (barEl && data.ticker_returns.length) {
-      ids.push('growth-bar-chart')
+      drawn.push(barEl)
       const tickers = data.ticker_returns.map(r => r.ticker).reverse()
       const traces = [{
         y: tickers,
@@ -292,10 +299,10 @@ export default function Growth({ embedded = false }) {
     }
 
     // ── Value-weighted performance treemap ──
-    const treeEl = document.getElementById('growth-treemap')
+    const treeEl = treemapRef.current
     const treemapRows = data.treemap || []
     if (treeEl && treemapRows.length) {
-      ids.push('growth-treemap')
+      drawn.push(treeEl)
       const returnValues = treemapRows
         .map(row => Number(row.return_pct))
         .filter(value => Number.isFinite(value))
@@ -381,10 +388,9 @@ export default function Growth({ embedded = false }) {
 
     return () => {
       cancelled = true
-      ids.forEach(id => {
-        const el = document.getElementById(id)
-        if (el) Plotly.purge(el)
-      })
+      // Purge the elements this effect drew into. Looking them up again here
+      // finds nothing once the page has unmounted — or finds the other pane's.
+      drawn.forEach(el => Plotly.purge(el))
     }
   }, [data, isDark])
 
@@ -891,11 +897,11 @@ export default function Growth({ embedded = false }) {
           {!isLifetimePerformancePeriod(period) && (
             <>
               <div className="growth-charts-row">
-                <div className="growth-chart-box" id="growth-price-chart" />
-                <div className="growth-chart-box" id="growth-total-chart" />
+                <div ref={priceChartRef} className="growth-chart-box" id="growth-price-chart" />
+                <div ref={totalChartRef} className="growth-chart-box" id="growth-total-chart" />
               </div>
 
-              <div id="growth-bar-chart" style={{ marginBottom: '1rem' }} />
+              <div ref={barChartRef} id="growth-bar-chart" style={{ marginBottom: '1rem' }} />
 
               <section className="growth-treemap-panel" aria-labelledby="growth-treemap-title">
                 <div className="growth-treemap-heading">
@@ -909,7 +915,7 @@ export default function Growth({ embedded = false }) {
                     <span><i className="growth-treemap-swatch growth-treemap-swatch-gain" /> Gain</span>
                   </div>
                 </div>
-                <div id="growth-treemap" className="growth-treemap-chart" />
+                <div ref={treemapRef} id="growth-treemap" className="growth-treemap-chart" />
               </section>
             </>
           )}

@@ -50,7 +50,14 @@ export function buildOpenLotMetrics(transactions, holding) {
 
   const lotShares = rows.reduce((sum, row) => sum + row.shares, 0)
   const rawBasis = rows.reduce((sum, row) => sum + row.raw_basis, 0)
-  const shareTolerance = Math.max(1e-6, Math.abs(holdingShares) * 1e-8)
+  // A caller whose share count was rounded upstream says by how much
+  // (`share_tolerance`). Without it, lots recorded to six decimals never
+  // reconcile to a holding the Gains & Losses summary reports to four.
+  const shareTolerance = Math.max(
+    1e-6,
+    Math.abs(holdingShares) * 1e-8,
+    numberOrZero(holding?.share_tolerance),
+  )
   const sharesMatchHolding = rows.length > 0 && Math.abs(lotShares - holdingShares) <= shareTolerance
   const canUseSelectedBasis = sharesMatchHolding && selectedBasis > 0 && rawBasis > 0
   const basisScale = canUseSelectedBasis ? selectedBasis / rawBasis : 1

@@ -21,6 +21,9 @@ function ScannerChartModal({ ticker, timeframe, period, onClose }) {
   const [figLayout, setFigLayout] = useState(null)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(true)
+  // A ref, not an id lookup: Split View can mount this page in both panes, and
+  // an id lookup returns the other pane's element.
+  const chartRef = useRef(null)
 
   useEffect(() => {
     if (!ticker) return
@@ -48,7 +51,7 @@ function ScannerChartModal({ ticker, timeframe, period, onClose }) {
 
   useEffect(() => {
     if (!figData || !figLayout || !window.Plotly) return
-    const el = document.getElementById('scanner-chart')
+    const el = chartRef.current
     if (!el) return
     window.Plotly.newPlot(el, figData, themedPlotlyLayout({ ...figLayout, autosize: true }, isDark), { responsive: true })
     return () => { if (el) window.Plotly.purge(el) }
@@ -62,7 +65,7 @@ function ScannerChartModal({ ticker, timeframe, period, onClose }) {
         <button className="modal-close" onClick={onClose}>&times;</button>
         {loading && <div style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>}
         {error && <div className="alert alert-error">{error}</div>}
-        {figData && <div id="scanner-chart" style={{ height: '520px' }} />}
+        {figData && <div ref={chartRef} id="scanner-chart" style={{ height: '520px' }} />}
       </div>
     </div>
   )

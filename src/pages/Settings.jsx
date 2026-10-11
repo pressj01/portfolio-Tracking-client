@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useId } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP } from '../context/ThemeContext'
 import { useCurrency } from '../context/CurrencyContext'
@@ -70,6 +70,10 @@ const FRED_TERMS_URL = 'https://fred.stlouisfed.org/docs/api/terms_of_use.html'
 
 export default function Settings() {
   const pf = useProfileFetch()
+  // Per-instance ids: Split View can mount this page in both panes, and a
+  // label or datalist pointing at a repeated id resolves to the other pane's
+  // field.
+  const uid = useId()
   const { selection, currentProfileName, isAggregate } = useProfile()
   const { theme, setTheme, isDark, fontScale, setFontScale } = useTheme()
   const { displayCurrency, usdToCadRate, rateAsOf, rateInfo, loading: currencyLoading, setDisplayCurrency, refreshCadRate, setCadManualRate } = useCurrency()
@@ -1142,11 +1146,11 @@ export default function Settings() {
             </div>
           </div>
           <div style={{ marginTop: '0.9rem', borderTop: '1px solid var(--border)', paddingTop: '0.8rem' }}>
-            <label htmlFor="manual-usd-cad-rate" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+            <label htmlFor={`${uid}-manual-usd-cad-rate`} style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
               Manual override (CAD per USD)
             </label>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
-              <input id="manual-usd-cad-rate" type="number" min="0.5" max="2.5" step="0.0001" value={manualRateInput}
+              <input id={`${uid}-manual-usd-cad-rate`} type="number" min="0.5" max="2.5" step="0.0001" value={manualRateInput}
                 onChange={e => setManualRateInput(e.target.value)} placeholder="e.g. 1.3750"
                 style={{ width: 150, background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', borderRadius: 4, padding: '0.45rem 0.55rem' }} />
               <button className="btn btn-primary" type="button" onClick={saveManualExchangeRate} disabled={rateBusy}>Use Override</button>
@@ -1205,11 +1209,11 @@ export default function Settings() {
         </label>
 
         <div style={{ marginTop: '0.9rem' }}>
-          <label htmlFor="tiingo-api-key" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+          <label htmlFor={`${uid}-tiingo-api-key`} style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
             Tiingo API key
           </label>
           <input
-            id="tiingo-api-key"
+            id={`${uid}-tiingo-api-key`}
             type="password"
             autoComplete="off"
             value={tiingoKey}
@@ -1284,11 +1288,11 @@ export default function Settings() {
           </div>
         </div>
 
-        <label htmlFor="fred-api-key" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+        <label htmlFor={`${uid}-fred-api-key`} style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
           Your FRED API key
         </label>
         <input
-          id="fred-api-key"
+          id={`${uid}-fred-api-key`}
           type="password"
           autoComplete="off"
           value={fredKey}
@@ -1386,12 +1390,12 @@ export default function Settings() {
 
         {priceReuse.enabled && (
           <div style={{ marginTop: '1rem', padding: '0.85rem', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-sunken)' }}>
-            <label htmlFor="price-reuse-ttl" style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
+            <label htmlFor={`${uid}-price-reuse-ttl`} style={{ display: 'block', color: 'var(--text-dim)', fontSize: '0.8rem', marginBottom: 5 }}>
               Reuse prices for
             </label>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <select
-                id="price-reuse-ttl"
+                id={`${uid}-price-reuse-ttl`}
                 value={Math.round((priceReuse.ttl_sec || 600) / 60)}
                 onChange={e => savePriceReuse(true, Number(e.target.value))}
                 disabled={priceReuseBusy}
@@ -1492,11 +1496,11 @@ export default function Settings() {
             onChange={e => setNavBenchmark(e.target.value.toUpperCase())}
             onKeyDown={e => e.key === 'Enter' && handleAddNavOverride()}
             placeholder="Benchmark"
-            list="nav-benchmark-choices"
+            list={`${uid}-nav-benchmark-choices`}
             style={{ textTransform: 'uppercase' }}
             disabled={navSaving}
           />
-          <datalist id="nav-benchmark-choices">
+          <datalist id={`${uid}-nav-benchmark-choices`}>
             {navBenchmarkChoices.map(b => <option key={b} value={b} />)}
           </datalist>
           <button className="btn btn-primary" onClick={handleAddNavOverride} disabled={navSaving || !navTicker.trim() || !navBenchmark.trim()}>

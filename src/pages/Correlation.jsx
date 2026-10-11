@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
@@ -49,6 +49,9 @@ export default function Correlation() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
+  // A ref, not an id lookup: Split View can mount this page in both panes, and
+  // an id lookup returns the other pane's element.
+  const heatmapRef = useRef(null)
 
   const addTicker = useCallback(() => {
     const t = input.trim().toUpperCase()
@@ -81,7 +84,7 @@ export default function Correlation() {
   // Render Plotly heatmap when result changes
   useEffect(() => {
     if (!result || !window.Plotly) return
-    const el = document.getElementById('corr-heatmap')
+    const el = heatmapRef.current
     if (!el) return
     const ct = chartTheme(isDark)
 
@@ -275,7 +278,7 @@ export default function Correlation() {
 
           {/* Plotly Heatmap */}
           <div className="card" style={{ padding: '0.75rem 1rem' }}>
-            <div id="corr-heatmap" />
+            <div ref={heatmapRef} id="corr-heatmap" />
           </div>
         </>
       )}
