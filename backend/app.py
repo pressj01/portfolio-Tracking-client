@@ -11817,21 +11817,98 @@ _TXN_PRICE_MATCH_TOLERANCE = 0.01
 # absolute tolerance above.
 _LAYERED_DRIP_PRICE_MATCH_REL_TOLERANCE = 0.01
 
+# Brokers print reinvested shares to three decimals, so 0.010 shares is
+# anything from 0.0095 to 0.0105.  One feed reports the execution price and
+# another divides the cash by those rounded shares, which puts the two prices
+# for one small reinvestment several percent apart (NVDA: $186.53 vs $180.00).
+# The price gap that rounding can explain grows as the share count shrinks.
+_LAYERED_DRIP_SHARE_ROUNDING = 0.0005
+_LAYERED_DRIP_PRICE_MATCH_MAX_REL_TOLERANCE = 0.5
+
 
 def _is_drip_transaction_notes(notes):
     text = str(notes or "").strip().casefold()
     return "[drip]" in text or "reinvest" in text
 
 
-def _layered_drip_price_matches(existing_price, incoming_price):
+def _layered_drip_price_matches(existing_price, incoming_price, shares=None):
     existing = _num_or_zero(existing_price)
     incoming = _num_or_zero(incoming_price)
     difference = abs(existing - incoming)
+    relative = _LAYERED_DRIP_PRICE_MATCH_REL_TOLERANCE
+    share_count = abs(_num_or_zero(shares))
+    if share_count > 0:
+        relative = max(
+            relative,
+            min(
+                _LAYERED_DRIP_SHARE_ROUNDING / share_count,
+                _LAYERED_DRIP_PRICE_MATCH_MAX_REL_TOLERANCE,
+            ),
+        )
     tolerance = max(
         _TXN_PRICE_MATCH_TOLERANCE,
-        max(abs(existing), abs(incoming)) * _LAYERED_DRIP_PRICE_MATCH_REL_TOLERANCE,
+        max(abs(existing), abs(incoming)) * relative,
     )
     return difference <= tolerance
+
+
+def _layered_drip_same_reinvestment(candidate, txn):
+    """True when a parsed row could be the reinvestment ``txn`` describes."""
+    return (
+        candidate.get("type") == txn["type"]
+        and candidate.get("ticker") == txn["ticker"]
+        and candidate.get("shares") is not None
+        and abs(candidate["shares"] - txn["shares"]) < 0.0001
+        and _is_drip_transaction_notes(candidate.get("notes"))
+        and _layered_drip_price_matches(
+            candidate.get("price_per_share"), txn.get("price_per_share"), txn["shares"]
+        )
+    )
+
+
+def _layered_drip_date_shifted_duplicate(conn, profile_id, txn, batch, before_id, claimed_ids):
+    """Return the id of a stored reinvestment that is ``txn`` on a nearby date.
+
+    One feed stamps a reinvestment with its trade date and another with the
+    run date a day or two later, so an exact-date match misses it. Only rows
+    stored before this import began are candidates, each can absorb one
+    incoming row, and a stored row is left alone when the file reports a
+    reinvestment of its own on that date: it is that row's twin, not this one's.
+    """
+    try:
+        d = datetime.date.fromisoformat(str(txn["date"])[:10])
+    except (TypeError, ValueError):
+        return None
+    window = datetime.timedelta(days=_LAYERED_DIV_WINDOW_DAYS)
+    rows = conn.execute(
+        "SELECT id, transaction_date, price_per_share, notes FROM transactions "
+        "WHERE ticker = ? AND profile_id = ? AND transaction_type = ? "
+        "AND id <= ? AND transaction_date BETWEEN ? AND ? AND transaction_date != ? "
+        "AND ABS(shares - ?) < 0.0001 "
+        "ORDER BY ABS(julianday(transaction_date) - julianday(?)), id",
+        (
+            txn["ticker"], profile_id, txn["type"], before_id,
+            (d - window).isoformat(), (d + window).isoformat(), d.isoformat(),
+            txn["shares"], d.isoformat(),
+        ),
+    ).fetchall()
+    for row in rows:
+        if row["id"] in claimed_ids:
+            continue
+        if not _is_drip_transaction_notes(row["notes"]):
+            continue
+        if not _layered_drip_price_matches(
+            row["price_per_share"], txn.get("price_per_share"), txn["shares"]
+        ):
+            continue
+        if any(
+            candidate.get("date") == row["transaction_date"]
+            and _layered_drip_same_reinvestment(candidate, txn)
+            for candidate in batch
+        ):
+            continue
+        return row["id"]
+    return None
 
 
 # Half-width of the window that identifies "the same distribution" for a payout
@@ -12951,6 +13028,10 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
         # Insert BUY/SELL transactions
         import_hash_occ = {}
+        pre_import_max_txn_id = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM transactions"
+        ).fetchone()[0]
+        date_shifted_drip_ids = set()
         for txn in non_div_txns:
             ticker = txn["ticker"]
             tickers_seen_txns.add(ticker)
@@ -12980,20 +13061,13 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                     1 for candidate in existing_candidates
                     if _is_drip_transaction_notes(candidate["notes"])
                     and _layered_drip_price_matches(
-                        candidate["price_per_share"], txn.get("price_per_share")
+                        candidate["price_per_share"], txn.get("price_per_share"), txn["shares"]
                     )
                 )
                 import_count = sum(
                     1 for candidate in non_div_txns
-                    if candidate["type"] == txn["type"]
-                    and candidate["ticker"] == ticker
-                    and candidate["date"] == txn["date"]
-                    and candidate["shares"] is not None
-                    and abs(candidate["shares"] - txn["shares"]) < 0.0001
-                    and _is_drip_transaction_notes(candidate.get("notes"))
-                    and _layered_drip_price_matches(
-                        candidate.get("price_per_share"), txn.get("price_per_share")
-                    )
+                    if candidate["date"] == txn["date"]
+                    and _layered_drip_same_reinvestment(candidate, txn)
                 )
             else:
                 existing_count = conn.execute(
@@ -13013,6 +13087,16 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
+
+            if layered_drip:
+                shifted_id = _layered_drip_date_shifted_duplicate(
+                    conn, profile_id, txn, non_div_txns,
+                    pre_import_max_txn_id, date_shifted_drip_ids,
+                )
+                if shifted_id is not None:
+                    date_shifted_drip_ids.add(shifted_id)
+                    duplicates_skipped += 1
+                    continue
 
             # Ensure holding exists in all_account_info
             existing = conn.execute(

@@ -2339,6 +2339,186 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             [("2026-03-12", 0.092), ("2026-06-11", 1.041)],
         )
 
+    _NVDA_FIDELITY_HISTORY = (
+        "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),"
+        "Commission ($),Fees ($),Amount ($)\n"
+        "10/02/2025,Trust,DIVIDEND RECEIVED,NVDA,NVIDIA CORPORATION COM,Cash,,,0,0,1.80\n"
+        "10/02/2025,Trust,REINVESTMENT,NVDA,NVIDIA CORPORATION COM,Cash,0.010,186.53,0,0,-1.80\n"
+        "10/30/2025,Trust,YOU BOUGHT,NVDA,NVIDIA CORPORATION COM,Cash,5,204.02,0,0,-1020.10\n"
+        "12/26/2025,Trust,DIVIDEND RECEIVED,NVDA,NVIDIA CORPORATION COM,Cash,,,0,0,1.90\n"
+        "12/26/2025,Trust,REINVESTMENT,NVDA,NVIDIA CORPORATION COM,Cash,0.010,187.80,0,0,-1.90\n"
+        "04/01/2026,Trust,DIVIDEND RECEIVED,NVDA,NVIDIA CORPORATION COM,Cash,,,0,0,1.95\n"
+        "04/01/2026,Trust,REINVESTMENT,NVDA,NVIDIA CORPORATION COM,Cash,0.011,171.13,0,0,-1.95\n"
+        "06/26/2026,Trust,DIVIDEND RECEIVED,NVDA,NVIDIA CORPORATION COM,Cash,,,0,0,48.76\n"
+        "06/26/2026,Trust,REINVESTMENT,NVDA,NVIDIA CORPORATION COM,Cash,0.249,195.76,0,0,-48.76\n"
+        "10/01/2026,Trust,DIVIDEND RECEIVED,NVDA,NVIDIA CORPORATION COM,Cash,,,0,0,48.82\n"
+        "10/01/2026,Trust,REINVESTMENT,NVDA,NVIDIA CORPORATION COM,Cash,0.212,230.66,0,0,-48.82\n"
+    )
+    # The same events as Snowball exports them: price is the cash divided by
+    # the rounded shares, and the last reinvestment carries the trade date.
+    _NVDA_SNOWBALL_EXPORT = (
+        "Event,Date,Symbol,Price,Quantity,Currency,FeeTax,Exchange,FeeCurrency,DoNotAdjustCash,Note\n"
+        "DIVIDEND,10/2/2025 0:00,NVDA,0,1.8,USD,0,NASDAQ,,FALSE,DIVIDEND RECEIVED\n"
+        "BUY,10/2/2025 0:00,NVDA,180,0.01,USD,0,NASDAQ,,FALSE,DIVIDEND_REINVESTMENT\n"
+        "BUY,10/30/2025 0:00,NVDA,204.02,5,USD,0,NASDAQ,,FALSE,YOU BOUGHT NVIDIA CORPORATION COM\n"
+        "BUY,12/26/2025 0:00,NVDA,190,0.01,USD,0,NASDAQ,,FALSE,DIVIDEND_REINVESTMENT\n"
+        "DIVIDEND,12/26/2025 0:00,NVDA,0,1.9,USD,0,NASDAQ,,FALSE,DIVIDEND RECEIVED\n"
+        "DIVIDEND,4/1/2026 0:00,NVDA,0,1.95,USD,0,NASDAQ,,FALSE,DIVIDEND RECEIVED\n"
+        "BUY,4/1/2026 0:00,NVDA,177.2727273,0.011,USD,0,NASDAQ,,FALSE,DIVIDEND_REINVESTMENT\n"
+        "BUY,6/26/2026 0:00,NVDA,195.8232932,0.249,USD,0,NASDAQ,USD,FALSE,REINVESTMENT NVIDIA CORPORATION COM (NVDA) (Cash)\n"
+        "DIVIDEND,6/26/2026 0:00,NVDA,0,48.76,USD,0,NASDAQ,,FALSE,DIVIDEND RECEIVED\n"
+        "BUY,9/30/2026 0:00,NVDA,230.28,0.212,USD,0,NASDAQ,USD,FALSE,REINVESTMENT NVIDIA CORPORATION COM (NVDA) (Cash)\n"
+        "DIVIDEND,9/30/2026 0:00,NVDA,0,48.82,USD,0,NASDAQ,,FALSE,DIVIDEND RECEIVED\n"
+    )
+
+    def _post_layered_import(self, profile_id, fmt, filename, content):
+        import io
+
+        orig_income = app_module.populate_income_tracking
+        orig_snapshot = app_module._snapshot_nav_after_profile_update
+        orig_backup = app_module._create_import_backup
+        app_module.populate_income_tracking = lambda profile_id: None
+        app_module._snapshot_nav_after_profile_update = lambda profile_id, nav_date=None: None
+        app_module._create_import_backup = lambda profile_id: None
+        try:
+            return self.client.post(
+                f"/api/import/transactions?profile_id={profile_id}",
+                data={"format": fmt, "file": (io.BytesIO(content.encode()), filename)},
+                content_type="multipart/form-data",
+            )
+        finally:
+            app_module.populate_income_tracking = orig_income
+            app_module._snapshot_nav_after_profile_update = orig_snapshot
+            app_module._create_import_backup = orig_backup
+
+    def _drip_ledger(self, profile_id, ticker):
+        return [
+            (row["transaction_date"], row["shares"], row["price_per_share"])
+            for row in self._rows(
+                "SELECT transaction_date, shares, price_per_share FROM transactions "
+                "WHERE profile_id = ? AND ticker = ? AND transaction_type = 'BUY' "
+                "ORDER BY transaction_date, id",
+                (profile_id, ticker),
+            )
+        ]
+
+    _NVDA_FIDELITY_BUYS = [
+        ("2025-10-02", 0.01, 186.53),
+        ("2025-10-30", 5.0, 204.02),
+        ("2025-12-26", 0.01, 187.8),
+        ("2026-04-01", 0.011, 171.13),
+        ("2026-06-26", 0.249, 195.76),
+        ("2026-10-01", 0.212, 230.66),
+    ]
+
+    def test_layered_fidelity_then_snowball_dedupes_small_and_date_shifted_drips(self):
+        """Overlapping Snowball history must not add a second reinvestment lot.
+
+        Reported on NVDA: 0.010 shares is anything from 0.0095 to 0.0105, so
+        Fidelity's execution price ($186.53) and Snowball's cash-over-shares
+        price ($180.00) sit 3.5% apart for one and the same reinvestment, and
+        Snowball dates the newest one by trade date (09-30) where Fidelity
+        uses the run date (10-01).
+        """
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (56, 'Trust', 'fidelity', 0, 0)"
+        )
+
+        first = self._post_layered_import(
+            56, "fidelity_transactions", "History.csv", self._NVDA_FIDELITY_HISTORY
+        )
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(self._drip_ledger(56, "NVDA"), self._NVDA_FIDELITY_BUYS)
+
+        second = self._post_layered_import(
+            56, "snowball", "NVDA_Snowball_Export.csv", self._NVDA_SNOWBALL_EXPORT
+        )
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["inserted_buys"], 0)
+        self.assertEqual(self._drip_ledger(56, "NVDA"), self._NVDA_FIDELITY_BUYS)
+        self.assertEqual(
+            self._scalar("SELECT COUNT(*) FROM dividend_payments WHERE profile_id = 56"), 5
+        )
+
+        # Importing the overlap again changes nothing either.
+        third = self._post_layered_import(
+            56, "snowball", "NVDA_Snowball_Export.csv", self._NVDA_SNOWBALL_EXPORT
+        )
+        self.assertEqual(third.status_code, 200, third.get_data(as_text=True))
+        self.assertEqual(self._drip_ledger(56, "NVDA"), self._NVDA_FIDELITY_BUYS)
+
+    def test_layered_snowball_then_fidelity_dedupes_small_and_date_shifted_drips(self):
+        """The same overlap, imported in the other order."""
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (57, 'Trust', 'fidelity', 0, 0)"
+        )
+
+        first = self._post_layered_import(
+            57, "snowball", "NVDA_Snowball_Export.csv", self._NVDA_SNOWBALL_EXPORT
+        )
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        snowball_buys = self._drip_ledger(57, "NVDA")
+        self.assertEqual(len(snowball_buys), 6)
+
+        second = self._post_layered_import(
+            57, "fidelity_transactions", "History.csv", self._NVDA_FIDELITY_HISTORY
+        )
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["inserted_buys"], 0)
+        self.assertEqual(self._drip_ledger(57, "NVDA"), snowball_buys)
+
+    def test_layered_drip_dedupe_keeps_reinvestments_that_are_really_separate(self):
+        """The wider match must not swallow a reinvestment of its own.
+
+        Three ways a second row is a different event: the price gap is more
+        than share rounding can explain, the stored neighbour belongs to a row
+        the file reports on that very date, or the dates are simply a week
+        apart.
+        """
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (58, 'Trust', 'fidelity', 0, 0)"
+        )
+        fidelity = (
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),"
+            "Commission ($),Fees ($),Amount ($)\n"
+            "01/05/2026,Trust,YOU BOUGHT,WKLY,WEEKLY PAYER,Cash,100,50.00,0,0,-5000.00\n"
+            "03/12/2026,Trust,REINVESTMENT,WKLY,WEEKLY PAYER,Cash,1.041,103.34,0,0,-107.58\n"
+            "06/11/2026,Trust,REINVESTMENT,WKLY,WEEKLY PAYER,Cash,0.212,50.00,0,0,-10.60\n"
+            "09/04/2026,Trust,REINVESTMENT,WKLY,WEEKLY PAYER,Cash,0.010,50.00,0,0,-0.50\n"
+        )
+        snowball = (
+            "Event,Symbol,Date,Quantity,Price,Note\n"
+            # 1.041 shares pins the price to 0.05%; $110 is another fill.
+            "BUY,WKLY,2026-03-12,1.041,110.00,DIVIDEND_REINVESTMENT\n"
+            # The file has 06-11 itself, so 06-10 is a second reinvestment.
+            "BUY,WKLY,2026-06-10,0.212,50.00,DIVIDEND_REINVESTMENT\n"
+            "BUY,WKLY,2026-06-11,0.212,50.00,DIVIDEND_REINVESTMENT\n"
+            # A week later is the next payout, however alike it looks.
+            "BUY,WKLY,2026-09-11,0.010,50.00,DIVIDEND_REINVESTMENT\n"
+        )
+
+        first = self._post_layered_import(58, "fidelity_transactions", "History.csv", fidelity)
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        second = self._post_layered_import(58, "snowball", "snowball.csv", snowball)
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+
+        self.assertEqual(second.get_json()["inserted_buys"], 3)
+        self.assertEqual(
+            self._drip_ledger(58, "WKLY"),
+            [
+                ("2026-01-05", 100.0, 50.0),
+                ("2026-03-12", 1.041, 103.34),
+                ("2026-03-12", 1.041, 110.0),
+                ("2026-06-10", 0.212, 50.0),
+                ("2026-06-11", 0.212, 50.0),
+                ("2026-09-04", 0.01, 50.0),
+                ("2026-09-11", 0.01, 50.0),
+            ],
+        )
+
     def test_generic_transactions_template_download_contains_expected_sheets_and_headers(self):
         import io
         import openpyxl
