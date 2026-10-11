@@ -36,7 +36,11 @@ def _market_frame(periods, start="2026-07-27"):
         },
         index=dates,
     )
-    zeros = pd.DataFrame(0.0, index=dates, columns=close.columns)
+    return _as_download(close)
+
+
+def _as_download(close):
+    zeros = pd.DataFrame(0.0, index=close.index, columns=close.columns)
     return pd.concat(
         {
             "Close": close,
@@ -45,6 +49,27 @@ def _market_frame(periods, start="2026-07-27"):
         },
         axis=1,
     )
+
+
+def _volatile_market_frame(periods=120, start="2025-08-27", seed=7):
+    """Prices with real down days, so the portfolio has a drawdown to measure."""
+    dates = pd.bdate_range(start, periods=periods)
+    rng = np.random.default_rng(seed)
+    specs = {
+        "AAA": (100, 0.0006, 0.022),
+        "BBB": (80, 0.0002, 0.015),
+        "CCC": (50, -0.0004, 0.030),
+        "SPY": (475, 0.0004, 0.010),
+        "QQQ": (405, 0.0005, 0.013),
+    }
+    close = pd.DataFrame(
+        {
+            name: base * np.cumprod(1 + rng.normal(drift, vol, len(dates)))
+            for name, (base, drift, vol) in specs.items()
+        },
+        index=dates,
+    )
+    return _as_download(close)
 
 
 class MinObservationsForWindowTest(unittest.TestCase):
@@ -290,6 +315,143 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
             analytics["portfolio_metrics"]["ulcer_index"],
             dashboard["portfolio_grade"]["ulcer_index"],
         )
+
+    # Holdings are weighted by current value. The grade normalizes those dollars
+    # itself; the drawdown chart and the Risk vs Return point once did not, so a
+    # $3,500 portfolio compounded 3,500x its daily return.
+    HELD_VALUES = {"AAA": 1200.0, "BBB": 1800.0, "CCC": 500.0}
+
+    def _constituent_returns(self):
+        """Daily returns per holding, on the zero-filled basis the grade uses."""
+        close = self.market_data["Close"][list(self.HELD_VALUES)]
+        return close.pct_change().fillna(0)
+
+    def _weight_fractions(self):
+        total = sum(self.HELD_VALUES.values())
+        return pd.Series({t: v / total for t, v in self.HELD_VALUES.items()})
+
+    @patch("yfinance.Ticker")
+    def test_drawdown_series_stays_within_a_total_loss(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        response = self._post_analytics("1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        series = payload["drawdown_series"]
+        values = series["values"]
+        self.assertEqual(len(values), len(self.market_data))
+        self.assertEqual(len(series["dates"]), len(values))
+        out_of_range = [v for v in values if not -100 <= v <= 0]
+        self.assertEqual(out_of_range, [], out_of_range[:5])
+
+        port_daily = self._constituent_returns().dot(self._weight_fractions())
+        cum = (1 + port_daily).cumprod()
+        expected = (cum / cum.cummax() - 1) * 100
+        # A flat line would pass the range check without measuring anything.
+        self.assertLess(float(expected.min()), -3)
+        np.testing.assert_allclose(values, expected.values, atol=0.0051)
+        # The chart's trough is the max drawdown printed on the grade card.
+        self.assertAlmostEqual(
+            min(values),
+            payload["portfolio_metrics"]["max_drawdown"] * 100,
+            delta=0.0051,
+        )
+
+    @patch("yfinance.Ticker")
+    def test_portfolio_point_is_the_weighted_mean_of_its_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        response = self._post_analytics("1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        point = payload["portfolio_metrics"]
+        returns = self._constituent_returns()
+        weights = self._weight_fractions()
+
+        weighted_mean = sum(
+            weights[t] * float(returns[t].mean() * 252) * 100 for t in self.HELD_VALUES
+        )
+        self.assertAlmostEqual(point["annual_ret"], weighted_mean, delta=0.0051)
+        # A blend cannot return more than its best holding or less than its worst.
+        annualized = [float(returns[t].mean() * 252) * 100 for t in self.HELD_VALUES]
+        self.assertGreaterEqual(point["annual_ret"], min(annualized) - 0.0051)
+        self.assertLessEqual(point["annual_ret"], max(annualized) + 0.0051)
+
+        port_daily = returns.dot(weights)
+        self.assertAlmostEqual(
+            point["annual_vol"],
+            float(port_daily.std() * np.sqrt(252)) * 100,
+            delta=0.0051,
+        )
+        # Nor can it be more volatile than the weighted mean of their volatility.
+        weighted_vol = sum(
+            weights[t] * float(returns[t].std() * np.sqrt(252)) * 100
+            for t in self.HELD_VALUES
+        )
+        self.assertLessEqual(point["annual_vol"], weighted_vol + 0.0051)
+
+    @patch("yfinance.Ticker")
+    def test_unheld_tickers_do_not_divide_by_a_zero_total(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("DELETE FROM all_account_info")
+        conn.commit()
+        conn.close()
+
+        response = self._post_analytics("1y")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        # NaN here would reach the page as invalid JSON.
+        self.assertNotIn("NaN", response.get_data(as_text=True))
+        values = payload["drawdown_series"]["values"]
+        self.assertEqual(len(values), len(self.market_data))
+        self.assertTrue(all(v == 0 for v in values), values[:5])
+        self.assertEqual(payload["portfolio_metrics"]["annual_ret"], 0)
+        self.assertEqual(payload["portfolio_metrics"]["annual_vol"], 0)
+
+    def test_builder_drawdown_series_stays_within_a_total_loss(self):
+        # Portfolio Builder draws the same chart from its own dollar amounts.
+        self.market_data = _volatile_market_frame()
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(
+            """
+            CREATE TABLE builder_portfolios (id INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE builder_holdings (
+                portfolio_id INTEGER, ticker TEXT, dollar_amount REAL
+            );
+            INSERT INTO builder_portfolios VALUES (1, 'Model');
+            INSERT INTO builder_holdings VALUES (1, 'AAA', 1200);
+            INSERT INTO builder_holdings VALUES (1, 'BBB', 1800);
+            INSERT INTO builder_holdings VALUES (1, 'CCC', 500);
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        with patch.object(app_module, "_yf_ticker") as ticker_mock:
+            ticker_mock.return_value.info = {}
+            response = self.client.post(
+                "/api/builder/portfolios/1/analyze",
+                json={"benchmark": "SPY", "period": "1y"},
+            )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        values = payload["drawdown_series"]["values"]
+        out_of_range = [v for v in values if not -100 <= v <= 0]
+        self.assertEqual(out_of_range, [], out_of_range[:5])
+
+        # Builder drops the first (return-less) row instead of zero-filling it.
+        close = self.market_data["Close"][list(self.HELD_VALUES)]
+        port_daily = close.pct_change().dropna().dot(self._weight_fractions())
+        cum = (1 + port_daily).cumprod()
+        expected = (cum / cum.cummax() - 1) * 100
+        self.assertLess(float(expected.min()), -3)
+        np.testing.assert_allclose(values, expected.values, atol=0.0051)
 
 
 if __name__ == "__main__":

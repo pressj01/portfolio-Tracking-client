@@ -48677,8 +48677,13 @@ def analytics_data():
                        for a in available_tickers],
         }
 
-        # Portfolio drawdown series
-        port_daily = returns_df.dot(weights_arr)
+        # Portfolio drawdown series. weights_arr is dollars and only
+        # grade_portfolio normalizes it, so take fractions here too: the raw
+        # dot product multiplied each daily return by the portfolio's value.
+        # With nothing held the weights stay zero, as they do in the grade.
+        weights_total = float(weights_arr.sum())
+        weight_fractions = weights_arr / weights_total if weights_total > 0 else weights_arr
+        port_daily = returns_df.dot(weight_fractions)
         port_cum = (1 + port_daily).cumprod()
         roll_max = port_cum.cummax()
         drawdown_s = (port_cum / roll_max - 1)
