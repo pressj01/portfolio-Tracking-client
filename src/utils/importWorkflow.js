@@ -249,6 +249,13 @@ export function completedWorkflowSteps(format, { navOnly = false, exportScope = 
   return role === 'positions' || role === 'transactions' ? [role] : []
 }
 
+export function nextWorkflowStepAfterImport(currentStep, completedSteps, autoAdvance = false) {
+  if (!autoAdvance || !Array.isArray(completedSteps)) return ''
+  if (currentStep === 'positions' && completedSteps.includes('positions')) return 'transactions'
+  if (currentStep === 'transactions' && completedSteps.includes('transactions')) return 'refresh'
+  return ''
+}
+
 export function formatImportDetail(detail = {}) {
   const failed = detail.ok === false ? 'FAILED - ' : ''
   const source = detail.account_label || detail.source_sheet || ''

@@ -11,6 +11,7 @@ import {
   formatImportDetail,
   brokerIdFromSource,
   completedWorkflowSteps,
+  nextWorkflowStepAfterImport,
   needsPositionsSnapshotFirst,
   isPositionsFormat,
   isSnowballFormat,
@@ -249,6 +250,14 @@ test('only completed imports advance the checklist', () => {
   assert.deepEqual(completedWorkflowSteps('portfolio_export'), ['positions', 'transactions'])
   assert.deepEqual(completedWorkflowSteps('snowball_holdings'), [])
   assert.deepEqual(completedWorkflowSteps('schwab', { navOnly: true }), [])
+})
+
+test('automatic progression advances only after the current import step succeeds', () => {
+  assert.equal(nextWorkflowStepAfterImport('positions', ['positions'], true), 'transactions')
+  assert.equal(nextWorkflowStepAfterImport('transactions', ['transactions'], true), 'refresh')
+  assert.equal(nextWorkflowStepAfterImport('positions', [], true), '')
+  assert.equal(nextWorkflowStepAfterImport('positions', ['positions'], false), '')
+  assert.equal(nextWorkflowStepAfterImport('refresh', ['positions', 'transactions'], true), '')
 })
 
 test('a scoped app-export run only completes the half it imported', () => {

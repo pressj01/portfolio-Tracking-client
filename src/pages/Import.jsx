@@ -21,6 +21,7 @@ import {
   brokerById,
   brokerIdFromSource,
   needsPositionsSnapshotFirst,
+  nextWorkflowStepAfterImport,
   workflowStepForFormat,
 } from '../utils/importWorkflow'
 import {
@@ -517,6 +518,7 @@ export default function Import() {
   const [txnOrderAck, setTxnOrderAck] = useState(false)
   const [exportScope, setExportScope] = useState('both')
   const [completedSteps, setCompletedSteps] = useState({})
+  const [autoAdvanceWorkflow, setAutoAdvanceWorkflow] = useState(false)
   const [lastImportKind, setLastImportKind] = useState('')
 
   // Backup / restore state
@@ -767,17 +769,19 @@ export default function Import() {
     setError(null)
   }
 
-  const applyTxnFormat = useCallback((nextFormat, nextStep) => {
+  const applyTxnFormat = useCallback((nextFormat, nextStep, { preserveFeedback = false } = {}) => {
     setTxnFormat(nextFormat)
     setTxnPreview(null)
     setTxnAccountMap({})
     setTxnDestSelected({})
     setTxnFile(null)
     setTxnNavOnly(false)
-    setResult(null)
-    setError(null)
+    if (!preserveFeedback) {
+      setResult(null)
+      setError(null)
+      setLastImportKind('')
+    }
     setTxnOrderAck(false)
-    setLastImportKind('')
     if (nextStep) setWorkflowStep(nextStep)
     else setWorkflowStep((current) => workflowStepForFormat(nextFormat, current))
   }, [])
@@ -817,23 +821,25 @@ export default function Import() {
     }
   }
 
-  const selectWorkflowStep = (step) => {
+  const selectWorkflowStep = (step, { preserveFeedback = false } = {}) => {
     setWorkflowStep(step)
-    setResult(null)
-    setError(null)
-    setLastImportKind('')
+    if (!preserveFeedback) {
+      setResult(null)
+      setError(null)
+      setLastImportKind('')
+    }
     if (step === 'refresh') return
     if (workflow.brokerId) {
       applyTxnFormat(formatForWorkflow({
         brokerId: workflow.brokerId,
         role: step,
         schwabAllAccounts: workflow.schwabAllAccounts,
-      }), step)
+      }), step, { preserveFeedback })
       return
     }
     const brokerId = brokerIdFromSource(currentProfile?.broker_source)
     if (brokerId) {
-      applyTxnFormat(formatForWorkflow({ brokerId, role: step }), step)
+      applyTxnFormat(formatForWorkflow({ brokerId, role: step }), step, { preserveFeedback })
     }
   }
 
@@ -1511,12 +1517,14 @@ export default function Import() {
               step={workflowStep}
               workflow={workflow}
               completedSteps={completedSteps}
+              autoAdvance={autoAdvanceWorkflow}
               hasPositions={hasPositions}
               currentProfileName={currentProfileName}
               isRollupTarget={isRollupTarget}
               skipTransactionOrderWarning={txnIsMultiTransactionFormat}
               txnOrderAck={txnOrderAck}
               onTxnOrderAckChange={setTxnOrderAck}
+              onAutoAdvanceChange={setAutoAdvanceWorkflow}
               onSelectStep={selectWorkflowStep}
               onSelectBroker={selectImportBroker}
               onSelectBrokerScope={selectBrokerScope}
@@ -1953,6 +1961,9 @@ export default function Import() {
                     const nextKind = completedKinds.includes('transactions')
                       ? 'transactions'
                       : completedKinds[0] || ''
+                    const nextStep = workflow.brokerId
+                      ? nextWorkflowStepAfterImport(workflowStep, completedKinds, autoAdvanceWorkflow)
+                      : ''
                     setLastImportKind(nextKind)
                     setCompletedSteps((prev) => ({
                       ...prev,
@@ -1970,6 +1981,7 @@ export default function Import() {
                     clearAllDashboardCache()
                     await loadDataStats()
                     loadBackups()
+                    if (nextStep) selectWorkflowStep(nextStep, { preserveFeedback: true })
                   } catch (e) {
                     setError(e.message)
                   } finally {
@@ -2393,14 +2405,14 @@ export default function Import() {
           {result.map((msg, i) => (
             <div key={i}>{msg}</div>
           ))}
-          {activeTab === 'txnHistory' && lastImportKind === 'positions' && (
+          {activeTab === 'txnHistory' && lastImportKind === 'positions' && workflowStep === 'positions' && (
             <div style={{ marginTop: '0.75rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => selectWorkflowStep('transactions')}>
                 Next: import transactions
               </button>
             </div>
           )}
-          {activeTab === 'txnHistory' && lastImportKind === 'transactions' && (
+          {activeTab === 'txnHistory' && lastImportKind === 'transactions' && workflowStep === 'transactions' && (
             <div style={{ marginTop: '0.75rem' }}>
               <button type="button" className="btn btn-secondary" onClick={() => selectWorkflowStep('refresh')}>
                 Next: refresh prices

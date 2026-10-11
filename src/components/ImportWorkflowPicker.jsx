@@ -44,12 +44,14 @@ export default function ImportWorkflowPicker({
   step,
   workflow,
   completedSteps,
+  autoAdvance = false,
   hasPositions,
   currentProfileName,
   isRollupTarget,
   skipTransactionOrderWarning = false,
   txnOrderAck,
   onTxnOrderAckChange,
+  onAutoAdvanceChange,
   onSelectStep,
   onSelectBroker,
   onSelectBrokerScope,
@@ -84,6 +86,21 @@ export default function ImportWorkflowPicker({
           )
         })}
       </div>
+
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', margin: '0.75rem 0 1rem', cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={autoAdvance}
+          onChange={(e) => onAutoAdvanceChange(e.target.checked)}
+          style={{ marginTop: '0.2rem' }}
+        />
+        <span>
+          <strong>Automatically continue to the next step</strong>
+          <span style={{ display: 'block', color: 'var(--text-dim-2)', fontSize: '0.85rem', marginTop: '0.15rem' }}>
+            After a successful Positions import, open Transactions. After a successful Transactions import, open Refresh.
+          </span>
+        </span>
+      </label>
 
       {step !== 'refresh' && (
         <>
