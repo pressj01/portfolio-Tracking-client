@@ -1047,6 +1047,7 @@ export default function ETFComparer() {
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
             style={{ width: '100%', height: 560 }}
+            rankUnifiedHover
             onRelayout={(e) => {
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)

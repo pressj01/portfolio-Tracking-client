@@ -2949,6 +2949,8 @@ export default function ETFScreen() {
       traces.push({
         x: [minDate, maxDate], y: [baseY, baseY], type: 'scatter', mode: 'lines',
         name: 'Baseline', line: { color: '#555', dash: 'dash', width: 1 }, showlegend: false,
+        // A guide line, not a fund: keep it out of the ranked hover box.
+        hoverinfo: 'skip',
       })
     }
 
@@ -3743,7 +3745,7 @@ export default function ETFScreen() {
                     Reinvest is 100% — the Custom and DRIP lines are identical and overlap. Adjust the slider below 100% to see them diverge.
                   </div>
                 )}
-                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
+                <Plot data={returnPlotData} layout={themedPlotlyLayout(returnPlotLayout, isDark)} config={{ responsive: true, displayModeBar: true, displaylogo: false }} useResizeHandler style={{ width: '100%' }} rankUnifiedHover onInitialized={rememberReturnPlotElement} onUpdate={rememberReturnPlotElement} onRelayout={handleReturnRelayout} onRelayouting={handleReturnRelayouting} />
                 <div className="etfc-section" style={{ marginTop: '1rem' }}>
                   <div className="etfc-section-head">
                     <h2 style={{ fontSize: '1.1rem' }}>Yield on Cost</h2>
