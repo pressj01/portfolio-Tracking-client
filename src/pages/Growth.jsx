@@ -3,6 +3,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme, hoverLastPoint } from '../utils/chartTheme'
 import { formatMoneyWhole } from '../utils/money'
+import { signedPercent } from '../utils/signedPercent'
 import {
   MIN_PERFORMANCE_DATE,
   PERFORMANCE_PERIODS,
@@ -320,15 +321,23 @@ export default function Growth({ embedded = false }) {
           return Number.isFinite(value) ? value : 0
         }),
       ]
+      // The last entry is the signed return as text: a "%{customdata[3]:+.2f}"
+      // hover format prints the raw float in Plotly 3 (see signedPercent).
       const customdata = [
-        [null, null, null, null],
-        ...treemapRows.map(row => [row.market_value, row.allocation_pct, row.quantity, row.return_pct]),
+        [null, null, null, null, null],
+        ...treemapRows.map(row => [
+          row.market_value,
+          row.allocation_pct,
+          row.quantity,
+          row.return_pct,
+          signedPercent(row.return_pct),
+        ]),
       ]
       const hovertemplate = [
         '<b>Portfolio</b><br>Total tracked value: $%{value:,.2f}<extra></extra>',
         ...treemapRows.map(() => (
           '<b>%{label}</b><br>' +
-          'Total return: %{customdata[3]:+.2f}%<br>' +
+          'Total return: %{customdata[4]}<br>' +
           'Allocation: %{customdata[1]:.2f}%<br>' +
           'Market value: $%{customdata[0]:,.2f}<br>' +
           'Shares: %{customdata[2]:,.4f}<extra></extra>'

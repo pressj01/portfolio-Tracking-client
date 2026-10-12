@@ -717,7 +717,11 @@ class TotalReturnDashboardPeriodTest(unittest.TestCase):
         self.assertEqual(data["performance_rows"][0]["ticker"], "AAA")
         self.assertEqual(data["performance_rows"][0]["total_return_pct"], 10.0)
         self.assertEqual(data["bar"]["data"][0]["text"], ["+10.00%"])
-        self.assertIn("%{x:+.2f}%", data["bar"]["data"][0]["hovertemplate"])
+        # The hover prints the preformatted label. A "+" hover format such as
+        # "%{x:+.2f}" makes Plotly 3 print the raw float.
+        hovertemplate = data["bar"]["data"][0]["hovertemplate"]
+        self.assertIn("Total Return: %{text}<br>", hovertemplate)
+        self.assertNotIn(":+", hovertemplate)
 
     def test_open_holdings_total_excludes_fully_closed_transaction_history(self):
         dates = pd.to_datetime(["2025-12-31", "2026-01-02", "2026-01-05"])

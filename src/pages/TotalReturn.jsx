@@ -5,6 +5,7 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoney, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
+import { signedPercent } from '../utils/signedPercent'
 import { AccountValueCard } from '../components/AccountReconciliation'
 import {
   MIN_PERFORMANCE_DATE,
@@ -324,9 +325,11 @@ export default function TotalReturn() {
         x: values,
         y: rows.map(row => row.ticker),
         marker: { color: values.map(value => value >= 0 ? '#4dff91' : '#ff6b6b') },
-        text: values.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+        // The hover reuses the signed bar label: a "%{x:+.2f}" hover format
+        // prints the raw float in Plotly 3 (see signedPercent).
+        text: values.map(value => signedPercent(value)),
         textposition: 'outside',
-        hovertemplate: '<b>%{y}</b><br>Cost-basis G/L: %{x:+.2f}%<extra></extra>',
+        hovertemplate: '<b>%{y}</b><br>Cost-basis G/L: %{text}<extra></extra>',
       }], themedPlotlyLayout({
         title: 'Holding Cost-Basis G/L % — Lifetime (matches Holdings)',
         xaxis: { title: 'G/L %' },
@@ -415,7 +418,11 @@ export default function TotalReturn() {
       return {
         x: group.map(r => r.yield_on_cost_pct),
         y: group.map(r => r[yKey]),
-        customdata: group.map(r => [r.total_return_pct_num, r.total_return_dollar_num]),
+        customdata: group.map(r => [
+          r.total_return_pct_num,
+          r.total_return_dollar_num,
+          signedPercent(r.total_return_pct_num),
+        ]),
         mode: 'markers+text',
         name: category,
         text: group.map(r => r.ticker),
@@ -427,8 +434,8 @@ export default function TotalReturn() {
           color: PALETTE[i % PALETTE.length],
         },
         hovertemplate: scatterReturnMode === 'dollar'
-          ? '<b>%{text}</b><br>Total Ret: $%{y:,.2f}<br>Total Ret %: %{customdata[0]:+.2f}%<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>'
-          : '<b>%{text}</b><br>Total Ret: %{y:+.2f}%<br>Total Ret $: $%{customdata[1]:,.2f}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>',
+          ? '<b>%{text}</b><br>Total Ret: $%{y:,.2f}<br>Total Ret %: %{customdata[2]}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>'
+          : '<b>%{text}</b><br>Total Ret: %{customdata[2]}<br>Total Ret $: $%{customdata[1]:,.2f}<br>Yield on Cost: %{x:.2f}%<extra>' + category + '</extra>',
       }
     })
 
@@ -590,7 +597,7 @@ export default function TotalReturn() {
         return [{
           x: cmpData.dates,
           y: displayValues,
-          customdata: displayValues.map(value => value == null ? null : roundForDisplay(value - 100)),
+          customdata: displayValues.map(value => value == null ? null : signedPercent(value - 100)),
           name,
           mode: 'lines',
           line: {
@@ -598,7 +605,7 @@ export default function TotalReturn() {
             color,
             dash: style.dash,
           },
-          hovertemplate: `<b>${name}</b><br>%{x}<br>Index: %{y:.2f}<br>Return: %{customdata:+.2f}%<extra></extra>`,
+          hovertemplate: `<b>${name}</b><br>%{x}<br>Index: %{y:.2f}<br>Return: %{customdata}<extra></extra>`,
         }]
       })
     })

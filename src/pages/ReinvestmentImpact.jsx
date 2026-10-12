@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoneyWhole } from '../utils/money'
 import { PRICE_SHOCK_PRESETS, PRICE_SENSITIVITY_POINTS, projectPriceImpact } from '../utils/priceImpactModel'
+import { signedPercent } from '../utils/signedPercent'
 
 const fmt$ = v => formatMoneyWhole(v)
 const fmtShares = v => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -561,6 +562,9 @@ export default function ReinvestmentImpact() {
     })
     return {
       pct,
+      // Hover text for the price change. A "%{x:+.0f}" hover format drops
+      // the sign in Plotly 3 (see signedPercent).
+      pctLabel: signedPercent(pct, 0),
       currentAnnual: result.adjustedCurrentAnnualIncome,
       currentMonthly: result.adjustedCurrentMonthlyIncome,
       annual: result.projectedAnnualIncome,
@@ -575,23 +579,25 @@ export default function ReinvestmentImpact() {
       {
         x: priceSensitivity.map(p => p.pct),
         y: priceSensitivity.map(p => p.currentMonthly),
+        customdata: priceSensitivity.map(p => p.pctLabel),
         type: 'scatter',
         mode: 'lines+markers',
         line: { color: '#38bdf8', width: 2 },
         marker: { size: 5, color: '#38bdf8' },
         name: 'Current monthly',
-        hovertemplate: '%{x:+.0f}% price<br>$%{y:,.0f} monthly<extra></extra>',
+        hovertemplate: '%{customdata} price<br>$%{y:,.0f} monthly<extra></extra>',
       },
       {
         x: priceSensitivity.map(p => p.pct),
         y: priceSensitivity.map(p => p.currentAnnual),
+        customdata: priceSensitivity.map(p => p.pctLabel),
         type: 'scatter',
         mode: 'lines+markers',
         yaxis: 'y2',
         line: { color: '#4dff91', width: 2 },
         marker: { size: 5, color: '#4dff91' },
         name: 'Current annual',
-        hovertemplate: '%{x:+.0f}% price<br>$%{y:,.0f} annual<extra></extra>',
+        hovertemplate: '%{customdata} price<br>$%{y:,.0f} annual<extra></extra>',
       },
       {
         x: [priceShockPct, priceShockPct],
@@ -611,21 +617,23 @@ export default function ReinvestmentImpact() {
       {
         x: priceSensitivity.map(p => p.pct),
         y: priceSensitivity.map(p => p.annual),
+        customdata: priceSensitivity.map(p => p.pctLabel),
         type: 'scatter',
         mode: 'lines+markers',
         line: { color: '#4dff91', width: 2 },
         marker: { size: 5, color: '#4dff91' },
         name: `Projected annual after reinvestment in ${years}yr`,
-        hovertemplate: '%{x:+.0f}% price<br>$%{y:,.0f} projected annual<extra></extra>',
+        hovertemplate: '%{customdata} price<br>$%{y:,.0f} projected annual<extra></extra>',
       },
       {
         x: priceSensitivity.map(p => p.pct),
         y: priceSensitivity.map(p => p.currentAnnual),
+        customdata: priceSensitivity.map(p => p.pctLabel),
         type: 'scatter',
         mode: 'lines',
         line: { color: '#94a3b8', width: 1.5, dash: 'dash' },
         name: 'Current annual payout',
-        hovertemplate: '%{x:+.0f}% price<br>$%{y:,.0f} current annual payout<extra></extra>',
+        hovertemplate: '%{customdata} price<br>$%{y:,.0f} current annual payout<extra></extra>',
       },
       {
         x: [priceShockPct, priceShockPct],

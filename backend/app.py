@@ -37479,7 +37479,10 @@ def total_return_charts():
             text=displayed_returns.apply(lambda v: f"{v:+.2f}%"),
             textposition="outside",
             customdata=ret_df[["actual_start_date", "actual_end_date"]].values.tolist(),
-            hovertemplate="<b>%{y}</b><br>Total Return: %{x:+.2f}%<br>Held-period range: %{customdata[0]} to %{customdata[1]}<extra></extra>",
+            # The hover reuses the signed bar label: a "%{x:+.2f}" hover format
+            # prints the raw float in Plotly 3 (it rewrites it to "~+.2f",
+            # which d3 rejects).
+            hovertemplate="<b>%{y}</b><br>Total Return: %{text}<br>Held-period range: %{customdata[0]} to %{customdata[1]}<extra></extra>",
         ))
         if spy_ret is not None:
             fig_bar.add_vline(x=spy_ret, line_dash="dash", line_color="#FFD700",

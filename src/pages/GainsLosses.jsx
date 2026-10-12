@@ -10,6 +10,7 @@ import ColumnCustomizer from '../components/ColumnCustomizer'
 import LotDetailsPanel from '../components/LotDetailsPanel'
 import useLotDetails from '../utils/useLotDetails'
 import { sortByValue } from '../utils/lotTableSort'
+import { signedPercent } from '../utils/signedPercent'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
 import {
@@ -317,20 +318,24 @@ export default function GainsLosses({ embedded = false }) {
       const totalReturns = (portfolioSeries.total || []).map(value => (
         value == null ? null : Number((Number(value) - 100).toFixed(2))
       ))
+      // The signed return is preformatted: a "%{y:+.2f}" hover format prints
+      // the raw float in Plotly 3 (see signedPercent).
       const traces = [
         {
           x: portfolioSeries.dates, y: priceReturns,
+          customdata: priceReturns.map(value => signedPercent(value)),
           name: 'Price Return', mode: 'lines',
           line: { width: 2.5, color: '#7B8CFF' },
           fill: 'tozeroy', fillcolor: 'rgba(123,140,255,0.1)',
-          hovertemplate: '<b>Price Return</b><br>%{x}<br>%{y:+.2f}%<extra></extra>',
+          hovertemplate: '<b>Price Return</b><br>%{x}<br>%{customdata}<extra></extra>',
         },
         {
           x: portfolioSeries.dates, y: totalReturns,
+          customdata: totalReturns.map(value => signedPercent(value)),
           name: 'Tracker Total Return', mode: 'lines',
           line: { width: 2.5, color: '#2EFDB5' },
           fill: 'tozeroy', fillcolor: 'rgba(46,253,181,0.08)',
-          hovertemplate: '<b>Tracker Total Return</b><br>%{x}<br>%{y:+.2f}%<extra></extra>',
+          hovertemplate: '<b>Tracker Total Return</b><br>%{x}<br>%{customdata}<extra></extra>',
         },
       ]
       // Zero line
@@ -366,16 +371,16 @@ export default function GainsLosses({ embedded = false }) {
         {
           y: tickers, x: priceVals, type: 'bar', orientation: 'h',
           name: 'Price Return', marker: { color: '#7B8CFF' },
-          text: priceVals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+          text: priceVals.map(value => signedPercent(value)),
           textposition: 'outside', cliponaxis: false,
-          hovertemplate: '<b>%{y}</b><br>Price Return: %{x:+.2f}%<extra></extra>',
+          hovertemplate: '<b>%{y}</b><br>Price Return: %{text}<extra></extra>',
         },
         {
           y: tickers, x: totalVals, type: 'bar', orientation: 'h',
           name: 'Tracker Total Return', marker: { color: '#2EFDB5' },
-          text: totalVals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+          text: totalVals.map(value => signedPercent(value)),
           textposition: 'outside', cliponaxis: false,
-          hovertemplate: '<b>%{y}</b><br>Tracker Total Return: %{x:+.2f}%<extra></extra>',
+          hovertemplate: '<b>%{y}</b><br>Tracker Total Return: %{text}<extra></extra>',
         },
       ]
       const barHeight = Math.max(400, tickers.length * 32 + 80)
@@ -403,9 +408,9 @@ export default function GainsLosses({ embedded = false }) {
       const watTraces = [{
         x: tickers, y: vals, type: 'bar',
         marker: { color: colors },
-        text: vals.map(value => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`),
+        text: vals.map(value => signedPercent(value)),
         textposition: 'outside', cliponaxis: false,
-        hovertemplate: '<b>%{x}</b><br>Tracker Total Return: %{y:+.2f}%<extra></extra>',
+        hovertemplate: '<b>%{x}</b><br>Tracker Total Return: %{text}<extra></extra>',
         showlegend: false,
       }]
       const watLayout = {
