@@ -205,6 +205,7 @@ export default function YieldOnCostChart({
         config={{ responsive: true, displayModeBar: false }}
         useResizeHandler
         style={{ width: '100%', height }}
+        rankUnifiedHover
       />
       <div className="yoc-basis-row">
         {built.map(({ symbol, color, yoc }) => (
