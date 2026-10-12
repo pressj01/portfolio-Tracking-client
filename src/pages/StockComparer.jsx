@@ -621,8 +621,10 @@ export default function StockComparer() {
           line: { color, width: style.width, dash: style.dash },
           hovertemplate: logScaleActive && returnPctMode
             ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{customdata[0]}<br>Growth of $100: %{customdata[1]}<extra></extra>`
+            // No leading "+" in the format: Plotly 3 prepends "~" to it, d3
+            // rejects the result, and the raw float is printed instead.
             : returnPctMode
-              ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:+,.2f}%<extra></extra>`
+              ? `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}%<extra></extra>`
             : `<b>${sym}</b><br>%{x}<br>${label || 'Total Return'}: %{y:,.2f}<extra></extra>`,
         })
         if (showReturnLabels && labelIdx >= 0) {
@@ -1026,6 +1028,7 @@ export default function StockComparer() {
             config={{ responsive: true, displayModeBar: true, displaylogo: false }}
             useResizeHandler
             style={{ width: '100%', height: 560 }}
+            rankUnifiedHover
             onRelayout={(e) => {
               if (e?.['xaxis.autorange']) { setReturnXRange([null, null]); return }
               const range = e?.['xaxis.range'] || (e?.['xaxis.range[0]'] && e?.['xaxis.range[1]'] ? [e['xaxis.range[0]'], e['xaxis.range[1]']] : null)
