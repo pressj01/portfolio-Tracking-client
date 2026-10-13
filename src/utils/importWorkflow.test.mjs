@@ -18,7 +18,19 @@ import {
   workflowStepForFormat,
   isPinnableFormat,
   isRollupImportTarget,
+  AUTO_ADVANCE_STORAGE_KEY,
+  readAutoAdvancePreference,
+  writeAutoAdvancePreference,
 } from './importWorkflow.js'
+
+function fakeStorage(initial = {}) {
+  const data = { ...initial }
+  return {
+    data,
+    getItem: (key) => (key in data ? data[key] : null),
+    setItem: (key, value) => { data[key] = String(value) },
+  }
+}
 
 test('keeps the 21 brokerage import formats', () => {
   assert.equal(TXN_FORMATS.length, 21)
@@ -320,4 +332,38 @@ test('the app-export workbook owns a tab, so it cannot be the brokerage default'
   // Pinning it would make Broker Import open on a format that lights up the
   // Positions + Transactions tab instead.
   assert.equal(isPinnableFormat('portfolio_export'), false)
+})
+
+test('auto-continue is off until it has been ticked', () => {
+  assert.equal(readAutoAdvancePreference(fakeStorage()), false)
+})
+
+test('ticking auto-continue survives a new session, and so does unticking it', () => {
+  const storage = fakeStorage()
+  assert.equal(writeAutoAdvancePreference(storage, true), true)
+  // A later launch reads the same storage with fresh page state.
+  assert.equal(readAutoAdvancePreference(storage), true)
+  assert.equal(storage.data[AUTO_ADVANCE_STORAGE_KEY], '1')
+
+  writeAutoAdvancePreference(storage, false)
+  assert.equal(readAutoAdvancePreference(storage), false)
+})
+
+test('only an explicit saved yes turns auto-continue on', () => {
+  for (const stored of ['0', 'true', 'yes', '', 'null', ' 1']) {
+    const storage = fakeStorage({ [AUTO_ADVANCE_STORAGE_KEY]: stored })
+    assert.equal(readAutoAdvancePreference(storage), false, JSON.stringify(stored))
+  }
+})
+
+test('blocked or missing storage costs the preference, never the import', () => {
+  const blocked = {
+    getItem: () => { throw new Error('SecurityError') },
+    setItem: () => { throw new Error('QuotaExceededError') },
+  }
+  assert.equal(readAutoAdvancePreference(blocked), false)
+  assert.equal(writeAutoAdvancePreference(blocked, true), false)
+  assert.equal(readAutoAdvancePreference(null), false)
+  assert.equal(readAutoAdvancePreference(undefined), false)
+  assert.equal(writeAutoAdvancePreference(null, true), false)
 })

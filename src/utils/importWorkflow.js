@@ -256,6 +256,31 @@ export function nextWorkflowStepAfterImport(currentStep, completedSteps, autoAdv
   return ''
 }
 
+// "Automatically continue to the next step" is a standing choice: the same
+// Positions -> Transactions -> Refresh run happens on every import. It lived
+// only in page state, so it was unticked again on each launch and each time
+// the Import page was left and reopened.
+export const AUTO_ADVANCE_STORAGE_KEY = 'portfolio_importAutoAdvance'
+
+export function readAutoAdvancePreference(storage) {
+  try {
+    return storage?.getItem(AUTO_ADVANCE_STORAGE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeAutoAdvancePreference(storage, enabled) {
+  if (!storage) return false
+  try {
+    storage.setItem(AUTO_ADVANCE_STORAGE_KEY, enabled ? '1' : '0')
+    return true
+  } catch {
+    // A blocked localStorage only costs the preference, not the import.
+    return false
+  }
+}
+
 export function formatImportDetail(detail = {}) {
   const failed = detail.ok === false ? 'FAILED - ' : ''
   const source = detail.account_label || detail.source_sheet || ''

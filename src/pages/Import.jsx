@@ -22,7 +22,9 @@ import {
   brokerIdFromSource,
   needsPositionsSnapshotFirst,
   nextWorkflowStepAfterImport,
+  readAutoAdvancePreference,
   workflowStepForFormat,
+  writeAutoAdvancePreference,
 } from '../utils/importWorkflow'
 import {
   applyBrokerDestSelection,
@@ -83,6 +85,15 @@ const readDefaultBrokerFormat = () => {
     return isPinnableFormat(saved) ? saved : NO_FORMAT
   } catch {
     return NO_FORMAT
+  }
+}
+
+// Reaching for localStorage can itself throw when storage is blocked.
+const preferenceStorage = () => {
+  try {
+    return window.localStorage
+  } catch {
+    return null
   }
 }
 
@@ -518,7 +529,9 @@ export default function Import() {
   const [txnOrderAck, setTxnOrderAck] = useState(false)
   const [exportScope, setExportScope] = useState('both')
   const [completedSteps, setCompletedSteps] = useState({})
-  const [autoAdvanceWorkflow, setAutoAdvanceWorkflow] = useState(false)
+  const [autoAdvanceWorkflow, setAutoAdvanceWorkflow] = useState(
+    () => readAutoAdvancePreference(preferenceStorage())
+  )
   const [lastImportKind, setLastImportKind] = useState('')
 
   // Backup / restore state
@@ -946,6 +959,11 @@ export default function Import() {
       })
       applyTxnFormat(fallback, 'positions')
     }
+  }
+
+  const changeAutoAdvanceWorkflow = (enabled) => {
+    setAutoAdvanceWorkflow(enabled)
+    writeAutoAdvancePreference(preferenceStorage(), enabled)
   }
 
   const pinDefaultTxnFormat = () => {
@@ -1524,7 +1542,7 @@ export default function Import() {
               skipTransactionOrderWarning={txnIsMultiTransactionFormat}
               txnOrderAck={txnOrderAck}
               onTxnOrderAckChange={setTxnOrderAck}
-              onAutoAdvanceChange={setAutoAdvanceWorkflow}
+              onAutoAdvanceChange={changeAutoAdvanceWorkflow}
               onSelectStep={selectWorkflowStep}
               onSelectBroker={selectImportBroker}
               onSelectBrokerScope={selectBrokerScope}
