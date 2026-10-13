@@ -12,6 +12,7 @@ on one of them is quoted in one batched request to Yahoo's quote endpoint,
 which reports the last trade and the prior session's close even where the chart
 has a hole.
 """
+import math
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -204,4 +205,179 @@ def align_to_sessions(close_history, yahoo_symbols, request, *, now_et=None,
         close_history[ticker] = _with_bars(close_history[ticker], bars)
         if max(bars) > last_bar:
             report["repriced"].append(ticker)
+    return report
+
+
+# ── Extended-hours prices (opt-in) ──────────────────────────────────────────
+#
+# Yahoo's daily bar, and ``regularMarketPrice``, stop at the 4 PM close. Schwab
+# can show "Extended Hours Values", the last trade including pre- and
+# post-market, so a book priced from the close sits a little off Schwab until
+# the next open. Nothing here runs unless the user turns it on in Settings.
+
+EXTENDED_QUOTE_FIELDS = (
+    "regularMarketPrice,regularMarketTime,"
+    "preMarketPrice,preMarketTime,postMarketPrice,postMarketTime"
+)
+
+
+def _positive_float(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def _epoch(value):
+    try:
+        stamp = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return stamp if stamp > 0 else 0
+
+
+def _parse_extended_quote(row):
+    """One Yahoo quote row as ``{symbol, price, time, kind, session}``.
+
+    ``price`` is None when the fund has no extended-hours trade newer than its
+    last regular-session print. That matters: Yahoo leaves yesterday's
+    ``postMarketPrice`` on the row all through the next session, and using it
+    would price today's open from yesterday's evening.
+    """
+    symbol = str(row.get("symbol") or "").strip().upper()
+    if not symbol:
+        return None
+    regular_time = _epoch(row.get("regularMarketTime"))
+    best = None
+    if regular_time:
+        for kind, price_key, time_key in (
+            ("pre", "preMarketPrice", "preMarketTime"),
+            ("post", "postMarketPrice", "postMarketTime"),
+        ):
+            price = _positive_float(row.get(price_key))
+            stamp = _epoch(row.get(time_key))
+            if price is None or stamp <= regular_time:
+                continue
+            if best is None or stamp > best["time"]:
+                best = {"price": price, "time": stamp, "kind": kind}
+    quote = {"symbol": symbol, "price": None, "time": None, "kind": None, "session": None}
+    if best is not None:
+        session = eastern_now(datetime.fromtimestamp(best["time"], timezone.utc)).date()
+        quote.update(best, session=session.isoformat())
+    return quote
+
+
+def fetch_extended_quotes(yahoo_symbols, request, *, recall=None, remember=None):
+    """{yahoo symbol: extended quote}, ``QUOTE_BATCH_SIZE`` symbols per request.
+
+    Same contract as :func:`fetch_quotes`: the caller's ``request(params)``
+    wraps the rate-limit gateway, ``recall``/``remember`` are an optional
+    short-TTL cache, and a failed request ends the sweep keeping what was
+    already quoted. The quote layer never raises.
+    """
+    quotes = {}
+    pending = []
+    for symbol in sorted({str(s or "").strip().upper() for s in yahoo_symbols} - {""}):
+        cached = recall(symbol) if recall else None
+        if cached:
+            quotes[symbol] = cached
+        else:
+            pending.append(symbol)
+    for start in range(0, len(pending), QUOTE_BATCH_SIZE):
+        chunk = pending[start:start + QUOTE_BATCH_SIZE]
+        try:
+            payload = request({"symbols": ",".join(chunk), "fields": EXTENDED_QUOTE_FIELDS})
+        except Exception:
+            break
+        for row in ((payload or {}).get("quoteResponse") or {}).get("result") or []:
+            quote = _parse_extended_quote(row)
+            if quote and quote["symbol"] in chunk:
+                quotes[quote["symbol"]] = quote
+                if remember:
+                    remember(quote["symbol"], quote)
+    return quotes
+
+
+def with_session_price(series, day, price):
+    """``series`` with the bar for ``day`` set to ``price``, replacing any bar there.
+
+    Unlike :func:`_with_bars`, which never replaces a bar, this is for stating
+    what a session ended at once its after-hours trades are counted.
+    """
+    clean = series.dropna()
+    tz = getattr(clean.index, "tz", None)
+    stamp = pd.Timestamp(day)
+    if tz is not None:
+        stamp = stamp.tz_localize(tz)
+    extra = pd.Series([float(price)], index=pd.DatetimeIndex([stamp]), dtype=float)
+    kept = clean[[pd.Timestamp(i).date() != day for i in clean.index]]
+    if kept.empty:
+        combined = extra
+    else:
+        combined = pd.concat([kept, extra]).sort_index()
+    combined.name = series.name
+    return combined
+
+
+def apply_extended_prices(price_map, close_history, yahoo_symbols, request, *,
+                          latest, skip=(), recall=None, remember=None):
+    """Reprice holdings from their latest pre- or post-market trade.
+
+    ``price_map`` ({ticker: price}) is updated in place, and only for tickers it
+    already prices from the regular session: an extended trade never stands in
+    for a missing close. ``skip`` names holdings known to be behind the latest
+    session. ``latest`` is the latest NYSE session, so a trade is used only if
+    it falls on that session or a later one.
+
+    ``close_history`` is left untouched. Dividend and DRIP maths read it, and an
+    after-hours print is not a close. Returns ``applied`` ({ticker: {price,
+    time, kind, session}}) and ``change_history`` ({ticker: series}), copies of
+    the series of the repriced holdings with the latest session's bar replaced
+    by the extended price, so a day change measures prior close to last trade
+    the way Schwab's does.
+    """
+    report = {"applied": {}, "change_history": {}}
+    skip = set(skip or ())
+    symbols = {}
+    for ticker in price_map:
+        if ticker in skip:
+            continue
+        symbol = str(yahoo_symbols.get(ticker) or ticker).strip().upper()
+        if on_nyse_calendar(symbol):
+            symbols[ticker] = symbol
+    if not symbols:
+        return report
+
+    quotes = fetch_extended_quotes(
+        symbols.values(), request, recall=recall, remember=remember
+    )
+    new_prices = {}
+    for ticker, symbol in sorted(symbols.items()):
+        quote = quotes.get(symbol)
+        price = _positive_float((quote or {}).get("price"))
+        if price is None:
+            continue
+        try:
+            session = datetime.strptime(quote["session"], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if session < latest:
+            continue
+        new_prices[ticker] = price
+        report["applied"][ticker] = {
+            "price": price,
+            "time": quote.get("time"),
+            "kind": quote.get("kind"),
+            "session": quote["session"],
+        }
+        series = close_history.get(ticker)
+        if session == latest and series is not None and len(series.dropna()):
+            try:
+                report["change_history"][ticker] = with_session_price(series, latest, price)
+            except Exception:
+                # The price still applies; its day change keeps the regular bar.
+                pass
+    # Written last so a failure above leaves ``price_map`` exactly as it came.
+    price_map.update(new_prices)
     return report
