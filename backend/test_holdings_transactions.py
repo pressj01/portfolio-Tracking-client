@@ -2519,6 +2519,131 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             ],
         )
 
+    # One sale that closed a position in two fills: the whole shares and the
+    # fractional remainder. Fidelity prints the execution price; Snowball
+    # divides the cash, already rounded to the cent, by the shares.
+    _NVDA_FIDELITY_SELLS = (
+        "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),"
+        "Commission ($),Fees ($),Amount ($)\n"
+        "08/29/2024,Trust,YOU BOUGHT,NVDA,NVIDIA CORPORATION COM,Cash,50.059,121.22,0,0,-6068.15\n"
+        "04/08/2025,Trust,YOU SOLD,NVDA,NVIDIA CORPORATION COM,Cash,-0.059,103.19,0,0,6.09\n"
+        "04/08/2025,Trust,YOU SOLD,NVDA,NVIDIA CORPORATION COM,Cash,-45,103.19,0,0.13,4643.23\n"
+    )
+    _NVDA_SNOWBALL_SELLS = (
+        "Event,Date,Symbol,Price,Quantity,Currency,FeeTax,Exchange,FeeCurrency,DoNotAdjustCash,Note\n"
+        "BUY,8/29/2024 0:00,NVDA,121.2212,50.059,USD,0,NASDAQ,,FALSE,Buy_NVIDIA CORP\n"
+        "SELL,4/8/2025 0:00,NVDA,103.1828889,45,USD,0,NASDAQ,,FALSE,YOU SOLD NVIDIA CORPORATION COM\n"
+        "SELL,4/8/2025 0:00,NVDA,103.220339,0.059,USD,0,NASDAQ,,FALSE,YOU SOLD NVIDIA CORPORATION COM\n"
+    )
+
+    def _sell_ledger(self, profile_id, ticker):
+        return [
+            (row["transaction_date"], row["shares"], round(row["price_per_share"], 2))
+            for row in self._rows(
+                "SELECT transaction_date, shares, price_per_share FROM transactions "
+                "WHERE profile_id = ? AND ticker = ? AND transaction_type = 'SELL' "
+                "ORDER BY transaction_date, shares, id",
+                (profile_id, ticker),
+            )
+        ]
+
+    def test_layered_fidelity_then_snowball_dedupes_a_fractional_sell(self):
+        """A cent of cash is a large price gap on a fraction of a share.
+
+        Reported on NVDA: 0.059 shares sold for $6.09 is $103.19 in Fidelity
+        and $103.22 in Snowball (6.09 / 0.059). The 45-share fill of the same
+        sale was already recognised, because dividing by 45 shrinks the same
+        rounding to under a cent; the fractional fill was added a second time.
+        """
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (59, 'Trust', 'fidelity', 0, 0)"
+        )
+        fidelity_sells = [("2025-04-08", 0.059, 103.19), ("2025-04-08", 45.0, 103.19)]
+
+        first = self._post_layered_import(
+            59, "fidelity_transactions", "History.csv", self._NVDA_FIDELITY_SELLS
+        )
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(self._sell_ledger(59, "NVDA"), fidelity_sells)
+
+        second = self._post_layered_import(
+            59, "snowball", "NVDA_Snowball_Export.csv", self._NVDA_SNOWBALL_SELLS
+        )
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["inserted_sells"], 0)
+        self.assertEqual(second.get_json()["inserted_buys"], 0)
+        self.assertEqual(self._sell_ledger(59, "NVDA"), fidelity_sells)
+
+    def test_layered_snowball_then_fidelity_dedupes_a_fractional_sell(self):
+        """The same overlap, imported in the other order."""
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (60, 'Trust', 'fidelity', 0, 0)"
+        )
+        snowball_sells = [("2025-04-08", 0.059, 103.22), ("2025-04-08", 45.0, 103.18)]
+
+        first = self._post_layered_import(
+            60, "snowball", "NVDA_Snowball_Export.csv", self._NVDA_SNOWBALL_SELLS
+        )
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        self.assertEqual(self._sell_ledger(60, "NVDA"), snowball_sells)
+
+        second = self._post_layered_import(
+            60, "fidelity_transactions", "History.csv", self._NVDA_FIDELITY_SELLS
+        )
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["inserted_sells"], 0)
+        self.assertEqual(self._sell_ledger(60, "NVDA"), snowball_sells)
+
+    def test_fractional_fill_dedupe_keeps_fills_that_are_really_separate(self):
+        """Cent rounding explains a few cents of price, not a different fill.
+
+        Two ways a second fractional row is its own trade: its price is
+        further off than a cent of cash can account for, or the file itself
+        lists it beside the fill it resembles.
+        """
+        self._execute(
+            "INSERT INTO profiles (id, name, broker_source, include_in_owner, positions_managed) "
+            "VALUES (61, 'Trust', 'fidelity', 0, 0)"
+        )
+        fidelity = (
+            "Run Date,Account,Action,Symbol,Description,Type,Quantity,Price ($),"
+            "Commission ($),Fees ($),Amount ($)\n"
+            "08/29/2024,Trust,YOU BOUGHT,NVDA,NVIDIA CORPORATION COM,Cash,50,121.22,0,0,-6061.00\n"
+            "04/08/2025,Trust,YOU SOLD,NVDA,NVIDIA CORPORATION COM,Cash,-0.059,103.19,0,0,6.09\n"
+            "04/09/2025,Trust,YOU SOLD,NVDA,NVIDIA CORPORATION COM,Cash,-0.059,103.19,0,0,6.09\n"
+            "04/09/2025,Trust,YOU SOLD,NVDA,NVIDIA CORPORATION COM,Cash,-0.059,103.22,0,0,6.09\n"
+        )
+        snowball = (
+            "Event,Symbol,Date,Quantity,Price,Note\n"
+            # $1.31 a share on 0.059 shares is 8 cents of cash: another fill.
+            "SELL,NVDA,2025-04-08,0.059,104.50,YOU SOLD NVIDIA CORPORATION COM\n"
+        )
+
+        first = self._post_layered_import(61, "fidelity_transactions", "History.csv", fidelity)
+        self.assertEqual(first.status_code, 200, first.get_data(as_text=True))
+        # Both 04-09 fills are in one file, so both are real.
+        self.assertEqual(first.get_json()["inserted_sells"], 3)
+
+        second = self._post_layered_import(61, "snowball", "snowball.csv", snowball)
+        self.assertEqual(second.status_code, 200, second.get_data(as_text=True))
+        self.assertEqual(second.get_json()["inserted_sells"], 1)
+
+        # Re-importing the broker file adds nothing.
+        third = self._post_layered_import(61, "fidelity_transactions", "History.csv", fidelity)
+        self.assertEqual(third.status_code, 200, third.get_data(as_text=True))
+        self.assertEqual(third.get_json()["inserted_sells"], 0)
+        self.assertEqual(
+            self._sell_ledger(61, "NVDA"),
+            [
+                ("2025-04-08", 0.059, 103.19),
+                ("2025-04-08", 0.059, 104.5),
+                ("2025-04-09", 0.059, 103.19),
+                ("2025-04-09", 0.059, 103.22),
+            ],
+        )
+
     def test_generic_transactions_template_download_contains_expected_sheets_and_headers(self):
         import io
         import openpyxl
