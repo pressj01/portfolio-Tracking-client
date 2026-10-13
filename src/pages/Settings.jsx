@@ -111,6 +111,11 @@ export default function Settings() {
   const [priceReuseBusy, setPriceReuseBusy] = useState(false)
   const [priceReuseStatus, setPriceReuseStatus] = useState(null)
 
+  // Extended-hours pricing (pre/post-market trades), off unless chosen
+  const [extendedHours, setExtendedHours] = useState(false)
+  const [extendedHoursBusy, setExtendedHoursBusy] = useState(false)
+  const [extendedHoursStatus, setExtendedHoursStatus] = useState(null)
+
   // Optional Tiingo-first market data. A saved key alone never enables it.
   const [marketProvider, setMarketProvider] = useState({
     requested: false, enabled: false, key_configured: false, key_valid: false,
@@ -182,6 +187,39 @@ export default function Settings() {
       })
       .catch(() => setPriceReuseStatus({ type: 'error', msg: 'Could not save that setting.' }))
       .finally(() => setPriceReuseBusy(false))
+  }
+
+  const fetchExtendedHours = () => {
+    pf('/api/market-feed/extended-hours')
+      .then(r => r.json())
+      .then(d => { if (d && d.ok) setExtendedHours(Boolean(d.enabled)) })
+      .catch(() => {})
+  }
+
+  const saveExtendedHours = (enabled) => {
+    setExtendedHoursBusy(true)
+    setExtendedHoursStatus(null)
+    pf('/api/market-feed/extended-hours', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d && d.ok) {
+          setExtendedHours(Boolean(d.enabled))
+          setExtendedHoursStatus({
+            type: 'success',
+            msg: d.enabled
+              ? 'Saved. The next price refresh will use extended-hours trades when there are any.'
+              : 'Saved. The next price refresh will use the regular-session close.',
+          })
+        } else {
+          setExtendedHoursStatus({ type: 'error', msg: 'Could not save that setting.' })
+        }
+      })
+      .catch(() => setExtendedHoursStatus({ type: 'error', msg: 'Could not save that setting.' }))
+      .finally(() => setExtendedHoursBusy(false))
   }
 
   const clearPriceCache = () => {
@@ -604,7 +642,7 @@ export default function Settings() {
       .finally(() => setDeletingBackup(null))
   }
 
-  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse(); fetchMarketProvider(); fetchFredProvider() }, [selection])
+  useEffect(() => { fetchStats(); fetchSingleStockEtfs(); fetchNavBenchmarkOverrides(); fetchBackups(); fetchSymbolMap(); fetchPriceReuse(); fetchExtendedHours(); fetchMarketProvider(); fetchFredProvider() }, [selection])
 
   const handleClearAll = async () => {
     setLoading(true)
@@ -1420,6 +1458,75 @@ export default function Settings() {
           This only changes how often <strong>market prices</strong> are re-downloaded. It never
           affects your holdings, transactions, cost basis or dividend records. Reused prices are
           dropped when you switch this off, change the time above, press Clear, or restart the app.
+        </p>
+      </div>
+
+      {/* Extended-hours prices */}
+      <div className="card">
+        <h2>Extended-Hours Prices</h2>
+        <p style={{ color: 'var(--text-dim-2)', marginBottom: '0.75rem', fontSize: '0.9rem' }}>
+          By default every price is the regular-session close (4:00 PM ET). Some brokers, such as
+          Schwab with &ldquo;Extended Hours Values&rdquo; on, show the last trade including pre-market
+          (4:00&ndash;9:30 AM) and after-hours (4:00&ndash;8:00 PM) trading. Choose whether this app
+          should do the same, so your totals sit closer to your broker outside market hours.
+        </p>
+
+        {extendedHoursStatus && (
+          <div className={`alert alert-${extendedHoursStatus.type}`} style={{ marginBottom: '0.75rem' }}>{extendedHoursStatus.msg}</div>
+        )}
+
+        <div className="theme-toggle" role="group" aria-label="Extended-hours prices">
+          <button
+            type="button"
+            className={`theme-toggle-btn${!extendedHours ? ' active' : ''}`}
+            onClick={() => saveExtendedHours(false)}
+            aria-pressed={!extendedHours}
+            disabled={extendedHoursBusy}
+          >
+            Regular Close Only
+          </button>
+          <button
+            type="button"
+            className={`theme-toggle-btn${extendedHours ? ' active' : ''}`}
+            onClick={() => saveExtendedHours(true)}
+            aria-pressed={extendedHours}
+            disabled={extendedHoursBusy}
+          >
+            Include Extended Hours
+          </button>
+        </div>
+
+        <div style={{ marginTop: '0.9rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.65rem' }}>
+          <div style={{
+            padding: '0.7rem 0.8rem', borderRadius: 6, fontSize: '0.83rem',
+            background: 'var(--surface-sunken)',
+            border: `1px solid ${!extendedHours ? 'var(--accent-bright)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Regular Close Only</div>
+            <div style={{ color: 'var(--text-dim)' }}>
+              Prices are each fund&apos;s 4:00 PM close. Stable and exactly what the app has always
+              shown, but after hours your totals can differ slightly from a broker that shows
+              extended-hours values.
+            </div>
+          </div>
+          <div style={{
+            padding: '0.7rem 0.8rem', borderRadius: 6, fontSize: '0.83rem',
+            background: 'var(--surface-sunken)',
+            border: `1px solid ${extendedHours ? 'var(--accent-bright)' : 'var(--border)'}`,
+          }}>
+            <div style={{ fontWeight: 700, color: 'var(--text-strong)', marginBottom: 4 }}>Include Extended Hours</div>
+            <div style={{ color: 'var(--text-dim)' }}>
+              Outside market hours a fund is priced from its latest pre- or post-market trade when
+              it has one. Thinly traded funds can print at wide spreads after hours, so their price
+              can move more than the market did.
+            </div>
+          </div>
+        </div>
+
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.9rem', marginBottom: 0 }}>
+          This only changes the <strong>price</strong> shown from the next refresh. It never
+          affects your holdings, transactions, cost basis or dividend records, and the official
+          end-of-day NAV point on the Dashboard chart is always recorded from the regular close.
         </p>
       </div>
 

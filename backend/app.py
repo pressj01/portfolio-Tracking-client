@@ -19,7 +19,8 @@ import math
 import pandas as pd
 import urllib.parse
 import urllib.request
-from flask import Flask, request, jsonify, session, send_file
+from flask import Flask, request, jsonify, session, send_file, has_app_context
+from flask import g as _flask_g
 from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
@@ -143,6 +144,7 @@ from nav_history import activity_flows, build_nav_history_payload, dividend_outf
 from refresh_sessions import (
     QUOTE_URL as _YAHOO_QUOTE_URL,
     align_to_sessions,
+    apply_extended_prices,
     closes_by_session,
 )
 from dividend_ledger import build_ledger as build_dividend_ledger
@@ -3540,6 +3542,53 @@ def market_feed_price_reuse():
             conn.close()
         yahoo_gateway.set_reuse_policy(enabled, minutes * 60.0)
     return jsonify({"ok": True, **yahoo_gateway.reuse_stats()})
+
+
+EXTENDED_HOURS_PRICES_KEY = "extended_hours_prices"
+
+
+def _extended_hours_setting():
+    """Whether the user chose to price holdings from pre/post-market trades.
+
+    Off unless explicitly saved on, and off on any read failure: the safe
+    answer is the regular-session close the app has always used.
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (EXTENDED_HOURS_PRICES_KEY,)
+        ).fetchone()
+        return bool(row) and str(row[0] or "").strip().lower() in ("1", "true", "yes", "on")
+    except Exception:
+        return False
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+@app.route("/api/market-feed/extended-hours", methods=["GET", "POST"])
+def market_feed_extended_hours():
+    """Read or set the opt-in "include extended-hours trades in prices" choice.
+
+    POST body: {"enabled": bool}. The next price refresh picks it up.
+    """
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled"))
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (EXTENDED_HOURS_PRICES_KEY, "true" if enabled else "false"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return jsonify({"ok": True, "enabled": _extended_hours_setting()})
 
 
 @app.route("/api/market-feed/clear-price-cache", methods=["POST"])
@@ -13666,8 +13715,29 @@ def api_nav_snapshot():
     conn = get_connection()
     try:
         profile_ids = _nav_snapshot_profile_ids(conn, profile_id)
+        close_recorded = conn.execute(
+            "SELECT 1 FROM portfolio_nav "
+            "WHERE profile_id = ? AND nav_date = ? AND source = 'close'",
+            (profile_id, today.isoformat()),
+        ).fetchone()
     finally:
         conn.close()
+
+    # With extended-hours prices on, the holdings now carry after-hours trades.
+    # Recording them would overwrite the official close with a value that isn't.
+    if close_recorded and _extended_hours_setting():
+        return jsonify({
+            "profile_id": profile_id,
+            "value": None,
+            "owner_value": None,
+            "values": {},
+            "skipped": True,
+            "reason": (
+                "Today's official closing NAV is already recorded. It is not "
+                "replaced while extended-hours prices are on."
+            ),
+            "nav_date": today.isoformat(),
+        })
 
     values = {}
     for pid in dict.fromkeys(profile_ids):
@@ -13736,6 +13806,29 @@ def api_iv_rank_collect():
     return jsonify(payload)
 
 
+def _restore_extended_prices_after_capture():
+    """Put the user's extended-hours prices back once the close capture is done.
+
+    The capture's refresh prices every holding at the regular close on purpose.
+    With the option on, leaving them there shows the close on every screen until
+    something else happens to refresh, so the totals appear to flip back by
+    themselves. Skipped while Yahoo is cooling down: a second refresh then only
+    deepens the throttle, and the next ordinary refresh restores them anyway.
+    Never raises, because the capture's own answer must not depend on it.
+    """
+    try:
+        if not _extended_hours_setting():
+            return False
+        if yahoo_gateway.breaker_state().get("cooling_down"):
+            return False
+        if has_app_context():
+            _flask_g.regular_prices_only = False
+        refresh_market_data()
+        return True
+    except Exception:
+        return False
+
+
 @app.route("/api/nav/auto-capture", methods=["POST"])
 def api_nav_auto_capture():
     """Record the official closing NAV once the market has closed for the day.
@@ -13791,6 +13884,10 @@ def api_nav_auto_capture():
     # Pull the settled closing prices before snapshotting, so 'close' matches
     # "refresh, then Record NAV" exactly rather than reusing a stale intraday
     # price. Reuses the same refresh the manual button runs.
+    # The official close is the 4 PM print: even with extended-hours prices
+    # switched on, this refresh must not let an after-hours trade into it.
+    if has_app_context():
+        _flask_g.regular_prices_only = True
     try:
         refresh_response = refresh_market_data()
     except Exception as exc:  # noqa: BLE001 - never let a refresh hiccup 500 the poll
@@ -13829,6 +13926,7 @@ def api_nav_auto_capture():
         if detail:
             reason += f" ({detail})"
         reason += "."
+        _restore_extended_prices_after_capture()
         return jsonify({
             "captured": False,
             "skipped": True,
@@ -13840,6 +13938,9 @@ def api_nav_auto_capture():
     values = {}
     for pid in dict.fromkeys(profile_ids):
         values[str(pid)] = snapshot_nav(pid, nav_date=market_date_str, source="close")
+
+    # Only after the close is stamped: the snapshot reads the holdings table.
+    _restore_extended_prices_after_capture()
 
     return jsonify({
         "captured": True,
@@ -19708,6 +19809,55 @@ def _align_refresh_sessions(close_history, rename_map):
         return None
 
 
+# Short, because an after-hours price keeps moving; a Dashboard reload inside it
+# reuses the answer instead of asking Yahoo again.
+_EXTENDED_QUOTE_TTL_SEC = 120
+
+
+def _regular_prices_forced():
+    """True when this request must price from the regular-session close.
+
+    The end-of-day NAV capture sets it: an official close is the 4 PM print,
+    never a later after-hours trade.
+    """
+    return has_app_context() and bool(getattr(_flask_g, "regular_prices_only", False))
+
+
+def _extended_hours_active():
+    return _extended_hours_setting() and not _regular_prices_forced()
+
+
+def _apply_extended_hours_prices(price_map, close_history, rename_map, price_stale, latest):
+    """Opt-in: reprice from pre/post-market trades. Never raises.
+
+    Returns ``apply_extended_prices``' report, or an empty one when the quote
+    layer fails, in which case the refresh keeps its regular-session prices.
+    """
+    from yfinance.data import YfData
+
+    def _request(params):
+        return yahoo_gateway.call(
+            lambda: YfData().get_raw_json(_YAHOO_QUOTE_URL, params=params)
+        )
+
+    symbols = {t: _yahoo_symbol(rename_map.get(t, t)) for t in price_map}
+    try:
+        return apply_extended_prices(
+            price_map,
+            close_history,
+            symbols,
+            _request,
+            latest=latest,
+            skip=price_stale,
+            recall=lambda s: yahoo_gateway.recall(
+                "extended_quote", s, max_age_sec=_EXTENDED_QUOTE_TTL_SEC
+            ),
+            remember=lambda s, quote: yahoo_gateway.remember("extended_quote", s, quote),
+        )
+    except Exception:
+        return {"applied": {}, "change_history": {}}
+
+
 @app.route("/api/refresh", methods=["POST"])
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
@@ -19946,6 +20096,20 @@ def refresh_market_data():
     price_stale = session_report.get("stale") or {}
 
     price_failures = sorted(t for t in tickers if t not in price_map)
+
+    # Opt-in (Settings): price from the last pre/post-market trade, as a broker's
+    # "extended hours values" do. Runs after failures/stale are settled so it can
+    # only refine a regular-session price, never stand in for a missing one.
+    extended_enabled = _extended_hours_active()
+    extended_report = {"applied": {}, "change_history": {}}
+    if extended_enabled and session_report.get("sessions"):
+        extended_report = _apply_extended_hours_prices(
+            price_map, close_history, rename_map, price_stale, session_report["sessions"][1]
+        )
+    extended_applied = extended_report["applied"]
+    # Dividend and DRIP maths keep the untouched closes; only the Day Change
+    # card sees the latest session's bar replaced by the after-hours trade.
+    day_change_history = {**close_history, **extended_report["change_history"]}
 
     lag_pattern_map = _build_dividend_lag_patterns(conn)
 
@@ -20825,7 +20989,7 @@ def refresh_market_data():
     account_current_value = float(account_value_row[0] if account_value_row else 0)
     daily_change = _portfolio_daily_price_change(
         holding_map,
-        close_history,
+        day_change_history,
         source_pids,
         account_current_value=account_current_value,
         sessions=session_report.get("sessions"),
@@ -20854,6 +21018,11 @@ def refresh_market_data():
             f" {len(stale_names)} holding{'' if len(stale_names) == 1 else 's'} kept an "
             f"earlier close because Yahoo has no {latest_session:%b} {latest_session.day} "
             f"price yet: {shown}{f', +{more} more' if more > 0 else ''}."
+        )
+    if extended_applied:
+        msg += (
+            f" {len(extended_applied)} holding{'' if len(extended_applied) == 1 else 's'} "
+            "priced from extended-hours trades."
         )
     dividend_update_accounts = [
         {
@@ -20885,6 +21054,8 @@ def refresh_market_data():
         "price_failures": price_failures,
         "price_stale": price_stale,
         "price_complete": not price_failures and not price_stale,
+        "extended_hours_enabled": extended_enabled,
+        "extended_hours_applied": sorted(extended_applied),
     })
 
 
