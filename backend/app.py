@@ -11152,12 +11152,13 @@ def _import_portfolio_export_workbook(
             import_hash_occ[ident] = import_hash_occ.get(ident, 0) + 1
 
             # Same-fill rounding across feeds; see _TXN_PRICE_MATCH_TOLERANCE.
+            price_tolerance = _txn_price_match_tolerance(shares)
             existing_count = conn.execute(
                 "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
                 "AND transaction_type = ? AND transaction_date = ? "
                 "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
                 (ticker, profile_id, txn_type, txn_date, shares, price,
-                 _TXN_PRICE_MATCH_TOLERANCE),
+                 price_tolerance),
             ).fetchone()[0]
             import_count = sum(
                 1
@@ -11167,7 +11168,7 @@ def _import_portfolio_export_workbook(
                 and (t.get("date") or None) == txn_date
                 and _normalize_transaction_shares(t.get("shares")) is not None
                 and abs(_normalize_transaction_shares(t.get("shares")) - shares) < 0.0001
-                and abs((t.get("price_per_share") or 0) - price) < _TXN_PRICE_MATCH_TOLERANCE
+                and abs((t.get("price_per_share") or 0) - price) < price_tolerance
                 and profile_by_name.get(str(t.get("profile") or "").strip().lower(), transaction_profile_fallback) == profile_id
             )
             if existing_count >= import_count:
@@ -11809,6 +11810,22 @@ _LAYERED_DIV_WINDOW_DAYS = 3
 
 # Wider than any 2-decimal rounding gap, narrower than a real price change.
 _TXN_PRICE_MATCH_TOLERANCE = 0.01
+
+# Cash settles to the cent, and a feed with no execution price of its own
+# divides that cash by the shares.  On a fraction of a share one cent is a
+# large price gap (NVDA: 0.059 shares for $6.09 is $103.19 at the broker and
+# $103.22 in Snowball), so the gap rounding can explain grows as the share
+# count shrinks.  From one share up this is the flat tolerance above.
+_TXN_CASH_ROUNDING = 0.01
+
+
+def _txn_price_match_tolerance(shares):
+    """Widest price gap between two feeds' copies of one fill of ``shares``."""
+    share_count = abs(_num_or_zero(shares))
+    if share_count <= 0:
+        return _TXN_PRICE_MATCH_TOLERANCE
+    return max(_TXN_PRICE_MATCH_TOLERANCE, _TXN_CASH_ROUNDING / share_count)
+
 
 # Broker and portfolio-tracker feeds can calculate the displayed DRIP price
 # from slightly different cash figures.  Date + exact fractional shares + a
@@ -13070,12 +13087,13 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                     and _layered_drip_same_reinvestment(candidate, txn)
                 )
             else:
+                price_tolerance = _txn_price_match_tolerance(txn["shares"])
                 existing_count = conn.execute(
                     "SELECT COUNT(*) FROM transactions WHERE ticker = ? AND profile_id = ? "
                     "AND transaction_type = ? AND transaction_date = ? "
                     "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ?",
                     (ticker, profile_id, txn["type"], txn["date"],
-                     txn["shares"], txn["price_per_share"] or 0, _TXN_PRICE_MATCH_TOLERANCE),
+                     txn["shares"], txn["price_per_share"] or 0, price_tolerance),
                 ).fetchone()[0]
                 import_count = sum(1 for t in non_div_txns
                                    if t["type"] == txn["type"] and t["ticker"] == ticker
@@ -13083,7 +13101,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                                    and t["shares"] is not None
                                    and abs(t["shares"] - txn["shares"]) < 0.0001
                                    and abs((t["price_per_share"] or 0) - (txn["price_per_share"] or 0))
-                                   < _TXN_PRICE_MATCH_TOLERANCE)
+                                   < price_tolerance)
             if existing_count >= import_count:
                 duplicates_skipped += 1
                 continue
