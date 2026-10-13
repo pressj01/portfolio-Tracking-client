@@ -242,6 +242,21 @@ jobs:
           name: PortfolioTrackingClient-Windows
           path: release/*.exe
 
+      - name: Select release notes
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          notes="RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
+          if [ -f "$notes" ]; then
+            echo "path=$notes" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$notes not found; using generated release notes"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -251,7 +266,8 @@ jobs:
           files: |
             release/*.exe
             release/*.blockmap
-          body_path: RELEASE_NOTES_1.37.7.md
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
 
   build-mac:
     if: ${{ github.event.inputs.platform != 'windows' }}
@@ -303,6 +319,21 @@ jobs:
           name: PortfolioTrackingClient-Mac-${{ matrix.arch }}
           path: release/*.dmg
 
+      - name: Select release notes
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          notes="RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
+          if [ -f "$notes" ]; then
+            echo "path=$notes" >> "$GITHUB_OUTPUT"
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$notes not found; using generated release notes"
+            echo "path=" >> "$GITHUB_OUTPUT"
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -310,4 +341,5 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           files: release/*.dmg
-          body_path: RELEASE_NOTES_1.37.7.md
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: ${{ steps.notes.outputs.generate }}
