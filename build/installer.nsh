@@ -5,7 +5,29 @@
 ;
 ; This deliberately updates only this application's known shortcut names. It
 ; does not create a taskbar pin for users who have not chosen to pin the app.
+;
+; Do this with NSIS's own shortcut support and never by shelling out. This used
+; to run PowerShell with -ExecutionPolicy Bypass -EncodedCommand, which is how
+; droppers launch a payload: a user's Norton quarantined the signed installer
+; as IDP.HELU.PSE94, its PowerShell command-line detection.
+!macro repointTaskbarPin NAME
+  ${If} ${FileExists} "$0\${NAME}"
+    CreateShortCut "$0\${NAME}" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 "" "" "${APP_DESCRIPTION}"
+    ClearErrors
+    ; A rewritten link has no AppUserModelID. Without it the running window
+    ; stops grouping onto the pin and appears as a second taskbar button.
+    WinShell::SetLnkAUMI "$0\${NAME}" "${APP_ID}"
+  ${EndIf}
+!macroend
+
 !macro customInstall
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand JAB0AGEAcgBnAGUAdAA9ACQAYQByAGcAcwBbADAAXQA7ACQAaQBuAHMAdABhAGwAbABEAGkAcgA9ACQAYQByAGcAcwBbADEAXQA7ACQAdABhAHMAawBiAGEAcgA9AFsASQBPAC4AUABhAHQAaABdADoAOgBDAG8AbQBiAGkAbgBlACgAWwBFAG4AdgBpAHIAbwBuAG0AZQBuAHQAXQA6ADoARwBlAHQARgBvAGwAZABlAHIAUABhAHQAaAAoACcAQQBwAHAAbABpAGMAYQB0AGkAbwBuAEQAYQB0AGEAJwApACwAJwBNAGkAYwByAG8AcwBvAGYAdAAnACwAJwBJAG4AdABlAHIAbgBlAHQAIABFAHgAcABsAG8AcgBlAHIAJwAsACcAUQB1AGkAYwBrACAATABhAHUAbgBjAGgAJwAsACcAVQBzAGUAcgAgAFAAaQBuAG4AZQBkACcALAAnAFQAYQBzAGsAQgBhAHIAJwApADsAaQBmACAAKABUAGUAcwB0AC0AUABhAHQAaAAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJAB0AGEAcwBrAGIAYQByACkAIAB7ACAAJABzAGgAZQBsAGwAPQBOAGUAdwAtAE8AYgBqAGUAYwB0ACAALQBDAG8AbQBPAGIAagBlAGMAdAAgAFcAUwBjAHIAaQBwAHQALgBTAGgAZQBsAGwAOwAgAEAAKAAnAFAAbwByAHQAZgBvAGwAaQBvACAAVAByAGEAYwBrAGkAbgBnAC4AbABuAGsAJwAsACcAUABvAHIAdABmAG8AbABpAG8AIABUAHIAYQBjAGsAZQByAC4AbABuAGsAJwAsACcAUABvAHIAdABmAG8AbABpAG8AIABUAHIAYQBjAGsAaQBuAGcAIABDAGwAaQBlAG4AdAAuAGwAbgBrACcAKQB8AEYAbwByAEUAYQBjAGgALQBPAGIAagBlAGMAdAAgAHsAIAAkAHAAYQB0AGgAPQBbAEkATwAuAFAAYQB0AGgAXQA6ADoAQwBvAG0AYgBpAG4AZQAoACQAdABhAHMAawBiAGEAcgAsACQAXwApADsAIABpAGYAIAAoAFQAZQBzAHQALQBQAGEAdABoACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAkAHAAYQB0AGgAKQAgAHsAIAAkAGwAaQBuAGsAPQAkAHMAaABlAGwAbAAuAEMAcgBlAGEAdABlAFMAaABvAHIAdABjAHUAdAAoACQAcABhAHQAaAApADsAIAAkAGwAaQBuAGsALgBUAGEAcgBnAGUAdABQAGEAdABoAD0AJAB0AGEAcgBnAGUAdAA7ACAAJABsAGkAbgBrAC4AQQByAGcAdQBtAGUAbgB0AHMAPQAnACcAOwAgACQAbABpAG4AawAuAFcAbwByAGsAaQBuAGcARABpAHIAZQBjAHQAbwByAHkAPQAkAGkAbgBzAHQAYQBsAGwARABpAHIAOwAgACQAbABpAG4AawAuAEkAYwBvAG4ATABvAGMAYQB0AGkAbwBuAD0AKAAkAHQAYQByAGcAZQB0ACsAJwAsADAAJwApADsAIAAkAGwAaQBuAGsALgBTAGEAdgBlACgAKQAgAH0AIAB9ACAAfQAgAA== "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "$INSTDIR"'
-  Pop $0
+  ; $APPDATA follows the install mode and is ProgramData for an all-users
+  ; install, but the pins live in the profile of whoever is running setup.
+  ReadEnvStr $0 APPDATA
+  StrCpy $0 "$0\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+  ; A shortcut takes its working directory from the output path.
+  SetOutPath "$INSTDIR"
+  !insertmacro repointTaskbarPin "Portfolio Tracking.lnk"
+  !insertmacro repointTaskbarPin "Portfolio Tracker.lnk"
+  !insertmacro repointTaskbarPin "Portfolio Tracking Client.lnk"
 !macroend
