@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  bankHolidayFor,
   buildPaymentAgenda,
   buildMonthCells,
   buildWeekCells,
+  isoDate,
   monthKeysForWeek,
+  usBankHolidays,
   weekPaymentTotal,
 } from './dividendCalendar.js'
 
@@ -53,4 +56,42 @@ test('buildMonthCells still groups payments onto the matching calendar day', () 
   assert.equal(monday.payments[0].ticker, 'BLOX')
   assert.equal(cells[0].key, '2026-07-27')
   assert.equal(cells[0].currentMonth, false)
+})
+
+test('usBankHolidays follows the Federal Reserve schedule, not the NYSE one', () => {
+  assert.deepEqual([...usBankHolidays(2026).keys()], [
+    '2026-01-01', '2026-01-19', '2026-02-16', '2026-05-25', '2026-06-19',
+    '2026-09-07', '2026-10-12', '2026-11-11', '2026-11-26', '2026-12-25',
+  ])
+  // Good Friday closes the NYSE but not the banks.
+  assert.equal(usBankHolidays(2026).has('2026-04-03'), false)
+})
+
+test('usBankHolidays moves Sunday holidays to Monday and skips Saturday ones', () => {
+  const holidays = usBankHolidays(2027)
+  assert.equal(holidays.get('2027-07-05'), 'Independence Day (observed)')
+  // Juneteenth and Christmas 2027 fall on Saturday: the banks open Friday.
+  assert.equal(holidays.has('2027-06-18'), false)
+  assert.equal(holidays.has('2027-12-24'), false)
+  assert.equal(usBankHolidays(2028).has('2027-12-31'), false)
+})
+
+test('bankHolidayFor names the holiday and the next business day', () => {
+  const columbus = bankHolidayFor(new Date(2026, 9, 12))
+  assert.equal(columbus.name, 'Columbus Day')
+  assert.equal(isoDate(columbus.nextBusinessDay), '2026-10-13')
+  assert.equal(isoDate(bankHolidayFor(new Date(2026, 11, 25)).nextBusinessDay), '2026-12-28')
+  assert.equal(bankHolidayFor(new Date(2026, 9, 13)), null)
+})
+
+test('week and month cells carry the bank holiday for that day', () => {
+  const week = buildWeekCells('2026-10-15', [])
+  assert.deepEqual(week.map(cell => cell.holiday?.name || null), [
+    'Columbus Day', null, null, null, null, null, null,
+  ])
+  const month = buildMonthCells('2026-11', [])
+  assert.deepEqual(
+    month.filter(cell => cell.holiday).map(cell => cell.key),
+    ['2026-11-11', '2026-11-26'],
+  )
 })

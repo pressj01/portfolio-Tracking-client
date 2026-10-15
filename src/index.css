@@ -6264,6 +6264,14 @@ th.col-drag-target {
 .dc-month-cell:nth-child(7n) { border-right: 0; }
 .dc-month-cell.outside { background: var(--surface-sunken); }
 .dc-month-cell.today { background: rgba(0, 201, 167, .07); box-shadow: inset 0 0 0 1px rgba(0, 201, 167, .55); }
+.dc-month-cell.holiday:not(.today) { background: color-mix(in srgb, var(--warning) 6%, var(--surface-2)); }
+.dc-month-holiday {
+  display: flex; flex-direction: column; gap: 2px; margin-bottom: 5px; padding: 5px 7px;
+  border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, transparent); line-height: 1.3;
+}
+.dc-month-holiday strong { color: var(--warning-text); font-size: .7rem; font-weight: 700; }
+.dc-month-holiday span { color: var(--text-dim); font-size: .64rem; }
 .dc-month-cell-head {
   display: flex; align-items: center; justify-content: space-between; min-height: 25px; gap: 6px; margin-bottom: 4px;
 }
@@ -6313,6 +6321,10 @@ th.col-drag-target {
 }
 .dc-month-legend i.confirmed { background: var(--purple); color: var(--surface-sunken); }
 .dc-month-legend i.estimated { border: 1px solid var(--text-dim); color: var(--text-muted); }
+.dc-month-legend i.holiday {
+  border-radius: 3px; border: 1px dashed color-mix(in srgb, var(--warning) 55%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
 .dc-opt { display: flex; flex-direction: column; gap: 14px; }
 .dc-opt-help {
   overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2);

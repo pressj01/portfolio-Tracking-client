@@ -46,17 +46,31 @@ export function DividendMonthEvent({ ev }) {
   )
 }
 
+function DividendHolidayNote({ holiday }) {
+  const nextDay = holiday.nextBusinessDay.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  return (
+    <div
+      className="dc-month-holiday"
+      title={`${holiday.name}: banks and the payment system are closed. Distributions payable today are paid on the next business day, ${nextDay}.`}
+    >
+      <strong>{holiday.name}</strong>
+      <span>Bank holiday &middot; payments move to the next business day ({nextDay})</span>
+    </div>
+  )
+}
+
 export function DividendMonthDayCell({ cell, today, showOutsideEvents = false }) {
   const dailyIncome = cell.payments.reduce((sum, ev) => sum + calendarPaymentIncome(ev), 0)
   const isToday = cell.key === today
   const showEvents = cell.currentMonth || showOutsideEvents
   const showTotal = showEvents && dailyIncome > 0
+  const holiday = showEvents ? cell.holiday : null
 
   return (
     <div
-      className={`dc-month-cell${cell.currentMonth ? '' : ' outside'}${isToday ? ' today' : ''}`}
+      className={`dc-month-cell${cell.currentMonth ? '' : ' outside'}${isToday ? ' today' : ''}${holiday ? ' holiday' : ''}`}
       role="gridcell"
-      aria-label={`${cell.date.toLocaleDateString()}: ${cell.payments.length} dividend payments`}
+      aria-label={`${cell.date.toLocaleDateString()}: ${holiday ? `${holiday.name}, bank holiday, ` : ''}${cell.payments.length} dividend payments`}
     >
       <div className="dc-month-cell-head">
         <span className="dc-month-day-number">{cell.date.getDate()}</span>
@@ -64,6 +78,7 @@ export function DividendMonthDayCell({ cell, today, showOutsideEvents = false })
           <span className="dc-month-day-total">+{formatMoney(dailyIncome)}</span>
         )}
       </div>
+      {holiday && <DividendHolidayNote holiday={holiday} />}
       {showEvents && (
         <div className="dc-month-cell-events">
           {cell.payments.map((ev, index) => (
@@ -90,6 +105,7 @@ export function DividendMonthLegend() {
       <span><i className="confirmed">{'\u2713'}</i> confirmed pay date</span>
       <span><i className="confirmed">{'\u2713'}</i> matched to imported transaction history</span>
       <span><i className="estimated">~</i> estimated from the current dividend schedule</span>
+      <span><i className="holiday" aria-hidden="true" /> bank holiday: payments due that day are paid the next business day</span>
       <span>Tickers and amounts follow the selected account; aggregate views combine only their configured members.</span>
     </div>
   )

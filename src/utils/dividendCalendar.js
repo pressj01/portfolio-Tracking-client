@@ -105,6 +105,70 @@ export function monthKeysForWeek(todayIso) {
   return [...new Set([monthKey(monday), monthKey(sunday)])]
 }
 
+function nthWeekday(year, monthIndex, weekday, n) {
+  const first = new Date(year, monthIndex, 1)
+  return new Date(year, monthIndex, 1 + ((weekday - first.getDay() + 7) % 7) + (n - 1) * 7)
+}
+
+function lastWeekday(year, monthIndex, weekday) {
+  const last = new Date(year, monthIndex + 1, 0)
+  return new Date(year, monthIndex, last.getDate() - ((last.getDay() - weekday + 7) % 7))
+}
+
+// Federal Reserve rule for fixed-date holidays: Sunday closes the following
+// Monday, but Saturday closes nothing (the banks open the Friday before).
+function observedFixedHoliday(year, monthIndex, day) {
+  const actual = new Date(year, monthIndex, day)
+  if (actual.getDay() === 6) return null
+  if (actual.getDay() === 0) return { date: new Date(year, monthIndex, day + 1), observed: true }
+  return { date: actual, observed: false }
+}
+
+const bankHolidayCache = new Map()
+
+// Weekdays the Federal Reserve -- and with it DTC, which pays fund
+// distributions -- is closed. Distinct from NYSE holidays: Columbus Day and
+// Veterans Day close the banks with the stock market open, and Good Friday is
+// the reverse. A payable date that lands on one of these pays the next
+// business day, so the broker records it then.
+export function usBankHolidays(year) {
+  if (bankHolidayCache.has(year)) return bankHolidayCache.get(year)
+  const holidays = new Map()
+  const add = (date, name) => holidays.set(isoDate(date), name)
+  const addFixed = (monthIndex, day, name) => {
+    const holiday = observedFixedHoliday(year, monthIndex, day)
+    if (holiday) add(holiday.date, holiday.observed ? `${name} (observed)` : name)
+  }
+
+  addFixed(0, 1, "New Year's Day")
+  add(nthWeekday(year, 0, 1, 3), 'Martin Luther King Jr. Day')
+  add(nthWeekday(year, 1, 1, 3), "Presidents' Day")
+  add(lastWeekday(year, 4, 1), 'Memorial Day')
+  if (year >= 2022) addFixed(5, 19, 'Juneteenth')
+  addFixed(6, 4, 'Independence Day')
+  add(nthWeekday(year, 8, 1, 1), 'Labor Day')
+  add(nthWeekday(year, 9, 1, 2), 'Columbus Day')
+  addFixed(10, 11, 'Veterans Day')
+  add(nthWeekday(year, 10, 4, 4), 'Thanksgiving Day')
+  addFixed(11, 25, 'Christmas Day')
+
+  bankHolidayCache.set(year, holidays)
+  return holidays
+}
+
+export function isBankBusinessDay(date) {
+  const day = date.getDay()
+  return day !== 0 && day !== 6 && !usBankHolidays(date.getFullYear()).has(isoDate(date))
+}
+
+export function bankHolidayFor(date) {
+  const name = usBankHolidays(date.getFullYear()).get(isoDate(date))
+  if (!name) return null
+  const next = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)
+  while (!isBankBusinessDay(next)) next.setDate(next.getDate() + 1)
+  return { name, nextBusinessDay: next }
+}
+
 function paymentsByDate(payments) {
   const byDate = new Map()
   ;(payments || []).forEach(payment => {
@@ -133,6 +197,7 @@ export function buildMonthCells(selectedMonth, payments) {
       date,
       currentMonth: date.getMonth() === month - 1,
       payments: byDate.get(key) || [],
+      holiday: bankHolidayFor(date),
     }
   })
 }
@@ -150,6 +215,7 @@ export function buildWeekCells(todayIso, payments) {
       date,
       currentMonth: true,
       payments: byDate.get(key) || [],
+      holiday: bankHolidayFor(date),
     }
   })
 }

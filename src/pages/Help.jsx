@@ -999,7 +999,8 @@ function DashboardHelp() {
         shows expected pay dates for the current Monday–Sunday. Each day uses the same ticker chips
         as the full month calendar: estimated payment, yield, and a confirmed or estimated pay-date
         marker. The week total is the sum of those expected payments. Open the Month calendar from
-        the link in the header to see the rest of the month.
+        the link in the header to see the rest of the month. Bank holidays are labeled on the day,
+        because a payment due then arrives on the next business day.
       </p>
     </div>
   )
@@ -2953,6 +2954,14 @@ function DivCalendarHelp() {
         <strong>Optimization</strong> projects those payments across the next 12 months so you can
         see whether income is evenly distributed or concentrated in certain months. Use this page
         for dividend timing and income-smoothing research; it does not recommend a trade.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        US bank holidays (the Federal Reserve schedule) are highlighted on the Month and Dashboard
+        week calendars. Banks and the payment system are closed on those days, so a distribution
+        payable then is paid on the next business day, and your broker records it on that date.
+        The stock market can be open on a bank holiday: Columbus Day and Veterans Day close the
+        banks but not the NYSE, which is why a fund that normally pays on Monday can show its
+        payment on Tuesday that week.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
