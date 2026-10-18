@@ -1619,11 +1619,11 @@ export default function Import() {
               : txnFormat === 'etrade_transactions'
                 ? <>Import buy, sell, dividend, and DRIP rows from one E*TRADE <strong>All Transactions XLSX or CSV</strong> export. In E*TRADE, go to Accounts {'>'} Transaction History, choose all transaction activity types, then download.</>
                 : txnFormat === 'fidelity'
-                  ? <>Import current positions from a Fidelity <strong>Positions XLSX or CSV</strong> export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
+                  ? <>Import current positions from a Fidelity <strong>Positions CSV, XLSX, or XLS</strong> file &mdash; the Fidelity website&apos;s Positions download or a Fidelity Trader+ positions export. This uses only the holdings and dividend fields the app already supports, and treats money market rows as cash.</>
                   : txnFormat === 'fidelity_all_accounts'
-                    ? <>Import every Fidelity account from one combined <strong>Positions CSV or XLSX</strong> export. Choose which Fidelity portfolios to update; preview matches each selected portfolio to the account name and number carried on its rows.</>
+                    ? <>Import every Fidelity account from one combined <strong>Positions CSV, XLSX, or XLS</strong> export. Choose which Fidelity portfolios to update; preview matches each selected portfolio to the account name and number carried on its rows.</>
                   : txnFormat === 'fidelity_transactions'
-                    ? <>Import transaction history from a Fidelity <strong>Transactions XLSX or CSV</strong> export. This imports buys, sells, dividend cash receipts, and DRIP reinvestments for recordkeeping.</>
+                    ? <>Import transaction history from a Fidelity <strong>Transactions or Accounts History CSV, XLSX, or XLS</strong> export. This imports buys, sells, dividend cash receipts, and DRIP reinvestments for recordkeeping.</>
                   : txnFormat === 'robinhood'
                     ? <>Import current positions from a Robinhood <strong>Holdings PDF</strong>. Robinhood does not include cost basis in this PDF, so current value is used as the initial cost basis.</>
                   : txnFormat === 'robinhood_transactions'
@@ -2290,6 +2290,9 @@ export default function Import() {
                 Total value: <strong>{formatMoney(txnPreview.positions.reduce((s, p) => s + (p.current_value || 0), 0))}</strong>
                 {txnPreview.summary.cash != null && Number(txnPreview.summary.cash) !== 0 && (
                   <> Cash: <strong>{formatMoney(txnPreview.summary.cash)}</strong></>
+                )}
+                {txnPreview.summary.cash_reported === false && (
+                  <> This file lists no cash, so the portfolio&apos;s current cash balance is kept.</>
                 )}
                 {txnPreview.summary.account_value > 0 && (
                   <> Account value: <strong>{formatMoney(txnPreview.summary.account_value)}</strong></>
