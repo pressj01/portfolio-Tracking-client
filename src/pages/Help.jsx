@@ -295,6 +295,7 @@ function ImportHelp() {
         <li><strong>Included:</strong> ticker, shares, cost basis / price paid, current price, current value, gain/loss, and dividend yield when the broker file provides it.</li>
         <li><strong>Schwab and Fidelity also include:</strong> description from the broker positions export.</li>
         <li><strong>Fidelity may also include:</strong> ex-dividend date, pay date, dividend-per-share, and estimated annual income when those columns are present in the workbook.</li>
+        <li><strong>Fidelity (Positions) files:</strong> either the Fidelity website&apos;s Positions download or a Fidelity Trader+ positions export, saved as CSV, XLSX, or Excel 97-2003 XLS. A Trader+ export lists no cash, so importing one leaves the portfolio&apos;s cash balance as it was.</li>
         <li><strong>After import:</strong> the app recalculates derived income fields from the imported holdings data.</li>
       </ul>
 
@@ -320,7 +321,7 @@ function ImportHelp() {
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (All Accounts Positions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Export the combined Fidelity <strong>Positions CSV or XLSX</strong> containing the Account number and Account name columns on each holding row.</li>
+        <li>Export the combined Fidelity <strong>Positions CSV, XLSX, or XLS</strong> containing the Account number and Account name columns on each holding row.</li>
         <li>On Broker Import, choose <strong>Fidelity</strong>, stay on the <strong>Positions</strong> step, and click <strong>All Accounts</strong>.</li>
         <li>The import follows the same workflow as Schwab All Accounts: select Fidelity portfolios, preview account matching, re-point accounts when needed, skip accounts, or create a new Fidelity portfolio.</li>
         <li>Holdings, cost basis, current value, cash or core money-market balances, and available dividend fields remain separated by Fidelity account.</li>
@@ -425,7 +426,7 @@ function ImportHelp() {
 
       <h4 style={{ marginBottom: '0.4rem' }}>Fidelity (Transactions)</h4>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>In Fidelity, export the <strong>Transactions XLSX</strong> workbook for a single account.</li>
+        <li>In Fidelity, export the <strong>Transactions</strong> (Accounts History) file for a single account, as CSV, XLSX, or Excel 97-2003 XLS. A history file that covers several accounts imports only the rows of the account matched to this portfolio.</li>
         <li>On Broker Import, choose <strong>Fidelity</strong> and the <strong>Transactions</strong> step.</li>
         <li>Imports: BUY, SELL, cash dividend receipts, and DRIP reinvestment rows.</li>
         <li>If a refresh-estimated dividend already exists for the same ticker, account, and date, the imported broker dividend replaces that estimate so Dividend History keeps the actual payment amount.</li>

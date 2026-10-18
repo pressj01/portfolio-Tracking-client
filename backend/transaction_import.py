@@ -326,11 +326,63 @@ def _is_csv_file(file_path, filename=None):
     return name.endswith(".csv")
 
 
-def _read_table_rows(file_path, filename=None, sheet_name=None):
-    """Return a list of row lists from either CSV or Excel."""
-    if _is_csv_file(file_path, filename):
-        with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
-            return [row for row in csv.reader(fh)]
+_XLS_SIGNATURE = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def _is_legacy_xls(file_path):
+    """True for an Excel 97-2003 workbook, judged by its bytes, not its name.
+
+    openpyxl reads only .xlsx/.xlsm and rejects these outright. Fidelity
+    downloads re-saved from Excel arrive in this format.
+    """
+    try:
+        with open(file_path, "rb") as fh:
+            return fh.read(len(_XLS_SIGNATURE)) == _XLS_SIGNATURE
+    except OSError:
+        return False
+
+
+def _xls_cell_value(cell, datemode):
+    """Return an xlrd cell as the value openpyxl would give for the same cell."""
+    import xlrd
+
+    if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK, xlrd.XL_CELL_ERROR):
+        return None
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            return xlrd.xldate.xldate_as_datetime(cell.value, datemode)
+        except (xlrd.xldate.XLDateError, ValueError, OverflowError):
+            return cell.value
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return bool(cell.value)
+    # xlrd keeps every number as a float. A whole number goes back to an int
+    # so an account number reads "263923278", not "263923278.0".
+    if cell.ctype == xlrd.XL_CELL_NUMBER and float(cell.value).is_integer():
+        return int(cell.value)
+    return cell.value
+
+
+def _read_xls_rows(file_path, sheet_name=None):
+    import xlrd
+
+    book = xlrd.open_workbook(file_path, on_demand=True)
+    try:
+        if sheet_name and sheet_name in book.sheet_names():
+            sheet = book.sheet_by_name(sheet_name)
+        else:
+            sheet = book.sheet_by_index(0)
+        return [
+            [_xls_cell_value(cell, book.datemode) for cell in sheet.row(r)]
+            for r in range(sheet.nrows)
+        ]
+    finally:
+        book.release_resources()
+
+
+def _read_workbook_rows(file_path, sheet_name=None):
+    """Return a list of row lists from an .xlsx/.xlsm or legacy .xls workbook."""
+    if _is_legacy_xls(file_path):
+        return _read_xls_rows(file_path, sheet_name)
 
     import openpyxl
 
@@ -340,6 +392,14 @@ def _read_table_rows(file_path, filename=None, sheet_name=None):
         return [list(row) for row in ws.iter_rows(values_only=True)]
     finally:
         wb.close()
+
+
+def _read_table_rows(file_path, filename=None, sheet_name=None):
+    """Return a list of row lists from either CSV or Excel."""
+    if _is_csv_file(file_path, filename):
+        with open(file_path, "r", encoding="utf-8-sig", newline="") as fh:
+            return [row for row in csv.reader(fh)]
+    return _read_workbook_rows(file_path, sheet_name)
 
 
 def _row_has_values(row):
@@ -1383,14 +1443,7 @@ def parse_etrade_csv(file_path, filename):
 
 
 def _fidelity_read_xlsx(file_path, sheet_name=None):
-    import openpyxl
-
-    wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-    try:
-        ws = wb[sheet_name] if sheet_name and sheet_name in wb.sheetnames else wb.active
-        return [list(row) for row in ws.iter_rows(values_only=True)]
-    finally:
-        wb.close()
+    return _read_workbook_rows(file_path, sheet_name)
 
 
 def _fidelity_read_csv(file_path):
@@ -1452,23 +1505,33 @@ def _fidelity_parse_percent_fraction(raw):
     return val * 100.0
 
 
+# The website's Positions download and Fidelity Trader+'s positions export
+# name the same fields differently; Trader+ uses "Last", "$ Avg Cost",
+# "Basis", "$ Total G/L", "Value", and the "Div ..." columns.
 _FIDELITY_POSITION_ALIASES = {
     "Account Number": ["Account #", "Acct #", "Account No", "Account Number"],
     "Account Name": ["Account", "Account Description", "Portfolio"],
     "Symbol": ["Ticker"],
     "Description": ["Security Description", "Security name", "Name"],
-    "Last Price": ["Last price", "Price", "Current Price", "Market Price"],
+    "Last Price": ["Last price", "Price", "Current Price", "Market Price", "Last"],
     "Current value": ["Current Value", "Market Value", "Market value", "Value", "Value $"],
-    "Cost basis total": ["Cost Basis Total", "Cost basis", "Cost Basis", "Total Cost", "Purchase Value"],
-    "Average cost basis": ["Average Cost Basis", "Average cost", "Cost/Share", "Price Paid $"],
-    "Total gain/loss $": ["Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $", "Total Gain $"],
+    "Cost basis total": [
+        "Cost Basis Total", "Cost basis", "Cost Basis", "Total Cost", "Purchase Value", "Basis",
+    ],
+    "Average cost basis": [
+        "Average Cost Basis", "Average cost", "Cost/Share", "Price Paid $", "$ Avg Cost",
+    ],
+    "Total gain/loss $": [
+        "Total Gain/Loss Dollar", "Total gain/loss dollar", "Gain/Loss $", "Total Gain $",
+        "$ Total G/L",
+    ],
     "Dist. yield": [
         "Distribution Yield", "Distribution yield", "Dist yield", "Dividend Yield", "Yield",
         "Dist. rate", "Dist rate", "Distribution Rate", "Distribution rate",
     ],
-    "Amount per share": ["Amount Per Share", "Dividend Amount", "Dividend Per Share"],
-    "Ex-date": ["Ex Date", "Ex-dividend Date", "Ex Dividend Date"],
-    "Pay date": ["Pay Date", "Payment Date"],
+    "Amount per share": ["Amount Per Share", "Dividend Amount", "Dividend Per Share", "Div Amt"],
+    "Ex-date": ["Ex Date", "Ex-dividend Date", "Ex Dividend Date", "Div Ex-Date"],
+    "Pay date": ["Pay Date", "Payment Date", "Div Pay Date"],
     "Est. annual income": ["Estimated Annual Income", "Est Annual Income", "Annual Income"],
     "Type": ["Asset Type", "Security Type", "Holding Type"],
     "Quantity": ["Qty", "Shares", "Qty #", "Quantity #"],
@@ -1687,7 +1750,7 @@ def parse_generic_transactions(file_path, filename):
     return result
 
 
-def _fidelity_positions_from_records(records):
+def _fidelity_positions_from_records(records, lists_cash=True):
     """Normalize one Fidelity account's already-cleaned position records."""
     positions = []
     cash_value = 0.0
@@ -1741,16 +1804,30 @@ def _fidelity_positions_from_records(records):
         })
 
     positions_value = round(sum(p["current_value"] for p in positions), 2)
-    return {
-        "positions": positions,
-        "summary": {
-            "holdings": len(positions),
-            "filtered": cash_count,
-            "options": 0,
-            "cash": round(cash_value, 2),
-            "account_value": round(positions_value + cash_value, 2),
-        },
+    summary = {
+        "holdings": len(positions),
+        "filtered": cash_count,
+        "options": 0,
+        "cash": round(cash_value, 2),
+        "account_value": round(positions_value + cash_value, 2),
     }
+    if not cash_count and not lists_cash:
+        # A Fidelity Trader+ positions export lists securities only, so it says
+        # nothing about cash. The positions import sets the portfolio's cash
+        # only when the summary carries a "cash" key; leaving it out keeps the
+        # balance instead of zeroing it.
+        del summary["cash"]
+        summary["cash_reported"] = False
+    return {"positions": positions, "summary": summary}
+
+
+def _fidelity_header_lists_cash(header):
+    """True for the website's Positions layout, which names the account on every row.
+
+    There a missing cash row has always meant no cash. Trader+'s positions
+    export has no account columns and no cash rows.
+    """
+    return bool({"Account Name", "Account Number"} & set(header))
 
 
 def _fidelity_position_account_groups(rows, header_idx, header):
@@ -1822,6 +1899,9 @@ def _read_fidelity_position_groups(file_path, filename):
         )
 
     groups, filtered_count = _fidelity_position_account_groups(rows, header_idx, header)
+    lists_cash = _fidelity_header_lists_cash(header)
+    for group in groups:
+        group["lists_cash"] = lists_cash
     return rows, groups, filtered_count
 
 
@@ -1839,7 +1919,7 @@ def parse_fidelity_positions_xlsx(file_path, filename):
         raise ValueError("No holdings rows were found in the Fidelity positions file.")
 
     group = groups[0]
-    parsed = _fidelity_positions_from_records(group["records"])
+    parsed = _fidelity_positions_from_records(group["records"], group["lists_cash"])
     positions = parsed["positions"]
 
     if not positions:
@@ -1870,7 +1950,7 @@ def parse_fidelity_all_accounts_positions(file_path, filename):
     accounts = []
 
     for group in groups:
-        parsed = _fidelity_positions_from_records(group["records"])
+        parsed = _fidelity_positions_from_records(group["records"], group["lists_cash"])
         account_name = group["account_name"]
         account_number = group["account_number"]
         accounts.append({
@@ -1888,7 +1968,7 @@ def parse_fidelity_all_accounts_positions(file_path, filename):
         )
 
     all_positions = [position for account in accounts for position in account["positions"]]
-    total_cash = sum(account["summary"]["cash"] for account in accounts)
+    total_cash = sum(account["summary"].get("cash", 0.0) for account in accounts)
     if not all_positions and not total_cash:
         raise ValueError("No holdings or cash rows were found in the Fidelity All Accounts file.")
     if all_positions and all(position["purchase_value"] == 0 for position in all_positions):
