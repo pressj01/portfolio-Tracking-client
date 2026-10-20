@@ -9,6 +9,8 @@ import {
   formatForAccountSelection,
   formatForWorkflow,
   formatImportDetail,
+  preservedQuantityItems,
+  brokerCountRetryFields,
   brokerIdFromSource,
   completedWorkflowSteps,
   nextWorkflowStepAfterImport,
@@ -366,4 +368,38 @@ test('blocked or missing storage costs the preference, never the import', () => 
   assert.equal(readAutoAdvancePreference(null), false)
   assert.equal(readAutoAdvancePreference(undefined), false)
   assert.equal(writeAutoAdvancePreference(null, true), false)
+})
+
+test('reads the holdings a positions import kept, naming the portfolio', () => {
+  assert.deepEqual(preservedQuantityItems({
+    preserved_quantity: [
+      { ticker: 'SPYI', profile_id: 2, imported_quantity: 10, kept_quantity: 100 },
+      { ticker: 'QQQI', profile_id: 3, profile_name: 'Fidelity IRA', imported_quantity: 1, kept_quantity: 20 },
+    ],
+  }, 'Roth IRA'), [
+    { ticker: 'SPYI', profile_id: 2, imported_quantity: 10, kept_quantity: 100, profile_name: 'Roth IRA' },
+    { ticker: 'QQQI', profile_id: 3, profile_name: 'Fidelity IRA', imported_quantity: 1, kept_quantity: 20 },
+  ])
+  assert.deepEqual(preservedQuantityItems({}), [])
+  assert.deepEqual(preservedQuantityItems(null), [])
+})
+
+test('a single-account re-send names only the holdings to take at the broker count', () => {
+  assert.deepEqual(
+    brokerCountRetryFields([{ ticker: 'SPYI', profile_id: 2, kept_quantity: 100, profile_name: 'Roth' }]),
+    { accept_broker_quantity: '[{"profile_id":2,"ticker":"SPYI"}]' },
+  )
+})
+
+test('an All-Accounts re-send reuses the applied routing and skips the other accounts', () => {
+  const fields = brokerCountRetryFields(
+    [{ ticker: 'SPYI', profile_id: 2 }],
+    { 'num:z111': 2, 'num:z222': 7, 'num:z333': 'skip' },
+  )
+  assert.deepEqual(JSON.parse(fields.account_map), {
+    'num:z111': 2,
+    'num:z222': 'skip',
+    'num:z333': 'skip',
+  })
+  assert.deepEqual(JSON.parse(fields.accept_broker_quantity), [{ profile_id: 2, ticker: 'SPYI' }])
 })

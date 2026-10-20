@@ -906,6 +906,41 @@ class HoldingsTransactionTest(unittest.TestCase):
 
         self.assertIsNone(corrected)
 
+    def test_positions_import_guard_takes_broker_count_for_money_market_fund(self):
+        app_module._ensure_basis_columns(self.conn)
+        self.conn.execute(
+            "INSERT INTO all_account_info "
+            "(ticker, profile_id, quantity, price_paid, purchase_value, current_value, "
+            "broker_price_paid, broker_purchase_value, import_date) "
+            "VALUES ('FZDXX', 1, 118182.13, 1, 118182.13, 118182.13, 1, 118182.13, '2026-10-01')"
+        )
+        # Sweep buys only: the redemptions that spent the cash are not SELL rows.
+        self.conn.execute(
+            "INSERT INTO transactions "
+            "(ticker, profile_id, transaction_type, transaction_date, shares, price_per_share, fees, notes) "
+            "VALUES ('FZDXX', 1, 'BUY', '2026-09-10', 1450, 1.0, 0, '')"
+        )
+        existing = self.conn.execute(
+            "SELECT quantity, price_paid, purchase_value, current_value, import_date, "
+            "broker_price_paid, broker_purchase_value FROM all_account_info WHERE ticker = 'FZDXX'"
+        ).fetchone()
+
+        corrected = app_module._large_unsold_position_drop_guard(
+            self.conn,
+            1,
+            "FZDXX",
+            {
+                "ticker": "FZDXX",
+                "description": "Fidelity Hereford Street Trust",
+                "quantity": 49270.93,
+                "current_price": 0.0,
+                "current_value": 49270.93,
+            },
+            existing,
+        )
+
+        self.assertIsNone(corrected)
+
     def test_yahoo_symbol_normalizes_common_broker_spellings(self):
         self.assertEqual(_yahoo_symbol_for_ticker("BRKB"), "BRK-B")
         self.assertEqual(_yahoo_symbol_for_ticker("CODIPRB"), "CODI-PB")

@@ -291,6 +291,38 @@ export function formatImportDetail(detail = {}) {
   return `  ${failed}${route}: ${detail.message || ''}`
 }
 
+// A positions import keeps a holding's existing share count when the file shows
+// a large drop that no recorded sale explains. The import names each one it kept;
+// these read that list and build the re-send of the same file that takes the
+// broker's count instead.
+export function preservedQuantityItems(data = {}, fallbackProfileName = '') {
+  return (data?.preserved_quantity || []).map((item) => ({
+    ...item,
+    profile_name: item.profile_name || fallbackProfileName,
+  }))
+}
+
+// An All-Accounts re-send reuses the routing the first import applied (so an
+// account that opened a new portfolio goes back to it instead of opening
+// another) and skips every account that is not being corrected.
+export function brokerCountRetryFields(items = [], appliedAccountMap = null) {
+  const fields = {
+    accept_broker_quantity: JSON.stringify(
+      items.map(({ profile_id: profileId, ticker }) => ({ profile_id: profileId, ticker })),
+    ),
+  }
+  if (appliedAccountMap) {
+    const ids = new Set(items.map((item) => Number(item.profile_id)))
+    fields.account_map = JSON.stringify(Object.fromEntries(
+      Object.entries(appliedAccountMap).map(([key, pid]) => [
+        key,
+        ids.has(Number(pid)) ? pid : 'skip',
+      ]),
+    ))
+  }
+  return fields
+}
+
 export function isPositionsFormat(format) {
   return POSITIONS_FORMATS.has(String(format || '').trim())
 }

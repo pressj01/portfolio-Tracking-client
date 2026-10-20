@@ -9,6 +9,7 @@ import {
   NO_FORMAT,
   MULTI_ACCOUNT_FORMATS,
   TXN_FORMATS,
+  brokerCountRetryFields,
   completedWorkflowSteps,
   describeWorkflow,
   formatForAccountSelection,
@@ -22,6 +23,7 @@ import {
   brokerIdFromSource,
   needsPositionsSnapshotFirst,
   nextWorkflowStepAfterImport,
+  preservedQuantityItems,
   readAutoAdvancePreference,
   workflowStepForFormat,
   writeAutoAdvancePreference,
@@ -533,6 +535,10 @@ export default function Import() {
     () => readAutoAdvancePreference(preferenceStorage())
   )
   const [lastImportKind, setLastImportKind] = useState('')
+  // Holdings the last positions import kept at their existing share count, with
+  // what it takes to re-send that file at the broker's count instead.
+  const [preservedQuantity, setPreservedQuantity] = useState(null)
+  const [acceptingBrokerCount, setAcceptingBrokerCount] = useState(false)
 
   // Backup / restore state
   const [backups, setBackups] = useState([])
@@ -999,6 +1005,45 @@ export default function Import() {
       await waitForMarketRefresh()
     } finally {
       setWaitingForRefresh(false)
+    }
+  }
+
+  // Re-send the positions file the last import read, taking the broker's share
+  // count for the chosen holdings where that import kept the existing one.
+  const acceptBrokerCount = async (items) => {
+    if (!preservedQuantity || !items.length) return
+    setAcceptingBrokerCount(true)
+    setError(null)
+    const formData = new FormData()
+    formData.append('file', preservedQuantity.file)
+    formData.append('format', preservedQuantity.format)
+    formData.append('nav_date', preservedQuantity.navDate)
+    Object.entries(brokerCountRetryFields(items, preservedQuantity.appliedAccountMap))
+      .forEach(([key, value]) => formData.append(key, value))
+    try {
+      await waitForRefreshBeforeImport()
+      const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Import failed')
+      const taken = new Set(items.map((item) => `${item.profile_id}:${item.ticker}`))
+      const remaining = preservedQuantity.items.filter(
+        (item) => !taken.has(`${item.profile_id}:${item.ticker}`),
+      )
+      setPreservedQuantity(remaining.length ? { ...preservedQuantity, items: remaining } : null)
+      const names = items.map((item) => (
+        preservedQuantity.appliedAccountMap ? `${item.ticker} (${item.profile_name})` : item.ticker
+      ))
+      setResult((prev) => [
+        ...(prev || []),
+        `Took the broker's share count for ${names.join(', ')}.`,
+      ])
+      clearAllDashboardCache()
+      await loadDataStats()
+      loadBackups()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setAcceptingBrokerCount(false)
     }
   }
 
@@ -1893,6 +1938,7 @@ export default function Import() {
               setTxnAccountMap({})
               setTxnNavOnly(false)
               setResult(null)
+              setPreservedQuantity(null)
               setError(null)
               maybeAutodetectSchwabAllAccounts(f)
             }}
@@ -1909,6 +1955,7 @@ export default function Import() {
                 setTxnPreviewLoading(true)
                 setError(null)
                 setResult(null)
+                setPreservedQuantity(null)
                 setTxnPreview(null)
                 const formData = new FormData()
                 formData.append('file', txnFile)
@@ -1960,6 +2007,7 @@ export default function Import() {
                   setTxnImporting(true)
                   setError(null)
                   setResult(null)
+                  setPreservedQuantity(null)
                   const formData = new FormData()
                   formData.append('file', txnFile)
                   formData.append('format', txnFormat)
@@ -1991,6 +2039,14 @@ export default function Import() {
                       data.message,
                       ...(data.details || []).map(formatImportDetail),
                     ])
+                    const kept = preservedQuantityItems(data, currentProfileName)
+                    setPreservedQuantity(kept.length ? {
+                      items: kept,
+                      file: txnFile,
+                      format: txnFormat,
+                      navDate: navSnapshotDate,
+                      appliedAccountMap: data.applied_account_map || null,
+                    } : null)
                     setTxnPreview(null)
                     setTxnAccountMap({})
                     setTxnFile(null)
@@ -2442,6 +2498,85 @@ export default function Import() {
           )}
         </div>
       )}
+      {preservedQuantity && (() => {
+        const { items, appliedAccountMap } = preservedQuantity
+        const shares = (value) => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
+        // A single-account file goes to the selected portfolio, so it has to
+        // still be the one the counts were kept in.
+        const blockedReason = (item) => (
+          !appliedAccountMap && (isAggregate || Number(profileId) !== Number(item.profile_id))
+            ? `Switch back to ${item.profile_name || 'that portfolio'} to use this.`
+            : ''
+        )
+        const allBlocked = items.some((item) => blockedReason(item))
+        return (
+          <div className="alert alert-warning">
+            <strong>
+              {items.length === 1
+                ? 'The file\'s share count was not applied to 1 holding.'
+                : `The file's share count was not applied to ${items.length} holdings.`}
+            </strong>
+            <div style={{ marginTop: '0.35rem' }}>
+              The file shows a large drop that no recorded sale explains, so the portfolio kept its
+              existing count. If the file is right, take the broker&apos;s count. A sale or transfer
+              missing from the transaction history, or a buy there that should not be, can cause this.
+            </div>
+            <table style={{ marginTop: '0.75rem', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
+              <thead>
+                <tr style={{ textAlign: 'left' }}>
+                  <th style={{ padding: '0.25rem 1rem 0.25rem 0' }}>Ticker</th>
+                  {appliedAccountMap && <th style={{ padding: '0.25rem 1rem 0.25rem 0' }}>Portfolio</th>}
+                  <th style={{ padding: '0.25rem 1rem 0.25rem 0', textAlign: 'right' }}>File says</th>
+                  <th style={{ padding: '0.25rem 1rem 0.25rem 0', textAlign: 'right' }}>Kept</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={`${item.profile_id}:${item.ticker}`}>
+                    <td style={{ padding: '0.25rem 1rem 0.25rem 0', fontWeight: 600 }}>{item.ticker}</td>
+                    {appliedAccountMap && (
+                      <td style={{ padding: '0.25rem 1rem 0.25rem 0' }}>{item.profile_name}</td>
+                    )}
+                    <td style={{ padding: '0.25rem 1rem 0.25rem 0', textAlign: 'right' }}>{shares(item.imported_quantity)}</td>
+                    <td style={{ padding: '0.25rem 1rem 0.25rem 0', textAlign: 'right' }}>{shares(item.kept_quantity)}</td>
+                    <td style={{ padding: '0.25rem 0' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        disabled={acceptingBrokerCount || txnImporting || Boolean(blockedReason(item))}
+                        title={blockedReason(item) || undefined}
+                        onClick={() => acceptBrokerCount([item])}
+                      >
+                        Use broker count
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {items.length > 1 && (
+              <div style={{ marginTop: '0.75rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  disabled={acceptingBrokerCount || txnImporting || allBlocked}
+                  onClick={() => acceptBrokerCount(items)}
+                >
+                  {acceptingBrokerCount
+                    ? <><span className="spinner" /> Applying...</>
+                    : `Use broker count for all ${items.length}`}
+                </button>
+              </div>
+            )}
+            {allBlocked && (
+              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                {blockedReason(items.find((item) => blockedReason(item)))}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* ── Cost Basis Repair ─────────────────────────────────────────── */}
       <div className="card" style={{ marginTop: '1.5rem' }}>

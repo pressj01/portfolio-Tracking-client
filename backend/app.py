@@ -6473,8 +6473,17 @@ def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
     Positions imports normally own current share counts. This guard is deliberately
     narrow: it only protects an existing, transaction-backed holding from a large
     imported quantity collapse when no recent SELL transaction explains the drop.
+
+    Money-market funds are exempt. Their share count is the cash balance, and
+    the ledger cannot vouch for it: sweep buys are recorded, but much of what
+    leaves the fund (redemptions, settlements) never appears as a SELL (see
+    _uniform_buy_price). A count built from that ledger runs high, and the
+    guard then defended it. An IRA holding 49,270.93 FZDXX kept showing
+    118,182.13 through every re-import of a correct positions file.
     """
     if not existing:
+        return None
+    if _is_money_market_holding({**pos, "ticker": ticker}) or _is_money_market_holding(existing):
         return None
     existing_qty = _num_or_zero(existing["quantity"] if isinstance(existing, dict) else existing[0])
     incoming_qty = _num_or_zero(pos.get("quantity"))
@@ -6530,6 +6539,7 @@ def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
     )
     corrected["_quantity_preserved"] = {
         "ticker": ticker,
+        "profile_id": profile_id,
         "imported_quantity": round(incoming_qty, 6),
         "kept_quantity": round(existing_qty, 6),
         "unexplained_drop": round(reduction, 6),
@@ -7351,7 +7361,40 @@ def _requested_multi_account_map():
     return mapping
 
 
-def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=None):
+def _requested_accept_broker_quantity():
+    """Read the holdings the user chose to take at the file's share count.
+
+    Posted as a JSON list of {profile_id, ticker} when the Import page re-sends
+    a positions file after the drop guard kept an existing quantity. Returns
+    {profile_id: {ticker, ...}}; empty when nothing was posted.
+    """
+    raw = request.form.get("accept_broker_quantity")
+    if not raw:
+        return {}
+    error = "The holdings to take at the broker's share count could not be read."
+    try:
+        items = json.loads(raw)
+    except (TypeError, ValueError):
+        raise ValueError(error)
+    if not isinstance(items, list):
+        raise ValueError(error)
+    accepted = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError(error)
+        try:
+            pid = int(item.get("profile_id"))
+        except (TypeError, ValueError):
+            raise ValueError(error)
+        ticker = str(item.get("ticker") or "").strip().upper()
+        if ticker:
+            accepted.setdefault(pid, set()).add(ticker)
+    return accepted
+
+
+def _import_positions_multi(
+    parsed, nav_date=None, nav_only=False, account_map=None, accept_broker_quantity=None,
+):
     """Import a multi-account positions export, one portfolio per account block.
 
     Each account is written with the same code path as a single-account
@@ -7378,11 +7421,16 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
     valid_ids = {candidate["id"] for candidate in candidates}
     profile_names = {candidate["id"]: candidate["name"] for candidate in candidates}
     requested = account_map if account_map is not None else {}
+    accept_broker_quantity = accept_broker_quantity or {}
 
     targets = []
     skipped = []
     created = []
     claimed = {}
+    # The routing as actually applied, with any new portfolio's id in place of
+    # "new". Re-sending the file with it (to take a broker count the guard
+    # kept) reaches the same portfolios without opening another one.
+    applied_map = {}
 
     for account in accounts:
         key = _multi_account_key(account, broker_source)
@@ -7394,6 +7442,7 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
 
         if raw in (None, "", "skip"):
             skipped.append(label)
+            applied_map[key] = "skip"
             continue
 
         # An account with no portfolio yet can open one on the spot, so a fresh
@@ -7415,6 +7464,7 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
             profile_names[pid] = new_name
             created.append(new_name)
             claimed[pid] = label
+            applied_map[key] = pid
             targets.append((account, pid, label))
             continue
 
@@ -7443,6 +7493,7 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
             }), 400
 
         claimed[pid] = label
+        applied_map[key] = pid
         targets.append((account, pid, label))
 
     if not targets:
@@ -7450,9 +7501,19 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
             "error": "No accounts were assigned to a portfolio, so nothing was imported."
         }), 400
 
+    unrouted = set(accept_broker_quantity) - {pid for _, pid, _ in targets}
+    if unrouted:
+        return jsonify({
+            "error": (
+                "The holdings to take at the broker's share count belong to a portfolio "
+                "this import is not writing to. Import the file again from the start."
+            )
+        }), 400
+
     details = []
     failures = []
     confirmed = {}
+    preserved_quantity = []
 
     for account, pid, label in targets:
         single = {
@@ -7466,7 +7527,12 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
             if nav_only:
                 result = _record_positions_nav_only(single, pid, nav_date)
             else:
-                result = _import_positions(single, pid, nav_date=nav_date)
+                result = _import_positions(
+                    single,
+                    pid,
+                    nav_date=nav_date,
+                    accept_broker_quantity=accept_broker_quantity.get(pid),
+                )
             payload, status = _flask_result_parts(result)
         except ValueError as exc:
             payload, status = {"error": str(exc)}, 400
@@ -7479,6 +7545,13 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
         else:
             failures.append(label)
 
+        for item in payload.get("preserved_quantity") or []:
+            preserved_quantity.append({
+                **item,
+                "profile_id": pid,
+                "profile_name": profile_name,
+                "account_label": label,
+            })
         details.append({
             "account_label": label,
             "profile_id": pid,
@@ -7488,6 +7561,7 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
             "updated": payload.get("updated", 0),
             "inserted": payload.get("inserted", 0),
             "removed": payload.get("removed", 0),
+            "accepted_quantity": payload.get("accepted_quantity") or [],
         })
 
     conn = get_connection()
@@ -7523,6 +7597,8 @@ def _import_positions_multi(parsed, nav_date=None, nav_only=False, account_map=N
         "failed_accounts": failures,
         "skipped_accounts": skipped,
         "created_profiles": created,
+        "preserved_quantity": preserved_quantity,
+        "applied_account_map": applied_map,
     })
 
 
@@ -11545,12 +11621,16 @@ def _finalize_generic_positions_snapshot(profile_id):
         conn.close()
 
 
-def _import_positions(parsed, profile_id, nav_date=None):
+def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=None):
     """Import holdings from a positions-based file (e.g. Schwab Positions CSV).
 
     Writes directly to all_account_info — sets quantity, cost basis, price,
     and current value. Existing holdings for the profile are updated; new
     tickers are inserted. Holdings not in the import are removed.
+
+    `accept_broker_quantity` names tickers the user has told us to take at the
+    file's share count even where _large_unsold_position_drop_guard would keep
+    the existing one. The Import page offers it after the guard has fired.
     """
     from datetime import date as _date
     conn = get_connection()
@@ -11570,6 +11650,10 @@ def _import_positions(parsed, profile_id, nav_date=None):
     updated = 0
     inserted = 0
     preserved_quantity = []
+    accepted_quantity = []
+    accept_broker_quantity = {
+        str(value or "").strip().upper() for value in (accept_broker_quantity or ())
+    }
     category_stats = {
         "categories_created": 0,
         "category_assignments_added": 0,
@@ -11586,7 +11670,8 @@ def _import_positions(parsed, profile_id, nav_date=None):
             existing = conn.execute(
                 """SELECT quantity, price_paid, purchase_value, current_value,
                           import_date, broker_price_paid, broker_purchase_value,
-                          original_price_paid, original_purchase_value
+                          original_price_paid, original_purchase_value,
+                          description, classification_type
                    FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
                 (ticker, profile_id),
             ).fetchone()
@@ -11597,7 +11682,9 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 pos,
                 existing,
             )
-            if corrected_pos:
+            if corrected_pos and ticker.upper() in accept_broker_quantity:
+                accepted_quantity.append(ticker)
+            elif corrected_pos:
                 preserved_quantity.append(corrected_pos["_quantity_preserved"])
                 pos = corrected_pos
 
@@ -11784,6 +11871,11 @@ def _import_positions(parsed, profile_id, nav_date=None):
                 f"{'' if len(preserved_quantity) == 1 else 's'} with an unexplained large "
                 f"drop in the import: {kept}{f', +{more} more' if more > 0 else ''}."
             )
+        if accepted_quantity:
+            msg += (
+                f" Used the broker's share count for {', '.join(accepted_quantity)}"
+                " as requested."
+            )
         if is_snowball_holdings:
             created = category_stats["categories_created"]
             assigned = category_stats["category_assignments_added"]
@@ -11804,6 +11896,7 @@ def _import_positions(parsed, profile_id, nav_date=None):
             "inserted": inserted,
             "removed": removed,
             "preserved_quantity": preserved_quantity,
+            "accepted_quantity": accepted_quantity,
             "basis_reconciliation": basis_reconciliation,
             **category_stats,
         })
@@ -12939,6 +13032,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             }), 400
         try:
             account_map = _requested_multi_account_map()
+            accept_broker_quantity = _requested_accept_broker_quantity()
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return _import_positions_multi(
@@ -12946,6 +13040,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             nav_date=nav_date,
             nav_only=nav_only,
             account_map=account_map,
+            accept_broker_quantity=accept_broker_quantity,
         )
 
     # ── Positions-based import (e.g. Schwab) ─────────────────────────────────
@@ -12962,7 +13057,25 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                     "This prevents an older file from replacing current holdings."
                 )
             }), 400
-        return _import_positions(parsed, profile_id, nav_date=nav_date)
+        try:
+            accept_broker_quantity = _requested_accept_broker_quantity()
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if set(accept_broker_quantity) - {profile_id}:
+            # The re-send follows the selected portfolio, so a switch in between
+            # would otherwise import this account's file over another one.
+            return jsonify({
+                "error": (
+                    "The holdings to take at the broker's share count belong to a different "
+                    "portfolio than the one selected. Switch back to it and try again."
+                )
+            }), 400
+        return _import_positions(
+            parsed,
+            profile_id,
+            nav_date=nav_date,
+            accept_broker_quantity=accept_broker_quantity.get(profile_id),
+        )
 
     # ── Transaction-based import (e.g. Snowball) ─────────────────────────────
     conn = get_connection()
