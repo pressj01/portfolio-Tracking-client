@@ -5983,6 +5983,12 @@ def _ensure_basis_columns(conn):
         # only once the pay date it names has actually passed.
         "div_dates_manual_until": "TEXT",
         "div_dates_manual_set_at": "TEXT",
+        # When a broker positions file last set this holding's share count:
+        # the file's date, and the moment it was imported (SQLite UTC, the
+        # same clock as transactions.created_at). A manual trade moves that
+        # count only if it falls after the file — see _broker_holding_baseline.
+        "broker_snapshot_date": "TEXT",
+        "broker_snapshot_at": "TEXT",
     }
     for col, col_type in needed.items():
         if col not in cols:
@@ -11597,6 +11603,13 @@ def _finalize_positions_snapshot(profile_id, conn, tickers=None):
                       broker_purchase_value = COALESCE(broker_purchase_value, purchase_value),
                       original_price_paid = COALESCE(original_price_paid, price_paid),
                       original_purchase_value = COALESCE(original_purchase_value, purchase_value)
+                WHERE ticker = ? AND profile_id = ?""",
+            (ticker, profile_id),
+        )
+        conn.execute(
+            """UPDATE all_account_info
+                  SET broker_snapshot_date = COALESCE(import_date, date('now')),
+                      broker_snapshot_at = CURRENT_TIMESTAMP
                 WHERE ticker = ? AND profile_id = ?""",
             (ticker, profile_id),
         )
@@ -23922,7 +23935,250 @@ def _refresh_drip_tracking_from_transactions(ticker, profile_id, conn):
     )
 
 
-def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False):
+def _sql_timestamp(value):
+    """A stored timestamp in SQLite's 'YYYY-MM-DD HH:MM:SS' form, or ''."""
+    return str(value or "").replace("T", " ")[:19]
+
+
+def _broker_snapshot_cutoff(holding):
+    """When a broker positions file last set this holding's share count.
+
+    Returns (date, timestamp). A holding imported before the time was recorded
+    falls back to its import date from the first moment of that day, so a
+    trade entered that day counts as later than the file.
+    """
+    snap_date = str(holding.get("broker_snapshot_date") or holding.get("import_date") or "")[:10]
+    if not snap_date:
+        return None, None
+    snap_at = _sql_timestamp(holding.get("broker_snapshot_at")) or f"{snap_date} 00:00:00"
+    return snap_date, snap_at
+
+
+def _trade_is_after_broker_snapshot(txn_date, created_at, cutoff_date, cutoff_at):
+    """True for a trade the broker's positions file cannot already include."""
+    if not cutoff_date:
+        return True
+    day = str(txn_date or "")[:10]
+    if not day:
+        return False
+    if day != cutoff_date:
+        return day > cutoff_date
+    # Same day as the file: new only if it was entered after the import.
+    entered = _sql_timestamp(created_at)
+    return bool(entered and entered > cutoff_at)
+
+
+def _trades_after_broker_snapshot(conn, ticker, profile_id, cutoff_date, cutoff_at, proposed=None):
+    """Net shares and costs of the trades dated after the broker's file.
+
+    `proposed` is a trade about to be written: a new one (no id), or the new
+    values of an existing one, which keeps the fields it does not name. It
+    lets a sell be checked against the broker's count before it is saved;
+    `proposed_after` then says whether that trade itself falls after the file.
+    """
+    created = "created_at" if "created_at" in _table_columns(conn, "transactions") else "NULL AS created_at"
+    rows = [
+        dict(row) for row in conn.execute(
+            "SELECT id, transaction_type, transaction_date, shares, price_per_share, fees, "
+            f"{created} FROM transactions WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        ).fetchall()
+    ]
+    if proposed is not None:
+        replaced = next(
+            (row for row in rows if proposed.get("id") is not None and row["id"] == proposed["id"]),
+            None,
+        )
+        merged = {**(replaced or {}), **proposed, "_proposed": True}
+        if replaced is None and not merged.get("created_at"):
+            merged["created_at"] = _sql_timestamp(
+                datetime.datetime.now(datetime.timezone.utc).isoformat()
+            )
+        rows = [row for row in rows if row is not replaced]
+        rows.append(merged)
+    totals = {"shares": 0.0, "buy_cost": 0.0, "sold": 0.0, "proposed_after": False}
+    for row in rows:
+        if not _trade_is_after_broker_snapshot(
+            row.get("transaction_date"), row.get("created_at"), cutoff_date, cutoff_at,
+        ):
+            continue
+        if row.get("_proposed"):
+            totals["proposed_after"] = True
+        shares = abs(_num_or_zero(row.get("shares")))
+        if str(row.get("transaction_type") or "BUY").upper() == "SELL":
+            totals["shares"] -= shares
+            totals["sold"] += shares
+        else:
+            totals["shares"] += shares
+            totals["buy_cost"] += (
+                shares * _num_or_zero(row.get("price_per_share")) + _num_or_zero(row.get("fees"))
+            )
+    return totals
+
+
+def _broker_holding_baseline(conn, ticker, profile_id):
+    """Capture what a manual transaction edit must move rather than rebuild.
+
+    In a portfolio fed by broker positions files, the file owns the share
+    count (see _finalize_positions_snapshot). Rebuilding the count from the
+    transaction history after a manual edit is only right when that history is
+    complete. A money-market fund's history has its sweep buys but not the
+    cash that left, so adding 5 shares to 71 gave 16,238. An export that starts
+    after the first purchase leaves the history short, so 100 shares + 5 gave 45.
+
+    So an edit moves the broker's count by what it changes among trades dated
+    after the file. An edit to anything the file already reflects only
+    corrects the history and leaves the count alone.
+
+    Take it before the edit is written. Returns None where the history owns the
+    count: a portfolio with no broker positions import, or a ticker it does not
+    hold.
+    """
+    if not _profile_is_positions_managed(profile_id, conn):
+        return None
+    _ensure_basis_columns(conn)
+    row = conn.execute(
+        "SELECT * FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if not row:
+        return None
+    holding = dict(row)
+    if _num_or_zero(holding.get("quantity")) <= 0:
+        return None
+    cutoff_date, cutoff_at = _broker_snapshot_cutoff(holding)
+    return {
+        "holding": holding,
+        "cutoff_date": cutoff_date,
+        "cutoff_at": cutoff_at,
+        "trades": _trades_after_broker_snapshot(conn, ticker, profile_id, cutoff_date, cutoff_at),
+    }
+
+
+def _broker_count_covers_sell(conn, ticker, profile_id, baseline, proposed):
+    """True when a sell dated after the broker's file fits the broker's count.
+
+    The history-based check refuses a sale the history cannot cover, which is
+    any sale from a position whose history starts after its first purchase.
+    """
+    if not baseline:
+        return False
+    after = _trades_after_broker_snapshot(
+        conn, ticker, profile_id, baseline["cutoff_date"], baseline["cutoff_at"], proposed=proposed,
+    )
+    if not after["proposed_after"]:
+        return False
+    quantity = _num_or_zero(baseline["holding"].get("quantity"))
+    remaining = quantity + after["shares"] - baseline["trades"]["shares"]
+    return remaining >= -_basis_share_tolerance(quantity)
+
+
+def _apply_broker_holding_baseline(conn, ticker, profile_id, baseline, ledger_quantity):
+    """Restore a broker-managed holding after a rollup, moved by the edit.
+
+    When the rebuilt history matches the broker's count as moved, the
+    rollup's figures stand: that is the ordinary case and it is unchanged.
+    Otherwise the count and basis go back to the broker's, plus what the edit
+    changed among trades dated after the file. The rollup's realized gains and
+    DRIP figures come from the history and are kept either way.
+    """
+    holding = baseline["holding"]
+    before = baseline["trades"]
+    after = _trades_after_broker_snapshot(
+        conn, ticker, profile_id, baseline["cutoff_date"], baseline["cutoff_at"],
+    )
+    old_qty = _num_or_zero(holding.get("quantity"))
+    new_qty = old_qty + after["shares"] - before["shares"]
+    tolerance = _basis_share_tolerance(max(old_qty, abs(new_qty)))
+
+    row = conn.execute(
+        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    snapshot_keep = (
+        holding.get("broker_snapshot_date") or baseline["cutoff_date"],
+        holding.get("broker_snapshot_at") or baseline["cutoff_at"],
+        holding.get("import_date"),
+    )
+    if abs(_num_or_zero(ledger_quantity) - new_qty) <= tolerance:
+        if row:
+            # The rollup stamps import_date with today; the drop guard reads it
+            # as the file's date, so it goes back to the file's.
+            conn.execute(
+                """UPDATE all_account_info
+                      SET broker_snapshot_date = ?, broker_snapshot_at = ?,
+                          import_date = COALESCE(?, import_date)
+                    WHERE ticker = ? AND profile_id = ?""",
+                (*snapshot_keep, ticker, profile_id),
+            )
+        return
+    if new_qty <= tolerance:
+        conn.execute(
+            "DELETE FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+            (ticker, profile_id),
+        )
+        return
+    if not row:
+        # The rollup deletes a holding its history says was sold out.
+        columns = list(holding.keys())
+        conn.execute(
+            f"INSERT INTO all_account_info ({', '.join(columns)}) "
+            f"VALUES ({', '.join('?' * len(columns))})",
+            [holding[column] for column in columns],
+        )
+
+    old_cost = _num_or_zero(holding.get("purchase_value"))
+    average_cost = old_cost / old_qty if old_qty > 0 else 0.0
+    basis_change = (
+        (after["buy_cost"] - before["buy_cost"])
+        - (after["sold"] - before["sold"]) * average_cost
+    )
+
+    def moved(total):
+        return round(max(0.0, _num_or_zero(total) + basis_change), 2)
+
+    purchase_value = moved(old_cost)
+    broker_total = moved(_first_not_none(holding.get("broker_purchase_value"), old_cost))
+    original_total = moved(_first_not_none(holding.get("original_purchase_value"), old_cost))
+    price = _num_or_zero(holding.get("current_price"))
+    current_value = round(new_qty * price, 2) if price > 0 else None
+    gain = round(current_value - purchase_value, 2) if current_value is not None else None
+    gain_pct = round(gain / purchase_value, 6) if gain is not None and purchase_value > 0 else None
+    conn.execute(
+        """UPDATE all_account_info
+              SET quantity = ?, base_quantity = ?,
+                  price_paid = ?, purchase_value = ?,
+                  broker_price_paid = ?, broker_purchase_value = ?,
+                  original_price_paid = ?, original_purchase_value = ?,
+                  original_seed_premium = ?,
+                  purchase_date = COALESCE(?, purchase_date),
+                  current_value = ?, gain_or_loss = ?,
+                  gain_or_loss_percentage = ?, percent_change = ?,
+                  broker_snapshot_date = ?, broker_snapshot_at = ?,
+                  import_date = COALESCE(?, import_date)
+            WHERE ticker = ? AND profile_id = ?""",
+        (
+            round(new_qty, 6), round(new_qty, 6),
+            round(purchase_value / new_qty, 4), purchase_value,
+            round(broker_total / new_qty, 4), broker_total,
+            round(original_total / new_qty, 4), original_total,
+            holding.get("original_seed_premium"),
+            holding.get("purchase_date"),
+            current_value, gain, gain_pct, gain_pct,
+            *snapshot_keep,
+            ticker, profile_id,
+        ),
+    )
+    _recompute_position_income_fields(
+        conn,
+        profile_id,
+        ticker,
+        previous_quantity=old_qty,
+        previous_annual_income=holding.get("estim_payment_per_year"),
+    )
+
+
+def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False, broker_baseline=None):
     """Recalculate all_account_info from transactions.
 
     BUY transactions add to a lot queue.
@@ -23933,6 +24189,9 @@ def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False):
 
     `reset_seed_premium` drops the seed lot's stored original-cost premium, for
     when the user has repriced that lot themselves.
+
+    `broker_baseline` (from _broker_holding_baseline, taken before a manual
+    edit) keeps a broker positions file's share count in charge of the result.
     """
     _ensure_basis_columns(conn)
     order_by = _transaction_order_by(conn)
@@ -23942,6 +24201,11 @@ def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False):
         (ticker, profile_id),
     ).fetchall()
     if not rows:
+        if broker_baseline:
+            _apply_broker_holding_baseline(conn, ticker, profile_id, broker_baseline, 0.0)
+            conn.commit()
+            populate_holdings(profile_id)
+            populate_dividends(profile_id)
         return
 
     previous_income_row = conn.execute(
@@ -24102,6 +24366,10 @@ def _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=False):
             previous_annual_income=previous_annual_income,
         )
         _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
+    if broker_baseline:
+        _apply_broker_holding_baseline(
+            conn, ticker, profile_id, broker_baseline, max(0.0, total_shares),
+        )
     conn.commit()
     populate_holdings(profile_id)
     populate_dividends(profile_id)
@@ -25725,7 +25993,10 @@ def holding_opening_lot(ticker):
         if new_id is None:
             return jsonify({"error": "That opening lot is already recorded."}), 409
         conn.commit()
-        _rollup_transactions(ticker, profile_id, conn)
+        # Taken after the lot is written: it fills in history the broker's
+        # count already includes, so it must never move that count.
+        broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
+        _rollup_transactions(ticker, profile_id, conn, broker_baseline=broker_baseline)
         conn.commit()
         _reconcile_owner_after_member_change(conn, profile_id)
         holding_after = conn.execute(
@@ -25824,16 +26095,28 @@ def add_transaction(ticker):
         # Auto-seed existing holding's current data as the first transaction
         _seed_transaction_if_needed(ticker, profile_id, conn)
 
+    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id) if existing else None
+
     try:
         normalized_allocs = []
         if txn_type == "SELL":
-            _validate_sell_quantity_available(
-                conn,
-                ticker,
-                profile_id,
-                shares,
-                transaction_date=data.get("transaction_date"),
-            )
+            try:
+                _validate_sell_quantity_available(
+                    conn,
+                    ticker,
+                    profile_id,
+                    shares,
+                    transaction_date=data.get("transaction_date"),
+                )
+            except ValueError:
+                if not _broker_count_covers_sell(conn, ticker, profile_id, broker_baseline, {
+                    "transaction_type": "SELL",
+                    "transaction_date": data.get("transaction_date"),
+                    "shares": shares,
+                    "price_per_share": data.get("price_per_share"),
+                    "fees": data.get("fees", 0),
+                }):
+                    raise
             normalized_allocs = _normalize_lot_allocations(
                 conn,
                 ticker,
@@ -25872,7 +26155,7 @@ def add_transaction(ticker):
         conn.commit()
 
     # Rollup into all_account_info
-    _rollup_transactions(ticker, profile_id, conn)
+    _rollup_transactions(ticker, profile_id, conn, broker_baseline=broker_baseline)
     _reconcile_owner_after_member_change(conn, profile_id)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction added for {ticker}"}), 201
@@ -25977,12 +26260,13 @@ def reorder_transactions(ticker):
         if proposed_alloc_error and proposed_alloc_error != current_alloc_error:
             return jsonify({"error": proposed_alloc_error}), 409
 
+        broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
         for sort_order, txn_id in enumerate(transaction_ids, 1):
             conn.execute(
                 "UPDATE transactions SET sort_order = ? WHERE id = ?",
                 (sort_order, txn_id),
             )
-        _rollup_transactions(ticker, profile_id, conn)
+        _rollup_transactions(ticker, profile_id, conn, broker_baseline=broker_baseline)
         conn.commit()
         _reconcile_owner_after_member_change(conn, profile_id)
         _clear_total_return_caches()
@@ -26036,6 +26320,7 @@ def update_transaction(ticker, txn_id):
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
     existing_allocs = _load_lot_alloc_map(conn, [txn_id]).get(txn_id, [])
+    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
 
     new_type = (data.get("transaction_type") or existing_type).upper()
     try:
@@ -26050,15 +26335,25 @@ def update_transaction(ticker, txn_id):
     try:
         normalized_allocs = []
         if new_type == "SELL":
-            _validate_sell_quantity_available(
-                conn,
-                ticker,
-                profile_id,
-                new_shares,
-                transaction_date=data.get("transaction_date", existing_date),
-                exclude_txn_id=txn_id,
-                sort_txn_id=txn_id,
-            )
+            try:
+                _validate_sell_quantity_available(
+                    conn,
+                    ticker,
+                    profile_id,
+                    new_shares,
+                    transaction_date=data.get("transaction_date", existing_date),
+                    exclude_txn_id=txn_id,
+                    sort_txn_id=txn_id,
+                )
+            except ValueError:
+                proposed = {"id": txn_id, "transaction_type": "SELL", "shares": new_shares}
+                for field in ("transaction_date", "price_per_share", "fees"):
+                    if field in data:
+                        proposed[field] = data[field]
+                if not _broker_count_covers_sell(
+                    conn, ticker, profile_id, broker_baseline, proposed,
+                ):
+                    raise
             if "lot_allocations" in data:
                 normalized_allocs = _normalize_lot_allocations(
                     conn,
@@ -26134,7 +26429,11 @@ def update_transaction(ticker, txn_id):
         and "price_per_share" in data
         and abs((_optional_float(data["price_per_share"]) or 0.0) - float(existing_price or 0)) > 1e-9
     )
-    _rollup_transactions(ticker, profile_id, conn, reset_seed_premium=seed_repriced)
+    _rollup_transactions(
+        ticker, profile_id, conn,
+        reset_seed_premium=seed_repriced,
+        broker_baseline=broker_baseline,
+    )
     _reconcile_owner_after_member_change(conn, profile_id)
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} updated"})
@@ -26164,6 +26463,7 @@ def delete_transaction(ticker, txn_id):
         conn.close()
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
+    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
 
@@ -26173,10 +26473,12 @@ def delete_transaction(ticker, txn_id):
         (ticker, profile_id),
     ).fetchone()
     cnt = remaining["cnt"] if isinstance(remaining, dict) else remaining[0]
-    if cnt > 0:
-        _rollup_transactions(ticker, profile_id, conn)
+    if cnt > 0 or broker_baseline:
+        _rollup_transactions(ticker, profile_id, conn, broker_baseline=broker_baseline)
         _reconcile_owner_after_member_change(conn, profile_id)
-    # If no transactions left, the holding stays as-is (user can manage via edit modal)
+    # If no transactions left, the holding stays as-is (user can manage via edit
+    # modal) -- apart from a broker-managed count, which drops the deleted trade
+    # when it was dated after the broker's file.
 
     conn.close()
     return jsonify({"ticker": ticker, "message": f"Transaction {txn_id} deleted"})
