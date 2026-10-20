@@ -479,6 +479,12 @@ def ensure_tables_exist(conn=None):
             original_purchase_value    REAL,
             broker_price_paid          REAL,
             broker_purchase_value      REAL,
+            -- When a broker positions file last set this holding's share
+            -- count: the file's date and the moment it was imported. A manual
+            -- trade moves that count only if it falls after the file
+            -- (app._broker_holding_baseline).
+            broker_snapshot_date       TEXT,
+            broker_snapshot_at         TEXT,
             -- Per seeded share, how much more was originally paid than the
             -- price the ledger's seed lot carries (app._original_basis_from_lots).
             original_seed_premium      REAL,
