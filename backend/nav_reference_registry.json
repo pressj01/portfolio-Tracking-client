@@ -1,0 +1,1641 @@
+{
+  "ADX": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "SPY",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "AITX": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "ARCC": {
+    "family": "Quarterly BDC NAV",
+    "guidance": "Use reported quarterly NAV per share; reconcile distributions and share issuance. Credit/BDC references provide context, not a daily equity-NAV substitute.",
+    "suggestion": "BIZD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "BIZD: BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_legs": [
+      {
+        "symbol": "BIZD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "BIZD",
+    "automatic_reason": "BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "BLOX": {
+    "family": "Mixed crypto-related investments",
+    "guidance": "Use the prospectus and historical ETP/equity/cash exposures. The issuer page describes multiple exposures; a static 100% Bitcoin mapping is insufficient.",
+    "suggestion": "DAPP",
+    "source_url": "https://nicholasx.com/blox/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the prospectus; do not force a Bitcoin-only reference",
+    "suggested_direction": "DAPP: Crypto-company equity context, rather than treating crypto-related shares as spot Bitcoin.",
+    "automatic_legs": [
+      {
+        "symbol": "DAPP",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "DAPP",
+    "automatic_reason": "Crypto-company equity context, rather than treating crypto-related shares as spot Bitcoin.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "crypto_related": true
+  },
+  "BST": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "QQQ",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "BTCI": {
+    "family": "Crypto ETP income",
+    "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
+    "suggestion": "BTC-USD",
+    "source_url": "https://neosfunds.com/btci/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Bitcoin (BTC): Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ.",
+    "automatic_legs": [
+      {
+        "symbol": "BTC-USD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "Bitcoin (BTC)",
+    "automatic_reason": "Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ.",
+    "automatic_fit": "Crypto market reference",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Bitcoin ETP exposure + call options",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://neosfunds.com/btci/",
+      "checked": "2026-10-21"
+    },
+    "crypto_related": true
+  },
+  "CEFS": {
+    "family": "CEF basket with hedging",
+    "guidance": "Use ETF NAV and its historical CEF/hedge allocations. Underlying CEF discounts affect ETF assets; its own exchange-price discount is separate.",
+    "suggestion": "PCEF",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "PCEF: Closed-end-fund basket context; the actual basket, discounts and hedges differ.",
+    "automatic_legs": [
+      {
+        "symbol": "PCEF",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "PCEF",
+    "automatic_reason": "Closed-end-fund basket context; the actual basket, discounts and hedges differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "CEPI": {
+    "family": "Crypto equities with covered calls",
+    "guidance": "Use its disclosed crypto-equity basket/index plus the overlay. Bitcoin alone does not represent crypto-company stocks.",
+    "suggestion": "DAPP",
+    "source_url": "https://www.rexshares.com/cepi/?llm_view=1",
+    "source_checked": "2026-10-21",
+    "limitations": "Bitcoin alone omits the actual company-stock exposure",
+    "suggested_direction": "DAPP: Crypto-company equity context, rather than treating crypto-related shares as spot Bitcoin.",
+    "automatic_legs": [
+      {
+        "symbol": "DAPP",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "DAPP",
+    "automatic_reason": "Crypto-company equity context, rather than treating crypto-related shares as spot Bitcoin.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Crypto-company equities + covered calls",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://www.rexshares.com/cepi/?llm_view=1",
+      "checked": "2026-10-21"
+    },
+    "crypto_related": true
+  },
+  "CHPY": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SOXX",
+    "source_url": "https://yieldmaxetfs.com/our-etfs/chpy/",
+    "source_checked": "2026-10-21",
+    "limitations": "SOXX differs from the active basket and call spreads",
+    "suggested_direction": "SOXX: Semiconductor-sector context; active holdings and the memory subset can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "SOXX",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SOXX",
+    "automatic_reason": "Semiconductor-sector context; active holdings and the memory subset can differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Semiconductor equities + call spreads",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://yieldmaxetfs.com/our-etfs/chpy/",
+      "checked": "2026-10-21"
+    }
+  },
+  "CSHI": {
+    "family": "Fixed income / short maturity",
+    "guidance": "Short-term Treasury exposure with sold and purchased SPX puts. Use SGOV for T-bill context and review the put spread separately. Strike distance can vary.",
+    "suggestion": "SGOV",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1848758/000199937125014284/cshi-497k_093025.htm",
+    "source_checked": "2026-10-21",
+    "limitations": "SGOV omits the SPX put-spread overlay; exact option moneyness requires dated holdings. A high payout or ex-dividend price dip does not establish erosion.",
+    "suggested_direction": "SGOV: Short US Treasury-bill total-return context.",
+    "automatic_legs": [
+      {
+        "symbol": "SGOV",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SGOV",
+    "automatic_reason": "Short US Treasury-bill total-return context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "capital_review",
+      "label": "Treasury bills + SPX put-spread overlay",
+      "reason": "Review T-bill income, put-spread results and payouts. This is not an equity covered-call strategy; SGOV does not reproduce the SPX overlay.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1848758/000199937125014284/cshi-497k_093025.htm",
+      "checked": "2026-10-21"
+    }
+  },
+  "CVS": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "DRMY": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SOXX",
+    "source_url": "https://nicholasx.com/drmy/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SOXX: Semiconductor-sector context; active holdings and the memory subset can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "SOXX",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SOXX",
+    "automatic_reason": "Semiconductor-sector context; active holdings and the memory subset can differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Memory equities + synthetic covered calls / spreads",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://nicholasx.com/drmy/",
+      "checked": "2026-10-21"
+    }
+  },
+  "DRVR": {
+    "family": "Dividend/growth equity",
+    "guidance": "Use ETF NAV and the issuer's declared equity style/index. Verify DRVR and MBOX holdings before suggesting a broad index as more than a proxy.",
+    "suggestion": "SPY",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "DX": {
+    "family": "Quarterly mortgage REIT book value",
+    "guidance": "Use reported book value and mortgage/leverage context, with the issuer's common/economic book-value definition recorded. No daily fund-NAV verdict.",
+    "suggestion": "REM",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "REM: Mortgage-REIT market context; assess the company using reported book value.",
+    "automatic_legs": [
+      {
+        "symbol": "REM",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "REM",
+    "automatic_reason": "Mortgage-REIT market context; assess the company using reported book value.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "EGGQ": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "EGGY": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://nestyield.com/eggy/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Concentrated active equities + selective covered calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://nestyield.com/eggy/",
+      "checked": "2026-10-21"
+    }
+  },
+  "ETTY": {
+    "family": "Crypto ETP income",
+    "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
+    "suggestion": "ETH-USD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Ether (ETH): Ether market context; actual ETP exposure, tracking and options differ.",
+    "automatic_legs": [
+      {
+        "symbol": "ETH-USD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "Ether (ETH)",
+    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ.",
+    "automatic_fit": "Crypto market reference",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "crypto_related": true
+  },
+  "FBDC": {
+    "family": "BDC fund basket",
+    "guidance": "Use the ETF's own published NAV. Compare a documented BDC/specialty-finance basket; do not use one underlying BDC's quarterly NAV for the whole ETF.",
+    "suggestion": "BIZD",
+    "source_url": "https://www.ftportfolios.com/Retail/Etf/Etfsummary.aspx?Ticker=FBDC",
+    "source_checked": "2026-10-21",
+    "limitations": "BIZD is BDC-sector context; holdings and specialty-finance allocations differ. Falling BDC equity prices can reflect credit or discount changes.",
+    "suggested_direction": "BIZD: BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_legs": [
+      {
+        "symbol": "BIZD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "BIZD",
+    "automatic_reason": "BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "capital_review",
+      "label": "BDC / specialty-finance equity income",
+      "reason": "Review BDC sector returns, credit and reported underlying NAV. Sector declines are not evidence of covered-call erosion.",
+      "source_url": "https://www.ftportfolios.com/Retail/Etf/Etfsummary.aspx?Ticker=FBDC",
+      "checked": "2026-10-21"
+    }
+  },
+  "FIZY": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://nicholasx.com/fizy/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "FSCO": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "HYG",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "HYG: High-yield credit context; credit selection, loans, duration and leverage can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "HYG",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "HYG",
+    "automatic_reason": "High-yield credit context; credit selection, loans, duration and leverage can differ.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "GIAX": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "ACWI",
+    "source_url": "https://nicholasx.com/giax/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "ACWI: Global developed and emerging equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "ACWI",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "ACWI",
+    "automatic_reason": "Global developed and emerging equity market context.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Global equities + US index credit call spreads",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://nicholasx.com/giax/",
+      "checked": "2026-10-21"
+    }
+  },
+  "GLDN": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "GLD",
+    "source_url": "https://nicholasx.com/wp-content/uploads/docs/gldn/summary-prospectus.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "GLD: Gold-market context; miners and option overlays can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "GLD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "GLD",
+    "automatic_reason": "Gold-market context; miners and option overlays can differ.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Gold / mining equities + synthetic covered calls and spreads",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://nicholasx.com/wp-content/uploads/docs/gldn/summary-prospectus.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "GPTY": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://yieldmaxetfs.com/our-etfs/gpty/",
+    "source_checked": "2026-10-21",
+    "limitations": "Google alone is unsuitable; QQQ remains a proxy",
+    "suggested_direction": "QQQ: QQQ is a practical broad growth/technology market reference for the active AI and technology stock basket. It does not recreate the basket or its call spreads.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "QQQ is a practical broad growth/technology market reference for the active AI and technology stock basket. It does not recreate the basket or its call spreads.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "AI / technology equities + call spreads",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://yieldmaxetfs.com/our-etfs/gpty/",
+      "checked": "2026-10-21"
+    }
+  },
+  "HTGC": {
+    "family": "Quarterly BDC NAV",
+    "guidance": "Use reported quarterly NAV per share; reconcile distributions and share issuance. Credit/BDC references provide context, not a daily equity-NAV substitute.",
+    "suggestion": "BIZD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "BIZD: BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_legs": [
+      {
+        "symbol": "BIZD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "BIZD",
+    "automatic_reason": "BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "HYBI": {
+    "family": "Credit bonds with put overlay",
+    "guidance": "High-yield and investment-grade bond ETFs with a data-driven SPX put overlay. HYG is credit-market context, not the exact portfolio.",
+    "suggestion": "HYG",
+    "source_url": "https://neosfunds.com/hybi/",
+    "source_checked": "2026-10-21",
+    "limitations": "HYG differs from the changing credit allocation and excludes the SPX put overlay. A larger payout than HYG is not itself a warning.",
+    "suggested_direction": "HYG: High-yield credit context; credit selection, loans, duration and leverage can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "HYG",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "HYG",
+    "automatic_reason": "High-yield credit context; credit selection, loans, duration and leverage can differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "capital_review",
+      "label": "High-yield / investment-grade credit + SPX puts",
+      "reason": "Review credit allocation, credit losses, duration, put results and payouts. This is not an equity covered-call strategy.",
+      "source_url": "https://neosfunds.com/hybi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "IAUI": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "GLD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "GLD: Gold-market context; miners and option overlays can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "GLD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "GLD",
+    "automatic_reason": "Gold-market context; miners and option overlays can differ.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "ISBG": {
+    "family": "Stacked exposures",
+    "guidance": "Use disclosed 1x+1x daily exposures with documented rebalance/funding rules. ISBG: Bitcoin + gold. ISSB: US stocks + Bitcoin. Do not normalize to 50/50.",
+    "suggestion": null,
+    "source_url": "https://quantifyfunds.com/optionsbasedincome/isbg/",
+    "source_checked": "2026-10-21",
+    "limitations": "About 200% gross exposure, not a 50/50 portfolio",
+    "suggested_direction": "1x Bitcoin + 1x gold: Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs.",
+    "automatic_legs": [
+      {
+        "symbol": "BTC-USD",
+        "weight": 1
+      },
+      {
+        "symbol": "GLD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "1x Bitcoin + 1x gold",
+    "automatic_reason": "Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs.",
+    "automatic_fit": "Daily exposure model \u2014 before costs",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "crypto_related": true
+  },
+  "ISSB": {
+    "family": "Stacked exposures",
+    "guidance": "Use disclosed 1x+1x daily exposures with documented rebalance/funding rules. ISBG: Bitcoin + gold. ISSB: US stocks + Bitcoin. Do not normalize to 50/50.",
+    "suggestion": null,
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1924868/000199937126017336/isbg-ncsrs_053126.htm",
+    "source_checked": "2026-10-21",
+    "limitations": "About 200% gross exposure; verify exact stock leg and overlay",
+    "suggested_direction": "1x US stocks + 1x Bitcoin: Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      },
+      {
+        "symbol": "BTC-USD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "1x US stocks + 1x Bitcoin",
+    "automatic_reason": "Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs.",
+    "automatic_fit": "Daily exposure model \u2014 before costs",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "crypto_related": true
+  },
+  "IWMI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "IWM",
+    "source_url": "https://neosfunds.com/iwmi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "IWM: US small-cap equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "IWM",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "IWM",
+    "automatic_reason": "US small-cap equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Russell 2000 equities + index calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://neosfunds.com/iwmi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "IYRI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "VNQ",
+    "source_url": "https://neosfunds.com/iyri/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "VNQ: Listed real-estate equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "VNQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "VNQ",
+    "automatic_reason": "Listed real-estate equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Real-estate equities + calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://neosfunds.com/iyri/",
+      "checked": "2026-10-21"
+    }
+  },
+  "JNJ": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "KCOP": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "COPX",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KCOP.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "COPX: Copper-mining equity context. Physical copper exposure is an important additional difference.",
+    "automatic_legs": [
+      {
+        "symbol": "COPX",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "COPX",
+    "automatic_reason": "Copper-mining equity context. Physical copper exposure is an important additional difference.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Copper / miners + covered and other option income",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KCOP.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "KEO": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KEO.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Basket of Kurv option-income ETFs",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KEO.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "KGLD": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "GLD",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KGLD.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "GLD: Gold-market context; miners and option overlays can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "GLD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "GLD",
+    "automatic_reason": "Gold-market context; miners and option overlays can differ.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Gold exposure + covered and other option income",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KGLD.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "KQQQ": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KQQQ.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Technology equities + covered and other option income",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KQQQ.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "KSLV": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "SLV",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KSLV.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SLV: Silver-market context; miners and option overlays can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "SLV",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SLV",
+    "automatic_reason": "Silver-market context; miners and option overlays can differ.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Silver exposure + covered and other option income",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KSLV.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "KYLD": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SPY",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KYLD.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Active equities + covered and other option income",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_KYLD.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "LQID": {
+    "family": "Fixed income / short maturity",
+    "guidance": "Short-maturity fixed-income portfolio with an option-writing strategy on fixed-income instruments. Normal duration does not exceed two years; JPST is a short-duration credit proxy.",
+    "suggestion": "JPST",
+    "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_LQID.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "JPST does not reproduce its bond selection, credit exposures or fixed-income options. Monthly payout timing can create small price dips.",
+    "suggested_direction": "JPST: Active short-maturity fixed-income context; portfolio credit/duration can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "JPST",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "JPST",
+    "automatic_reason": "Active short-maturity fixed-income context; portfolio credit/duration can differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "capital_review",
+      "label": "Short-maturity bonds + fixed-income options",
+      "reason": "Review short-duration bond income, credit and rate risk, fixed-income options and payouts. Do not apply an equity covered-call label.",
+      "source_url": "https://documents.services.kurvinvest.com/SummaryProspectus/Kurv_SP_LQID.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "LTNC": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "MBOX": {
+    "family": "Dividend/growth equity",
+    "guidance": "Use ETF NAV and the issuer's declared equity style/index. Verify DRVR and MBOX holdings before suggesting a broad index as more than a proxy.",
+    "suggestion": "VIG",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "VIG: Dividend-growth equity context; the active stock portfolio can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "VIG",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "VIG",
+    "automatic_reason": "Dividend-growth equity context; the active stock portfolio can differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "MLPI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "AMLP",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "AMLP: MLP and energy-infrastructure equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "AMLP",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "AMLP",
+    "automatic_reason": "MLP and energy-infrastructure equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "MO": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "NEHI": {
+    "family": "Crypto ETP income",
+    "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
+    "suggestion": "ETH-USD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Ether (ETH): Ether market context; actual ETP exposure, tracking and options differ.",
+    "automatic_legs": [
+      {
+        "symbol": "ETH-USD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "Ether (ETH)",
+    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ.",
+    "automatic_fit": "Crypto market reference",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "crypto_related": true
+  },
+  "NIHI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "EFA",
+    "source_url": "https://neosfunds.com/nihi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "EFA: Developed international equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "EFA",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "EFA",
+    "automatic_reason": "Developed international equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "EAFE equities + index calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://neosfunds.com/nihi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "OVF": {
+    "family": "Equity with put-spread overlay",
+    "guidance": "Use foreign/large-cap/small-cap exposure respectively and model the actual option overlay. EFA/SPY/IWM are context candidates, not automatically strategy matched.",
+    "suggestion": "EFA",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "EFA: Developed international equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "EFA",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "EFA",
+    "automatic_reason": "Developed international equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "OVL": {
+    "family": "Equity with put-spread overlay",
+    "guidance": "Use foreign/large-cap/small-cap exposure respectively and model the actual option overlay. EFA/SPY/IWM are context candidates, not automatically strategy matched.",
+    "suggestion": "SPY",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "OVS": {
+    "family": "Equity with put-spread overlay",
+    "guidance": "Use foreign/large-cap/small-cap exposure respectively and model the actual option overlay. EFA/SPY/IWM are context candidates, not automatically strategy matched.",
+    "suggestion": "IWM",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "IWM: US small-cap equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "IWM",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "IWM",
+    "automatic_reason": "US small-cap equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "PBDC": {
+    "family": "BDC fund basket",
+    "guidance": "Use the ETF's own published NAV. Compare a documented BDC/specialty-finance basket; do not use one underlying BDC's quarterly NAV for the whole ETF.",
+    "suggestion": "BIZD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "BIZD: BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_legs": [
+      {
+        "symbol": "BIZD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "BIZD",
+    "automatic_reason": "BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "PDPR": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "PEO": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "XLE",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "XLE: Energy-sector equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "XLE",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "XLE",
+    "automatic_reason": "Energy-sector equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "PFFA": {
+    "family": "Preferred securities",
+    "guidance": "Use ETF NAV; match preferred-credit exposure, duration and leverage. A generic S&P 500 reference is unsuitable.",
+    "suggestion": "PFF",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "PFF: Preferred-security context, before PFFA-specific leverage and management differences.",
+    "automatic_legs": [
+      {
+        "symbol": "PFF",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "PFF",
+    "automatic_reason": "Preferred-security context, before PFFA-specific leverage and management differences.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "QQQI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "QQQ",
+    "source_url": "https://neosfunds.com/qqqi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Exposure reference; published buy-write index is a separate options comparator",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Nasdaq-100 equities + index call options",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://neosfunds.com/qqqi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "QVOL": {
+    "family": "Nasdaq Composite options exposure",
+    "guidance": "Start with Nasdaq Composite total return. QQQ represents Nasdaq-100 and is only a proxy; verify actual holdings, overlay and any leverage.",
+    "suggestion": "ONEQ",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1650149/000089418926015004/infrastructurecapitalnasda.htm",
+    "source_checked": "2026-10-21",
+    "limitations": "Nasdaq Composite is different from Nasdaq-100/QQQ",
+    "suggested_direction": "ONEQ: Nasdaq Composite exposure context rather than substituting Nasdaq-100.",
+    "automatic_legs": [
+      {
+        "symbol": "ONEQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "ONEQ",
+    "automatic_reason": "Nasdaq Composite exposure context rather than substituting Nasdaq-100.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Nasdaq Composite equity + blended call/put strategies",
+      "reason": "Call-option income is part of the mandate. Compare with Nasdaq Composite context; active exposures and option caps differ. A short history cannot establish a long-term verdict.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1650149/000089418926015004/infrastructurecapitalnasda.htm",
+      "checked": "2026-10-21"
+    }
+  },
+  "RDGL": {
+    "family": "Operating-company stock",
+    "guidance": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately.",
+    "suggestion": null,
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Fund NAV erosion does not apply. Show stock return, dividends and company fundamentals separately."
+  },
+  "SCHG": {
+    "family": "Dividend/growth equity",
+    "guidance": "Use ETF NAV and the issuer's declared equity style/index. Verify DRVR and MBOX holdings before suggesting a broad index as more than a proxy.",
+    "suggestion": "VUG",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "VUG: US large-cap growth equity context; index constituents and weights differ.",
+    "automatic_legs": [
+      {
+        "symbol": "VUG",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "VUG",
+    "automatic_reason": "US large-cap growth equity context; index constituents and weights differ.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "SEPI": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SPY",
+    "source_url": "https://www.sheltoncap.com/sepi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "SEPQ": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "QQQ",
+    "source_url": "https://advisor.sheltoncap.com/sepi-sepq/",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "SLJY": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "SILJ",
+    "source_url": "https://amplifyetfs.com/sljy/",
+    "source_checked": "2026-10-21",
+    "limitations": "SLV alone omits junior-mining equity exposure",
+    "suggested_direction": "SILJ: Junior silver-miner context; physical silver and the options overlay also matter.",
+    "automatic_legs": [
+      {
+        "symbol": "SILJ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SILJ",
+    "automatic_reason": "Junior silver-miner context; physical silver and the options overlay also matter.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Junior silver miners + covered calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://amplifyetfs.com/sljy/",
+      "checked": "2026-10-21"
+    }
+  },
+  "SLVX": {
+    "family": "Metals / mining income",
+    "guidance": "Verify physical-metal ETP, futures and mining-equity weights for each fund. Separate gold, silver and copper; include derivative and financing rules.",
+    "suggestion": "SLV",
+    "source_url": "https://nicholasx.com/wp-content/uploads/docs/slvx/summary-prospectus.pdf",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SLV: Silver-market context; miners and option overlays can differ.",
+    "automatic_legs": [
+      {
+        "symbol": "SLV",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SLV",
+    "automatic_reason": "Silver-market context; miners and option overlays can differ.",
+    "automatic_fit": "Broad context \u2014 mixed exposures",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Silver / mining equities + synthetic covered calls and spreads",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://nicholasx.com/wp-content/uploads/docs/slvx/summary-prospectus.pdf",
+      "checked": "2026-10-21"
+    }
+  },
+  "SOLM": {
+    "family": "Crypto ETP income",
+    "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
+    "suggestion": "SOL-USD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "Solana (SOL): Solana market context; actual ETP exposure, tracking and options differ.",
+    "automatic_legs": [
+      {
+        "symbol": "SOL-USD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "Solana (SOL)",
+    "automatic_reason": "Solana market context; actual ETP exposure, tracking and options differ.",
+    "automatic_fit": "Crypto market reference",
+    "automatic_version": "2026-10-21-v2",
+    "requires_aligned_crypto_close": true,
+    "crypto_related": true
+  },
+  "SPYI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "SPY",
+    "source_url": "https://neosfunds.com/spyi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Exposure reference; published buy-write index is a separate options comparator",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "S&P 500 equities + index call options",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://neosfunds.com/spyi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "TDAQ": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "QQQ",
+    "source_url": "https://www.tappalphafunds.com/etfs/tdaq",
+    "source_checked": "2026-10-21",
+    "limitations": "Exposure reference; daily calls require a separate strategy model",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Nasdaq-100 exposure + daily option income",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://www.tappalphafunds.com/etfs/tdaq",
+      "checked": "2026-10-21"
+    }
+  },
+  "TDAX": {
+    "family": "Daily leveraged or boosted equity",
+    "guidance": "TDAX targets 130% of TDAQ daily before fees; model daily compounding/costs. XQQI/XSPI need actual boosted exposure and option rules, not an assumed constant 1.5x target.",
+    "suggestion": null,
+    "source_url": "https://www.tappalphafunds.com/etfs/tdax",
+    "source_checked": "2026-10-21",
+    "limitations": "Daily target reference; not 130% of a multi-month QQQ return",
+    "suggested_direction": "130% daily TDAQ: The disclosed daily target is 130% of TDAQ before fees. This automatic target model is before incremental financing/strategy costs.",
+    "automatic_legs": [
+      {
+        "symbol": "TDAQ",
+        "weight": 1.3
+      }
+    ],
+    "automatic_label": "130% daily TDAQ",
+    "automatic_reason": "The disclosed daily target is 130% of TDAQ before fees. This automatic target model is before incremental financing/strategy costs.",
+    "automatic_fit": "Daily exposure model \u2014 before costs",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Daily boosted TDAQ exposure",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://www.tappalphafunds.com/etfs/tdax",
+      "checked": "2026-10-21"
+    }
+  },
+  "TMGN": {
+    "family": "Concentrated named exposure",
+    "guidance": "XSHP: verify SpaceX exposure/security and trading history. TMGN: Cboe Magnificent 10 index plus daily calls. Broad QQQ is only context for TMGN.",
+    "suggestion": null,
+    "source_url": "https://www.tappalphafunds.com/etfs/tmgn",
+    "source_checked": "2026-10-21",
+    "limitations": "Saved QQQ is context, not this concentrated index/0DTE strategy",
+    "suggested_direction": "Magnificent 10 basket: Ten disclosed index companies at 10% each, reset daily as a context model. This does not reproduce the index rebalance schedule, historical constituent changes or daily calls.",
+    "automatic_legs": [
+      {
+        "symbol": "NVDA",
+        "weight": 0.1
+      },
+      {
+        "symbol": "MSFT",
+        "weight": 0.1
+      },
+      {
+        "symbol": "AAPL",
+        "weight": 0.1
+      },
+      {
+        "symbol": "AMZN",
+        "weight": 0.1
+      },
+      {
+        "symbol": "GOOGL",
+        "weight": 0.1
+      },
+      {
+        "symbol": "META",
+        "weight": 0.1
+      },
+      {
+        "symbol": "TSLA",
+        "weight": 0.1
+      },
+      {
+        "symbol": "AVGO",
+        "weight": 0.1
+      },
+      {
+        "symbol": "AMD",
+        "weight": 0.1
+      },
+      {
+        "symbol": "PLTR",
+        "weight": 0.1
+      }
+    ],
+    "automatic_label": "Magnificent 10 basket",
+    "automatic_reason": "Ten disclosed index companies at 10% each, reset daily as a context model. This does not reproduce the index rebalance schedule, historical constituent changes or daily calls.",
+    "automatic_fit": "Daily exposure model \u2014 before costs",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Concentrated growth exposure + option income",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://www.tappalphafunds.com/etfs/tmgn",
+      "checked": "2026-10-21"
+    }
+  },
+  "TRIN": {
+    "family": "Quarterly BDC NAV",
+    "guidance": "Use reported quarterly NAV per share; reconcile distributions and share issuance. Credit/BDC references provide context, not a daily equity-NAV substitute.",
+    "suggestion": "BIZD",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "BIZD: BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_legs": [
+      {
+        "symbol": "BIZD",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "BIZD",
+    "automatic_reason": "BDC-sector market context; the security still needs its own NAV evidence.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "TSPY": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "SPY",
+    "source_url": "https://www.tappalphafunds.com/etfs/tspy",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "S&P 500 exposure + daily option income",
+      "reason": "Equity/asset call-income mandate: assess persistent capital and same-cash reference shortfalls. Large distributions alone do not establish erosion.",
+      "source_url": "https://www.tappalphafunds.com/etfs/tspy",
+      "checked": "2026-10-21"
+    }
+  },
+  "ULTI": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SPY",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/2043954/000199937126009566/incomemax-497k_043026.htm",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Active volatile equities + synthetic covered options",
+      "reason": "Synthetic equity and income option strategies qualify for the covered-call review. SPY is only broad context for the changing active stock basket.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/2043954/000199937126009566/incomemax-497k_043026.htm",
+      "checked": "2026-10-21"
+    }
+  },
+  "UTF": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "IGF",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "IGF: Global listed infrastructure context; financing, utilities mix and leverage differ.",
+    "automatic_legs": [
+      {
+        "symbol": "IGF",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "IGF",
+    "automatic_reason": "Global listed infrastructure context; financing, utilities mix and leverage differ.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "UTG": {
+    "family": "Published CEF NAV",
+    "guidance": "Use published fund NAV and distributions. Choose a mandate/asset-matched total-return reference, with leverage and option differences disclosed. Keep the traded discount separate.",
+    "suggestion": "XLU",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "XLU: US utility-sector context; the fund also has broader infrastructure/credit exposure.",
+    "automatic_legs": [
+      {
+        "symbol": "XLU",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "XLU",
+    "automatic_reason": "US utility-sector context; the fund also has broader infrastructure/credit exposure.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "WRTH": {
+    "family": "Active or concentrated equity/options",
+    "guidance": "Use historical holdings/exposures and the disclosed options rules. A sector or broad-market ETF can be a labeled proxy; do not grant it strategy-match status.",
+    "suggestion": "SPY",
+    "source_url": null,
+    "source_checked": null,
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Sector / style proxy",
+    "automatic_version": "2026-10-21-v2"
+  },
+  "XLEI": {
+    "family": "Broad equity with income overlay",
+    "guidance": "Suggest the relevant underlying equity index or an unleveraged ETF as exposure context. Add a documented options comparator separately. Neither automatically matches the complete strategy.",
+    "suggestion": "XLE",
+    "source_url": "https://www.ssga.com/us/en/individual/etfs/state-street-energy-select-sector-spdr-premium-income-etf-xlei",
+    "source_checked": "2026-10-21",
+    "limitations": "Verify the issuer objective and historical exposures before using a reference.",
+    "suggested_direction": "XLE: Energy-sector equity context.",
+    "automatic_legs": [
+      {
+        "symbol": "XLE",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "XLE",
+    "automatic_reason": "Energy-sector equity context.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Energy ETF exposure + covered calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://www.ssga.com/us/en/individual/etfs/state-street-energy-select-sector-spdr-premium-income-etf-xlei",
+      "checked": "2026-10-21"
+    }
+  },
+  "XQQI": {
+    "family": "Daily leveraged or boosted equity",
+    "guidance": "TDAX targets 130% of TDAQ daily before fees; model daily compounding/costs. XQQI/XSPI need actual boosted exposure and option rules, not an assumed constant 1.5x target.",
+    "suggestion": "QQQ",
+    "source_url": "https://neosfunds.com/xqqi/",
+    "source_checked": "2026-10-21",
+    "limitations": "QQQ alone does not model the boosted strategy",
+    "suggested_direction": "QQQ: Nasdaq-100 / large growth market context.",
+    "automatic_legs": [
+      {
+        "symbol": "QQQ",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "QQQ",
+    "automatic_reason": "Nasdaq-100 / large growth market context.",
+    "automatic_fit": "Unboosted market context",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Boosted Nasdaq-100 exposure + index calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://neosfunds.com/xqqi/",
+      "checked": "2026-10-21"
+    }
+  },
+  "XSHP": {
+    "family": "Concentrated named exposure",
+    "guidance": "SpaceX common stock and/or derivatives on SPCX, plus collateral and income options. Compare SpaceX returns and account for changing notional exposure.",
+    "suggestion": "SPCX",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1782952/000199937126013033/xshp-497k_061726.htm",
+    "source_checked": "2026-10-21",
+    "limitations": "SPCX represents SpaceX exposure, but does not reproduce XSHP option coverage, collateral income, expenses or possible synthetic exposure above 100%.",
+    "suggested_direction": "SPCX: The named SpaceX reference exposure; usable history and security identity must still be checked.",
+    "automatic_legs": [
+      {
+        "symbol": "SPCX",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SpaceX (SPCX)",
+    "automatic_reason": "SpaceX common stock (SPCX), the underlying named in the XSHP prospectus. Compare the same dated SpaceX exposure and cash payouts.",
+    "automatic_fit": "Exposure reference",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "SpaceX exposure + synthetic / covered option income",
+      "reason": "Compare the named SPCX equity exposure and dated payouts. A fall alongside SpaceX is not sufficient to establish a covered-call erosion pattern.",
+      "source_url": "https://www.sec.gov/Archives/edgar/data/1782952/000199937126013033/xshp-497k_061726.htm",
+      "checked": "2026-10-21"
+    }
+  },
+  "XSPI": {
+    "family": "Daily leveraged or boosted equity",
+    "guidance": "TDAX targets 130% of TDAQ daily before fees; model daily compounding/costs. XQQI/XSPI need actual boosted exposure and option rules, not an assumed constant 1.5x target.",
+    "suggestion": "SPY",
+    "source_url": "https://neosfunds.com/xspi/",
+    "source_checked": "2026-10-21",
+    "limitations": "Saved SPCX reference is incompatible; SPY alone is exposure context",
+    "suggested_direction": "SPY: Broad US large-cap equity market context.",
+    "automatic_legs": [
+      {
+        "symbol": "SPY",
+        "weight": 1
+      }
+    ],
+    "automatic_label": "SPY",
+    "automatic_reason": "Broad US large-cap equity market context.",
+    "automatic_fit": "Unboosted market context",
+    "automatic_version": "2026-10-21-v2",
+    "screen_strategy": {
+      "kind": "covered_call",
+      "label": "Boosted S&P 500 exposure + index calls",
+      "reason": "The documented mandate includes call writing for income. Coverage and other option positions can change; a price-based reference shortfall does not prove that calls caused the loss.",
+      "source_url": "https://neosfunds.com/xspi/",
+      "checked": "2026-10-21"
+    }
+  }
+}

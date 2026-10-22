@@ -23,6 +23,12 @@ from flask import Flask, request, jsonify, session, send_file, has_app_context
 from flask import g as _flask_g
 from flask.json.provider import DefaultJSONProvider
 from flask_cors import CORS
+from nav_assessment_service import (
+    VERSION as NAV_ASSESSMENT_VERSION,
+    WINDOWS as NAV_ASSESSMENT_WINDOWS,
+    build_payload as build_nav_assessment,
+    validate_choice as validate_nav_reference_choice,
+)
 from werkzeug.exceptions import HTTPException
 
 
@@ -21568,7 +21574,7 @@ def _action_center_cef_discount_rows(holdings):
 
 
 def _action_center_nav_erosion_rows(holdings, profile_ids):
-    """High NAV-erosion names from the latest cached coverage payload, if any."""
+    """Legacy price/payout screen results requiring published-NAV verification."""
     held = {str(h.get("ticker") or "").strip().upper() for h in holdings if h.get("ticker")}
     scoped_profile_ids = {int(pid) for pid in profile_ids if pid is not None}
     if not held or not scoped_profile_ids:
@@ -21852,12 +21858,13 @@ def action_center():
             _action_item(
                 items,
                 "nav",
-                "warning",
-                "High NAV erosion",
+                "info",
+                "Verify legacy price/payout signals",
                 f"{len(nav_rows)} holding"
-                f"{'' if len(nav_rows) == 1 else 's'} currently score High on NAV erosion: {shown}.",
-                "/nav-erosion-portfolio",
-                cta="Open NAV Erosion Screener",
+                f"{'' if len(nav_rows) == 1 else 's'} flagged by the older price/payout screen: {shown}. "
+                "These are not verified NAV-erosion warnings. Review published NAV and reference evidence on the dashboard.",
+                "/",
+                cta="Review NAV assessment",
                 metric=len(nav_rows),
                 id="nav-erosion-high",
             )
@@ -28281,6 +28288,239 @@ def portfolio_coverage():
         ) for t in ticker_info)),
     )
     return jsonify(_build_nav_coverage_payload(ticker_info, coverage_cache_key))
+
+
+_NAV_ASSESSMENT_CACHE = {}
+_NAV_ASSESSMENT_SOURCE_CACHE = {}
+_NAV_ASSESSMENT_PRICE_CACHE = {}
+_NAV_ASSESSMENT_PRICE_LOCKS = {}
+_NAV_ASSESSMENT_PRICE_LOCK = threading.Lock()
+
+
+def _nav_screen_market_history(ticker, start, end):
+    """Existing opted-in Tiingo/Yahoo facade; split-only and cash-adjusted series.
+
+    Close/Dividends are already restated by the facade to the same share basis.
+    Do not apply Stock Splits again, or label this data as published fund NAV.
+    """
+    key = (ticker, start.isoformat(), end.isoformat())
+    with _NAV_ASSESSMENT_PRICE_LOCK:
+        lock = _NAV_ASSESSMENT_PRICE_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        cached = _NAV_ASSESSMENT_PRICE_CACHE.get(key)
+        if cached and time.time()-cached[0] < 900:
+            return cached[1]
+        kwargs = {'end':(end+datetime.timedelta(days=1)).isoformat(), 'auto_adjust':False, 'actions':True}
+        if start.year == 1900:
+            kwargs['period'] = 'max'
+        else:
+            kwargs['start'] = (start-datetime.timedelta(days=10)).isoformat()
+        frame = _yf_ticker(ticker).history(**kwargs)
+        if frame is None or frame.empty or 'Close' not in frame:
+            return None
+        frame = frame.copy().sort_index()
+        if frame.index.has_duplicates:
+            raise ValueError('Duplicate closing-price observations; price screen withheld.')
+        if (frame['Close'].dropna() <= 0).any():
+            raise ValueError('Invalid closing prices; price screen withheld.')
+        # Yahoo can append today's OHLC/volume with Close/Adj Close still NaN.
+        # Retain real closes rather than discarding the entire historical series.
+        # No price or return is invented for the unfinished observation.
+        omitted = [day.strftime('%Y-%m-%d') for day in frame.index[frame['Close'].isna()]]
+        priced = frame.loc[frame['Close'].notna()]
+        if priced.empty:
+            return None
+        sources = frame.attrs.get('market_data_sources') or {}
+        provider = sources.get(ticker) or ('tiingo_hybrid' if market_data_provider.tiingo_enabled() else 'yahoo')
+        # Both providers supply Adj Close independently of raw cash accounting.
+        # A missing payout column is unknown, never silently treated as zero.
+        action_frame = frame.loc[frame.index <= priced.index[-1]]
+        payouts = action_frame['Dividends'].copy() if 'Dividends' in action_frame else None
+        if payouts is not None and 'Capital Gains' in frame:
+            payouts = payouts + action_frame['Capital Gains']
+        payload = {'basis':'split_adjusted_market_price', 'label':f'{provider.replace("_"," ").title()} closing prices and distributions',
+                   'provider':provider, 'url':f'https://finance.yahoo.com/quote/{urllib.parse.quote(ticker)}/history/',
+                   'fetched_at':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                   'prices':[{'date':day.strftime('%Y-%m-%d'),'close':float(value)} for day,value in priced['Close'].items()],
+                   'omitted_price_dates':omitted,
+                   'distributions':[{'date':day.strftime('%Y-%m-%d'),'amount':float(value)} for day,value in payouts.items() if pd.notna(value) and value != 0] if payouts is not None else [],
+                   'distributions_complete':payouts is not None and not payouts.isna().any(),
+                   'corporate_actions_resolved':'Stock Splits' in frame,
+                   'total_returns':{day.strftime('%Y-%m-%d'):float(value) for day,value in frame['Adj Close'].items() if pd.notna(value)} if 'Adj Close' in frame else {}}
+        if payload['distributions_complete'] and payload['corporate_actions_resolved']:
+            if len(_NAV_ASSESSMENT_PRICE_CACHE) > 300:
+                _NAV_ASSESSMENT_PRICE_CACHE.clear()
+            _NAV_ASSESSMENT_PRICE_CACHE[key] = (time.time(),payload)
+        return payload
+
+
+def _nav_reference_settings_key(is_aggregate, profile_ids):
+    return "nav_reference_choices_v1:" + ("a:" if is_aggregate else "p:") + ",".join(map(str, sorted(profile_ids)))
+
+
+def _nav_assessment_source(ticker, guide, start, as_of):
+    """Use actual published NAV. Unsupported adapters never fall back to Close."""
+    key = (ticker, start.isoformat(), as_of.isoformat())
+    cached = _NAV_ASSESSMENT_SOURCE_CACHE.get(key)
+    if cached and time.time() - cached[0] < 900:
+        return cached[1]
+    source = None
+    if ticker in {"TDAQ", "TSPY", "TDAX", "TMGN"}:
+        payload = _fetch_tappalpha_public_payload(ticker)
+        if not payload:
+            return None
+        inception = str((payload.get("fund") or {}).get("inception_date") or "")[:10]
+        nav = [{"date": row.get("as_of_date"), "nav": row.get("nav")}
+               for row in payload.get("chart", [])
+               if not inception or str(row.get("as_of_date") or "")[:10] >= inception]
+        distributions = [{"date": row.get("ex_date"), "amount": row.get("amount")}
+                         for row in payload.get("distributions", [])]
+        source = {"basis": "published_nav", "label": "TappAlpha published daily NAV",
+                  "url": f"https://www.tappalphafunds.com/etfs/{ticker.lower()}",
+                  "nav": nav, "distributions": distributions,
+                  "distributions_complete": "distributions" in payload,
+                  "distribution_source": "TappAlpha ex-date distribution history",
+                  "corporate_actions_resolved": False, "splits": [],
+                  "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        try:
+            actual_start = max(start.isoformat(), min(row["date"] for row in nav))
+            actions = _yf_ticker(ticker).history(start=actual_start, end=(as_of + datetime.timedelta(days=1)).isoformat(),
+                                               auto_adjust=False, actions=True)
+            if actions is not None and not actions.empty and "Stock Splits" in actions.columns:
+                source["splits"] = [{"date": day.strftime("%Y-%m-%d"), "ratio": float(ratio)}
+                                    for day, ratio in actions["Stock Splits"].items() if float(ratio) != 0]
+                source["corporate_actions_resolved"] = True
+                source["adjustment_source"] = "Yahoo split actions; published NAV and distributions normalized per original share"
+        except Exception:
+            pass
+        if not source["corporate_actions_resolved"]:
+            source["limitation"] = "Published NAV is available; the share-adjustment check is unavailable. Assessment remains unconfirmed."
+    elif guide["security_kind"] == "cef":
+        # CEF NAV differs from its market price. Rights/issuance adjustments and
+        # full distribution provenance must be resolved before economic claims.
+        cef_period = "All" if start.year == 1900 else "5Y" if (as_of-start).days > 1000 else "3Y" if (as_of-start).days > 366 else "1Y"
+        payload = _cefconnect_json(f"/api/v3/pricinghistory/{urllib.parse.quote(ticker)}/{cef_period}",
+                                   f"assessment-nav:{ticker}:{cef_period}")
+        data = payload.get("Data") or {}
+        source = {"basis": "published_nav", "label": "CEFConnect reported NAV",
+                  "url": f"https://www.cefconnect.com/fund/{ticker}",
+                  "nav": [{"date": str(row.get("DataDate") or row.get("DataDateDisplay"))[:10], "nav": row.get("NAVData")}
+                          for row in data.get("PriceHistory", []) if row.get("NAVData") is not None],
+                  "distributions": [], "distributions_complete": False,
+                  "corporate_actions_resolved": False,
+                  "limitation": "Reported CEF NAV observed; full distributions and rights/share-issuance adjustments need verification.",
+                  "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    if source and source.get("corporate_actions_resolved"):
+        _NAV_ASSESSMENT_SOURCE_CACHE[key] = (time.time(), source)
+    return source
+
+
+@app.route("/api/nav-assessment", methods=["GET"])
+def nav_assessment_data():
+    is_aggregate, profile_ids = get_profile_filter()
+    window = request.args.get("window", "1Y").upper()
+    if window not in NAV_ASSESSMENT_WINDOWS:
+        return jsonify({"error": "Unsupported NAV assessment window"}), 400
+    if window == "CUSTOM" and "period" not in request.args:
+        return jsonify({"error": "Custom assessment requires period=custom and both dates"}), 400
+    period_range = None
+    if "period" in request.args:
+        try:
+            period_range = _resolve_total_return_period(
+                request.args.get("period"), start_date=request.args.get("start_date"), end_date=request.args.get("end_date"))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        window = period_range["key"].upper()
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        rows = conn.execute(
+            f"SELECT ticker, current_price, quantity, description, classification_type, estim_payment_per_year, "
+            f"current_value, nav_erosion_scope, nav_benchmark_override FROM all_account_info "
+            f"WHERE profile_id IN ({placeholders}) AND quantity > 0", profile_ids,
+        ).fetchall()
+        info = _ticker_info_from_holding_rows(rows)
+        # The legacy coverage helper treats missing income as zero. Preserve
+        # missingness for the current high-payout priority list instead.
+        for holding in rows:
+            if holding['estim_payment_per_year'] is None:
+                info[str(holding['ticker']).strip().upper()]['annual_income'] = None
+        settings_key = _nav_reference_settings_key(is_aggregate, profile_ids)
+        saved = conn.execute("SELECT value FROM settings WHERE key = ?", (settings_key,)).fetchone()
+        choices = json.loads(saved[0]) if saved else {}
+        cash_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+        cash = conn.execute(f"SELECT SUM(cash_value) FROM profiles WHERE id IN ({','.join('?' * len(cash_ids))})", cash_ids).fetchone()[0]
+        if period_range and period_range["key"] == "all":
+            # Use the same portfolio inception policy as shared performance,
+            # including transactions for positions that have since been closed.
+            inception_holdings = [dict(row) for row in conn.execute(
+                f"SELECT * FROM all_account_info WHERE profile_id IN ({placeholders})", profile_ids)]
+            try:
+                inception_transactions = [dict(row) for row in conn.execute(
+                    f"SELECT * FROM transactions WHERE profile_id IN ({placeholders})", profile_ids)]
+            except sqlite3.OperationalError:
+                inception_transactions = []
+            inception = _portfolio_inception_date(inception_holdings, inception_transactions)
+            if not inception:
+                return jsonify({"error": "The shared All Market start is unavailable; choose another date range."}), 400
+            period_range = _resolve_total_return_period("all", inception_date=inception)
+    finally:
+        conn.close()
+    # Include quantities, values and settings; cache cannot leak across accounts
+    # or survive a changed position/reference. New endpoint ignores legacy caches.
+    assessment_end = datetime.date.fromisoformat(period_range["end_date"]) if period_range else datetime.date.today()
+    assessment_start = period_range["start_date"] if period_range else None
+    cache_key = (NAV_ASSESSMENT_VERSION, tuple(profile_ids), is_aggregate, window, assessment_start, assessment_end,
+                 json.dumps(info, sort_keys=True), json.dumps(choices, sort_keys=True), cash)
+    cached = _NAV_ASSESSMENT_CACHE.get(cache_key)
+    if cached and time.time() - cached[0] < 300:
+        return jsonify(cached[1])
+    def reference_loader(symbol, first, last):
+        # Share one full-window download across funds and completed quarters.
+        global_start = datetime.date.fromisoformat(assessment_start) if assessment_start else first
+        market = _nav_screen_market_history(symbol, min(global_start,first), assessment_end)
+        return {day:value for day,value in (market or {}).get('total_returns',{}).items() if first <= datetime.date.fromisoformat(day) <= last}
+    result = build_nav_assessment(info, _nav_assessment_source, reference_loader,
+                                 window=window, as_of=assessment_end, start_date=assessment_start,
+                                 choices={tk: entry["choice"] for tk, entry in choices.items()}, cash=cash,
+                                 market_loader=_nav_screen_market_history)
+    if period_range:
+        result["period_label"] = "All Market" if window == "ALL" else period_range["label"]
+        result["shared_range"] = True
+    # Retry incomplete sources on refresh instead of pinning a feed outage.
+    if not any(row["capital_status"] == "unconfirmed" for row in result["results"]):
+        if len(_NAV_ASSESSMENT_CACHE) > 24:
+            _NAV_ASSESSMENT_CACHE.clear()
+        _NAV_ASSESSMENT_CACHE[cache_key] = (time.time(), result)
+    return jsonify(result)
+
+
+@app.route("/api/nav-assessment/reference/<ticker>", methods=["PUT"])
+def save_nav_assessment_reference(ticker):
+    ticker = ticker.strip().upper()
+    try:
+        choice = validate_nav_reference_choice(request.get_json() or {})
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    is_aggregate, profile_ids = get_profile_filter()
+    key = _nav_reference_settings_key(is_aggregate, profile_ids)
+    conn = get_connection()
+    try:
+        if not conn.execute(f"SELECT 1 FROM all_account_info WHERE UPPER(ticker) = ? AND quantity > 0 AND profile_id IN ({','.join('?' * len(profile_ids))})", [ticker] + list(profile_ids)).fetchone():
+            return jsonify({"error": "Holding is not in the selected account"}), 404
+        saved = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        settings = json.loads(saved[0]) if saved else {}
+        old = settings.get(ticker) or {}
+        history = old.get("history", [])
+        if old.get("choice"):
+            history = (history + [{"choice": old["choice"], "saved_at": old.get("saved_at")}])[-50:]
+        settings[ticker] = {"choice": choice, "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "history": history}
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(settings)))
+        conn.commit()
+    finally:
+        conn.close()
+    _NAV_ASSESSMENT_CACHE.clear()
+    return jsonify({"ticker": ticker, "choice": choice})
 
 
 def _all_held_tickers(conn):

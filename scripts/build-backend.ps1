@@ -62,6 +62,7 @@ $hiddenImports = @(
   "refresh_sessions"
 )
 $dataFiles = @(
+  "nav_reference_registry.json${dataSeparator}.",
   "config.py${dataSeparator}.",
   "database.py${dataSeparator}.",
   "import_data.py${dataSeparator}.",

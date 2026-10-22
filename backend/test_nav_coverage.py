@@ -119,7 +119,7 @@ class NavCoverageAggregationTest(unittest.TestCase):
         }
         # The NAV severity bands are read from the request's query string, so
         # the builder only ever runs inside a request.
-        with app.test_request_context(), patch("yfinance.Ticker", FakeTicker):
+        with app.test_request_context(), patch("app._yf_ticker", FakeTicker):
             payload = _build_nav_coverage_payload(info, use_cache=False)
 
         row = payload["results"][0]

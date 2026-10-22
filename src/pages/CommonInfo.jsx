@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
-import { withSignalFormula } from '../utils/gradingPreferences'
+import { useNavAssessment, invalidateNavAssessment, navPercent, NAV_STATUS } from '../utils/navAssessment'
+import NavReferenceEditor from '../components/NavReferenceEditor'
+import '../components/NavAssessment.css'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
@@ -103,7 +105,7 @@ const COLUMN_HELP = {
   totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares. Dividends and realized profit both count from when your oldest remaining lot was bought, so an earlier position you sold out of before buying back does not carry over.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
   paidForItself: 'Column: distributions received on the position you hold now, counted from when its oldest remaining lot was bought, as a percent of original cost. 100% means dividends have paid back the amount invested.',
-  nav: 'Column: benchmark-adjusted NAV erosion. Auto/Test/Skip chooses whether to test this ticker. The box assigns a benchmark such as QQQ or BTC-USD.',
+  nav: 'Published NAV assessment and reference guidance over the trailing year. A market decline or reference shortfall alone does not prove destructive erosion. Missing source data is unconfirmed.',
   nextPayment: 'Column: next listed dividend payment date.',
   exDividend: 'Column: the listed ex-dividend date.',
   frequency: 'Column: dividend payment frequency.',
@@ -161,7 +163,7 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Realized P&L (ours)', body: COLUMN_HELP.realizedProfit.replace('Column: ', '') },
   { kind: 'Table column', label: 'Realized P&L (all-time, Snowball-style)', body: COLUMN_HELP.realizedAllTime.replace('Column: ', '') },
   { kind: 'Ours vs Snowball', label: 'Realized P&L', body: REALIZED_COMPARE_HELP },
-  { kind: 'Table column', label: 'NAV', body: COLUMN_HELP.nav.replace('Column: ', '') },
+  { kind: 'Table column', label: 'NAV assessment', body: COLUMN_HELP.nav.replace('Column: ', '') },
 ]
 
 function finite(value) {
@@ -394,85 +396,27 @@ function GradeBadge({ grade }) {
 }
 
 function NavCell({ row }) {
-  if (row.sold) return <span className="ci-muted">--</span>
-  const meta = row.navMeta || {}
-  const scope = row.navScope || 'auto'
-  const coverage = row.navCoverage
-  const invalid = Boolean(row.navBenchmark && meta.benchmark_valid === false)
-  const severity = meta.nav_erosion_severity
-  const priceOutage = Boolean(meta.price_data_unavailable)
-  const coverageTitle = scope === 'skip'
-    ? 'Skipped by user override'
-    : priceOutage
-      // Without this the cell reads exactly like a holding the rules exempt,
-      // and a quote-feed outage looks like a deliberate decision not to test.
-      ? (meta.warning
-        || 'No price history returned for this ticker right now - retry after the next refresh')
-      : invalid
-        ? `${row.navBenchmark} is not returning benchmark price history`
-        : scope === 'test'
-            ? `Forced NAV test${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
-            : meta.nav_tested
-              ? `Auto-tested${row.navBenchmark || meta.benchmark ? ` vs ${row.navBenchmark || meta.benchmark}` : ''}`
-              : 'Auto: not tested by current NAV erosion rules'
-  const identityAvailable = meta.raw_nav_erosion_rate != null
-  const overallScore = meta.overall_nav_erosion_score
-  const overallSeverity = meta.overall_nav_erosion_severity
-  const rateText = value => value == null ? '--' : `${(Number(value) * 100).toFixed(2)}%`
-  const identityTitle = identityAvailable
-    ? `Raw 1Y accounting: e ${rateText(meta.raw_nav_erosion_rate)}, d ${rateText(meta.distribution_rate_on_starting_nav)}, r ${rateText(meta.accounting_total_return_rate)}; e = d - r. Positive e means NAV ERODER regardless of the benchmark; negative e means NAV rose; zero is flat. Higher r is better. A higher d is more cash, but is not automatically better when d exceeds r`
-    : ''
-  const coverageGuidance = coverage == null
-    ? ''
-    : 'Coverage is benchmark-gated and lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High'
-  const overallTitle = overallScore == null ? '' : `Overall verdict: ${overallSeverity} NAV erosion risk (${Number(overallScore).toFixed(1)}/100)`
-  const title = [overallTitle, coverageTitle, coverageGuidance, identityTitle].filter(Boolean).join('. ')
-  const color = severity === 'High'
-    ? 'var(--neg)'
-    : severity === 'Medium'
-      ? 'var(--warning-money)'
-      // An outage dash is tinted so it does not read as a dim "nothing to see
-      // here" next to the holdings the rules genuinely exempt.
-      : priceOutage
-        ? 'var(--warning-money)'
-        : coverage == null
-          ? 'var(--text-dim)'
-          : 'var(--pos)'
+  const [editing, setEditing] = useState(false)
+  if (row.sold) return <span className="ci-muted">—</span>
+  const meta = row.navMeta
+  if (!meta?.ticker) return <span className="ci-muted">Assessment loading / unavailable</span>
+  const price = meta.price_screen?.status === 'available' ? meta.price_screen : null
   return (
-    <div className="ci-nav-cell" title={title}>
-      <div className="ci-nav-row">
-        <strong style={{ color }}>{coverage == null ? '--' : Number(coverage).toFixed(2)}</strong>
-        <select
-          aria-label={`${row.ticker} NAV erosion testing`}
-          value={scope}
-          onChange={event => row.onNavScope?.(row.ticker, event.target.value, row.navBenchmark)}
-        >
-          <option value="auto">Auto</option>
-          <option value="test">Test</option>
-          <option value="skip">Skip</option>
+    <div className="ci-nav-cell" title={meta.reason}>
+      <strong>{meta.metrics || !price ? NAV_STATUS[meta.capital_status] || 'Unconfirmed' : price.label}</strong>
+      {price?.estimated_eroder && meta.metrics && <small className="nav-reference-warning">Estimated eroder</small>}
+      {meta.erosion_review && <small className="nav-reference-warning" style={{ display: 'block' }}>Potential erosion — review</small>}
+      {meta.metrics && <small style={{ display: 'block' }}>{navPercent(meta.metrics.capital_change_rate)} NAV change</small>}
+      {!meta.metrics && price && <><small style={{ display: 'block' }}>{navPercent(price.price_change_rate)} price change · {navPercent(price.cash_total_return)} with payouts</small><small style={{ display: 'block', color: 'var(--text-dim)' }}>Price-based estimate · NAV not verified</small></>}
+      <small style={{ display: 'block', color: 'var(--text-dim)' }}>{meta.reference.selected || 'Reference needed'} · {meta.reference.automatic ? 'Automatic · ' : ''}{meta.reference.fit}</small>
+      {meta.reference.warning && <small className="nav-reference-warning" style={{ display: 'block' }}>Reference needs review</small>}
+      {meta.capital_status !== 'not_applicable' && <>
+        <button type="button" className="btn btn-sm" onClick={() => setEditing(value => !value)}>Reference help</button>
+        <select aria-label={`${row.ticker} NAV assessment inclusion`} value={row.navScope || 'auto'} onChange={event => row.onNavScope?.(row.ticker, event.target.value, row.navBenchmark)}>
+          <option value="auto">Include</option><option value="test">Include (manual)</option><option value="skip">Skip</option>
         </select>
-      </div>
-      <input
-        aria-label={`${row.ticker} NAV benchmark override`}
-        value={row.navBenchmarkInput ?? ''}
-        placeholder={meta.benchmark || 'bench'}
-        onChange={event => row.onNavBenchmarkDraft?.(row.ticker, event.target.value)}
-        onBlur={event => row.onNavScope?.(row.ticker, scope, event.target.value)}
-        onKeyDown={event => {
-          if (event.key === 'Enter') event.currentTarget.blur()
-        }}
-        style={{ borderColor: invalid ? 'var(--neg)' : undefined }}
-      />
-      {identityAvailable && (
-        <div style={{ marginTop: 3, fontSize: '0.66rem', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-          e {rateText(meta.raw_nav_erosion_rate)} · d {rateText(meta.distribution_rate_on_starting_nav)} · r {rateText(meta.accounting_total_return_rate)}
-        </div>
-      )}
-      {overallScore != null && (
-        <div style={{ marginTop: 2, fontSize: '0.66rem', fontWeight: 700, color: overallSeverity === 'High' ? 'var(--neg)' : overallSeverity === 'Medium' ? 'var(--warning-money)' : 'var(--pos)', whiteSpace: 'nowrap' }}>
-          {String(overallSeverity).toUpperCase()} RISK · {Number(overallScore).toFixed(1)}/100
-        </div>
-      )}
+      </>}
+      {editing && <NavReferenceEditor row={meta} onClose={() => setEditing(false)} />}
     </div>
   )
 }
@@ -919,7 +863,7 @@ const COLUMN_DEFS = {
     ),
   },
   nav: {
-    label: 'NAV',
+    label: 'NAV assessment',
     align: 'right',
     sortValue: row => row.navCoverage ?? -1,
     render: row => <NavCell row={row} />,
@@ -1023,7 +967,7 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
             {rows.map(row => (
               <tr
                 key={row.id}
-                className={`${row.sold ? 'ci-row-sold' : ''}${row.navMeta?.nav_erosion_severity === 'High' ? ' ci-row-nav-high' : ''}`}
+                className={row.sold ? 'ci-row-sold' : ''}
               >
                 {activeColumns.map((column, index) => (
                   <td key={column.key} className={cellClass(column, index)}>
@@ -1066,6 +1010,8 @@ function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sort
 
 export function CommonInfoPanel({
   embedded = false,
+  navRange = '1Y',
+  navEnabled = true,
   onTickerClick,
   onNavChange,
   tickerGrades = {},
@@ -1077,8 +1023,8 @@ export function CommonInfoPanel({
   const [gainsLosses, setGainsLosses] = useState(null)
   const [categoryData, setCategoryData] = useState({ categories: [], unallocated: [] })
   const [dividendGrowth, setDividendGrowth] = useState({})
-  const [coverage, setCoverage] = useState({})
-  const [coverageMeta, setCoverageMeta] = useState({})
+  const { data: navAssessment } = useNavAssessment(navRange, { enabled: navEnabled })
+  const coverageMeta = useMemo(() => Object.fromEntries((navAssessment?.results || []).map(row => [row.ticker, row])), [navAssessment])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [view, setView] = useState('common')
@@ -1144,41 +1090,7 @@ export function CommonInfoPanel({
     return () => { alive = false }
   }, [pf, growthTickers])
 
-  const refreshCoverage = useCallback(() => {
-    return readJson(pf(withSignalFormula('/api/portfolio-coverage')))
-      .then(data => {
-        const map = {}
-        const meta = {}
-        ;(data.results || []).forEach(row => {
-          if (row.coverage_ratio != null) map[row.ticker] = row.coverage_ratio
-          meta[row.ticker] = {
-            nav_tested: !!row.nav_tested,
-            benchmark: row.benchmark || null,
-            benchmark_valid: row.benchmark_valid !== false,
-            nav_erosion_scope: row.nav_erosion_scope || 'auto',
-            nav_benchmark_override: row.nav_benchmark_override || '',
-            nav_erosion_severity: row.nav_erosion_severity || null,
-            price_data_unavailable: !!row.price_data_unavailable,
-            warning: row.warning || null,
-            raw_nav_erosion_rate: row.raw_nav_erosion_rate,
-            distribution_rate_on_starting_nav: row.distribution_rate_on_starting_nav,
-            accounting_total_return_rate: row.accounting_total_return_rate,
-            raw_payout_gap_ratio: row.raw_payout_gap_ratio,
-            overall_nav_erosion_score: row.overall_nav_erosion_score,
-            overall_nav_erosion_severity: row.overall_nav_erosion_severity,
-            accounting_window_start: row.accounting_window_start,
-            accounting_window_end: row.accounting_window_end,
-          }
-        })
-        setCoverage(map)
-        setCoverageMeta(meta)
-      })
-      .catch(() => {})
-  }, [pf])
-
-  useEffect(() => {
-    refreshCoverage()
-  }, [refreshCoverage, selection])
+  const refreshCoverage = useCallback(() => invalidateNavAssessment(), [])
 
   const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
     const navBenchmark = String(benchmark || '').trim().toUpperCase()
@@ -1187,14 +1099,6 @@ export function CommonInfoPanel({
         ? { ...row, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark }
         : row
     )))
-    setCoverageMeta(prev => ({
-      ...prev,
-      [ticker]: {
-        ...(prev[ticker] || {}),
-        nav_erosion_scope: scope,
-        nav_benchmark_override: navBenchmark,
-      },
-    }))
     pf(`/api/holdings/${ticker}/nav-erosion-scope`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1203,6 +1107,7 @@ export function CommonInfoPanel({
         nav_benchmark_override: navBenchmark,
       }),
     })
+      .then(response => readJson(Promise.resolve(response)))
       .then(() => {
         refreshCoverage()
         onNavChange?.()
@@ -1240,7 +1145,7 @@ export function CommonInfoPanel({
         navScope: row.sold ? 'skip' : (row.nav_erosion_scope || meta.nav_erosion_scope || 'auto'),
         navBenchmark: row.nav_benchmark_override || meta.nav_benchmark_override || '',
         navBenchmarkInput: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
-        navCoverage: coverage[ticker],
+        navCoverage: meta.metrics?.capital_change_rate,
         navMeta: meta,
         onNavScope: updateNavScope,
         onNavBenchmarkDraft: draftNavBenchmark,
@@ -1248,7 +1153,7 @@ export function CommonInfoPanel({
     }
     const rows = showSold ? [...openRows, ...closedRows] : openRows
     return rows.map(withNav)
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverage, coverageMeta, onTickerClick, tickerGrades, tickerRisk, updateNavScope, draftNavBenchmark])
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverageMeta, onTickerClick, tickerGrades, tickerRisk, updateNavScope, draftNavBenchmark])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null
@@ -1353,8 +1258,8 @@ export function CommonInfoPanel({
           <h2 className={embedded ? 'ci-embed-title' : undefined}>{embedded ? 'Holdings overview' : 'Holdings overview'}</h2>
           <p>
             {embedded
-              ? 'Snowball-style views of this account. Assign a NAV benchmark on each row. Edit lots and DRIP on Holdings.'
-              : 'Portfolio holdings with forward income, yields, total profit, sold positions, and NAV benchmark assignment.'}
+              ? 'References are selected automatically. Use Reference help on a row to inspect or change one. NAV assessments follow the shared date range above. Edit lots and DRIP on Holdings.'
+              : 'Portfolio holdings with forward income, yields, total profit and sold positions. NAV references are selected automatically; use Reference help to inspect or change one.'}
           </p>
         </div>
         <div className="ci-view-tabs" aria-label="Holdings overview views">

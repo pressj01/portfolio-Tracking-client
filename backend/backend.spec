@@ -1,11 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+nav_assets = [('nav_reference_registry.json', '.')]
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.'), ('tax_report.py', '.'), ('dividend_safety.py', '.'), ('transaction_import.py', '.'), ('portfolio_tester.py', '.'), ('options_pricing.py', '.'), ('options_api.py', '.'), ('seed', 'seed')],
+    datas=nav_assets + [('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.'), ('tax_report.py', '.'), ('dividend_safety.py', '.'), ('transaction_import.py', '.'), ('portfolio_tester.py', '.'), ('options_pricing.py', '.'), ('options_api.py', '.'), ('seed', 'seed')],
     hiddenimports=['flask', 'flask_cors', 'pandas', 'openpyxl', 'xlrd', 'yfinance', 'plotly', 'scipy', 'pypdf', 'sqlite3', 'statistics', 'decimal', 'config', 'market_data_provider', 'database', 'import_data', 'normalize', 'grading', 'create_template', 'tax_report', 'dividend_safety', 'transaction_import', 'portfolio_tester', 'options_pricing', 'options_api', 'diversification', 'account_performance', 'refresh_sessions'],
     hookspath=[],
     hooksconfig={},

@@ -41,6 +41,8 @@ import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
 import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
 import GradePeriodHelp from '../components/GradePeriodHelp'
+import NavAssessmentPanel from '../components/NavAssessmentPanel'
+import { invalidateNavAssessment } from '../utils/navAssessment'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import { portfolioGradeGuideRows, withSignalFormula } from '../utils/gradingPreferences'
 import { CommonInfoPanel } from './CommonInfo'
@@ -204,10 +206,6 @@ const exPaySortKey = (value) => {
   return year * 10000 + parseInt(m[1], 10) * 100 + parseInt(m[2], 10)
 }
 const pct = (v) => (v == null || !Number.isFinite(Number(v)) ? '—' : (Number(v) * 100).toFixed(2) + '%')
-const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
-const navSeverityColor = (severity) => severity === 'High' ? 'var(--neg)' : severity === 'Medium' ? 'var(--warning-money)' : severity === 'Low' ? 'var(--pos)' : 'var(--text-dim)'
-const navSeverityBg = (severity) => severity === 'High' ? 'color-mix(in srgb, var(--neg) 14%, transparent)' : severity === 'Medium' ? 'color-mix(in srgb, var(--warning-money) 14%, transparent)' : 'color-mix(in srgb, var(--pos) 14%, transparent)'
-const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Gated Coverage' : severity === 'Medium' ? 'Moderate Benchmark-Gated Coverage' : 'Low Benchmark-Gated Coverage'
 
 // ── ETF closure risk (fund too small to be profitable for the issuer) ──────────
 const CLOSURE_TIER = {
@@ -845,11 +843,6 @@ export default function Dashboard() {
   // fixed at 'cur' is the behavior that toggle was already stuck at.
   const rvyMode = 'cur'
   const { openTickerResearch } = useTickerResearch()
-  const [portfolioCoverage, setPortfolioCoverage] = useState(null)
-  const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
-  const [portfolioNavAccounting, setPortfolioNavAccounting] = useState({})
-  const [tickerCoverage, setTickerCoverage] = useState({})
-  const [tickerCoverageMeta, setTickerCoverageMeta] = useState({})
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [overviewCategories, setOverviewCategories] = useState(null)
   const [overviewCategoryId, setOverviewCategoryId] = useState(null)
@@ -1014,11 +1007,6 @@ export default function Dashboard() {
       if (cachedGrade.overall) {
         setGradeResultKey(gradeDataKey(dashboardCacheKey, '1y', '', ''))
       }
-      setPortfolioCoverage(cached.portfolioCoverage ?? null)
-      setPortfolioCoverageSeverity(cached.portfolioCoverageSeverity ?? null)
-      setPortfolioNavAccounting(cached.portfolioNavAccounting || {})
-      setTickerCoverage(cached.tickerCoverage || {})
-      setTickerCoverageMeta(cached.tickerCoverageMeta || {})
       setOverviewGroups(cached.overviewGroups || null)
       setOverviewCategories(cached.overviewCategories || null)
       setDailyChange(cached.dailyChange || null)
@@ -1036,11 +1024,6 @@ export default function Dashboard() {
       setTickerRiskLoading(false)
       setPortfolioGrade({})
       setGradeResultKey(null)
-      setPortfolioCoverage(null)
-      setPortfolioCoverageSeverity(null)
-      setPortfolioNavAccounting({})
-      setTickerCoverage({})
-      setTickerCoverageMeta({})
       setOverviewGroups(null)
       setOverviewCategories(null)
       setDailyChange(null)
@@ -1138,52 +1121,6 @@ export default function Dashboard() {
                 })
                 setOverviewGroups(Object.values(byType).sort((a, b) => b.value - a.value))
                 setOverviewCategories(null)
-              }
-            })
-            .catch(() => {})
-          pf(withSignalFormula('/api/portfolio-coverage'))
-            .then(safeJson)
-            .then(d => {
-              if (stale) return
-              setPortfolioCoverage(d.aggregate_coverage ?? null)
-              setPortfolioCoverageSeverity(d.aggregate_severity ?? null)
-              setPortfolioNavAccounting({
-                rawErosionRate: d.aggregate_raw_nav_erosion_rate ?? null,
-                distributionRate: d.aggregate_distribution_rate_on_starting_nav ?? null,
-                totalReturnRate: d.aggregate_accounting_total_return_rate ?? null,
-                rawPayoutGapRatio: d.aggregate_raw_payout_gap_ratio ?? null,
-                overallScore: d.aggregate_overall_nav_erosion_score ?? null,
-                overallSeverity: d.aggregate_overall_nav_erosion_severity ?? null,
-              })
-              if (d.results) {
-                const map = {}
-                const meta = {}
-                d.results.forEach(r => {
-                  if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio
-                  meta[r.ticker] = {
-                    nav_tested: !!r.nav_tested,
-                    benchmark: r.benchmark || null,
-                    benchmark_valid: r.benchmark_valid !== false,
-                    nav_erosion_scope: r.nav_erosion_scope || 'auto',
-                    nav_benchmark_override: r.nav_benchmark_override || '',
-                    nav_erosion_severity: r.nav_erosion_severity || null,
-                    price_change_pct: r.price_change_pct,
-                    raw_nav_erosion_rate: r.raw_nav_erosion_rate,
-                    distribution_rate_on_starting_nav: r.distribution_rate_on_starting_nav,
-                    accounting_total_return_rate: r.accounting_total_return_rate,
-                    raw_payout_gap_ratio: r.raw_payout_gap_ratio,
-                    overall_nav_erosion_score: r.overall_nav_erosion_score,
-                    overall_nav_erosion_severity: r.overall_nav_erosion_severity,
-                    accounting_window_start: r.accounting_window_start,
-                    accounting_window_end: r.accounting_window_end,
-                    warning: r.warning || null,
-                  }
-                })
-                setTickerCoverage(map)
-                setTickerCoverageMeta(meta)
-              } else {
-                setTickerCoverage({})
-                setTickerCoverageMeta({})
               }
             })
             .catch(() => {})
@@ -1432,11 +1369,6 @@ export default function Dashboard() {
       tickerRisk: canStoreGrades ? activeTickerRisk : (previousCached.tickerRisk || {}),
       tickerClosureRisk: canStoreGrades ? activeTickerClosureRisk : (previousCached.tickerClosureRisk || {}),
       portfolioGrade: canStoreGrades ? activePortfolioGrade : (previousCached.portfolioGrade || {}),
-      portfolioCoverage,
-      portfolioCoverageSeverity,
-      portfolioNavAccounting,
-      tickerCoverage,
-      tickerCoverageMeta,
       overviewGroups,
       overviewCategories,
       dailyChange,
@@ -1456,11 +1388,6 @@ export default function Dashboard() {
     gradeResultsAreCurrent,
     gradePeriod,
     gradeUnpriced,
-    portfolioCoverage,
-    portfolioCoverageSeverity,
-    portfolioNavAccounting,
-    tickerCoverage,
-    tickerCoverageMeta,
     overviewGroups,
     overviewCategories,
     dailyChange,
@@ -1619,8 +1546,6 @@ export default function Dashboard() {
           rvy_annual_yield_pct: rvyAnnualYieldPct,
           ret_vs_yld: rvy,
           ret_vs_yld_sort: rvy ? rvy.spread : -999,
-          _coverage: tickerCoverage[h.ticker] ?? null,
-          _coverage_meta: tickerCoverageMeta[h.ticker] || null,
           _risk: activeTickerRisk[h.ticker] || null,
           _closure: activeTickerClosureRisk[h.ticker] || null,
           _closure_sort: closureRank(activeTickerClosureRisk[h.ticker]),
@@ -1632,15 +1557,7 @@ export default function Dashboard() {
           _grade_sort: ({ 'A+': 13, 'A': 12, 'A-': 11, 'B+': 10, 'B': 9, 'B-': 8, 'C+': 7, 'C': 6, 'C-': 5, 'D+': 4, 'D': 3, 'D-': 2, 'F': 1 })[activeTickerGrades[h.ticker]?.grade] || 0,
         }
       })
-  }, [holdings, totals, trackerPerformanceByTicker, tickerCoverage, tickerCoverageMeta, activeTickerGrades, activeTickerRisk, activeTickerClosureRisk, rvyMode])
-  const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
-  const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
-  const portfolioRawErosion = portfolioNavAccounting.rawErosionRate
-  const portfolioDistributionRate = portfolioNavAccounting.distributionRate
-  const portfolioAccountingReturn = portfolioNavAccounting.totalReturnRate
-  const portfolioOverallScore = portfolioNavAccounting.overallScore
-  const portfolioOverallSeverity = portfolioNavAccounting.overallSeverity
-  const portfolioRawPayoutGap = portfolioNavAccounting.rawPayoutGapRatio
+  }, [holdings, totals, trackerPerformanceByTicker, activeTickerGrades, activeTickerRisk, activeTickerClosureRisk, rvyMode])
   // A withheld change arrives as amount: null, and Number(null) is 0 — which
   // would print "+$0.00" instead of saying the closes are missing.
   const dailyChangeAmount = dailyChange?.amount == null ? NaN : Number(dailyChange.amount)
@@ -1767,53 +1684,7 @@ export default function Dashboard() {
       ? `${fmt(fullTrackerTotalReturnDollar)} (${pct(fullTrackerTotalReturn)})`
       : pct(fullTrackerTotalReturn)
   )
-  const refreshPortfolioCoverage = useCallback(() => {
-    return pf(withSignalFormula('/api/portfolio-coverage'))
-      .then(safeJson)
-      .then(d => {
-        setPortfolioCoverage(d.aggregate_coverage ?? null)
-        setPortfolioCoverageSeverity(d.aggregate_severity ?? null)
-        setPortfolioNavAccounting({
-          rawErosionRate: d.aggregate_raw_nav_erosion_rate ?? null,
-          distributionRate: d.aggregate_distribution_rate_on_starting_nav ?? null,
-          totalReturnRate: d.aggregate_accounting_total_return_rate ?? null,
-          rawPayoutGapRatio: d.aggregate_raw_payout_gap_ratio ?? null,
-          overallScore: d.aggregate_overall_nav_erosion_score ?? null,
-          overallSeverity: d.aggregate_overall_nav_erosion_severity ?? null,
-        })
-        if (d.results) {
-          const map = {}
-          const meta = {}
-          d.results.forEach(r => {
-            if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio
-            meta[r.ticker] = {
-              nav_tested: !!r.nav_tested,
-              benchmark: r.benchmark || null,
-              benchmark_valid: r.benchmark_valid !== false,
-              nav_erosion_scope: r.nav_erosion_scope || 'auto',
-              nav_benchmark_override: r.nav_benchmark_override || '',
-              nav_erosion_severity: r.nav_erosion_severity || null,
-              price_change_pct: r.price_change_pct,
-              raw_nav_erosion_rate: r.raw_nav_erosion_rate,
-              distribution_rate_on_starting_nav: r.distribution_rate_on_starting_nav,
-              accounting_total_return_rate: r.accounting_total_return_rate,
-              raw_payout_gap_ratio: r.raw_payout_gap_ratio,
-              overall_nav_erosion_score: r.overall_nav_erosion_score,
-              overall_nav_erosion_severity: r.overall_nav_erosion_severity,
-              accounting_window_start: r.accounting_window_start,
-              accounting_window_end: r.accounting_window_end,
-              warning: r.warning || null,
-            }
-          })
-          setTickerCoverage(map)
-          setTickerCoverageMeta(meta)
-        } else {
-          setTickerCoverage({})
-          setTickerCoverageMeta({})
-        }
-      })
-      .catch(() => {})
-  }, [pf])
+  const refreshPortfolioCoverage = useCallback(() => invalidateNavAssessment(), [])
 
   const gradeColor = (v) => v >= 0 ? 'var(--pos)' : 'var(--neg)'
   const currentMonth = new Date().toLocaleString('default', { month: 'long' })
@@ -2353,150 +2224,7 @@ export default function Dashboard() {
         </p>
       )}
 
-      {(portfolioCoverage != null || portfolioRawErosion != null) && (
-        <div className="nav-erosion-summary-row">
-          {portfolioOverallScore != null && (
-            <div
-              className="summary-card nav-erosion-severity-card"
-              title="Primary combined historical verdict from raw NAV decline, raw payout gap e ÷ d, benchmark-gated coverage, and relative drag. This is not a forecast probability."
-              style={{
-                border: `3px solid ${navSeverityColor(portfolioOverallSeverity)}`,
-                background: navSeverityBg(portfolioOverallSeverity),
-                cursor: 'help',
-              }}
-            >
-              <div className="summary-value" style={{ color: navSeverityColor(portfolioOverallSeverity), fontSize: '0.82rem', lineHeight: 1.3, textAlign: 'center' }}>
-                {`${String(portfolioOverallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}
-              </div>
-              <div className="summary-label">Overall Verdict</div>
-              <div className="summary-sub">{`${Number(portfolioOverallScore).toFixed(1)} / 100 · raw gap ${portfolioRawPayoutGap != null ? Number(portfolioRawPayoutGap).toFixed(4) : '—'}`}</div>
-            </div>
-          )}
-          {portfolioCoverage != null && (
-            <div
-              className="summary-card nav-erosion-severity-card"
-              title="Benchmark-gated coverage severity. Low is favorable, Medium deserves review, and High means qualifying fund-specific price loss consumed more than 75% of distributions. Raw e is separate and can still be positive when coverage is Low or zero."
-              style={{
-                borderColor: portfolioNavColor,
-                background: navSeverityBg(portfolioNavSeverity),
-              }}
-            >
-              <div
-                className="summary-value"
-                style={{
-                  color: portfolioNavColor,
-                  fontSize: '0.82rem',
-                  lineHeight: 1.3,
-                  textAlign: 'center',
-                }}
-              >
-                {navSeverityText(portfolioNavSeverity)}
-              </div>
-            </div>
-          )}
-          {portfolioCoverage != null && (
-            <SummaryCard
-              label="Yield-Funding Coverage"
-              value={portfolioCoverage.toFixed(4)}
-              color={portfolioNavColor}
-              sub="benchmark-gated · lower is better"
-              title="Benchmark-gated price-loss dollars divided by distributions. Lower is better: 0 is best, 0–0.25 is Low, above 0.25–0.75 is Medium, and above 0.75 is High. A zero caused by a falling benchmark does not prove NAV was flat; check raw e."
-            />
-          )}
-          {portfolioRawErosion != null && (
-            <SummaryCard
-              label="Raw NAV Erosion (e)"
-              value={pct(portfolioRawErosion)}
-              color={portfolioRawErosion > 0 ? 'var(--neg)' : 'var(--pos)'}
-              sub={portfolioRawErosion > 0 ? 'NAV ERODER · benchmark independent' : portfolioRawErosion < 0 ? 'NAV rose · no raw erosion' : 'NAV flat'}
-              title="Raw principal change with no benchmark gate. Negative is good because NAV rose; 0% is flat; positive is erosion because NAV fell. Positive e means distributions exceeded accounting total return."
-            />
-          )}
-          {portfolioDistributionRate != null && (
-            <SummaryCard
-              label="Distribution Rate (d)"
-              value={pct(portfolioDistributionRate)}
-              color="var(--accent-2)"
-              sub="1Y distributions ÷ NAV₀"
-              title="Cash distributions divided by starting NAV. Higher means more cash was paid, but is not automatically better. Compare d with r: when d is greater than r, e is positive and NAV fell."
-            />
-          )}
-          {portfolioAccountingReturn != null && (
-            <SummaryCard
-              label="Accounting Total Return (r)"
-              value={pct(portfolioAccountingReturn)}
-              color={portfolioAccountingReturn >= 0 ? 'var(--pos)' : 'var(--neg)'}
-              sub="NAV change + distributions"
-              title="Price change plus distributions, divided by starting NAV. Higher is better. For the payout to be covered without NAV loss, r must be at least d, making e zero or negative."
-            />
-          )}
-        </div>
-      )}
-
-      <details className="card" style={{ marginBottom: '1rem', padding: '0.75rem 1rem' }}>
-        <summary style={{ cursor: 'pointer', color: 'var(--accent-2)', fontWeight: 500 }}>
-          Understanding NAV Erosion Values and Colors
-        </summary>
-        <div style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.5, marginTop: '0.75rem' }}>
-          <p style={{ margin: '0 0 0.65rem' }}>
-            For NAV-tested holdings, two separate measures are shown over the same trailing-year window. <strong style={{ color: 'var(--text-strong)' }}>Raw
-            NAV Erosion (e)</strong> is the unadjusted price decline on starting NAV: e = (NAV₀ − NAVₜ) ÷ NAV₀.
-            <strong style={{ color: 'var(--text-strong)' }}> Distribution Rate (d)</strong> and
-            <strong style={{ color: 'var(--text-strong)' }}> Accounting Total Return (r)</strong> use that same
-            starting NAV, so the accounting identity e = d − r is visible without extra assumptions.
-          </p>
-          <div style={{ margin: '0 0 0.65rem', padding: '0.55rem 0.7rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 6 }}>
-            <strong style={{ color: 'var(--text-strong)' }}>Symbol key</strong>
-            <ul style={{ margin: '0.4rem 0 0', paddingLeft: '1.2rem' }}>
-              <li><strong>NAV₀</strong> — unadjusted share price at the start of the window.</li>
-              <li><strong>NAVₜ</strong> — unadjusted share price at the end of the window.</li>
-              <li><strong>D</strong> — cash distributions paid per share during the window.</li>
-              <li><strong>d</strong> — distribution rate, D ÷ NAV₀.</li>
-              <li><strong>r</strong> — accounting total return, (NAVₜ − NAV₀ + D) ÷ NAV₀.</li>
-              <li><strong>e</strong> — raw NAV erosion, d − r = (NAV₀ − NAVₜ) ÷ NAV₀. Positive means NAV fell; zero means flat; negative means NAV rose.</li>
-            </ul>
-          </div>
-          <p style={{ margin: '0 0 0.65rem' }}>
-            <strong style={{ color: 'var(--text-strong)' }}>Yield-Funding Coverage</strong> keeps the app&apos;s original
-            income-sustainability screen: benchmark-gated price decline divided by distribution yield. The benchmark
-            gate applies only to coverage, never to e, d, or r. Lower coverage is better.
-          </p>
-          <ul style={{ margin: '0 0 0.65rem', paddingLeft: '1.2rem' }}>
-            <li>
-              <strong style={{ color: 'var(--text-strong)' }}>Why can the value be 0.00?</strong> The ratio is
-              zero when the holding&apos;s price rose or when its selected benchmark also declined. In the latter
-              case, the benchmark gate treats the drop as a broader market move instead of fund-specific erosion.
-            </li>
-            <li>
-              <strong style={{ color: 'var(--text-strong)' }}>Why can 0.00 still be red?</strong> The Dashboard
-              forces a High/red warning when the holding&apos;s unadjusted price has fallen 50% or more during the
-              trailing-year test, even if the benchmark gate made the ratio zero. The color is warning about the
-              absolute price collapse, not saying that 0.00 is a bad ratio.
-            </li>
-          </ul>
-          <p style={{ margin: 0 }}>
-            For example, BTCI can show <strong style={{ color: 'var(--text-strong)' }}>0.00 in red</strong> when
-            both BTCI and its BTC-USD benchmark declined, but BTCI&apos;s own decline exceeded the 50% safety threshold.
-            Detailed NAV back-tests can also force High when the ending share deficit reaches 5% or more.
-          </p>
-          <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.8rem', paddingTop: '0.75rem' }}>
-            <strong style={{ color: 'var(--text-strong)' }}>Why can the benchmark box turn red?</strong>
-            <p style={{ margin: '0.35rem 0 0.55rem' }}>
-              A red border around the benchmark entry box is a validation error, not a NAV-risk rating. It means
-              the manual symbol did not return usable price history from the market-data provider, so the NAV test
-              cannot compare the holding with that benchmark.
-            </p>
-            <p style={{ margin: 0 }}>
-              To fix it, enter the provider&apos;s complete symbol and press Enter or click outside the box. For
-              example, the PHLX Semiconductor Index is <strong style={{ color: 'var(--text-strong)' }}>^SOX</strong>,
-              not SOX; <strong style={{ color: 'var(--text-strong)' }}>SOXX</strong> is also a valid semiconductor ETF
-              proxy. You can instead clear the box to let Auto choose the holding&apos;s default benchmark. A valid
-              symbol restores the normal border. Changing a valid benchmark only to remove a red NAV warning is
-              not recommended—the benchmark should represent the holding&apos;s actual underlying exposure.
-            </p>
-          </div>
-        </div>
-      </details>
+      <NavAssessmentPanel period={gradePeriod} start={gradeCustomStart} end={gradeCustomEnd} />
 
       {isLifetimePerformancePeriod(gradePeriod) ? (
         <div className="alert alert-info" style={{ marginTop: 0 }}>
@@ -3060,6 +2788,8 @@ export default function Dashboard() {
 
       <CommonInfoPanel
         embedded
+        navRange={{ period: gradePeriod, start: gradeCustomStart, end: gradeCustomEnd }}
+        navEnabled={!isLifetimePerformancePeriod(gradePeriod) && !gradeRangeError}
         onTickerClick={ticker => openTickerResearch(ticker)}
         onNavChange={refreshPortfolioCoverage}
         tickerGrades={activeTickerGrades}
