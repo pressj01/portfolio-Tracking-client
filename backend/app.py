@@ -28,7 +28,10 @@ from nav_assessment_service import (
     WINDOWS as NAV_ASSESSMENT_WINDOWS,
     build_payload as build_nav_assessment,
     validate_choice as validate_nav_reference_choice,
+    validate_strategy_answer as validate_nav_strategy_answer,
 )
+from nav_auto_guidance import summarize_option_holdings
+import neos_nav_source
 from werkzeug.exceptions import HTTPException
 
 
@@ -28349,6 +28352,9 @@ def _nav_screen_market_history(ticker, start, end):
                    'distributions':[{'date':day.strftime('%Y-%m-%d'),'amount':float(value)} for day,value in payouts.items() if pd.notna(value) and value != 0] if payouts is not None else [],
                    'distributions_complete':payouts is not None and not payouts.isna().any(),
                    'corporate_actions_resolved':'Stock Splits' in frame,
+                   # Listed for sources that must not mix share bases (NEOS NAV rebuild).
+                   'splits':[{'date':day.strftime('%Y-%m-%d'),'ratio':float(value)} for day,value in frame['Stock Splits'].items()
+                             if pd.notna(value) and value not in (0, 1)] if 'Stock Splits' in frame else [],
                    'total_returns':{day.strftime('%Y-%m-%d'):float(value) for day,value in frame['Adj Close'].items() if pd.notna(value)} if 'Adj Close' in frame else {}}
         if payload['distributions_complete'] and payload['corporate_actions_resolved']:
             if len(_NAV_ASSESSMENT_PRICE_CACHE) > 300:
@@ -28395,7 +28401,92 @@ def _nav_security_profiles(conn, tickers):
                     entry[field] = row[field]
             if "name" in row.keys() and row["name"]:
                 entry.setdefault("names", []).append(str(row["name"]).strip())
+    # Written calls/puts in the disclosed holdings answer "does it sell
+    # options?" without asking. Only option-looking rows are read.
+    try:
+        option_rows = {}
+        for row in conn.execute(
+            f"SELECT UPPER(fund_ticker) AS t, symbol, name, weight_pct FROM fund_holdings "
+            f"WHERE UPPER(fund_ticker) IN ({marks}) AND (UPPER(name) LIKE '%CALL%' OR UPPER(name) LIKE '%PUT%' "
+            f"OR UPPER(symbol) GLOB '*[0-9][0-9][0-9][0-9][0-9][0-9][CP][0-9]*' "
+            f"OR name GLOB '*[0-9][0-9]/[0-9][0-9]/[0-9][0-9]*')",
+            tickers,
+        ):
+            option_rows.setdefault(row["t"], []).append((row["symbol"], row["name"], row["weight_pct"]))
+        as_of = {row["t"]: row["as_of"] for row in conn.execute(
+            f"SELECT UPPER(fund_ticker) AS t, as_of FROM fund_holdings_meta WHERE UPPER(fund_ticker) IN ({marks})", tickers)}
+    except sqlite3.OperationalError:
+        option_rows, as_of = {}, {}
+    for ticker, rows in option_rows.items():
+        summary = summarize_option_holdings(rows)
+        if summary:
+            profiles[ticker]["option_holdings"] = summary
+            if as_of.get(ticker):
+                profiles[ticker]["holdings_as_of"] = str(as_of[ticker])[:10]
     return {t: entry for t, entry in profiles.items() if entry}
+
+
+_NAV_STRATEGY_ANSWERS_KEY = "nav_strategy_answers_v1"
+
+
+def _nav_strategy_answers(conn):
+    """The user's "does this fund sell options?" answers, one per fund.
+
+    A fund's strategy is the same in every account, so these are not scoped
+    to the selected profile the way reference choices are.
+    """
+    saved = conn.execute("SELECT value FROM settings WHERE key = ?", (_NAV_STRATEGY_ANSWERS_KEY,)).fetchone()
+    try:
+        return json.loads(saved[0]) if saved else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+_NEOS_FUND_PAGE_CACHE = {}
+_NEOS_FUND_PAGE_LOCK = threading.Lock()
+
+
+def _fetch_neos_fund_page(ticker):
+    """The neosfunds.com fund page, cached for three hours (NAV updates daily)."""
+    import requests
+
+    ticker = (ticker or "").strip().upper()
+    with _NEOS_FUND_PAGE_LOCK:
+        cached = _NEOS_FUND_PAGE_CACHE.get(ticker)
+        if cached and time.time() - cached[0] < 3 * 3600:
+            return cached[1]
+    try:
+        resp = requests.get(f"https://neosfunds.com/{ticker.lower()}/", timeout=15,
+                            headers={"User-Agent": "PortfolioTrackingClient/1.0"})
+        resp.raise_for_status()
+        page = resp.text or ""
+    except Exception:
+        # An outage is not cached; the next assessment retries.
+        return None
+    with _NEOS_FUND_PAGE_LOCK:
+        if len(_NEOS_FUND_PAGE_CACHE) > 64:
+            _NEOS_FUND_PAGE_CACHE.clear()
+        _NEOS_FUND_PAGE_CACHE[ticker] = (time.time(), page)
+    return page
+
+
+def _neos_nav_assessment_source(ticker, start, as_of):
+    page = _fetch_neos_fund_page(ticker)
+    parsed = neos_nav_source.parse_fund_page(page) if page else None
+    if parsed is None:
+        return None
+    # The same closes the price screen uses: they give the trading-day
+    # calendar and the NAV cross-check, and are already cached.
+    try:
+        market = _nav_screen_market_history(ticker, start, as_of)
+    except ValueError:
+        market = None
+    prices = {datetime.date.fromisoformat(row["date"]): row["close"] for row in (market or {}).get("prices", [])}
+    splits = [(datetime.date.fromisoformat(row["date"]), row["ratio"]) for row in (market or {}).get("splits", [])]
+    return neos_nav_source.build_source(
+        parsed, start, as_of, prices=prices or None, splits=splits,
+        url=f"https://neosfunds.com/{ticker.lower()}/",
+        fetched_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
 
 
 def _nav_assessment_source(ticker, guide, start, as_of):
@@ -28405,7 +28496,9 @@ def _nav_assessment_source(ticker, guide, start, as_of):
     if cached and time.time() - cached[0] < 900:
         return cached[1]
     source = None
-    if ticker in {"TDAQ", "TSPY", "TDAX", "TMGN"}:
+    if _is_neos_fund(ticker):
+        source = _neos_nav_assessment_source(ticker, start, as_of)
+    elif ticker in {"TDAQ", "TSPY", "TDAX", "TMGN"}:
         payload = _fetch_tappalpha_public_payload(ticker)
         if not payload:
             return None
@@ -28488,6 +28581,9 @@ def nav_assessment_data():
         for ticker, profile in _nav_security_profiles(conn, info).items():
             if ticker in info:
                 info[ticker]["security_profile"] = profile
+        for ticker, answer in _nav_strategy_answers(conn).items():
+            if ticker in info:
+                info[ticker]["strategy_answer"] = answer
         settings_key = _nav_reference_settings_key(is_aggregate, profile_ids)
         saved = conn.execute("SELECT value FROM settings WHERE key = ?", (settings_key,)).fetchone()
         choices = json.loads(saved[0]) if saved else {}
@@ -28564,6 +28660,40 @@ def save_nav_assessment_reference(ticker):
         conn.close()
     _NAV_ASSESSMENT_CACHE.clear()
     return jsonify({"ticker": ticker, "choice": choice})
+
+
+@app.route("/api/nav-assessment/strategy/<ticker>", methods=["PUT"])
+def save_nav_strategy_answer(ticker):
+    """Record whether a fund sells calls, puts, both or no options.
+
+    An empty answer ("Not sure") removes it, so automatic detection applies again.
+    """
+    ticker = ticker.strip().upper()
+    try:
+        answer = validate_nav_strategy_answer(request.get_json() or {})
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    is_aggregate, profile_ids = get_profile_filter()
+    conn = get_connection()
+    try:
+        if not conn.execute(
+            f"SELECT 1 FROM all_account_info WHERE UPPER(ticker) = ? AND quantity > 0 "
+            f"AND profile_id IN ({','.join('?' * len(profile_ids))})", [ticker] + list(profile_ids)
+        ).fetchone():
+            return jsonify({"error": "Holding is not in the selected account"}), 404
+        answers = _nav_strategy_answers(conn)
+        if answer:
+            answers[ticker] = {"answer": answer,
+                               "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        else:
+            answers.pop(ticker, None)
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                     (_NAV_STRATEGY_ANSWERS_KEY, json.dumps(answers)))
+        conn.commit()
+    finally:
+        conn.close()
+    _NAV_ASSESSMENT_CACHE.clear()
+    return jsonify({"ticker": ticker, "answer": answer})
 
 
 def _all_held_tickers(conn):

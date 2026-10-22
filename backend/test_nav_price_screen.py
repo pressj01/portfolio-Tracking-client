@@ -116,7 +116,8 @@ class PriceScreenTest(unittest.TestCase):
                 self.assertTrue(result['review_candidate'])
                 self.assertFalse(result['covered_call_eligible'])
                 self.assertFalse(result['estimated_eroder'])
-                self.assertEqual(result['label'],'Capital / payout review')
+                self.assertEqual(result['label'],'Losing capital vs reference')
+                self.assertIn('less capital than QQQ',result['reason'])
 
     def test_call_spread_funds_are_eligible_without_high_payout_being_a_verdict(self):
         src,start,end,loader=example(price_growth=.0005,amount=4)

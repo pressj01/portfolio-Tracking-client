@@ -83,6 +83,47 @@ def interval_check(prices, paid, first, last, plan, loader):
             'status':'repeated_declines' if repeated else 'not_established' if supportive_count >= 2 else 'insufficient_evidence'}
 
 
+def _plain_reason(plan, strategy, ref, persistence, price_change, *, candidate, eligible, eroder, lagged_only):
+    """What the check found, in plain words and the fund's own numbers."""
+    name = plan.get('selected') or 'the reference'
+    gap = ref.get('capital_gap_rate') if ref.get('status') == 'available' else None
+    def pct(value):
+        return f'{abs(value) * 100:.1f}%'
+    flat, fell = persistence['supportive_intervals'], persistence['qualifying_intervals']
+    behind = (f'After paying out the same cash, the fund ended with {pct(gap)} less capital than {name}'
+              if gap is not None and gap < 0 else None)
+    if candidate:
+        text = (f'Over these dates the price fell {pct(price_change)}. {behind}. In {fell} of the {flat} months when '
+                f'{name} was flat or up, the fund’s price still fell.')
+        if eroder:
+            text += (f' Its payouts were also bigger than {name}’s return in those months: the pattern of a call-income '
+                     'fund paying out more than it earns.')
+        elif eligible:
+            text += (f' It sells call options, but its payouts did not repeatedly exceed {name}’s return, so it is not '
+                     'labelled a covered-call eroder.')
+        elif strategy.get('payout_driven_only'):
+            text += (f' Its payouts were also bigger than {name}’s return in those months, so the cash it pays out is '
+                     'not being earned back.')
+        elif strategy['kind'] == 'needs_verification':
+            text += ' Whether it sells call options is not known, so it cannot be labelled a covered-call eroder.'
+        else:
+            text += ' It does not sell call options, so this flags lost capital only, not covered-call erosion.'
+        return text + ' Based on market prices, not published NAV.'
+    if lagged_only:
+        return (f'{behind or f"The price fell behind {name}"}, and the price fell in months when {name} was flat or up. '
+                f'But its payouts did not repeatedly exceed {name}’s return, so this is weaker performance, not '
+                'payout-driven NAV erosion.')
+    if gap is not None and gap >= 0:
+        return (f'After paying out the same cash, the fund kept at least as much capital as {name}. '
+                'A high payout alone is not erosion.')
+    if flat < 2:
+        return (f'Fewer than two completed months with {name} flat or up in these dates, so a repeated pattern cannot '
+                'be checked yet.')
+    lead = f'{behind}, but its' if behind else 'Its'
+    return (f'{lead} price did not keep falling in the months when {name} was flat or up, so there is no repeated '
+            'pattern of lost capital.')
+
+
 def screen(source, start, end, plan, reference_loader):
     if not source or source.get('basis') != 'split_adjusted_market_price':
         return {'status': 'unavailable', 'reason': 'Split-adjusted price and payout history is unavailable.'}
@@ -150,8 +191,7 @@ def screen(source, start, end, plan, reference_loader):
     eligible = strategy['kind'] == 'covered_call'
     eroder = candidate and persistence['both_repeated'] and eligible
     label = ('Estimated covered-call eroder' if eroder else
-             'Covered-call review' if candidate and eligible else
-             'Capital / payout review' if candidate else
+             'Losing capital vs reference' if candidate else
              'No covered-call erosion signal' if eligible and persistence['supportive_intervals'] >= 2 else
              'Covered-call screen: limited evidence' if eligible else
              'Strategy needs verification' if strategy['kind'] == 'needs_verification' else
@@ -160,13 +200,8 @@ def screen(source, start, end, plan, reference_loader):
              # still ran; say whether it found anything.
              'No capital / payout signal' if ref.get('status') == 'available' and persistence['supportive_intervals'] >= 2 else
              'Capital / payout: limited evidence')
-    reason = (f'Repeated material price declines and same-cash shortfalls in flat/rising reference months. '
-              f'{"Payouts also exceeded reference returns repeatedly; investigate possible covered-call erosion." if eroder else "Review strategy, payouts and reference fit; this is not an eroder classification."}' if candidate else
-              'Price fell behind the reference in flat/rising months, but payouts did not repeatedly exceed the reference’s '
-              'return. That is relative performance, not payout-driven NAV erosion.' if lagged_only else
-              'The fund retained at least as much capital as the reference after matching the same payouts; a high payout alone is not an erosion signal.' if ref.get('status') == 'available' and ref.get('capital_gap_rate',-1) >= 0 else
-              'Insufficient completed months with a flat/rising reference to establish persistence.' if persistence['supportive_intervals'] < 2 else
-              'The material, persistent price-and-reference shortfall rule was not met.')
+    reason = _plain_reason(plan, strategy, ref, persistence, change / p0,
+                           candidate=candidate, eligible=eligible, eroder=eroder, lagged_only=lagged_only)
     return {'status':'available', 'basis':'market_price', 'published_nav':False,
             'start':first.isoformat(), 'end':last.isoformat(),
             'shorter_history':start.year != 1900 and first > start,

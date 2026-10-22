@@ -1,9 +1,53 @@
 import { useId, useState } from 'react'
-import { useNavAssessment, navMoney, navPercent, navProbability, NAV_STATUS } from '../utils/navAssessment'
+import { useNavAssessment, navMoney, navPercent, navProbability, NAV_STATUS, strategyInQuestion } from '../utils/navAssessment'
 import NavErosionHelp from './NavErosionHelp'
 import NavReferenceEditor from './NavReferenceEditor'
 import './NavAssessment.css'
 import { PERFORMANCE_PERIODS, customRangeError, formatPerformanceRange, isLifetimePerformancePeriod } from '../utils/performancePeriods'
+
+// One sentence that reads the three averages together: paid out + price
+// change = total return.
+function describeFundAverages(preliminary) {
+  const paid = preliminary?.weighted_distribution_rate
+  const price = preliminary?.weighted_price_change_rate
+  const total = preliminary?.weighted_cash_total_return
+  if ([paid, price, total].some(value => value == null)) return null
+  const pct = value => `${Math.abs(Number(value) * 100).toFixed(1)}%`
+  const sentence = `Across the funds checked, weighted by how much you hold of each: they paid out ${pct(paid)} of their starting price in cash, `
+    + `and their prices ${price < 0 ? 'fell' : 'rose'} ${pct(price)}, so overall they ${total < 0 ? 'lost' : 'returned'} ${pct(total)}.`
+  return price < 0 && paid > 0
+    ? `${sentence} Prices falling while payouts stay high is what this screen looks into fund by fund; the average on its own does not show erosion.`
+    : sentence
+}
+
+// Why funds lack verified NAV, grouped by what is missing.
+function navCoverage(results) {
+  const applicable = results.filter(row => row.capital_status !== 'not_applicable')
+  const unverified = applicable.filter(row => !row.metrics)
+  const kind = row => row.guidance?.security_kind
+  const cef = unverified.filter(row => kind(row) === 'cef')
+  const quarterly = unverified.filter(row => ['bdc', 'reit'].includes(kind(row))).length
+  const noSource = unverified.filter(row => kind(row) === 'fund' && row.nav_erosion_scope !== 'skip'
+    && String(row.reason || '').startsWith('Published NAV and complete')).length
+  const noHistory = unverified.filter(row => String(row.reason || '').startsWith('NEOS does not publish')).length
+  return {
+    applicable: applicable.length, unverified: unverified.length, cef: cef.length, quarterly, noSource, noHistory,
+    other: unverified.length - cef.length - quarterly - noSource - noHistory,
+    cefBlocked: cef.some(row => String(row.reason || '').startsWith('CEF Connect')),
+  }
+}
+
+function describeNavStates(summary) {
+  const states = summary?.states
+  if (!states || states.unconfirmed.share == null) return null
+  const share = key => `${(states[key].share * 100).toFixed(1)}%`
+  const verified = states.declined.count + states.preserved.count
+  if (!verified) {
+    return `None of your funds have published NAV the app can check yet, so ${share('unconfirmed')} of your account is checked with market prices only.`
+  }
+  return `Of your account: ${share('declined')} is in funds whose published NAV fell, ${share('preserved')} in funds whose published NAV held up, `
+    + `and ${share('unconfirmed')} in funds with no published NAV to check, which are judged on market prices only.`
+}
 
 export default function NavAssessmentPanel({ period = '1y', start = '', end = '' }) {
   const [filter, setFilter] = useState('all')
@@ -21,8 +65,14 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
   const summary = data?.summary
   const preliminary = data?.preliminary
   const verdict = data?.verdict
+  const groupSentence = describeFundAverages(preliminary)
+  const coverage = navCoverage(data?.results || [])
+  const statesSentence = describeNavStates(summary)
   const rows = (data?.results || []).filter(row => (
-    (filter === 'all' || (filter === 'price_review' ? row.price_screen?.review_candidate : filter === 'reference' ? Boolean(row.reference.warning) || !row.reference.legs.length : row.capital_status === filter))
+    (filter === 'all' || (filter === 'price_review' ? row.price_screen?.review_candidate
+      : filter === 'reference' ? Boolean(row.reference.warning) || !row.reference.legs.length
+        : filter === 'strategy' ? strategyInQuestion(row) && row.capital_status !== 'not_applicable'
+          : row.capital_status === filter))
     && `${row.ticker} ${row.description}`.toLowerCase().includes(search.toLowerCase())
   ))
   const active = data?.results.find(row => row.ticker === selected)
@@ -103,9 +153,11 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
         {preliminary && <details className="card nav-overall-assessment">
           <summary>Account erosion assessment: {preliminary.title}</summary>
           {preliminary.estimated_eroder_count > 0 && <p><strong>{preliminary.estimated_eroder_count} estimated covered-call eroder{preliminary.estimated_eroder_count === 1 ? '' : 's'} · {navMoney(preliminary.estimated_eroder_value)} · {navPercent(preliminary.estimated_eroder_account_share)} of current account value.</strong> These call-income holdings meet the material decline, repeated payout and same-cash reference shortfall rules. This is a price-based review signal, not verified NAV causation.</p>}
-          <p className="nav-assessment-note">{preliminary.covered_count} of {preliminary.applicable_count} applicable holdings have price-based metrics, covering {navPercent(preliminary.value_coverage)} of applicable holding value. Published NAV is verified separately below.</p>
-          <p className="nav-assessment-note">{preliminary.reference_covered_count} have an aligned reference comparison; {preliminary.persistence_evaluable_count} have at least two flat/rising-reference intervals to evaluate persistence.</p>
-          <p className="nav-assessment-note">{preliminary.covered_call_count} holdings have a documented call-income strategy. Treasury/credit funds, put overlays and other strategies retain capital and payout metrics without receiving a covered-call eroder label.</p>
+          <p className="nav-assessment-note">
+            {preliminary.covered_count} of {preliminary.applicable_count} funds had enough price history to check ({navPercent(preliminary.value_coverage)} of their value).
+            {' '}{preliminary.reference_covered_count} could be compared with a reference fund, and {preliminary.persistence_evaluable_count} had at least two months when the reference was flat or up, which the repeat test needs.
+            {' '}{preliminary.covered_call_count} sell call options; the others (Treasury, credit and put-selling funds, for example) still get the capital and payout check but can&apos;t be labelled covered-call eroders. Published NAV is checked separately below.
+          </p>
           {preliminary.candidates.length > 0 ? <>
             <strong className="nav-reference-warning">Holdings to investigate — price-based estimates</strong>
             <ul>{preliminary.candidates.map(item => <li key={item.ticker}>
@@ -114,71 +166,121 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
             </li>)}</ul>
           </> : <p className="nav-assessment-note">No repeated price-based signal was established in the covered holdings. This does not establish NAV preservation or clear holdings with missing evidence.</p>}
           {preliminary.priority_holdings && <details className="nav-assessment-note">
-            <summary>High-payout watchlist: {preliminary.priority_holdings.length} holdings above 15%, excluding crypto</summary>
-            <p>This prioritizes review using current estimated annual payouts, regardless of the selected historical range. A high payout alone is not an erosion finding. Crypto-related holdings, including crypto-company equities and stacked crypto exposures, are excluded from this priority list; their metrics remain in the assessment.</p>
+            <summary>Funds paying over 15% a year ({preliminary.priority_holdings.length}, crypto not included)</summary>
+            <p>
+              A list to look at first, not a finding. It uses each holding&apos;s current yearly payout estimate (its estimated annual income
+              divided by its current value), whatever dates are selected above. Paying a lot is not erosion by itself; the table shows how
+              each fund did in the check. Crypto funds, including crypto-company and stacked crypto funds, are left off this list but are
+              still checked.
+            </p>
             <div className="nav-assessment-table-wrap"><table className="nav-assessment-table">
-              <thead><tr><th>Holding</th><th>Estimated annual payout</th><th>Selected-window assessment</th><th>Price change</th><th>Same-cash reference gap</th></tr></thead>
+              <thead><tr><th>Holding</th><th>Yearly payout estimate</th><th>Result for these dates</th><th>Price change</th><th>Capital vs reference</th></tr></thead>
               <tbody>{preliminary.priority_holdings.map(item => <tr key={item.ticker}>
                 <td><button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button></td>
                 <td>{navPercent(item.annual_rate)}</td><td>{item.label}<small>{item.reason}</small></td><td>{navPercent(item.price_change_rate)}</td><td>{navPercent(item.reference_gap_rate)}</td>
               </tr>)}</tbody>
             </table></div>
-            {preliminary.priority_rate_unavailable_tickers?.length > 0 && <p>Annual payout estimate unavailable: {preliminary.priority_rate_unavailable_tickers.join(', ')}. These holdings are not assumed below 15%.</p>}
+            {preliminary.priority_rate_unavailable_tickers?.length > 0 && <p>No yearly payout estimate yet: {preliminary.priority_rate_unavailable_tickers.join(', ')}. They are not assumed to be under 15%.</p>}
           </details>}
+          {groupSentence && <p className="nav-cards-lead">{groupSentence}</p>}
           <div className="nav-assessment-cards">
             {[
-              ['Price change estimate', preliminary.weighted_price_change_rate],
-              ['Return with cash payouts', preliminary.weighted_cash_total_return],
-              ['Cash paid / starting price', preliminary.weighted_distribution_rate],
-              ['Fund value screened', preliminary.value_coverage],
-            ].map(([label,value]) => <div className="summary-card" key={label}><div className="summary-label">{label}</div><div className="summary-value">{navPercent(value)}</div></div>)}
+              ['Paid out in cash', preliminary.weighted_distribution_rate, 'Distributions paid over these dates, as a share of the starting price'],
+              ['Price change', preliminary.weighted_price_change_rate, 'Market price only, with payouts not added back'],
+              ['Total return', preliminary.weighted_cash_total_return, 'Paid out + price change, payouts not reinvested'],
+              ['Funds covered', preliminary.value_coverage, `Share of your fund holdings' value with enough price history for this check`],
+            ].map(([label, value, sub]) => (
+              <div className="summary-card" key={label}>
+                <div className="summary-label">{label}</div>
+                <div className="summary-value">{navPercent(value)}</div>
+                <div className="summary-sub">{sub}</div>
+              </div>
+            ))}
           </div>
-          <p className="nav-assessment-note">{preliminary.limitation} Cash payouts are historical, not an annualized yield. Exchange prices can differ from NAV, especially for CEFs, BDCs and REITs. A weak reference limits the interpretation.</p>
-          {preliminary.missing_tickers.length > 0 && <p className="nav-assessment-note">Price metrics unavailable or skipped: {preliminary.missing_tickers.join(', ')}.</p>}
-          {preliminary.reference_unavailable_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Reference comparisons still need data</summary><p>{preliminary.reference_unavailable_tickers.join(', ')}. Their price and payout metrics remain available; an erosion label is withheld when reference evidence is unavailable.</p></details>}
-          {preliminary.strategy_unverified_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Strategies still need verification</summary><p>{preliminary.strategy_unverified_tickers.join(', ')}. Price and reference results remain available, but these holdings cannot be classified as covered-call eroders until their strategy is documented.</p></details>}
+          <p className="nav-assessment-note">
+            These are averages across the funds you hold now, weighted by how much you hold of each, over the dates selected above. They
+            are not your account&apos;s actual return: buys, sells and cash are left out, and a fund held for less time uses the dates it has.
+            Market prices are used, which can differ from NAV, especially for closed-end funds, BDCs and REITs. Paid out is what was paid in
+            these dates, not a yearly yield.
+          </p>
+          {preliminary.missing_tickers.length > 0 && <p className="nav-assessment-note">No price history for this check: {preliminary.missing_tickers.join(', ')}.</p>}
+          {preliminary.reference_unavailable_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Funds with no comparison yet ({preliminary.reference_unavailable_tickers.length})</summary><p>{preliminary.reference_unavailable_tickers.join(', ')}. Their price and payout numbers are shown above, but with no reference fund to compare against they can&apos;t be flagged either way. Choose a reference under Reference details, or wait for the missing price data.</p></details>}
+          {preliminary.strategy_unverified_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Strategies the app could not detect ({preliminary.strategy_unverified_tickers.length})</summary><p>{preliminary.strategy_unverified_tickers.join(', ')}. Neither the reviewed list, the fund&apos;s disclosed option positions nor its name or category said whether it sells options. Price and reference results remain available, but these holdings cannot be labelled covered-call eroders until you answer <strong>Sells call options?</strong> in the holdings table or under Reference details.</p></details>}
         </details>}
         <details className="card nav-overall-assessment" role="status">
           <summary>Verified NAV assessment: {data.overall.title}</summary>
-          <p className="nav-assessment-note">{data.overall.assessed_count} of {data.overall.applicable_count} applicable holdings have verified NAV accounting.{data.overall.partial ? ' Partial coverage: a complete portfolio-wide verdict is unavailable.' : ''}</p>
+          <p className="nav-cards-lead">
+            <strong>{data.overall.assessed_count} of {data.overall.applicable_count} funds</strong> have published NAV the app can check.
+            {' '}Verified means the fund&apos;s own NAV per share, every distribution and any splits were all available, so lost capital
+            is measured directly rather than estimated from market prices.
+            {data.overall.partial && ' Because the rest are not verified, this section cannot give a whole-portfolio verdict; the price-based check above covers them.'}
+          </p>
+          {coverage.unverified > 0 && (
+            <>
+              <p className="nav-assessment-note"><strong>Why the other {coverage.unverified} aren&apos;t verified:</strong></p>
+              <ul className="nav-coverage-reasons">
+                {coverage.noSource > 0 && <li><strong>{coverage.noSource}</strong> fund{coverage.noSource === 1 ? '' : 's'}: the app has no published-NAV source for their issuer yet. It has one for TappAlpha and NEOS funds.</li>}
+                {coverage.noHistory > 0 && <li><strong>{coverage.noHistory}</strong> NEOS fund{coverage.noHistory === 1 ? '' : 's'}: NEOS shows only today&apos;s NAV for {coverage.noHistory === 1 ? 'it' : 'them'}, not a daily history, so a date range can&apos;t be checked yet.</li>}
+                {coverage.cef > 0 && <li><strong>{coverage.cef}</strong> closed-end fund{coverage.cef === 1 ? '' : 's'}: published NAV comes from CEF Connect, and its full distribution history isn&apos;t read yet{coverage.cefBlocked ? '; CEF Connect is also refusing the app’s requests right now' : ''}.</li>}
+                {coverage.quarterly > 0 && <li><strong>{coverage.quarterly}</strong> BDC{coverage.quarterly === 1 ? '' : 's'} or mortgage REIT{coverage.quarterly === 1 ? '' : 's'}: these report NAV or book value quarterly, and the app doesn&apos;t fetch those reports yet.</li>}
+                {coverage.other > 0 && <li><strong>{coverage.other}</strong> other{coverage.other === 1 ? '' : 's'}: skipped, unidentified, or the source had stale or incomplete data. Reference details on each holding says which.</li>}
+              </ul>
+              <p className="nav-assessment-note">
+                Nothing in your settings changes this number. It goes up as the app adds NAV sources for more fund issuers, closed-end
+                funds and BDCs.
+              </p>
+            </>
+          )}
           {data.overall.candidates.length > 0 ? <>
             <strong className="nav-reference-warning">Potential erosion candidates</strong>
             <ul>{data.overall.candidates.map(item => <li key={item.ticker}>
               <button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button>
               {' '}NAV {navPercent(item.nav_change_rate)} · same-cash reference gap {navPercent(item.reference_gap_rate)}. {item.reason}
             </li>)}</ul>
-          </> : <p className="nav-assessment-note">{data.overall.partial ? 'A full NAV conclusion is withheld. Use the preliminary price-based results above to identify holdings needing review.' : 'No persistent NAV erosion signal was established by the available reference screen.'}</p>}
+          </> : <p className="nav-assessment-note">{data.overall.assessed_count
+            ? `None of the ${data.overall.assessed_count} verified fund${data.overall.assessed_count === 1 ? '' : 's'} showed repeated NAV erosion.`
+            : 'No fund has verified NAV yet, so this section has nothing to flag.'}</p>}
           {data.overall.payout_pressure_tickers.length > 0 && <details className="nav-assessment-note">
-            <summary>Cash payout accounting — not an erosion warning</summary>
-            <p>{data.overall.payout_pressure_tickers.join(', ')} paid more cash than the selected period&apos;s positive economic result replenished. This can reflect the market path and payout timing. These tickers are not added to the erosion watchlist on that basis.</p>
+            <summary>Paid out more than they earned this period (not a warning)</summary>
+            <p>{data.overall.payout_pressure_tickers.join(', ')} paid out more cash than they earned over these dates, so their NAV per share ended lower. That can just reflect when the market fell and when payouts landed, so it does not flag them on its own.</p>
           </details>}
-          <p className="nav-assessment-note">{data.overall.explanation}</p>
+          <p className="nav-assessment-note">
+            A verified fund is flagged here only when its published NAV fell in at least two of the last four completed quarters while
+            its reference was flat or up. One bad quarter, a small end-to-end dip or a falling market does not count.
+          </p>
         </details>
+        {statesSentence && <p className="nav-cards-lead">{statesSentence}</p>}
         <div className="nav-assessment-cards">
-          {[['declined', 'Observed NAV decline'], ['preserved', 'Capital preserved / within precision'], ['unconfirmed', 'NAV unconfirmed'], ['not_applicable', 'Not applicable']].map(([key, label]) => {
+          {[
+            ['declined', 'Published NAV fell', 'Verified NAV per share ended lower than it started'],
+            ['preserved', 'Published NAV held up', 'Verified NAV per share ended level or higher, within rounding'],
+            ['unconfirmed', 'No published NAV to check', 'Checked with market prices only, in the price-based results above'],
+            ['not_applicable', 'Not a fund', 'Stocks, preferreds and money-market funds the NAV check skips'],
+          ].map(([key, label, sub]) => {
             const state = summary.states[key]
             return <div className="summary-card" key={key}>
               <div className="summary-label">{label}</div>
               <div className="summary-value">{state.share == null ? navMoney(state.value) : navPercent(state.share)}</div>
               <div className="summary-sub">{state.count} holding{state.count === 1 ? '' : 's'} · {navMoney(state.value)}</div>
+              <div className="summary-sub">{sub}</div>
             </div>
           })}
         </div>
         <p className="nav-assessment-note">
-          Current exposure in {navMoney(summary.account_value)} account value, including {navMoney(summary.cash)} cash shown separately.
-          {' '}These are holding diagnostics, not your historical account return. Each holding&apos;s actual NAV dates appear below.
-          {!summary.value_coverage_complete && ' Current-value coverage is incomplete; percentages are withheld.'}
+          Percentages are shares of your whole account today, {navMoney(summary.account_value)}, which includes {navMoney(summary.cash)} of
+          cash that is in none of the boxes. They describe what you hold now, not your account&apos;s past return.
+          {!summary.value_coverage_complete && ' Some holdings have no current value, so percentages are withheld.'}
         </p>
         <p className="nav-assessment-note">
-          {summary.reference_available} of {data.results.filter(row => row.capital_status !== 'not_applicable').length} applicable holdings have a calculated reference comparison.
-          {' '}{summary.reference_needs_review} need reference selection or review.
-          {summary.states.unconfirmed.count > 0 && ' Unconfirmed holdings remain in the account denominator. Published NAV, complete distributions or share adjustments still need verification.'}
+          {summary.reference_available} of {coverage.applicable} funds have a published-NAV comparison with a reference fund; the
+          price-based check above compares the rest.
+          {summary.reference_needs_review > 0 && ` ${summary.reference_needs_review} still need a reference chosen or reviewed.`}
         </p>
         <details className="card nav-assessment-details" open={detailsOpen} onToggle={event => setDetailsOpen(event.currentTarget.open)}>
           <summary>Review holdings and references ({data.results.length})</summary>
           <div className="nav-assessment-toolbar">
             <label>Show <select aria-label="Filter NAV assessments" value={filter} onChange={event => setFilter(event.target.value)}>
-              <option value="all">All holdings</option><option value="price_review">Price-based review candidates</option><option value="declined">Verified NAV declined</option><option value="unconfirmed">NAV not verified</option><option value="reference">Reference needs review</option><option value="not_applicable">Not applicable</option>
+              <option value="all">All holdings</option><option value="price_review">Price-based review candidates</option><option value="declined">Verified NAV declined</option><option value="unconfirmed">NAV not verified</option><option value="reference">Reference needs review</option><option value="strategy">Strategy needs your answer</option><option value="not_applicable">Not applicable</option>
             </select></label>
             <label>Find holding <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Ticker or name" /></label>
           </div>

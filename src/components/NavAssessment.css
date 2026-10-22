@@ -86,6 +86,10 @@
 .nav-assessment-note { color: var(--text-dim); font-size: .78rem; line-height: 1.5; margin: .5rem 0; }
 .nav-assessment-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; }
 .nav-assessment-cards .summary-value { color: var(--accent-2); }
+.nav-assessment-cards .summary-sub { color: var(--text-dim); font-size: .7rem; line-height: 1.35; margin-top: .25rem; white-space: normal; }
+.nav-cards-lead { margin: .85rem 0 .5rem; font-size: .84rem; line-height: 1.5; color: var(--text); }
+.nav-coverage-reasons { margin: .25rem 0 .5rem; padding-left: 1.2rem; font-size: .8rem; line-height: 1.5; color: var(--text-dim); }
+.nav-coverage-reasons strong { color: var(--text); }
 .nav-assessment-details { padding: .75rem 1rem; margin: .75rem 0; }
 .nav-assessment summary { cursor: pointer; color: var(--accent-2); }
 .nav-assessment-table-wrap { overflow-x: auto; max-height: 550px; }
@@ -145,6 +149,20 @@
 .ci-table .ci-nav-cell select { width: auto; min-width: 7.4rem; height: 22px; font-size: .66rem; padding: 0 2px; }
 .ci-table .ci-nav-cell input { width: 4.4rem; height: 22px; font-size: .66rem; padding: 0 4px; text-align: left; }
 .ci-nav-controls .btn-sm { height: 22px; padding: 0 .5rem; font-size: .66rem; line-height: 1; }
+.ci-nav-question { display: flex; align-items: center; justify-content: flex-end; gap: .35rem; max-width: 100%; }
+.ci-nav-question > span { color: var(--warning-money); font-size: .72rem; font-weight: 700; white-space: nowrap; }
+.ci-table .ci-nav-cell .ci-nav-question select { min-width: 8.6rem; }
+.nav-finding { margin: .5rem 0 .85rem; padding: .7rem .9rem; border: 1px solid var(--border); border-left: 3px solid var(--pos); border-radius: 6px; }
+.nav-finding > strong { display: block; font-size: .95rem; color: var(--pos); }
+.nav-finding > p { margin: .35rem 0 0; }
+.nav-finding-warn { border-left-color: var(--warning-money); }
+.nav-finding-warn > strong { color: var(--warning-money); }
+.nav-finding-neg { border-left-color: var(--neg); }
+.nav-finding-neg > strong { color: var(--neg); }
+.nav-strategy-question { margin: .75rem 0; padding: .65rem .85rem; border: 1px solid var(--border); border-radius: 6px; }
+.nav-strategy-question legend { padding: 0 .35rem; font-weight: 700; color: var(--text-strong); }
+.nav-strategy-options { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; margin: .35rem 0; }
+.nav-strategy-options label { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; }
 .nav-reference-overlay { z-index: 1200; }
 .nav-reference-dialog { width: min(960px, 94vw); max-width: 960px; text-align: left; }
 .nav-reference-dialog .nav-reference-editor { margin: 0; padding: 0; border: 0; background: none; }

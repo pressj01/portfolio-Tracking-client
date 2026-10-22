@@ -236,6 +236,130 @@ ALTERNATIVE_WORDS = re.compile(r"LONG[ /-]?SHORT|MARKET NEUTRAL|MULTI[- ]?STRATE
 CEF_OPTION_WORDS = re.compile(r"OPTION|COVERED CALL|BUY[- ]?WRITE|PREMIUM|ENHANCED EQUITY|ENH EQT|ENHAN|ENH(ANCED)? (EQ|EQUITY)")
 
 
+# --- Option positions in a fund's disclosed holdings -------------------------
+# Issuers list written (sold) options with a negative weight. That is direct
+# evidence of the strategy, stronger than the fund name or category.
+OCC_SYMBOL = re.compile(r"^\d?([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
+OPTION_NAMES = [
+    # NDX US 09/18/26 C29075
+    re.compile(r"^(?P<u>[A-Z0-9.]+)\s+(?:US\s+)?(?P<d>\d{2}/\d{2}/\d{2,4})\s+(?P<t>[CP])\s?(?P<k>\d+(?:\.\d+)?)$"),
+    # GLD 09/18/2026 382 C
+    re.compile(r"^(?P<u>[A-Z0-9.]+)\s+(?P<d>\d{2}/\d{2}/\d{2,4})\s+(?P<k>\d+(?:\.\d+)?)\s+(?P<t>[CP])$"),
+    # ... ENERGY SELECT SEC AUG26 62 CALL
+    re.compile(r"^(?P<u>.+?)\s+(?P<d>[A-Z]{3}\d{2})\s+(?P<k>\d+(?:\.\d+)?)\s+(?P<t>CALL|PUT)$"),
+    # NVIDIA C PUT OPT 08/26 210
+    re.compile(r"^(?P<u>.+?)\s+(?P<t>CALL|PUT)\s+OPT\s+(?P<d>\d{2}/\d{2})\s+(?P<k>\d+(?:\.\d+)?)$"),
+    # Put On S&P 500 Jul26
+    re.compile(r"^(?P<t>PUT|CALL)\s+ON\s+(?P<u>.+?)(?:\s+(?P<d>[A-Z][a-z]{2}\d{2}))?$", re.I),
+]
+
+
+def parse_option_position(symbol, name, weight):
+    """{type, underlying, expiry, strike, side} for an option row, else None."""
+    symbol = str(symbol or "").strip().upper()
+    name = str(name or "").strip()
+    found = OCC_SYMBOL.match(symbol)
+    if found:
+        underlying, expiry, kind, strike = found.groups()
+        option = {"type": kind, "underlying": underlying, "expiry": expiry, "strike": int(strike) / 1000}
+    else:
+        option = None
+        for pattern in OPTION_NAMES:
+            match = pattern.match(name if pattern.flags & re.I else name.upper())
+            if match:
+                parts = match.groupdict()
+                strike = parts.get("k")
+                option = {"type": parts["t"].upper()[0], "underlying": (parts.get("u") or "").upper().strip(),
+                          "expiry": parts.get("d"), "strike": float(strike) if strike else None}
+                break
+        if option is None:
+            return None
+    weight = number_or_none(weight)
+    option["side"] = "short" if weight is not None and weight < 0 else "long" if weight else "unknown"
+    return option
+
+
+def number_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def summarize_option_holdings(rows):
+    """Count written calls and written puts in disclosed holdings.
+
+    A short put paired with a long call at the same strike and expiry is
+    synthetic long stock, a short call paired with a long put is synthetic
+    short stock, and a short put below a long put is bought protection; none
+    of them is option selling for income. Rows whose weight rounds to zero do
+    not say which side the fund is on and are not counted.
+    """
+    options = [option for option in (parse_option_position(*row) for row in rows) if option]
+    if not options:
+        return None
+    def key(option):
+        return option["underlying"], option["expiry"]
+    # Pairs need a strike; name-only rows without one are never paired.
+    long_calls = {(key(o), o["strike"]) for o in options
+                  if o["type"] == "C" and o["side"] == "long" and o["strike"] is not None}
+    long_put_strikes = {(key(o), o["strike"]) for o in options
+                        if o["type"] == "P" and o["side"] == "long" and o["strike"] is not None}
+    long_puts = {}
+    for option in options:
+        if option["type"] == "P" and option["side"] == "long" and option["strike"] is not None:
+            long_puts.setdefault(key(option), []).append(option["strike"])
+    short_calls = sum(o["type"] == "C" and o["side"] == "short" and (key(o), o["strike"]) not in long_put_strikes
+                      for o in options)
+    short_puts = 0
+    for option in options:
+        if option["type"] != "P" or option["side"] != "short":
+            continue
+        if (key(option), option["strike"]) in long_calls:
+            continue
+        if option["strike"] is not None and any(strike > option["strike"] for strike in long_puts.get(key(option), [])):
+            continue
+        short_puts += 1
+    return {"positions": len(options), "short_calls": short_calls, "short_puts": short_puts,
+            "long_only": short_calls == 0 and short_puts == 0
+            and any(o["side"] == "long" for o in options),
+            "unknown_side": sum(o["side"] == "unknown" for o in options)}
+
+
+def strategy_from_holdings(summary, as_of=None):
+    """The answer the holdings give to "does it sell options?", or None."""
+    if not summary or not (summary["short_calls"] or summary["short_puts"]):
+        return None
+    when = f" (as of {as_of})" if as_of else ""
+    calls, puts = summary["short_calls"], summary["short_puts"]
+    if calls and puts:
+        answer, label = "both", "Writes calls and puts (from holdings)"
+    elif calls:
+        answer, label = "calls", "Writes call options (from holdings)"
+    else:
+        answer, label = "puts", "Writes put options (from holdings)"
+    counted = " and ".join(part for part in (
+        f"{calls} written call position{'s' if calls != 1 else ''}" if calls else "",
+        f"{puts} written put position{'s' if puts != 1 else ''}" if puts else "") if part)
+    reason = f"Its disclosed holdings{when} include {counted}."
+    if answer == "puts":
+        reason += (" Put sellers get the capital, payout and reference review; the covered-call eroder label applies only "
+                   "to call sellers.")
+    else:
+        reason += " It is screened as a call-income fund."
+    return {"answer": answer, "kind": "covered_call" if calls else "capital_review", "label": label, "reason": reason}
+
+
+def name_says_option_income(info):
+    """True when the stored category, scanner tag or fund name says option income."""
+    profile = info.get("security_profile") or {}
+    text = _text(info, profile)
+    category = str(profile.get("category") or profile.get("etf_category") or "").strip()
+    return (str(profile.get("fund_kind") or "").lower() == "option_income" or category == "Derivative Income"
+            or str(profile.get("etf_strategy") or "").strip().upper() == "OPTIONS INCOME"
+            or bool(OPTION_WORDS.search(text) and not (BOND_WORDS.search(text) and "OPTION" not in text)))
+
+
 def _text(info, profile):
     parts = [info.get("description") or "", *(profile.get("names") or [])]
     return " ".join(str(part) for part in parts if part).upper().replace("’", "'")

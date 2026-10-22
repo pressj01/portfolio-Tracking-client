@@ -3,7 +3,10 @@ import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
-import { useNavAssessment, invalidateNavAssessment, navPercent, NAV_STATUS } from '../utils/navAssessment'
+import {
+  useNavAssessment, invalidateNavAssessment, navPercent, NAV_STATUS,
+  STRATEGY_ANSWER_OPTIONS, strategyInQuestion, useStrategyAnswer,
+} from '../utils/navAssessment'
 import NavReferenceEditor from '../components/NavReferenceEditor'
 import '../components/NavAssessment.css'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
@@ -106,7 +109,7 @@ const COLUMN_HELP = {
   totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares. Dividends and realized profit both count from when your oldest remaining lot was bought, so an earlier position you sold out of before buying back does not carry over.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
   paidForItself: 'Column: distributions received on the position you hold now, counted from when its oldest remaining lot was bought, as a percent of original cost. 100% means dividends have paid back the amount invested.',
-  nav: 'Column: NAV assessment over the shared date range: published NAV where available, otherwise a price-based estimate, against the reference shown. Funds outside the reviewed list get an inferred type and reference ("auto, inferred"). Include screens the holding automatically; Include (manual) screens it against the benchmark you type in the box, even when its type was not recognized; Skip leaves it out. Details opens the reference guide. A market decline or reference shortfall alone does not prove destructive erosion.',
+  nav: 'Column: NAV assessment over the shared date range: published NAV where available, otherwise a price-based estimate, against the reference shown. Funds outside the reviewed list get an inferred type and reference ("auto, inferred"). Include screens the holding automatically; Include (manual) screens it against the benchmark you type in the box, even when its type was not recognized; Skip leaves it out. When the app cannot tell from the fund\'s holdings, name or category whether it sells options, the cell asks "Sells call options?". Details opens the reference guide, where the detected strategy can be corrected. A market decline or reference shortfall alone does not prove destructive erosion.',
   nextPayment: 'Column: next listed dividend payment date.',
   exDividend: 'Column: the listed ex-dividend date.',
   frequency: 'Column: dividend payment frequency.',
@@ -450,6 +453,24 @@ function navReferenceLine(reference) {
   return `${reference.selected || 'No reference'} · ${how}${reference.warning ? ' · review' : ''}`
 }
 
+// Asked in the cell only when nothing automatic (reviewed list, disclosed
+// option positions, fund name or category) settled the strategy.
+function StrategyQuestion({ ticker, answer }) {
+  const { value, choose, error } = useStrategyAnswer(ticker, answer)
+  return (
+    <label className="ci-nav-question" title="The app could not tell from the fund's holdings, name or category. Only funds that sell call options can be labelled covered-call eroders.">
+      <span className={error ? 'nav-reference-warning' : undefined}>{error ? 'Not saved — sells calls?' : 'Sells call options?'}</span>
+      <select
+        aria-label={`Does ${ticker} sell call options?`}
+        value={value}
+        onChange={event => choose(event.target.value)}
+      >
+        {STRATEGY_ANSWER_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select>
+    </label>
+  )
+}
+
 function NavCell({ row }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(null)
@@ -473,9 +494,12 @@ function NavCell({ row }) {
     setDraft(null)
   }
   const title = [meta.reason, price?.reason, meta.reference.why].filter(Boolean).join('\n')
+  const ask = scope !== 'skip' && meta.capital_status !== 'not_applicable' && strategyInQuestion(meta)
   return (
     <div className="ci-nav-cell" title={title}>
-      <strong className={`ci-nav-status ci-nav-tone-${summary.tone}`}>{summary.label}</strong>
+      {ask
+        ? <StrategyQuestion ticker={row.ticker} answer={meta.guidance?.strategy_answer} />
+        : <strong className={`ci-nav-status ci-nav-tone-${summary.tone}`}>{summary.label}</strong>}
       <small>{summary.detail}</small>
       <div className="ci-nav-controls">
         {meta.capital_status !== 'not_applicable' && (

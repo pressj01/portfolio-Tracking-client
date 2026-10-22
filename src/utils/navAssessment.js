@@ -65,6 +65,50 @@ export function useNavAssessment(windowKey = '1Y', { enabled = true } = {}) {
   }
 }
 
+// "Does this fund sell call options?" — asked only when the app could not
+// tell from the reviewed list, the fund's holdings or its name.
+export const STRATEGY_ANSWER_OPTIONS = [
+  ['', 'Not sure'],
+  ['calls', 'Yes, sells calls'],
+  ['none', 'No options'],
+  ['puts', 'Sells puts only'],
+  ['both', 'Sells calls and puts'],
+]
+
+export const strategyInQuestion = meta => ['unverified', 'manual'].includes(meta?.guidance?.strategy_source)
+
+export async function saveStrategyAnswer(pf, ticker, answer) {
+  const response = await pf(`/api/nav-assessment/strategy/${encodeURIComponent(ticker)}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: answer || null }),
+  })
+  await readNavJson(response)
+  invalidateNavAssessment()
+}
+
+// The choice shows at once. The assessment takes seconds to recompute, and
+// showing only the server's answer until then made clicks look ignored.
+// A pending choice is kept only while the server still reports the answer it
+// was made against; once the refreshed answer arrives, that wins.
+export function useStrategyAnswer(ticker, saved) {
+  const pf = useProfileFetch()
+  const savedValue = saved || ''
+  const [pending, setPending] = useState(null)
+  const [error, setError] = useState('')
+  const latest = useRef(0)
+  const choose = useCallback(value => {
+    const request = ++latest.current
+    setPending({ value, base: savedValue })
+    setError('')
+    saveStrategyAnswer(pf, ticker, value).catch(err => {
+      if (latest.current !== request) return
+      setPending(null)
+      setError(err.message || 'The answer could not be saved.')
+    })
+  }, [pf, ticker, savedValue])
+  const value = pending && pending.base === savedValue ? pending.value : savedValue
+  return { value, choose, error }
+}
+
 export const navPercent = value => value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%`
 export const navMoney = value => value == null ? '—' : Number(value).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
 export const NAV_STATUS = {

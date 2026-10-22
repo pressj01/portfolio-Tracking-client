@@ -133,6 +133,22 @@ class NavAssessmentApiTest(unittest.TestCase):
         self.assertEqual(q['nav_erosion_scope'], 'auto')
         self.assertFalse(q['reference']['manual'])
 
+    def test_strategy_answer_is_saved_per_fund_for_every_account_and_can_be_cleared(self):
+        response = self.client.put('/api/nav-assessment/strategy/QQQI', json={'answer': 'puts'})
+        self.assertEqual(response.status_code, 200)
+        guide = self.client.get('/api/nav-assessment').get_json()['results'][0]['guidance']
+        self.assertEqual((guide['strategy_source'], guide['strategy_answer']), ('user', 'puts'))
+        module.get_profile_filter.return_value = (False, [3])
+        other = next(r for r in self.client.get('/api/nav-assessment').get_json()['results'] if r['ticker'] == 'QQQI')
+        self.assertEqual(other['guidance']['strategy_answer'], 'puts')
+        self.client.put('/api/nav-assessment/strategy/QQQI', json={'answer': None})
+        cleared = next(r for r in self.client.get('/api/nav-assessment').get_json()['results'] if r['ticker'] == 'QQQI')
+        self.assertEqual(cleared['guidance']['strategy_source'], 'registry')
+
+    def test_strategy_answer_rejects_nonheld_ticker_and_unknown_answer(self):
+        self.assertEqual(self.client.put('/api/nav-assessment/strategy/NOTHELD', json={'answer': 'calls'}).status_code, 404)
+        self.assertEqual(self.client.put('/api/nav-assessment/strategy/QQQI', json={'answer': 'sometimes'}).status_code, 400)
+
     def test_reference_rejects_nonheld_ticker_and_bad_payload(self):
         self.assertEqual(self.client.put('/api/nav-assessment/reference/NOTHELD',json={'mode':'auto'}).status_code,404)
         self.assertEqual(self.client.put('/api/nav-assessment/reference/QQQI',json={'mode':'symbol','symbol':'https://example.com'}).status_code,400)

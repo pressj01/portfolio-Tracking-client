@@ -4,6 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from nav_assessment_service import build_payload, guidance, reference_plan
+from nav_auto_guidance import parse_option_position, strategy_from_holdings, summarize_option_holdings
 from nav_price_screen import screen
 from test_nav_price_screen import example
 
@@ -130,6 +131,97 @@ class ManualIncludeTest(unittest.TestCase):
                 self.assertEqual(row["capital_status"], "unconfirmed")
                 self.assertEqual(row["reference"]["legs"], [{"symbol": "SPY", "weight": 1.0}])
                 self.assertEqual(row["nav_benchmark_override"], "SPY")
+
+
+class HoldingsStrategyTest(unittest.TestCase):
+    """Written options in a fund's disclosed holdings settle its strategy."""
+
+    def test_issuer_formats_parse_and_company_names_do_not(self):
+        cases = [
+            (("NDX260918C29075000", "NDX US 09/18/26 C29075", -0.62), ("C", "short", 29075.0)),
+            (("2GLD260918C00382000", "GLD 09/18/2026 382 C", -0.52), ("C", "short", 382.0)),
+            (("", "STATE STREET ENERGY SELECT SEC AUG26 62 CALL", -0.01), ("C", "short", 62.0)),
+            (("", "NVIDIA C PUT OPT 08/26 210", 0.06), ("P", "long", 210.0)),
+            (("", "Put On S&P 500 Jul26", 0.37), ("P", "long", None)),
+            (("SPXW260813P06375000", "SPXW US 08/13/26 P6375", 0.0), ("P", "unknown", 6375.0)),
+        ]
+        for row, (kind, side, strike) in cases:
+            with self.subTest(name=row[1]):
+                option = parse_option_position(*row)
+                self.assertEqual((option["type"], option["side"], option["strike"]), (kind, side, strike))
+        for row in [("OPCH", "Option Care Health Inc.", 0.1), ("CALY", "Callaway Golf Co.", 0.08), ("603986C1", "GigaDevice", 2.2)]:
+            self.assertIsNone(parse_option_position(*row))
+
+    def test_written_calls_make_a_call_seller(self):
+        summary = summarize_option_holdings([("SPX260918C07610000", "", -0.6), ("SPY", "SPDR", 98.0)])
+        self.assertEqual(strategy_from_holdings(summary)["answer"], "calls")
+
+    def test_synthetic_long_put_is_not_put_selling(self):
+        # ETTY/SOLM: long call + short put at one strike = synthetic stock.
+        summary = summarize_option_holdings([
+            ("4ETHA260918C00011050", "", 22.74), ("4ETHA260918P00011050", "", -1.16), ("4ETHA260804C00015350", "", -0.02)])
+        self.assertEqual((summary["short_calls"], summary["short_puts"]), (1, 0))
+        self.assertEqual(strategy_from_holdings(summary)["answer"], "calls")
+
+    def test_synthetic_short_call_and_protective_put_spread_are_not_income_selling(self):
+        summary = summarize_option_holdings([
+            ("MSTR261016C00300000", "", -10.0), ("MSTR261016P00300000", "", 10.0),   # synthetic short
+            ("NDX260918P25000000", "", -0.42), ("NDX260918P26800000", "", 1.04)])    # bought protection
+        self.assertEqual((summary["short_calls"], summary["short_puts"]), (0, 0))
+        self.assertIsNone(strategy_from_holdings(summary))
+
+    def test_written_puts_only_is_a_put_seller_with_capital_review(self):
+        held = strategy_from_holdings(summarize_option_holdings([("WMT261002P00106000", "", -0.07)]), "2026-10-01")
+        self.assertEqual((held["answer"], held["kind"]), ("puts", "capital_review"))
+        self.assertIn("2026-10-01", held["reason"])
+
+    def test_zero_weight_rows_do_not_decide(self):
+        self.assertIsNone(strategy_from_holdings(summarize_option_holdings([("SPXW260813P06375000", "", 0.0)])))
+
+
+class StrategyOrderTest(unittest.TestCase):
+    """User answer > reviewed registry > holdings > name/category > ask."""
+
+    def calls(self):
+        return {"positions": 2, "short_calls": 2, "short_puts": 0, "long_only": False, "unknown_side": 0}
+
+    def test_holdings_settle_a_registry_fund_with_no_documented_strategy(self):
+        guide = guidance("ETTY", {"security_profile": {"option_holdings": self.calls()}})
+        self.assertEqual(guide["strategy_source"], "holdings")
+        self.assertEqual(guide["screen_strategy"]["kind"], "covered_call")
+
+    def test_documented_registry_strategy_is_not_overridden_by_holdings(self):
+        puts = {"positions": 1, "short_calls": 0, "short_puts": 1, "long_only": False, "unknown_side": 0}
+        guide = guidance("QQQI", {"security_profile": {"option_holdings": puts}})
+        self.assertEqual(guide["strategy_source"], "registry")
+        self.assertEqual(guide["screen_strategy"]["kind"], "covered_call")
+
+    def test_holdings_override_a_name_inference(self):
+        info = fund("STATE STREET SPDR PORT S&P 500 ETF", security_type="ETF", option_holdings=self.calls())
+        guide = guidance("SPYM", info)
+        self.assertEqual((guide["strategy_source"], guide["screen_strategy"]["kind"]), ("holdings", "covered_call"))
+
+    def test_undetectable_registry_fund_asks_the_user(self):
+        guide = guidance("EGGQ", {"description": "NESTYIELD VISIONARY ETF"})
+        self.assertEqual(guide["strategy_source"], "unverified")
+        self.assertEqual(guide["screen_strategy"]["kind"], "needs_verification")
+
+    def test_registry_fund_named_as_option_income_is_detected(self):
+        guide = guidance("EGGQ", {"description": "NestYield Visionary Covered Call ETF"})
+        self.assertEqual((guide["strategy_source"], guide["screen_strategy"]["kind"]), ("inferred", "covered_call"))
+
+    def test_user_answer_wins_and_each_answer_maps_to_a_screen(self):
+        expected = {"calls": "covered_call", "both": "covered_call", "puts": "capital_review", "none": "capital_review"}
+        for answer, kind in expected.items():
+            with self.subTest(answer=answer):
+                guide = guidance("QQQI", {"strategy_answer": {"answer": answer}})
+                self.assertEqual((guide["strategy_source"], guide["strategy_answer"]), ("user", answer))
+                self.assertEqual(guide["screen_strategy"]["kind"], kind)
+        self.assertTrue(guidance("QQQI", {"strategy_answer": {"answer": "none"}})["screen_strategy"]["payout_driven_only"])
+
+    def test_answering_calls_for_an_unidentified_holding_screens_it_as_a_fund(self):
+        guide = guidance("UNLISTED", {"strategy_answer": {"answer": "calls"}})
+        self.assertEqual(guide["security_kind"], "fund")
 
 
 class PlainFundLagTest(unittest.TestCase):

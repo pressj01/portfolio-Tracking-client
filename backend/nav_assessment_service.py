@@ -13,12 +13,12 @@ from pathlib import Path
 
 try:
     from .nav_assessment import CapitalObservation, assess, same_cash_reference
-    from .nav_auto_guidance import infer_guidance
+    from .nav_auto_guidance import infer_guidance, name_says_option_income, strategy_from_holdings
 except ImportError:
     from nav_assessment import CapitalObservation, assess, same_cash_reference
-    from nav_auto_guidance import infer_guidance
+    from nav_auto_guidance import infer_guidance, name_says_option_income, strategy_from_holdings
 
-VERSION = "nav-assessment-v8-inferred-and-manual"
+VERSION = "nav-assessment-v9-strategy-detection"
 VERDICT_LABELS = {
     "strong": "Strong NAV Erosion",
     "weak": "Weak NAV Erosion",
@@ -66,6 +66,34 @@ def manual_scope(info):
     return str((info or {}).get("nav_erosion_scope") or "auto").strip().lower() == "test"
 
 
+# The user's answer to "Does this fund sell call options?" for a fund whose
+# strategy is not documented. Only call sellers can receive the covered-call
+# eroder label; put sellers keep the capital/payout review.
+STRATEGY_ANSWERS = {
+    "calls": {"kind": "covered_call", "label": "Sells call options (your answer)",
+              "reason": "You said this fund sells call options, so it is screened as a call-income fund."},
+    "both": {"kind": "covered_call", "label": "Sells call and put options (your answer)",
+             "reason": "You said this fund sells both calls and puts. Its call selling makes it eligible for the covered-call screen."},
+    "puts": {"kind": "capital_review", "label": "Sells put options (your answer)",
+             "reason": "You said this fund sells put options only. Put sellers get the capital, payout and reference review; "
+                       "the covered-call eroder label applies only to call sellers."},
+    "none": {"kind": "capital_review", "label": "No option selling (your answer)", "payout_driven_only": True,
+             "reason": "You said this fund does not sell options. Lagging its reference alone is treated as relative "
+                       "performance; it is flagged only when payouts also repeatedly exceeded the reference's return."},
+}
+
+
+def validate_strategy_answer(data):
+    if not isinstance(data, dict):
+        raise ValueError("The answer must be an object")
+    answer = data.get("answer")
+    if answer in (None, "", "unsure"):
+        return None
+    if answer not in STRATEGY_ANSWERS:
+        raise ValueError("Answer calls, puts, both or none")
+    return answer
+
+
 def guidance(ticker, info):
     # Holdings outside the reviewed registry get guidance inferred from their
     # stored category, quote type and name instead of stopping at "needs
@@ -86,13 +114,16 @@ def guidance(ticker, info):
         "cef" if family == "Published CEF NAV" else
         "fund" if ticker in REGISTRY or category in {"ETF", "CEF", "FUND"} else "unknown"
     )
-    if manual_scope(info) and row["security_kind"] in {"stock", "cash", "unknown"}:
+    answer = (info.get("strategy_answer") or {}).get("answer")
+    answer = answer if answer in STRATEGY_ANSWERS else None
+    if (manual_scope(info) or (answer and answer != "none")) and row["security_kind"] in {"stock", "cash", "unknown"}:
         # The user says this is a fund to screen; respect that over the
         # automatic type, which can misread an unusual name.
         row["security_kind"] = "fund"
         row["manual_type"] = True
     # Eligibility follows the documented strategy, never the distribution yield
     # or a user-selected benchmark. Other funds retain capital/payout metrics.
+    documented = "screen_strategy" in row and not row.get("inferred")
     row.setdefault("screen_strategy", {
         "kind": "capital_review" if row["security_kind"] in {"bdc", "reit", "cef"} or family in {
             "Fixed income / short maturity", "BDC fund basket", "Preferred securities",
@@ -101,12 +132,47 @@ def guidance(ticker, info):
         "label": family,
         "reason": "Capital, credit, payout and discount changes need their own review. This is not a verified equity/asset covered-call mandate."
     })
-    if manual_scope(info) and row["screen_strategy"]["kind"] == "needs_verification":
+    # Settle "does it sell options?" from the most trusted source available:
+    # the user's answer, the reviewed registry, the fund's disclosed option
+    # positions, then its name or category. Only a fund none of these settle
+    # asks the user ("unverified").
+    profile = info.get("security_profile") or {}
+    held = strategy_from_holdings(profile.get("option_holdings"), profile.get("holdings_as_of"))
+    if held and row["security_kind"] == "unknown":
+        row["security_kind"] = "fund"
+    if row["security_kind"] in {"stock", "cash"}:
+        source = "not_applicable"
+    elif answer:
+        row["screen_strategy"] = dict(STRATEGY_ANSWERS[answer])
+        source = "user"
+    elif documented:
+        source = "registry"
+    elif held and row["security_kind"] not in {"stock", "cash"}:
+        row["screen_strategy"] = {key: held[key] for key in ("kind", "label", "reason")}
+        source = "holdings"
+    elif row.get("inferred"):
+        source = "inferred"
+    elif row["screen_strategy"]["kind"] != "needs_verification":
+        source = "family"
+    elif name_says_option_income(info):
+        row["screen_strategy"] = {
+            "kind": "covered_call", "label": "Option-income strategy (from its name or category)",
+            "reason": "Its fund category or name says option income, so it is screened as a call-income fund. "
+                      "Answer whether it sells call options to confirm or change this.",
+        }
+        source = "inferred"
+    elif manual_scope(info):
         row["screen_strategy"] = {
             "kind": "covered_call", "label": "Option-income strategy (Include manual)",
             "reason": "Screened as a call-income fund because the holding is set to Include (manual). "
-                      "The strategy itself is not documented here.",
+                      "Answer whether it sells call options to confirm or change this.",
         }
+        source = "manual"
+    else:
+        source = "unverified"
+    row["strategy_source"] = source
+    row["strategy_answer"] = answer
+    row["holdings_strategy"] = held["answer"] if held else None
     row["fit"] = "Exposure reference" if row.get("suggestion") else "Needs verification"
     if ticker in {"CHPY", "SLJY", "QVOL"}:
         row["fit"] = "Sector / exposure proxy"
@@ -660,6 +726,10 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
             if not source:
                 return row
             row["source"] = {key: source.get(key) for key in ("label", "url", "fetched_at", "distribution_source", "adjustment_source")}
+            if source.get("unavailable_reason"):
+                # The issuer answered but publishes no usable NAV history.
+                row["reason"] = source["unavailable_reason"]
+                return row
             first, last, nav, distributions = normalize_source(source, start, as_of)
             row.update(window_start=first.isoformat(), window_end=last.isoformat(), shorter_history=start.year != 1900 and first>start)
             row["published_nav"] = {"start": nav[first], "end": nav[last]}
@@ -689,7 +759,15 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
             except Exception:
                 row["reference_result"] = {"status": "unavailable", "reason": "Reference total-return history is unavailable; NAV accounting is unaffected."}
         except json.JSONDecodeError:
-            row["reason"] = "The published NAV feed could not be read. Retry after the source recovers."
+            # The source answered with a web page instead of data: CEF Connect
+            # does this when it blocks or rate-limits requests.
+            row["reason"] = (
+                "CEF Connect, the source of published closed-end fund NAV, sent a web page instead of NAV data, which "
+                "usually means it is blocking or rate-limiting requests. Published NAV can't be checked until it "
+                "answers again, so the result above uses market prices."
+                if kind == "cef" else
+                "The published NAV source sent something other than NAV data. Published NAV can't be checked until it "
+                "recovers, so the result above uses market prices.")
         except Exception as exc:
             row["reason"] = str(exc) if isinstance(exc, ValueError) else "Published NAV source is temporarily unavailable."
         return row

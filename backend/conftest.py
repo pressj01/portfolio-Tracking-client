@@ -76,6 +76,8 @@ def _no_live_neos_fund_pages(monkeypatch):
     app._NEOS_FUND_FACTS_CACHE.clear()
     app._NEOS_FUND_FACTS_MISSES.clear()
     monkeypatch.setattr(app, "_fetch_neos_etf_profile", lambda ticker: None)
+    if hasattr(app, "_fetch_neos_fund_page"):
+        monkeypatch.setattr(app, "_fetch_neos_fund_page", lambda ticker: None)
     yield
     app._NEOS_FUND_FACTS_CACHE.clear()
     app._NEOS_FUND_FACTS_MISSES.clear()
