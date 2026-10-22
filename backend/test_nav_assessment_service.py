@@ -6,7 +6,8 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from nav_assessment_service import (
-    REGISTRY, build_payload, compare_reference, guidance, reference_plan, validate_choice,
+    REGISTRY, build_payload, compare_reference, guidance, portfolio_verdict,
+    reference_plan, validate_choice,
 )
 
 
@@ -125,11 +126,13 @@ class ReferenceChoiceTest(unittest.TestCase):
                 self.assertTrue(plan["automatic"])
                 self.assertTrue(plan["legs"])
 
-    def test_bitcoin_reference_is_coin_series_not_a_similarly_named_equity(self):
+    def test_bitcoin_reference_is_a_spot_etp_priced_at_the_us_close(self):
+        # BTC-USD closes at midnight, so it could never be compared with the
+        # fund's 4 p.m. close; the spot ETP can.
         plan = reference_plan("BTCI", {}, guidance("BTCI", {}))
-        self.assertEqual(plan["selected"], "Bitcoin (BTC)")
-        self.assertEqual(plan["legs"], [{"symbol": "BTC-USD", "weight": 1}])
-        self.assertTrue(plan["requires_aligned_crypto_close"])
+        self.assertEqual(plan["selected"], "Bitcoin (IBIT)")
+        self.assertEqual(plan["legs"], [{"symbol": "IBIT", "weight": 1}])
+        self.assertFalse(plan["requires_aligned_crypto_close"])
 
     def test_automatic_stacked_and_daily_targets_keep_their_exposures(self):
         for ticker, total in [("ISBG",2),("ISSB",2),("TDAX",1.3)]:
@@ -234,6 +237,115 @@ class OverallAssessmentTest(unittest.TestCase):
         for choice in [[], {"mode": "symbol", "symbol": "https://example.com"}, {"mode": "custom", "legs": []}, {"mode": "strategy_matched"}]:
             with self.assertRaises(ValueError):
                 validate_choice(choice)
+
+    def test_market_drop_is_no_nav_erosion_not_a_strong_card(self):
+        verdict = self.build()["verdict"]
+        self.assertEqual(verdict["label"], "No NAV Erosion")
+        self.assertEqual(verdict["strength"], "none")
+        self.assertGreaterEqual(verdict["probability"], 0)
+        self.assertLessEqual(verdict["probability"], 15)
+
+    def test_repeated_quarter_shortfalls_are_strong_nav_erosion(self):
+        verdict = self.repeated([100, 90, 80, 70], [100, 130, 169, 219.7])["verdict"]
+        self.assertEqual(verdict["label"], "Strong NAV Erosion")
+        self.assertEqual(verdict["strength"], "strong")
+        self.assertGreaterEqual(verdict["probability"], 52)
+        self.assertEqual(verdict["verified_count"], 1)
+
+    def test_missing_nav_without_price_screen_is_insufficient_evidence(self):
+        verdict = build_payload({"QQQI": holding()}, lambda *a: None, Mock(), cash=0)["verdict"]
+        self.assertEqual(verdict["label"], "Insufficient evidence")
+        self.assertIsNone(verdict["probability"])
+
+    def test_stock_only_portfolio_is_no_nav_erosion(self):
+        verdict = build_payload({"JNJ": holding()}, Mock(), Mock(), cash=20)["verdict"]
+        self.assertEqual(verdict["label"], "No NAV Erosion")
+        self.assertEqual(verdict["probability"], 0)
+
+
+class PortfolioVerdictCardTest(unittest.TestCase):
+    def test_small_single_eroder_is_weak(self):
+        verdict = portfolio_verdict(
+            [{"ticker": "ULTI", "capital_status": "unconfirmed", "current_value": 8,
+              "price_screen": {"estimated_eroder": True, "review_candidate": True}},
+             {"ticker": "CSHI", "capital_status": "unconfirmed", "current_value": 92,
+              "price_screen": {"estimated_eroder": False, "review_candidate": False}}],
+            {"covered_count": 2, "persistence_evaluable_count": 2, "value_coverage": 1,
+             "estimated_eroder_count": 1, "estimated_eroder_account_share": .08},
+            {"candidates": [], "assessed_count": 0, "applicable_count": 2},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        self.assertEqual(verdict["label"], "Weak NAV Erosion")
+        self.assertGreaterEqual(verdict["probability"], 20)
+        self.assertLessEqual(verdict["probability"], 49)
+        self.assertEqual(verdict["eroder_count"], 1)
+
+    def test_material_eroder_share_is_strong_and_two_small_eroders_stay_weak(self):
+        material = portfolio_verdict(
+            [{"ticker": "ULTI", "capital_status": "unconfirmed", "current_value": 20,
+              "price_screen": {"estimated_eroder": True, "review_candidate": True}}],
+            {"covered_count": 1, "persistence_evaluable_count": 2, "value_coverage": 1},
+            {"candidates": [], "assessed_count": 0, "applicable_count": 1},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        small_pair = portfolio_verdict(
+            [{"ticker": "ULTI", "capital_status": "unconfirmed", "current_value": 4,
+              "price_screen": {"estimated_eroder": True, "review_candidate": True}},
+             {"ticker": "QQQI", "capital_status": "unconfirmed", "current_value": 4,
+              "price_screen": {"estimated_eroder": True, "review_candidate": True}}],
+            {"covered_count": 2, "persistence_evaluable_count": 2, "value_coverage": 1},
+            {"candidates": [], "assessed_count": 0, "applicable_count": 2},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        self.assertEqual(material["label"], "Strong NAV Erosion")
+        self.assertGreaterEqual(material["probability"], 52)
+        self.assertEqual(small_pair["label"], "Weak NAV Erosion")
+        self.assertLessEqual(small_pair["probability"], 49)
+
+    def test_price_review_without_eroder_is_weak(self):
+        verdict = portfolio_verdict(
+            [{"ticker": "CSHI", "capital_status": "unconfirmed", "current_value": 100,
+              "price_screen": {"estimated_eroder": False, "review_candidate": True}}],
+            {"covered_count": 1, "persistence_evaluable_count": 2, "value_coverage": 1},
+            {"candidates": [], "assessed_count": 0, "applicable_count": 1},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        self.assertEqual(verdict["label"], "Weak NAV Erosion")
+        self.assertEqual(verdict["review_count"], 1)
+        self.assertFalse(verdict["eroder_count"])
+        self.assertEqual(verdict["holdings"]["review"][0]["ticker"], "CSHI")
+        self.assertTrue(verdict["reduction"]["under_50"])
+
+    def test_strong_card_lists_eroder_tickers_and_trim_path_under_50(self):
+        verdict = portfolio_verdict(
+            [{"ticker": "ULTI", "capital_status": "unconfirmed", "current_value": 20,
+              "price_screen": {"estimated_eroder": True, "review_candidate": True, "reason": "Repeated shortfalls"}},
+             {"ticker": "CSHI", "capital_status": "unconfirmed", "current_value": 80,
+              "price_screen": {"estimated_eroder": False, "review_candidate": True, "label": "Capital / payout review"}}],
+            {"covered_count": 2, "persistence_evaluable_count": 2, "value_coverage": 1},
+            {"candidates": [], "assessed_count": 0, "applicable_count": 2},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        self.assertEqual(verdict["label"], "Strong NAV Erosion")
+        self.assertEqual([item["ticker"] for item in verdict["holdings"]["implicated"]], ["ULTI", "CSHI"])
+        self.assertFalse(verdict["reduction"]["under_50"])
+        text = " ".join(verdict["reduction"]["steps"])
+        self.assertIn("ULTI", text)
+        self.assertIn("below 10%", text)
+        self.assertIn("Strong-band floor", text)
+        self.assertIn("CSHI", text)
+
+    def test_verified_candidate_is_listed_as_a_cause(self):
+        verdict = portfolio_verdict(
+            [{"ticker": "QQQI", "capital_status": "declined", "current_value": 40,
+              "persistence": {"qualifying_quarters": 3}, "price_screen": {}}],
+            {"covered_count": 1, "persistence_evaluable_count": 2, "value_coverage": 1},
+            {"candidates": [{"ticker": "QQQI", "reason": "Repeated qualifying quarters"}],
+             "assessed_count": 1, "applicable_count": 1},
+            {"account_value": 100, "value_coverage_complete": True},
+        )
+        self.assertEqual(verdict["holdings"]["verified"][0]["ticker"], "QQQI")
+        self.assertIn("QQQI", " ".join(verdict["reduction"]["steps"]))
 
 
 if __name__ == "__main__":

@@ -22870,27 +22870,30 @@ def update_holding_nav_erosion_scope(ticker):
     benchmark = str(data.get("nav_benchmark_override") or "").strip().upper()
     benchmark = benchmark or None
 
-    if is_agg:
-        profile_id = _resolve_aggregate_profile(ticker, pids)
-    else:
-        profile_id = pids[0]
+    # An aggregate shows one setting per ticker, merged across its members
+    # with "test" winning. Writing only the largest member left the others
+    # on their old value, so switching off Include (manual) never stuck.
+    write_ids = list(pids) if is_agg else [pids[0]]
+    marks = ",".join("?" * len(write_ids))
 
     conn = get_connection()
     existing = conn.execute(
-        "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
-        (ticker, profile_id),
+        f"SELECT 1 FROM all_account_info WHERE UPPER(ticker) = ? AND profile_id IN ({marks})",
+        [ticker] + write_ids,
     ).fetchone()
     if not existing:
         conn.close()
         return jsonify({"error": f"{ticker} not found"}), 404
 
     conn.execute(
-        "UPDATE all_account_info SET nav_erosion_scope = ?, nav_benchmark_override = ? WHERE ticker = ? AND profile_id = ?",
-        (scope, benchmark, ticker, profile_id),
+        f"UPDATE all_account_info SET nav_erosion_scope = ?, nav_benchmark_override = ? "
+        f"WHERE UPPER(ticker) = ? AND profile_id IN ({marks})",
+        [scope, benchmark, ticker] + write_ids,
     )
     conn.commit()
     conn.close()
     _PORTFOLIO_COVERAGE_CACHE.clear()
+    _NAV_ASSESSMENT_CACHE.clear()
     return jsonify({
         "ticker": ticker,
         "nav_erosion_scope": scope,
@@ -28358,6 +28361,43 @@ def _nav_reference_settings_key(is_aggregate, profile_ids):
     return "nav_reference_choices_v1:" + ("a:" if is_aggregate else "p:") + ",".join(map(str, sorted(profile_ids)))
 
 
+def _nav_security_profiles(conn, tickers):
+    """Stored type/category data for holdings outside the reviewed registry.
+
+    The NAV screen infers a fund's type, strategy and reference from these.
+    Each source is optional: a fresh install may not have scanned yet.
+    """
+    tickers = sorted({str(t).strip().upper() for t in tickers if t})
+    profiles = {t: {} for t in tickers}
+    if not tickers:
+        return profiles
+    marks = ",".join("?" * len(tickers))
+    sources = [
+        (f"SELECT UPPER(ticker) AS t, quote_type, category, asset_class, source AS profile_source "
+         f"FROM security_sector_profile WHERE UPPER(ticker) IN ({marks})", ("quote_type", "category", "asset_class", "profile_source")),
+        (f"SELECT UPPER(fund_ticker) AS t, security_type FROM fund_holdings_meta WHERE UPPER(fund_ticker) IN ({marks})", ("security_type",)),
+        (f"SELECT UPPER(ticker) AS t, name, asset_type, etf_category, etf_strategy FROM general_scanner_cache "
+         f"WHERE UPPER(ticker) IN ({marks})", ("asset_type", "etf_category", "etf_strategy")),
+        (f"SELECT UPPER(ticker) AS t, fund_kind FROM etf_type_overrides WHERE UPPER(ticker) IN ({marks})", ("fund_kind",)),
+        (f"SELECT UPPER(ticker) AS t, name FROM security_names WHERE UPPER(ticker) IN ({marks})", ()),
+    ]
+    for sql, fields in sources:
+        try:
+            rows = conn.execute(sql, tickers).fetchall()
+        except sqlite3.OperationalError:
+            continue
+        for row in rows:
+            entry = profiles.get(row["t"])
+            if entry is None:
+                continue
+            for field in fields:
+                if row[field] not in (None, "") and not entry.get(field):
+                    entry[field] = row[field]
+            if "name" in row.keys() and row["name"]:
+                entry.setdefault("names", []).append(str(row["name"]).strip())
+    return {t: entry for t, entry in profiles.items() if entry}
+
+
 def _nav_assessment_source(ticker, guide, start, as_of):
     """Use actual published NAV. Unsupported adapters never fall back to Close."""
     key = (ticker, start.isoformat(), as_of.isoformat())
@@ -28445,6 +28485,9 @@ def nav_assessment_data():
         for holding in rows:
             if holding['estim_payment_per_year'] is None:
                 info[str(holding['ticker']).strip().upper()]['annual_income'] = None
+        for ticker, profile in _nav_security_profiles(conn, info).items():
+            if ticker in info:
+                info[ticker]["security_profile"] = profile
         settings_key = _nav_reference_settings_key(is_aggregate, profile_ids)
         saved = conn.execute("SELECT value FROM settings WHERE key = ?", (settings_key,)).fetchone()
         choices = json.loads(saved[0]) if saved else {}

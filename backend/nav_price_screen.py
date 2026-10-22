@@ -143,6 +143,10 @@ def screen(source, start, end, plan, reference_loader):
     relative_shortfall = ref.get('status') == 'available' and ref.get('capital_gap_rate',0) <= -WINDOW_GAP
     candidate = material_decline and relative_shortfall and persistence['repeated'] and not plan['warning']
     strategy = plan.get('screen_strategy', {'kind':'needs_verification', 'label':'Strategy not verified'})
+    # An inferred plain fund (index, bond, sector) that only lagged its
+    # reference is relative performance; erosion needs the payouts too.
+    lagged_only = bool(candidate and strategy.get('payout_driven_only') and not persistence['both_repeated'])
+    candidate = candidate and not lagged_only
     eligible = strategy['kind'] == 'covered_call'
     eroder = candidate and persistence['both_repeated'] and eligible
     label = ('Estimated covered-call eroder' if eroder else
@@ -150,9 +154,16 @@ def screen(source, start, end, plan, reference_loader):
              'Capital / payout review' if candidate else
              'No covered-call erosion signal' if eligible and persistence['supportive_intervals'] >= 2 else
              'Covered-call screen: limited evidence' if eligible else
-             'Strategy needs verification' if strategy['kind'] == 'needs_verification' else 'Capital / payout context')
+             'Strategy needs verification' if strategy['kind'] == 'needs_verification' else
+             'Lagged reference — no payout erosion' if lagged_only else
+             # Other strategies get no eroder label, but the capital test
+             # still ran; say whether it found anything.
+             'No capital / payout signal' if ref.get('status') == 'available' and persistence['supportive_intervals'] >= 2 else
+             'Capital / payout: limited evidence')
     reason = (f'Repeated material price declines and same-cash shortfalls in flat/rising reference months. '
               f'{"Payouts also exceeded reference returns repeatedly; investigate possible covered-call erosion." if eroder else "Review strategy, payouts and reference fit; this is not an eroder classification."}' if candidate else
+              'Price fell behind the reference in flat/rising months, but payouts did not repeatedly exceed the reference’s '
+              'return. That is relative performance, not payout-driven NAV erosion.' if lagged_only else
               'The fund retained at least as much capital as the reference after matching the same payouts; a high payout alone is not an erosion signal.' if ref.get('status') == 'available' and ref.get('capital_gap_rate',-1) >= 0 else
               'Insufficient completed months with a flat/rising reference to establish persistence.' if persistence['supportive_intervals'] < 2 else
               'The material, persistent price-and-reference shortfall rule was not met.')

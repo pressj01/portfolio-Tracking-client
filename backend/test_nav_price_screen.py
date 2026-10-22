@@ -173,6 +173,9 @@ class PriceScreenTest(unittest.TestCase):
         self.assertEqual(payload['preliminary']['title'],'Possible covered-call erosion detected')
         self.assertEqual(payload['overall']['assessed_count'],0)
         self.assertEqual(payload['overall']['title'],'NAV verdict unavailable — incomplete portfolio coverage')
+        self.assertEqual(payload['verdict']['label'],'Strong NAV Erosion')
+        self.assertGreaterEqual(payload['verdict']['probability'],52)
+        self.assertEqual(payload['verdict']['eroder_count'],1)
 
 
 class MarketAdapterTest(unittest.TestCase):

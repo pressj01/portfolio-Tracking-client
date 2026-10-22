@@ -33,7 +33,21 @@ export default function NavReferenceEditor({ row, onClose }) {
         <strong>{row.ticker}: reference</strong>
         <button type="button" className="btn btn-sm" onClick={onClose}>Close</button>
       </div>
-      <p><strong>{row.reference.automatic ? 'Automatic reference' : 'Selected reference'}: {row.reference.selected || 'Needs verification'}</strong></p>
+      <p><strong>{row.reference.manual ? 'Include (manual) benchmark' : row.reference.automatic ? 'Automatic reference' : 'Selected reference'}: {row.reference.selected || 'Needs verification'}</strong></p>
+      {row.reference.manual && (
+        <p className="nav-assessment-note">
+          This holding is set to Include (manual) in the holdings table, so it is compared with the benchmark typed there
+          {row.reference.automatic_label ? <> instead of the automatic reference, {row.reference.automatic_label}</> : null}.
+          Change the benchmark in the table, or set the table back to Include to use the automatic reference.
+          A ticker or basket saved under Advanced takes precedence over both.
+        </p>
+      )}
+      {guide.inferred && (
+        <p className="nav-assessment-note">
+          Not in the reviewed fund list: its type, strategy and reference were inferred from {guide.inferred_from || 'its stored data'}.
+          Check the issuer&apos;s documents before relying on them.
+        </p>
+      )}
       <p className="nav-assessment-note">To enter a different ticker, expand Advanced below, choose Single ticker as context, enter the Reference ticker, then select Save and compare. Restore automatic reference returns to the suggested choice.</p>
       {row.capital_status === 'unconfirmed' && <p className="nav-assessment-note"><strong>Why unconfirmed:</strong> {row.reason} Changing the reference does not supply missing NAV evidence.</p>}
       <p><strong>Why it fits:</strong> {row.reference.why}</p>
@@ -70,7 +84,7 @@ export default function NavReferenceEditor({ row, onClose }) {
           </tr>)}</tbody>
         </table></div>
       </details>}
-      {!row.reference.automatic && row.guidance.automatic_legs?.length > 0 && (
+      {!row.reference.automatic && !row.reference.manual && row.guidance.automatic_legs?.length > 0 && (
         <button type="button" className="btn btn-sm" disabled={saving} onClick={() => save({ mode: 'auto' })}>
           Use automatic reference
         </button>

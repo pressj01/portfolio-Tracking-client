@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
@@ -105,7 +106,7 @@ const COLUMN_HELP = {
   totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares. Dividends and realized profit both count from when your oldest remaining lot was bought, so an earlier position you sold out of before buying back does not carry over.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
   paidForItself: 'Column: distributions received on the position you hold now, counted from when its oldest remaining lot was bought, as a percent of original cost. 100% means dividends have paid back the amount invested.',
-  nav: 'Published NAV assessment and reference guidance over the trailing year. A market decline or reference shortfall alone does not prove destructive erosion. Missing source data is unconfirmed.',
+  nav: 'Column: NAV assessment over the shared date range: published NAV where available, otherwise a price-based estimate, against the reference shown. Funds outside the reviewed list get an inferred type and reference ("auto, inferred"). Include screens the holding automatically; Include (manual) screens it against the benchmark you type in the box, even when its type was not recognized; Skip leaves it out. Details opens the reference guide. A market decline or reference shortfall alone does not prove destructive erosion.',
   nextPayment: 'Column: next listed dividend payment date.',
   exDividend: 'Column: the listed ex-dividend date.',
   frequency: 'Column: dividend payment frequency.',
@@ -395,28 +396,121 @@ function GradeBadge({ grade }) {
   return <span className={`grade-badge ${cls}`}>{grade}</span>
 }
 
+// The table cell is a summary. The full reference guide opens in a dialog:
+// rendered inside the cell it stretched every row to the editor's height.
+function NavReferenceDialog({ meta, onClose }) {
+  useEffect(() => {
+    const onKey = event => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return createPortal(
+    <div className="modal-overlay nav-reference-overlay" onClick={onClose}>
+      <div
+        className="modal-content nav-reference-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${meta.ticker} NAV reference`}
+        onClick={event => event.stopPropagation()}
+      >
+        <NavReferenceEditor row={meta} onClose={onClose} />
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function navCellSummary(meta, scope) {
+  const price = meta.price_screen?.status === 'available' ? meta.price_screen : null
+  if (meta.capital_status === 'not_applicable') {
+    return { label: 'Not applicable', tone: 'muted', detail: meta.guidance?.family === 'Money market fund' ? 'Money-market fund' : 'Not a fund' }
+  }
+  if (scope === 'skip') return { label: 'Skipped', tone: 'muted', detail: 'Excluded from the NAV screen' }
+  if (meta.metrics) {
+    return {
+      label: meta.erosion_review ? 'Potential erosion — review' : NAV_STATUS[meta.capital_status] || 'Unconfirmed',
+      tone: meta.erosion_review ? 'neg' : meta.capital_status === 'declined' ? 'warn' : 'ok',
+      detail: `${navPercent(meta.metrics.capital_change_rate)} published NAV`,
+    }
+  }
+  if (price) {
+    return {
+      label: price.label,
+      tone: price.estimated_eroder ? 'neg' : price.review_candidate ? 'warn' : price.strategy?.kind === 'needs_verification' ? 'muted' : 'ok',
+      detail: `${navPercent(price.price_change_rate)} price · ${navPercent(price.cash_total_return)} with payouts`,
+    }
+  }
+  return { label: 'Unconfirmed', tone: 'muted', detail: 'Price history unavailable' }
+}
+
+function navReferenceLine(reference) {
+  const how = reference.manual ? 'your benchmark'
+    : reference.automatic ? (reference.inferred ? 'auto, inferred' : 'auto')
+      : reference.legs?.length ? 'chosen' : 'needs one'
+  return `${reference.selected || 'No reference'} · ${how}${reference.warning ? ' · review' : ''}`
+}
+
 function NavCell({ row }) {
   const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(null)
+  const closeEditor = useCallback(() => setEditing(false), [])
   if (row.sold) return <span className="ci-muted">—</span>
   const meta = row.navMeta
-  if (!meta?.ticker) return <span className="ci-muted">Assessment loading / unavailable</span>
+  if (!meta?.ticker) {
+    return <span className="ci-muted">{row.navStatus === 'disabled' ? 'Choose a date range' : row.navStatus === 'error' ? 'Unavailable' : 'Loading…'}</span>
+  }
+  const scope = row.navScope || 'auto'
+  const summary = navCellSummary(meta, scope)
   const price = meta.price_screen?.status === 'available' ? meta.price_screen : null
+  // Inferred types can be wrong, so a holding detected as a stock or cash
+  // keeps the menu: Include (manual) screens it anyway.
+  const showScope = meta.capital_status !== 'not_applicable' || meta.guidance?.inferred || scope === 'test'
+  const benchmark = draft ?? row.navBenchmark ?? ''
+  const commitBenchmark = () => {
+    if (draft != null && draft.trim().toUpperCase() !== (row.navBenchmark || '')) {
+      row.onNavScope?.(row.ticker, 'test', draft)
+    }
+    setDraft(null)
+  }
+  const title = [meta.reason, price?.reason, meta.reference.why].filter(Boolean).join('\n')
   return (
-    <div className="ci-nav-cell" title={meta.reason}>
-      <strong>{meta.metrics || !price ? NAV_STATUS[meta.capital_status] || 'Unconfirmed' : price.label}</strong>
-      {price?.estimated_eroder && meta.metrics && <small className="nav-reference-warning">Estimated eroder</small>}
-      {meta.erosion_review && <small className="nav-reference-warning" style={{ display: 'block' }}>Potential erosion — review</small>}
-      {meta.metrics && <small style={{ display: 'block' }}>{navPercent(meta.metrics.capital_change_rate)} NAV change</small>}
-      {!meta.metrics && price && <><small style={{ display: 'block' }}>{navPercent(price.price_change_rate)} price change · {navPercent(price.cash_total_return)} with payouts</small><small style={{ display: 'block', color: 'var(--text-dim)' }}>Price-based estimate · NAV not verified</small></>}
-      <small style={{ display: 'block', color: 'var(--text-dim)' }}>{meta.reference.selected || 'Reference needed'} · {meta.reference.automatic ? 'Automatic · ' : ''}{meta.reference.fit}</small>
-      {meta.reference.warning && <small className="nav-reference-warning" style={{ display: 'block' }}>Reference needs review</small>}
-      {meta.capital_status !== 'not_applicable' && <>
-        <button type="button" className="btn btn-sm" onClick={() => setEditing(value => !value)}>Reference help</button>
-        <select aria-label={`${row.ticker} NAV assessment inclusion`} value={row.navScope || 'auto'} onChange={event => row.onNavScope?.(row.ticker, event.target.value, row.navBenchmark)}>
-          <option value="auto">Include</option><option value="test">Include (manual)</option><option value="skip">Skip</option>
-        </select>
-      </>}
-      {editing && <NavReferenceEditor row={meta} onClose={() => setEditing(false)} />}
+    <div className="ci-nav-cell" title={title}>
+      <strong className={`ci-nav-status ci-nav-tone-${summary.tone}`}>{summary.label}</strong>
+      <small>{summary.detail}</small>
+      <div className="ci-nav-controls">
+        {meta.capital_status !== 'not_applicable' && (
+          <small className={`ci-nav-ref${meta.reference.warning || !meta.reference.legs?.length ? ' nav-reference-warning' : ''}`}>
+            {navReferenceLine(meta.reference)}
+          </small>
+        )}
+        {showScope && (
+          <select
+            aria-label={`${row.ticker} NAV assessment inclusion`}
+            value={scope}
+            onChange={event => row.onNavScope?.(row.ticker, event.target.value, row.navBenchmark)}
+          >
+            <option value="auto">Include</option>
+            <option value="test">Include (manual)</option>
+            <option value="skip">Skip</option>
+          </select>
+        )}
+        {scope === 'test' && (
+          <input
+            aria-label={`${row.ticker} Include (manual) benchmark`}
+            value={benchmark}
+            placeholder={meta.reference.automatic_label || 'Ticker'}
+            maxLength={20}
+            onChange={event => setDraft(event.target.value.toUpperCase())}
+            onBlur={commitBenchmark}
+            onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            title="Benchmark ticker for Include (manual). Leave blank to use the automatic reference."
+          />
+        )}
+        {meta.capital_status !== 'not_applicable' && (
+          <button type="button" className="btn btn-sm" onClick={() => setEditing(true)}>Details</button>
+        )}
+      </div>
+      {editing && <NavReferenceDialog meta={meta} onClose={closeEditor} />}
     </div>
   )
 }
@@ -1023,7 +1117,8 @@ export function CommonInfoPanel({
   const [gainsLosses, setGainsLosses] = useState(null)
   const [categoryData, setCategoryData] = useState({ categories: [], unallocated: [] })
   const [dividendGrowth, setDividendGrowth] = useState({})
-  const { data: navAssessment } = useNavAssessment(navRange, { enabled: navEnabled })
+  const { data: navAssessment, error: navError } = useNavAssessment(navRange, { enabled: navEnabled })
+  const navStatus = !navEnabled ? 'disabled' : navAssessment ? 'ready' : navError ? 'error' : 'loading'
   const coverageMeta = useMemo(() => Object.fromEntries((navAssessment?.results || []).map(row => [row.ticker, row])), [navAssessment])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -1094,12 +1189,13 @@ export function CommonInfoPanel({
 
   const updateNavScope = useCallback((ticker, scope, benchmark = '') => {
     const navBenchmark = String(benchmark || '').trim().toUpperCase()
-    setHoldings(prev => prev.map(row => (
-      row.ticker === ticker
-        ? { ...row, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark }
-        : row
-    )))
-    pf(`/api/holdings/${ticker}/nav-erosion-scope`, {
+    let previous = null
+    setHoldings(prev => prev.map(row => {
+      if (row.ticker !== ticker) return row
+      previous = { nav_erosion_scope: row.nav_erosion_scope, nav_benchmark_override: row.nav_benchmark_override }
+      return { ...row, nav_erosion_scope: scope, nav_benchmark_override: navBenchmark }
+    }))
+    pf(`/api/holdings/${encodeURIComponent(ticker)}/nav-erosion-scope`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1113,16 +1209,12 @@ export function CommonInfoPanel({
         onNavChange?.()
       })
       .catch(() => {
+        if (previous) {
+          setHoldings(prev => prev.map(row => (row.ticker === ticker ? { ...row, ...previous } : row)))
+        }
         setError(`Could not update ${ticker} NAV test setting.`)
       })
   }, [pf, onNavChange, refreshCoverage])
-
-  const draftNavBenchmark = useCallback((ticker, value) => {
-    const next = String(value || '').toUpperCase()
-    setHoldings(prev => prev.map(row => (
-      row.ticker === ticker ? { ...row, nav_benchmark_override: next } : row
-    )))
-  }, [])
 
   const categoryLookup = useMemo(() => buildCategoryLookup(categoryData), [categoryData])
 
@@ -1143,17 +1235,17 @@ export function CommonInfoPanel({
         alpha: risk.alpha ?? null,
         betaBenchmark: risk.beta_benchmark || null,
         navScope: row.sold ? 'skip' : (row.nav_erosion_scope || meta.nav_erosion_scope || 'auto'),
-        navBenchmark: row.nav_benchmark_override || meta.nav_benchmark_override || '',
-        navBenchmarkInput: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
-        navCoverage: meta.metrics?.capital_change_rate,
+        navBenchmark: row.nav_benchmark_override ?? meta.nav_benchmark_override ?? '',
+        // Published NAV when verified, otherwise the price-based estimate.
+        navCoverage: meta.metrics?.capital_change_rate ?? meta.price_screen?.price_change_rate,
         navMeta: meta,
+        navStatus,
         onNavScope: updateNavScope,
-        onNavBenchmarkDraft: draftNavBenchmark,
       }
     }
     const rows = showSold ? [...openRows, ...closedRows] : openRows
     return rows.map(withNav)
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverageMeta, onTickerClick, tickerGrades, tickerRisk, updateNavScope, draftNavBenchmark])
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverageMeta, navStatus, onTickerClick, tickerGrades, tickerRisk, updateNavScope])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null

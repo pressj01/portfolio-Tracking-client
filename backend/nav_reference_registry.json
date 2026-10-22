@@ -88,22 +88,22 @@
   "BTCI": {
     "family": "Crypto ETP income",
     "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
-    "suggestion": "BTC-USD",
+    "suggestion": "IBIT",
     "source_url": "https://neosfunds.com/btci/",
     "source_checked": "2026-10-21",
     "limitations": "Verify the issuer objective and historical exposures before using a reference.",
-    "suggested_direction": "Bitcoin (BTC): Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ.",
+    "suggested_direction": "Bitcoin (IBIT): Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_legs": [
       {
-        "symbol": "BTC-USD",
+        "symbol": "IBIT",
         "weight": 1
       }
     ],
-    "automatic_label": "Bitcoin (BTC)",
-    "automatic_reason": "Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ.",
-    "automatic_fit": "Crypto market reference",
-    "automatic_version": "2026-10-21-v2",
-    "requires_aligned_crypto_close": true,
+    "automatic_label": "Bitcoin (IBIT)",
+    "automatic_reason": "Bitcoin market context for Bitcoin ETP exposure; ETP tracking, expenses and calls differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
+    "automatic_fit": "Spot ETP market reference",
+    "automatic_version": "2026-10-22-v3",
+    "requires_aligned_crypto_close": false,
     "screen_strategy": {
       "kind": "covered_call",
       "label": "Bitcoin ETP exposure + call options",
@@ -332,22 +332,22 @@
   "ETTY": {
     "family": "Crypto ETP income",
     "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
-    "suggestion": "ETH-USD",
+    "suggestion": "ETHA",
     "source_url": null,
     "source_checked": null,
     "limitations": "Verify the issuer objective and historical exposures before using a reference.",
-    "suggested_direction": "Ether (ETH): Ether market context; actual ETP exposure, tracking and options differ.",
+    "suggested_direction": "Ether (ETHA): Ether market context; actual ETP exposure, tracking and options differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_legs": [
       {
-        "symbol": "ETH-USD",
+        "symbol": "ETHA",
         "weight": 1
       }
     ],
-    "automatic_label": "Ether (ETH)",
-    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ.",
-    "automatic_fit": "Crypto market reference",
-    "automatic_version": "2026-10-21-v2",
-    "requires_aligned_crypto_close": true,
+    "automatic_label": "Ether (ETHA)",
+    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
+    "automatic_fit": "Spot ETP market reference",
+    "automatic_version": "2026-10-22-v3",
+    "requires_aligned_crypto_close": false,
     "crypto_related": true
   },
   "FBDC": {
@@ -563,10 +563,10 @@
     "source_url": "https://quantifyfunds.com/optionsbasedincome/isbg/",
     "source_checked": "2026-10-21",
     "limitations": "About 200% gross exposure, not a 50/50 portfolio",
-    "suggested_direction": "1x Bitcoin + 1x gold: Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs.",
+    "suggested_direction": "1x Bitcoin + 1x gold: Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_legs": [
       {
-        "symbol": "BTC-USD",
+        "symbol": "IBIT",
         "weight": 1
       },
       {
@@ -575,10 +575,10 @@
       }
     ],
     "automatic_label": "1x Bitcoin + 1x gold",
-    "automatic_reason": "Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs.",
+    "automatic_reason": "Disclosed stacked exposures total about 200%, not a 50/50 portfolio. Daily context model, before incremental financing/strategy costs. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_fit": "Daily exposure model \u2014 before costs",
-    "automatic_version": "2026-10-21-v2",
-    "requires_aligned_crypto_close": true,
+    "automatic_version": "2026-10-22-v3",
+    "requires_aligned_crypto_close": false,
     "crypto_related": true
   },
   "ISSB": {
@@ -588,22 +588,22 @@
     "source_url": "https://www.sec.gov/Archives/edgar/data/1924868/000199937126017336/isbg-ncsrs_053126.htm",
     "source_checked": "2026-10-21",
     "limitations": "About 200% gross exposure; verify exact stock leg and overlay",
-    "suggested_direction": "1x US stocks + 1x Bitcoin: Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs.",
+    "suggested_direction": "1x US stocks + 1x Bitcoin: Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_legs": [
       {
         "symbol": "SPY",
         "weight": 1
       },
       {
-        "symbol": "BTC-USD",
+        "symbol": "IBIT",
         "weight": 1
       }
     ],
     "automatic_label": "1x US stocks + 1x Bitcoin",
-    "automatic_reason": "Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs.",
+    "automatic_reason": "Disclosed stacked exposures total about 200%. SPY represents US equity context; daily model before incremental financing/strategy costs. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_fit": "Daily exposure model \u2014 before costs",
-    "automatic_version": "2026-10-21-v2",
-    "requires_aligned_crypto_close": true,
+    "automatic_version": "2026-10-22-v3",
+    "requires_aligned_crypto_close": false,
     "crypto_related": true
   },
   "IWMI": {
@@ -908,22 +908,22 @@
   "NEHI": {
     "family": "Crypto ETP income",
     "guidance": "Use actual ETP exposure and option rules for Bitcoin/Ether/Solana respectively; match valuation cutoffs. Spot crypto alone is market context.",
-    "suggestion": "ETH-USD",
+    "suggestion": "ETHA",
     "source_url": null,
     "source_checked": null,
     "limitations": "Verify the issuer objective and historical exposures before using a reference.",
-    "suggested_direction": "Ether (ETH): Ether market context; actual ETP exposure, tracking and options differ.",
+    "suggested_direction": "Ether (ETHA): Ether market context; actual ETP exposure, tracking and options differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
     "automatic_legs": [
       {
-        "symbol": "ETH-USD",
+        "symbol": "ETHA",
         "weight": 1
       }
     ],
-    "automatic_label": "Ether (ETH)",
-    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ.",
-    "automatic_fit": "Crypto market reference",
-    "automatic_version": "2026-10-21-v2",
-    "requires_aligned_crypto_close": true,
+    "automatic_label": "Ether (ETHA)",
+    "automatic_reason": "Ether market context; actual ETP exposure, tracking and options differ. Spot ETP closes at the 4 p.m. US close, so it aligns with the fund; the crypto coin series would not.",
+    "automatic_fit": "Spot ETP market reference",
+    "automatic_version": "2026-10-22-v3",
+    "requires_aligned_crypto_close": false,
     "crypto_related": true
   },
   "NIHI": {

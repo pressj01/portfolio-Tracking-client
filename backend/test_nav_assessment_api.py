@@ -60,6 +60,8 @@ class NavAssessmentApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertEqual([r['ticker'] for r in data['results']], ['QQQI'])
+        self.assertIn(data['verdict']['label'], {'No NAV Erosion', 'Weak NAV Erosion', 'Strong NAV Erosion', 'Insufficient evidence'})
+        self.assertIn(data['verdict']['strength'], {'none', 'weak', 'strong', 'insufficient'})
         self.assertEqual(data['summary']['account_value'],110)
         self.assertEqual(data['results'][0]['metrics']['investment_result'],5)
         self.assertEqual(data['results'][0]['reference_result']['status'],'unavailable')
@@ -101,6 +103,35 @@ class NavAssessmentApiTest(unittest.TestCase):
         self.assertEqual(saved['QQQI']['history'][-1]['choice']['symbol'],'SPY')
         self.assertIsNone(conn.execute("SELECT nav_benchmark_override FROM all_account_info WHERE profile_id=2").fetchone()[0])
         conn.close()
+
+    def test_include_manual_benchmark_is_used_as_the_reference(self):
+        conn = self.connect()
+        conn.execute("UPDATE all_account_info SET nav_erosion_scope='test', nav_benchmark_override='SPY' WHERE profile_id=2")
+        conn.commit()
+        conn.close()
+        reference = self.client.get('/api/nav-assessment').get_json()['results'][0]['reference']
+        self.assertTrue(reference['manual'])
+        self.assertEqual(reference['selected'], 'SPY')
+        self.assertEqual(reference['automatic_label'], 'QQQ')
+
+    def test_scope_change_in_an_aggregate_reaches_every_member(self):
+        # The aggregate merges members with "test" winning, so writing only the
+        # largest member left Include (manual) stuck on.
+        conn = self.connect()
+        conn.execute("UPDATE all_account_info SET nav_erosion_scope='test', nav_benchmark_override='SPY' WHERE ticker='QQQI'")
+        conn.commit()
+        conn.close()
+        module.get_profile_filter.return_value = (True, [2, 3])
+        response = self.client.put('/api/holdings/QQQI/nav-erosion-scope',
+                                   json={'nav_erosion_scope': 'auto', 'nav_benchmark_override': 'SPY'})
+        self.assertEqual(response.status_code, 200)
+        conn = self.connect()
+        scopes = {row[0] for row in conn.execute("SELECT nav_erosion_scope FROM all_account_info WHERE ticker='QQQI'")}
+        conn.close()
+        self.assertEqual(scopes, {'auto'})
+        q = next(r for r in self.client.get('/api/nav-assessment').get_json()['results'] if r['ticker'] == 'QQQI')
+        self.assertEqual(q['nav_erosion_scope'], 'auto')
+        self.assertFalse(q['reference']['manual'])
 
     def test_reference_rejects_nonheld_ticker_and_bad_payload(self):
         self.assertEqual(self.client.put('/api/nav-assessment/reference/NOTHELD',json={'mode':'auto'}).status_code,404)

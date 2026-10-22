@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useNavAssessment, navMoney, navPercent, NAV_STATUS } from '../utils/navAssessment'
+import { useId, useState } from 'react'
+import { useNavAssessment, navMoney, navPercent, navProbability, NAV_STATUS } from '../utils/navAssessment'
 import NavErosionHelp from './NavErosionHelp'
 import NavReferenceEditor from './NavReferenceEditor'
 import './NavAssessment.css'
@@ -10,6 +10,9 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState(null)
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [verdictOpen, setVerdictOpen] = useState(false)
+  // Split View mounts a page twice, so the id must be unique per mount.
+  const drilldownId = useId()
   const rangeError = customRangeError(period, start, end)
   const isCostBasis = isLifetimePerformancePeriod(period)
   const enabled = !isCostBasis && !rangeError
@@ -17,11 +20,20 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
   const rangeLabel = PERFORMANCE_PERIODS.find(option => option.key === period)?.label || period
   const summary = data?.summary
   const preliminary = data?.preliminary
+  const verdict = data?.verdict
   const rows = (data?.results || []).filter(row => (
     (filter === 'all' || (filter === 'price_review' ? row.price_screen?.review_candidate : filter === 'reference' ? Boolean(row.reference.warning) || !row.reference.legs.length : row.capital_status === filter))
     && `${row.ticker} ${row.description}`.toLowerCase().includes(search.toLowerCase())
   ))
   const active = data?.results.find(row => row.ticker === selected)
+  const openHolding = ticker => {
+    setDetailsOpen(true)
+    setSelected(ticker)
+    setFilter('all')
+    setSearch(ticker)
+  }
+  const implicated = verdict?.holdings?.implicated || []
+  const reduction = verdict?.reduction
   return (
     <section className="nav-assessment" aria-label="NAV, distributions and references">
       <div className="nav-assessment-toolbar">
@@ -37,8 +49,59 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
       {loading && <p role="status">Loading NAV, closing prices, distributions and references…</p>}
       {error && <p role="alert" className="nav-reference-warning">{error} <button type="button" className="btn btn-sm" onClick={refresh}>Retry</button></p>}
       {summary && data.overall && <>
-        {preliminary && <div className="card nav-overall-assessment">
-          <strong>Account erosion assessment: {preliminary.title}</strong>
+        {verdict && (
+          <div className={`nav-verdict-row${verdictOpen ? ' is-open' : ''}`}>
+            <div
+              className={`summary-card nav-verdict-card nav-verdict-${verdict.strength}`}
+              role="status"
+              title={verdict.explanation}
+            >
+              <div className="summary-label">Portfolio NAV Erosion</div>
+              <div className="summary-value">{verdict.label}</div>
+              <div className="summary-sub">{navProbability(verdict.probability)} evidence probability</div>
+              <div className="summary-sub">{verdict.summary}</div>
+              <button
+                type="button"
+                className="nav-verdict-link"
+                aria-expanded={verdictOpen}
+                aria-controls={drilldownId}
+                onClick={() => setVerdictOpen(open => !open)}
+              >
+                {verdictOpen ? 'Hide details'
+                  : verdict.strength === 'strong' ? 'See holdings and how to get under 50%'
+                    : implicated.length ? `See the ${implicated.length} holding${implicated.length === 1 ? '' : 's'} behind this reading`
+                      : 'Why this reading'}
+              </button>
+            </div>
+            {verdictOpen && <div className="card nav-verdict-drilldown" id={drilldownId}>
+              <strong>Holdings behind this reading ({implicated.length})</strong>
+              {implicated.length === 0 ? (
+                <p className="nav-assessment-note">No estimated eroders, verified persistent candidates, or price-based review candidates in this account.</p>
+              ) : (
+                <ul className="nav-verdict-holding-list">
+                  {implicated.map(item => (
+                    <li key={`${item.role}-${item.ticker}`}>
+                      <button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button>
+                      {' '}<strong>{item.label}</strong>
+                      {item.value_share != null && <> · {navPercent(item.value_share)} of account</>}
+                      {item.current_value != null && <> · {navMoney(item.current_value)}</>}
+                      {item.reason && <small>{item.reason}</small>}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {reduction && (
+                <>
+                  <strong>{reduction.under_50 ? 'Evidence probability' : 'How to get the evidence probability under 50%'}</strong>
+                  <p className="nav-assessment-note">{reduction.headline}</p>
+                  <ul>{(reduction.steps || []).map(step => <li key={step}>{step}</li>)}</ul>
+                </>
+              )}
+            </div>}
+          </div>
+        )}
+        {preliminary && <details className="card nav-overall-assessment">
+          <summary>Account erosion assessment: {preliminary.title}</summary>
           {preliminary.estimated_eroder_count > 0 && <p><strong>{preliminary.estimated_eroder_count} estimated covered-call eroder{preliminary.estimated_eroder_count === 1 ? '' : 's'} · {navMoney(preliminary.estimated_eroder_value)} · {navPercent(preliminary.estimated_eroder_account_share)} of current account value.</strong> These call-income holdings meet the material decline, repeated payout and same-cash reference shortfall rules. This is a price-based review signal, not verified NAV causation.</p>}
           <p className="nav-assessment-note">{preliminary.covered_count} of {preliminary.applicable_count} applicable holdings have price-based metrics, covering {navPercent(preliminary.value_coverage)} of applicable holding value. Published NAV is verified separately below.</p>
           <p className="nav-assessment-note">{preliminary.reference_covered_count} have an aligned reference comparison; {preliminary.persistence_evaluable_count} have at least two flat/rising-reference intervals to evaluate persistence.</p>
@@ -46,7 +109,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
           {preliminary.candidates.length > 0 ? <>
             <strong className="nav-reference-warning">Holdings to investigate — price-based estimates</strong>
             <ul>{preliminary.candidates.map(item => <li key={item.ticker}>
-              <button type="button" className="btn btn-sm" onClick={() => { setDetailsOpen(true); setSelected(item.ticker); setFilter('all'); setSearch(item.ticker) }}>{item.ticker}</button>
+              <button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button>
               {' '}<strong>{item.label}</strong> · {item.strategy} · price change {navPercent(item.price_change_rate)}. {item.reason} Reference fit: {item.reference_fit}.
             </li>)}</ul>
           </> : <p className="nav-assessment-note">No repeated price-based signal was established in the covered holdings. This does not establish NAV preservation or clear holdings with missing evidence.</p>}
@@ -56,7 +119,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
             <div className="nav-assessment-table-wrap"><table className="nav-assessment-table">
               <thead><tr><th>Holding</th><th>Estimated annual payout</th><th>Selected-window assessment</th><th>Price change</th><th>Same-cash reference gap</th></tr></thead>
               <tbody>{preliminary.priority_holdings.map(item => <tr key={item.ticker}>
-                <td><button type="button" className="btn btn-sm" onClick={() => { setDetailsOpen(true); setSelected(item.ticker); setFilter('all'); setSearch(item.ticker) }}>{item.ticker}</button></td>
+                <td><button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button></td>
                 <td>{navPercent(item.annual_rate)}</td><td>{item.label}<small>{item.reason}</small></td><td>{navPercent(item.price_change_rate)}</td><td>{navPercent(item.reference_gap_rate)}</td>
               </tr>)}</tbody>
             </table></div>
@@ -74,14 +137,14 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
           {preliminary.missing_tickers.length > 0 && <p className="nav-assessment-note">Price metrics unavailable or skipped: {preliminary.missing_tickers.join(', ')}.</p>}
           {preliminary.reference_unavailable_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Reference comparisons still need data</summary><p>{preliminary.reference_unavailable_tickers.join(', ')}. Their price and payout metrics remain available; an erosion label is withheld when reference evidence is unavailable.</p></details>}
           {preliminary.strategy_unverified_tickers?.length > 0 && <details className="nav-assessment-note"><summary>Strategies still need verification</summary><p>{preliminary.strategy_unverified_tickers.join(', ')}. Price and reference results remain available, but these holdings cannot be classified as covered-call eroders until their strategy is documented.</p></details>}
-        </div>}
-        <div className="card nav-overall-assessment" role="status">
-          <strong>Verified NAV assessment: {data.overall.title}</strong>
+        </details>}
+        <details className="card nav-overall-assessment" role="status">
+          <summary>Verified NAV assessment: {data.overall.title}</summary>
           <p className="nav-assessment-note">{data.overall.assessed_count} of {data.overall.applicable_count} applicable holdings have verified NAV accounting.{data.overall.partial ? ' Partial coverage: a complete portfolio-wide verdict is unavailable.' : ''}</p>
           {data.overall.candidates.length > 0 ? <>
             <strong className="nav-reference-warning">Potential erosion candidates</strong>
             <ul>{data.overall.candidates.map(item => <li key={item.ticker}>
-              <button type="button" className="btn btn-sm" onClick={() => { setDetailsOpen(true); setSelected(item.ticker); setFilter('all'); setSearch(item.ticker) }}>{item.ticker}</button>
+              <button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button>
               {' '}NAV {navPercent(item.nav_change_rate)} · same-cash reference gap {navPercent(item.reference_gap_rate)}. {item.reason}
             </li>)}</ul>
           </> : <p className="nav-assessment-note">{data.overall.partial ? 'A full NAV conclusion is withheld. Use the preliminary price-based results above to identify holdings needing review.' : 'No persistent NAV erosion signal was established by the available reference screen.'}</p>}
@@ -90,7 +153,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
             <p>{data.overall.payout_pressure_tickers.join(', ')} paid more cash than the selected period&apos;s positive economic result replenished. This can reflect the market path and payout timing. These tickers are not added to the erosion watchlist on that basis.</p>
           </details>}
           <p className="nav-assessment-note">{data.overall.explanation}</p>
-        </div>
+        </details>
         <div className="nav-assessment-cards">
           {[['declined', 'Observed NAV decline'], ['preserved', 'Capital preserved / within precision'], ['unconfirmed', 'NAV unconfirmed'], ['not_applicable', 'Not applicable']].map(([key, label]) => {
             const state = summary.states[key]

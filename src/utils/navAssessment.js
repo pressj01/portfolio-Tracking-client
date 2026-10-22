@@ -21,7 +21,7 @@ function load(pf, key, query) {
   const existing = cache.get(key)
   if (existing && Date.now() - existing.created < 60000) return existing.promise
   const promise = pf(`/api/nav-assessment?${query}`).then(readNavJson).then(data => {
-    if (!Array.isArray(data.results) || !data.summary || !data.overall) throw new Error('The assessment response is incomplete. Please refresh the assessment.')
+    if (!Array.isArray(data.results) || !data.summary || !data.overall || !data.verdict) throw new Error('The assessment response is incomplete. Please refresh the assessment.')
     return data
   })
   const entry = { created: Date.now(), promise }
@@ -39,7 +39,8 @@ export function useNavAssessment(windowKey = '1Y', { enabled = true } = {}) {
   const query = typeof windowKey === 'string'
     ? new URLSearchParams({ window: windowKey }).toString()
     : addCustomRangeParams(new URLSearchParams({ period: windowKey.period }), windowKey.period, windowKey.start, windowKey.end).toString()
-  const key = `v6:${selection}:${query}:${revision}:${enabled}`
+  const base = `v9:${selection}:${query}`
+  const key = `${base}:${revision}:${enabled}`
   useEffect(() => {
     const onUpdate = () => setRevision(value => value + 1)
     window.addEventListener(EVENT, onUpdate)
@@ -49,14 +50,19 @@ export function useNavAssessment(windowKey = '1Y', { enabled = true } = {}) {
     if (!enabled) return undefined
     let active = true
     const request = ++serial.current
-    load(pf, `v6:${selection}:${query}`, query)
-      .then(data => { if (active && serial.current === request) setState({ key, data }) })
-      .catch(error => { if (active && serial.current === request) setState({ key, error: error.message }) })
+    load(pf, base, query)
+      .then(data => { if (active && serial.current === request) setState({ key, base, data }) })
+      .catch(error => { if (active && serial.current === request) setState({ key, base, error: error.message }) })
     return () => { active = false }
-  }, [pf, key, selection, query, enabled])
+  }, [pf, key, base, query, enabled])
   const refresh = useCallback(() => invalidateNavAssessment(), [])
-  const current = enabled && state.key === key ? state : {}
-  return { data: current.data || null, error: current.error || null, loading: enabled && !current.data && !current.error, refresh, selection }
+  // After a setting change the same account and range reload; keep showing
+  // the previous result meanwhile instead of blanking every NAV cell.
+  const current = !enabled ? {} : state.key === key ? state : state.base === base && state.data ? { data: state.data, stale: true } : {}
+  return {
+    data: current.data || null, error: current.error || null,
+    loading: enabled && (current.stale || (!current.data && !current.error)), refresh, selection,
+  }
 }
 
 export const navPercent = value => value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%`
@@ -65,3 +71,4 @@ export const NAV_STATUS = {
   declined: 'NAV declined', preserved: 'Capital preserved', within_precision: 'Within source precision',
   unconfirmed: 'Unconfirmed', not_applicable: 'Not applicable', liquidated: 'Liquidated',
 }
+export const navProbability = value => value == null || Number.isNaN(Number(value)) ? '—' : `${Math.round(Number(value))}%`

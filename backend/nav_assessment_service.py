@@ -13,10 +13,18 @@ from pathlib import Path
 
 try:
     from .nav_assessment import CapitalObservation, assess, same_cash_reference
+    from .nav_auto_guidance import infer_guidance
 except ImportError:
     from nav_assessment import CapitalObservation, assess, same_cash_reference
+    from nav_auto_guidance import infer_guidance
 
-VERSION = "nav-assessment-v5-evidence-tiers"
+VERSION = "nav-assessment-v8-inferred-and-manual"
+VERDICT_LABELS = {
+    "strong": "Strong NAV Erosion",
+    "weak": "Weak NAV Erosion",
+    "none": "No NAV Erosion",
+    "insufficient": "Insufficient evidence",
+}
 REGISTRY = json.loads(Path(__file__).with_name("nav_reference_registry.json").read_text(encoding="utf-8"))
 WINDOWS = {"1D": 0, "7D": 0, "1M": 1, "3M": 3, "6M": 6, "YTD": 0, "1Y": 12, "2Y": 24, "3Y": 36, "5Y": 60, "ALL": None, "CUSTOM": 0}
 BAD_REFERENCES = {
@@ -53,23 +61,36 @@ def window_start(as_of, window):
     return dt.date(year, month, min(as_of.day, calendar.monthrange(year, month)[1]))
 
 
+def manual_scope(info):
+    """Include (manual): screen this holding against the user's own benchmark."""
+    return str((info or {}).get("nav_erosion_scope") or "auto").strip().lower() == "test"
+
+
 def guidance(ticker, info):
-    row = dict(REGISTRY.get(ticker, {
+    # Holdings outside the reviewed registry get guidance inferred from their
+    # stored category, quote type and name instead of stopping at "needs
+    # verification" (an account of ordinary index and bond funds).
+    row = dict(REGISTRY.get(ticker) or infer_guidance(ticker, info) or {
         "family": "Security type needs verification", "suggestion": None,
         "source_url": None, "source_checked": None,
         "guidance": "Identify the security and verify its issuer objective before choosing a reference.",
         "limitations": "No automatic broad-market fallback is applied.",
         "suggested_direction": "No validated reference available",
-    }))
+    })
     family = row["family"]
     category = str(info.get("classification_type") or "").upper()
-    row["security_kind"] = (
+    row["security_kind"] = row.get("security_kind") or (
         "stock" if family == "Operating-company stock" else
         "bdc" if family == "Quarterly BDC NAV" or category == "BDC" else
         "reit" if family == "Quarterly mortgage REIT book value" else
         "cef" if family == "Published CEF NAV" else
         "fund" if ticker in REGISTRY or category in {"ETF", "CEF", "FUND"} else "unknown"
     )
+    if manual_scope(info) and row["security_kind"] in {"stock", "cash", "unknown"}:
+        # The user says this is a fund to screen; respect that over the
+        # automatic type, which can misread an unusual name.
+        row["security_kind"] = "fund"
+        row["manual_type"] = True
     # Eligibility follows the documented strategy, never the distribution yield
     # or a user-selected benchmark. Other funds retain capital/payout metrics.
     row.setdefault("screen_strategy", {
@@ -80,6 +101,12 @@ def guidance(ticker, info):
         "label": family,
         "reason": "Capital, credit, payout and discount changes need their own review. This is not a verified equity/asset covered-call mandate."
     })
+    if manual_scope(info) and row["screen_strategy"]["kind"] == "needs_verification":
+        row["screen_strategy"] = {
+            "kind": "covered_call", "label": "Option-income strategy (Include manual)",
+            "reason": "Screened as a call-income fund because the holding is set to Include (manual). "
+                      "The strategy itself is not documented here.",
+        }
     row["fit"] = "Exposure reference" if row.get("suggestion") else "Needs verification"
     if ticker in {"CHPY", "SLJY", "QVOL"}:
         row["fit"] = "Sector / exposure proxy"
@@ -132,8 +159,23 @@ def validate_choice(data):
 def reference_plan(ticker, info, guide, choice=None):
     choice = validate_choice(choice or {"mode": "auto"})
     legacy = str(info.get("nav_benchmark_override") or "").strip().upper()
+    automatic_label = guide.get("automatic_label") or guide.get("suggestion")
+    # Include (manual) compares against the holding's own benchmark box. A
+    # saved symbol or custom basket still wins, and a benchmark already known
+    # to misrepresent the fund stays unused.
+    manual_notice = None
+    manual = False
+    if manual_scope(info) and choice["mode"] == "auto" and legacy:
+        if not SYMBOL.fullmatch(legacy):
+            manual_notice = f"Include (manual) benchmark {legacy} is not a valid ticker; using the automatic reference."
+        elif legacy in BAD_REFERENCES.get(ticker, set()):
+            manual_notice = (f"Include (manual) benchmark {legacy} does not represent this fund's exposure, "
+                             f"so the automatic reference {automatic_label or ''} is used instead.").replace("  ", " ")
+        else:
+            choice = {"mode": "symbol", "symbol": legacy}
+            manual = True
     automatic = choice["mode"] == "auto"
-    selected = choice.get("symbol") if choice["mode"] == "symbol" else guide.get("automatic_label") or guide.get("suggestion")
+    selected = choice.get("symbol") if choice["mode"] == "symbol" else automatic_label
     warning = None
     if choice["mode"] == "symbol" and selected in BAD_REFERENCES.get(ticker, set()):
         warning = f"{selected} does not represent this fund's exposure. Choose a different reference."
@@ -142,15 +184,18 @@ def reference_plan(ticker, info, guide, choice=None):
     )
     if selected and not legs and choice["mode"] != "custom":
         warning = "The saved composite needs documented weights, funding and rebalance rules. Define a custom daily basket."
-    fit = guide.get("automatic_fit", "Needs verification") if automatic else "Custom daily context" if choice["mode"] == "custom" else (
+    fit = guide.get("automatic_fit", "Needs verification") if automatic and legs else "Custom daily context" if choice["mode"] == "custom" else (
+        "Your Include (manual) benchmark" if manual else
         guide["fit"] if selected and selected == guide.get("suggestion") else "User-selected context" if selected else "Needs verification"
     )
     return {"choice": choice, "legacy_override": legacy, "selected": selected if choice["mode"] != "custom" else "Custom basket",
             "legs": legs, "fit": fit, "warning": warning, "causal_match": False,
-            "automatic": automatic,
+            "automatic": automatic and bool(legs), "manual": manual, "automatic_label": automatic_label,
+            "inferred": bool(guide.get("inferred")) and automatic,
             "screen_strategy": guide["screen_strategy"],
-            "why": guide.get("automatic_reason", guide["guidance"]),
-            "legacy_notice": (f"Holding override {legacy} is retained but not used in automatic mode." if automatic and legacy else None),
+            "why": (f"Your Include (manual) benchmark for {ticker}." if manual else guide.get("automatic_reason") or guide["guidance"]),
+            "legacy_notice": manual_notice or (f"Benchmark {legacy} is saved for this holding; it is used only when the NAV setting is Include (manual)."
+                                               if automatic and legacy and not manual_scope(info) else None),
             "requires_aligned_crypto_close": any(leg["symbol"].endswith("-USD") for leg in legs),
             "annual_cost": choice.get("annual_cost", 0), "effective_date": choice.get("effective_date"),
             "status": "needs_review" if warning or not legs else "awaiting_data"}
@@ -272,6 +317,253 @@ def erosion_overview(results):
             "explanation": "Potential candidates require repeated qualifying quarters, not a small endpoint decline. This is a review screen, not a probability or confirmation of destructive erosion. Market declines alone do not qualify. Unconfirmed holdings prevent a complete portfolio-wide conclusion."}
 
 
+def _verdict_share(value, account, complete):
+    if not complete or account is None or account <= 0 or value is None:
+        return None
+    return value / account
+
+
+def _verdict_value(results, tickers):
+    wanted = {str(ticker) for ticker in tickers}
+    return sum((row.get("current_value") or 0) for row in results if row["ticker"] in wanted)
+
+
+def _verdict_weight(share, count, applicable_count):
+    if share is not None:
+        return share
+    if applicable_count:
+        return count / applicable_count
+    return 0.0
+
+
+def _verdict_money(value):
+    if value is None:
+        return None
+    return f"${value:,.0f}"
+
+
+def _verdict_pct(share):
+    if share is None:
+        return None
+    return f"{share * 100:.0f}%"
+
+
+def _holding_entry(row, role, account, complete, extra=None):
+    extra = extra or {}
+    price = (row or {}).get("price_screen") or {}
+    value = (row or {}).get("current_value")
+    labels = {
+        "verified": "Verified persistent candidate",
+        "estimated_eroder": "Estimated covered-call eroder",
+        "review": price.get("label") or "Price-based review",
+    }
+    return {
+        "ticker": extra.get("ticker") or row["ticker"],
+        "role": role,
+        "label": labels[role],
+        "current_value": value,
+        "value_share": _verdict_share(value, account, complete),
+        "reason": extra.get("reason") or (price.get("reason") if role != "verified" else None) or (row or {}).get("reason"),
+    }
+
+
+def _reduction_plan(strength, probability, *, verified, eroders, reviews, eroder_share, eroder_value, account, complete):
+    def names(rows):
+        return [item["ticker"] for item in rows]
+
+    if strength == "insufficient":
+        return {
+            "under_50": False,
+            "headline": "There is not enough completed-month or published-NAV evidence to name a path under 50%.",
+            "steps": ["Refresh after published NAV and at least two completed months are available. Missing evidence is not treated as No NAV Erosion."],
+        }
+    if strength == "none":
+        return {
+            "under_50": True,
+            "headline": "No implicated tickers. Evidence probability is already under 50%.",
+            "steps": ["50% is the Strong-band floor of this evidence score, not a forecast. The screen did not establish a persistent or estimated erosion signal."],
+        }
+    if strength == "weak":
+        remaining = names(eroders) + names(reviews)
+        return {
+            "under_50": True,
+            "headline": f"Evidence probability is already under 50% ({probability}%). 50% is the Strong-band floor, not a forecast.",
+            "steps": [
+                f"Remaining Weak names: {', '.join(remaining)}." if remaining else "No remaining estimated eroders or review candidates.",
+                "To reach No NAV Erosion, the screen needs no estimated covered-call eroders and no price-based review candidates.",
+            ],
+        }
+    steps = ["50% is the Strong-band floor of this evidence score, not a forecast that NAV will keep falling."]
+    if verified:
+        steps.append(
+            "Clear verified persistent candidates (" + ", ".join(names(verified)) + "). "
+            "Those names keep the account in Strong because published NAV declined in at least two qualifying quarters."
+        )
+    if eroders and (eroder_share is None or eroder_share >= 0.10):
+        if complete and account and eroder_share is not None:
+            trim = max(0.0, (eroder_value or 0) - 0.10 * account)
+            steps.append(
+                f"Reduce estimated covered-call eroders from {_verdict_pct(eroder_share)} to below 10% of current account value "
+                f"({', '.join(names(eroders))}). At today's account value of {_verdict_money(account)}, that means cutting more than "
+                f"{_verdict_money(trim)} from those holdings, or growing the rest of the account until they are a smaller sleeve. "
+                "That leaves the Strong band and puts the evidence score in Weak (20–49%)."
+            )
+        else:
+            steps.append(
+                "Reduce estimated covered-call eroders (" + ", ".join(names(eroders)) + ") below 10% of current account value. "
+                "Value coverage is incomplete, so refresh after holdings values are complete and trim until that sleeve is a small share."
+            )
+    leftover = names(eroders) + names(reviews)
+    if leftover:
+        steps.append(
+            "After leaving Strong, remaining estimated eroders and review candidates (" + ", ".join(leftover) + ") still keep a Weak reading (20–49%). "
+            "To reach No NAV Erosion, the screen needs none of those names."
+        )
+    return {"under_50": False, "headline": "Leave Strong to get the evidence score under 50%.", "steps": steps}
+
+
+def _verdict_probability(strength, *, verified_weight, eroder_weight, review_weight,
+                         verified_count, eroder_count, extra_quarters, coverage):
+    if strength == "insufficient":
+        return None
+    implicated = max(verified_weight, eroder_weight, review_weight)
+    if strength == "strong":
+        return int(round(min(95, 52 + 28 * implicated + 6 * min(3, verified_count + max(0, eroder_count - 1)) + min(9, extra_quarters * 3))))
+    if strength == "weak":
+        return int(round(min(49, 20 + 22 * implicated + 4 * min(3, max(eroder_count, 0) + max(0, (1 if review_weight else 0))))))
+    missing = 1 - min(1.0, coverage if coverage is not None else 0.5)
+    return int(round(min(15, 3 + 12 * missing)))
+
+
+def portfolio_verdict(results, preliminary, overall, summary):
+    """Glanceable Strong / Weak / No card for the selected portfolio.
+
+    The probability is an evidence score from 0–100, not a calibrated forecast.
+    It answers how strongly the available persistence and reference screens
+    support NAV erosion in this account. Incomplete coverage is not labeled
+    No NAV Erosion.
+    """
+    preliminary = preliminary or {}
+    overall = overall or {}
+    summary = summary or {}
+    applicable = [row for row in results if row.get("capital_status") != "not_applicable"]
+    complete = bool(summary.get("value_coverage_complete"))
+    account = number(summary.get("account_value")) or 0
+    applicable_count = len(applicable)
+
+    by_ticker = {row.get("ticker"): row for row in results}
+    eroder_rows = [row for row in results if (row.get("price_screen") or {}).get("estimated_eroder")]
+    review_rows = [row for row in results if (row.get("price_screen") or {}).get("review_candidate")]
+    verified = list(overall.get("candidates") or [])
+    eroder_tickers = {row["ticker"] for row in eroder_rows}
+    review_only_rows = [row for row in review_rows if row["ticker"] not in eroder_tickers]
+    verified_holdings = [_holding_entry(by_ticker.get(item.get("ticker")), "verified", account, complete, item) for item in verified]
+    eroder_holdings = [_holding_entry(row, "estimated_eroder", account, complete) for row in eroder_rows]
+    review_holdings = [_holding_entry(row, "review", account, complete) for row in review_only_rows]
+    implicated = verified_holdings + eroder_holdings + review_holdings
+    eroder_value = _verdict_value(results, [row["ticker"] for row in eroder_rows])
+    eroder_count = len(eroder_rows)
+    review_count = len(review_rows)
+    verified_count = len(verified)
+    extra_quarters = 0
+    for candidate in verified:
+        row = next((item for item in results if item.get("ticker") == candidate.get("ticker")), None)
+        extra_quarters += max(0, ((row or {}).get("persistence") or {}).get("qualifying_quarters", 0) - 2)
+
+    eroder_share = _verdict_share(_verdict_value(results, [row["ticker"] for row in eroder_rows]), account, complete)
+    review_share = _verdict_share(_verdict_value(results, [row["ticker"] for row in review_rows]), account, complete)
+    verified_share = _verdict_share(_verdict_value(results, [row.get("ticker") for row in verified]), account, complete)
+    eroder_weight = _verdict_weight(eroder_share, eroder_count, applicable_count)
+    review_weight = _verdict_weight(review_share, review_count, applicable_count)
+    verified_weight = _verdict_weight(verified_share, verified_count, applicable_count)
+    implicated_shares = [share for share in (verified_share, eroder_share, review_share) if share is not None]
+    implicated_share = max(implicated_shares) if implicated_shares else None
+    coverage = preliminary.get("value_coverage")
+    if coverage is None and overall.get("applicable_count"):
+        coverage = overall.get("assessed_count", 0) / overall["applicable_count"]
+
+    price_ready = preliminary.get("persistence_evaluable_count", 0) >= 2 or preliminary.get("covered_count", 0) >= 1
+    nav_ready = (overall.get("assessed_count") or 0) > 0
+    has_signal = verified_count or eroder_count or review_count
+
+    if not applicable:
+        strength = "none"
+        explanation = "No applicable fund holdings in this portfolio."
+        summary_text = "No fund holdings to assess."
+    elif verified_count or eroder_weight >= 0.10:
+        strength = "strong"
+        explanation = (
+            "This account has a persistent NAV-erosion signal: verified quarterly NAV shortfalls "
+            "and/or estimated covered-call eroders covering at least 10% of current account value. "
+            "The probability is an evidence score for that screen, not a forecast that NAV will keep falling."
+        )
+        summary_text = "Persistent or estimated erosion signal in this account."
+    elif eroder_count or review_count:
+        strength = "weak"
+        explanation = (
+            "Holdings need review because of price-based shortfalls or a small estimated-eroder position, "
+            "but the account does not yet meet the Strong NAV Erosion threshold. "
+            "This is not verified causation."
+        )
+        summary_text = "Review indicated; the Strong NAV Erosion threshold was not met."
+    elif price_ready or nav_ready:
+        strength = "none"
+        explanation = (
+            "Screened holdings did not establish a persistent NAV-erosion or estimated covered-call eroder signal. "
+            "This does not certify that every holding preserved NAV, especially where published NAV is still missing."
+        )
+        summary_text = "No persistent or estimated erosion signal in screened holdings."
+    else:
+        strength = "insufficient"
+        explanation = (
+            "Not enough completed-month price evidence or published NAV to classify this portfolio as "
+            "Strong, Weak, or No NAV Erosion."
+        )
+        summary_text = "Completed-month and published-NAV evidence are still incomplete."
+
+    parts = []
+    if verified_count:
+        parts.append(f"{verified_count} verified persistent candidate{'s' if verified_count != 1 else ''}")
+    if eroder_count:
+        parts.append(f"{eroder_count} estimated covered-call eroder{'s' if eroder_count != 1 else ''}")
+    elif review_count:
+        parts.append(f"{review_count} price-based review candidate{'s' if review_count != 1 else ''}")
+    if implicated_share is not None and has_signal:
+        parts.append(f"{implicated_share * 100:.0f}% of current account value")
+    if parts:
+        summary_text = " · ".join(parts)
+
+    probability = 0 if not applicable else _verdict_probability(
+        strength, verified_weight=verified_weight, eroder_weight=eroder_weight,
+        review_weight=review_weight, verified_count=verified_count, eroder_count=eroder_count,
+        extra_quarters=extra_quarters, coverage=coverage,
+    )
+    return {
+        "label": VERDICT_LABELS[strength],
+        "strength": strength,
+        "probability": probability,
+        "probability_label": "Evidence probability",
+        "summary": summary_text,
+        "explanation": explanation,
+        "verified_count": verified_count,
+        "eroder_count": eroder_count,
+        "review_count": review_count,
+        "value_share": implicated_share,
+        "has_signal": bool(has_signal),
+        "holdings": {
+            "verified": verified_holdings,
+            "estimated_eroders": eroder_holdings,
+            "review": review_holdings,
+            "implicated": implicated,
+        },
+        "reduction": _reduction_plan(
+            strength, probability, verified=verified_holdings, eroders=eroder_holdings,
+            reviews=review_holdings, eroder_share=eroder_share, eroder_value=eroder_value,
+            account=account, complete=complete,
+        ),
+    }
+
+
 def persistence_check(nav, distributions, first, last, plan, loader):
     """Use independent completed calendar quarters within the selected window.
 
@@ -344,14 +636,18 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
                "capital_status": "unconfirmed", "structural_erosion": "unconfirmed", "guidance": guide,
                "reference": plan, "reference_result": {"status": "unavailable"},
                "persistence": {"status": "insufficient_quarterly_evidence", "qualifying_quarters": 0, "quarters_compared": 0, "minimum_required": 2, "windows": []},
-               "nav_erosion_scope": info.get("nav_erosion_scope", "auto"), "metrics": None,
+               "nav_erosion_scope": info.get("nav_erosion_scope") or "auto",
+               "nav_benchmark_override": str(info.get("nav_benchmark_override") or "").strip().upper(),
+               "metrics": None,
                "reason": "Published NAV and complete distribution/share-adjustment history are needed."}
         kind = guide["security_kind"]
-        if kind == "stock":
-            row.update(capital_status="not_applicable", reason="Fund NAV assessment does not apply to an operating-company stock.")
+        if kind in {"stock", "cash"}:
+            row.update(capital_status="not_applicable",
+                       reason=guide.get("not_applicable_reason") or "Fund NAV assessment does not apply to an operating-company stock.")
             return row
         if kind == "unknown":
-            row["reason"] = "Security identity/type needs verification before selecting an NAV source or reference."
+            row["reason"] = ("Security identity/type needs verification before selecting an NAV source or reference. "
+                             "Choose Include (manual) and enter a benchmark to screen it anyway.")
             return row
         if row["nav_erosion_scope"] == "skip":
             row["reason"] = "Skipped by user setting; included in unconfirmed exposure."
@@ -438,11 +734,12 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
     flagged = {row["ticker"] for row in overall["candidates"]}
     for row in results:
         row["erosion_review"] = row["ticker"] in flagged
+    summary = {"states": states, "cash": cash, "account_value": total,
+               "value_coverage_complete": cash is not None and not missing_values,
+               "missing_values": missing_values,
+               "reference_available": sum(r["reference_result"]["status"] == "available" for r in results),
+               "reference_needs_review": sum(bool(r["reference"]["warning"]) or not r["reference"]["legs"] for r in results if r["capital_status"] != "not_applicable")}
     return {"version": VERSION, "window": window, "requested_start": start.isoformat() if start.year != 1900 else None,
             "as_of": as_of.isoformat(), "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(), "results": results,
-            "overall": overall, "preliminary": preliminary_overview,
-            "summary": {"states": states, "cash": cash, "account_value": total,
-                        "value_coverage_complete": cash is not None and not missing_values,
-                        "missing_values": missing_values,
-                        "reference_available": sum(r["reference_result"]["status"] == "available" for r in results),
-                        "reference_needs_review": sum(bool(r["reference"]["warning"]) or not r["reference"]["legs"] for r in results if r["capital_status"] != "not_applicable")}}
+            "overall": overall, "preliminary": preliminary_overview, "verdict": portfolio_verdict(results, preliminary_overview, overall, summary),
+            "summary": summary}
