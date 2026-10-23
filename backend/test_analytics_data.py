@@ -10,7 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app as app_module
-from grading import min_observations_for_window
+from grading import min_observations_for_window, portfolio_returns_frame
 
 
 def _blank_coverage(*_args, **_kwargs):
@@ -322,9 +322,9 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
     HELD_VALUES = {"AAA": 1200.0, "BBB": 1800.0, "CCC": 500.0}
 
     def _constituent_returns(self):
-        """Daily returns per holding, on the zero-filled basis the grade uses."""
+        """Daily returns per holding, on the basis the grade uses."""
         close = self.market_data["Close"][list(self.HELD_VALUES)]
-        return close.pct_change().fillna(0)
+        return portfolio_returns_frame(close)
 
     def _weight_fractions(self):
         total = sum(self.HELD_VALUES.values())
@@ -346,7 +346,8 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         self.assertEqual(out_of_range, [], out_of_range[:5])
 
         port_daily = self._constituent_returns().dot(self._weight_fractions())
-        cum = (1 + port_daily).cumprod()
+        # The curve starts at 1.0 on the window's first date.
+        cum = pd.concat([pd.Series([1.0]), (1 + port_daily).cumprod()], ignore_index=True)
         expected = (cum / cum.cummax() - 1) * 100
         # A flat line would pass the range check without measuring anything.
         self.assertLess(float(expected.min()), -3)

@@ -967,7 +967,7 @@ export default function Settings() {
           </FormulaFieldGrid>
           <h4 style={{ marginBottom: 0 }}>Portfolio weights</h4>
           <FormulaFieldGrid>
-            {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture', diversification: 'Diversification', navHealth: 'NAV Health' }).map(([key, label]) => (
+            {Object.entries({ ulcerIndex: 'Ulcer Index', calmar: 'Calmar', omega: 'Omega', sortino: 'Sortino', sharpe: 'Sharpe', maxDrawdown: 'Max drawdown', downCapture: 'Downside capture', captureRatio: 'Capture ratio', diversification: 'Diversification', diversificationRatio: 'Diversification ratio', navHealth: 'NAV Health' }).map(([key, label]) => (
               <FormulaNumberField key={key} label={`${label} weight`} help={gradingPreferenceHelp('portfolioRisk', 'portfolioWeights', key)} value={portfolioRiskFormula.portfolioWeights[key]} onChange={value => updateGradingPreference('portfolioRisk', 'portfolioWeights', key, value)} />
             ))}
           </FormulaFieldGrid>
@@ -987,6 +987,7 @@ export default function Settings() {
           </p>
           {Object.entries({
             calmar: 'Calmar ratio', omega: 'Omega ratio', sortino: 'Sortino ratio', sharpe: 'Sharpe ratio', diversification: 'Effective holdings',
+            diversificationRatio: 'Diversification ratio', captureRatio: 'Capture ratio',
           }).map(([metric, label]) => (
             <div key={metric} style={{ marginTop: '0.8rem' }}>
               <strong style={{ fontSize: '0.82rem' }}>{label} · higher is better</strong>

@@ -798,6 +798,8 @@ export default function PortfolioBuilder() {
                       { label: 'Total Value', val: fmt$(pm.total_value) },
                       { label: 'Holdings', val: pm.n_holdings },
                       { label: 'Effective N', val: pm.effective_n },
+                      { label: 'Diversification Ratio', val: pm.diversification_ratio != null ? pm.diversification_ratio.toFixed(2) : '--' },
+                      { label: 'Capture Ratio', val: pm.capture_ratio != null ? pm.capture_ratio.toFixed(2) : '--' },
                       { label: 'Max Drawdown', val: pm.max_drawdown != null ? (pm.max_drawdown * 100).toFixed(1) + '%' : '--' },
                       { label: 'Ulcer Index', val: pm.ulcer_index != null ? pm.ulcer_index.toFixed(2) : '--' },
                       { label: 'NAV Health', val: pm.nav_erosion_avg_pct != null ? pm.nav_erosion_avg_pct.toFixed(1) + '%' : '--' },
@@ -847,6 +849,8 @@ export default function PortfolioBuilder() {
                 { key: 'ulcer_index', label: 'Ulcer', dec: 2, lowerBetter: true },
                 { key: 'max_drawdown', label: 'Max DD', fmt: 'pct', lowerBetter: true },
                 { key: 'effective_n', label: 'Eff N', dec: 1, lowerBetter: false },
+                { key: 'diversification_ratio', label: 'Div Ratio', dec: 2, lowerBetter: false },
+                { key: 'capture_ratio', label: 'Capture', dec: 2, lowerBetter: false },
               ]
               // winner per metric: index of the better portfolio (0 or 1)
               const winners = hasDelta ? metrics.map(m => {
@@ -957,6 +961,8 @@ export default function PortfolioBuilder() {
             { key: 'ulcer_index', label: 'Ulcer', dec: 2, lowerBetter: true },
             { key: 'max_drawdown', label: 'Max DD', fmt: 'pct', lowerBetter: true },
             { key: 'effective_n', label: 'Eff N', dec: 1, lowerBetter: false },
+            { key: 'diversification_ratio', label: 'Div Ratio', dec: 2, lowerBetter: false },
+            { key: 'capture_ratio', label: 'Capture', dec: 2, lowerBetter: false },
           ]
           const winners = hasDelta ? metrics.map(m => {
             const a = res[0][m.key], b = res[1][m.key]
