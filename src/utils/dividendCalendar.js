@@ -27,6 +27,18 @@ export function calendarPaymentIncome(ev) {
   return estimatePaymentIncome(ev)
 }
 
+export function calendarPaymentStatus(ev) {
+  const dateEstimated = Boolean(ev.calendar_estimated ?? (ev.pay_estimated || ev.calendar_projected))
+  // Old cached rows contain only date confirmation, so cannot confirm amounts.
+  const amountEstimated = ev.amount_estimated !== false
+  const estimated = dateEstimated || amountEstimated
+  const label = dateEstimated
+    ? '~ Estimated'
+    : amountEstimated ? 'Scheduled · Estimated amount' : '✓ Confirmed'
+  const description = `${dateEstimated ? 'Estimated' : 'Confirmed'} pay date · ${amountEstimated ? 'Estimated' : 'Declared'} amount`
+  return { dateEstimated, amountEstimated, estimated, label, description }
+}
+
 export function buildPaymentAgenda(events = []) {
   const groups = new Map()
   ;(events || []).forEach((event) => {

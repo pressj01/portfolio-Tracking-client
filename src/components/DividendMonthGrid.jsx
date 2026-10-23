@@ -2,20 +2,21 @@ import { formatMoney } from '../utils/money'
 import {
   WEEKDAYS,
   calendarPaymentIncome,
+  calendarPaymentStatus,
   currentYieldPct,
 } from '../utils/dividendCalendar'
 
 export function DividendMonthEvent({ ev }) {
   const payment = calendarPaymentIncome(ev)
   const yieldPct = currentYieldPct(ev)
-  const estimated = ev.calendar_estimated ?? (ev.pay_estimated || ev.calendar_projected)
+  const { estimated, amountEstimated, description: statusDescription } = calendarPaymentStatus(ev)
   const description = ev.description || 'Dividend payment'
 
   return (
     <div
       className="dc-month-event"
       style={{ borderLeftColor: ev.color || 'var(--teal)' }}
-      title={`${ev.ticker} - ${description}\nPayment: ${formatMoney(payment)}\nYield: ${yieldPct == null ? 'Unavailable' : `${yieldPct.toFixed(2)}%`}\nEx-dividend: ${ev.date || 'Unavailable'}\n${estimated ? 'Estimated pay date' : 'Confirmed pay date'}`}
+      title={`${ev.ticker} - ${description}\n${amountEstimated ? 'Estimated payment' : 'Payment'}: ${formatMoney(payment)}\nYield: ${yieldPct == null ? 'Unavailable' : `${yieldPct.toFixed(2)}%`}\nEx-dividend: ${ev.date || 'Unavailable'}\n${statusDescription}`}
     >
       <div
         className="dc-month-event-icon"
@@ -30,11 +31,11 @@ export function DividendMonthEvent({ ev }) {
           <span>{description}</span>
         </div>
         <div className="dc-month-event-meta">
-          <strong>{formatMoney(payment)}</strong>
+          <strong>{amountEstimated ? '~ ' : ''}{formatMoney(payment)}</strong>
           <span
             className={`dc-month-date-status${estimated ? ' estimated' : ' confirmed'}`}
-            title={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
-            aria-label={estimated ? 'Estimated pay date' : 'Confirmed pay date'}
+            title={statusDescription}
+            aria-label={statusDescription}
           >
             {estimated ? '~' : '\u2713'}
           </span>
@@ -102,9 +103,8 @@ export function DividendMonthWeekdays() {
 export function DividendMonthLegend() {
   return (
     <div className="dc-month-legend">
-      <span><i className="confirmed">{'\u2713'}</i> confirmed pay date</span>
-      <span><i className="confirmed">{'\u2713'}</i> matched to imported transaction history</span>
-      <span><i className="estimated">~</i> estimated from the current dividend schedule</span>
+      <span><i className="confirmed">{'\u2713'}</i> confirmed pay date and declared amount</span>
+      <span><i className="estimated">~</i> estimated date or amount; hover for details</span>
       <span><i className="holiday" aria-hidden="true" /> bank holiday: payments due that day are paid the next business day</span>
       <span>Tickers and amounts follow the selected account; aggregate views combine only their configured members.</span>
     </div>

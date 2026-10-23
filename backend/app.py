@@ -17664,6 +17664,10 @@ def _fetch_kurv_distribution_snapshot(ticker, as_of=None):
         upcoming_rows.sort(key=lambda item: item[0])
         chosen_ex, chosen_pay = upcoming_rows[0]
 
+    # Keep the amount tied to its own distribution. A published schedule row
+    # with "--" confirms the dates, but the last amount is only a forecast.
+    amount_ex = chosen_ex if chosen_ex in history.index else latest_actual_ex
+
     # Kurv now has both monthly and weekly funds. Prefer the cadence of the
     # issuer's dated schedule so new launches such as KEO do not inherit the
     # older monthly-family default before enough paid history exists.
@@ -17677,13 +17681,15 @@ def _fetch_kurv_distribution_snapshot(ticker, as_of=None):
     return {
         "known": True,
         "has_dividend": True,
-        "div": float(history.iloc[-1]),
+        "div": float(history.loc[amount_ex]),
         "ex_div_date": chosen_ex.strftime("%m/%d/%y"),
         "div_pay_date": chosen_pay.strftime("%m/%d/%y") if chosen_pay is not None else None,
         "freq": freq,
         "history": history,
         "source": "Kurv",
         "source_url": url,
+        "amount_ex_div_date": amount_ex.strftime("%Y-%m-%d"),
+        "amount_estimated": chosen_ex not in history.index,
     }
 
 
@@ -43010,7 +43016,10 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 holding_value = holding.get(field)
                 # An expanded issuer row carries an event-specific cash amount;
                 # do not replace it with the holding's regular run-rate payment.
-                if selected_event.get("official_schedule") and field == "payment_income":
+                if field == "payment_income" and (
+                    selected_event.get("official_schedule")
+                    or selected_event.get("amount_estimated") is False
+                ):
                     continue
                 if holding_value is not None and (field != "description" or holding_value):
                     merged[field] = holding_value
@@ -43117,6 +43126,7 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 "calendar_source": source,
                 "calendar_projected": source == "projected",
                 "calendar_estimated": source == "projected",
+                "amount_estimated": source == "projected" or payment.get("amount_estimated", True),
             })
             if payment_income > 0:
                 payment["payment_income"] = round(payment_income, 2)
@@ -43507,6 +43517,32 @@ def _cached_dividend_calendar_events(holdings, is_aggregate, profile_ids):
     return _cache_get(_DIVIDEND_CALENDAR_CACHE, cache_key)
 
 
+def _calendar_amount_estimated(official, ex_date, amount, amount_pinned=False):
+    """Confirm an amount only for the distribution whose ex-date it belongs to."""
+    if amount_pinned:
+        return False
+    if not official or amount is None:
+        return True
+    if official.get("amount_estimated") is True:
+        return True
+    history = official.get("history")
+    if isinstance(history, pd.Series) and not history.empty:
+        for date, value in history.items():
+            timestamp = _parse_timestamp_value(date)
+            if timestamp is not None and timestamp.date() == ex_date:
+                return not math.isclose(float(value), float(amount), abs_tol=1e-8)
+        return True
+    amount_date = _parse_timestamp_value(
+        official.get("amount_ex_div_date") or official.get("ex_div_date")
+    )
+    return not (
+        official.get("has_dividend")
+        and amount_date is not None and amount_date.date() == ex_date
+        and official.get("div") is not None
+        and math.isclose(float(official["div"]), float(amount), abs_tol=1e-8)
+    )
+
+
 def _calendar_events_from_official_schedule(schedule, base_event, today=None):
     """Expand issuer-declared rows that carry their own amount and pay date."""
     today = today or datetime.date.today()
@@ -43570,6 +43606,7 @@ def _calendar_events_from_official_schedule(schedule, base_event, today=None):
             "pay_source": "issuer",
             "distribution_type": frequency_label or None,
             "official_schedule": True,
+            "amount_estimated": False,
         })
         expanded.append(event)
     return sorted(expanded, key=lambda event: (event["date"], event["pay_date"]))
@@ -43846,6 +43883,12 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             continue
         normalized_pay_date = normalized_pay_ts.date()
 
+        amount_estimated = _calendar_amount_estimated(
+            official, dt, amount, amount_pinned=amount_pinned,
+        )
+        if not amount_estimated and amount and quantity > 0:
+            payment_income = amount * quantity
+
         base_event = {
             "ticker":        ticker,
             "description":   description,
@@ -43866,6 +43909,7 @@ def _build_cal_events_locked(holdings=None, is_aggregate=None, profile_ids=None)
             "pay_month":     normalized_pay_date.strftime("%b"),
             "pay_day":       str(normalized_pay_date.day),
             "pay_estimated": pay_estimated,
+            "amount_estimated": amount_estimated,
         }
         declared_events = _calendar_events_from_official_schedule(
             official_schedule, base_event, today=today_d

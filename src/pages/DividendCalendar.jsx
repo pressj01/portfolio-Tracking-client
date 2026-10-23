@@ -5,6 +5,7 @@ import {
   paymentsPerYear,
   estimatePaymentIncome,
   calendarPaymentIncome,
+  calendarPaymentStatus,
   buildPaymentAgenda,
   estimateAnnualYieldPct,
   isoDate,
@@ -469,7 +470,7 @@ export default function DividendCalendar() {
   const [monthPayments, setMonthPayments] = useState([])
   const [monthLoading, setMonthLoading] = useState(true)
   const [loading, setLoading] = useState(true)
-  const cacheKey = useMemo(() => `portfolio_div_calendar_v8_${selection}`, [selection])
+  const cacheKey = useMemo(() => `portfolio_div_calendar_v9_${selection}`, [selection])
 
   useEffect(() => {
     let stale = false
@@ -648,7 +649,7 @@ export default function DividendCalendar() {
             <span className="dc-count">
               {filtered.length} payment{filtered.length !== 1 ? 's' : ''}
             </span>
-            <span className="dc-paydate-note">~ estimated date &nbsp;|&nbsp; ✓ confirmed date</span>
+            <span className="dc-paydate-note">Scheduled dates can have estimated amounts. ✓ Confirmed requires a declared amount.</span>
           </div>
 
           {filtered.length === 0 && agendaPayments.length > 0 && (
@@ -667,6 +668,7 @@ export default function DividendCalendar() {
               }) || 'Pay date unavailable'
               const shortMonth = groupDate?.toLocaleDateString(undefined, { month: 'short' }) || 'TBD'
               const weekday = groupDate?.toLocaleDateString(undefined, { weekday: 'short' }) || 'Date'
+              const estimatedIncome = group.events.some(ev => calendarPaymentStatus(ev).amountEstimated)
               return (
                 <section className="divcal-agenda-day" key={group.date || 'unscheduled'}>
                   <header className="divcal-agenda-day-head">
@@ -679,7 +681,7 @@ export default function DividendCalendar() {
                       <h2>{fullDate}</h2>
                       <span>
                         {group.events.length} payment{group.events.length !== 1 ? 's' : ''}
-                        {group.income > 0 ? ` · ${formatMoney(group.income)} portfolio income` : ''}
+                        {group.income > 0 ? ` · ${formatMoney(group.income)} ${estimatedIncome ? 'estimated portfolio income' : 'portfolio income'}` : ''}
                       </span>
                     </div>
                   </header>
@@ -688,6 +690,7 @@ export default function DividendCalendar() {
                     {group.events.map((ev, index) => {
                       const paidStatus = getPaidStatus(ev)
                       const paymentIncome = calendarPaymentIncome(ev)
+                      const paymentStatus = calendarPaymentStatus(ev)
                       const description = String(ev.description || 'Dividend payment')
                       const exDate = dateFromIso(ev.date)
                       const exDateLabel = exDate?.toLocaleDateString(undefined, {
@@ -698,12 +701,12 @@ export default function DividendCalendar() {
                         ? 'paid'
                         : isPast
                           ? 'past'
-                          : ev.pay_estimated ? 'estimated' : 'confirmed'
+                          : paymentStatus.estimated ? 'estimated' : 'confirmed'
                       const statusLabel = paidStatus
                         ? `✓ ${paidStatus}`
                         : isPast
                           ? 'Past date'
-                          : ev.pay_estimated ? '~ Estimated' : '✓ Confirmed'
+                          : paymentStatus.label
 
                       return (
                         <article
@@ -724,8 +727,8 @@ export default function DividendCalendar() {
                             </div>
                             <div className="divcal-agenda-meta">
                               <span>Ex-dividend <strong>{exDateLabel}</strong></span>
-                              {paymentIncome > 0 && <span>Portfolio income <strong>{formatMoney(paymentIncome)}</strong></span>}
-                              {ev.amount != null && <span><strong>{formatMoney(ev.amount)}</strong>/share</span>}
+                              {paymentIncome > 0 && <span>{paymentStatus.amountEstimated ? 'Estimated portfolio income' : 'Portfolio income'} <strong>{formatMoney(paymentIncome)}</strong></span>}
+                              {ev.amount != null && <span><strong>{formatMoney(ev.amount)}</strong>/share{paymentStatus.amountEstimated ? ' estimated' : ''}</span>}
                               {ev.freq_label && <span>{ev.freq_label}</span>}
                             </div>
                           </div>

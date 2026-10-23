@@ -5,11 +5,28 @@ import {
   buildPaymentAgenda,
   buildMonthCells,
   buildWeekCells,
+  calendarPaymentStatus,
   isoDate,
   monthKeysForWeek,
   usBankHolidays,
   weekPaymentTotal,
 } from './dividendCalendar.js'
+
+test('a scheduled date does not confirm a carried-forward dividend amount', () => {
+  const status = calendarPaymentStatus({ pay_estimated: false, amount_estimated: true })
+  assert.equal(status.dateEstimated, false)
+  assert.equal(status.amountEstimated, true)
+  assert.equal(status.estimated, true)
+  assert.equal(status.label, 'Scheduled · Estimated amount')
+  assert.equal(status.description, 'Confirmed pay date · Estimated amount')
+})
+
+test('confirmation requires both a known date and a declared amount', () => {
+  assert.equal(calendarPaymentStatus({ pay_estimated: false, amount_estimated: false }).label, '✓ Confirmed')
+  assert.equal(calendarPaymentStatus({ pay_estimated: true, amount_estimated: false }).estimated, true)
+  assert.equal(calendarPaymentStatus({ pay_estimated: false }).amountEstimated, true)
+  assert.equal(calendarPaymentStatus({ calendar_estimated: true, pay_estimated: false, amount_estimated: false }).dateEstimated, true)
+})
 
 test('buildPaymentAgenda groups and sorts events by pay date', () => {
   const groups = buildPaymentAgenda([
