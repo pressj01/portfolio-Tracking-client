@@ -26,6 +26,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import {
   accountPercent,
@@ -2176,6 +2177,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 export default function ManageHoldings() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const { runMarketRefresh } = useMarketRefresh()
   const { profileId, isAggregate, selection, basisMode, profileQueryString, profiles } = useProfile()
   const dialog = useDialog()
@@ -3477,7 +3479,8 @@ export default function ManageHoldings() {
                 key={periodOption.key}
                 className={`tr-pbtn${performancePeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                title={periodOption.hint}
+                disabled={Boolean(periodUnavailable(periodOption.key))}
+                title={periodUnavailable(periodOption.key) || periodOption.hint}
                 onClick={() => setPerformancePeriod(periodOption.key)}
               >
                 {periodOption.label}

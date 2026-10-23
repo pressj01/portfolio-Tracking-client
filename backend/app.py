@@ -907,6 +907,10 @@ def _normalize_prices_to_100(close):
 # range starts long after this; anything earlier is a half-typed year.
 _MIN_PERFORMANCE_DATE = datetime.date(1970, 1, 1)
 
+# Mirrors the year buttons in PERFORMANCE_PERIODS (src/utils/performancePeriods.js).
+_PERFORMANCE_YEAR_PERIODS = (1, 2, 3, 5, 6, 7, 8, 9, 10)
+_PERFORMANCE_YEAR_PERIOD_KEYS = {f"{years}y": years for years in _PERFORMANCE_YEAR_PERIODS}
+
 
 def _calendar_months_ago(value, months):
     """Subtract whole calendar months while keeping the day when possible."""
@@ -966,8 +970,7 @@ def _resolve_total_return_period(
         "6m": "6 Months",
         "ytd": "Year to Date",
         "1y": "1 Year",
-        "2y": "2 Years",
-        "5y": "5 Years",
+        **{f"{years}y": f"{years} Years" for years in _PERFORMANCE_YEAR_PERIODS if years > 1},
         "all": "From First Trade",
         "custom": "Custom",
     }
@@ -1074,12 +1077,8 @@ def _resolve_total_return_period(
         start_date = _calendar_months_ago(today, 6)
     elif key == "ytd":
         start_date = datetime.date(today.year, 1, 1)
-    elif key == "1y":
-        start_date = _calendar_years_ago(today, 1)
-    elif key == "2y":
-        start_date = _calendar_years_ago(today, 2)
-    elif key == "5y":
-        start_date = _calendar_years_ago(today, 5)
+    elif key in _PERFORMANCE_YEAR_PERIOD_KEYS:
+        start_date = _calendar_years_ago(today, _PERFORMANCE_YEAR_PERIOD_KEYS[key])
     else:
         raise ValueError(f"Unsupported period: {period}")
 
@@ -13577,6 +13576,37 @@ def _nav_history_flow_gaps(conn, profile_ids, first_date, last_date):
         # Older databases have no coverage table: no deposit history either.
         pass
     return flow_coverage_gaps(first_date, last_date, spans, _load_profile_name_map(conn, managed))
+
+
+@app.route("/api/performance/inception", methods=["GET"])
+def api_performance_inception():
+    """First trade, purchase, or import date of the active portfolio.
+
+    The shared date-range buttons gray out a preset whose start is earlier
+    than this, because that window does not exist yet for this portfolio.
+    """
+    _is_aggregate, profile_ids = get_profile_filter()
+    if not profile_ids:
+        return jsonify({"inception_date": None})
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        holdings = [dict(row) for row in conn.execute(
+            f"""SELECT purchase_date, import_date FROM all_account_info
+                WHERE profile_id IN ({placeholders}) AND quantity > 0""",
+            profile_ids,
+        )]
+        try:
+            transactions = [dict(row) for row in conn.execute(
+                f"""SELECT transaction_date FROM transactions
+                    WHERE profile_id IN ({placeholders}) AND transaction_date IS NOT NULL""",
+                profile_ids,
+            )]
+        except sqlite3.OperationalError:
+            transactions = []
+    finally:
+        conn.close()
+    return jsonify({"inception_date": _portfolio_inception_date(holdings, transactions)})
 
 
 @app.route("/api/nav/history", methods=["GET"])

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { navHistoryCallouts, resampleNavHistory, totalReturnGapLines, withLiveNavPoint } from './navHistoryInterval.js'
+import { navHistoryCallouts, navHistoryForWindow, resampleNavHistory, totalReturnGapLines, withLiveNavPoint } from './navHistoryInterval.js'
 
 const point = (date, value) => ({ date, value })
 const dates = points => points.map(item => item.date)
@@ -181,4 +181,45 @@ test('total-return gap lines name each account and what its history covers', () 
 test('no flow gaps means no total-return notice', () => {
   assert.deepEqual(totalReturnGapLines([{ date: '2026-05-19' }]), [])
   assert.deepEqual(totalReturnGapLines([]), [])
+})
+
+test('a shared range keeps its points plus the baseline close before its start', () => {
+  const history = [
+    point('2026-01-02', 1),
+    point('2026-04-17', 2),
+    point('2026-04-20', 3),
+    point('2026-04-24', 4),
+    point('2026-07-23', 5),
+  ]
+  // 3M from Thursday 2026-04-23: Monday the 20th is the last close before it.
+  assert.deepEqual(
+    dates(navHistoryForWindow(history, { start: '2026-04-23', end: '2026-07-23', anchored: true })),
+    ['2026-04-20', '2026-04-24', '2026-07-23'],
+  )
+  // 1D is already two sessions, so it has no extra baseline.
+  assert.deepEqual(
+    dates(navHistoryForWindow(history, { start: '2026-04-24', end: '2026-07-23', anchored: false })),
+    ['2026-04-24', '2026-07-23'],
+  )
+  // All Market and Open G/L show everything recorded.
+  assert.equal(navHistoryForWindow(history, null), history)
+})
+
+test('a baseline older than the reach-back is not stretched into the range', () => {
+  const history = [point('2025-06-02', 1), point('2026-05-19', 2), point('2026-10-23', 3)]
+  // 1Y with history that only starts in May: no 2025 point drags the axis back.
+  assert.deepEqual(
+    dates(navHistoryForWindow(history, { start: '2025-10-23', end: '2026-10-23', anchored: true })),
+    ['2026-05-19', '2026-10-23'],
+  )
+})
+
+test('a custom range that ends in the past drops later points and renames Current', () => {
+  const history = [point('2026-03-02', 10), point('2026-03-31', 12), point('2026-04-30', 9), point('2026-10-23', 20)]
+  const ranged = navHistoryForWindow(history, { start: '2026-03-01', end: '2026-04-30', anchored: true })
+  assert.deepEqual(dates(ranged), ['2026-03-02', '2026-03-31', '2026-04-30'])
+  assert.deepEqual(
+    navHistoryCallouts(ranged, { latestName: 'End' }).map(callout => callout.label),
+    ['High', 'End is the low'],
+  )
 })

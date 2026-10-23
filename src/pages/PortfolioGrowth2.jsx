@@ -21,6 +21,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import {
   fetchHoldingsJson,
   lifetimeGrowth2Payload,
@@ -163,6 +164,7 @@ function TabButtons({ options, value, onChange }) {
 
 export default function PortfolioGrowth2({ embedded = false }) {
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const { selection } = useProfile()
   const { isDark } = useTheme()
   // Split View can mount this screen twice. Refs keep each Plotly lifecycle
@@ -403,14 +405,15 @@ export default function PortfolioGrowth2({ embedded = false }) {
       <div className="growth-filters">
         <div className="growth-filter-group">
           <label>Shared Performance Date Range</label>
-          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
+          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none', flexWrap: 'wrap' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
                 key={option.key}
                 className={`tab${period === option.key ? ' active' : ''}`}
                 onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.6rem', fontSize: '0.85rem' }}
-                title={option.hint}
+                disabled={Boolean(periodUnavailable(option.key))}
+                title={periodUnavailable(option.key) || option.hint}
               >
                 {option.label}
               </button>

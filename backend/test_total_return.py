@@ -264,7 +264,13 @@ class TotalReturnPeriodTest(unittest.TestCase):
             "ytd": "2026-01-01",
             "1y": "2025-07-23",
             "2y": "2024-07-23",
+            "3y": "2023-07-23",
             "5y": "2021-07-23",
+            "6y": "2020-07-23",
+            "7y": "2019-07-23",
+            "8y": "2018-07-23",
+            "9y": "2017-07-23",
+            "10y": "2016-07-23",
         }
 
         for period, expected_start in expected_starts.items():
@@ -1959,7 +1965,7 @@ class WeekendStartAnchorTest(unittest.TestCase):
         # monthly and yearly offsets land on weekends of their own.
         saturday = datetime.date(2026, 8, 29)
 
-        for period in ("7d", "1m", "3m", "6m", "ytd", "1y", "2y", "5y"):
+        for period in ("7d", "1m", "3m", "6m", "ytd", "1y", "2y", "3y", "5y", "10y"):
             with self.subTest(period=period):
                 result = _resolve_total_return_period(period, today=saturday)
                 kwargs = result["yf_kwargs"]
