@@ -8,8 +8,30 @@ import {
   gradingSettingsQuery,
   loadGradingPreferences,
   normalizeGradingPreferences,
+  portfolioGradeGuideRows,
   saveGradingPreferences,
 } from './gradingPreferences.js'
+
+test('the grade guide lists the correlation and capture ratios as portfolio-only metrics', () => {
+  const rows = Object.fromEntries(portfolioGradeGuideRows({}).map(row => [row.metric, row]))
+  assert.equal(rows['Diversification Ratio'].portfolio, 10)
+  assert.equal(rows['Diversification Ratio'].holding, null)
+  assert.equal(rows['Diversification Ratio'].list, '1.8 / 1.5 / 1.25 / 1.1')
+  assert.equal(rows['Capture Ratio'].portfolio, 10)
+  assert.equal(rows['Capture Ratio'].a, '≥1.2')
+  const custom = portfolioGradeGuideRows({ portfolioRisk: { portfolioWeights: { captureRatio: 3 } } })
+  assert.equal(custom.find(row => row.metric === 'Capture Ratio').portfolio, 3)
+})
+
+test('guide weights are shares of the total, not raw relative weights', () => {
+  const rows = portfolioGradeGuideRows({})
+  const portfolioSum = rows.reduce((sum, row) => sum + row.portfolioShare, 0)
+  const holdingSum = rows.reduce((sum, row) => sum + (row.holdingShare ?? 0), 0)
+  assert.ok(Math.abs(portfolioSum - 100) < 0.5, `portfolio shares sum to ${portfolioSum}`)
+  assert.ok(Math.abs(holdingSum - 100) < 0.5, `holding shares sum to ${holdingSum}`)
+  // Ulcer Index carries 20 of the 130 default portfolio weight.
+  assert.equal(rows.find(row => row.metric === 'Ulcer Index').portfolioShare, 15.4)
+})
 
 function memoryStorage() {
   const values = new Map()

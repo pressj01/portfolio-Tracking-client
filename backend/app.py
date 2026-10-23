@@ -29651,6 +29651,7 @@ def portfolio_summary_data():
         grade_portfolio,
         letter_grade,
         min_observations_for_window,
+        portfolio_returns_frame,
         _beta,
     )
     warnings.filterwarnings("ignore")
@@ -29873,7 +29874,10 @@ def portfolio_summary_data():
         the portfolio-level regression), False otherwise. Always populates
         ticker_grades[t] and ticker_risk[t].
         """
-        if tc is None or len(tc) < effective_min_obs:
+        # min_obs counts returns, and n closes yield n-1. With exactly min_obs
+        # closes, ticker_score's dead-series guard fails the length check and
+        # scores 0, an "F" for nothing worse than a short history.
+        if tc is None or len(tc) <= effective_min_obs:
             ticker_grades[t] = {"grade": "N/A", "score": None}
             ticker_risk[t] = _blank_risk()
             return False
@@ -30054,7 +30058,7 @@ def portfolio_summary_data():
     portfolio_grade_info = {}
     if len(available) >= 2:
         try:
-            returns_df = close[available].pct_change().fillna(0)
+            returns_df = portfolio_returns_frame(close[available])
             val_map = {r["ticker"]: float(r["current_value"] or 0) for r in rows}
             weights_arr = np.array([val_map.get(t, 0.0) for t in available])
             pm = grade_portfolio(
@@ -30068,6 +30072,11 @@ def portfolio_summary_data():
             portfolio_grade_info["omega"] = pm.get("omega")
             portfolio_grade_info["max_drawdown"] = pm.get("max_drawdown")
             portfolio_grade_info["ulcer_index"] = pm.get("ulcer_index")
+            portfolio_grade_info["diversification_ratio"] = pm.get("diversification_ratio")
+            portfolio_grade_info["effective_n"] = pm.get("effective_n")
+            portfolio_grade_info["capture_ratio"] = pm.get("capture_ratio")
+            portfolio_grade_info["up_capture"] = pm.get("up_capture")
+            portfolio_grade_info["down_capture"] = pm.get("down_capture")
             portfolio_grade_info["beta_sp500"] = pm.get("beta")
             portfolio_daily = returns_df.dot(weights_arr / weights_arr.sum()) if weights_arr.sum() > 0 else None
             benchmark_betas = {}
@@ -35309,7 +35318,10 @@ def dividend_analysis_data():
     import yfinance as yf
     import plotly.graph_objects as go
     import plotly.utils
-    from grading import grade_portfolio, letter_grade, _sharpe, _sortino, _is_stale_or_dead
+    from grading import (
+        grade_portfolio, letter_grade, portfolio_returns_frame,
+        _sharpe, _sortino, _is_stale_or_dead,
+    )
     warnings.filterwarnings("ignore")
 
     def _clean(v):
@@ -35977,7 +35989,7 @@ def dividend_analysis_data():
             if not live:
                 live = available  # fallback: avoid empty grade
             if len(live) >= 2:
-                returns_df = close[live].pct_change().fillna(0)
+                returns_df = portfolio_returns_frame(close[live])
                 weights_arr = np.array([values_map.get(t, 0.0) for t in live])
                 pm = grade_portfolio(
                     returns_df, weights_arr, bench_ret,
@@ -40441,7 +40453,7 @@ def growth_data():
     import warnings
     import numpy as np
     import yfinance as yf
-    from grading import grade_portfolio, _sharpe, _sortino
+    from grading import grade_portfolio, portfolio_returns_frame, _sharpe, _sortino
     warnings.filterwarnings("ignore")
 
     def _clean(v):
@@ -40920,7 +40932,7 @@ def growth_data():
         # YTD/custom request over-fetches to anchor on the prior close), which
         # had the cards measuring one period and labelled with another.
         grade_adjusted = adjusted.reindex(chart_index)
-        returns_for_grade = grade_adjusted[grade_tickers].pct_change().fillna(0)
+        returns_for_grade = portfolio_returns_frame(grade_adjusted[grade_tickers])
         if len(returns_for_grade) >= 30:
             weights_arr = np.array([values.get(t, 0.0) for t in grade_tickers])
             bench_ret = (
@@ -49323,7 +49335,7 @@ def analytics_data():
     import numpy as np
     import yfinance as yf
     from grading import (ticker_score, grade_portfolio, letter_grade,
-                         min_observations_for_window,
+                         min_observations_for_window, portfolio_returns_frame,
                          _sharpe, _sortino, _calmar, _omega,
                          _ulcer_index, _max_drawdown, _capture_ratios, _safe)
     warnings.filterwarnings("ignore")
@@ -49470,7 +49482,8 @@ def analytics_data():
         if t not in close.columns:
             continue
         tc = close[t].dropna()
-        if len(tc) < effective_min_obs:
+        # Needs min_obs returns (n closes give n-1), or ticker_score scores 0.
+        if len(tc) <= effective_min_obs:
             continue
         available_tickers.append(t)
         tr = tc.pct_change().dropna()
@@ -49516,7 +49529,7 @@ def analytics_data():
         ret_full = close[available_tickers].pct_change()
         grade_tickers = list(available_tickers)
         grade_excluded = []
-        returns_df = ret_full.fillna(0)
+        returns_df = portfolio_returns_frame(close[available_tickers])
         graded_returns = returns_df
         # Raw current-value dollars, same as Dashboard; grade_portfolio renormalizes.
         weights_arr = np.array([value_map.get(t, 0.0) for t in grade_tickers])
@@ -49532,8 +49545,10 @@ def analytics_data():
             "max_drawdown": pm.get("max_drawdown"),
             "up_capture": pm.get("up_capture"),
             "down_capture": pm.get("down_capture"),
+            "capture_ratio": pm.get("capture_ratio"),
             "top_weight": pm.get("top_weight"),
             "effective_n": pm.get("effective_n"),
+            "diversification_ratio": pm.get("diversification_ratio"),
             "n_holdings": len(available_tickers),
             "n_holdings_graded": len(grade_tickers),
             "grade_excluded": grade_excluded,
@@ -49567,7 +49582,13 @@ def analytics_data():
         weights_total = float(weights_arr.sum())
         weight_fractions = weights_arr / weights_total if weights_total > 0 else weights_arr
         port_daily = returns_df.dot(weight_fractions)
-        port_cum = (1 + port_daily).cumprod()
+        # The returns start on the window's second date, so seat the curve at
+        # 1.0 on its first: the chart spans the whole window, and a loss on
+        # day one registers as a drawdown.
+        port_cum = pd.concat([
+            pd.Series([1.0], index=close.index[:1]),
+            (1 + port_daily).cumprod(),
+        ])
         roll_max = port_cum.cummax()
         drawdown_s = (port_cum / roll_max - 1)
         step = max(1, len(drawdown_s) // 200)
@@ -52393,6 +52414,8 @@ def builder_compare():
             "ulcer_index": pg.get("ulcer_index"),
             "max_drawdown": pg.get("max_drawdown"),
             "effective_n": pg.get("effective_n"),
+            "diversification_ratio": pg.get("diversification_ratio"),
+            "capture_ratio": pg.get("capture_ratio"),
             "breakdown": {b["category"]: b["score"] for b in pg["grade"]["breakdown"]},
         })
 

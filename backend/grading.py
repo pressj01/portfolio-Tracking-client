@@ -34,8 +34,8 @@ DEFAULT_GRADING_SETTINGS = {
     },
     "portfolioWeights": {
         "ulcerIndex": 20, "calmar": 20, "omega": 15, "sortino": 12,
-        "sharpe": 8, "maxDrawdown": 10, "downCapture": 5,
-        "diversification": 10, "navHealth": 10,
+        "sharpe": 8, "maxDrawdown": 10, "downCapture": 5, "captureRatio": 10,
+        "diversification": 10, "diversificationRatio": 10, "navHealth": 10,
     },
     "higherBands": {
         "calmar": {"excellent": 1.5, "good": 1.0, "fair": 0.5, "poor": 0.2},
@@ -43,6 +43,11 @@ DEFAULT_GRADING_SETTINGS = {
         "sortino": {"excellent": 2.0, "good": 1.5, "fair": 1.0, "poor": 0.5},
         "sharpe": {"excellent": 1.5, "good": 1.0, "fair": 0.5, "poor": 0.0},
         "diversification": {"excellent": 20, "good": 12, "fair": 6, "poor": 3},
+        # 1.0 is no benefit at all. With many holdings the ratio approaches
+        # 1/sqrt(average pairwise correlation): 1.8 ~ 0.3, 1.25 ~ 0.65.
+        "diversificationRatio": {"excellent": 1.8, "good": 1.5, "fair": 1.25, "poor": 1.1},
+        # 1.0 is what any fund that just tracks the benchmark at some beta gets.
+        "captureRatio": {"excellent": 1.2, "good": 1.05, "fair": 0.95, "poor": 0.85},
     },
     "lowerBands": {
         "ulcerIndex": {"excellent": 3, "good": 7, "fair": 12, "poor": 20},
@@ -260,8 +265,15 @@ def _max_drawdown(close):
 
 def _capture_ratios(ticker_returns, bench_returns, min_obs=MIN_RATIO_OBSERVATIONS):
     try:
-        if len(ticker_returns) < min_obs:
+        # Measure both sides over the same days. Unaligned, a holding younger
+        # than the window was compared with the benchmark's mean over days it
+        # did not trade, and a bar the benchmark lacks (a weekend crypto print)
+        # made the boolean mask unalignable, which silently blanked the ratio.
+        aligned = pd.concat([ticker_returns, bench_returns], axis=1, join="inner").dropna()
+        if len(aligned) < min_obs:
             return None, None
+        ticker_returns = aligned.iloc[:, 0]
+        bench_returns = aligned.iloc[:, 1]
         up_days = bench_returns > 0
         down_days = bench_returns < 0
         if up_days.sum() == 0 or down_days.sum() == 0:
@@ -275,6 +287,43 @@ def _capture_ratios(ticker_returns, bench_returns, min_obs=MIN_RATIO_OBSERVATION
         return up_cap, down_cap
     except Exception:
         return None, None
+
+
+def _capture_ratio(up_capture, down_capture):
+    """Upside capture divided by downside capture.
+
+    Above 1 the portfolio kept more of the benchmark's gains than of its
+    losses. Downside capture alone rewards a fund for simply capping its
+    upside, as covered-call funds do; this asks whether the protection was
+    worth what it gave up. Undefined when downside capture is zero or
+    negative (the portfolio rose on the benchmark's down days).
+    """
+    if up_capture is None or down_capture is None or down_capture <= 0:
+        return None
+    return round(up_capture / down_capture, 2)
+
+
+def _diversification_ratio(returns_df, weights, port_daily, min_obs=MIN_RATIO_OBSERVATIONS):
+    """Weighted average holding volatility divided by portfolio volatility.
+
+    1.0 means the holdings move together, so spreading money across them
+    removed no risk; higher means they offset one another. Effective holdings
+    counts positions and is blind to this: ten funds writing calls on the same
+    index count as ten holdings but diversify like one. A zero-volatility
+    position such as cash adds nothing to either side, so it earns no credit.
+    """
+    try:
+        if len(returns_df) < min_obs:
+            return None
+        port_vol = float(port_daily.std())
+        if not math.isfinite(port_vol) or port_vol <= 0:
+            return None
+        weighted_vol = float(np.nansum(np.asarray(weights, dtype=float) * returns_df.std().to_numpy(dtype=float)))
+        if not math.isfinite(weighted_vol) or weighted_vol <= 0:
+            return None
+        return round(weighted_vol / port_vol, 2)
+    except Exception:
+        return None
 
 
 # ── Scoring helpers ───────────────────────────────────────────────────────────
@@ -317,7 +366,10 @@ def _score_higher(val, thr):
         return 60 + 20 * (val - fair) / (good - fair)
     if val >= poor:
         return 40 + 20 * (val - poor) / (fair - poor)
-    return max(0.0, 40 * val / poor) if poor != 0 else 0.0
+    # Past "poor" the score falls from 40 to 0 over a span of |poor|. Dividing
+    # by poor itself flipped the sign when a user set a negative floor (Sharpe
+    # poor = -0.5), so worse values scored higher, past 100 at Sharpe -2.
+    return max(0.0, 40 * (1 - (poor - val) / abs(poor))) if poor != 0 else 0.0
 
 
 def _score_lower(val, thr):
@@ -333,7 +385,7 @@ def _score_lower(val, thr):
         return 60 + 20 * (fair - val) / (fair - good)
     if val <= poor:
         return 40 + 20 * (poor - val) / (poor - fair)
-    return max(0.0, 40 * (1 - (val - poor) / poor)) if poor != 0 else 0.0
+    return max(0.0, 40 * (1 - (val - poor) / abs(poor))) if poor != 0 else 0.0
 
 
 def letter_grade(score, grading_settings=None):
@@ -432,6 +484,19 @@ def ticker_score(close, daily_ret, bench_ret=None, min_obs=MIN_RATIO_OBSERVATION
 
 # ── Portfolio-level grading ───────────────────────────────────────────────────
 
+def portfolio_returns_frame(close_df):
+    """Daily returns for grade_portfolio from closes (one column per holding).
+
+    Interior gaps are carried forward first. pandas 3 no longer pads inside
+    pct_change, so a single missing bar made both the gap day and the day after
+    NaN, and the fillna(0) then erased the whole move across the gap. Leading
+    NaN (a holding that began trading inside the window) still becomes a zero
+    return, the convention Dashboard, Growth and Dividend Analysis share. The
+    first row is dropped: no close precedes it, so its zero is not a return.
+    """
+    return close_df.ffill().pct_change().iloc[1:].fillna(0)
+
+
 def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_OBSERVATIONS,
                     grading_settings=None, nav_erosion=None):
     """Compute composite portfolio grade.
@@ -478,12 +543,14 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
             uc, dc = _capture_ratios(aligned["port"], aligned["bench"], min_obs=min_obs)
             metrics["up_capture"] = _safe(uc)
             metrics["down_capture"] = _safe(dc)
+            metrics["capture_ratio"] = _safe(_capture_ratio(metrics["up_capture"], metrics["down_capture"]))
             metrics["beta"] = _safe(_beta(aligned["port"], aligned["bench"], min_obs=min_obs))
 
     wt_sorted = sorted(w, reverse=True)
     metrics["top_weight"] = round(float(wt_sorted[0]) * 100, 2) if len(wt_sorted) else 0
     hhi = float(sum(wi ** 2 for wi in w))
     metrics["effective_n"] = round(1.0 / hhi, 1) if hhi > 0 else 0
+    metrics["diversification_ratio"] = _safe(_diversification_ratio(returns_df, w, port_daily, min_obs=min_obs))
 
     mdd_pct = port_mdd * 100 if port_mdd is not None else None
     sub = {
@@ -494,7 +561,9 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
         "sharpe":        _score_higher(metrics.get("sharpe"), _band_tuple(settings, "higherBands", "sharpe")),
         "max_drawdown":  _score_lower(abs(mdd_pct) if mdd_pct is not None else None, _band_tuple(settings, "lowerBands", "maxDrawdown")),
         "down_capture":  _score_lower(metrics.get("down_capture"), _band_tuple(settings, "lowerBands", "downCapture")),
+        "capture_ratio": _score_higher(metrics.get("capture_ratio"), _band_tuple(settings, "higherBands", "captureRatio")),
         "diversification": _score_higher(metrics.get("effective_n"), _band_tuple(settings, "higherBands", "diversification")),
+        "diversification_ratio": _score_higher(metrics.get("diversification_ratio"), _band_tuple(settings, "higherBands", "diversificationRatio")),
     }
 
     if nav_erosion is not None:
@@ -509,7 +578,8 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
     weight_keys = {
         "ulcer_index": "ulcerIndex", "calmar": "calmar", "omega": "omega",
         "sortino": "sortino", "sharpe": "sharpe", "max_drawdown": "maxDrawdown",
-        "down_capture": "downCapture", "diversification": "diversification",
+        "down_capture": "downCapture", "capture_ratio": "captureRatio",
+        "diversification": "diversification", "diversification_ratio": "diversificationRatio",
         "nav_health": "navHealth",
     }
     gw = {
@@ -522,7 +592,8 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
         "omega": "Omega Ratio", "sortino": "Sortino Ratio",
         "sharpe": "Sharpe Ratio",
         "max_drawdown": "Max Drawdown", "down_capture": "Downside Capture",
-        "diversification": "Diversification", "nav_health": "NAV Health",
+        "capture_ratio": "Capture Ratio", "diversification": "Diversification",
+        "diversification_ratio": "Diversification Ratio", "nav_health": "NAV Health",
     }
 
     total_w = total_s = 0.0

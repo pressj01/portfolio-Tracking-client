@@ -465,6 +465,8 @@ export default function Analytics() {
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)', marginBottom: '0.2rem' }}>Quick Stats</div>
                   <Stat label="Holdings" value={pm.n_holdings} />
                   <Stat label="Effective N" value={pm.effective_n?.toFixed(1)} />
+                  <Stat label="Diversification Ratio" value={pm.diversification_ratio?.toFixed(2)} />
+                  <Stat label="Capture Ratio" value={pm.capture_ratio?.toFixed(2)} />
                   <Stat label="Max Drawdown" value={pm.max_drawdown != null ? (pm.max_drawdown * 100).toFixed(1) + '%' : '—'} color="#ef5350" />
                   <Stat label="Top Holding" value={pm.top_weight != null ? pm.top_weight + '%' : '—'} />
                   <Stat label="Ulcer Index" value={pm.ulcer_index?.toFixed(2)} color={metricColor(pm.ulcer_index, [3, 7, 12], true)} />
@@ -672,8 +674,8 @@ export default function Analytics() {
                       <tbody style={{ color: 'var(--text-strong)' }}>
                         {portfolioGradeGuideRows().map(row => {
                           const metric = row.metric
-                          const tw = row.holding == null ? '—' : `${row.holding}%`
-                          const pw = `${row.portfolio}%`
+                          const tw = row.holdingShare == null ? '—' : `${row.holdingShare}%`
+                          const pw = `${row.portfolioShare}%`
                           const dir = row.direction
                           const thr = row.list
                           return (
@@ -690,8 +692,10 @@ export default function Analytics() {
                     </table>
                   </div>
                   <p style={{ margin: '0 0 0.6rem', fontSize: '0.74rem' }}>
-                    The portfolio row uses the same metrics on the blended portfolio return stream and adds a
-                    <strong> Diversification</strong> term (based on the effective number of holdings). Stale, delisted, or
+                    The portfolio row uses the same metrics on the blended portfolio return stream and adds
+                    <strong> Diversification</strong> (the effective number of holdings), <strong>Diversification Ratio</strong> (how
+                    much the holdings offset one another, from their correlations), and <strong>Capture Ratio</strong> (upside capture
+                    ÷ downside capture), plus NAV Health where NAV-erosion data exists. Stale, delisted, or
                     flat-lined price series are treated as un-gradeable and score 0 rather than being rewarded for zero volatility.
                   </p>
 

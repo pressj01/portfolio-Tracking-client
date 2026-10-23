@@ -755,7 +755,7 @@ function DashboardHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
         <li>
           <strong>Grade &amp; Risk Period</strong> — the Shared Performance Date Range. Grade, beta,
-          Sharpe, Sortino, Calmar, Omega, and Ulcer follow market windows such as
+          Sharpe, Sortino, Calmar, Omega, Ulcer, Diversification Ratio, and Capture Ratio follow market windows such as
           <strong> YTD, 1M, 1Y, 5Y, All, and Custom</strong>. See
           <strong> Portfolio Grade and the date range</strong> below for which filters produce a grade.
           All begins with the portfolio&apos;s earliest recorded trade
@@ -770,6 +770,21 @@ function DashboardHelp() {
           Blank on <strong>Life</strong> — that filter is cost-basis G/L, not a daily price series.
         </li>
         <li><strong>Ulcer / Calmar / Omega / Sortino / Sharpe</strong> — risk-adjusted performance ratios for the selected market window. Blank on Life, same as Portfolio Grade.</li>
+        <li>
+          <strong>Diversification Ratio</strong> — the weighted average volatility of your holdings divided by the
+          volatility of the whole portfolio. At 1.00 the holdings move together, so owning many of them removed no
+          risk; higher means they offset one another (about 1.25 is fair, 1.5 good, 1.8 excellent by default). The
+          subtitle shows effective holdings, the older Diversification measure, which only counts how evenly money is
+          spread: ten funds writing calls on the same index count as ten holdings but diversify like one. Cash adds
+          nothing to either side, so it earns no credit. Blank on Life.
+        </li>
+        <li>
+          <strong>Capture Ratio</strong> — upside capture divided by downside capture against the S&amp;P 500 (SPY),
+          with both shown in the subtitle. Above 1.00 the portfolio kept more of the market&apos;s gains than of its
+          losses; a portfolio that only tracks the market at any beta scores about 1.00. Downside capture alone
+          rewards funds that cap their upside, as covered-call funds do, so this checks whether that protection was
+          worth what it gave up. Blank on Life, and blank when the portfolio rose on the market&apos;s down days.
+        </li>
         <li><strong>Lifetime Income</strong> — total dividend income received by the selected account across all years.</li>
         <li><strong>YTD Dividends</strong> — total dividends received year-to-date.</li>
         <li><strong>[Month] Income</strong> (e.g. "May Income") — dividends actually received this calendar month from recorded payments, with a subtitle showing the number of recorded payments through today. Estimated only when no payment history exists.</li>
@@ -6132,7 +6147,7 @@ function SettingsHelp() {
         in screen order — click an image to open it full size.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.9' }}>
-        <li><strong>Portfolio and holding risk-grade weights</strong> — relative weights for Ulcer Index, Calmar, Omega, Sortino, Sharpe, max drawdown, and downside capture; the portfolio grade adds Diversification and NAV Health.</li>
+        <li><strong>Portfolio and holding risk-grade weights</strong> — relative weights for Ulcer Index, Calmar, Omega, Sortino, Sharpe, max drawdown, and downside capture; the portfolio grade adds Capture Ratio, Diversification (effective holdings), Diversification Ratio (correlation benefit), and NAV Health.</li>
         <li><strong>Risk-metric scoring bands</strong> — the Excellent / Good / Fair / Poor boundaries (100 / 80 / 60 / 40 points) for each metric, split into higher-is-better and lower-is-better groups.</li>
         <li><strong>Letter-grade cutoffs</strong> — the minimum 0–100 score for A+ through D−; anything below D− is F. These change only the letter, not the numeric score.</li>
         <li><strong>ETF, CEF, and option-income final grade bands</strong> — composite score and maximum failed criteria for Strong reading and Partial reading. Per-criterion thresholds stay on each evaluator's cards.</li>

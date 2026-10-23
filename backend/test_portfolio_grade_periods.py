@@ -170,6 +170,34 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
             expected = "A+" if info["score"] >= 100 else "F"
             self.assertEqual(info["grade"], expected, ticker)
 
+    @patch("yfinance.Ticker")
+    def test_holding_at_the_observation_floor_is_unrated_not_failed(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO all_account_info VALUES ('NEW', 6, 5, 500, '2024-01-02', NULL)"
+        )
+        conn.commit()
+        conn.close()
+        # 45 dates -> 44 returns -> a 30-return floor. NEW lists 30 closes,
+        # which is only 29 returns: too short to grade, not a failing holding.
+        close = self.market_data["Close"].copy()
+        step = np.arange(len(close), dtype=float)
+        close["NEW"] = 20 + step * 0.1 + np.sin(step)
+        close.iloc[:len(close) - 30, close.columns.get_loc("NEW")] = np.nan
+        zeros = pd.DataFrame(0.0, index=close.index, columns=close.columns)
+        self.market_data = pd.concat(
+            {"Close": close, "Adj Close": close, "Dividends": zeros}, axis=1,
+        )
+
+        payload = self.client.get(
+            "/api/portfolio-summary/data?profile_id=6&period=all"
+        ).get_json()
+
+        self.assertEqual(payload["min_observations"], 30)
+        self.assertEqual(payload["ticker_grades"]["NEW"], {"grade": "N/A", "score": None})
+        self.assertNotEqual(payload["ticker_grades"]["AAA"]["grade"], "N/A")
+
     def test_dashboard_custom_range_validation_is_visible(self):
         response = self.client.get(
             "/api/portfolio-summary/data?profile_id=6&period=custom"
@@ -240,6 +268,10 @@ class PortfolioGradePeriodApiTest(unittest.TestCase):
     @patch("yfinance.Ticker")
     def test_grade_does_not_block_on_live_info_when_history_downloads(self, ticker_mock):
         ticker_mock.side_effect = AssertionError("live .info must not block grades")
+        # The fixture only ever rises, which leaves Sortino no downside to
+        # measure. Two pullbacks give every ratio something real to report.
+        for day in (10, 25):
+            self.market_data.iloc[day, self.market_data.columns.get_loc(("Close", "AAA"))] *= 0.97
 
         response = self.client.get("/api/portfolio-summary/data?profile_id=6&period=1y")
         payload = response.get_json()

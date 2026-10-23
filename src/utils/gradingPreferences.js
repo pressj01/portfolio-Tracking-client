@@ -15,8 +15,8 @@ export const DEFAULT_GRADING_PREFERENCES = Object.freeze({
     },
     portfolioWeights: {
       ulcerIndex: 20, calmar: 20, omega: 15, sortino: 12,
-      sharpe: 8, maxDrawdown: 10, downCapture: 5,
-      diversification: 10, navHealth: 10,
+      sharpe: 8, maxDrawdown: 10, downCapture: 5, captureRatio: 10,
+      diversification: 10, diversificationRatio: 10, navHealth: 10,
     },
     higherBands: {
       calmar: { excellent: 1.5, good: 1, fair: 0.5, poor: 0.2 },
@@ -24,6 +24,8 @@ export const DEFAULT_GRADING_PREFERENCES = Object.freeze({
       sortino: { excellent: 2, good: 1.5, fair: 1, poor: 0.5 },
       sharpe: { excellent: 1.5, good: 1, fair: 0.5, poor: 0 },
       diversification: { excellent: 20, good: 12, fair: 6, poor: 3 },
+      diversificationRatio: { excellent: 1.8, good: 1.5, fair: 1.25, poor: 1.1 },
+      captureRatio: { excellent: 1.2, good: 1.05, fair: 0.95, poor: 0.85 },
     },
     lowerBands: {
       ulcerIndex: { excellent: 3, good: 7, fair: 12, poor: 20 },
@@ -225,7 +227,7 @@ export function portfolioGradeGuideRows(preferences = loadGradingPreferences()) 
   }
   const holding = risk.holdingWeights
   const portfolio = risk.portfolioWeights
-  return [
+  const rows = [
     { metric: 'Ulcer Index', measures: 'Drawdown depth & duration (lower = better)', direction: 'lower', holding: holding.ulcerIndex, portfolio: portfolio.ulcerIndex, ...lower('ulcerIndex') },
     { metric: 'Calmar', measures: 'Return / max drawdown', direction: 'higher', holding: holding.calmar, portfolio: portfolio.calmar, ...higher('calmar') },
     { metric: 'Omega', measures: 'Gains vs losses', direction: 'higher', holding: holding.omega, portfolio: portfolio.omega, ...higher('omega') },
@@ -233,7 +235,9 @@ export function portfolioGradeGuideRows(preferences = loadGradingPreferences()) 
     { metric: 'Sharpe', measures: 'Return per unit of risk', direction: 'higher', holding: holding.sharpe, portfolio: portfolio.sharpe, ...higher('sharpe') },
     { metric: 'Max Drawdown', measures: 'Worst peak-to-trough', direction: 'lower', holding: holding.maxDrawdown, portfolio: portfolio.maxDrawdown, ...lower('maxDrawdown', '%') },
     { metric: 'Down Capture', measures: 'Loss vs benchmark', direction: 'lower', holding: holding.downCapture, portfolio: portfolio.downCapture, ...lower('downCapture', '%') },
+    { metric: 'Capture Ratio', measures: 'Upside capture ÷ downside capture', direction: 'higher', holding: null, portfolio: portfolio.captureRatio, ...higher('captureRatio') },
     { metric: 'Diversification', measures: 'Effective # holdings', direction: 'higher', holding: null, portfolio: portfolio.diversification, ...higher('diversification') },
+    { metric: 'Diversification Ratio', measures: 'Avg holding volatility ÷ portfolio volatility (correlation benefit)', direction: 'higher', holding: null, portfolio: portfolio.diversificationRatio, ...higher('diversificationRatio') },
     {
       metric: 'NAV Health',
       measures: `Starts at ${risk.navHealth.fullScore} and loses ${risk.navHealth.penaltyPerDeclinePct} points per 1% of portfolio NAV decline`,
@@ -248,6 +252,18 @@ export function portfolioGradeGuideRows(preferences = loadGradingPreferences()) 
       list: `${risk.navHealth.fullScore} − ${risk.navHealth.penaltyPerDeclinePct} per decline %`,
     },
   ]
+  // Weights are relative, so a raw weight is not a percentage: the portfolio
+  // defaults sum to 130. Report each one's share of its total, which is what
+  // the grade applies when every metric is available.
+  const total = (weights) => Object.values(weights).reduce((sum, w) => sum + w, 0)
+  const holdingTotal = total(holding)
+  const portfolioTotal = total(portfolio)
+  const share = (value, sum) => (sum > 0 ? Math.round((value / sum) * 1000) / 10 : 0)
+  return rows.map(row => ({
+    ...row,
+    holdingShare: row.holding == null ? null : share(row.holding, holdingTotal),
+    portfolioShare: share(row.portfolio, portfolioTotal),
+  }))
 }
 
 export function loadGradingPreferences(storage = globalThis.localStorage) {

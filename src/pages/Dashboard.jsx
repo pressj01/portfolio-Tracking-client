@@ -2230,7 +2230,7 @@ export default function Dashboard() {
         <div className="alert alert-info" style={{ marginTop: 0 }}>
           <strong>Grade cannot be computed for the Lifetime setting.</strong>{' '}
           Open G/L is cost-basis G/L, not a daily price series, so Portfolio Grade, beta, Sharpe,
-          Sortino, Calmar, Omega, and Ulcer stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom
+          Sortino, Calmar, Omega, Ulcer, Diversification Ratio, and Capture Ratio stay blank. Pick YTD, 1M, 1Y, 5Y, All, or Custom
           to grade that market window.
         </div>
       ) : (
@@ -2290,6 +2290,20 @@ export default function Dashboard() {
         <SummaryCard label="Omega Ratio" value={activePortfolioGrade.omega ?? '—'} />
         <SummaryCard label="Sortino Ratio" value={activePortfolioGrade.sortino ?? '—'} />
         <SummaryCard label="Sharpe Ratio" value={activePortfolioGrade.sharpe ?? '—'} />
+        <SummaryCard
+          label="Diversification Ratio"
+          value={activePortfolioGrade.diversification_ratio ?? '—'}
+          sub={activePortfolioGrade.effective_n != null ? `Effective holdings: ${activePortfolioGrade.effective_n}` : null}
+          title="Weighted average holding volatility ÷ portfolio volatility. 1.00 means the holdings move together and spreading money across them removed no risk; higher means they offset one another."
+        />
+        <SummaryCard
+          label="Capture Ratio"
+          value={activePortfolioGrade.capture_ratio ?? '—'}
+          sub={activePortfolioGrade.up_capture != null && activePortfolioGrade.down_capture != null
+            ? `Up ${activePortfolioGrade.up_capture}% · Down ${activePortfolioGrade.down_capture}%`
+            : null}
+          title="Upside capture ÷ downside capture versus the S&P 500 (SPY). Above 1.00 the portfolio kept more of the market's gains than of its losses."
+        />
         <SummaryCard label="Lifetime Income" value={fmt(totals.lifetimeIncome)} color="var(--pos)" />
         <SummaryCard label="YTD Dividends" value={fmt(totals.ytdDivs)} color="var(--pos)" />
         <SummaryCard label={`${currentMonth} Income`} value={fmt(totals.currentMonthIncome)} color="var(--pos)" sub={currentMonthSub} />
@@ -2657,6 +2671,21 @@ export default function Dashboard() {
           <div>Aggressive income: 0.90-1.15 beta</div>
           <div>Very aggressive: &gt;1.15 beta</div>
         </div>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.75rem 0 0' }}>
+          <strong style={{ color: 'var(--text-strong)' }}>Diversification Ratio</strong> is the weighted average
+          volatility of your holdings divided by the volatility of the whole portfolio. At 1.00 the holdings move
+          together, so owning many of them removed no risk; higher means they offset one another. It complements
+          <strong> Diversification</strong> (effective holdings), which only counts how evenly money is spread: ten
+          funds writing calls on the same index count as ten holdings but diversify like one. Cash adds nothing
+          to either side, so it earns no credit.
+        </p>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.82rem', lineHeight: 1.45, margin: '0.5rem 0 0' }}>
+          <strong style={{ color: 'var(--text-strong)' }}>Capture Ratio</strong> is upside capture divided by
+          downside capture against the S&amp;P 500 (SPY). Above 1.00 the portfolio kept more of the market&apos;s
+          gains than of its losses; a fund that simply tracks the market at any beta scores about 1.00. Downside
+          Capture alone rewards funds that cap their upside, as covered-call funds do, so this asks whether that
+          protection was worth what it gave up. It is blank when the portfolio rose on the market&apos;s down days.
+        </p>
         <div style={{ marginTop: '0.75rem', overflowX: 'auto' }}>
           <table style={{ fontSize: '0.8rem' }}>
             <thead>
@@ -2672,12 +2701,17 @@ export default function Dashboard() {
                   <td>{row.c}</td>
                   <td>{row.d}</td>
                   <td>{row.f}</td>
-                  <td>{row.portfolio}%</td>
+                  <td>{row.portfolioShare}%</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', lineHeight: 1.45, margin: '0.4rem 0 0' }}>
+          Weight is each metric&apos;s share of the grade when every metric can be measured. One that cannot
+          (NAV Health without NAV-erosion data, or Capture Ratio when downside capture is not positive) drops out and
+          the rest scale up to fill its share. Change weights and bands in Settings.
+        </p>
       </details>
 
       {/* Account Alpha guide (collapsible) */}

@@ -187,6 +187,16 @@ const signalScore = (state, settings) => (
 )
 const signalBadge = (state) => (state === 'BUY' ? 'pass' : state === 'SELL' ? 'fail' : 'warn')
 
+// The backend sends a NEUTRAL placeholder state for every indicator it could
+// not compute (no price history). That is missing data, not a neutral reading:
+// scored as one, a ticker with no data at all read "Favorable" at 60/100. An
+// indicator counts when its value is present or its state is a real call.
+const hasSignal = (value, state) => num(value) !== null || state === 'BUY' || state === 'SELL'
+const meanScore = (scores) => (
+  scores.length ? Math.round(scores.reduce((s, v) => s + v, 0) / scores.length) : null
+)
+const NO_PRICE_HISTORY = 'Not enough price history from the data source to score this group.'
+
 function rangeScore(position, settings) {
   const p = num(position)
   if (p === null) return null
@@ -240,7 +250,8 @@ function gradeTechnicals(t, settings) {
 
   // Trend
   const trend = trendState(t, settings)
-  const trendScore = signalScore(trend, settings)
+  const trendOk = hasSignal(num(t.sma200) !== null ? t.pct_vs_sma200 : t.pct_vs_sma50, t.trend_state)
+  const trendScore = trendOk ? signalScore(trend, settings) : null
   groups.push({
     id: 5, key: 'trend', group: 'technical',
     question: 'Is the price trend constructive?',
@@ -253,7 +264,8 @@ function gradeTechnicals(t, settings) {
       { label: 'vs 200-day', value: fmtPct(t.pct_vs_sma200) },
       { label: 'Golden cross', value: t.golden_cross === null || t.golden_cross === undefined ? 'n/a' : (t.golden_cross ? 'Yes (50 > 200)' : 'No (50 < 200)') },
     ],
-    rationale: trend === 'BUY' ? 'Price is above its major moving averages — an uptrend.'
+    rationale: !trendOk ? NO_PRICE_HISTORY
+      : trend === 'BUY' ? 'Price is above its major moving averages — an uptrend.'
       : trend === 'SELL' ? 'Price is below its major moving averages — a downtrend.'
       : 'Price is hovering around its moving averages — no clear trend.',
     formula: `Uses the 200-day average when available, otherwise the 50-day average. Bullish above +${settings.technicalThresholds.trendBufferPct}%, Bearish below -${settings.technicalThresholds.trendBufferPct}%, otherwise Neutral. Group weight: ${settings.groupWeights.trend}.`,
@@ -261,58 +273,70 @@ function gradeTechnicals(t, settings) {
 
   // Momentum: MACD + RSI
   const rsi = rsiState(t, settings)
-  const momScores = [signalScore(t.macd_state, settings), signalScore(rsi, settings)]
-  const momScore = Math.round((momScores[0] + momScores[1]) / 2)
+  const macdOk = hasSignal(t.macd, t.macd_state)
+  const rsiOk = hasSignal(t.rsi14, t.rsi_state)
+  const momScore = meanScore([
+    ...(macdOk ? [signalScore(t.macd_state, settings)] : []),
+    ...(rsiOk ? [signalScore(rsi, settings)] : []),
+  ])
   groups.push({
     id: 6, key: 'momentum', group: 'technical',
     question: 'Does momentum support an entry?',
     badge: scoreBadge(momScore, settings), score: momScore,
     metrics: [
-      { label: 'MACD', value: fmtNum(t.macd, 3), badge: signalBadge(t.macd_state) },
+      { label: 'MACD', value: fmtNum(t.macd, 3), badge: macdOk ? signalBadge(t.macd_state) : 'info' },
       { label: 'Signal line', value: fmtNum(t.macd_signal_line, 3) },
       { label: 'Histogram', value: fmtNum(t.macd_histogram, 3) },
-      { label: 'RSI (14)', value: fmtNum(t.rsi14, 1), badge: signalBadge(rsi) },
+      { label: 'RSI (14)', value: fmtNum(t.rsi14, 1), badge: rsiOk ? signalBadge(rsi) : 'info' },
     ],
-    rationale: `MACD is ${t.macd_state === 'BUY' ? 'bullish (line above signal)' : t.macd_state === 'SELL' ? 'bearish (line below signal)' : 'flat'}; `
-      + `RSI ${num(t.rsi14) === null ? 'n/a' : Number(t.rsi14).toFixed(0)} is ${rsi === 'BUY' ? 'oversold' : rsi === 'SELL' ? 'overbought' : 'neutral'}.`,
+    rationale: momScore === null ? NO_PRICE_HISTORY
+      : `MACD is ${!macdOk ? 'unavailable' : t.macd_state === 'BUY' ? 'bullish (line above signal)' : t.macd_state === 'SELL' ? 'bearish (line below signal)' : 'flat'}; `
+      + `RSI ${num(t.rsi14) === null ? 'n/a' : Number(t.rsi14).toFixed(0)} is ${!rsiOk ? 'unavailable' : rsi === 'BUY' ? 'oversold' : rsi === 'SELL' ? 'overbought' : 'neutral'}.`,
     formula: `Averages MACD and RSI signal scores. RSI is Bullish below ${settings.technicalThresholds.rsiBuyBelow}, Bearish above ${settings.technicalThresholds.rsiSellAbove}; MACD is Bullish when its line is above the signal line. Group weight: ${settings.groupWeights.momentum}.`,
   })
 
   // Oscillators: Stochastic + Awesome Oscillator
   const stochastic = stochasticState(t, settings)
-  const oscScores = [signalScore(stochastic, settings), signalScore(t.ao_state, settings)]
-  const oscScore = Math.round((oscScores[0] + oscScores[1]) / 2)
+  const stochOk = (num(t.stoch_k) !== null && num(t.stoch_d) !== null) || hasSignal(null, t.stoch_state)
+  const aoOk = hasSignal(t.awesome_oscillator, t.ao_state)
+  const oscScore = meanScore([
+    ...(stochOk ? [signalScore(stochastic, settings)] : []),
+    ...(aoOk ? [signalScore(t.ao_state, settings)] : []),
+  ])
   groups.push({
     id: 7, key: 'oscillators', group: 'technical',
     question: 'What do the oscillators say?',
     badge: scoreBadge(oscScore, settings), score: oscScore,
     metrics: [
-      { label: 'Stochastic %K', value: fmtNum(t.stoch_k, 1), badge: signalBadge(stochastic) },
+      { label: 'Stochastic %K', value: fmtNum(t.stoch_k, 1), badge: stochOk ? signalBadge(stochastic) : 'info' },
       { label: 'Stochastic %D', value: fmtNum(t.stoch_d, 1) },
-      { label: 'Awesome Oscillator', value: fmtNum(t.awesome_oscillator, 3), badge: signalBadge(t.ao_state) },
+      { label: 'Awesome Oscillator', value: fmtNum(t.awesome_oscillator, 3), badge: aoOk ? signalBadge(t.ao_state) : 'info' },
     ],
-    rationale: `Slow stochastic is ${stochastic === 'BUY' ? 'oversold' : stochastic === 'SELL' ? 'overbought' : 'mid-range'}; `
-      + `the awesome oscillator is ${t.ao_state === 'BUY' ? 'bullish' : t.ao_state === 'SELL' ? 'bearish' : 'flat'}.`,
+    rationale: oscScore === null ? NO_PRICE_HISTORY
+      : `Slow stochastic is ${!stochOk ? 'unavailable' : stochastic === 'BUY' ? 'oversold' : stochastic === 'SELL' ? 'overbought' : 'mid-range'}; `
+      + `the awesome oscillator is ${!aoOk ? 'unavailable' : t.ao_state === 'BUY' ? 'bullish' : t.ao_state === 'SELL' ? 'bearish' : 'flat'}.`,
     formula: `Averages slow-stochastic and Awesome Oscillator signal scores. Stochastic is Bullish when K and D are below ${settings.technicalThresholds.stochasticBuyBelow}, Bearish when both exceed ${settings.technicalThresholds.stochasticSellAbove}. Group weight: ${settings.groupWeights.oscillators}.`,
   })
 
   // Volume & 52-week range
   const volume = volumeState(t, settings)
+  const volumeOk = hasSignal(t.obv_trend_pct, t.volume_state)
   const rScore = rangeScore(t.range_position_pct, settings)
-  const volScores = [signalScore(volume, settings)]
+  const volScores = volumeOk ? [signalScore(volume, settings)] : []
   if (rScore !== null) volScores.push(rScore)
-  const volScore = Math.round(volScores.reduce((s, v) => s + v, 0) / volScores.length)
+  const volScore = meanScore(volScores)
   groups.push({
     id: 8, key: 'volume', group: 'technical',
     question: 'Do volume and price location confirm?',
     badge: scoreBadge(volScore, settings), score: volScore,
     metrics: [
-      { label: 'OBV trend (20d)', value: fmtPct(t.obv_trend_pct), badge: signalBadge(volume) },
+      { label: 'OBV trend (20d)', value: fmtPct(t.obv_trend_pct), badge: volumeOk ? signalBadge(volume) : 'info' },
       { label: 'Volume vs 20d avg', value: num(t.volume_vs_avg) === null ? 'n/a' : `${Number(t.volume_vs_avg).toFixed(2)}×` },
       { label: '52-wk range position', value: num(t.range_position_pct) === null ? 'n/a' : `${Number(t.range_position_pct).toFixed(0)}%`, badge: scoreBadge(rScore, settings) },
       { label: '52-wk low / high', value: `${num(t.fifty_two_week_low) === null ? 'n/a' : formatMoney(t.fifty_two_week_low)} / ${num(t.fifty_two_week_high) === null ? 'n/a' : formatMoney(t.fifty_two_week_high)}` },
     ],
-    rationale: `On-balance volume is ${volume === 'BUY' ? 'rising (accumulation)' : volume === 'SELL' ? 'falling (distribution)' : 'flat'}`
+    rationale: volScore === null ? NO_PRICE_HISTORY
+      : `On-balance volume is ${!volumeOk ? 'unavailable' : volume === 'BUY' ? 'rising (accumulation)' : volume === 'SELL' ? 'falling (distribution)' : 'flat'}`
       + (num(t.range_position_pct) === null ? '.' : `; price sits at ${Number(t.range_position_pct).toFixed(0)}% of its 52-week range (lower is a better entry).`),
     formula: `Averages the OBV signal with the 52-week range score. OBV is neutral inside ±${settings.technicalThresholds.obvNeutralBandPct}%; range bands end at ${settings.rangeBands.best}%, ${settings.rangeBands.good}%, ${settings.rangeBands.fair}% and ${settings.rangeBands.weak}%. Group weight: ${settings.groupWeights.volume}.`,
   })
@@ -340,10 +364,12 @@ export function stockVerdict(fundComposite, techComposite, rawSettings) {
   const w = totalWeight > 0
     ? { fundamental: rawFundWeight / totalWeight, technical: rawTechWeight / totalWeight }
     : SCORE_WEIGHTS
-  let combined
-  if (f === null) combined = t
-  else if (t === null) combined = f
-  else combined = f * w.fundamental + t * w.technical
+  // Report the weights actually applied: with one side unscored the blend is
+  // the other side alone, and labelling it 60/40 misstated the result.
+  let combined, applied
+  if (f === null) { combined = t; applied = { fundamental: 0, technical: 1 } }
+  else if (t === null) { combined = f; applied = { fundamental: 1, technical: 0 } }
+  else { combined = f * w.fundamental + t * w.technical; applied = w }
   let label, tone
   const verdictBands = settings.verdictBands
   if (combined >= verdictBands.strongBuy && (f === null || f >= verdictBands.strongFundamental)) { label = STOCK_READING.strong; tone = 'pass' }
@@ -357,7 +383,7 @@ export function stockVerdict(fundComposite, techComposite, rawSettings) {
     else if (f < 50 && t >= 65) detail += ' The chart looks strong, but the underlying business scores poorly — momentum without quality.'
     else if (f >= 65 && t >= 65) detail += ' Quality business and a constructive chart line up.'
   }
-  return { label, tone, combined, detail, weights: w }
+  return { label, tone, combined, detail, weights: applied }
 }
 
 // Compute per-sector medians for the metrics we grade, from a scanned cohort.

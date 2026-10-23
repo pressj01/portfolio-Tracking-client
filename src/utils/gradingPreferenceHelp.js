@@ -6,7 +6,9 @@ const riskMetricDefinitions = {
   sharpe: 'The Sharpe ratio measures excess return per unit of total volatility, using the application risk-free-rate assumption.',
   maxDrawdown: 'Maximum drawdown is the largest peak-to-trough percentage loss observed during the selected grading period.',
   downCapture: 'Downside capture compares the holding or portfolio with its benchmark on benchmark down days. Below 100 means it lost less than the benchmark; lower is better.',
+  captureRatio: 'The capture ratio divides upside capture by downside capture against the S&P 500 (SPY). Above 1 means the portfolio kept more of the market’s gains than of its losses; a portfolio that only tracks the market at any beta scores about 1. Downside capture alone rewards funds that cap their upside, so this checks whether that protection was worth what it gave up. It is omitted when downside capture is zero or negative.',
   diversification: 'Diversification uses effective holdings, calculated from position concentration. A portfolio with equally sized positions scores near its actual holding count, while large concentrations reduce the effective count.',
+  diversificationRatio: 'The diversification ratio divides the weighted average volatility of the holdings by the volatility of the whole portfolio. At 1 the holdings move together, so spreading money across them removed no risk; higher values mean they offset one another. Unlike effective holdings, it accounts for correlation: ten funds writing calls on the same index count as ten holdings but diversify like one.',
   navHealth: 'NAV Health measures portfolio-weighted NAV erosion for holdings where that data is available. It is omitted when the portfolio has no usable NAV-erosion evidence.',
 }
 
@@ -139,13 +141,13 @@ export const GRADING_PREFERENCE_HELP = {
   portfolioRisk: {
     letterCutoffs: letterCutoffHelp,
     holdingWeights: Object.fromEntries(
-      Object.keys(riskMetricDefinitions).filter(key => !['diversification', 'navHealth'].includes(key)).map(key => [key, relativeWeightHelp('individual holding', key)]),
+      Object.keys(riskMetricDefinitions).filter(key => !['captureRatio', 'diversification', 'diversificationRatio', 'navHealth'].includes(key)).map(key => [key, relativeWeightHelp('individual holding', key)]),
     ),
     portfolioWeights: Object.fromEntries(
       Object.keys(riskMetricDefinitions).map(key => [key, relativeWeightHelp('whole-portfolio', key)]),
     ),
     higherBands: Object.fromEntries(
-      ['calmar', 'omega', 'sortino', 'sharpe', 'diversification'].map(metric => [
+      ['calmar', 'omega', 'sortino', 'sharpe', 'diversification', 'diversificationRatio', 'captureRatio'].map(metric => [
         metric,
         Object.fromEntries(Object.keys(higherTierMeaning).map(tier => [tier, higherBandHelp(metric, tier)])),
       ]),
