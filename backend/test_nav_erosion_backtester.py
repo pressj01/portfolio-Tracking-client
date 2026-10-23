@@ -1,4 +1,7 @@
+import datetime as dt
+import sqlite3
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -44,189 +47,6 @@ class NavErosionBacktesterTest(unittest.TestCase):
         self.assertEqual(_nav_erosion_numerator(-0.10, -0.001), 0.0)
         self.assertEqual(_nav_erosion_numerator(0.10, 0.20), 0.0)
 
-    def test_route_uses_real_benchmark_and_separates_cash_from_share_value(self):
-        fund_index = pd.DatetimeIndex(
-            ["2026-01-02", "2026-01-30", "2026-02-27", "2026-03-31"],
-            tz="America/New_York",
-        )
-        crypto_index = pd.DatetimeIndex(
-            ["2026-01-02", "2026-01-30", "2026-02-27", "2026-03-31"],
-            tz="UTC",
-        )
-        fund_history = pd.DataFrame(
-            {
-                "Close": [100.0, 100.0, 90.0, 80.0],
-                "Dividends": [0.0, 1.0, 2.0, 2.0],
-            },
-            index=fund_index,
-        )
-        benchmark_history = pd.DataFrame(
-            {"Close": [1000.0, 1000.0, 1100.0, 1000.0]},
-            index=crypto_index,
-        )
-
-        class FakeTicker:
-            def __init__(self, symbol):
-                self.symbol = symbol
-
-            def history(self, **_kwargs):
-                if self.symbol == "FUND":
-                    return fund_history.copy()
-                if self.symbol == "BTC-USD":
-                    return benchmark_history.copy()
-                return pd.DataFrame()
-
-        with patch("yfinance.Ticker", FakeTicker):
-            with app_module.app.test_client() as client:
-                response = client.get(
-                    "/api/nav-erosion/data",
-                    query_string={
-                        "ticker": "FUND",
-                        "benchmark": "BTC-USD",
-                        "amount": 10000,
-                        "start": "2026-01-02",
-                        "end": "2026-03-31",
-                        "reinvest": 0,
-                    },
-                )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.get_json()
-        self.assertIsNone(data["error"])
-        summary = data["summary"]
-        self.assertEqual(summary["benchmark"], "BTC-USD")
-        self.assertTrue(summary["benchmark_valid"])
-        self.assertEqual(summary["confirmed_erosion_months"], 1)
-        self.assertTrue(summary["has_erosion"])
-        self.assertTrue(summary["has_price_deficit"])
-        self.assertAlmostEqual(summary["total_coverage"], 2.0, places=4)
-        self.assertAlmostEqual(summary["final_value"], 8000.0, places=2)
-        self.assertAlmostEqual(summary["cash_taken"], 500.0, places=2)
-        self.assertAlmostEqual(summary["ending_wealth"], 8500.0, places=2)
-        self.assertAlmostEqual(summary["total_return_pct"], -15.0, places=2)
-        self.assertAlmostEqual(summary["raw_nav_erosion_rate"], 0.20, places=6)
-        self.assertAlmostEqual(summary["distribution_rate_on_starting_nav"], 0.05, places=6)
-        self.assertAlmostEqual(summary["accounting_total_return_rate"], -0.15, places=6)
-        self.assertAlmostEqual(summary["raw_payout_gap_ratio"], 4.0, places=6)
-        self.assertEqual(summary["overall_nav_erosion_score"], 100.0)
-        self.assertEqual(summary["overall_nav_erosion_severity"], "High")
-        self.assertGreater(len({row["benchmark_price"] for row in data["rows"]}), 1)
-        february = next(row for row in data["rows"] if row["date"] == "Feb 2026")
-        self.assertAlmostEqual(february["coverage_ratio"], 5.0, places=4)
-        march = next(row for row in data["rows"] if row["date"] == "Mar 2026")
-        self.assertEqual(march["coverage_ratio"], 0.0)
-
-    def test_portfolio_route_uses_mapped_benchmark_and_strict_erosion(self):
-        index = pd.DatetimeIndex(
-            ["2026-01-02", "2026-01-30", "2026-02-27", "2026-03-31"],
-            tz="UTC",
-        )
-        columns = pd.MultiIndex.from_product(
-            [["BTCI", "BTC-USD"], ["Close", "Dividends"]]
-        )
-        raw = pd.DataFrame(
-            [
-                [100.0, 0.0, 1000.0, 0.0],
-                [100.0, 1.0, 1000.0, 0.0],
-                [90.0, 2.0, 1100.0, 0.0],
-                [80.0, 2.0, 1000.0, 0.0],
-            ],
-            index=index,
-            columns=columns,
-        )
-
-        with patch.object(app_module, "_chunked_yf_download", return_value=raw):
-            with app_module.app.test_client() as client:
-                response = client.post(
-                    "/api/nav-erosion-portfolio/data",
-                    json={
-                        "start": "2026-01-02",
-                        "end": "2026-03-31",
-                        "rows": [
-                            {"ticker": "BTCI", "amount": 10000, "reinvest_pct": 0}
-                        ],
-                    },
-                )
-
-        self.assertEqual(response.status_code, 200)
-        data = response.get_json()
-        self.assertNotIn("error", data)
-        row = data["results"][0]
-        self.assertEqual(row["benchmark"], "BTC-USD")
-        self.assertTrue(row["has_erosion"])
-        self.assertEqual(row["confirmed_erosion_months"], 1)
-        self.assertAlmostEqual(row["coverage_ratio"], 2.0, places=4)
-        self.assertAlmostEqual(row["final_value"], 8000.0, places=2)
-        self.assertAlmostEqual(row["cash_taken"], 500.0, places=2)
-        self.assertAlmostEqual(row["ending_wealth"], 8500.0, places=2)
-        self.assertAlmostEqual(row["total_return_pct"], -15.0, places=2)
-        self.assertAlmostEqual(row["raw_nav_erosion_rate"], 0.20, places=6)
-        self.assertAlmostEqual(row["distribution_rate_on_starting_nav"], 0.05, places=6)
-        self.assertAlmostEqual(row["accounting_total_return_rate"], -0.15, places=6)
-        self.assertAlmostEqual(row["raw_payout_gap_ratio"], 4.0, places=6)
-        self.assertEqual(row["overall_nav_erosion_score"], 100.0)
-        self.assertEqual(row["overall_nav_erosion_severity"], "High")
-
-        # A non-distributing penny-stock-style holding has no cash leg, so its
-        # investor total return must equal its price return exactly.
-        zero_dist = raw.copy()
-        zero_dist.loc[:, ("BTCI", "Dividends")] = 0.0
-        with patch.object(app_module, "_chunked_yf_download", return_value=zero_dist):
-            with app_module.app.test_client() as client:
-                response = client.post(
-                    "/api/nav-erosion-portfolio/data",
-                    json={
-                        "start": "2026-01-02",
-                        "end": "2026-03-31",
-                        "rows": [
-                            {"ticker": "BTCI", "amount": 10000, "reinvest_pct": 0}
-                        ],
-                    },
-                )
-        no_div_row = response.get_json()["results"][0]
-        self.assertAlmostEqual(
-            no_div_row["total_return_pct"], no_div_row["price_delta_pct"], places=2
-        )
-
-    def test_portfolio_route_uses_adjusted_close_for_benchmark_gate(self):
-        index = pd.DatetimeIndex(
-            ["2026-01-02", "2026-01-30", "2026-02-27"],
-            tz="UTC",
-        )
-        columns = pd.MultiIndex.from_tuples([
-            ("BTCI", "Close"),
-            ("BTCI", "Dividends"),
-            ("BTC-USD", "Close"),
-            ("BTC-USD", "Adj Close"),
-            ("BTC-USD", "Dividends"),
-        ])
-        raw = pd.DataFrame(
-            [
-                [100.0, 0.0, 100.0, 100.0, 0.0],
-                [100.0, 0.0, 99.0, 101.0, 0.0],
-                [90.0, 2.0, 98.0, 102.0, 0.0],
-            ],
-            index=index,
-            columns=columns,
-        )
-
-        with patch.object(app_module, "_chunked_yf_download", return_value=raw):
-            with app_module.app.test_client() as client:
-                response = client.post(
-                    "/api/nav-erosion-portfolio/data",
-                    json={
-                        "start": "2026-01-02",
-                        "end": "2026-02-27",
-                        "rows": [
-                            {"ticker": "BTCI", "amount": 10000, "reinvest_pct": 0}
-                        ],
-                    },
-                )
-
-        row = response.get_json()["results"][0]
-        self.assertEqual(row["confirmed_erosion_months"], 1)
-        self.assertAlmostEqual(row["coverage_ratio"], 5.0, places=4)
-
     def test_split_adjust_restates_unadjusted_pre_reverse_split_history(self):
         index = pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-12-20", "2024-12-23"])
         close = pd.Series([4.0, 4.0, 40.0, 40.0], index=index)
@@ -249,48 +69,154 @@ class NavErosionBacktesterTest(unittest.TestCase):
         self.assertEqual(adj.tolist(), close.tolist())
         self.assertEqual(adj_divs.tolist(), divs.tolist())
 
-    def test_portfolio_row_can_override_benchmark(self):
-        index = pd.DatetimeIndex(
-            ["2026-01-02", "2026-01-30", "2026-02-27", "2026-03-31"],
-            tz="UTC",
-        )
-        columns = pd.MultiIndex.from_product(
-            [["BTCI", "BTC-USD", "SPY"], ["Close", "Dividends"]]
-        )
-        raw = pd.DataFrame(
-            [
-                [100.0, 0.0, 1000.0, 0.0, 50.0, 0.0],
-                [100.0, 1.0, 1000.0, 0.0, 50.0, 0.0],
-                [90.0, 2.0, 1100.0, 0.0, 55.0, 0.0],
-                [80.0, 2.0, 1000.0, 0.0, 60.0, 0.0],
-            ],
-            index=index,
-            columns=columns,
-        )
 
-        with patch.object(app_module, "_chunked_yf_download", return_value=raw):
-            with patch.object(app_module, "_merge_nav_benchmark_overrides"):
-                with app_module.app.test_client() as client:
-                    response = client.post(
-                        "/api/nav-erosion-portfolio/data",
-                        json={
-                            "start": "2026-01-02",
-                            "end": "2026-03-31",
-                            "rows": [
-                                {
-                                    "ticker": "BTCI",
-                                    "amount": 10000,
-                                    "reinvest_pct": 0,
-                                    "benchmark": "SPY",
-                                }
-                            ],
-                        },
-                    )
+START, END = dt.date(2025, 12, 31), dt.date(2026, 9, 30)
+DAYS = [START + dt.timedelta(days=i) for i in range((END - START).days + 1)]
+DAYS = [day for day in DAYS if day.weekday() < 5]
+PAYOUTS = sum(day.day == 15 for day in DAYS)
 
-        self.assertEqual(response.status_code, 200)
-        row = response.get_json()["results"][0]
-        self.assertEqual(row["benchmark"], "SPY")
-        self.assertAlmostEqual(row["benchmark_return_pct"], 20.0, places=2)
+
+def market_fixture(symbol, start, end):
+    """QQQI: flat $100 price paying $0.50 a month while QQQ climbs (NAV lag)."""
+    days = [day for day in DAYS if day <= end]
+    if symbol in ("QQQI", "JNJ", "KEO"):
+        closes = [100.0] * len(days)
+        payouts = [{"date": day.isoformat(), "amount": 0.5} for day in days if day.day == 15]
+    elif symbol in ("QQQ", "SPY"):
+        growth = .0005 if symbol == "QQQ" else .0002
+        closes = [100 * (1 + growth) ** i for i in range(len(days))]
+        payouts = []
+    else:
+        return None
+    return {"basis": "split_adjusted_market_price", "provider": "fixture",
+            "prices": [{"date": day.isoformat(), "close": close} for day, close in zip(days, closes)],
+            "distributions": payouts, "distributions_complete": True, "corporate_actions_resolved": True,
+            "splits": [], "total_returns": {day.isoformat(): close for day, close in zip(days, closes)}}
+
+
+class NavErosionScreensTest(unittest.TestCase):
+    """The Dashboard and both NAV Erosion screens share one assessment."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.path = str(Path(self.temp.name) / "test.db")
+        conn = self.connect()
+        conn.executescript("""
+            CREATE TABLE profiles (id INTEGER PRIMARY KEY, cash_value REAL);
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT);
+            CREATE TABLE all_account_info (profile_id INTEGER, ticker TEXT,
+                current_price REAL, quantity REAL, description TEXT, classification_type TEXT,
+                estim_payment_per_year REAL, current_value REAL, nav_erosion_scope TEXT,
+                nav_benchmark_override TEXT);
+            INSERT INTO profiles VALUES (2, 0);
+            INSERT INTO all_account_info VALUES
+                (2, 'QQQI', 100, 100, 'NEOS Nasdaq-100 High Income ETF', 'ETF', 600, 10000, 'auto', NULL),
+                (2, 'JNJ', 100, 10, 'Johnson & Johnson', 'G', 50, 1000, 'auto', NULL);
+        """)
+        conn.commit()
+        conn.close()
+        app_module._NAV_ASSESSMENT_CACHE.clear()
+        patches = [
+            patch.object(app_module, "get_connection", self.connect),
+            patch.object(app_module, "get_profile_filter", return_value=(False, [2])),
+            patch.object(app_module, "_cash_profile_ids_for_read", side_effect=lambda conn, agg, ids: ids),
+            patch.object(app_module, "_nav_assessment_source", return_value=None),
+            patch.object(app_module, "_nav_screen_market_history", side_effect=market_fixture),
+            patch.object(app_module.app, "_db_initialized", True, create=True),
+        ]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        merge = patch.object(app_module, "_merge_nav_benchmark_overrides")
+        self.merge = merge.start()
+        self.addCleanup(merge.stop)
+        self.addCleanup(self.temp.cleanup)
+        self.client = app_module.app.test_client()
+
+    def connect(self):
+        conn = sqlite3.connect(self.path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+    def single(self, **params):
+        query = {"ticker": "QQQI", "amount": 10000, "start": START.isoformat(), "end": END.isoformat(), "reinvest": 0}
+        return self.client.get("/api/nav-erosion/data", query_string={**query, **params}).get_json()
+
+    def screener(self, rows):
+        return self.client.post("/api/nav-erosion-portfolio/data", json={
+            "start": START.isoformat(), "end": END.isoformat(), "rows": rows}).get_json()
+
+    def test_all_three_screens_give_the_same_result_for_a_fund(self):
+        dashboard = self.client.get("/api/nav-assessment", query_string={
+            "period": "custom", "start_date": START.isoformat(), "end_date": END.isoformat()}).get_json()
+        single = self.single()
+        screener = self.screener([{"ticker": "QQQI", "amount": 10000, "reinvest_pct": 0}])
+        on_dashboard = next(row for row in dashboard["results"] if row["ticker"] == "QQQI")["finding"]
+        self.assertIsNone(single["error"])
+        self.assertEqual(on_dashboard["code"], "nav_lag")
+        self.assertEqual(single["assessment"]["finding"], on_dashboard)
+        self.assertEqual(screener["results"][0]["finding"], on_dashboard)
+        self.assertEqual(on_dashboard["label"], "NAV lag — not erosion")
+        self.assertEqual(single["summary"]["benchmark"], "QQQ")
+        self.assertEqual(single["summary"]["benchmark_source"], "Automatic")
+        self.assertEqual(screener["results"][0]["nav_lag"]["status"], "lag")
+        self.assertEqual([item["ticker"] for item in screener["verdict"]["nav_lag"]], ["QQQI"])
+        self.assertEqual(screener["verdict"]["label"], "No NAV Erosion")
+
+    def test_backtest_uses_the_assessment_dates_and_payouts(self):
+        cash = self.single()["summary"]
+        self.assertEqual(cash["actual_start"], START.isoformat())
+        self.assertEqual(cash["actual_end"], END.isoformat())
+        self.assertAlmostEqual(cash["cash_taken"], 50.0 * PAYOUTS)
+        self.assertAlmostEqual(cash["final_value"], 10000.0)
+        self.assertAlmostEqual(cash["total_return_pct"], 0.5 * PAYOUTS)
+        self.assertAlmostEqual(cash["benchmark_return_pct"], ((1.0005) ** (len(DAYS) - 1) - 1) * 100, places=2)
+        drip = self.single(reinvest=100)
+        self.assertAlmostEqual(drip["summary"]["final_value"], 10000 * 1.005 ** PAYOUTS, places=2)
+        self.assertAlmostEqual(drip["summary"]["cash_taken"], 0.0)
+        months = drip["rows"]
+        self.assertEqual(months[0]["date"], "Jan 2026")
+        self.assertEqual(len(months), 9)
+        self.assertIsNotNone(months[0]["same_cash_gap_rate"])
+        self.assertFalse(any(month["erosion_month"] for month in months))
+
+    def test_benchmark_box_old_defaults_count_as_blank_and_typed_tickers_apply_to_the_run(self):
+        same = self.single(benchmark="QQQ")
+        self.assertEqual(same["summary"]["benchmark_source"], "Automatic")
+        typed = self.single(benchmark="SPY")
+        self.assertEqual(typed["summary"]["benchmark"], "SPY")
+        self.assertEqual(typed["summary"]["benchmark_source"], "Your benchmark for this run")
+        self.assertIn("SPY", typed["assessment"]["finding"]["detail"])
+        result = self.screener([{"ticker": "QQQI", "amount": 10000, "reinvest_pct": 0, "benchmark": "SPY"}])
+        self.assertEqual(result["results"][0]["benchmark_source"], "Your benchmark for this run")
+        self.merge.assert_called_with({"QQQI": "SPY"})
+        # Saved Dashboard references are untouched by a run.
+        conn = self.connect()
+        self.assertIsNone(conn.execute("SELECT value FROM settings WHERE key LIKE 'nav_reference_choices%'").fetchone())
+        conn.close()
+
+    def test_stocks_are_not_assessed_but_keep_their_dollar_backtest(self):
+        result = self.screener([{"ticker": "JNJ", "amount": 1000, "reinvest_pct": 0, "benchmark": "SPY"}])
+        row = result["results"][0]
+        self.assertEqual(row["finding"]["code"], "not_applicable")
+        self.assertIsNone(row["error"])
+        self.assertAlmostEqual(row["cash_taken"], 5.0 * PAYOUTS)
+
+    def test_unheld_fund_is_assessed_with_its_own_reference(self):
+        result = self.screener([{"ticker": "KEO", "amount": 1000, "reinvest_pct": 0}])
+        row = result["results"][0]
+        self.assertIsNone(row["error"])
+        self.assertIn(row["finding"]["code"], {"nav_lag", "no_signal", "needs_strategy", "limited_evidence", "unconfirmed"})
+
+    def test_current_portfolio_rows_leave_the_benchmark_to_the_dashboard(self):
+        with patch.object(app_module, "_nav_erosion_portfolio_profile_scope", return_value=([2], "profile")), \
+                patch.object(app_module, "_basis_total_expr", return_value="0"):
+            conn = self.connect()
+            conn.execute("ALTER TABLE all_account_info ADD COLUMN reinvest TEXT")
+            conn.commit()
+            rows, _scope, _count = app_module._nav_erosion_current_rows(conn)
+            conn.close()
+        self.assertEqual({row["benchmark"] for row in rows}, {""})
 
 
 if __name__ == "__main__":

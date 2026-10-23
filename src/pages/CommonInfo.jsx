@@ -4,10 +4,11 @@ import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney, formatMoneyWhole } from '../utils/money'
 import {
-  useNavAssessment, invalidateNavAssessment, navPercent, NAV_STATUS,
+  useNavAssessment, invalidateNavAssessment, isNavLag, NAV_LAG_EXPLAINER,
   STRATEGY_ANSWER_OPTIONS, strategyInQuestion, useStrategyAnswer,
 } from '../utils/navAssessment'
 import NavReferenceEditor from '../components/NavReferenceEditor'
+import { NavFindingLabel } from '../components/NavFinding'
 import '../components/NavAssessment.css'
 import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 import { useColumnLayout } from '../utils/useColumnLayout'
@@ -423,27 +424,13 @@ function NavReferenceDialog({ meta, onClose }) {
   )
 }
 
+// The backend's shared per-fund result (also shown on the NAV Erosion page
+// and Screener). A Skip chosen here shows at once, before the reload.
 function navCellSummary(meta, scope) {
-  const price = meta.price_screen?.status === 'available' ? meta.price_screen : null
-  if (meta.capital_status === 'not_applicable') {
-    return { label: 'Not applicable', tone: 'muted', detail: meta.guidance?.family === 'Money market fund' ? 'Money-market fund' : 'Not a fund' }
+  if (scope === 'skip' && meta.capital_status !== 'not_applicable') {
+    return { label: 'Skipped', tone: 'muted', detail: 'Excluded from the NAV screen' }
   }
-  if (scope === 'skip') return { label: 'Skipped', tone: 'muted', detail: 'Excluded from the NAV screen' }
-  if (meta.metrics) {
-    return {
-      label: meta.erosion_review ? 'Potential erosion — review' : NAV_STATUS[meta.capital_status] || 'Unconfirmed',
-      tone: meta.erosion_review ? 'neg' : meta.capital_status === 'declined' ? 'warn' : 'ok',
-      detail: `${navPercent(meta.metrics.capital_change_rate)} published NAV`,
-    }
-  }
-  if (price) {
-    return {
-      label: price.label,
-      tone: price.estimated_eroder ? 'neg' : price.review_candidate ? 'warn' : price.strategy?.kind === 'needs_verification' ? 'muted' : 'ok',
-      detail: `${navPercent(price.price_change_rate)} price · ${navPercent(price.cash_total_return)} with payouts`,
-    }
-  }
-  return { label: 'Unconfirmed', tone: 'muted', detail: 'Price history unavailable' }
+  return meta.finding || { label: 'Unconfirmed', tone: 'muted', detail: 'Price history unavailable' }
 }
 
 function navReferenceLine(reference) {
@@ -493,13 +480,14 @@ function NavCell({ row }) {
     }
     setDraft(null)
   }
-  const title = [meta.reason, price?.reason, meta.reference.why].filter(Boolean).join('\n')
+  const title = [isNavLag(summary) && NAV_LAG_EXPLAINER, summary.reason, summary.reason === price?.reason ? null : price?.reason,
+    meta.reference.why].filter(Boolean).join('\n')
   const ask = scope !== 'skip' && meta.capital_status !== 'not_applicable' && strategyInQuestion(meta)
   return (
     <div className="ci-nav-cell" title={title}>
       {ask
         ? <StrategyQuestion ticker={row.ticker} answer={meta.guidance?.strategy_answer} />
-        : <strong className={`ci-nav-status ci-nav-tone-${summary.tone}`}>{summary.label}</strong>}
+        : <NavFindingLabel finding={summary} title="" />}
       <small>{summary.detail}</small>
       <div className="ci-nav-controls">
         {meta.capital_status !== 'not_applicable' && (

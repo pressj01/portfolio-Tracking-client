@@ -16,6 +16,7 @@ from html.parser import HTMLParser
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import math
+import bisect
 import pandas as pd
 import urllib.parse
 import urllib.request
@@ -27,10 +28,13 @@ from nav_assessment_service import (
     VERSION as NAV_ASSESSMENT_VERSION,
     WINDOWS as NAV_ASSESSMENT_WINDOWS,
     build_payload as build_nav_assessment,
+    guidance as nav_guidance,
+    reference_plan as nav_reference_plan,
     validate_choice as validate_nav_reference_choice,
     validate_strategy_answer as validate_nav_strategy_answer,
 )
 from nav_auto_guidance import summarize_option_holdings
+from nav_price_screen import reference_price_index
 import neos_nav_source
 from werkzeug.exceptions import HTTPException
 
@@ -28548,6 +28552,76 @@ def _nav_assessment_source(ticker, guide, start, as_of):
     return source
 
 
+def _nav_assessment_inputs(conn, is_aggregate, profile_ids, tickers=None):
+    """What the NAV assessment knows about each fund, read the Dashboard's way.
+
+    Holdings supply type, value, income and the Include/Skip setting; stored
+    fund data, strategy answers and saved references apply on every screen.
+    `tickers` limits the result to those funds, adding any that are not held,
+    so the NAV Erosion screens assess a fund exactly as the Dashboard does.
+    Returns (info, saved reference choices, cash).
+    """
+    placeholders = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"SELECT ticker, current_price, quantity, description, classification_type, estim_payment_per_year, "
+        f"current_value, nav_erosion_scope, nav_benchmark_override FROM all_account_info "
+        f"WHERE profile_id IN ({placeholders}) AND quantity > 0", profile_ids,
+    ).fetchall()
+    info = _ticker_info_from_holding_rows(rows)
+    # The legacy coverage helper treats missing income as zero. Preserve
+    # missingness for the current high-payout priority list instead.
+    for holding in rows:
+        if holding['estim_payment_per_year'] is None:
+            info[str(holding['ticker']).strip().upper()]['annual_income'] = None
+    if tickers is not None:
+        info = {ticker: info.get(ticker) or {
+            "current_price": 0.0, "quantity": 0.0, "description": "", "classification_type": "",
+            "annual_income": None, "current_value": None, "nav_erosion_scope": "auto", "nav_benchmark_override": None,
+        } for ticker in dict.fromkeys(str(t).strip().upper() for t in tickers)}
+    for ticker, profile in _nav_security_profiles(conn, info).items():
+        if ticker in info:
+            info[ticker]["security_profile"] = profile
+    for ticker, answer in _nav_strategy_answers(conn).items():
+        if ticker in info:
+            info[ticker]["strategy_answer"] = answer
+    settings_key = _nav_reference_settings_key(is_aggregate, profile_ids)
+    saved = conn.execute("SELECT value FROM settings WHERE key = ?", (settings_key,)).fetchone()
+    choices = json.loads(saved[0]) if saved else {}
+    cash_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
+    cash = conn.execute(f"SELECT SUM(cash_value) FROM profiles WHERE id IN ({','.join('?' * len(cash_ids))})", cash_ids).fetchone()[0]
+    return info, choices, cash
+
+
+def _nav_saved_reference_choices(saved):
+    return {ticker: entry["choice"] for ticker, entry in (saved or {}).items()
+            if isinstance(entry, dict) and "choice" in entry}
+
+
+def _nav_reference_history(symbol, first, last, field, global_start, assessment_end):
+    # Share one full-window download across funds, months and quarters.
+    market = _nav_screen_market_history(symbol, min(global_start, first), assessment_end) or {}
+    if field == "prices":
+        series = {row["date"]: row["close"] for row in market.get("prices", [])}
+    else:
+        series = market.get("total_returns", {})
+    return {day: value for day, value in series.items() if first <= datetime.date.fromisoformat(day) <= last}
+
+
+def _run_nav_assessment(info, choices, cash, *, window="CUSTOM", start_date=None, as_of=None):
+    """The one NAV assessment behind the Dashboard and both NAV Erosion screens."""
+    as_of = as_of or datetime.date.today()
+    global_start = datetime.date.fromisoformat(str(start_date)[:10]) if start_date else None
+
+    def loader(field):
+        def load(symbol, first, last):
+            return _nav_reference_history(symbol, first, last, field, global_start or first, as_of)
+        return load
+
+    return build_nav_assessment(info, _nav_assessment_source, loader("total_returns"),
+                                window=window, as_of=as_of, start_date=start_date, choices=choices, cash=cash,
+                                market_loader=_nav_screen_market_history, price_loader=loader("prices"))
+
+
 @app.route("/api/nav-assessment", methods=["GET"])
 def nav_assessment_data():
     is_aggregate, profile_ids = get_profile_filter()
@@ -28567,28 +28641,7 @@ def nav_assessment_data():
     conn = get_connection()
     try:
         placeholders = ",".join("?" * len(profile_ids))
-        rows = conn.execute(
-            f"SELECT ticker, current_price, quantity, description, classification_type, estim_payment_per_year, "
-            f"current_value, nav_erosion_scope, nav_benchmark_override FROM all_account_info "
-            f"WHERE profile_id IN ({placeholders}) AND quantity > 0", profile_ids,
-        ).fetchall()
-        info = _ticker_info_from_holding_rows(rows)
-        # The legacy coverage helper treats missing income as zero. Preserve
-        # missingness for the current high-payout priority list instead.
-        for holding in rows:
-            if holding['estim_payment_per_year'] is None:
-                info[str(holding['ticker']).strip().upper()]['annual_income'] = None
-        for ticker, profile in _nav_security_profiles(conn, info).items():
-            if ticker in info:
-                info[ticker]["security_profile"] = profile
-        for ticker, answer in _nav_strategy_answers(conn).items():
-            if ticker in info:
-                info[ticker]["strategy_answer"] = answer
-        settings_key = _nav_reference_settings_key(is_aggregate, profile_ids)
-        saved = conn.execute("SELECT value FROM settings WHERE key = ?", (settings_key,)).fetchone()
-        choices = json.loads(saved[0]) if saved else {}
-        cash_ids = _cash_profile_ids_for_read(conn, is_aggregate, profile_ids)
-        cash = conn.execute(f"SELECT SUM(cash_value) FROM profiles WHERE id IN ({','.join('?' * len(cash_ids))})", cash_ids).fetchone()[0]
+        info, choices, cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids)
         if period_range and period_range["key"] == "all":
             # Use the same portfolio inception policy as shared performance,
             # including transactions for positions that have since been closed.
@@ -28614,15 +28667,8 @@ def nav_assessment_data():
     cached = _NAV_ASSESSMENT_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < 300:
         return jsonify(cached[1])
-    def reference_loader(symbol, first, last):
-        # Share one full-window download across funds and completed quarters.
-        global_start = datetime.date.fromisoformat(assessment_start) if assessment_start else first
-        market = _nav_screen_market_history(symbol, min(global_start,first), assessment_end)
-        return {day:value for day,value in (market or {}).get('total_returns',{}).items() if first <= datetime.date.fromisoformat(day) <= last}
-    result = build_nav_assessment(info, _nav_assessment_source, reference_loader,
-                                 window=window, as_of=assessment_end, start_date=assessment_start,
-                                 choices={tk: entry["choice"] for tk, entry in choices.items()}, cash=cash,
-                                 market_loader=_nav_screen_market_history)
+    result = _run_nav_assessment(info, _nav_saved_reference_choices(choices), cash, window=window,
+                                 start_date=assessment_start, as_of=assessment_end)
     if period_range:
         result["period_label"] = "All Market" if window == "ALL" else period_range["label"]
         result["shared_range"] = True
@@ -33082,11 +33128,14 @@ def _nav_benchmark_overrides():
 
 def _nav_benchmark_for_ticker(ticker, name="", category=""):
     """Best-effort benchmark for underlying-adjusted NAV erosion."""
+    override = _nav_benchmark_overrides().get(str(ticker or "").upper())
+    return override or _nav_benchmark_builtin(ticker, name, category)
+
+
+def _nav_benchmark_builtin(ticker, name="", category=""):
+    """The built-in benchmark mapping, ignoring saved overrides."""
     t = str(ticker or "").upper()
     text = f"{name or ''} {category or ''}".lower()
-    override = _nav_benchmark_overrides().get(t)
-    if override:
-        return override
     direct = {
         "QQQI": "QQQ", "GPIQ": "QQQ", "XQQI": "QQQ", "KQQQ": "QQQ", "TDAQ": "QQQ", "TDAX": "QQQ",
         "TQQY": "QQQ", "QDTE": "QQQ", "QYLD": "QQQ", "JEPQ": "QQQ",
@@ -46928,334 +46977,258 @@ def watchlist_data():
 
 # ── NAV Erosion Back-Tester ────────────────────────────────────────────────────
 
+# ── NAV Erosion screens ───────────────────────────────────────────────────────
+# Both screens show the Dashboard's assessment of each fund (the shared
+# _run_nav_assessment) beside a dollar back-test built from the same closes,
+# payouts, dates and reference, so a fund reads the same on all three.
+
+def _nav_screen_reference_choices(typed, info, saved):
+    """Reference choices for a NAV Erosion screen run.
+
+    A blank benchmark box uses exactly what the Dashboard uses for that fund:
+    a reference saved there, the Include (manual) benchmark, or the automatic
+    one. A typed ticker applies to this run only. Older saved screener rows
+    hold the previous automatic mapping (IYRI -> SPY), so a box matching that
+    mapping, the holding's own benchmark or the Dashboard's reference counts
+    as blank instead of quietly replacing the Dashboard's reference.
+    Returns (choices, {ticker: typed symbol used}, {ticker: note}).
+    """
+    choices = _nav_saved_reference_choices(saved)
+    used, notes = {}, {}
+    for ticker, raw in typed.items():
+        symbol = str(raw or "").strip().upper()
+        if not symbol:
+            continue
+        fund = info.get(ticker) or {}
+        try:
+            plan = nav_reference_plan(ticker, fund, nav_guidance(ticker, fund), choices.get(ticker))
+        except ValueError:
+            plan = {"selected": None, "legs": []}
+        same = {_nav_benchmark_builtin(ticker), str(fund.get("nav_benchmark_override") or "").strip().upper(),
+                plan.get("selected")}
+        if len(plan.get("legs") or []) == 1:
+            same.add(plan["legs"][0]["symbol"])
+        if symbol in same:
+            continue
+        try:
+            choices[ticker] = validate_nav_reference_choice({"mode": "symbol", "symbol": symbol})
+            used[ticker] = symbol
+        except ValueError:
+            notes[ticker] = (f"Benchmark {symbol} is not a single ticker, so "
+                             f"{plan.get('selected') or 'the automatic reference'} was used.")
+    return choices, used, notes
+
+
+def _nav_screen_reference_source(row, typed):
+    plan = row["reference"]
+    if typed:
+        return "Your benchmark for this run"
+    if plan.get("manual"):
+        return "Your Include (manual) benchmark"
+    if plan.get("automatic"):
+        return "Automatic, inferred" if plan.get("inferred") else "Automatic"
+    return "Saved on the Dashboard" if plan.get("legs") else "No reference"
+
+
+def _nav_screen_backtest(market, row, start, end, amount, reinvest_pct, price_loader):
+    """Month-by-month dollar back-test on the NAV assessment's own data.
+
+    Uses the assessment's dates, closes, payouts and reference, so the dollar
+    results line up with the result shown for the fund. Distributions are
+    reinvested at each month's last close. Returns (monthly rows, summary);
+    raises ValueError with a readable message when there is no usable history.
+    """
+    prices = {}
+    for item in (market or {}).get("prices", []):
+        day = datetime.date.fromisoformat(item["date"])
+        if day <= end:
+            prices[day] = float(item["close"])
+    screen = row.get("price_screen") or {}
+    if screen.get("status") == "available":
+        first, last = datetime.date.fromisoformat(screen["start"]), datetime.date.fromisoformat(screen["end"])
+    else:
+        days = sorted(prices)
+        before = [day for day in days if day <= start]
+        first = before[-1] if before else (days[0] if days else None)
+        last = days[-1] if days else None
+    if first is None or last is None or first >= last or first not in prices or last not in prices:
+        raise ValueError(f"Not enough price history for {row['ticker']} in that date range.")
+    paid = {}
+    for item in (market or {}).get("distributions", []):
+        day = datetime.date.fromisoformat(item["date"])
+        if first < day <= last:
+            paid[day] = paid.get(day, 0.0) + float(item["amount"])
+    try:
+        ref_index = reference_price_index(row["reference"], first, last, price_loader)
+    except Exception:
+        ref_index = None
+    ref_days = sorted(ref_index) if ref_index else []
+
+    def ref_level(day):
+        i = bisect.bisect_right(ref_days, day) - 1
+        return ref_index[ref_days[i]] if i >= 0 else None
+
+    windows = {window["end"][:7]: window for window in (screen.get("persistence") or {}).get("windows") or []}
+    month_end = {}
+    for day in sorted(day for day in prices if first < day <= last):
+        month_end[(day.year, day.month)] = day
+    p0 = prices[first]
+    shares = amount / p0
+    rows, prev_price, prev_ref = [], p0, 1.0
+    cum_dist = cum_reinvested = cum_bought = per_share = 0.0
+    for (year, month), day in month_end.items():
+        price = prices[day]
+        div = sum(value for paid_day, value in paid.items() if (paid_day.year, paid_day.month) == (year, month))
+        total_dist = div * shares
+        reinvest_amt = total_dist * reinvest_pct / 100.0
+        bought = reinvest_amt / price
+        shares += bought
+        cum_dist += total_dist
+        cum_reinvested += reinvest_amt
+        cum_bought += bought
+        per_share += div
+        level = ref_level(day) if ref_days else None
+        breakeven = amount / price
+        window = windows.get(f"{year:04d}-{month:02d}") or {}
+        rows.append({
+            "date": day.strftime("%b %Y"), "month_end": day.isoformat(),
+            "price": round(price, 4), "price_delta_pct": round((price / prev_price - 1) * 100, 2),
+            "benchmark_price": round(p0 * level, 4) if level else None,
+            "benchmark_delta_pct": round((level / prev_ref - 1) * 100, 2) if level else None,
+            "div_per_share": round(div, 4), "total_dist": round(total_dist, 2), "reinvested": round(reinvest_amt, 2),
+            "shares_bought": round(bought, 4), "total_shares": round(shares, 4),
+            "portfolio_val": round(shares * price, 2), "breakeven_sh": round(breakeven, 4),
+            "shares_deficit": round(breakeven - shares, 4),
+            # The assessment's own completed-month check for this month.
+            "reference_return": window.get("reference_return"),
+            "same_cash_gap_rate": window.get("reference_gap_rate"),
+            "reference_flat_or_up": window.get("supportive"),
+            "erosion_month": window.get("qualifies"),
+            "paid_above_reference": window.get("payouts_exceed_reference_return"),
+        })
+        prev_price, prev_ref = price, level or prev_ref
+    final_price = prices[last]
+    final_value = shares * final_price
+    breakeven = amount / final_price
+    deficit = breakeven - shares
+    cash_taken = cum_dist - cum_reinvested
+    ending_wealth = final_value + cash_taken
+    ref_change = ref_index[last] - 1 if ref_index and last in ref_index else None
+    return rows, {
+        "benchmark": row["reference"].get("selected"),
+        "actual_start": first.isoformat(), "actual_end": last.isoformat(),
+        "start_price": round(p0, 4), "end_price": round(final_price, 4),
+        "price_chg_pct": round((final_price / p0 - 1) * 100, 2),
+        "benchmark_return_pct": round(ref_change * 100, 2) if ref_change is not None else None,
+        "total_dist": round(cum_dist, 2), "total_shares_bought": round(cum_bought, 4),
+        "total_reinvested": round(cum_reinvested, 2), "cash_taken": round(cash_taken, 2),
+        "final_value": round(final_value, 2), "ending_wealth": round(ending_wealth, 2),
+        "gain_loss_dollar": round(final_value - amount, 2),
+        "gain_loss_pct": round((final_value - amount) / amount * 100, 2),
+        "total_return_dollar": round(ending_wealth - amount, 2),
+        "total_return_pct": round((ending_wealth - amount) / amount * 100, 2),
+        "final_deficit": round(deficit, 4), "final_deficit_pct": round(deficit / breakeven * 100, 2),
+        "has_price_deficit": deficit > 0, "distributions_per_share": round(per_share, 6),
+    }
+
+
+def _nav_screen_dates(data_get):
+    start, end = data_get("start", ""), data_get("end", "")
+    if not start or not end:
+        raise ValueError("Please select both start and end dates.")
+    start, end = datetime.date.fromisoformat(start), datetime.date.fromisoformat(end)
+    if end < start:
+        raise ValueError("End date must be on or after start date.")
+    return start, end
+
+
+def _nav_screen_notes(row, summary, start, note=None):
+    notes = [note] if note else []
+    actual = datetime.date.fromisoformat(summary["actual_start"])
+    if (actual - start).days > 30:
+        notes.append(f"{row['ticker']} only has data going back to {actual.strftime('%B %d, %Y')}; results start there.")
+    if summary["benchmark_return_pct"] is None and row["reference"].get("legs"):
+        notes.append(f"No price history for {row['reference'].get('selected')} over these dates, so it is not drawn.")
+    return " ".join(notes) or None
+
+
 @app.route("/api/nav-erosion/data")
 def nav_erosion_data():
-    """Back-test benchmark-confirmed price erosion over a custom date range."""
-    import warnings
-    warnings.filterwarnings("ignore")
-
+    """One fund: the Dashboard's NAV assessment plus a dollar back-test."""
     sym = request.args.get("ticker", "").strip().upper()
-    benchmark_override = request.args.get("benchmark", "").strip().upper()
+    typed = request.args.get("benchmark", "").strip().upper()
     try:
-        initial_investment = float(request.args.get("amount", 0))
+        amount = float(request.args.get("amount", 0))
     except (TypeError, ValueError):
-        initial_investment = 0.0
-    start_date = request.args.get("start", "")
-    end_date = request.args.get("end", "")
+        amount = 0.0
     try:
-        reinvest_pct = float(request.args.get("reinvest", 0))
+        reinvest_pct = min(100.0, max(0.0, float(request.args.get("reinvest", 0))))
     except (TypeError, ValueError):
         reinvest_pct = 0.0
-
     if not sym:
         return jsonify(error="Please enter a ticker symbol.")
-    if initial_investment <= 0:
+    if amount <= 0:
         return jsonify(error="Initial investment must be greater than zero.")
-    if not start_date or not end_date:
-        return jsonify(error="Please select both start and end dates.")
-
-    error = None
-    warning = None
-    fig_json = None
-    rows = []
-    summary = {}
+    try:
+        start, end = _nav_screen_dates(request.args.get)
+    except ValueError as exc:
+        return jsonify(error=str(exc))
 
     try:
-        from datetime import datetime as _dt, timedelta as _td
-        import json
-        import yfinance as yf
         import plotly.graph_objects as go
         import plotly.utils
 
-        requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
-        requested_end = _dt.strptime(end_date, "%Y-%m-%d").date()
-        if requested_end < requested_start:
-            return jsonify(error="End date must be on or after start date.")
-        # yfinance treats ``end`` as exclusive; add a day so the date chosen in
-        # the UI is actually included in the analysis.
-        fetch_end = (requested_end + _td(days=1)).isoformat()
-
-        hist = _yf_ticker(sym).history(
-            start=start_date, end=fetch_end,
-            interval="1d", auto_adjust=False, actions=True,
-        )
-
-        if hist.empty:
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            info, saved, _cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids, [sym])
+        finally:
+            conn.close()
+        choices, used, notes = _nav_screen_reference_choices({sym: typed}, info, saved)
+        payload = _run_nav_assessment(info, choices, 0, start_date=start.isoformat(), as_of=end)
+        row = payload["results"][0]
+        market = _nav_screen_market_history(sym, start, end)
+        if not market:
             return jsonify(error=f"No data found for ticker {sym}. Check the symbol and date range.")
-
-        fund_close, _hist_divs = _nav_ohlc_from_frame(hist, sym)
-        if fund_close is None or len(fund_close.dropna()) < 2:
-            return jsonify(error=f"Not enough price history for {sym} in that date range.")
-        if _hist_divs is not None:
-            hist = hist.copy()
-            hist["Dividends"] = _hist_divs.reindex(hist.index).fillna(0.0)
-
-        def _fetch_benchmark_part(part):
-            bench_hist = _yf_ticker(part).history(
-                start=start_date, end=fetch_end,
-                interval="1d", auto_adjust=True,
-            )
-            if bench_hist is None or bench_hist.empty or "Close" not in bench_hist.columns:
-                return None
-            return bench_hist["Close"].dropna()
-
-        benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
-            sym,
-            benchmark_override,
-            _fetch_benchmark_part,
-            anchor_series=fund_close,
-        )
-        if benchmark_close is None:
-            return jsonify(error=benchmark_note)
-        if benchmark_note:
-            warning = benchmark_note
-
-        aligned_daily = _nav_align_series(
-            fund_close.rename("fund"),
-            benchmark_close.rename("benchmark"),
-        )
-        if len(aligned_daily) < 2:
-            return jsonify(error=f"{sym} and {benchmark} do not have overlapping price history.")
-        fund_daily = aligned_daily["fund"]
-        benchmark_daily = aligned_daily["benchmark"]
-
-        actual_start = fund_daily.index[0].date()
-        if (actual_start - requested_start).days > 30:
-            short_history_note = (
-                f"{sym} only has data going back to {actual_start.strftime('%B %d, %Y')}. "
-                f"Results are shown from that date — your requested start "
-                f"({requested_start.strftime('%B %d, %Y')}) predates when this ETF existed."
-            )
-            # A substituted benchmark is worth saying too, so append rather than replace.
-            warning = f"{warning} {short_history_note}" if warning else short_history_note
-
-        df = _nav_monthly_frame(
-            fund_daily,
-            hist.get("Dividends"),
-            benchmark_daily,
-        )
-        if df.empty:
-            return jsonify(error=f"No overlapping monthly data for {sym} and {benchmark}.")
-
-        # Enter at the first available close on/after the requested start, not
-        # at that month's ending close. Monthly distributions are then applied
-        # only from the requested window onward.
-        initial_price = float(fund_daily.iloc[0])
-        benchmark_initial = float(benchmark_daily.iloc[0])
-        if initial_price == 0:
-            return jsonify(error=f"Initial price for {sym} is zero — cannot calculate.")
-        if benchmark_initial <= 0:
-            return jsonify(error=f"Initial benchmark price for {benchmark} is invalid.")
-
-        current_shares = initial_investment / initial_price
-        cumulative_dist = 0.0
-        cumulative_reinvested = 0.0
-        cumulative_shares_bought = 0.0
-        prev_price = initial_price
-        prev_benchmark_price = benchmark_initial
-        cumulative_divs_per_share = 0.0
-        confirmed_erosion_per_share = 0.0
-        confirmed_erosion_months = 0
-
-        for dt, row in df.iterrows():
-            price = float(row["price"])
-            benchmark_price = float(row["benchmark_price"])
-            div_per_share = float(row["div"])
-            total_dist = div_per_share * current_shares
-            reinvest_amt = total_dist * reinvest_pct / 100.0
-            shares_bought = (reinvest_amt / price) if price > 0 else 0.0
-            current_shares += shares_bought
-            portfolio_val = current_shares * price
-            breakeven_sh = (initial_investment / price) if price > 0 else 0.0
-            shares_deficit = breakeven_sh - current_shares
-            fund_month_return = (price - prev_price) / prev_price if prev_price > 0 else 0.0
-            benchmark_month_return = (
-                (benchmark_price - prev_benchmark_price) / prev_benchmark_price
-                if prev_benchmark_price > 0 else 0.0
-            )
-            cumulative_dist += total_dist
-            cumulative_reinvested += reinvest_amt
-            cumulative_shares_bought += shares_bought
-            cumulative_divs_per_share += div_per_share
-
-            # Confirmed erosion exists only when the fund loses price while its
-            # underlying benchmark is flat or rising. Express it in dollars per
-            # share so the aggregate ratio uses the same units as distributions.
-            numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
-            erosion_per_share = (numerator or 0.0) * prev_price
-            if erosion_per_share > 1e-12:
-                confirmed_erosion_per_share += erosion_per_share
-                confirmed_erosion_months += 1
-            coverage_ratio = (
-                round(erosion_per_share / div_per_share, 4)
-                if div_per_share > 0 and numerator is not None else None
-            )
-            monthly_accounting = _nav_accounting_rates(prev_price, price, div_per_share)
-            prev_price = price
-            prev_benchmark_price = benchmark_price
-
-            rows.append({
-                "date": dt.strftime("%b %Y"),
-                "price": round(price, 4),
-                "benchmark_price": round(benchmark_price, 4) if benchmark_price is not None else None,
-                "benchmark_normalized_price": round(
-                    initial_price * benchmark_price / benchmark_initial, 4
-                ),
-                "price_delta_pct": round(fund_month_return * 100.0, 2),
-                "benchmark_delta_pct": round(benchmark_month_return * 100.0, 2),
-                "price_change_from_start_pct": round(
-                    (price - initial_price) / initial_price * 100.0, 2
-                ),
-                "div_per_share": round(div_per_share, 4),
-                "total_dist": round(total_dist, 2),
-                "reinvested": round(reinvest_amt, 2),
-                "shares_bought": round(shares_bought, 4),
-                "total_shares": round(current_shares, 4),
-                "portfolio_val": round(portfolio_val, 2),
-                "breakeven_sh": round(breakeven_sh, 4),
-                "shares_deficit": round(shares_deficit, 4),
-                "coverage_ratio": coverage_ratio,
-                **monthly_accounting,
-            })
-
-        final_row = rows[-1]
-        benchmark_end = float(benchmark_daily.iloc[-1])
-        fund_return = (final_row["price"] - initial_price) / initial_price if initial_price > 0 else 0.0
-        benchmark_return = (
-            (benchmark_end - benchmark_initial) / benchmark_initial
-            if benchmark_initial > 0 else 0.0
-        )
-        # Match the numerator and denominator horizons: both cover the selected
-        # window. This ratio measures the share of period distributions offset
-        # by price losses specifically confirmed against a flat/rising benchmark.
-        total_coverage = (
-            round(confirmed_erosion_per_share / cumulative_divs_per_share, 4)
-            if cumulative_divs_per_share > 0 else None
-        )
-        accounting = _nav_accounting_rates(
-            initial_price,
-            final_row["price"],
-            cumulative_divs_per_share,
-        )
-        deficit_pct = (
-            final_row["shares_deficit"] / final_row["breakeven_sh"] * 100
-            if final_row.get("breakeven_sh", 0) and final_row["shares_deficit"] > 0
-            else 0.0
-        )
-        nav_bands = _nav_rule_bands()
-        total_severity = _nav_erosion_from_adjusted_ratio(
-            total_coverage,
-            price_change_pct=fund_return * 100.0,
-            deficit_pct=deficit_pct,
-            **nav_bands,
-        )
-        cash_taken = cumulative_dist - cumulative_reinvested
-        ending_wealth = final_row["portfolio_val"] + cash_taken
-        total_return_dollar = ending_wealth - initial_investment
-        total_return_pct = total_return_dollar / initial_investment * 100.0
-        price_change_pct = fund_return * 100.0
-        benchmark_return_pct = benchmark_return * 100.0
-        relative_drag_pct = max(0.0, benchmark_return_pct - price_change_pct)
-        up_market_recovery = _nav_up_market_recovery(fund_daily, benchmark_daily)
-        overall_erosion = _nav_overall_erosion_metrics(
-            accounting["raw_nav_erosion_rate"],
-            accounting["distribution_rate_on_starting_nav"],
-            total_coverage,
-            relative_drag_pct,
-            up_market_recovery["up_market_recovery_score"],
-        )
-        summary = {
-            "benchmark": benchmark,
-            "benchmark_valid": True,
-            "actual_start": fund_daily.index[0].strftime("%Y-%m-%d"),
-            "actual_end": fund_daily.index[-1].strftime("%Y-%m-%d"),
-            "total_dist": round(cumulative_dist, 2),
-            "total_shares_bought": round(cumulative_shares_bought, 4),
-            "total_reinvested": round(cumulative_reinvested, 2),
-            "cash_taken": round(cash_taken, 2),
-            "final_value": final_row["portfolio_val"],
-            "ending_wealth": round(ending_wealth, 2),
-            "total_return_dollar": round(total_return_dollar, 2),
-            "total_return_pct": round(total_return_pct, 2),
-            "price_chg_pct": round(price_change_pct, 2),
-            "benchmark_return_pct": round(benchmark_return_pct, 2),
-            "relative_drag_pct": round(relative_drag_pct, 2),
-            "has_erosion": confirmed_erosion_months > 0,
-            "confirmed_erosion_months": confirmed_erosion_months,
-            "confirmed_erosion_per_share": round(confirmed_erosion_per_share, 4),
-            "has_price_deficit": final_row["shares_deficit"] > 0,
-            "final_deficit": final_row["shares_deficit"],
-            "final_deficit_pct": round(deficit_pct, 2),
-            "total_coverage": total_coverage,
-            **accounting,
-            **up_market_recovery,
-            **overall_erosion,
-            "accounting_start_nav": round(initial_price, 6),
-            "accounting_end_nav": round(final_row["price"], 6),
-            "accounting_distributions_per_share": round(cumulative_divs_per_share, 6),
-            "nav_erosion_severity": total_severity,
-        }
-
-        dates_list = [r["date"] for r in rows]
-        prices_list = [r["price"] for r in rows]
-        benchmark_prices_list = [r["benchmark_normalized_price"] for r in rows]
-        vals_list = [r["portfolio_val"] for r in rows]
-        breakeven_list = [initial_investment] * len(rows)
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=dates_list, y=prices_list,
-            name=f"{sym} Share Price",
-            line=dict(color="#7ecfff", width=2),
-            yaxis="y1",
-            hovertemplate="<b>%{x}</b><br>Price: $%{y:.2f}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=dates_list, y=benchmark_prices_list,
-            name=f"{benchmark} (Normalized)",
-            line=dict(color="#ffb74d", width=2, dash="dot"),
-            yaxis="y1",
-            hovertemplate=f"<b>%{{x}}</b><br>{benchmark} normalized: $%{{y:.2f}}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=dates_list, y=vals_list,
-            name="Portfolio Value",
-            line=dict(color="#00e89a", width=2),
-            yaxis="y2",
-            hovertemplate="<b>%{x}</b><br>Portfolio Value: $%{y:,.2f}<extra></extra>",
-        ))
-        fig.add_trace(go.Scatter(
-            x=dates_list, y=breakeven_list,
-            name="Initial Investment",
-            line=dict(color="#888", width=1.5, dash="dash"),
-            yaxis="y2",
-            hovertemplate="<b>%{x}</b><br>Break-Even: $%{y:,.2f}<extra></extra>",
-        ))
-        fig.update_layout(
-            title=f"{sym} vs {benchmark} — Price Erosion Back-Test ({rows[0]['date']} → {rows[-1]['date']})",
-            template="plotly_dark",
-            margin=dict(t=50, l=60, r=60, b=50),
-            height=420,
-            legend=dict(orientation="h", y=1.08, x=0),
-            hoverlabel=dict(
-                bgcolor="#111124",
-                bordercolor="#3a3a5c",
-                font=dict(color="#e0e0e0", size=13),
-            ),
-            yaxis=dict(title="Share Price ($)", tickprefix="$", side="left"),
-            yaxis2=dict(
-                title="Portfolio Value ($)", tickprefix="$",
-                overlaying="y", side="right", showgrid=False,
-            ),
-            hovermode="x unified",
-        )
-        fig_json = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
+        rows, summary = _nav_screen_backtest(
+            market, row, start, end, amount, reinvest_pct,
+            lambda symbol, a, b: _nav_reference_history(symbol, a, b, "prices", start, end))
+    except ValueError as exc:
+        return jsonify(error=str(exc))
     except Exception:
         import traceback
-        error = traceback.format_exc(limit=5)
+        return jsonify(error=traceback.format_exc(limit=5))
 
-    return jsonify(fig_json=fig_json, error=error, warning=warning, rows=rows, summary=summary)
+    summary["benchmark_source"] = _nav_screen_reference_source(row, sym in used)
+    reference = summary["benchmark"] or "Reference"
+    fig = go.Figure()
+    dates = [item["date"] for item in rows]
+    fig.add_trace(go.Scatter(x=dates, y=[item["price"] for item in rows], name=f"{sym} Share Price",
+                             line=dict(color="#7ecfff", width=2), yaxis="y1",
+                             hovertemplate="<b>%{x}</b><br>Price: $%{y:.2f}<extra></extra>"))
+    if any(item["benchmark_price"] is not None for item in rows):
+        fig.add_trace(go.Scatter(x=dates, y=[item["benchmark_price"] for item in rows],
+                                 name=f"{reference} price (normalized)",
+                                 line=dict(color="#ffb74d", width=2, dash="dot"), yaxis="y1",
+                                 hovertemplate=f"<b>%{{x}}</b><br>{reference} normalized: $%{{y:.2f}}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=dates, y=[item["portfolio_val"] for item in rows], name="Portfolio Value",
+                             line=dict(color="#00e89a", width=2), yaxis="y2",
+                             hovertemplate="<b>%{x}</b><br>Portfolio Value: $%{y:,.2f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=dates, y=[amount] * len(rows), name="Initial Investment",
+                             line=dict(color="#888", width=1.5, dash="dash"), yaxis="y2",
+                             hovertemplate="<b>%{x}</b><br>Break-Even: $%{y:,.2f}<extra></extra>"))
+    fig.update_layout(
+        title=f"{sym} vs {reference} — NAV Erosion Back-Test ({summary['actual_start']} → {summary['actual_end']})",
+        template="plotly_dark", margin=dict(t=50, l=60, r=60, b=50), height=420,
+        legend=dict(orientation="h", y=1.08, x=0),
+        hoverlabel=dict(bgcolor="#111124", bordercolor="#3a3a5c", font=dict(color="#e0e0e0", size=13)),
+        yaxis=dict(title="Share Price ($)", tickprefix="$", side="left"),
+        yaxis2=dict(title="Portfolio Value ($)", tickprefix="$", overlaying="y", side="right", showgrid=False),
+        hovermode="x unified",
+    )
+    return jsonify(fig_json=json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder), error=None,
+                   warning=_nav_screen_notes(row, summary, start, notes.get(sym)),
+                   rows=rows, summary=summary, assessment=row)
 
 
 # ── NAV Erosion Portfolio Screener ─────────────────────────────────────────────
@@ -47296,8 +47269,7 @@ def _nav_erosion_current_rows(conn):
         f"""SELECT ticker,
                    SUM({value_expr}) AS amount,
                    SUM(CASE WHEN UPPER(COALESCE(reinvest, '')) = 'Y'
-                            THEN {value_expr} ELSE 0 END) AS reinvest_amount,
-                   MAX(NULLIF(TRIM(COALESCE(nav_benchmark_override, '')), '')) AS nav_benchmark_override
+                            THEN {value_expr} ELSE 0 END) AS reinvest_amount
               FROM all_account_info
              WHERE profile_id IN ({placeholders})
                AND COALESCE(quantity, 0) > 0
@@ -47315,13 +47287,13 @@ def _nav_erosion_current_rows(conn):
         amount = float(r["amount"] or 0)
         reinvest_amount = float(r["reinvest_amount"] or 0)
         ticker = str(r["ticker"] or "").strip().upper()
-        override = str(r["nav_benchmark_override"] or "").strip().upper()
         out.append({
             "ticker": ticker,
             "amount": round(amount, 2),
             "reinvest_pct": round((reinvest_amount / amount * 100.0) if amount > 0 else 0.0, 1),
-            "benchmark": override or _nav_benchmark_for_ticker(ticker),
-            "benchmark_default": _nav_benchmark_for_ticker(ticker),
+            # Blank: the run uses the Dashboard's reference for each fund,
+            # including its Include (manual) benchmark.
+            "benchmark": "",
         })
     return out, scope, total_count
 
@@ -47580,23 +47552,21 @@ def nav_erosion_portfolio_saved_item(saved_id):
 
 @app.route("/api/nav-erosion-portfolio/data", methods=["POST"])
 def nav_erosion_portfolio_data():
-    import yfinance as yf
-    import warnings
-    warnings.filterwarnings("ignore")
+    """Each row: the Dashboard's NAV assessment of the fund plus a dollar back-test.
 
+    The account verdict weighs the funds by the amounts entered here.
+    """
     data = request.get_json(force=True, silent=True) or {}
-    start_date = data.get("start", "")
-    end_date = data.get("end", "")
     rows_input = data.get("rows", [])
-
-    if not start_date or not end_date:
-        return jsonify(error="Please select both start and end dates.")
+    try:
+        start, end = _nav_screen_dates(data.get)
+    except ValueError as exc:
+        return jsonify(error=str(exc))
     if not rows_input:
         return jsonify(error="No ETFs provided.")
     if len(rows_input) > 80:
         return jsonify(error="Maximum 80 ETFs allowed.")
 
-    # Validate rows
     validated = []
     for i, r in enumerate(rows_input):
         ticker = str(r.get("ticker", "")).strip().upper()
@@ -47614,306 +47584,74 @@ def nav_erosion_portfolio_data():
             return jsonify(error=f"Row {i+1}: invalid reinvest %.")
         if reinvest_pct < 0 or reinvest_pct > 100:
             return jsonify(error=f"Row {i+1}: reinvest % must be 0–100.")
-        benchmark = str(r.get("benchmark", "") or "").strip().upper()
-        validated.append({
-            "ticker": ticker,
-            "amount": amount,
-            "reinvest_pct": reinvest_pct,
-            "benchmark": benchmark,
-        })
+        validated.append({"ticker": ticker, "amount": amount, "reinvest_pct": reinvest_pct,
+                          "benchmark": str(r.get("benchmark", "") or "").strip().upper()})
 
-    unique_tickers = list(dict.fromkeys(r["ticker"] for r in validated))
-    explicit_benchmarks = {
-        r["ticker"]: r["benchmark"]
-        for r in validated
-        if r.get("benchmark")
-    }
-    # Explicit picks are only persisted once they resolve to real history, so a
-    # typo cannot poison the saved mapping for every later run.
-    benchmark_by_ticker = {
-        t: (explicit_benchmarks.get(t) or _nav_benchmark_for_ticker(t))
-        for t in unique_tickers
-    }
-    benchmark_tickers = list(dict.fromkeys(
-        part
-        for benchmark in benchmark_by_ticker.values()
-        for part in _nav_benchmark_parts(benchmark)
-    ))
-    download_tickers = list(dict.fromkeys(unique_tickers + benchmark_tickers))
-
-    # Batch download all tickers
+    tickers = list(dict.fromkeys(r["ticker"] for r in validated))
+    typed, amounts = {}, {}
+    for r in validated:
+        if r["benchmark"] and not typed.get(r["ticker"]):
+            typed[r["ticker"]] = r["benchmark"]
+        amounts[r["ticker"]] = amounts.get(r["ticker"], 0.0) + r["amount"]
     try:
-        from datetime import datetime as _dt, timedelta as _td
-        requested_end = _dt.strptime(end_date, "%Y-%m-%d").date()
-        requested_start = _dt.strptime(start_date, "%Y-%m-%d").date()
-        if requested_end < requested_start:
-            return jsonify(error="End date must be on or after start date.")
-        raw = _chunked_yf_download(
-            download_tickers,
-            # yfinance treats ``end`` as exclusive; include the date selected
-            # in the UI by fetching one calendar day beyond it.
-            start=start_date, end=(requested_end + _td(days=1)).isoformat(),
-            interval="1d", auto_adjust=False, actions=True,
-            group_by="ticker", progress=False,
-        )
-    except Exception as e:
-        return jsonify(error=f"Failed to fetch data: {str(e)}")
+        is_aggregate, profile_ids = get_profile_filter()
+        conn = get_connection()
+        try:
+            info, saved, _cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids, tickers)
+        finally:
+            conn.close()
+        choices, used, notes = _nav_screen_reference_choices(typed, info, saved)
+        for ticker in tickers:
+            info[ticker] = {**info[ticker], "current_value": amounts[ticker]}
+        payload = _run_nav_assessment(info, choices, 0, start_date=start.isoformat(), as_of=end)
+    except ValueError as exc:
+        return jsonify(error=str(exc))
+    except Exception as exc:
+        return jsonify(error=f"Failed to assess these funds: {exc}")
+    by_ticker = {row["ticker"]: row for row in payload["results"]}
 
-    ohlc_cache = {}
-    benchmark_close_cache = {}
-
-    def get_ticker_df(sym):
-        if sym in ohlc_cache:
-            return ohlc_cache[sym]
-        close, divs = _nav_resolve_ohlc(raw, sym, start_date, (requested_end + _td(days=1)).isoformat())
-        ohlc_cache[sym] = (close, divs)
-        return close, divs
-
-    def get_benchmark_close(sym):
-        """Match the single-fund tester's dividend-adjusted benchmark series."""
-        if sym in benchmark_close_cache:
-            return benchmark_close_cache[sym]
-        adjusted = _nav_pick_frame_column(raw, sym, "Adj Close")
-        if adjusted is not None:
-            adjusted = pd.to_numeric(pd.Series(adjusted), errors="coerce")
-            adjusted = adjusted[adjusted.notna() & (adjusted > 0)]
-        if (adjusted is None or adjusted.empty) and _nav_pick_frame_column(raw, sym, "Close") is not None:
-            # Synthetic/legacy downloads may not include Adj Close. Preserve
-            # their available Close series instead of making another request.
-            adjusted, _ = get_ticker_df(sym)
-        if adjusted is None or adjusted.empty:
-            try:
-                bench_hist = _yf_ticker(sym).history(
-                    start=start_date,
-                    end=(requested_end + _td(days=1)).isoformat(),
-                    interval="1d",
-                    auto_adjust=True,
-                )
-                adjusted = (
-                    pd.to_numeric(bench_hist["Close"], errors="coerce").dropna()
-                    if bench_hist is not None and not bench_hist.empty and "Close" in bench_hist.columns
-                    else None
-                )
-            except Exception:
-                adjusted = None
-        if adjusted is None or adjusted.empty:
-            adjusted, _ = get_ticker_df(sym)
-        benchmark_close_cache[sym] = adjusted
-        return adjusted
+    def prices(symbol, a, b):
+        return _nav_reference_history(symbol, a, b, "prices", start, end)
 
     results = []
-    resolved_explicit = {}
     for r in validated:
-        sym = r["ticker"]
-        benchmark = benchmark_by_ticker.get(sym) or _nav_benchmark_for_ticker(sym)
-        amount = r["amount"]
-        reinvest_pct = r["reinvest_pct"]
-
-        close, divs = get_ticker_df(sym)
-
-        if close is None or close.dropna().empty:
-            results.append({
-                "ticker": sym, "benchmark": benchmark,
-                "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"No data found for {sym}.",
-            })
+        sym, row = r["ticker"], by_ticker[r["ticker"]]
+        price = row.get("price_screen") or {}
+        persistence = price.get("persistence") or {}
+        base = {"ticker": sym, "amount": round(r["amount"], 2), "reinvest_pct": round(r["reinvest_pct"], 1),
+                "benchmark": row["reference"].get("selected"),
+                "benchmark_source": _nav_screen_reference_source(row, sym in used),
+                "finding": row["finding"], "nav_lag": price.get("nav_lag") or {"status": "not_applicable"},
+                "same_cash_gap_rate": (price.get("reference_result") or {}).get("capital_gap_rate"),
+                "months_checked": persistence.get("supportive_intervals"),
+                "erosion_months": persistence.get("qualifying_intervals"),
+                "strategy": (price.get("strategy") or row["guidance"].get("screen_strategy") or {}).get("label"),
+                "published_nav_change_rate": (row.get("metrics") or {}).get("capital_change_rate")}
+        try:
+            market = _nav_screen_market_history(sym, start, end)
+            if not market:
+                raise ValueError(f"No data found for {sym}.")
+            _rows, summary = _nav_screen_backtest(market, row, start, end, r["amount"], r["reinvest_pct"], prices)
+        except ValueError as exc:
+            results.append({**base, "error": str(exc)})
             continue
-
-        benchmark, benchmark_close, benchmark_note = _nav_resolve_benchmark(
-            sym,
-            explicit_benchmarks.get(sym),
-            get_benchmark_close,
-            anchor_series=close,
-        )
-        if benchmark_close is None:
-            results.append({
-                "ticker": sym, "benchmark": benchmark_by_ticker.get(sym),
-                "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": benchmark_note,
-            })
+        except Exception:
+            results.append({**base, "error": "Market data is temporarily unavailable."})
             continue
-        if explicit_benchmarks.get(sym) and not benchmark_note:
-            resolved_explicit[sym] = benchmark
+        results.append({**base, **{key: summary[key] for key in (
+            "start_price", "end_price", "benchmark_return_pct", "total_dist", "total_reinvested", "cash_taken",
+            "final_value", "ending_wealth", "gain_loss_dollar", "gain_loss_pct", "total_return_dollar",
+            "total_return_pct", "final_deficit", "final_deficit_pct", "has_price_deficit")},
+            "price_delta_pct": summary["price_chg_pct"],
+            "warning": _nav_screen_notes(row, summary, start, notes.get(sym)), "error": None})
 
-        aligned_daily = _nav_align_series(
-            close.rename("fund"), benchmark_close.rename("benchmark")
-        )
-        if len(aligned_daily) < 2:
-            results.append({
-                "ticker": sym, "benchmark": benchmark,
-                "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"{sym} and {benchmark} do not have overlapping price history.",
-            })
-            continue
-
-        fund_daily = aligned_daily["fund"]
-        benchmark_daily = aligned_daily["benchmark"]
-        df = _nav_monthly_frame(fund_daily, divs, benchmark_daily)
-
-        if df.empty:
-            results.append({
-                "ticker": sym, "benchmark": benchmark,
-                "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"No overlapping monthly data for {sym} and {benchmark}.",
-            })
-            continue
-
-        actual_start = fund_daily.index[0].date()
-        warning = None
-        if (actual_start - requested_start).days > 30:
-            warning = (
-                f"{sym} only has data going back to {actual_start.strftime('%B %d, %Y')}. "
-                f"Results start from that date."
-            )
-        if benchmark_note:
-            warning = f"{benchmark_note} {warning}" if warning else benchmark_note
-
-        # Enter at the first available daily close, rather than the first
-        # month-end close. This makes the selected start date economically
-        # meaningful and keeps the price and total-return horizons aligned.
-        initial_price = float(fund_daily.iloc[0])
-        benchmark_initial = float(benchmark_daily.iloc[0])
-        if initial_price == 0:
-            results.append({
-                "ticker": sym, "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"Initial price for {sym} is zero.",
-            })
-            continue
-        if benchmark_initial <= 0:
-            results.append({
-                "ticker": sym, "benchmark": benchmark,
-                "amount": amount, "reinvest_pct": reinvest_pct,
-                "error": f"Initial benchmark price for {benchmark} is invalid.",
-            })
-            continue
-
-        current_shares = amount / initial_price
-        cumul_dist = 0.0
-        cumul_reinvested = 0.0
-        cumul_divs_per_share = 0.0
-        cumulative_shares_bought = 0.0
-        confirmed_erosion_per_share = 0.0
-        confirmed_erosion_months = 0
-        prev_price = initial_price
-        prev_benchmark_price = benchmark_initial
-
-        for dt, row in df.iterrows():
-            price = float(row["price"])
-            benchmark_price = float(row["benchmark_price"])
-            div_per_share = float(row["div"])
-            total_dist = div_per_share * current_shares
-            reinvest_amt = total_dist * reinvest_pct / 100.0
-            shares_bought = (reinvest_amt / price) if price > 0 else 0.0
-            current_shares += shares_bought
-            cumul_dist += total_dist
-            cumul_reinvested += reinvest_amt
-            cumul_divs_per_share += div_per_share
-            cumulative_shares_bought += shares_bought
-
-            fund_month_return = (price - prev_price) / prev_price if prev_price > 0 else 0.0
-            benchmark_month_return = (
-                (benchmark_price - prev_benchmark_price) / prev_benchmark_price
-                if prev_benchmark_price > 0 else 0.0
-            )
-            numerator = _nav_erosion_numerator(fund_month_return, benchmark_month_return)
-            erosion_per_share = (numerator or 0.0) * prev_price
-            if erosion_per_share > 1e-12:
-                confirmed_erosion_per_share += erosion_per_share
-                confirmed_erosion_months += 1
-            prev_price = price
-            prev_benchmark_price = benchmark_price
-
-        final_price = float(df["price"].iloc[-1])
-        portfolio_val = current_shares * final_price
-        breakeven_final = (amount / final_price) if final_price > 0 else 0.0
-        final_deficit = breakeven_final - current_shares
-        price_delta_pct = (final_price - initial_price) / initial_price * 100 if initial_price else 0.0
-        gain_loss_dollar = portfolio_val - amount
-        gain_loss_pct = gain_loss_dollar / amount * 100 if amount else 0.0
-        cash_taken = cumul_dist - cumul_reinvested
-        total_return_dollar = portfolio_val + cash_taken - amount
-        total_return_pct = total_return_dollar / amount * 100 if amount else 0.0
-
-        fund_return = (final_price - initial_price) / initial_price if initial_price > 0 else 0.0
-        benchmark_end = float(benchmark_daily.iloc[-1])
-        benchmark_return = (
-            (benchmark_end - benchmark_initial) / benchmark_initial
-            if benchmark_initial > 0 else 0.0
-        )
-        # Match numerator and denominator horizons: the ratio is the confirmed
-        # benchmark-adjusted price loss per share divided by all distributions
-        # per share over this same backtest window.
-        coverage_ratio = (
-            round(confirmed_erosion_per_share / cumul_divs_per_share, 4)
-            if cumul_divs_per_share > 0 else None
-        )
-        accounting = _nav_accounting_rates(
-            initial_price,
-            final_price,
-            cumul_divs_per_share,
-        )
-        deficit_pct = final_deficit / breakeven_final * 100 if breakeven_final > 0 and final_deficit > 0 else 0.0
-        nav_erosion_severity = _nav_erosion_from_adjusted_ratio(
-            coverage_ratio,
-            price_change_pct=price_delta_pct,
-            deficit_pct=deficit_pct,
-            **_nav_rule_bands(),
-        )
-        relative_drag_pct = max(0.0, benchmark_return * 100.0 - price_delta_pct)
-        up_market_recovery = _nav_up_market_recovery(fund_daily, benchmark_daily)
-        overall_erosion = _nav_overall_erosion_metrics(
-            accounting["raw_nav_erosion_rate"],
-            accounting["distribution_rate_on_starting_nav"],
-            coverage_ratio,
-            relative_drag_pct,
-            up_market_recovery["up_market_recovery_score"],
-        )
-        starting_shares = amount / initial_price
-        confirmed_erosion_dollar = confirmed_erosion_per_share * starting_shares
-        period_distributions_dollar = cumul_divs_per_share * starting_shares
-
-        results.append({
-            "ticker": sym,
-            "benchmark": benchmark,
-            "amount": round(amount, 2),
-            "reinvest_pct": round(reinvest_pct, 1),
-            "start_price": round(initial_price, 4),
-            "end_price": round(final_price, 4),
-            "price_delta_pct": round(price_delta_pct, 2),
-            "total_dist": round(cumul_dist, 2),
-            "total_reinvested": round(cumul_reinvested, 2),
-            "final_value": round(portfolio_val, 2),
-            "gain_loss_dollar": round(gain_loss_dollar, 2),
-            "gain_loss_pct": round(gain_loss_pct, 2),
-            "total_return_dollar": round(total_return_dollar, 2),
-            "total_return_pct": round(total_return_pct, 2),
-            "cash_taken": round(cash_taken, 2),
-            "ending_wealth": round(portfolio_val + cash_taken, 2),
-            "benchmark_return_pct": round(benchmark_return * 100.0, 2),
-            "relative_drag_pct": round(relative_drag_pct, 2),
-            "has_erosion": confirmed_erosion_months > 0,
-            "confirmed_erosion_months": confirmed_erosion_months,
-            "confirmed_erosion_per_share": round(confirmed_erosion_per_share, 4),
-            "confirmed_erosion_dollar": round(confirmed_erosion_dollar, 2),
-            "period_distributions_dollar": round(period_distributions_dollar, 2),
-            "has_price_deficit": final_deficit > 0,
-            "final_deficit": round(final_deficit, 4),
-            "final_deficit_pct": round(deficit_pct, 2),
-            "coverage_ratio": coverage_ratio,
-            **accounting,
-            **up_market_recovery,
-            **overall_erosion,
-            "accounting_start_nav": round(initial_price, 6),
-            "accounting_end_nav": round(final_price, 6),
-            "accounting_distributions_per_share": round(cumul_divs_per_share, 6),
-            "nav_erosion_severity": nav_erosion_severity,
-            "warning": warning,
-            "error": None,
-        })
-
-    _merge_nav_benchmark_overrides(resolved_explicit)
-
-    return jsonify(results=results)
+    # Explicit picks that resolved are remembered as before (Buy/Sell Signals
+    # read them); they never change the Dashboard's saved references.
+    _merge_nav_benchmark_overrides({
+        ticker: symbol for ticker, symbol in used.items()
+        if ((by_ticker[ticker].get("price_screen") or {}).get("reference_result") or {}).get("status") == "available"})
+    return jsonify(results=results, verdict=payload["verdict"], preliminary=payload["preliminary"],
+                   as_of=payload["as_of"], requested_start=payload["requested_start"])
 
 
 # ── Portfolio Income Simulator ─────────────────────────────────────────────────

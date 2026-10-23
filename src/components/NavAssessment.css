@@ -135,6 +135,14 @@
 .ci-nav-tone-warn { color: var(--warning-money); }
 .ci-nav-tone-ok { color: var(--text-strong); }
 .ci-nav-tone-muted { color: var(--text-dim); }
+/* NAV lag is informational, so it gets the accent color, never a warning. */
+.ci-nav-tone-lag { color: var(--accent-2); }
+.nav-lag-note { display: block; color: var(--accent-2); font-size: .72rem; line-height: 1.4; }
+.nav-lag-toggle { background: none; border: 0; padding: 0; color: var(--accent-2); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
+.nav-lag-explainer { display: block; margin-top: .25rem; color: var(--text-dim); font-weight: 400; }
+.nav-lag-list { list-style: none; padding-left: 0; margin: .5rem 0 .85rem; }
+.nav-lag-list li { margin: .35rem 0; }
+.nav-lag-list small { display: block; color: var(--text-dim); margin: .2rem 0 0 0; }
 .ci-nav-controls { display: flex; align-items: center; justify-content: flex-end; gap: .3rem; max-width: 100%; margin-top: .1rem; }
 .ci-nav-controls .ci-nav-ref {
   flex: 0 1 auto;
@@ -159,6 +167,8 @@
 .nav-finding-warn > strong { color: var(--warning-money); }
 .nav-finding-neg { border-left-color: var(--neg); }
 .nav-finding-neg > strong { color: var(--neg); }
+.nav-finding-lag { border-left-color: var(--accent-2); }
+.nav-finding-lag > strong { color: var(--accent-2); }
 .nav-strategy-question { margin: .75rem 0; padding: .65rem .85rem; border: 1px solid var(--border); border-radius: 6px; }
 .nav-strategy-question legend { padding: 0 .35rem; font-weight: 700; color: var(--text-strong); }
 .nav-strategy-options { display: flex; flex-wrap: wrap; gap: .4rem 1.1rem; margin: .35rem 0; }

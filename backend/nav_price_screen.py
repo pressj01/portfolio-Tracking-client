@@ -12,6 +12,11 @@ INTERVAL_DECLINE = .0025
 INTERVAL_GAP = .0025
 WINDOW_DECLINE = .01
 WINDOW_GAP = .005
+# NAV lag: a call-selling fund's price trailing its underlying's price by at
+# least one percentage point over the window. It is a description, never
+# erosion, and is reported only when the erosion tests found nothing.
+LAG_MIN = .01
+NAV_LAG_LABEL = 'NAV lag — not erosion'
 
 try:
     from .nav_assessment_service import date, number, compare_reference
@@ -83,6 +88,88 @@ def interval_check(prices, paid, first, last, plan, loader):
             'status':'repeated_declines' if repeated else 'not_established' if supportive_count >= 2 else 'insufficient_evidence'}
 
 
+def reference_price_index(plan, first, last, loader):
+    """The reference's closing-price path, 1.0 on `first`.
+
+    Prices only, no dividends: this is what the underlying's price did. Legs
+    are combined with the plan's daily exposure weights, so a single 100% leg
+    is just its own price ratio. None when a leg lacks either end date.
+    """
+    if not plan.get('legs') or plan.get('warning'):
+        return None
+    histories = []
+    for leg in plan['legs']:
+        raw = loader(leg['symbol'], first, last) or {}
+        clean = {}
+        for day, value in raw.items():
+            day, value = date(day), number(value)
+            if first <= day <= last and value is not None and value > 0:
+                clean[day] = value
+        if first not in clean or last not in clean:
+            return None
+        histories.append(clean)
+    days = sorted(set.intersection(*(set(history) for history in histories)))
+    index, level = {first: 1.0}, 1.0
+    for previous, day in zip(days, days[1:]):
+        level *= 1 + sum(leg['weight'] * (history[day]/history[previous]-1)
+                         for leg, history in zip(plan['legs'], histories))
+        if level <= 0:
+            return None
+        index[day] = level
+    return index
+
+
+def nav_lag(plan, strategy, ref, persistence, p0, pt, first, last, cash, price_loader, *, erosion):
+    """Whether a call-selling fund's price trailed its underlying's price.
+
+    Selling calls caps the upside and the premium is paid out, so the price of
+    a covered-call fund usually trails its underlying. That is NAV lag, not
+    NAV erosion. It is reported only when the erosion test had enough months
+    to run and found nothing; erosion, when found, is reported instead.
+    """
+    name = plan.get('selected') or 'the reference'
+    out = {'status':'not_applicable', 'threshold':LAG_MIN, 'reference':name}
+    if strategy.get('kind') != 'covered_call':
+        return out
+    if erosion:
+        return {**out, 'status':'superseded'}
+    if ref.get('status') != 'available' or persistence['supportive_intervals'] < 2:
+        return {**out, 'status':'insufficient_evidence'}
+    try:
+        index = reference_price_index(plan, first, last, price_loader)
+    except Exception:
+        index = None
+    if not index or last not in index:
+        return {**out, 'status':'unavailable'}
+    underlying, fund = index[last]-1, pt/p0-1
+    lag, payout, gap = underlying-fund, cash/p0, ref['capital_gap_rate']
+    out.update(underlying_price_change_rate=underlying, fund_price_change_rate=fund, lag_rate=lag,
+               payout_rate=payout, same_cash_gap_rate=gap,
+               status='lag' if lag >= LAG_MIN else 'none')
+    if out['status'] != 'lag':
+        return out
+    def pct(value):
+        return f'{abs(value) * 100:.1f}%'
+    def moved(value):
+        return f'rose {pct(value)}' if value >= 0 else f'fell {pct(value)}'
+    text = (f'The fund’s price {moved(fund)} while {name}’s price {moved(underlying)}, so it trailed by '
+            f'{lag * 100:.1f} points. A covered-call fund is expected to trail its underlying: it pays its option income '
+            f'out as cash ({pct(payout)} of its starting price here) and gives up part of {name}’s gains when it rises. ')
+    if gap <= -WINDOW_GAP:
+        text += f'Counting that cash, it still kept {pct(gap)} less capital than {name} would have. '
+    elif gap >= WINDOW_GAP:
+        text += f'Counting that cash, it kept more capital than {name} would have. '
+    else:
+        text += f'Counting that cash, it kept pace with {name}. '
+    text += ('This is not NAV erosion: the price did not repeatedly fall in months when '
+             f'{name} was flat or up.' if not persistence['repeated'] else
+             f'This is not NAV erosion: although the price fell in several months when {name} was flat or up, over '
+             f'the whole period it did not both lose at least {WINDOW_DECLINE * 100:.0f}% and end at least '
+             f'{WINDOW_GAP * 100:.1f}% behind {name} after paying the same cash.')
+    out['reason'] = text
+    return out
+
+
 def _plain_reason(plan, strategy, ref, persistence, price_change, *, candidate, eligible, eroder, lagged_only):
     """What the check found, in plain words and the fund's own numbers."""
     name = plan.get('selected') or 'the reference'
@@ -124,7 +211,14 @@ def _plain_reason(plan, strategy, ref, persistence, price_change, *, candidate, 
             'pattern of lost capital.')
 
 
-def screen(source, start, end, plan, reference_loader):
+def screen(source, start, end, plan, reference_loader, price_loader=None, *, verified_erosion=False):
+    """Price-based erosion screen for one fund, with NAV lag for call sellers.
+
+    reference_loader gives total-return closes; price_loader gives plain
+    closes for the NAV-lag comparison (total returns are used when it is
+    missing). verified_erosion is the published-NAV check's own flag: it
+    outranks NAV lag, so a fund is never shown as both.
+    """
     if not source or source.get('basis') != 'split_adjusted_market_price':
         return {'status': 'unavailable', 'reason': 'Split-adjusted price and payout history is unavailable.'}
     if not source.get('distributions_complete') or not source.get('corporate_actions_resolved'):
@@ -190,8 +284,16 @@ def screen(source, start, end, plan, reference_loader):
     candidate = candidate and not lagged_only
     eligible = strategy['kind'] == 'covered_call'
     eroder = candidate and persistence['both_repeated'] and eligible
+    price_history = {}
+    def aligned_prices(symbol,a,b):
+        if symbol not in price_history:
+            price_history[symbol] = (price_loader or reference_loader)(symbol,first,last)
+        return {day:value for day,value in (price_history[symbol] or {}).items() if a <= date(day) <= b}
+    lag = nav_lag(plan, strategy, ref, persistence, p0, pt, first, last, distributions, aligned_prices,
+                  erosion=bool(candidate or verified_erosion))
     label = ('Estimated covered-call eroder' if eroder else
              'Losing capital vs reference' if candidate else
+             NAV_LAG_LABEL if lag['status'] == 'lag' else
              'No covered-call erosion signal' if eligible and persistence['supportive_intervals'] >= 2 else
              'Covered-call screen: limited evidence' if eligible else
              'Strategy needs verification' if strategy['kind'] == 'needs_verification' else
@@ -200,8 +302,9 @@ def screen(source, start, end, plan, reference_loader):
              # still ran; say whether it found anything.
              'No capital / payout signal' if ref.get('status') == 'available' and persistence['supportive_intervals'] >= 2 else
              'Capital / payout: limited evidence')
-    reason = _plain_reason(plan, strategy, ref, persistence, change / p0,
-                           candidate=candidate, eligible=eligible, eroder=eroder, lagged_only=lagged_only)
+    reason = lag['reason'] if lag['status'] == 'lag' else _plain_reason(
+        plan, strategy, ref, persistence, change / p0,
+        candidate=candidate, eligible=eligible, eroder=eroder, lagged_only=lagged_only)
     return {'status':'available', 'basis':'market_price', 'published_nav':False,
             'start':first.isoformat(), 'end':last.isoformat(),
             'shorter_history':start.year != 1900 and first > start,
@@ -213,7 +316,7 @@ def screen(source, start, end, plan, reference_loader):
             'reference_result':ref, 'persistence':persistence, 'review_candidate':bool(candidate),
             'strategy':strategy, 'covered_call_eligible':eligible,
             'window_decline_floor':WINDOW_DECLINE, 'window_gap_floor':WINDOW_GAP,
-            'estimated_eroder':bool(eroder), 'label':label, 'reason':reason,
+            'estimated_eroder':bool(eroder), 'nav_lag':lag, 'label':label, 'reason':reason,
             'limitation':'Preliminary price-based estimate. Premiums/discounts, exposure differences and payout timing can affect it; this is not verified NAV erosion.'}
 
 
@@ -249,6 +352,13 @@ def summarize(results):
             'priority_rate_unavailable_tickers':[row['ticker'] for row in applicable if row.get('payout_priority',{}).get('status') == 'rate_unavailable'],
             'estimated_eroder_count':len(eroders),
             'estimated_eroder_value':sum(row.get('current_value') or 0 for row in eroders),
+            # Listed so it is visibly accounted for, and never counted as erosion.
+            'nav_lag':[{'ticker':row['ticker'], 'reference':lag['reference'], 'lag_rate':lag['lag_rate'],
+                        'fund_price_change_rate':lag['fund_price_change_rate'],
+                        'underlying_price_change_rate':lag['underlying_price_change_rate'],
+                        'same_cash_gap_rate':lag['same_cash_gap_rate'], 'current_value':row.get('current_value'),
+                        'reason':lag['reason']}
+                       for row in covered for lag in [row['price_screen'].get('nav_lag') or {}] if lag.get('status') == 'lag'],
             'candidates':[{'ticker':row['ticker'], 'price_change_rate':row['price_screen']['price_change_rate'],
                            'estimated_eroder':row['price_screen']['estimated_eroder'], 'label':row['price_screen']['label'],
                            'reference_fit':row['reference']['fit'], 'strategy':row['price_screen']['strategy']['label'],

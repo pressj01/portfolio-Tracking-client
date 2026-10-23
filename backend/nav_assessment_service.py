@@ -18,7 +18,7 @@ except ImportError:
     from nav_assessment import CapitalObservation, assess, same_cash_reference
     from nav_auto_guidance import infer_guidance, name_says_option_income, strategy_from_holdings
 
-VERSION = "nav-assessment-v9-strategy-detection"
+VERSION = "nav-assessment-v10-nav-lag"
 VERDICT_LABELS = {
     "strong": "Strong NAV Erosion",
     "weak": "Weak NAV Erosion",
@@ -348,6 +348,22 @@ def compare_reference(start_nav, end_nav, first, last, distributions, plan, load
     return result
 
 
+VERIFIED_EROSION_LABEL = "Potential NAV erosion — review"
+VERIFIED_EROSION_REASON = (
+    "Published NAV declined in at least two of the most recent four completed quarters while the exposure reference "
+    "was flat/rising. This is a persistent capital-depletion review signal; payout policy, options, expenses and "
+    "exposure differences still need investigation.")
+
+
+def verified_erosion_candidate(row):
+    """The published-NAV quarterly check's erosion flag for one fund."""
+    ref, plan = row.get("reference_result") or {}, row["reference"]
+    return bool(row.get("metrics") and row["capital_status"] == "declined"
+                and ref.get("status") == "available"
+                and plan["fit"] == "Exposure reference" and not plan["warning"]
+                and (row.get("persistence") or {}).get("qualifying_quarters", 0) >= 2)
+
+
 def erosion_overview(results):
     """Triage observations, not calibrated probabilities or causal assertions.
 
@@ -360,17 +376,15 @@ def erosion_overview(results):
     known = [row for row in applicable if row.get("metrics")]
     candidates, payouts, declines = [], [], []
     for row in known:
-        metrics, ref, plan = row["metrics"], row["reference_result"], row["reference"]
+        metrics, ref = row["metrics"], row["reference_result"]
         if row["capital_status"] != "declined":
             continue
         declines.append(row["ticker"])
         if metrics["investment_result"] >= 0 and metrics["payouts_not_replenished"]:
             payouts.append(row["ticker"])
-        if (ref.get("status") == "available"
-                and plan["fit"] == "Exposure reference" and not plan["warning"]
-                and row.get("persistence", {}).get("qualifying_quarters", 0) >= 2):
-            candidates.append({"ticker": row["ticker"], "label": "Potential NAV erosion — review",
-                "reason": "Published NAV declined in at least two of the most recent four completed quarters while the exposure reference was flat/rising. This is a persistent capital-depletion review signal; payout policy, options, expenses and exposure differences still need investigation.",
+        if verified_erosion_candidate(row):
+            candidates.append({"ticker": row["ticker"], "label": VERIFIED_EROSION_LABEL,
+                "reason": VERIFIED_EROSION_REASON,
                 "nav_change_rate": metrics["capital_change_rate"], "reference_gap_rate": ref["capital_gap_rate"]})
     partial = len(known) < len(applicable)
     persistence_evidence_count = sum(row.get("persistence", {}).get("quarters_compared", 0) >= 2 for row in known)
@@ -381,6 +395,62 @@ def erosion_overview(results):
             "causal_verdict": "unconfirmed",
             "persistence_evidence_count": persistence_evidence_count,
             "explanation": "Potential candidates require repeated qualifying quarters, not a small endpoint decline. This is a review screen, not a probability or confirmation of destructive erosion. Market declines alone do not qualify. Unconfirmed holdings prevent a complete portfolio-wide conclusion."}
+
+
+NAV_STATUS_LABELS = {"declined": "NAV declined", "preserved": "Capital preserved",
+                     "within_precision": "Within source precision", "liquidated": "Liquidated"}
+
+
+def _signed_pct(value):
+    return "—" if value is None else f"{value * 100:.2f}%"
+
+
+def fund_finding(row):
+    """The one result every NAV screen shows for a fund.
+
+    The Dashboard, the NAV Erosion page and the NAV Erosion Screener all
+    display this, so a fund over the same dates and reference reads the same
+    on each. Erosion outranks NAV lag, which outranks a plain NAV status.
+    """
+    price = row.get("price_screen") or {}
+    price = price if price.get("status") == "available" else None
+    lag = (price or {}).get("nav_lag") or {}
+    metrics = row.get("metrics")
+    if row["capital_status"] == "not_applicable":
+        money_market = (row.get("guidance") or {}).get("family") == "Money market fund"
+        return {"code": "not_applicable", "label": "Not applicable", "tone": "muted", "basis": None,
+                "detail": "Money-market fund" if money_market else "Not a fund", "reason": row.get("reason")}
+    if row.get("nav_erosion_scope") == "skip":
+        return {"code": "skipped", "label": "Skipped", "tone": "muted", "basis": None,
+                "detail": "Excluded from the NAV screen", "reason": row.get("reason")}
+    basis = "published_nav" if metrics else "market_price" if price else None
+    detail = (f"{_signed_pct(metrics['capital_change_rate'])} published NAV" if metrics else
+              f"{_signed_pct(price['price_change_rate'])} price · {_signed_pct(price['cash_total_return'])} with payouts"
+              if price else "Price history unavailable")
+
+    def result(code, label, tone, reason, shown=detail):
+        return {"code": code, "label": label, "tone": tone, "detail": shown, "reason": reason, "basis": basis}
+
+    if row.get("erosion_review"):
+        return result("verified_erosion", VERIFIED_EROSION_LABEL, "neg", VERIFIED_EROSION_REASON)
+    if price and price.get("estimated_eroder"):
+        return result("estimated_eroder", price["label"], "neg", price["reason"])
+    if price and price.get("review_candidate"):
+        return result("losing_capital", price["label"], "warn", price["reason"])
+    if lag.get("status") == "lag":
+        return result("nav_lag", price["label"], "lag", lag["reason"],
+                      f"{_signed_pct(lag['fund_price_change_rate'])} price vs "
+                      f"{_signed_pct(lag['underlying_price_change_rate'])} {lag['reference']}")
+    if metrics:
+        return result(row["capital_status"], NAV_STATUS_LABELS.get(row["capital_status"], "Unconfirmed"),
+                      "warn" if row["capital_status"] == "declined" else "ok", row.get("reason"))
+    if price:
+        if (price.get("strategy") or {}).get("kind") == "needs_verification":
+            return result("needs_strategy", price["label"], "muted", price["reason"])
+        if price["persistence"]["supportive_intervals"] < 2:
+            return result("limited_evidence", price["label"], "muted", price["reason"])
+        return result("no_signal", price["label"], "ok", price["reason"])
+    return result("unconfirmed", "Unconfirmed", "muted", row.get("reason"))
 
 
 def _verdict_share(value, account, complete):
@@ -599,6 +669,14 @@ def portfolio_verdict(results, preliminary, overall, summary):
     if parts:
         summary_text = " · ".join(parts)
 
+    # Shown beside the verdict so it is visibly accounted for; NAV lag never
+    # counts toward Strong or Weak.
+    nav_lag = [{
+        "ticker": row["ticker"], "label": row["finding"]["label"], "detail": row["finding"]["detail"],
+        "reason": row["finding"]["reason"], "current_value": row.get("current_value"),
+        "value_share": _verdict_share(row.get("current_value"), account, complete),
+    } for row in results if (row.get("finding") or {}).get("code") == "nav_lag"]
+
     probability = 0 if not applicable else _verdict_probability(
         strength, verified_weight=verified_weight, eroder_weight=eroder_weight,
         review_weight=review_weight, verified_count=verified_count, eroder_count=eroder_count,
@@ -616,6 +694,7 @@ def portfolio_verdict(results, preliminary, overall, summary):
         "review_count": review_count,
         "value_share": implicated_share,
         "has_signal": bool(has_signal),
+        "nav_lag": nav_lag,
         "holdings": {
             "verified": verified_holdings,
             "estimated_eroders": eroder_holdings,
@@ -671,7 +750,14 @@ def persistence_check(nav, distributions, first, last, plan, loader):
             "qualifying_quarters": qualifying, "quarters_compared": available, "minimum_required": 2, "windows": windows}
 
 
-def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", as_of=None, start_date=None, choices=None, cash=0, market_loader=None):
+def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", as_of=None, start_date=None, choices=None, cash=0,
+                  market_loader=None, price_loader=None):
+    """Assess every fund in ticker_info. The Dashboard and both NAV Erosion
+    screens all call this, so a fund gets the same result on each.
+
+    reference_loader returns total-return closes and price_loader plain
+    closes (used for NAV lag) for a reference symbol between two dates.
+    """
     if window not in WINDOWS:
         raise ValueError("Unsupported NAV assessment window")
     as_of = as_of or dt.date.today()
@@ -784,7 +870,8 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
                 return row
             try:
                 row['price_screen'] = screen(market_loader(row['ticker'], start, as_of), start, as_of,
-                                             row['reference'], reference_loader)
+                                             row['reference'], reference_loader, price_loader,
+                                             verified_erosion=verified_erosion_candidate(row))
             except Exception as exc:
                 row['price_screen'] = {'status':'unavailable', 'reason':str(exc) if isinstance(exc,ValueError) else 'Market data is temporarily unavailable.'}
             return row
@@ -812,6 +899,7 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
     flagged = {row["ticker"] for row in overall["candidates"]}
     for row in results:
         row["erosion_review"] = row["ticker"] in flagged
+        row["finding"] = fund_finding(row)
     summary = {"states": states, "cash": cash, "account_value": total,
                "value_coverage_complete": cash is not None and not missing_values,
                "missing_values": missing_values,
