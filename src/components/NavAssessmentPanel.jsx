@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
-import { useNavAssessment, navMoney, navPercent, navProbability, NAV_STATUS, strategyInQuestion } from '../utils/navAssessment'
+import { useNavAssessment, isNavLag, navMoney, navPercent, navProbability, NAV_LAG_EXPLAINER, strategyInQuestion } from '../utils/navAssessment'
 import NavErosionHelp from './NavErosionHelp'
+import { NavFindingLabel, NavLagNote } from './NavFinding'
 import NavReferenceEditor from './NavReferenceEditor'
 import './NavAssessment.css'
 import { PERFORMANCE_PERIODS, customRangeError, formatPerformanceRange, isLifetimePerformancePeriod } from '../utils/performancePeriods'
@@ -70,6 +71,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
   const statesSentence = describeNavStates(summary)
   const rows = (data?.results || []).filter(row => (
     (filter === 'all' || (filter === 'price_review' ? row.price_screen?.review_candidate
+      : filter === 'nav_lag' ? isNavLag(row.finding)
       : filter === 'reference' ? Boolean(row.reference.warning) || !row.reference.legs.length
         : filter === 'strategy' ? strategyInQuestion(row) && row.capital_status !== 'not_applicable'
           : row.capital_status === filter))
@@ -83,6 +85,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
     setSearch(ticker)
   }
   const implicated = verdict?.holdings?.implicated || []
+  const lagging = verdict?.nav_lag || []
   const reduction = verdict?.reduction
   return (
     <section className="nav-assessment" aria-label="NAV, distributions and references">
@@ -110,6 +113,9 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
               <div className="summary-value">{verdict.label}</div>
               <div className="summary-sub">{navProbability(verdict.probability)} evidence probability</div>
               <div className="summary-sub">{verdict.summary}</div>
+              {lagging.length > 0 && <div className="summary-sub ci-nav-tone-lag" title={NAV_LAG_EXPLAINER}>
+                {lagging.length} covered-call fund{lagging.length === 1 ? '' : 's'} with NAV lag, not counted as erosion
+              </div>}
               <button
                 type="button"
                 className="nav-verdict-link"
@@ -140,6 +146,20 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
                   ))}
                 </ul>
               )}
+              {lagging.length > 0 && <>
+                <strong className="ci-nav-tone-lag">NAV lag — not erosion ({lagging.length})</strong>
+                <p className="nav-assessment-note">{NAV_LAG_EXPLAINER}</p>
+                <ul className="nav-lag-list">
+                  {lagging.map(item => (
+                    <li key={item.ticker}>
+                      <button type="button" className="btn btn-sm" onClick={() => openHolding(item.ticker)}>{item.ticker}</button>
+                      {' '}{item.detail}
+                      {item.value_share != null && <> · {navPercent(item.value_share)} of account</>}
+                      {item.reason && <small>{item.reason}</small>}
+                    </li>
+                  ))}
+                </ul>
+              </>}
               {reduction && (
                 <>
                   <strong>{reduction.under_50 ? 'Evidence probability' : 'How to get the evidence probability under 50%'}</strong>
@@ -280,7 +300,7 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
           <summary>Review holdings and references ({data.results.length})</summary>
           <div className="nav-assessment-toolbar">
             <label>Show <select aria-label="Filter NAV assessments" value={filter} onChange={event => setFilter(event.target.value)}>
-              <option value="all">All holdings</option><option value="price_review">Price-based review candidates</option><option value="declined">Verified NAV declined</option><option value="unconfirmed">NAV not verified</option><option value="reference">Reference needs review</option><option value="strategy">Strategy needs your answer</option><option value="not_applicable">Not applicable</option>
+              <option value="all">All holdings</option><option value="price_review">Price-based review candidates</option><option value="nav_lag">NAV lag (not erosion)</option><option value="declined">Verified NAV declined</option><option value="unconfirmed">NAV not verified</option><option value="reference">Reference needs review</option><option value="strategy">Strategy needs your answer</option><option value="not_applicable">Not applicable</option>
             </select></label>
             <label>Find holding <input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Ticker or name" /></label>
           </div>
@@ -293,10 +313,11 @@ export default function NavAssessmentPanel({ period = '1y', start = '', end = ''
                 const metrics = row.metrics
                 const ref = metrics ? row.reference_result : price?.reference_result || row.reference_result
                 const first = metrics ? row.window_start : price?.start
+                const reasons = [...new Set([row.finding?.reason, metrics ? row.reason : price?.reason, metrics ? null : row.reason].filter(Boolean))]
                 const last = metrics ? row.window_end : price?.end
                 return <tr key={row.ticker}>
                 <td><strong>{row.ticker}</strong></td>
-                <td><strong>{metrics || !price ? NAV_STATUS[row.capital_status] || 'Unconfirmed' : `${price.label} · NAV not verified`}</strong>{row.erosion_review && <small className="nav-reference-warning">Potential NAV erosion — review</small>}{price?.review_candidate && <small className="nav-reference-warning">{price.label}</small>}<small>{metrics || !price ? row.reason : price.reason}</small>{!metrics && <small>{row.reason}</small>}{metrics && row.persistence && <small>{row.persistence.quarters_compared} completed quarters compared · {row.persistence.qualifying_quarters} NAV declines in flat/rising reference markets</small>}{price && <small>{price.persistence.intervals_compared} {price.persistence.cadence}s compared · {price.persistence.qualifying_intervals} price declines in flat/rising reference periods · {price.persistence.joint_qualifying_intervals} also paid above reference return</small>}{(metrics ? row.source : price?.source) && <small><a href={(metrics ? row.source : price.source).url} target="_blank" rel="noreferrer">{(metrics ? row.source : price.source).label}</a></small>}</td>
+                <td><NavFindingLabel finding={row.finding} title="" />{!metrics && price && <small>Market prices · NAV not verified</small>}{isNavLag(row.finding) && <NavLagNote compact />}{reasons.map(text => <small key={text}>{text}</small>)}{metrics && row.persistence && <small>{row.persistence.quarters_compared} completed quarters compared · {row.persistence.qualifying_quarters} NAV declines in flat/rising reference markets</small>}{price && <small>{price.persistence.intervals_compared} {price.persistence.cadence}s compared · {price.persistence.qualifying_intervals} price declines in flat/rising reference periods · {price.persistence.joint_qualifying_intervals} also paid above reference return</small>}{(metrics ? row.source : price?.source) && <small><a href={(metrics ? row.source : price.source).url} target="_blank" rel="noreferrer">{(metrics ? row.source : price.source).label}</a></small>}</td>
                 <td>{first ? <>{first}<br />{last}{(metrics ? row.shorter_history : price?.shorter_history) && <small>Shorter available history</small>}</> : '—'}</td>
                 <td>{navPercent(metrics?.capital_change_rate ?? price?.price_change_rate)}<small>{metrics ? 'Published NAV' : price ? 'Market price estimate' : ''}</small></td>
                 <td>{navMoney(metrics ? metrics.investment_result - metrics.capital_change : price?.cash_paid)}<small>{metrics ? 'Per original share' : price ? 'Split-restated share basis' : ''}</small></td>

@@ -1,7 +1,7 @@
 import { useId, useState } from 'react'
 import { useProfileFetch } from '../context/ProfileContext'
 import {
-  invalidateNavAssessment, navPercent, readNavJson, useStrategyAnswer, NAV_STATUS, STRATEGY_ANSWER_OPTIONS,
+  invalidateNavAssessment, isNavLag, navPercent, readNavJson, useStrategyAnswer, NAV_LAG_EXPLAINER, STRATEGY_ANSWER_OPTIONS,
 } from '../utils/navAssessment'
 
 // Registry family names describe the NAV source, not what a reader calls the fund.
@@ -38,8 +38,8 @@ export default function NavReferenceEditor({ row, onClose }) {
   const guide = row.guidance
   const price = row.price_screen?.status === 'available' ? row.price_screen : null
   const refName = row.reference.selected || 'the reference'
-  const findingTone = row.metrics ? (row.erosion_review ? 'neg' : 'ok')
-    : price?.estimated_eroder ? 'neg' : price?.review_candidate ? 'warn' : 'ok'
+  const finding = row.finding
+  const findingTone = ['neg', 'warn', 'lag'].includes(finding?.tone) ? finding.tone : 'ok'
   const save = async value => {
     setSaving(true)
     setError('')
@@ -58,10 +58,11 @@ export default function NavReferenceEditor({ row, onClose }) {
         <strong>{row.ticker}: NAV check</strong>
         <button type="button" className="btn btn-sm" onClick={onClose}>Close</button>
       </div>
-      {(price || row.metrics) && (
+      {finding && (price || row.metrics) && (
         <div className={`nav-finding nav-finding-${findingTone}`}>
-          <strong>{row.metrics ? (row.erosion_review ? 'Potential NAV erosion — review' : NAV_STATUS[row.capital_status]) : price.label}</strong>
-          <p>{row.metrics ? row.reason : price.reason}</p>
+          <strong>{finding.label}</strong>
+          <p>{finding.reason}</p>
+          {isNavLag(finding) && <p className="nav-assessment-note">{NAV_LAG_EXPLAINER}</p>}
           {price && <p className="nav-assessment-note">Dates checked: {price.start} to {price.end}{price.reference_aligned_end && ' (the latest close both the fund and the reference have)'}.</p>}
         </div>
       )}

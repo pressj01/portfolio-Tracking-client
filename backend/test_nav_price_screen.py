@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-from nav_price_screen import screen
-from nav_assessment_service import build_payload, guidance, reference_plan
+from nav_price_screen import reference_price_index, screen
+from nav_assessment_service import build_payload, fund_finding, guidance, reference_plan
 
 
 def example(price_growth=-.003, reference_growth=.0001, amount=4):
@@ -177,6 +177,101 @@ class PriceScreenTest(unittest.TestCase):
         self.assertEqual(payload['verdict']['label'],'Strong NAV Erosion')
         self.assertGreaterEqual(payload['verdict']['probability'],52)
         self.assertEqual(payload['verdict']['eroder_count'],1)
+
+
+class NavLagTest(unittest.TestCase):
+    """A covered-call fund trailing its underlying's price is NAV lag, not erosion."""
+
+    def lagging(self,ticker='QQQI',**kwargs):
+        # Flat fund price while the underlying climbs: no month has a price
+        # decline, so the erosion test cannot fire.
+        src,start,end,loader=example(**{'price_growth':0,'reference_growth':.0005,'amount':.5,**kwargs})
+        return screen(src,start,end,reference_plan(ticker,{},guidance(ticker,{})),loader),src,start,end,loader
+
+    def test_call_seller_trailing_its_underlying_is_marked_nav_lag_not_erosion(self):
+        result,*_=self.lagging()
+        lag=result['nav_lag']
+        self.assertEqual(lag['status'],'lag')
+        self.assertEqual(result['label'],'NAV lag — not erosion')
+        self.assertFalse(result['review_candidate'])
+        self.assertFalse(result['estimated_eroder'])
+        self.assertAlmostEqual(lag['fund_price_change_rate'],0)
+        self.assertGreater(lag['underlying_price_change_rate'],.05)
+        self.assertAlmostEqual(lag['lag_rate'],lag['underlying_price_change_rate']-lag['fund_price_change_rate'])
+        self.assertIn('This is not NAV erosion',result['reason'])
+        self.assertIn('QQQ',result['reason'])
+
+    def test_lag_compares_plain_prices_when_a_price_loader_is_given(self):
+        src,start,end,loader=example(price_growth=0,reference_growth=.0005,amount=.5)
+        flat={day:100 for day in loader()}
+        result=screen(src,start,end,reference_plan('QQQI',{},guidance('QQQI',{})),loader,lambda *a:flat)
+        self.assertEqual(result['nav_lag']['underlying_price_change_rate'],0)
+        self.assertEqual(result['nav_lag']['status'],'none')
+        self.assertEqual(result['label'],'No covered-call erosion signal')
+
+    def test_lag_under_one_point_is_not_marked(self):
+        result,*_=self.lagging(reference_growth=.00002)
+        self.assertEqual(result['nav_lag']['status'],'none')
+        self.assertLess(result['nav_lag']['lag_rate'],.01)
+        self.assertNotEqual(result['label'],'NAV lag — not erosion')
+
+    def test_erosion_outranks_lag(self):
+        src,start,end,loader=example(reference_growth=.001)
+        result=screen(src,start,end,reference_plan('ULTI',{},guidance('ULTI',{})),loader)
+        self.assertTrue(result['estimated_eroder'])
+        self.assertEqual(result['nav_lag']['status'],'superseded')
+        verified,*_=self.lagging()
+        src,start,end,loader=example(price_growth=0,reference_growth=.0005,amount=.5)
+        flagged=screen(src,start,end,reference_plan('QQQI',{},guidance('QQQI',{})),loader,verified_erosion=True)
+        self.assertEqual(verified['nav_lag']['status'],'lag')
+        self.assertEqual(flagged['nav_lag']['status'],'superseded')
+        self.assertNotEqual(flagged['label'],'NAV lag — not erosion')
+
+    def test_only_call_sellers_get_nav_lag(self):
+        result,*_=self.lagging('CSHI')
+        self.assertEqual(result['nav_lag']['status'],'not_applicable')
+        self.assertNotEqual(result['label'],'NAV lag — not erosion')
+
+    def test_short_range_cannot_call_lag_not_erosion(self):
+        src,start,end,loader=example(price_growth=0,reference_growth=.0005,amount=.5)
+        result=screen(src,dt.date(2026,8,20),end,reference_plan('QQQI',{},guidance('QQQI',{})),loader)
+        self.assertEqual(result['nav_lag']['status'],'insufficient_evidence')
+
+    def test_reference_price_index_compounds_daily_exposure_legs(self):
+        first,mid,last=dt.date(2026,1,2),dt.date(2026,1,5),dt.date(2026,1,6)
+        prices={'A':{first:100,mid:110,last:121},'B':{first:50,mid:50,last:45}}
+        plan={'legs':[{'symbol':'A','weight':1.0},{'symbol':'B','weight':1.0}],'warning':None}
+        index=reference_price_index(plan,first,last,lambda symbol,a,b:{d.isoformat():v for d,v in prices[symbol].items()})
+        self.assertAlmostEqual(index[mid],1.1)
+        self.assertAlmostEqual(index[last],1.1*(1+.1-.1))
+        self.assertIsNone(reference_price_index(plan,first,last,lambda *a:{}))
+
+    def test_one_shared_finding_and_lag_never_counts_toward_the_verdict(self):
+        src,start,end,loader=example(price_growth=0,reference_growth=.0005,amount=.5)
+        payload=build_payload({'QQQI':{'current_value':100,'quantity':1}},lambda *a:None,loader,
+                              as_of=end,start_date=start,market_loader=lambda *a:src)
+        row=payload['results'][0]
+        self.assertEqual(row['finding']['code'],'nav_lag')
+        self.assertEqual(row['finding']['label'],'NAV lag — not erosion')
+        self.assertEqual(row['finding']['tone'],'lag')
+        self.assertIn('QQQ',row['finding']['detail'])
+        self.assertEqual([item['ticker'] for item in payload['preliminary']['nav_lag']],['QQQI'])
+        self.assertEqual([item['ticker'] for item in payload['verdict']['nav_lag']],['QQQI'])
+        self.assertEqual(payload['verdict']['strength'],'none')
+        self.assertEqual(payload['verdict']['label'],'No NAV Erosion')
+
+    def test_finding_precedence(self):
+        base={'ticker':'QQQI','capital_status':'declined','nav_erosion_scope':'auto','guidance':{},
+              'metrics':{'capital_change_rate':-.03},'reason':'NAV fell.'}
+        lag_screen={'status':'available','label':'NAV lag — not erosion','reason':'lag','estimated_eroder':False,
+                    'review_candidate':False,'persistence':{'supportive_intervals':6},
+                    'nav_lag':{'status':'lag','reason':'lag','reference':'QQQ','fund_price_change_rate':-.03,
+                               'underlying_price_change_rate':.15}}
+        self.assertEqual(fund_finding({**base,'price_screen':lag_screen})['code'],'nav_lag')
+        self.assertEqual(fund_finding({**base,'price_screen':lag_screen,'erosion_review':True})['code'],'verified_erosion')
+        self.assertEqual(fund_finding({**base,'price_screen':{**lag_screen,'nav_lag':{'status':'none'}}})['label'],'NAV declined')
+        self.assertEqual(fund_finding({**base,'capital_status':'not_applicable'})['code'],'not_applicable')
+        self.assertEqual(fund_finding({**base,'nav_erosion_scope':'skip'})['code'],'skipped')
 
 
 class MarketAdapterTest(unittest.TestCase):

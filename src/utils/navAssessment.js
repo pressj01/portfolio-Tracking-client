@@ -39,7 +39,7 @@ export function useNavAssessment(windowKey = '1Y', { enabled = true } = {}) {
   const query = typeof windowKey === 'string'
     ? new URLSearchParams({ window: windowKey }).toString()
     : addCustomRangeParams(new URLSearchParams({ period: windowKey.period }), windowKey.period, windowKey.start, windowKey.end).toString()
-  const base = `v9:${selection}:${query}`
+  const base = `v10:${selection}:${query}`
   const key = `${base}:${revision}:${enabled}`
   useEffect(() => {
     const onUpdate = () => setRevision(value => value + 1)
@@ -115,4 +115,12 @@ export const NAV_STATUS = {
   declined: 'NAV declined', preserved: 'Capital preserved', within_precision: 'Within source precision',
   unconfirmed: 'Unconfirmed', not_applicable: 'Not applicable', liquidated: 'Liquidated',
 }
+// NAV lag, in one place for every screen that shows it.
+export const NAV_LAG_EXPLAINER = 'NAV lag means a covered-call fund’s price trailed the price of its underlying. That is expected: '
+  + 'the fund sells call options, pays the option income out as cash, and gives up part of the underlying’s gains when it '
+  + 'rises. It is not NAV erosion. It is shown only when the erosion check had at least two months to work with and found no '
+  + 'erosion, and it never counts toward the portfolio’s NAV erosion reading.'
+
+export const isNavLag = finding => finding?.code === 'nav_lag'
+
 export const navProbability = value => value == null || Number.isNaN(Number(value)) ? '—' : `${Math.round(Number(value))}%`
