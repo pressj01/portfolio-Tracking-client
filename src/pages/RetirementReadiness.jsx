@@ -70,12 +70,10 @@ function inflowBoxFor(category) {
   return INFLOW_BOX_BY_CATEGORY[key] || 'other'
 }
 
-// Average the 12-month expansion so quarterly/annual bills and inflows normalize
-// to a monthly figure. The series is requested in today's dollars, so a budget of
-// plain monthly bills averages to exactly what the Cash Flow screen shows for this
-// month. This is the same method behind that screen's "normalized monthly
-// expenses", so the two screens agree.
-function summarizeCashFlowPlan(payload) {
+// Expenses come from Cash Flow's "Expenses this month" card so the two screens
+// show the same number. Inflows still average the next 12 months in today's
+// dollars, which keeps quarterly and annual income from spiking one box.
+function summarizeCashFlowPlan(payload, summary) {
   const series = Array.isArray(payload?.series) ? payload.series : []
   if (!series.length) return null
 
@@ -97,16 +95,20 @@ function summarizeCashFlowPlan(payload) {
 
   const months = series.length
   Object.keys(boxes).forEach(key => { boxes[key] = round2(boxes[key] / months) })
-  const monthlyExpenses = round2(expenseTotal / months)
+  const typicalMonthlyExpenses = round2(expenseTotal / months)
+  const thisMonthExpenses = round2(summary?.expenses)
+  const monthlyExpenses = thisMonthExpenses > 0 ? thisMonthExpenses : typicalMonthlyExpenses
   const inflowsGross = round2(grossTotal / months)
   const inflowsNet = round2(netTotal / months)
 
   if (monthlyExpenses <= 0 && inflowsGross <= 0) return null
 
   return {
-    planName: payload?.plan?.name || 'Cash-flow plan',
+    planName: payload?.plan?.name || summary?.plan?.name || 'Cash-flow plan',
     months,
     monthlyExpenses,
+    thisMonthExpenses: thisMonthExpenses > 0 ? thisMonthExpenses : typicalMonthlyExpenses,
+    typicalMonthlyExpenses,
     boxes,
     inflowsGross,
     inflowsNet,
@@ -166,6 +168,13 @@ const RR_SAVED_INPUT_KEYS = [
   'portfolioBookNav', 'targetYieldPct', 'navErosionPct', 'bearDeclinePct',
   'bearYieldPct', 'investmentTaxPct', 'directContribution', 'incomeHaircutPct',
 ]
+// Cash-flow figures refresh on every visit. These knobs stay with this screen
+// because they are not stored on the cash-flow plan.
+const RR_OWN_INPUT_KEYS = [
+  'bufferRatio', 'targetCashMonths', 'incomeIndexPct',
+  'portfolioBookNav', 'targetYieldPct', 'navErosionPct', 'bearDeclinePct',
+  'bearYieldPct', 'directContribution', 'incomeHaircutPct',
+]
 
 function readSavedInputs(selection) {
   try {
@@ -187,7 +196,7 @@ function readSavedInputs(selection) {
 }
 
 const INPUT_HELP = {
-  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. Pulled from your Cash Flow & Sustainability plan, averaged over 12 months in today’s dollars so annual and quarterly bills are normalized. Expense inflation is applied forward from here, not baked in, so a budget of plain monthly bills matches the Cash Flow screen exactly.',
+  monthlyExpenses: 'How much cash you need every month to live on. This is the baseline income target. It comes from Expenses this month on Cash Flow & Sustainability and updates automatically when you open this page. You can still edit it here for a what-if; returning to the page restores the plan.',
   nonInvestmentIncome: 'Monthly income that does not come from the portfolio, before taxes. Examples: employment income, pensions, Social Security, annuities, and other recurring inflows. Pulled from the income entries in your Cash Flow & Sustainability plan.',
   nonInvestmentTaxPct: 'Estimated tax rate applied to non-investment monthly inflows. Pulled from your cash-flow plan as the blended rate across its income entries.',
   incomeIndexPct: 'Annual indexing or cost-of-living increase applied to non-investment inflows.',
@@ -351,30 +360,32 @@ export default function RetirementReadiness() {
     setSurplusWithdrawPct(s ? s.surplusWithdrawPct : d.surplusWithdrawPct)
   }, [])
 
-  const applySavedInputs = useCallback(saved => {
-    if ('monthlyExpenses' in saved) setMonthlyExpenses(saved.monthlyExpenses)
-    if ('bufferRatio' in saved) setBufferRatio(saved.bufferRatio)
-    if ('surplusWithdrawPct' in saved) setSurplusWithdrawPct(saved.surplusWithdrawPct)
-    if ('surplusReinvestPct' in saved) setSurplusReinvestPct(saved.surplusReinvestPct)
-    if ('startingCash' in saved) setStartingCash(saved.startingCash)
-    if ('targetCashMonths' in saved) setTargetCashMonths(saved.targetCashMonths)
-    if ('years' in saved) setYears(saved.years)
-    if ('inflationPct' in saved) setInflationPct(saved.inflationPct)
-    if ('employmentIncome' in saved) setEmploymentIncome(saved.employmentIncome)
-    if ('companyPension' in saved) setCompanyPension(saved.companyPension)
-    if ('govPension' in saved) setGovPension(saved.govPension)
-    if ('annuities' in saved) setAnnuities(saved.annuities)
-    if ('otherRecurringIncome' in saved) setOtherRecurringIncome(saved.otherRecurringIncome)
-    if ('incomeIndexPct' in saved) setIncomeIndexPct(saved.incomeIndexPct)
-    if ('nonInvestmentTaxPct' in saved) setNonInvestmentTaxPct(saved.nonInvestmentTaxPct)
-    if ('portfolioBookNav' in saved) setPortfolioBookNav(saved.portfolioBookNav)
-    if ('targetYieldPct' in saved) setTargetYieldPct(saved.targetYieldPct)
-    if ('navErosionPct' in saved) setNavErosionPct(saved.navErosionPct)
-    if ('bearDeclinePct' in saved) setBearDeclinePct(saved.bearDeclinePct)
-    if ('bearYieldPct' in saved) setBearYieldPct(saved.bearYieldPct)
-    if ('investmentTaxPct' in saved) setInvestmentTaxPct(saved.investmentTaxPct)
-    if ('directContribution' in saved) setDirectContribution(saved.directContribution)
-    if ('incomeHaircutPct' in saved) setIncomeHaircutPct(saved.incomeHaircutPct)
+  const applySavedInputs = useCallback((saved, keys) => {
+    const allow = keys ? new Set(keys) : null
+    const take = key => (!allow || allow.has(key)) && key in saved
+    if (take('monthlyExpenses')) setMonthlyExpenses(saved.monthlyExpenses)
+    if (take('bufferRatio')) setBufferRatio(saved.bufferRatio)
+    if (take('surplusWithdrawPct')) setSurplusWithdrawPct(saved.surplusWithdrawPct)
+    if (take('surplusReinvestPct')) setSurplusReinvestPct(saved.surplusReinvestPct)
+    if (take('startingCash')) setStartingCash(saved.startingCash)
+    if (take('targetCashMonths')) setTargetCashMonths(saved.targetCashMonths)
+    if (take('years')) setYears(saved.years)
+    if (take('inflationPct')) setInflationPct(saved.inflationPct)
+    if (take('employmentIncome')) setEmploymentIncome(saved.employmentIncome)
+    if (take('companyPension')) setCompanyPension(saved.companyPension)
+    if (take('govPension')) setGovPension(saved.govPension)
+    if (take('annuities')) setAnnuities(saved.annuities)
+    if (take('otherRecurringIncome')) setOtherRecurringIncome(saved.otherRecurringIncome)
+    if (take('incomeIndexPct')) setIncomeIndexPct(saved.incomeIndexPct)
+    if (take('nonInvestmentTaxPct')) setNonInvestmentTaxPct(saved.nonInvestmentTaxPct)
+    if (take('portfolioBookNav')) setPortfolioBookNav(saved.portfolioBookNav)
+    if (take('targetYieldPct')) setTargetYieldPct(saved.targetYieldPct)
+    if (take('navErosionPct')) setNavErosionPct(saved.navErosionPct)
+    if (take('bearDeclinePct')) setBearDeclinePct(saved.bearDeclinePct)
+    if (take('bearYieldPct')) setBearYieldPct(saved.bearYieldPct)
+    if (take('investmentTaxPct')) setInvestmentTaxPct(saved.investmentTaxPct)
+    if (take('directContribution')) setDirectContribution(saved.directContribution)
+    if (take('incomeHaircutPct')) setIncomeHaircutPct(saved.incomeHaircutPct)
   }, [])
 
   // The selection resolves to profile 1 for a tick before the aggregate list
@@ -390,12 +401,13 @@ export default function RetirementReadiness() {
       // inflates expenses forward itself, so an escalating series would charge
       // inflation twice and start the model above the Cash Flow screen.
       pf('/api/cash-flow/series?months=12&hold_growth=1').then(r => r.json()),
+      pf('/api/cash-flow/summary').then(r => r.json()).catch(() => ({})),
       pf('/api/cash-flow/settings').then(r => r.json()),
     ])
-      .then(([seriesData, settingsData]) => {
+      .then(([seriesData, summaryData, settingsData]) => {
         if (seriesData.error) throw new Error(seriesData.error)
         if (cashFlowRequestRef.current !== token) return null
-        const plan = summarizeCashFlowPlan(seriesData)
+        const plan = summarizeCashFlowPlan(seriesData, summaryData?.summary)
         const settings = summarizeCashFlowSettings(settingsData)
         setCashFlowPlan(plan)
         setCashFlowError(null)
@@ -409,16 +421,22 @@ export default function RetirementReadiness() {
       })
   }, [pf])
 
-  // Use the Cash Flow plan only until this selection has saved Retirement
-  // Readiness inputs. Once saved, the user's adjustments win on future visits;
-  // "Re-sync" remains the explicit way to replace them with plan values.
+  // Cash-flow expenses, inflows, and plan assumptions refresh on every visit
+  // so this screen stays aligned with Cash Flow & Sustainability. Yield, MEPB,
+  // and other knobs that live only here still come back from saved inputs.
   useEffect(() => {
     setSettingsLoadedFor(null)
     loadCashFlowPlan().then(result => {
       if (!result) return
       const saved = readSavedInputs(selection)
-      if (saved) applySavedInputs(saved)
-      else applyCashFlowPlan(result.plan, result.settings)
+      if (result.plan) {
+        applyCashFlowPlan(result.plan, result.settings)
+        if (saved) applySavedInputs(saved, RR_OWN_INPUT_KEYS)
+      } else if (saved) {
+        applySavedInputs(saved)
+      } else {
+        applyCashFlowPlan(null, null)
+      }
       setSettingsLoadedFor(selection)
     })
   }, [loadCashFlowPlan, applyCashFlowPlan, applySavedInputs, selection])
@@ -850,7 +868,7 @@ export default function RetirementReadiness() {
             {cashFlowPlan ? (
               <>
                 <div className="rr-source-main">
-                  <span className="rr-source-title">Pulled from your cash-flow plan</span>
+                  <span className="rr-source-title">Synced from your cash-flow plan</span>
                   <span className="rr-source-detail">
                     <strong>{cashFlowPlan.planName}</strong> — {fmtMoney(cashFlowPlan.monthlyExpenses)}/mo expenses
                     {cashFlowPlan.inflowsGross > 0
@@ -859,9 +877,13 @@ export default function RetirementReadiness() {
                             ? <> ({fmtMoney(cashFlowPlan.inflowsNet)} after tax)</>
                             : null}</>
                       : <>, no non-investment income entries</>}
-                    , averaged over {cashFlowPlan.months} months in today's dollars so
-                    quarterly and annual bills are normalized. Its saved assumptions
-                    (horizon, expense inflation, portfolio tax, cash reserve, and what
+                    . Monthly expenses match Expenses this month on Cash Flow &amp; Sustainability
+                    and refresh automatically when you open this page.
+                    {Math.abs((cashFlowPlan.typicalMonthlyExpenses || 0) - cashFlowPlan.monthlyExpenses) >= 0.005
+                      ? <> A typical month (12-month average) is {fmtMoney(cashFlowPlan.typicalMonthlyExpenses)}.</>
+                      : null}
+                    {' '}Inflows are averaged over {cashFlowPlan.months} months in today&apos;s dollars.
+                    Plan assumptions (horizon, expense inflation, portfolio tax, cash reserve, and what
                     happens to unused income) fill in below too.
                   </span>
                 </div>
@@ -892,7 +914,7 @@ export default function RetirementReadiness() {
                 <span className="rr-source-detail">
                   {cashFlowError
                     ? `Could not read your plan: ${cashFlowError}`
-                    : <>Cash-flow plans are saved per selection, and <strong>{currentProfileName}</strong> has no bills or income entered yet, so the boxes below are showing defaults. Add them on the Cash Flow &amp; Sustainability screen while <strong>{currentProfileName}</strong> is selected and they will fill in here.</>}
+                    : <>Cash-flow plans are saved per selection, and <strong>{currentProfileName}</strong> has no bills or income entered yet, so the boxes below are showing defaults. Add them on the Cash Flow &amp; Sustainability screen while <strong>{currentProfileName}</strong> is selected and they will fill in here the next time you open this page.</>}
                 </span>
               </div>
             )}
@@ -900,7 +922,7 @@ export default function RetirementReadiness() {
 
           <InputSection title="Critical Monthly Inputs">
             <InputField label="Monthly Expenses" help={INPUT_HELP.monthlyExpenses}>
-              <input title={INPUT_HELP.monthlyExpenses} className="rr-input" type="number" min="0" step="100" value={monthlyExpenses} onChange={e => setMonthlyExpenses(num(e.target.value))} />
+              <input title={INPUT_HELP.monthlyExpenses} className="rr-input" type="number" min="0" step="0.01" value={monthlyExpenses} onChange={e => setMonthlyExpenses(num(e.target.value))} />
             </InputField>
             <InputField label="Cash Reserve Months" help={INPUT_HELP.targetCashMonths}>
               <input title={INPUT_HELP.targetCashMonths} className="rr-input" type="number" min="0" max="60" step="1" value={targetCashMonths} onChange={e => setTargetCashMonths(clamp(num(e.target.value), 0, 60))} />

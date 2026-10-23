@@ -6533,7 +6533,7 @@ function RetirementReadinessHelp() {
         caption="All three input groups, top to bottom: Core Inputs, Non-Investment Inflows, Passive-Income Assumptions."
       />
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target.</li>
+        <li><strong>Monthly Expenses</strong> - how much cash you need every month to live on. This is the baseline income target. It comes from <strong>Expenses this month</strong> on Cash Flow &amp; Sustainability and updates automatically each time you open this page. You can still edit it here for a what-if; returning to the page restores the plan.</li>
         <li><strong>MEPB Ratio</strong> - your Monthly Expense Protection Buffer safety multiplier. It is applied to the expenses the <em>portfolio</em> must pay after non-investment inflows, not to total expenses. If that remainder is $4,500 and MEPB is 3, the stressed-income target is $13,500 per month.</li>
         <li><strong>Excess Withdrawn %</strong> - the share of good-market income above portfolio-paid expenses that goes into the cash reserve instead of being reinvested.</li>
         <li><strong>Excess Reinvested %</strong> - the share of that same surplus eligible for reinvestment. The two percentage controls are independent; the model removes the withdrawal share first, so entering totals above 100% does not spend more than the available surplus.</li>
