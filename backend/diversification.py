@@ -78,7 +78,9 @@ _CASH_PAT = re.compile(
     r"treasury\s+bill|t-?bill|^b\.0|repurchase|repo\b|"
     r"deposit\b|net\s+other|other\s+assets|payable|receivable|margin|"
     # Issuers list the fund's own cash line as a currency ("US Dollar", $USD).
-    r"^u\.?s\.?\s+dollar$|^\$?usd$)",
+    # Plural too: StockAnalysis files TDAX/SEPQ/OVF cash as "US DOLLARS", which
+    # used to chart as a 0.6% company.
+    r"^u\.?s\.?\s+dollars?$|^\$?usd$)",
     re.I,
 )
 _DERIV_PAT = re.compile(
@@ -102,9 +104,65 @@ _BILL_SYM_PAT = re.compile(r"^B0\d{6}$")
 # CUSIPs and swap identifiers, which are digit-bearing and/or much longer.
 _TICKER_PAT = re.compile(r"^[A-Z]{1,5}$")
 
+# A nested fund is only looked through when its own holdings cover this much
+# of it -- below that, expanding it would swap known exposure for a remainder.
+NESTABLE_COVERAGE = 90.0
+
+# Issuer files change daily and these funds roll their option legs weekly, so a
+# resolved fund older than this is re-read by an ordinary (non-forced) pass.
+STALE_AFTER_DAYS = 7
+# How soon after one refresh the page may start another by itself. Without it a
+# fund whose publisher is down would trigger a full sweep on every visit.
+AUTO_REFRESH_COOLDOWN_HOURS = 20
+_LAST_REFRESH_KEY = "xray_last_refresh_started"
+
+# Option legs arrive in two shapes: an OCC symbol in the symbol column
+# ("2COPX260918C00045000", "SPXW260813P06375000" once punctuation is stripped)
+# or a broker descriptor in the name ("DRAM 09/18/2026 57.01 P",
+# "MU US 08/07/26 P825").
+_OCC_SYM_PAT = re.compile(r"^\d?([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$")
+_OPT_DESC_PAT = re.compile(
+    r"^([A-Z][A-Z.]{0,5})\s+(?:US\s+)?(\d{1,2})/(\d{1,2})/(\d{2,4})\s+"
+    r"(?:([CP])\s*(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*([CP]))$",
+    re.I,
+)
+# Index options settle against an index nobody can hold, so a synthetic
+# position on one is looked through via the ETF that tracks the same index.
+_INDEX_OPTION_PROXY = {
+    "SPX": "VOO", "SPXW": "VOO", "XSP": "VOO",
+    "NDX": "QQQM", "NDXP": "QQQM", "XND": "QQQM",
+    "RUT": "IWM", "RUTW": "IWM", "MRUT": "IWM",
+    "MXEA": "IEFA",
+}
+# "MICRON TECHNOLOGY INC SWAP NM", "SK HYNIX INC-SWAP-GOLD-L": a single-name
+# total-return swap names the company it tracks ahead of the word "swap".
+_SWAP_REF_PAT = re.compile(r"^(.*?)[\s,.\-]*\bswap\b", re.I)
+
+# Two listings of one company. The look-through is a concentration check, and
+# Alphabet split across GOOG and GOOGL reads as two ~2% names when it is one
+# ~4% name. Keys are normalised symbols (punctuation stripped, so BRK.A ->
+# BRKA); the value is the listing the combined slice is filed under.
+_SHARE_CLASS_ALIASES = {
+    "GOOG": "GOOGL", "BRKA": "BRKB", "FOX": "FOXA", "NWS": "NWSA",
+    "UA": "UAA", "LENB": "LEN", "HEIA": "HEI", "BFA": "BFB", "ZG": "Z",
+    "LBRDA": "LBRDK", "BATRA": "BATRK", "CENT": "CENTA",
+}
+_CLASS_SUFFIX_PAT = re.compile(r"[\s,]*\b(?:class|cl)\s+[A-Z]\b\.?", re.I)
+
 
 def _now():
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def _age_days(stamp, now=None):
+    """Days since an ISO timestamp written by _now(), or None if unreadable."""
+    if not stamp:
+        return None
+    try:
+        then = datetime.datetime.fromisoformat(str(stamp)[:19])
+    except ValueError:
+        return None
+    return ((now or datetime.datetime.now()) - then).total_seconds() / 86400.0
 
 
 def _app_module(attr):
@@ -176,6 +234,11 @@ def _row(symbol, name, weight):
         "name": (str(name).strip() if name else "") or _norm_symbol(symbol),
         "weight_pct": _clean_weight(weight),
     }
+
+
+def _coverage(rows):
+    """How much of a fund a set of rows names, capped at the whole fund."""
+    return min(sum(r.get("weight_pct") or 0 for r in rows or []), 100.0)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -450,6 +513,11 @@ def _fetch_generic_csv(ticker, limit=None, url=None):
     resp = _http_get(url, tries=2)
     if resp is None:
         return []
+    # A "holdings file" link can serve a spreadsheet whatever its URL says --
+    # InfraCap's download-holdings .php returns an .xls -- so sniff the bytes.
+    content = resp.content or b""
+    if content[:4] in (b"\xd0\xcf\x11\xe0", b"PK\x03\x04"):
+        return _parse_generic_excel_bytes(content, limit)
     return _parse_generic_csv_text(resp.text or "", limit)
 
 
@@ -458,7 +526,17 @@ def _parse_generic_excel_bytes(content, limit=None):
     import pandas as pd
 
     try:
-        raw = pd.read_excel(io.BytesIO(content), header=None)
+        if content[:4] == b"\xd0\xcf\x11\xe0":
+            # Legacy .xls. Web-generated ones often fail xlrd's stream check
+            # ("Workbook corruption: seen[3] == 4") while reading perfectly
+            # well -- InfraCap's QVOL file does -- so the check is skipped, and
+            # xlrd's diagnostic dump is kept out of the server log.
+            import xlrd
+            book = xlrd.open_workbook(file_contents=content, ignore_workbook_corruption=True,
+                                      logfile=io.StringIO())
+            raw = pd.read_excel(book, header=None, engine="xlrd")
+        else:
+            raw = pd.read_excel(io.BytesIO(content), header=None)
     except Exception:
         return []
     if raw.empty:
@@ -1088,8 +1166,11 @@ ISSUER_SEED = [
      "https://www.vaneck.com/us/en/investments/{ticker_lower}/holdings/",
      "https://www.vaneck.com",
      "Official daily holdings XLSX; descriptive page slugs use an override."),
-    ("infracap", "InfraCap / Virtus", "generic_csv", "",
-     "https://infracapfund.com", "URL not confirmed yet."),
+    ("infracap", "InfraCap / Virtus", "generic_csv",
+     "https://www.infracapfund.com/download-holdings-usbanks.php?fund={ticker}",
+     "https://infracapfund.com",
+     "Official daily holdings .xls linked from each fund page (QVOL: ~195 rows "
+     "including option legs, vs a 76% top-25 table)."),
     ("reaves", "Reaves Utility Income (UTG)", "html_table",
      "https://utilityincomefund.com/the_fund/",
      "https://utilityincomefund.com",
@@ -1541,10 +1622,27 @@ _SEC_HEADERS = {"User-Agent": "Portfolio Tracker (personal desktop app; contact 
 _SEC_TIMEOUT = 30
 
 
+# SEC's fair-access limit is ten requests a second per client. A refresh runs
+# three workers and now reaches EDGAR for ETFs as well as closed-end funds, so
+# requests are spaced process-wide rather than trusting the workers to be slow.
+_SEC_MIN_GAP = 0.15
+_SEC_PACE_LOCK = threading.Lock()
+_SEC_LAST_REQUEST = [0.0]
+
+
+def _sec_pace():
+    with _SEC_PACE_LOCK:
+        wait = _SEC_LAST_REQUEST[0] + _SEC_MIN_GAP - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _SEC_LAST_REQUEST[0] = time.monotonic()
+
+
 def _sec_get(url, as_json=False, tries=3, backoff=1.5):
     last = None
     for attempt in range(tries):
         try:
+            _sec_pace()
             resp = requests.get(url, timeout=_SEC_TIMEOUT, headers=_SEC_HEADERS)
             if resp.status_code == 200:
                 return resp.json() if as_json else resp.text
@@ -1592,6 +1690,55 @@ def _sec_latest_nport_accession(cik):
         if form.startswith("NPORT-P"):
             return acc.replace("-", ""), date
     return None, None
+
+
+# Open-end funds and ETFs are not companies, so company_tickers.json does not
+# list them. They are share classes of a *series* inside a trust -- IEFA is
+# series S000038930 of iShares Trust -- and the trust files one N-PORT per
+# series under its own CIK. ticker -> (cik, series_id), built once per process.
+_SEC_SERIES_MAP = None
+_SEC_SERIES_LOCK = threading.Lock()
+
+
+def _sec_series_for(ticker):
+    global _SEC_SERIES_MAP
+    if _SEC_SERIES_MAP is None:
+        with _SEC_SERIES_LOCK:
+            if _SEC_SERIES_MAP is None:
+                data = _sec_get("https://www.sec.gov/files/company_tickers_mf.json",
+                                as_json=True) or {}
+                fields = data.get("fields") or []
+                built = {}
+                if {"cik", "seriesId", "symbol"} <= set(fields):
+                    i_cik = fields.index("cik")
+                    i_series = fields.index("seriesId")
+                    i_sym = fields.index("symbol")
+                    for row in data.get("data") or []:
+                        sym = str(row[i_sym] or "").strip().upper()
+                        if sym and row[i_series]:
+                            built[sym] = (str(row[i_cik]).zfill(10), row[i_series])
+                # A failed download is not "no funds exist": leave the map unset
+                # so the next lookup tries again instead of caching the miss.
+                if not built:
+                    return None, None
+                _SEC_SERIES_MAP = built
+    return _SEC_SERIES_MAP.get(ticker.strip().upper(), (None, None))
+
+
+def _sec_series_latest_nport(series_id):
+    """Accession number of a series' most recent N-PORT, or None.
+
+    The trust's own submissions feed interleaves hundreds of series (iShares
+    Trust files for ~400), so finding one fund there means opening filings one
+    by one. EDGAR's company browser accepts a series id in place of a CIK and
+    lists only that series' filings.
+    """
+    atom = _sec_get(
+        "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+        f"&CIK={series_id}&type=NPORT-P&dateb=&owner=include&count=10&output=atom"
+    )
+    accessions = re.findall(r"<accession-n(?:umber|o)>\s*([\d-]+)\s*<", atom or "")
+    return accessions[0].replace("-", "") if accessions else None
 
 
 # assetCat / issuerCat -> bucket. Vocabulary confirmed against N-PORT filings
@@ -1702,6 +1849,42 @@ def _fetch_sec_nport_holdings(ticker, limit=None):
     )
     if not xml_text:
         return []
+    return _nport_rows(xml_text, report_date)
+
+
+def _fetch_sec_series_nport_holdings(ticker, limit=None):
+    """An ETF's or mutual fund's complete holdings from its quarterly N-PORT.
+
+    The fallback for funds whose issuer cannot be read: iShares and Invesco
+    block automated downloads, and the free tables stop at a top 25. IEFA was
+    unresolved here -- so OVF and NIHI, which hold it, charted "iShares Core
+    MSCI EAFE ETF" as if it were a company -- while its filing lists all 2,625
+    holdings. N-PORT is quarterly and public about two months after quarter
+    end, so resolve_fund prefers a fresher source whenever that one is
+    complete. `limit` is ignored for the same reason as the CEF fetcher.
+    """
+    cik, series_id = _sec_series_for(ticker)
+    if not series_id:
+        return []
+    acc = _sec_series_latest_nport(series_id)
+    if not acc:
+        return []
+    xml_text = _sec_get(
+        f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/primary_doc.xml"
+    )
+    if not xml_text:
+        return []
+    # Every series in a trust files under the same CIK; a filing for the wrong
+    # one would chart a different fund's portfolio without complaint.
+    filed = re.search(r"<seriesId>\s*(S\d+)\s*</seriesId>", xml_text)
+    if filed and filed.group(1) != series_id:
+        return []
+    report = re.search(r"<repPdDate>\s*([\d-]+)\s*</repPdDate>", xml_text)
+    return _nport_rows(xml_text, report.group(1) if report else None)
+
+
+def _nport_rows(xml_text, report_date):
+    """Cache rows from one N-PORT filing: equities named, everything else pooled."""
     raw = _parse_nport_holdings(xml_text)
     if not raw:
         return []
@@ -1763,6 +1946,42 @@ EXPOSURE_SEED = {
     "XSHP": [("", "SpaceX (private)", 100.0, "Private")],
     "CSHI": [("", "US Treasury Bills", 100.0, "Cash & Equivalents")],
     "LQID": [("", "Short-Term Credit", 100.0, "Fixed Income")],
+    # TDAX targets 130% of TDAQ's daily return through a swap (prospectus band
+    # 120-140%); the other -30% is the cash that leverage borrows. Its filing
+    # shows only the swap and a cash offset, which charted as $10k of "Options
+    # & derivatives" against negative collateral. TDAQ is defined as QQQM, so
+    # the nesting pass carries this through to the Nasdaq-100 names.
+    "TDAX": [("TDAQ", "TappAlpha Nasdaq-100 (TDAQ)", 130.0, "Equity"),
+             ("", "Borrowed cash (swap financing)", -30.0, "Cash & Equivalents")],
+}
+
+# SpaceX now trades as SPCX and sits in the Nasdaq-100 (QQQM holds 4.9%), so
+# XSHP's single holding is that listed company rather than a private label.
+EXPOSURE_SEED["XSHP"] = [("SPCX", "Space Exploration Technologies Corp", 100.0, "Equity")]
+
+# Spot commodity and crypto trusts. They are not 1940-Act funds, so they file
+# no N-PORT and publish no holdings list -- a trust's only holding is the metal
+# or the coin. Mapped so a fund holding one (BLOX holds FBTC and ETHA, XBCI
+# holds IBIT) looks through to Bitcoin and Ethereum instead of charting a
+# trust as if it were a company.
+_TRUST_ASSETS = {
+    ("Gold", "Commodities"): ("GLD", "IAU", "IAUM", "GLDM", "AAAU", "SGOL", "BAR", "OUNZ"),
+    ("Silver", "Commodities"): ("SLV", "SIVR"),
+    ("Bitcoin", "Digital Assets"): ("IBIT", "FBTC", "GBTC", "BTC", "BITB", "ARKB", "HODL",
+                                    "BRRR", "EZBC", "BTCO", "BTCW"),
+    ("Ethereum", "Digital Assets"): ("ETHA", "ETHE", "ETH", "FETH", "ETHW", "CETH", "QETH",
+                                     "EZET"),
+}
+EXPOSURE_SEED.update({
+    tkr: [("", asset, 100.0, asset_class)]
+    for (asset, asset_class), tickers in _TRUST_ASSETS.items() for tkr in tickers
+})
+
+# Seeds that were right when written and have since gone stale. A fund's map
+# is rewritten only while it is still exactly the old seed: a user's own edit,
+# or any row they added, leaves it alone.
+EXPOSURE_SEED_UPGRADES = {
+    "XSHP": [("", "SpaceX (private)", 100.0, "Private")],
 }
 
 
@@ -1824,6 +2043,15 @@ def _seed_wrappers(conn):
 
 def _seed_exposures(conn):
     cur = conn.cursor()
+    for tkr, old in EXPOSURE_SEED_UPGRADES.items():
+        current = cur.execute(
+            "SELECT symbol, name, exposure_pct, asset_class, source FROM fund_exposure_map "
+            "WHERE fund_ticker=?", (tkr,),
+        ).fetchall()
+        untouched = sorted((s or "", n, p, c) for s, n, p, c, src in current if src == "seed")
+        if current and len(untouched) == len(current) and untouched == sorted(
+                (_norm_symbol(s), n, p, c) for s, n, p, c in old):
+            cur.execute("DELETE FROM fund_exposure_map WHERE fund_ticker=?", (tkr,))
     have = {r[0] for r in cur.execute(
         "SELECT DISTINCT fund_ticker FROM fund_exposure_map"
     ).fetchall()}
@@ -1947,20 +2175,26 @@ def resolve_fund(ticker, conn, force=False):
         conn.commit()
         return {"ticker": sym, "status": "manual", "source": "manual", "coverage_pct": round(cov, 2)}
 
-    if not force:
-        existing = conn.execute(
-            "SELECT status, source, coverage_pct FROM fund_holdings_meta WHERE fund_ticker=?",
-            (sym,),
-        ).fetchone()
+    prior = conn.execute(
+        "SELECT status, source, coverage_pct, COALESCE(fetched_at, updated_at) "
+        "FROM fund_holdings_meta WHERE fund_ticker=?",
+        (sym,),
+    ).fetchone()
+    if not force and prior:
         # A normal resolve pass should also improve shallow top-holdings
         # results now that an issuer has begun publishing a complete file.
         # Near-complete files vary slightly around 100% because of rounding,
         # cash and short derivatives, so 99% is the stable cache threshold.
-        coverage = float(existing[2] or 0) if existing else 0.0
-        if existing and (existing[0] in {"self", "cash"}
-                         or (existing[0] == "resolved" and coverage >= 99.0)):
-            return {"ticker": sym, "status": existing[0], "source": existing[1],
-                    "coverage_pct": existing[2], "cached": True}
+        # Complete files still age out: these funds rotate their option legs
+        # weekly, and a cache that was never re-read left 87% of one portfolio
+        # charted from holdings 81 days old.
+        coverage = float(prior[2] or 0)
+        age = _age_days(prior[3])
+        fresh = age is not None and age < STALE_AFTER_DAYS
+        if (prior[0] in {"self", "cash"}
+                or (prior[0] == "resolved" and coverage >= 99.0 and fresh)):
+            return {"ticker": sym, "status": prior[0], "source": prior[1],
+                    "coverage_pct": prior[2], "cached": True}
 
     sec_type = _security_type(sym)
 
@@ -1993,22 +2227,35 @@ def resolve_fund(ticker, conn, force=False):
         rows = _fetch_yahoo_holdings(sym)
         source = "yahoo" if rows else None
 
-    if not rows:
-        # Never let a transient fetch failure demote a fund that already has
-        # good cached rows -- a rate-limited sweep would otherwise blank out
-        # complete issuer data and inflate the Undisclosed slice.
-        prior = conn.execute(
-            "SELECT COUNT(*) FROM fund_holdings WHERE fund_ticker=? AND source!='manual'",
-            (sym,),
-        ).fetchone()
-        prior_meta = conn.execute(
-            "SELECT status, source, coverage_pct FROM fund_holdings_meta WHERE fund_ticker=?",
-            (sym,),
-        ).fetchone()
-        if prior and prior[0] > 0 and prior_meta and prior_meta[0] == "resolved":
-            return {"ticker": sym, "status": "resolved", "source": prior_meta[1],
-                    "coverage_pct": prior_meta[2], "kept_cached": True}
+    # Every registered ETF and mutual fund files its complete portfolio on
+    # N-PORT, the same as a closed-end fund does. It is a quarter old, so it
+    # only replaces a fresher answer that leaves a real part of the fund
+    # unnamed -- SEPQ's top-25 table covers 77.6%, its filing 99.2%. Not gated
+    # on Yahoo's quote type: Yahoo calls SEPQ an EQUITY. The SEC's own fund
+    # list decides, and a plain stock is simply not on it.
+    if sec_type != "CEF" and _coverage(rows) < NESTABLE_COVERAGE:
+        filed = _fetch_sec_series_nport_holdings(sym)
+        if filed and _coverage(filed) >= _coverage(rows) + 10:
+            rows, source = filed, "sec_nport"
 
+    cached_rows = conn.execute(
+        "SELECT COUNT(*) FROM fund_holdings WHERE fund_ticker=? AND source!='manual'",
+        (sym,),
+    ).fetchone()[0]
+    prior_good = bool(cached_rows and prior and prior[0] == "resolved")
+    prior_coverage = min(float(prior[2] or 0), 100.0) if prior else 0.0
+    # Never let a transient fetch failure demote a fund that already has good
+    # cached rows -- a rate-limited sweep would otherwise blank out complete
+    # issuer data and inflate the Undisclosed slice. A *shallower* answer is
+    # the same failure in disguise: with the issuer throttled, a stale-cache
+    # refresh falls through to a top-25 table and would overwrite a complete
+    # file with a quarter of it.
+    if prior_good and (not rows or (prior_coverage >= NESTABLE_COVERAGE
+                                    and _coverage(rows) < prior_coverage - 10)):
+        return {"ticker": sym, "status": "resolved", "source": prior[1],
+                "coverage_pct": prior[2], "kept_cached": True}
+
+    if not rows:
         # A plain stock is its own constituent -- not a gap.
         if sec_type in {"EQUITY", "NONE"}:
             _store_rows(conn, sym, [], "classified", 100.0, sec_type)
@@ -2070,23 +2317,48 @@ def _scope_profile_ids():
         return None
 
 
-def _discover_nested_candidates(conn, already, min_weight=5.0, limit=40):
+def _discover_nested_candidates(conn, already, min_weight=5.0, limit=40, force=False,
+                                within=None):
     """Funds that show up *inside* resolved funds but aren't positions themselves.
 
     TSPY holds VOO and TDAQ holds QQQM; neither VOO nor QQQM is a portfolio
     position, so without this they stay unresolved and render as if they were
-    companies. Only constituents carrying real weight are chased.
+    companies. Only constituents carrying real weight are chased, plus the
+    ETFs the economic view looks through: synthetic option underlyings (DRMY's
+    DRAM) and exposure-map targets (TDAX -> TDAQ).
+
+    A nested fund that is already settled is skipped. One that failed, or whose
+    holdings have aged out, is offered again -- skipping anything with a meta
+    row at all left IEFA unresolved from its first failure onward, so the two
+    funds holding it charted an iShares ETF as if it were a company.
+
+    `within` limits the search to what those funds hold, so resolving three
+    newly bought positions does not turn into a sweep of every aged-out ETF.
     """
     seen = {t.strip().upper() for t in already}
-    rows = conn.execute(
+    scope, args = "", []
+    if within:
+        scope = f"AND fund_ticker IN ({','.join('?' * len(within))}) "
+        args = [t.strip().upper() for t in within]
+    weighted = [r[0] for r in conn.execute(
         "SELECT symbol, MAX(weight_pct) FROM fund_holdings "
-        "WHERE symbol IS NOT NULL AND symbol != '' "
+        "WHERE symbol IS NOT NULL AND symbol != '' " + scope +
         "GROUP BY symbol HAVING MAX(weight_pct) >= ? ORDER BY MAX(weight_pct) DESC",
-        (min_weight,),
-    ).fetchall()
+        (*args, min_weight),
+    ).fetchall()]
+    mapped = [r[0] for r in conn.execute(
+        "SELECT DISTINCT symbol FROM fund_exposure_map "
+        "WHERE symbol IS NOT NULL AND symbol != '' " + scope,
+        args,
+    ).fetchall()]
+    # A nested gold or bitcoin trust is read from the exposure map; it has no
+    # holdings file to fetch, so chasing it is a guaranteed miss every pass.
+    seen |= {r[0] for r in conn.execute(
+        "SELECT DISTINCT fund_ticker FROM fund_exposure_map"
+    ).fetchall()}
 
     out = []
-    for sym, _w in rows:
+    for sym in _synthetic_underlyings(conn, within) + mapped + weighted:
         sym = (sym or "").strip().upper()
         if not sym or sym in seen:
             continue
@@ -2095,19 +2367,40 @@ def _discover_nested_candidates(conn, already, min_weight=5.0, limit=40):
         # wastes lookups and pollutes the cache with junk tickers.
         if not _TICKER_PAT.match(sym):
             continue
-        known = conn.execute(
-            "SELECT 1 FROM fund_holdings_meta WHERE fund_ticker=?", (sym,)
-        ).fetchone()
-        if known:
-            continue
-        out.append(sym)
         seen.add(sym)
+        known = conn.execute(
+            "SELECT status, coverage_pct, COALESCE(fetched_at, updated_at) "
+            "FROM fund_holdings_meta WHERE fund_ticker=?", (sym,)
+        ).fetchone()
+        if known and not force:
+            age = _age_days(known[2])
+            settled = known[0] in {"manual", "self", "cash"} or (
+                known[0] == "resolved" and (known[1] or 0) >= NESTABLE_COVERAGE
+                and age is not None and age < STALE_AFTER_DAYS)
+            if settled:
+                continue
+        out.append(sym)
         if len(out) >= limit:
             break
     return out
 
 
-def _run_refresh(tickers, force):
+def _synthetic_underlyings(conn, within=None):
+    """Every ETF a cached fund holds synthetically, as a ticker to resolve."""
+    out = []
+    holdings, _meta, _exposure = _load_cache(conn)
+    funds = {t.strip().upper() for t in within} if within else None
+    for fund, rows in holdings.items():
+        if funds is not None and fund not in funds:
+            continue
+        for under in _synthetic_pairs(rows):
+            sym = _INDEX_OPTION_PROXY.get(under, under)
+            if sym not in out:
+                out.append(sym)
+    return out
+
+
+def _run_refresh(tickers, force, targeted=False):
     # Published before any work starts. The job used to be marked running only
     # after seeding, so anything that threw before that point left _JOB in its
     # never-run state: the page polled once, saw running=False with zero
@@ -2122,6 +2415,17 @@ def _run_refresh(tickers, force):
         for name, problem in bootstrap(conn).items():
             with _JOB_LOCK:
                 _JOB["errors"].append(f"built-in {name} seed: {problem}")
+        # Read back by build_diversification to decide whether the page may
+        # start the next stale-holdings refresh on its own. A targeted job
+        # (just the newly bought positions) refreshes nothing stale, so it
+        # must not reset that clock.
+        if not targeted:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_LAST_REFRESH_KEY, _now()),
+            )
+            conn.commit()
 
         results = {}
         lock = threading.Lock()
@@ -2157,7 +2461,8 @@ def _run_refresh(tickers, force):
         # the first pass never looks it up -- leaving a fund sitting in the
         # chart as if it were a company. Only chase constituents big enough to
         # matter, so this stays a handful of extra lookups rather than hundreds.
-        nested = _discover_nested_candidates(conn, tickers)
+        nested = _discover_nested_candidates(conn, tickers, force=force,
+                                             within=tickers if targeted else None)
         if nested:
             with _JOB_LOCK:
                 _JOB["total"] += len(nested)
@@ -2196,12 +2501,13 @@ def _load_cache(conn):
         )
     meta = {}
     for row in conn.execute(
-        "SELECT fund_ticker, status, source, coverage_pct, holdings_count, security_type, is_manual, as_of "
+        "SELECT fund_ticker, status, source, coverage_pct, holdings_count, security_type, is_manual, as_of, "
+        "COALESCE(fetched_at, updated_at) "
         "FROM fund_holdings_meta"
     ).fetchall():
         meta[row[0]] = {"status": row[1], "source": row[2], "coverage_pct": row[3],
                         "holdings_count": row[4], "security_type": row[5],
-                        "is_manual": bool(row[6]), "as_of": row[7]}
+                        "is_manual": bool(row[6]), "as_of": row[7], "fetched_at": row[8]}
     exposure = {}
     for fund, sym, name, pct, cls, source in conn.execute(
         "SELECT fund_ticker, symbol, name, exposure_pct, asset_class, source FROM fund_exposure_map"
@@ -2230,7 +2536,7 @@ def _name_index(holdings):
     return idx
 
 
-def _expand_nested(rows, holdings, meta, depth=2, _seen=None):
+def _expand_nested(rows, holdings, meta, depth=2, _seen=None, rows_for=None):
     """Replace fund constituents with their own constituents, recursively.
 
     A wrapper holding 99.7% QQQM becomes the Nasdaq 100 names at 99.7% of their
@@ -2238,6 +2544,13 @@ def _expand_nested(rows, holdings, meta, depth=2, _seen=None):
     well covered (>=90%); a thinly-covered nested fund would silently convert
     known exposure into an Undisclosed remainder, which is worse than leaving
     the fund as its own slice. _seen breaks circular references.
+
+    `rows_for(symbol)` reads a nested fund the same way the caller reads a
+    position -- economic exposure, synthetic legs, capped at 100% -- so a
+    fund looked through from inside another is not treated more literally
+    than the same fund held directly. It also decides whether a fund nests at
+    all, returning None to keep it as one slice. Without it the raw cache and
+    the coverage rule above are used.
     """
     if depth <= 0:
         return rows
@@ -2247,28 +2560,215 @@ def _expand_nested(rows, holdings, meta, depth=2, _seen=None):
     for r in rows:
         sym = (r.get("symbol") or "").strip().upper()
         weight = r.get("weight_pct")
-        info = meta.get(sym) if sym else None
-        nested = holdings.get(sym) if sym else None
-
-        if (not sym or not weight or sym in _seen or not nested or not info
-                or info.get("status") not in {"resolved", "manual"}
-                or (info.get("coverage_pct") or 0) < 90):
+        if not sym or not weight or sym in _seen:
+            out.append(r)
+            continue
+        if rows_for is not None:
+            nested = rows_for(sym)
+        else:
+            info = meta.get(sym) or {}
+            nested = holdings.get(sym) if (
+                info.get("status") in {"resolved", "manual"}
+                and (info.get("coverage_pct") or 0) >= NESTABLE_COVERAGE) else None
+        if not nested:
             out.append(r)
             continue
 
-        inner = _expand_nested(nested, holdings, meta, depth - 1, _seen | {sym})
+        inner = _expand_nested(nested, holdings, meta, depth - 1, _seen | {sym}, rows_for)
         scale = weight / 100.0
         for ir in inner:
             iw = ir.get("weight_pct")
             if not iw:
                 continue
-            out.append({
-                "symbol": ir.get("symbol", ""),
-                "name": ir.get("name", ""),
-                "weight_pct": iw * scale,
-                "via": sym,
-            })
+            # Carries the row's own markers (an exposure-map row stays one) so
+            # the caller classifies it exactly as if it were held directly.
+            out.append({**ir, "weight_pct": iw * scale, "via": sym})
     return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Reading one fund's rows
+#
+# Filed holdings are a balance sheet, not an exposure report. Three shapes
+# misstate what a position is worth or what it is exposed to, and each is
+# corrected here before anything is aggregated.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_cash_row(row):
+    return bool(_CASH_PAT.search(row.get("name") or "")
+                or _BILL_SYM_PAT.match(row.get("symbol") or ""))
+
+
+def _is_derivative_row(row):
+    return bool(_DERIV_PAT.search(row.get("name") or "")
+                or _DERIV_SYM_PAT.search(row.get("symbol") or ""))
+
+
+def _parse_option_leg(symbol, name):
+    """(underlying, 'YYYY-MM-DD', strike, 'C'|'P') for an option row, else None."""
+    m = _OCC_SYM_PAT.match(symbol or "")
+    if m:
+        root, yy, mm, dd, cp, strike = m.groups()
+        return root, f"20{yy}-{mm}-{dd}", round(int(strike) / 1000.0, 3), cp
+    m = _OPT_DESC_PAT.match((name or "").strip())
+    if m:
+        root, mo, dy, yr, cp1, k1, k2, cp2 = m.groups()
+        year = yr if len(yr) == 4 else f"20{yr}"
+        return (root.upper().replace(".", ""), f"{year}-{int(mo):02d}-{int(dy):02d}",
+                round(float(k1 or k2), 3), (cp1 or cp2).upper())
+    return None
+
+
+def _synthetic_pairs(rows):
+    """{underlying: [row indexes]} for synthetic long positions.
+
+    A long call and a short put at the same strike and expiry pay off exactly
+    like owning the shares; funds that cannot (or prefer not to) hold an asset
+    build it this way on top of T-bill collateral. DRMY holds DRAM like this,
+    KCOP holds COPX and CPER. A put *spread* (GIAX) or a lone covered call is
+    not a synthetic long and is never matched.
+    """
+    legs = {}
+    for i, r in enumerate(rows):
+        if not r.get("weight_pct"):
+            continue
+        leg = _parse_option_leg(r.get("symbol"), r.get("name"))
+        if leg:
+            under, expiry, strike, side = leg
+            legs.setdefault((under, expiry, strike), {"C": [], "P": []})[side].append(i)
+    pairs = {}
+    for (under, _expiry, _strike), side in legs.items():
+        call = sum(rows[i]["weight_pct"] for i in side["C"])
+        put = sum(rows[i]["weight_pct"] for i in side["P"])
+        if side["C"] and side["P"] and call > 0 and put < 0:
+            pairs.setdefault(under, []).extend(side["C"] + side["P"])
+    return pairs
+
+
+def _fold_synthetic_exposure(rows):
+    """Economic reading of a fund that owns assets synthetically.
+
+    Its cash and T-bills are not idle: they collateralise the synthetic
+    position, and the pair's own value is that position's gain or loss. Both
+    are re-attributed to the underlying -- what you would hold had you bought
+    it outright -- so DRMY's 55% "collateral" becomes the DRAM it stands for,
+    and the nesting pass then reads DRAM's memory-chip holdings.
+
+    With several underlyings (KCOP: COPX and CPER) the collateral is split in
+    proportion to each pair's gross option value. Filed market values carry no
+    contract counts, so that split is an estimate; the underlyings themselves
+    are not. Returns (rows, {symbol: weight}).
+    """
+    pairs = _synthetic_pairs(rows)
+    if not pairs:
+        return rows, {}
+    legs = {i for idx in pairs.values() for i in idx}
+    backing = [i for i, r in enumerate(rows)
+               if i not in legs and (r.get("weight_pct") or 0) > 0 and _is_cash_row(r)]
+    pool = sum(rows[i]["weight_pct"] for i in backing) + sum(rows[i]["weight_pct"] for i in legs)
+    if pool <= 0:
+        return rows, {}
+
+    gross = {under: sum(abs(rows[i]["weight_pct"]) for i in idx) for under, idx in pairs.items()}
+    gross_total = sum(gross.values())
+    used = legs | set(backing)
+    out = [r for i, r in enumerate(rows) if i not in used]
+    synthetic = {}
+    for under, g in sorted(gross.items(), key=lambda item: -item[1]):
+        sym = _INDEX_OPTION_PROXY.get(under, under)
+        weight = pool * g / gross_total
+        out.append({"symbol": sym, "name": "", "weight_pct": weight, "synthetic": True})
+        synthetic[sym] = synthetic.get(sym, 0.0) + weight
+    return out, {sym: round(w, 2) for sym, w in synthetic.items()}
+
+
+def _map_swap_references(rows, name_idx):
+    """Single-name total-return swaps, read as the company they track.
+
+    DRAM files "MICRON TECHNOLOGY INC SWAP NM" at 14.1% -- a position in
+    Micron, bought with a swap instead of shares. Matched by name against the
+    companies other funds hold; an unrecognised reference (an index basket, a
+    fund's own strategy) stays a derivative.
+    """
+    out = []
+    for r in rows:
+        w = r.get("weight_pct") or 0
+        m = _SWAP_REF_PAT.match(r.get("name") or "") if w > 0 else None
+        ref = m.group(1).strip(" ,.-") if m else ""
+        sym = name_idx.get(_norm_name(ref)) if ref else None
+        if sym:
+            out.append({**r, "symbol": sym, "name": ref, "swap": True})
+        else:
+            out.append(r)
+    return out
+
+
+def _cap_at_fund_value(rows):
+    """Never let one fund's rows add up to more than the fund is worth.
+
+    Filed weights can sum past 100% in two ways, and both inflated the chart --
+    the buckets summed to $2,349 more than one portfolio held. A swap filed at
+    notional counts its exposure *and* the T-bills behind it (DRAM: 122%), and
+    the free top-25 tables drop the minus sign from short options and cash
+    offsets (ULTI 109%, EGGY 107%). Either way the excess lives in the cash and
+    derivative lines, so those are trimmed first and company weights stay as
+    filed; only if that is not enough is the whole fund scaled down.
+    """
+    total = sum(r.get("weight_pct") or 0 for r in rows)
+    excess = total - 100.0
+    if excess <= 0.5:
+        return rows
+    out = [dict(r) for r in rows]
+    soft = [i for i, r in enumerate(out)
+            if (r.get("weight_pct") or 0) > 0 and not r.get("synthetic") and not r.get("swap")
+            and (_is_cash_row(r) or _is_derivative_row(r))]
+    soft_total = sum(out[i]["weight_pct"] for i in soft)
+    if soft_total > 0:
+        keep = max(soft_total - excess, 0.0) / soft_total
+        for i in soft:
+            out[i]["weight_pct"] *= keep
+    total = sum(r.get("weight_pct") or 0 for r in out)
+    if total > 100.5:
+        scale = 100.0 / total
+        for r in out:
+            if r.get("weight_pct"):
+                r["weight_pct"] *= scale
+    return out
+
+
+def _merge_listings(buckets):
+    """Fold one company's other listings into a single bucket.
+
+    Issuers name the same company with different symbols -- SK hynix arrives
+    as 000660KS and SKHY, TC Energy as TRPCN and TRP -- so it charted as two
+    unrelated slices. Buckets whose names normalise identically are merged,
+    filed under the plainest symbol. Share classes (GOOG/GOOGL) differ in name
+    and are folded earlier, via _SHARE_CLASS_ALIASES.
+    """
+    groups = {}
+    for key, b in buckets.items():
+        if b["kind"] not in {"holding", "stock"}:
+            continue
+        norm = _norm_name(b["name"])
+        # Too short to identify a company on its own ("AG", "OR").
+        if len(norm) >= 4:
+            groups.setdefault(norm, []).append(key)
+
+    for keys in groups.values():
+        if len(keys) < 2:
+            continue
+        keys.sort(key=lambda k: (not _TICKER_PAT.match(buckets[k]["symbol"] or ""),
+                                 len(buckets[k]["symbol"] or "~" * 12),
+                                 -buckets[k]["value"]))
+        keep = buckets[keys[0]]
+        for k in keys[1:]:
+            other = buckets.pop(k)
+            keep["value"] += other["value"]
+            for ticker, amount in other["contributions"].items():
+                keep["contributions"][ticker] = keep["contributions"].get(ticker, 0.0) + amount
+            keep["listings"] |= other["listings"]
+            if keep["name"].isupper() and not other["name"].isupper():
+                keep["name"] = other["name"]
 
 
 def _undisclosed_composition(conn, ticker):
@@ -2313,10 +2813,46 @@ def _undisclosed_composition(conn, ticker):
     return {label: weight / total for label, weight in groups.items()}
 
 
+def _concentration(out, total, kinds):
+    """How concentrated the named part of the portfolio is.
+
+    `effective_holdings` is the inverse Herfindahl index: the number of
+    equal-sized positions that would be exactly as concentrated. 3,000 look-
+    through constituents can still behave like 60 if the top names dominate,
+    which a count of slices never shows. Measured over named exposure only --
+    cash, collateral and the undisclosed remainder are not positions.
+    """
+    named = [b for b in out if b["kind"] in kinds and b["value"] > 0]
+    if not named or not total:
+        return None
+    measured = sum(b["value"] for b in named)
+    hhi = sum((b["value"] / measured) ** 2 for b in named)
+    largest = max(named, key=lambda b: b["value"])
+    return {
+        "effective_holdings": round(1.0 / hhi, 1),
+        "holdings_count": len(named),
+        "top10_pct": round(100.0 * sum(sorted((b["value"] for b in named), reverse=True)[:10])
+                           / total, 2),
+        "measured_pct": round(100.0 * measured / total, 2),
+        "largest": {"symbol": largest["symbol"], "name": largest["name"],
+                    "weight_pct": round(100.0 * largest["value"] / total, 2)},
+    }
+
+
+def _last_refresh_started(conn):
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key=?",
+                           (_LAST_REFRESH_KEY,)).fetchone()
+    except Exception:
+        return None
+    return row[0] if row else None
+
+
 def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
                           top=None, nest_depth=2):
     positions = _portfolio_positions(conn, profile_ids)
     total = sum(v for _, v in positions)
+    position_value = dict(positions)
     holdings, meta, exposure = _load_cache(conn)
     name_idx = _name_index(holdings) if xray else {}
     # Lazy import (sector_exposure imports from this module, so a top-level
@@ -2328,16 +2864,62 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
     buckets = {}   # key -> dict
     fund_detail = []
 
-    def add(key, label, value, kind, symbol="", contributor=""):
+    def add(key, label, value, kind, symbol="", contributor="", listing=""):
         b = buckets.setdefault(key, {"key": key, "name": label, "symbol": symbol,
-                                     "value": 0.0, "kind": kind, "contributions": {}})
+                                     "value": 0.0, "kind": kind, "contributions": {},
+                                     "listings": set()})
         b["value"] += value
         if contributor:
             b["contributions"][contributor] = (
                 b["contributions"].get(contributor, 0.0) + value
             )
+        if listing:
+            b["listings"].add(listing)
         if kind in {"undisclosed", "undefined"}:
             b["kind"] = kind
+        # Whichever fund reports a company first names its slice. Prefer a
+        # real name over a bare ticker and mixed case over a shouted one
+        # ("MARVELL TECHNOLOGY INC"), regardless of which fund came first.
+        elif (kind in {"holding", "stock"} and label and label != b["name"]
+              and (b["name"] in {b["symbol"], ""}
+                   or (b["name"].isupper() and not label.isupper()))):
+            b["name"] = label
+
+    prepared = {}
+
+    def fund_rows(fund):
+        """(rows, basis, synthetic) for one fund, as the selected mode reads it."""
+        if fund not in prepared:
+            synthetic = {}
+            if mode == "economic" and exposure.get(fund):
+                rows = [{**r, "mapped": True} for r in exposure[fund]]
+                basis = "exposure"
+            elif holdings.get(fund):
+                rows = holdings[fund]
+                basis = meta.get(fund, {}).get("source") or "cache"
+                if mode == "economic":
+                    rows = _map_swap_references(rows, name_idx)
+                    rows, synthetic = _fold_synthetic_exposure(rows)
+                rows = _cap_at_fund_value(rows)
+            else:
+                rows, basis = None, None
+            prepared[fund] = (rows, basis, synthetic)
+        return prepared[fund]
+
+    def nested_rows(fund):
+        """A fund met inside another, or None to leave it as one slice.
+
+        Exposure-mapped funds always nest in economic mode -- a gold trust has
+        no holdings file to be "covered" by, it simply is gold. Anything else
+        must be resolved and well covered, as before.
+        """
+        if mode == "economic" and exposure.get(fund):
+            return fund_rows(fund)[0]
+        info = meta.get(fund) or {}
+        if (info.get("status") in {"resolved", "manual"}
+                and (info.get("coverage_pct") or 0) >= NESTABLE_COVERAGE):
+            return fund_rows(fund)[0]
+        return None
 
     for tkr, value in positions:
         info = meta.get(tkr, {})
@@ -2352,43 +2934,40 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
             continue
 
         if status == "self":
-            add(tkr, tkr, value, "stock", tkr, tkr)
+            canon = _SHARE_CLASS_ALIASES.get(tkr, tkr)
+            add(canon, canon, value, "stock", canon, tkr, listing=tkr)
             continue
 
-        rows = None
-        used = None
-        if mode == "economic" and exposure.get(tkr):
-            rows = exposure[tkr]
-            used = "exposure"
-        elif holdings.get(tkr):
-            rows = holdings[tkr]
-            used = info.get("source") or "cache"
+        rows, used, synthetic = fund_rows(tkr)
 
         if not rows:
             # Distinct from a partial remainder: nothing is known about this
             # fund at all, which is a different problem with a different fix.
-            add(f"UNDEFINED::{tkr}", f"{tkr} — no holdings data", value,
-                "undefined", tkr, tkr)
+            # A position bought since the last resolve has simply never been
+            # looked up -- that is not a fund that publishes nothing.
+            never = tkr not in meta
+            add(f"UNDEFINED::{tkr}",
+                f"{tkr} — not looked up yet" if never else f"{tkr} — no holdings data",
+                value, "undefined", tkr, tkr)
             fund_detail.append({"ticker": tkr, "value": value, "status": "unresolved",
-                                "coverage_pct": 0.0, "source": None})
+                                "coverage_pct": 0.0, "source": None, "never_checked": never})
             continue
+
+        economic = used == "exposure" or bool(synthetic) or any(r.get("swap") for r in rows)
 
         # Fund-of-fund expansion. Several option-income wrappers are a single
         # ETF plus collateral -- TSPY is 100.6% VOO, TDAQ 99.7% QQQM, OVL 99.9%
         # VOO. Stopping at "you own VOO" hides that this is really 500 stocks,
         # and defeats the whole point of merging exposure across funds.
-        rows = _expand_nested(rows, holdings, meta, depth=nest_depth)
-        filed_rows = holdings.get(tkr, [])
-        derivative_context = any(
-            _DERIV_PAT.search(r.get("name") or "")
-            or _DERIV_SYM_PAT.search(r.get("symbol") or "")
-            for r in filed_rows
-        )
+        rows = _expand_nested(rows, holdings, meta, depth=nest_depth, rows_for=nested_rows)
+        # Collateral is judged from what the fund *files*. Rows from the
+        # exposure map already say what they are: CSHI is mapped to T-bills
+        # because it is a T-bill fund, and its filed put spreads used to turn
+        # that into "collateral" anyway.
+        filed_rows = [] if used == "exposure" else holdings.get(tkr, [])
+        derivative_context = any(_is_derivative_row(r) for r in filed_rows)
         financing_context = any(
-            (r.get("weight_pct") or 0) < -1
-            and (_CASH_PAT.search(r.get("name") or "")
-                 or _BILL_SYM_PAT.match(r.get("symbol") or ""))
-            for r in filed_rows
+            (r.get("weight_pct") or 0) < -1 and _is_cash_row(r) for r in filed_rows
         )
         collateral_context = derivative_context or financing_context
 
@@ -2405,17 +2984,21 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
                 guess = name_idx.get(_norm_name(nm))
                 if guess:
                     sym = guess
+            mapped = bool(r.get("mapped"))
+            cash_class = mapped and (r.get("asset_class") or "").lower().startswith("cash")
             # Bill / cash collateral groups regardless of whether the issuer
             # gave it a symbol -- otherwise literal mode scatters a fund's
             # Treasury sleeve across rows like "B0090326".
-            if _CASH_PAT.search(nm) or _BILL_SYM_PAT.match(sym):
-                if collateral_context:
+            if cash_class or _is_cash_row({"symbol": sym, "name": nm}):
+                # A mapped negative cash row is borrowing (TDAX's leverage):
+                # it finances exposure, so it nets against collateral.
+                if (mapped and w < 0) or (not mapped and collateral_context):
                     add("COLLATERAL", "Cash & T-bill collateral", share,
                         "collateral", contributor=tkr)
                 else:
                     add("CASH", "Cash & equivalents", share, "cash", contributor=tkr)
                 continue
-            if _DERIV_PAT.search(nm) or _DERIV_SYM_PAT.search(sym):
+            if _is_derivative_row({"symbol": sym, "name": nm}):
                 add("DERIVATIVES", "Options & derivatives", share,
                     "derivative", contributor=tkr)
                 continue
@@ -2428,8 +3011,9 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
                 add("FIXED_INCOME", fixed_income_label, share,
                     "fixed_income", contributor=tkr)
                 continue
-            key = sym or f"NAME::{_norm_name(nm)}"
-            add(key, nm if not sym else (nm or sym), share, "holding", sym, tkr)
+            canon = _SHARE_CLASS_ALIASES.get(sym, sym)
+            key = canon or f"NAME::{_norm_name(nm)}"
+            add(key, nm if not sym else (nm or sym), share, "holding", canon, tkr, listing=sym)
 
         covered = min(covered, 100.0)
         if covered < 99.5:
@@ -2446,20 +3030,40 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
             else:
                 add(f"UNDISCLOSED::{tkr}", f"{tkr} — rest not disclosed by issuer",
                     remainder, "undisclosed", tkr, tkr)
+        age = _age_days(info.get("fetched_at"))
         fund_detail.append({"ticker": tkr, "value": value, "status": status,
                             "coverage_pct": round(covered, 2), "source": used,
-                            "mode": "economic" if used == "exposure" else "literal",
-                            "as_of": info.get("as_of")})
+                            "mode": "economic" if economic else "literal",
+                            "synthetic": synthetic or None,
+                            "as_of": info.get("as_of"),
+                            "fetched_at": info.get("fetched_at"),
+                            "age_days": round(age, 1) if age is not None else None})
+
+    if xray:
+        _merge_listings(buckets)
 
     out = []
     for b in buckets.values():
+        name = b["name"]
+        others = sorted(b["listings"] - {b["symbol"]})
+        # Share classes are one company under two names ("Alphabet Inc. Class
+        # A" / "Class C"), so the class drops out of the combined label.
+        if any(o in _SHARE_CLASS_ALIASES for o in others):
+            base = _CLASS_SUFFIX_PAT.sub("", name).strip(" ,")
+            name = f"{base} ({' + '.join([b['symbol']] + others)})"
         out.append({
-            "key": b["key"], "symbol": b["symbol"], "name": b["name"],
+            "key": b["key"], "symbol": b["symbol"], "name": name,
             "value": round(b["value"], 2),
             "weight_pct": round(100.0 * b["value"] / total, 4) if total else 0.0,
             "kind": b["kind"],
+            "listings": [b["symbol"]] + others if others else [],
+            "contributor_count": len(b["contributions"]),
             "contributors": [
-                {"ticker": ticker, "value": round(amount, 2)}
+                {"ticker": ticker, "value": round(amount, 2),
+                 # How much of that position this slice is -- "NVDA is 7.7%
+                 # of SPYI" -- which the dollar figure alone does not say.
+                 "fund_pct": (round(100.0 * amount / position_value[ticker], 3)
+                              if position_value.get(ticker) else None)}
                 for ticker, amount in sorted(
                     b["contributions"].items(), key=lambda item: -abs(item[1])
                 )[:5]
@@ -2474,6 +3078,20 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
     resolved_val = sum(f["value"] for f in fund_detail if f["status"] != "unresolved")
     undisclosed_val = sum(b["value"] for b in out if b["kind"] == "undisclosed")
     undefined_val = sum(b["value"] for b in out if b["kind"] == "undefined")
+    concentration = _concentration(out, total, {"holding", "stock"} if xray else {"fund"})
+
+    # Holdings older than a week are re-read by the next ordinary resolve.
+    # Exposure-mapped funds are left out: their chart comes from the map, not
+    # from the filed rows that aged.
+    stale = [f for f in fund_detail
+             if f["status"] == "resolved" and f.get("source") != "exposure"
+             and (f.get("age_days") or 0) >= STALE_AFTER_DAYS]
+    stale_val = sum(f["value"] for f in stale)
+    unchecked = [f["ticker"] for f in fund_detail if f.get("never_checked")]
+    last_refresh = _last_refresh_started(conn)
+    since_refresh = _age_days(last_refresh)
+    fetched = [f["fetched_at"] for f in fund_detail
+               if f["status"] == "resolved" and f.get("fetched_at")]
 
     constituent_count = len(out)
     truncated_value = 0.0
@@ -2509,7 +3127,26 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
         # so a truncated response can still label "Other (N)" honestly.
         "constituent_count": constituent_count,
         "truncated_value": truncated_value,
+        "concentration": concentration,
         "funds": sorted(fund_detail, key=lambda r: -r["value"]),
+        "freshness": {
+            "stale_after_days": STALE_AFTER_DAYS,
+            "stale_funds": len(stale),
+            "stale_value": round(stale_val, 2),
+            "stale_pct": round(100.0 * stale_val / total, 2) if total else 0.0,
+            "oldest_fetched_at": min(fetched) if fetched else None,
+            # Positions never looked up at all -- bought since the last resolve.
+            "unchecked": unchecked,
+            "last_refresh_at": last_refresh,
+            # The page starts a refresh by itself only when stale holdings
+            # carry real weight and it has not just tried, so a publisher that
+            # is down does not cost a full sweep on every visit.
+            "auto_refresh_due": bool(
+                total and stale_val >= 0.01 * total
+                and (since_refresh is None
+                     or since_refresh * 24 >= AUTO_REFRESH_COOLDOWN_HOURS)
+            ),
+        },
         "coverage": {
             "resolved_value": round(resolved_val, 2),
             # Split deliberately: an issuer publishing only a top 10 is a
@@ -2520,6 +3157,9 @@ def build_diversification(conn, profile_ids=None, xray=True, mode="economic",
             "undefined_value": round(undefined_val, 2),
             "undefined_pct": round(100.0 * undefined_val / total, 2) if total else 0.0,
             "unresolved_funds": sum(1 for f in fund_detail if f["status"] == "unresolved"),
+            # Of those, positions never looked up -- the page resolves these
+            # itself, so they are not counted as funds needing a definition.
+            "unchecked_funds": len(unchecked),
         },
     }
 
@@ -2818,7 +3458,8 @@ def register_routes(app):
             conn.close()
         if not tickers:
             return jsonify({"ok": False, "error": "No positions to resolve."}), 400
-        threading.Thread(target=_run_refresh, args=(tickers, force), daemon=True).start()
+        threading.Thread(target=_run_refresh, args=(tickers, force, bool(payload.get("tickers"))),
+                         daemon=True).start()
         time.sleep(0.2)
         return jsonify({"ok": True, "started": True, "total": len(tickers)})
 
