@@ -62159,21 +62159,66 @@ def _cef_cache_set(key, payload):
     _CEFCONNECT_CACHE[key] = (time.time(), payload)
 
 
+def _cefconnect_blocked_body(body, expect_json=False):
+    """True when Akamai/CEF Connect returned a block page instead of the payload."""
+    text = body if isinstance(body, str) else ""
+    sample = text.lstrip()[:1200]
+    if not sample:
+        return True
+    if "your request has been blocked" in sample.lower():
+        return True
+    if expect_json:
+        start = sample.lstrip()[:1]
+        return start not in "{["
+    return False
+
+
+def _cefconnect_http_get(url, accept):
+    """Fetch a CEF Connect URL, impersonating Chrome so Akamai does not block it."""
+    headers = {
+        "Accept": accept,
+        "Referer": f"{_CEFCONNECT_BASE_URL}/closed-end-funds-daily-pricing",
+    }
+    try:
+        from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(url, headers=headers, impersonate="chrome", timeout=20)
+        return resp.text or ""
+    except ImportError:
+        pass
+    req = urllib.request.Request(
+        url,
+        headers={
+            **headers,
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
 def _cefconnect_json(path, cache_key):
     cached = _cef_cache_get(cache_key)
     if cached is not None:
         return cached
 
-    req = urllib.request.Request(
-        f"{_CEFCONNECT_BASE_URL}{path}",
-        headers={
-            "Accept": "application/json,text/plain,*/*",
-            "User-Agent": "PortfolioTrackingClient/1.0",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    url = f"{_CEFCONNECT_BASE_URL}{path}"
+    try:
+        body = _cefconnect_http_get(url, "application/json,text/plain,*/*")
+        if _cefconnect_blocked_body(body, expect_json=True):
+            raise RuntimeError("CEF Connect blocked the automated request.")
+        payload = json.loads(body)
+    except Exception:
+        stale = _load_persisted_market_payload("cefconnect", cache_key, "json")
+        if stale is not None:
+            _cef_cache_set(cache_key, stale)
+            return stale
+        raise
+
     _cef_cache_set(cache_key, payload)
+    _persist_market_payload("cefconnect", cache_key, "json", payload)
     return payload
 
 
@@ -62182,17 +62227,15 @@ def _cefconnect_text(path, cache_key):
     if cached is not None:
         return cached
 
-    req = urllib.request.Request(
-        f"{_CEFCONNECT_BASE_URL}{path}",
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "User-Agent": "PortfolioTrackingClient/1.0",
-        },
+    url = f"{_CEFCONNECT_BASE_URL}{path}"
+    body = _cefconnect_http_get(
+        url,
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = resp.read().decode("utf-8", errors="replace")
-    _cef_cache_set(cache_key, payload)
-    return payload
+    if _cefconnect_blocked_body(body, expect_json=False):
+        raise RuntimeError("CEF Connect blocked the automated request.")
+    _cef_cache_set(cache_key, body)
+    return body
 
 
 def _cef_value(row, key):
@@ -62442,7 +62485,14 @@ def _cef_period_stats(history):
 
 @app.route("/api/closed-cef/pricing", methods=["GET"])
 def closed_cef_pricing():
-    rows = [_cef_normalize_row(row) for row in _cef_daily_rows()]
+    try:
+        raw_rows = _cef_daily_rows()
+    except Exception as exc:
+        return jsonify({
+            "error": "Could not load CEF Connect daily pricing. Try again in a few minutes.",
+            "detail": str(exc),
+        }), 502
+    rows = [_cef_normalize_row(row) for row in raw_rows if isinstance(row, dict)]
     rows = [row for row in rows if row.get("ticker")]
     categories = sorted({row["category"] for row in rows if row.get("category")})
     strategies = sorted({row["strategy"] for row in rows if row.get("strategy")})
