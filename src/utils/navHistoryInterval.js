@@ -56,11 +56,14 @@ const calloutSpansOverlap = (timeA, widthA, timeB, widthB, start, end, plotWidth
 // High, low, and the latest recorded value for the dashboard portfolio chart.
 // The latest value is "current" only when that point is inside the visible
 // range, so a zoom into older history does not label an off-screen point.
+// `latestName` renames it for a range that ends before today, where the last
+// point is the range's end rather than the current value.
 export const navHistoryCallouts = (points = [], {
   start = -Infinity,
   end = Infinity,
   dateTime,
   plotWidth = 0,
+  latestName = 'Current',
 } = {}) => {
   const timeOf = dateTime || (value => new Date(`${value}T00:00:00`).getTime())
   const visible = points.filter((point) => {
@@ -78,12 +81,12 @@ export const navHistoryCallouts = (points = [], {
   const currentIsHigh = Boolean(current) && current.value === high.value
   const currentIsLow = Boolean(current) && current.value === low.value
   const currentLabel = currentIsHigh && currentIsLow
-    ? 'Current is the high and the low'
+    ? `${latestName} is the high and the low`
     : currentIsHigh
-      ? 'Current is the high'
+      ? `${latestName} is the high`
       : currentIsLow
-        ? 'Current is the low'
-        : 'Current'
+        ? `${latestName} is the low`
+        : latestName
 
   if (high.value === low.value) {
     const callouts = [{
@@ -141,6 +144,30 @@ export const resampleNavHistory = (points = [], interval = 'daily') => {
     if (key) lastByPeriod.set(key, item.point)
   })
   return [...lastByPeriod.values()]
+}
+
+// The Dashboard's Shared Performance Date Range applied to the recorded
+// history. `window` is performancePeriodWindow's { start, end, anchored }, or
+// null for All Market and Open G/L, which show everything recorded. An
+// anchored window also keeps the last value on or before its start, the same
+// close every return on the page is measured from, when one was recorded
+// within the backend's 10-day reach-back; an older one would stretch the chart
+// across a gap the selected range never asked for.
+const BASELINE_REACH_DAYS = 10
+
+export const navHistoryForWindow = (points = [], window = null) => {
+  if (!window) return points
+  const sorted = points
+    .map((point, index) => ({ point, index, date: isoDateParts(point?.date)?.iso || null }))
+    .filter(item => item.date && (!window.end || item.date <= window.end))
+    .sort((a, b) => a.date.localeCompare(b.date) || a.index - b.index)
+  const inside = sorted.filter(item => item.date >= window.start)
+  const before = sorted.filter(item => item.date < window.start)
+  const baseline = before[before.length - 1]
+  const reach = isoDateParts(window.start)?.date
+  if (reach) reach.setUTCDate(reach.getUTCDate() - BASELINE_REACH_DAYS)
+  const keepBaseline = window.anchored && baseline && reach && baseline.date >= reach.toISOString().slice(0, 10)
+  return [...(keepBaseline ? [baseline] : []), ...inside].map(item => item.point)
 }
 
 // Today's chart point follows the live Dashboard account value, so the chart's

@@ -8,6 +8,16 @@ import { formatMoneyWhole } from './money.js'
 // resolves in _resolve_total_return_period; returns use the final close on or
 // before the selected start, which is the baseline rather than the first day
 // of gain.
+//
+// `months` marks the calendar-duration presets: a portfolio younger than one of
+// them does not have that window yet, so its button is grayed out.
+const calendarYearsPeriod = (years, word) => ({
+  key: `${years}y`,
+  label: `${years}Y`,
+  months: years * 12,
+  hint: `${word} calendar year${years === 1 ? '' : 's'} back on the same month and day (Feb 29 falls back to Feb 28).`,
+})
+
 export const PERFORMANCE_PERIODS = [
   {
     key: '1d',
@@ -22,16 +32,19 @@ export const PERFORMANCE_PERIODS = [
   {
     key: '1m',
     label: '1M',
+    months: 1,
     hint: 'One calendar month back on the same day of the month (clamped to the last day in shorter months).',
   },
   {
     key: '3m',
     label: '3M',
+    months: 3,
     hint: 'Three calendar months back on the same day of the month (clamped to the last day in shorter months).',
   },
   {
     key: '6m',
     label: '6M',
+    months: 6,
     hint: 'Six calendar months back on the same day of the month (clamped to the last day in shorter months).',
   },
   {
@@ -39,16 +52,15 @@ export const PERFORMANCE_PERIODS = [
     label: 'YTD',
     hint: "January 1 of this year. The baseline is the final market close on or before January 1, so the first trading session's move is included.",
   },
-  {
-    key: '1y',
-    label: '1Y',
-    hint: 'One calendar year back on the same month and day (Feb 29 falls back to Feb 28).',
-  },
-  {
-    key: '5y',
-    label: '5Y',
-    hint: 'Five calendar years back on the same month and day (Feb 29 falls back to Feb 28).',
-  },
+  calendarYearsPeriod(1, 'One'),
+  calendarYearsPeriod(2, 'Two'),
+  calendarYearsPeriod(3, 'Three'),
+  calendarYearsPeriod(5, 'Five'),
+  calendarYearsPeriod(6, 'Six'),
+  calendarYearsPeriod(7, 'Seven'),
+  calendarYearsPeriod(8, 'Eight'),
+  calendarYearsPeriod(9, 'Nine'),
+  calendarYearsPeriod(10, 'Ten'),
   {
     key: 'all',
     label: 'All Market',
@@ -100,7 +112,7 @@ export const COST_BASIS_SCOPE_NOTE = (
 // They need a daily price series in a market window — not cost-basis G/L.
 export const GRADE_WINDOW_NOTE = (
   'Portfolio Grade, beta, Sharpe, Sortino, Calmar, Omega, and Ulcer follow the selected market window. '
-  + 'YTD, 1M, 3M, 6M, 1Y, 5Y, All Market, and Custom re-grade that stretch — a YTD grade is not a lifetime report card. '
+  + 'YTD, 1M, 3M, 6M, 1Y through 10Y, All Market, and Custom re-grade that stretch — a YTD grade is not a lifetime report card. '
   + '1D and 7D usually have too few trading days to annualize those ratios. '
   + 'Open G/L is cost-basis G/L, not a price series, so it does not produce a grade.'
 )
@@ -108,14 +120,14 @@ export const GRADE_WINDOW_NOTE = (
 export const GRADE_LIFETIME_SKIP_NOTE = (
   'Grade cannot be computed for Open G/L. It is cost-basis G/L '
   + '(current value minus what you paid), not a daily price series. '
-  + 'Pick YTD, 1M, 1Y, 5Y, All Market, or Custom to grade that market window.'
+  + 'Pick YTD, 1M, 1Y, 5Y, 10Y, All Market, or Custom to grade that market window.'
 )
 
 export const GRADE_LIFETIME_CARD_NOTE = 'Cannot compute for Open G/L'
 
 export const GRADE_PERIOD_HELP_ROWS = [
   {
-    filter: '1M, 3M, 6M, YTD, 1Y, 5Y, All Market, Custom',
+    filter: '1M, 3M, 6M, YTD, 1Y, 2Y, 3Y, 5Y–10Y, All Market, Custom',
     grade: 'Yes. 5Y and All Market both work. That window\'s risk-adjusted grade and indexes. A YTD grade is this year\'s result, not a lifetime report card.',
   },
   {
@@ -536,4 +548,65 @@ export const addCustomRangeParams = (params, period, start, end) => {
     params.set('end_date', end)
   }
   return params
+}
+
+const isoDate = date => date.toISOString().slice(0, 10)
+
+const shiftIsoDays = (value, days) => {
+  const date = new Date(`${value}T00:00:00Z`)
+  date.setUTCDate(date.getUTCDate() + days)
+  return isoDate(date)
+}
+
+// Mirrors _calendar_months_ago in backend/app.py: keep the day of the month,
+// clamped to the last day of a shorter month (Feb 29 falls back to Feb 28).
+const calendarMonthsAgo = (value, months) => {
+  const [year, month, day] = value.split('-').map(Number)
+  const lastDay = new Date(Date.UTC(year, month - 1 - months + 1, 0)).getUTCDate()
+  return isoDate(new Date(Date.UTC(year, month - 1 - months, Math.min(day, lastDay))))
+}
+
+const lastWeekday = (value) => {
+  let date = value
+  while ([0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) date = shiftIsoDays(date, -1)
+  return date
+}
+
+// The window a preset covers, as _resolve_total_return_period resolves it, for
+// screens that filter data already in hand instead of asking the API. All
+// Market and Open G/L have no fixed start, so they return null. `anchored`
+// says the return is measured from the last close on or before `start`; 1D is
+// already two sessions, so it has no separate baseline.
+export const performancePeriodWindow = (period, { start = null, end = null, today = todayInputValue() } = {}) => {
+  if (period === 'custom') {
+    return customRangeError(period, start, end) ? null : { start, end, anchored: true }
+  }
+  if (period === '1d') {
+    const sessionEnd = lastWeekday(today)
+    return { start: lastWeekday(shiftIsoDays(sessionEnd, -1)), end: sessionEnd, anchored: false }
+  }
+  if (period === '7d') return { start: shiftIsoDays(today, -7), end: today, anchored: true }
+  if (period === 'ytd') return { start: `${today.slice(0, 4)}-01-01`, end: today, anchored: true }
+  const months = PERFORMANCE_PERIODS.find(option => option.key === period)?.months
+  if (!months) return null
+  return { start: calendarMonthsAgo(today, months), end: today, anchored: true }
+}
+
+// A first trade a few days after a preset's start still counts as having that
+// window: the start can fall on a weekend or holiday, and the first trade is
+// rarely on day one.
+const PERIOD_AVAILABILITY_GRACE_DAYS = 7
+
+// Why a duration preset (1M through 10Y) cannot be picked yet, or null when it
+// can. 1D, 7D, YTD, All Market, Open G/L, and Custom are always offered, and an
+// unknown inception date blocks nothing.
+export const performancePeriodUnavailableReason = (period, inceptionDate, today = todayInputValue()) => {
+  const option = PERFORMANCE_PERIODS.find(item => item.key === period)
+  if (!option?.months || !isCompletePerformanceDate(inceptionDate)) return null
+  const window = performancePeriodWindow(period, { today })
+  if (!window || inceptionDate <= shiftIsoDays(window.start, PERIOD_AVAILABILITY_GRACE_DAYS)) return null
+  return (
+    `Not available yet: ${option.label} starts ${formatPerformanceDate(window.start)}, `
+    + `but this portfolio's first trade is ${formatPerformanceDate(inceptionDate)}.`
+  )
 }

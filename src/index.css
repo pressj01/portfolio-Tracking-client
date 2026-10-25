@@ -1658,6 +1658,13 @@ html { scroll-padding-top: var(--app-header-height); }
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
+/* A shared date-range preset the portfolio is too young for. */
+.tab:disabled,
+.tab:disabled:hover {
+  color: var(--text-faint);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .help-tabs {
   flex-wrap: wrap;
   gap: 0.25rem 0;
@@ -3349,6 +3356,8 @@ th.col-drag-target {
 }
 .tr-pbtn:hover { background: var(--surface-inset); color: var(--text-strong); }
 .tr-pbtn-active { background: var(--primary); color: var(--white); border-color: var(--primary); }
+.tr-pbtn:disabled { opacity: 0.55; cursor: not-allowed; }
+.tr-pbtn:disabled:not(.tr-pbtn-active), .tr-pbtn:disabled:not(.tr-pbtn-active):hover { background: var(--surface-sunken); color: var(--text-faint); }
 .tr-pbtn-year { color: var(--purple); border-color: color-mix(in srgb, var(--purple) 45%, var(--border)); }
 .tr-pbtn-year:hover { background: color-mix(in srgb, var(--purple) 12%, var(--surface)); color: var(--purple); }
 .tr-pbtn-year.tr-pbtn-active { background: var(--purple); color: var(--white); border-color: var(--purple); }

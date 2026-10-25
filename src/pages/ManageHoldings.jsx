@@ -26,6 +26,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import {
   accountPercent,
@@ -1549,6 +1550,16 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
   )
 }
 
+// Deletes one ledger row in the row's own account, never an aggregate's
+// inferred first holding. `txn.id` is the numeric transactions id.
+const deleteLedgerRecord = async (ticker, txn, basisMode) => {
+  const dividend = txn.record_type === 'dividend'
+  const path = dividend ? `dividend-payments/${txn.dividend_payment_id}` : `transactions/${txn.id}`
+  const res = await fetch(`${API_BASE}/api/holdings/${ticker}/${path}?profile_id=${txn.profile_id}&basis_mode=${basisMode}`, { method: 'DELETE' })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Could not delete transaction')
+}
+
 const transactionTypeColor = (type) => {
   if (type === 'SELL') return 'var(--p-ef9a9a)'
   if (type === 'DIVIDEND') return 'var(--p-4fc3f7)'
@@ -1575,13 +1586,70 @@ const isClosedBuyLot = (txn) => {
   return txn.shares_remaining != null && Number(txn.shares_remaining) <= 1e-9
 }
 
-function TransactionHistoryModal({ onClose, pf }) {
+function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
+  const dialog = useDialog()
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [query, setQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [closedOnly, setClosedOnly] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [editing, setEditing] = useState(null) // { ticker, transaction }
+  const [busyId, setBusyId] = useState(null)
+  const [actionFeedback, setActionFeedback] = useState(null) // { type, text }
+
+  const afterChange = ticker => {
+    setReloadKey(key => key + 1)
+    onChanged?.(ticker)
+  }
+
+  const editEvent = async event => {
+    setActionFeedback(null)
+    if (event.record_type === 'dividend') {
+      setEditing({ ticker: event.ticker, transaction: event })
+      return
+    }
+    setBusyId(event.id)
+    try {
+      // History rows lack a sell's specific-lot picks, and saving without them
+      // would fall back to FIFO. The ticker's own ledger has them, so the
+      // editor opens on the same row the Holdings ledger edits.
+      const res = await fetch(`${API_BASE}/api/holdings/${event.ticker}/transactions?profile_id=${event.profile_id}&basis_mode=${basisMode}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `Could not load ${event.ticker} transactions`)
+      const transaction = data.find(txn => txn.id === event.transaction_id && txn.profile_id === event.profile_id)
+      if (!transaction) throw new Error(`That ${event.ticker} transaction no longer exists. Close and reopen the history.`)
+      setEditing({ ticker: event.ticker, transaction })
+    } catch (e) {
+      setActionFeedback({ type: 'error', text: e.message })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const deleteEvent = async event => {
+    const type = String(event.transaction_type || 'BUY').toUpperCase()
+    const account = event.source_account_name || `Account ${event.profile_id}`
+    const dividend = event.record_type === 'dividend'
+    const effect = dividend
+      ? 'This removes the cash payment; any DRIP BUY remains separate.'
+      : event.closed_position
+        ? 'Realized gains for this closed position will be recalculated.'
+        : 'Holdings and cost basis will be recalculated.'
+    if (!await dialog.confirm(`Delete ${type} for ${event.ticker} on ${event.transaction_date || 'the undated group'} in ${account}? ${effect}`)) return
+    setActionFeedback(null)
+    setBusyId(event.id)
+    try {
+      await deleteLedgerRecord(event.ticker, { ...event, id: event.transaction_id }, basisMode)
+      setActionFeedback({ type: 'success', text: `${event.ticker} ${type} deleted from ${account}.` })
+      afterChange(event.ticker)
+    } catch (e) {
+      setActionFeedback({ type: 'error', text: e.message })
+    } finally {
+      setBusyId(null)
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController()
@@ -1604,13 +1672,14 @@ function TransactionHistoryModal({ onClose, pf }) {
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [pf])
+  }, [pf, reloadKey])
 
   useEffect(() => {
-    const onKeyDown = event => { if (event.key === 'Escape') onClose() }
+    // Escape belongs to the row editor while it is open.
+    const onKeyDown = event => { if (event.key === 'Escape' && !editing) onClose() }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose])
+  }, [onClose, editing])
 
   const events = useMemo(() => {
     const search = query.trim().toLowerCase()
@@ -1644,6 +1713,7 @@ function TransactionHistoryModal({ onClose, pf }) {
               <h2 style={{ margin: 0 }}>Transaction History</h2>
               <div style={{ color: 'var(--text-dim-2)', fontSize: '0.82rem', marginTop: '0.3rem' }}>
                 Every saved buy, sell, and actual dividend, including tickers that are no longer held.
+                Edit or delete any row, closed positions included.
               </div>
             </div>
             <button className="btn btn-secondary" onClick={onClose}>Close</button>
@@ -1690,6 +1760,12 @@ function TransactionHistoryModal({ onClose, pf }) {
               Showing {events.length.toLocaleString()}
             </span>
           </div>
+          {actionFeedback && (
+            <div className={`alert ${actionFeedback.type === 'error' ? 'alert-error' : 'alert-success'}`}
+              role={actionFeedback.type === 'error' ? 'alert' : 'status'} style={{ margin: '0.75rem 0 0' }}>
+              {actionFeedback.text}
+            </div>
+          )}
         </div>
 
         <div style={{ overflow: 'auto', maxHeight: 'calc(92vh - 190px)' }}>
@@ -1699,10 +1775,10 @@ function TransactionHistoryModal({ onClose, pf }) {
             <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-dim-2)' }}>No transactions match these filters.</div>
           )}
           {!loading && !error && events.length > 0 && (
-            <table style={{ width: '100%', minWidth: 1180, fontSize: '0.8rem', margin: 0 }}>
+            <table style={{ width: '100%', minWidth: 1310, fontSize: '0.8rem', margin: 0 }}>
               <thead>
                 <tr>
-                  {['Date', 'Ticker', 'Type', 'Shares', 'Price', 'Fees', 'Cash Amount', 'Realized G/L', 'Account', 'Status', 'Notes'].map(label => (
+                  {['Actions', 'Date', 'Ticker', 'Type', 'Shares', 'Price', 'Fees', 'Cash Amount', 'Realized G/L', 'Account', 'Status', 'Notes'].map(label => (
                     <th key={label} style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2, whiteSpace: 'nowrap' }}>{label}</th>
                   ))}
                 </tr>
@@ -1714,6 +1790,18 @@ function TransactionHistoryModal({ onClose, pf }) {
                   const isBuy = type === 'BUY'
                   return (
                     <tr key={event.id}>
+                      <td className="mh-lot-actions">
+                        <div style={{ display: 'flex', gap: '0.35rem' }}>
+                          <button type="button" className="btn btn-primary" aria-label={`Edit ${event.ticker} ${type} on ${event.transaction_date || 'undated'}`}
+                            disabled={busyId != null} onClick={() => editEvent(event)}>
+                            {busyId === event.id && !isDividend ? 'Loading…' : 'Edit'}
+                          </button>
+                          <button type="button" className="btn btn-danger" aria-label={`Delete ${event.ticker} ${type} on ${event.transaction_date || 'undated'}`}
+                            disabled={busyId != null} onClick={() => deleteEvent(event)}>
+                            Delete
+                          </button>
+                        </div>
+                      </td>
                       <td style={{ whiteSpace: 'nowrap' }}>{event.transaction_date || '-'}</td>
                       <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{event.ticker || '-'}</td>
                       <td style={{ color: transactionTypeColor(type), fontWeight: 700 }}>{type}</td>
@@ -1754,6 +1842,11 @@ function TransactionHistoryModal({ onClose, pf }) {
           )}
         </div>
       </div>
+      {/* Inside this overlay so the editor stacks above the history table. */}
+      {editing && (
+        <LedgerTransactionEditor {...editing} pf={pf} basisMode={basisMode}
+          onClose={() => setEditing(null)} onSaved={() => afterChange(editing.ticker)} />
+      )}
     </div>
   )
 }
@@ -2232,6 +2325,7 @@ function DripMatrixModal({ onClose, onSynced, pf }) {
 export default function ManageHoldings() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const { runMarketRefresh } = useMarketRefresh()
   const { profileId, isAggregate, selection, basisMode, profileQueryString, profiles } = useProfile()
   const dialog = useDialog()
@@ -2681,10 +2775,7 @@ export default function ManageHoldings() {
     if (!await dialog.confirm(`Delete ${txn.transaction_type || 'BUY'} for ${ticker} on ${txn.transaction_date || 'the undated group'} in ${account}? ${dividend ? 'This removes the cash payment; any DRIP BUY remains separate.' : 'Holdings and cost basis will be recalculated.'}`)) return
     setDeletingLedgerId(txn.id)
     try {
-      const path = dividend ? `dividend-payments/${txn.dividend_payment_id}` : `transactions/${txn.id}`
-      const res = await fetch(`${API_BASE}/api/holdings/${ticker}/${path}?profile_id=${txn.profile_id}&basis_mode=${basisMode}`, { method: 'DELETE' })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Could not delete transaction')
+      await deleteLedgerRecord(ticker, txn, basisMode)
       await refreshLedger(ticker)
       setMessage(`${ticker} ${txn.transaction_type || 'BUY'} deleted from ${account}.`)
     } catch (e) { setError(e.message) }
@@ -3533,7 +3624,8 @@ export default function ManageHoldings() {
                 key={periodOption.key}
                 className={`tr-pbtn${performancePeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                title={periodOption.hint}
+                disabled={Boolean(periodUnavailable(periodOption.key))}
+                title={periodUnavailable(periodOption.key) || periodOption.hint}
                 onClick={() => setPerformancePeriod(periodOption.key)}
               >
                 {periodOption.label}
@@ -4086,6 +4178,12 @@ export default function ManageHoldings() {
         <TransactionHistoryModal
           onClose={() => setShowTransactionHistory(false)}
           pf={pf}
+          basisMode={basisMode}
+          onChanged={ticker => {
+            invalidateDashboardCache()
+            fetchHoldings({ silent: true })
+            if (expandedTickers[ticker]) fetchExpandedTransactions(ticker).catch(e => setError(e.message))
+          }}
         />
       )}
 

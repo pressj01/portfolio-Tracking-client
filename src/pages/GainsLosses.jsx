@@ -35,6 +35,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import {
   fetchHoldingsJson,
   lifetimeAccountingProfitFromTotals,
@@ -116,6 +117,7 @@ const COMBINED_COLS = [
 
 export default function GainsLosses({ embedded = false }) {
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const navigate = useNavigate()
   const { selection, basisMode, profileQueryString, profiles } = useProfile()
   const { isDark } = useTheme()
@@ -977,7 +979,8 @@ export default function GainsLosses({ embedded = false }) {
                 key={option.key}
                 className={`tr-pbtn${period === option.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                title={option.hint}
+                disabled={Boolean(periodUnavailable(option.key))}
+                title={periodUnavailable(option.key) || option.hint}
                 onClick={() => setPeriod(option.key)}
               >
                 {option.label}

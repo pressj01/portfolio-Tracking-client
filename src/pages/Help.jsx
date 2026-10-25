@@ -769,7 +769,7 @@ function DashboardHelp() {
         <li>
           <strong>Grade &amp; Risk Period</strong> — the Shared Performance Date Range. Grade, beta,
           Sharpe, Sortino, Calmar, Omega, Ulcer, Diversification Ratio, and Capture Ratio follow market windows such as
-          <strong> YTD, 1M, 1Y, 5Y, All, and Custom</strong>. See
+          <strong> YTD, 1M, 1Y, 2Y, 3Y, 5Y through 10Y, All, and Custom</strong>. A month or year preset that starts before the portfolio&apos;s first recorded trade is grayed out until the portfolio is that old; hover it to see both dates. See
           <strong> Portfolio Grade and the date range</strong> below for which filters produce a grade.
           All begins with the portfolio&apos;s earliest recorded trade
           (or saved purchase/import date when trade history is incomplete). The exact market-data
@@ -1004,6 +1004,7 @@ function DashboardHelp() {
         <li><strong>Import trigger</strong> — any holdings import (generic upload, broker positions, or broker transactions) automatically records a snapshot for the imported portfolio and Owner.</li>
         <li><strong>One snapshot per day</strong> — clicking the button or importing multiple times on the same day simply updates that day's value rather than creating duplicates.</li>
         <li><strong>Live last point</strong> — on a market day, today&apos;s point follows the live Portfolio Value card between recorded snapshots, so the chart&apos;s Current label always matches it. Hovering it says <em>Live value, not yet recorded</em>. Once the official close is captured after 4:00 PM ET, that recorded close is shown instead.</li>
+        <li><strong>Date range</strong> — the chart follows the <strong>Shared Performance Date Range</strong> at the top of the Dashboard, so picking 1Y, 5Y, YTD, or a Custom range there also sets the chart. Each preset starts at the last value recorded on or before its start date, the same baseline the returns use. All Market and Open G/L show every recorded value. When the recorded values begin after the selected start (for example, a 1Y range on five months of snapshots), the chart subtitle says where the range starts and where the recorded values begin. Daily, Weekly, and Monthly still thin the points within that range.</li>
         <li><strong>Price Return / Total Return</strong> — Price Return plots each recorded value as-is. Total Return ends at the same current value, and shifts each earlier point by the money withdrawn from (or deposited to) the account after it, like an adjusted close. The rise from any point to today is then investment gain, dividends included. Broker-synced accounts already hold their dividends (reinvested as shares or sitting in cash), so only imported deposits, withdrawals, transfers, and IRA tax withholding adjust the line. Import the broker transaction history to capture them. For manually kept portfolios, paid dividends count as money that left, because the value there is just shares × price.</li>
         <li><strong>Accuracy</strong> — snapshots from the button and from imports use identical logic. Both reflect the prices currently stored in the database, which are refreshed from yfinance on each page load or import.</li>
       </ul>
@@ -2541,8 +2542,8 @@ function GrowthVsMarketHelp() {
           in the metrics strip.
         </li>
         <li>
-          <strong>Period</strong> — The shared choices are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y,
-          All, Life, and Custom</strong>. All begins with the portfolio&apos;s first recorded trade rather than
+          <strong>Period</strong> — The shared choices are <strong>1D, 7D, 1M, 3M, 6M, YTD, 1Y, 2Y, 3Y,
+          5Y through 10Y, All, Life, and Custom</strong>. A month or year preset that starts before the portfolio&apos;s first recorded trade is grayed out until the portfolio is that old; hover it to see both dates. All begins with the portfolio&apos;s first recorded trade rather than
           the benchmark&apos;s older history. Custom start and end dates are inclusive. The selected
           range controls every metric and chart on the page. <strong>Life</strong> is cost-basis G/L
           and does not produce a Portfolio Grade — see <strong>Portfolio Grade and the date range</strong> below.
@@ -2697,7 +2698,7 @@ function GrowthDollarsHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Shared Performance Date Range</strong> - Preset buttons cover 1D, 7D, 1M, 3M, 6M,
-          YTD, 1Y, 5Y, and All. Choose
+          YTD, 1Y, 2Y, 3Y, 5Y through 10Y, and All. A month or year preset that starts before the portfolio&apos;s first recorded trade is grayed out until the portfolio is that old; hover it to see both dates. Choose
           <strong> Custom</strong> to enter your own inclusive start and end dates. The selected range
           controls both charts and the summary cards. <strong>All</strong> begins with the first recorded
           trade, purchase, or import for the portfolio. The 1D window uses the previous trading session;
@@ -3524,7 +3525,7 @@ function TotalReturnHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>
           <strong>Shared Performance Date Range</strong> — The page-wide 1D, 7D, 1M, 3M, 6M, YTD, 1Y,
-          5Y, All, and Custom choices update the summary cards, holding-return chart,
+          2Y, 3Y, 5Y through 10Y, All, and Custom choices update the summary cards, holding-return chart,
           comparison chart, scatter chart, and holdings summary together. All starts with
           the portfolio&apos;s first recorded trade; Custom accepts inclusive start and end dates.
           Every card displays its effective dates, every chart title shows From and To dates, and each holding also lists its held-period range.
@@ -3766,7 +3767,7 @@ function GainsLossesHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Performance Date Range</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        The 1D, 7D, 1M, 3M, 6M, YTD, 1Y, 5Y, All, and Custom buttons use the same saved range as
+        The 1D, 7D, 1M, 3M, 6M, YTD, 1Y, 2Y, 3Y, 5Y through 10Y, All, and Custom buttons use the same saved range as
         Dashboard, Growth, and Total Return. The selected-period
         cards, the <strong>Tracker TR %</strong> holding column, and the performance charts all come from
         the exact same transaction-aware endpoint as Total Return. With the same account, holdings

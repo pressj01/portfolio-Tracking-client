@@ -31,6 +31,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import {
   fetchHoldingsJson,
   lifetimeTotalReturnPayload,
@@ -98,6 +99,7 @@ function MetricCard({ label, value, range, className, children, title }) {
 export default function TotalReturn() {
   const navigate = useNavigate()
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const { selection, basisMode, profileQueryString, profiles } = useProfile()
   const { isDark } = useTheme()
   const [categories, setCategories] = useState([])
@@ -1117,7 +1119,8 @@ export default function TotalReturn() {
                 key={periodOption.key}
                 className={`tr-pbtn${dashboardPeriod === periodOption.key ? ' tr-pbtn-active' : ''}`}
                 style={{ padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
-                title={periodOption.hint}
+                disabled={Boolean(periodUnavailable(periodOption.key))}
+                title={periodUnavailable(periodOption.key) || periodOption.hint}
                 onClick={() => setDashboardPeriod(periodOption.key)}
               >
                 {periodOption.label}

@@ -26,7 +26,8 @@ VERDICT_LABELS = {
     "insufficient": "Insufficient evidence",
 }
 REGISTRY = json.loads(Path(__file__).with_name("nav_reference_registry.json").read_text(encoding="utf-8"))
-WINDOWS = {"1D": 0, "7D": 0, "1M": 1, "3M": 3, "6M": 6, "YTD": 0, "1Y": 12, "2Y": 24, "3Y": 36, "5Y": 60, "ALL": None, "CUSTOM": 0}
+WINDOWS = {"1D": 0, "7D": 0, "1M": 1, "3M": 3, "6M": 6, "YTD": 0, "1Y": 12, "2Y": 24, "3Y": 36, "5Y": 60,
+           "6Y": 72, "7Y": 84, "8Y": 96, "9Y": 108, "10Y": 120, "ALL": None, "CUSTOM": 0}
 BAD_REFERENCES = {
     "GPTY": {"GOOG", "GOOGL"}, "XSPI": {"SPCX"},
     "SLJY": {"SLV"}, "TDAX": {"QQQ"},

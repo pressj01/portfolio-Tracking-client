@@ -5,6 +5,7 @@ openpyxl
 xlrd
 yfinance
 requests
+curl_cffi
 plotly
 scipy
 pypdf

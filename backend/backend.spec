@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
 
 nav_assets = [('nav_reference_registry.json', '.')]
+curl_datas, curl_binaries, curl_hiddenimports = collect_all('curl_cffi')
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
-    datas=nav_assets + [('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.'), ('tax_report.py', '.'), ('dividend_safety.py', '.'), ('transaction_import.py', '.'), ('portfolio_tester.py', '.'), ('options_pricing.py', '.'), ('options_api.py', '.'), ('seed', 'seed')],
-    hiddenimports=['flask', 'flask_cors', 'pandas', 'openpyxl', 'xlrd', 'yfinance', 'plotly', 'scipy', 'pypdf', 'sqlite3', 'statistics', 'decimal', 'config', 'market_data_provider', 'database', 'import_data', 'normalize', 'grading', 'create_template', 'tax_report', 'dividend_safety', 'transaction_import', 'portfolio_tester', 'options_pricing', 'options_api', 'diversification', 'account_performance', 'refresh_sessions'],
+    binaries=curl_binaries,
+    datas=nav_assets + [('config.py', '.'), ('database.py', '.'), ('import_data.py', '.'), ('normalize.py', '.'), ('grading.py', '.'), ('create_template.py', '.'), ('tax_report.py', '.'), ('dividend_safety.py', '.'), ('transaction_import.py', '.'), ('portfolio_tester.py', '.'), ('options_pricing.py', '.'), ('options_api.py', '.'), ('seed', 'seed')] + curl_datas,
+    hiddenimports=['flask', 'flask_cors', 'pandas', 'openpyxl', 'xlrd', 'yfinance', 'plotly', 'scipy', 'pypdf', 'sqlite3', 'statistics', 'decimal', 'config', 'market_data_provider', 'database', 'import_data', 'normalize', 'grading', 'create_template', 'tax_report', 'dividend_safety', 'transaction_import', 'portfolio_tester', 'options_pricing', 'options_api', 'diversification', 'account_performance', 'refresh_sessions', 'curl_cffi'] + curl_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

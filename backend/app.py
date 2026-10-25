@@ -908,6 +908,10 @@ def _normalize_prices_to_100(close):
 # range starts long after this; anything earlier is a half-typed year.
 _MIN_PERFORMANCE_DATE = datetime.date(1970, 1, 1)
 
+# Mirrors the year buttons in PERFORMANCE_PERIODS (src/utils/performancePeriods.js).
+_PERFORMANCE_YEAR_PERIODS = (1, 2, 3, 5, 6, 7, 8, 9, 10)
+_PERFORMANCE_YEAR_PERIOD_KEYS = {f"{years}y": years for years in _PERFORMANCE_YEAR_PERIODS}
+
 
 def _calendar_months_ago(value, months):
     """Subtract whole calendar months while keeping the day when possible."""
@@ -967,8 +971,7 @@ def _resolve_total_return_period(
         "6m": "6 Months",
         "ytd": "Year to Date",
         "1y": "1 Year",
-        "2y": "2 Years",
-        "5y": "5 Years",
+        **{f"{years}y": f"{years} Years" for years in _PERFORMANCE_YEAR_PERIODS if years > 1},
         "all": "From First Trade",
         "custom": "Custom",
     }
@@ -1075,12 +1078,8 @@ def _resolve_total_return_period(
         start_date = _calendar_months_ago(today, 6)
     elif key == "ytd":
         start_date = datetime.date(today.year, 1, 1)
-    elif key == "1y":
-        start_date = _calendar_years_ago(today, 1)
-    elif key == "2y":
-        start_date = _calendar_years_ago(today, 2)
-    elif key == "5y":
-        start_date = _calendar_years_ago(today, 5)
+    elif key in _PERFORMANCE_YEAR_PERIOD_KEYS:
+        start_date = _calendar_years_ago(today, _PERFORMANCE_YEAR_PERIOD_KEYS[key])
     else:
         raise ValueError(f"Unsupported period: {period}")
 
@@ -13717,6 +13716,37 @@ def _nav_history_flow_gaps(conn, profile_ids, first_date, last_date):
     return flow_coverage_gaps(first_date, last_date, spans, _load_profile_name_map(conn, managed))
 
 
+@app.route("/api/performance/inception", methods=["GET"])
+def api_performance_inception():
+    """First trade, purchase, or import date of the active portfolio.
+
+    The shared date-range buttons gray out a preset whose start is earlier
+    than this, because that window does not exist yet for this portfolio.
+    """
+    _is_aggregate, profile_ids = get_profile_filter()
+    if not profile_ids:
+        return jsonify({"inception_date": None})
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        holdings = [dict(row) for row in conn.execute(
+            f"""SELECT purchase_date, import_date FROM all_account_info
+                WHERE profile_id IN ({placeholders}) AND quantity > 0""",
+            profile_ids,
+        )]
+        try:
+            transactions = [dict(row) for row in conn.execute(
+                f"""SELECT transaction_date FROM transactions
+                    WHERE profile_id IN ({placeholders}) AND transaction_date IS NOT NULL""",
+                profile_ids,
+            )]
+        except sqlite3.OperationalError:
+            transactions = []
+    finally:
+        conn.close()
+    return jsonify({"inception_date": _portfolio_inception_date(holdings, transactions)})
+
+
 @app.route("/api/nav/history", methods=["GET"])
 def api_nav_history():
     """Return portfolio NAV snapshots for the current profile."""
@@ -24216,6 +24246,60 @@ def _broker_holding_baseline(conn, ticker, profile_id):
     }
 
 
+def _closed_position_baseline(conn, ticker, profile_id):
+    """The broker's zero for a ticker its positions files no longer hold.
+
+    _broker_holding_baseline covers held tickers only, so an edit to a closed
+    position's history rebuilt the count from that history. A closed
+    position's history is often partial or being corrected: an export window
+    that misses the original buys, or a per-ticker import of them that is
+    wrong (a pre-split 2 shares beside the post-split 40). Rebuilding from it
+    opened a phantom holding the broker says was sold.
+
+    So the zero is the count as of the account's latest positions file. Trades
+    dated after that file move it; edits to anything before it only correct
+    the history and realized gains.
+
+    Take it before the edit is written. Returns None where the history owns the
+    count: a portfolio with no broker positions import, a ticker it still
+    holds, or no file date on record.
+    """
+    if not _profile_is_positions_managed(profile_id, conn):
+        return None
+    _ensure_basis_columns(conn)
+    held = conn.execute(
+        "SELECT quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if held and _num_or_zero(held["quantity"] if isinstance(held, dict) else held[0]) > 0:
+        return None
+    # Every positions import stamps all of the account's rows, so the latest
+    # stamp is the latest file.
+    cutoffs = [
+        _broker_snapshot_cutoff(dict(row))
+        for row in conn.execute(
+            "SELECT broker_snapshot_date, broker_snapshot_at, import_date "
+            "FROM all_account_info WHERE profile_id = ?",
+            (profile_id,),
+        ).fetchall()
+    ]
+    cutoffs = [cutoff for cutoff in cutoffs if cutoff[0]]
+    if not cutoffs:
+        return None
+    cutoff_date, cutoff_at = max(cutoffs)
+    return {
+        "holding": {
+            "ticker": ticker,
+            "profile_id": profile_id,
+            "quantity": 0.0,
+            "import_date": datetime.date.today().isoformat(),
+        },
+        "cutoff_date": cutoff_date,
+        "cutoff_at": cutoff_at,
+        "trades": _trades_after_broker_snapshot(conn, ticker, profile_id, cutoff_date, cutoff_at),
+    }
+
+
 def _broker_count_covers_sell(conn, ticker, profile_id, baseline, proposed):
     """True when a sell dated after the broker's file fits the broker's count.
 
@@ -26567,7 +26651,10 @@ def update_transaction(ticker, txn_id):
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
     existing_allocs = _load_lot_alloc_map(conn, [txn_id]).get(txn_id, [])
-    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
+    broker_baseline = (
+        _broker_holding_baseline(conn, ticker, profile_id)
+        or _closed_position_baseline(conn, ticker, profile_id)
+    )
 
     new_type = (data.get("transaction_type") or existing_type).upper()
     try:
@@ -26721,7 +26808,10 @@ def delete_transaction(ticker, txn_id):
         conn.close()
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
-    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
+    broker_baseline = (
+        _broker_holding_baseline(conn, ticker, profile_id)
+        or _closed_position_baseline(conn, ticker, profile_id)
+    )
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
 
@@ -62364,21 +62454,66 @@ def _cef_cache_set(key, payload):
     _CEFCONNECT_CACHE[key] = (time.time(), payload)
 
 
+def _cefconnect_blocked_body(body, expect_json=False):
+    """True when Akamai/CEF Connect returned a block page instead of the payload."""
+    text = body if isinstance(body, str) else ""
+    sample = text.lstrip()[:1200]
+    if not sample:
+        return True
+    if "your request has been blocked" in sample.lower():
+        return True
+    if expect_json:
+        start = sample.lstrip()[:1]
+        return start not in "{["
+    return False
+
+
+def _cefconnect_http_get(url, accept):
+    """Fetch a CEF Connect URL, impersonating Chrome so Akamai does not block it."""
+    headers = {
+        "Accept": accept,
+        "Referer": f"{_CEFCONNECT_BASE_URL}/closed-end-funds-daily-pricing",
+    }
+    try:
+        from curl_cffi import requests as curl_requests
+        resp = curl_requests.get(url, headers=headers, impersonate="chrome", timeout=20)
+        return resp.text or ""
+    except ImportError:
+        pass
+    req = urllib.request.Request(
+        url,
+        headers={
+            **headers,
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.read().decode("utf-8", errors="replace")
+
+
 def _cefconnect_json(path, cache_key):
     cached = _cef_cache_get(cache_key)
     if cached is not None:
         return cached
 
-    req = urllib.request.Request(
-        f"{_CEFCONNECT_BASE_URL}{path}",
-        headers={
-            "Accept": "application/json,text/plain,*/*",
-            "User-Agent": "PortfolioTrackingClient/1.0",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    url = f"{_CEFCONNECT_BASE_URL}{path}"
+    try:
+        body = _cefconnect_http_get(url, "application/json,text/plain,*/*")
+        if _cefconnect_blocked_body(body, expect_json=True):
+            raise RuntimeError("CEF Connect blocked the automated request.")
+        payload = json.loads(body)
+    except Exception:
+        stale = _load_persisted_market_payload("cefconnect", cache_key, "json")
+        if stale is not None:
+            _cef_cache_set(cache_key, stale)
+            return stale
+        raise
+
     _cef_cache_set(cache_key, payload)
+    _persist_market_payload("cefconnect", cache_key, "json", payload)
     return payload
 
 
@@ -62387,17 +62522,15 @@ def _cefconnect_text(path, cache_key):
     if cached is not None:
         return cached
 
-    req = urllib.request.Request(
-        f"{_CEFCONNECT_BASE_URL}{path}",
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "User-Agent": "PortfolioTrackingClient/1.0",
-        },
+    url = f"{_CEFCONNECT_BASE_URL}{path}"
+    body = _cefconnect_http_get(
+        url,
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        payload = resp.read().decode("utf-8", errors="replace")
-    _cef_cache_set(cache_key, payload)
-    return payload
+    if _cefconnect_blocked_body(body, expect_json=False):
+        raise RuntimeError("CEF Connect blocked the automated request.")
+    _cef_cache_set(cache_key, body)
+    return body
 
 
 def _cef_value(row, key):
@@ -62647,7 +62780,14 @@ def _cef_period_stats(history):
 
 @app.route("/api/closed-cef/pricing", methods=["GET"])
 def closed_cef_pricing():
-    rows = [_cef_normalize_row(row) for row in _cef_daily_rows()]
+    try:
+        raw_rows = _cef_daily_rows()
+    except Exception as exc:
+        return jsonify({
+            "error": "Could not load CEF Connect daily pricing. Try again in a few minutes.",
+            "detail": str(exc),
+        }), 502
+    rows = [_cef_normalize_row(row) for row in raw_rows if isinstance(row, dict)]
     rows = [row for row in rows if row.get("ticker")]
     categories = sorted({row["category"] for row in rows if row.get("category")})
     strategies = sorted({row["strategy"] for row in rows if row.get("strategy")})
