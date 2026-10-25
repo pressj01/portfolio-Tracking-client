@@ -389,7 +389,13 @@ def _score_lower(val, thr):
 
 
 def letter_grade(score, grading_settings=None):
-    cuts = normalize_grading_settings(grading_settings)["letterCutoffs"]
+    return _letter_for_cutoffs(score, normalize_grading_settings(grading_settings)["letterCutoffs"])
+
+
+def _letter_for_cutoffs(score, cuts):
+    # Split out so grade_portfolio, which already holds normalized settings, can
+    # skip re-normalizing them for every breakdown row (the target search grades
+    # thousands of mixes).
     if score >= cuts["aPlus"]: return "A+"
     if score >= cuts["a"]: return "A"
     if score >= cuts["aMinus"]: return "A-"
@@ -608,17 +614,129 @@ def grade_portfolio(returns_df, weights_arr, bench_ret=None, min_obs=MIN_RATIO_O
                 "category": label_map[key],
                 "score": round(sc, 1),
                 "weight": wt,
-                "grade": letter_grade(sc, settings),
+                "grade": _letter_for_cutoffs(sc, settings["letterCutoffs"]),
             })
     # Weights are relative, so report each one's share of the active total too.
     for item in breakdown:
         item["weight_pct"] = round(item["weight"] / total_w * 100, 1) if total_w > 0 else 0.0
 
     overall = round(total_s / total_w, 1) if total_w > 0 else 0.0
+    # Unrounded, for searches that need to see changes smaller than 0.1.
+    metrics["score_raw"] = total_s / total_w if total_w > 0 else 0.0
     metrics["grade"] = {
-        "overall": letter_grade(overall, settings),
+        "overall": _letter_for_cutoffs(overall, settings["letterCutoffs"]),
         "score": overall,
         "breakdown": breakdown,
         "settings": settings,
     }
     return metrics
+
+
+# ── Reaching a target grade ──────────────────────────────────────────────────
+
+# Grades a "what would it take" search can aim for, mapped to their cutoffs.
+GRADE_TARGET_CUTOFF_KEYS = {
+    "A+": "aPlus", "A": "a", "A-": "aMinus", "B+": "bPlus", "B": "b", "B-": "bMinus",
+    "C+": "cPlus", "C": "c",
+}
+
+
+def search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score, *,
+                             can_increase=None, max_weight=0.25, min_obs=MIN_RATIO_OBSERVATIONS,
+                             grading_settings=None, max_iterations=60, time_budget=10.0):
+    """Re-weight the holdings already in a portfolio until its grade reaches target_score.
+
+    Only weights change. Nothing that is not held (weight 0) is added, a holding
+    with can_increase False may shrink but not grow, and no holding grows past
+    max_weight. Each step pairs the holdings that raise the score fastest with
+    those that drag it most and moves the same amount across each pair (up to
+    three pairs at once, or the single best pair when that does better). The
+    step that reaches the target uses the smallest amount that does, so the
+    result stays close to the current mix. The search stops when the target is
+    reached ("reached"), no swap helps ("stuck"), or the iteration/time budget
+    runs out ("budget").
+
+    Returns None when nothing is held, else the final weights (fractions), their
+    score and letter grade, the starting score, and whether the target was met.
+    """
+    import time
+
+    settings = normalize_grading_settings(grading_settings)
+    w = np.array(weights_arr, dtype=float)
+    total = float(w.sum())
+    if total <= 0:
+        return None
+    w = w / total
+    held = w > 0
+    growable = held.copy()
+    if can_increase is not None:
+        growable &= np.array(can_increase, dtype=bool)
+
+    def grade(vec):
+        pm = grade_portfolio(returns_df, vec, bench_ret, min_obs=min_obs, grading_settings=settings)
+        return pm["score_raw"], pm["grade"]["score"]
+
+    raw, shown = grade(w)
+    start = shown
+    deadline = time.monotonic() + time_budget
+    iterations = 0
+    probe = 0.01
+    stop = "reached" if shown >= target_score else None
+    while stop is None:
+        if iterations >= max_iterations or time.monotonic() > deadline:
+            stop = "budget"
+            break
+        iterations += 1
+        # How fast the score moves when 1% of the portfolio shifts into each holding.
+        slopes = {}
+        for i in np.flatnonzero(held):
+            mixed = (1 - probe) * w
+            mixed[i] += probe
+            slopes[i] = (grade(mixed)[0] - raw) / probe
+        buyers = sorted((i for i in slopes if growable[i] and w[i] < max_weight - 1e-9),
+                        key=lambda i: -slopes[i])
+        sellers = sorted((j for j in slopes if w[j] > 1e-9), key=lambda j: slopes[j])
+        # Steepest buyer with flattest seller, next with next, never reusing one.
+        pairs, used = [], set()
+        for i, j in zip(buyers, sellers):
+            if len(pairs) == 3:
+                break
+            if i != j and i not in used and j not in used and slopes[i] > slopes[j]:
+                pairs.append((i, j, min(w[j], max_weight - w[i])))
+                used.update((i, j))
+        best = None      # (raw, shown, weights): the biggest gain
+        reaching = None  # ((moved, -raw), raw, shown, weights): the smallest move that reaches the target
+        for batch in ([pairs] + ([pairs[:1]] if len(pairs) > 1 else [])) if pairs else []:
+            most = max(limit for _, _, limit in batch)
+            for step in sorted({a for a in (0.005, 0.01, 0.02, 0.04, 0.08) if a < most} | {most}):
+                trial = w.copy()
+                moved = 0.0
+                for i, j, limit in batch:
+                    amount = min(step, limit)
+                    trial[i] += amount
+                    trial[j] -= amount
+                    moved += amount
+                trial_raw, trial_shown = grade(trial)
+                if trial_shown >= target_score:
+                    key = (moved, -trial_raw)
+                    if reaching is None or key < reaching[0]:
+                        reaching = (key, trial_raw, trial_shown, trial)
+                    break  # a bigger step of this same batch only moves more
+                if trial_raw > raw + 1e-9 and (best is None or trial_raw > best[0]):
+                    best = (trial_raw, trial_shown, trial)
+        if reaching is not None:
+            _, raw, shown, w = reaching
+            stop = "reached"
+        elif best is not None:
+            raw, shown, w = best
+        else:
+            stop = "stuck"
+    return {
+        "weights": w,
+        "score": shown,
+        "grade": letter_grade(shown, settings),
+        "start_score": start,
+        "reached": shown >= target_score,
+        "stopped": stop,
+        "iterations": iterations,
+    }

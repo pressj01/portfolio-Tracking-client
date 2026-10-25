@@ -1,6 +1,7 @@
 import sqlite3
 import sys
 import tempfile
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,12 +14,15 @@ import app as app_module
 from grading import min_observations_for_window, portfolio_returns_frame
 
 
-def _blank_coverage(*_args, **_kwargs):
-    return {
-        "results": [],
-        "aggregate_coverage": None,
-        "aggregate_severity": None,
-    }
+def json_dump(value):
+    return json.dumps(value, sort_keys=True)
+
+
+def _blank_nav_assessment(*_args, **_kwargs):
+    # The shared NAV assessment downloads NAV and reference histories; tests
+    # that are not about it get an empty one.
+    return {"verdict": {"label": "No NAV erosion", "holdings": {"implicated": []}, "nav_lag": []},
+            "results": []}, True
 
 
 def _market_frame(periods, start="2026-07-27"):
@@ -128,12 +132,12 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
 
         self.orig_connection = app_module.get_connection
         self.orig_download = app_module._chunked_yf_download
-        self.orig_coverage = app_module._build_nav_coverage_payload
+        self.orig_nav = app_module._analytics_nav_assessment
         self.orig_testing = app_module.app.testing
         self.orig_initialized = getattr(app_module.app, "_db_initialized", False)
         app_module.get_connection = self._get_connection
         app_module._chunked_yf_download = self._download
-        app_module._build_nav_coverage_payload = _blank_coverage
+        app_module._analytics_nav_assessment = _blank_nav_assessment
         app_module.app.testing = True
         app_module.app._db_initialized = True
         app_module._PORTFOLIO_SUMMARY_CACHE.clear()
@@ -143,7 +147,7 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
     def tearDown(self):
         app_module.get_connection = self.orig_connection
         app_module._chunked_yf_download = self.orig_download
-        app_module._build_nav_coverage_payload = self.orig_coverage
+        app_module._analytics_nav_assessment = self.orig_nav
         app_module.app.testing = self.orig_testing
         app_module.app._db_initialized = self.orig_initialized
         app_module._PORTFOLIO_SUMMARY_CACHE.clear()
@@ -271,6 +275,181 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         self.assertTrue(payload.get("window_too_short"), payload)
         self.assertEqual(payload.get("metrics") or [], [])
         self.assertFalse((payload.get("portfolio_metrics") or {}).get("grade", {}).get("overall"))
+
+    @patch("yfinance.Ticker")
+    def test_nav_findings_and_lag_come_from_the_shared_assessment(self, ticker_mock):
+        # Analytics shows the Dashboard's verdict and per-fund finding, NAV lag
+        # included; it no longer computes its own coverage ratio.
+        ticker_mock.return_value.info = {}
+        verdict = {
+            "label": "Weak NAV Erosion", "strength": "weak", "probability": 33,
+            "holdings": {"implicated": [{"ticker": "AAA", "label": "Estimated covered-call eroder"}]},
+            "nav_lag": [{"ticker": "BBB", "detail": "+2.0% price vs +9.0% QQQ"}],
+        }
+        findings = {
+            "AAA": {"code": "estimated_eroder", "label": "Estimated covered-call eroder", "tone": "neg"},
+            "BBB": {"code": "nav_lag", "label": "NAV lag", "tone": "lag"},
+            "CCC": {"code": "no_signal", "label": "No erosion signal", "tone": "ok"},
+        }
+
+        def shared(*_args, **_kwargs):
+            return {"verdict": verdict, "as_of": "2026-08-27", "requested_start": "2026-07-27",
+                    "results": [{"ticker": t, "finding": f, "reference": {"selected": "QQQ"}}
+                                for t, f in findings.items()]}, True
+
+        app_module._analytics_nav_assessment = shared
+        response = self._post_analytics("1mo")
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        self.assertNotIn("coverage", payload)
+        nav = payload["nav_assessment"]
+        self.assertEqual(nav["verdict"]["label"], "Weak NAV Erosion")
+        self.assertEqual(nav["verdict"]["nav_lag"][0]["ticker"], "BBB")
+        self.assertEqual({r["ticker"]: r["finding"]["code"] for r in nav["results"]},
+                         {"AAA": "estimated_eroder", "BBB": "nav_lag", "CCC": "no_signal"})
+        self.assertEqual(nav["flagged"], ["AAA"])
+        self.assertTrue(nav["whole_portfolio"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_reweights_only_existing_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _market_frame(80, start="2025-08-27")
+        response = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "BBB", "CCC", "SPY"], "benchmark": "SPY", "period": "1y",
+                  "mode": "target_grade", "target_grade": "A+"},
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200, payload)
+        opt = payload["optimization"]
+        target = opt["target"]
+        self.assertEqual(target["letter"], "A+")
+        self.assertIn(target["status"], {"already", "reached", "unreachable"})
+        self.assertEqual(target["start_grade"], payload["portfolio_metrics"]["grade"]["overall"])
+        # SPY is on the list but not held, so it is neither bought nor shown.
+        self.assertEqual(sorted(w["ticker"] for w in opt["weights"]), ["AAA", "BBB", "CCC"])
+        self.assertIn("SPY", target["not_held"])
+        self.assertAlmostEqual(sum(w["optimal_pct"] for w in opt["weights"]), 100, delta=0.1)
+        self.assertEqual(opt["comparison"]["after"]["score"], target["score"])
+        # Every move the search made is listed, so the listed adds add up to the total shifted.
+        added = sum(w["dollar_change"] for w in opt["weights"] if w["action"] == "BUY")
+        self.assertAlmostEqual(added, target["moved_value"], delta=max(1.0, target["moved_value"] * 0.01))
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_reports_no_owned_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["SPY", "QQQ"], "mode": "target_grade", "target_grade": "A"},
+        ).get_json()
+        self.assertEqual(payload["optimization"]["target"]["status"], "no_holdings")
+        self.assertCountEqual(payload["optimization"]["target"]["not_held"], ["SPY", "QQQ"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_explains_insufficient_history(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _market_frame(8)
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "BBB"], "mode": "target_grade", "period": "1mo"},
+        ).get_json()
+        self.assertEqual(payload["optimization"]["target"]["status"], "insufficient_history")
+        self.assertCountEqual(payload["optimization"]["target"]["ungraded"], ["AAA", "BBB"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_answers_when_only_one_ticker_has_data(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "MISSING"], "mode": "target_grade", "target_grade": "A+"},
+        ).get_json()
+        opt = payload["optimization"]
+        self.assertIn(opt["target"]["status"], {"already", "unreachable"})
+        self.assertEqual(len(opt["weights"]), 1)
+        self.assertEqual(opt["weights"][0]["action"], "HOLD")
+        self.assertEqual(opt["target"]["moved_value"], 0)
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_never_increases_penny_or_stale_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        for field in ("Close", "Adj Close"):
+            self.market_data[(field, "CCC")] = np.linspace(0.2, 0.5, len(self.market_data))
+        response = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+        )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200, payload)
+        target = payload["optimization"]["target"]
+        self.assertIn("CCC", {b["ticker"] for b in target["blocked"]})
+        weight = next(w for w in payload["optimization"]["weights"] if w["ticker"] == "CCC")
+        self.assertLessEqual(weight["optimal_pct"], weight["current_pct"] + 1e-9)
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_preserves_small_dollar_shifts_and_grade_drivers(self, ticker_mock):
+        from grading import grade_portfolio
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+
+        def small_shift(returns, values, bench, target, **kwargs):
+            weights = values / values.sum()
+            start_score = grade_portfolio(returns, weights, bench)["grade"]["score"]
+            weights[0] += 0.0002
+            weights[1] -= 0.0002
+            grade = grade_portfolio(returns, weights, bench)["grade"]
+            return {"weights": weights, "score": grade["score"], "grade": grade["overall"],
+                    "start_score": start_score, "reached": grade["score"] >= target, "stopped": "budget"}
+
+        with patch("grading.search_weights_for_grade", side_effect=small_shift):
+            payload = self.client.post(
+                "/api/analytics/data?profile_id=1",
+                json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+            ).get_json()
+        opt = payload["optimization"]
+        actions = {w["ticker"]: w for w in opt["weights"]}
+        self.assertEqual(actions["AAA"]["action"], "BUY")
+        self.assertEqual(actions["BBB"]["action"], "SELL")
+        self.assertEqual(actions["CCC"]["action"], "HOLD")
+        self.assertEqual(actions["AAA"]["dollar_change"], 0.70)
+        self.assertEqual(actions["BBB"]["dollar_change"], -0.70)
+        self.assertEqual(opt["target"]["moved_value"], 0.70)
+        self.assertEqual(opt["rebalance_summary"]["total_buy"], opt["rebalance_summary"]["total_sell"])
+        self.assertTrue(opt["comparison"]["before"]["breakdown"])
+        self.assertTrue(opt["comparison"]["after"]["breakdown"])
+        self.assertEqual(opt["comparison"]["after"]["score"], opt["target"]["score"])
+
+    @patch("yfinance.Ticker")
+    def test_nav_request_matches_the_dashboard_for_the_whole_portfolio(self, ticker_mock):
+        # Same funds, references, dates and cash reach _run_nav_assessment from
+        # the Dashboard route and from Analytics.
+        ticker_mock.return_value.info = {}
+        app_module._analytics_nav_assessment = self.orig_nav
+        calls = []
+        info = {t: {"current_value": v, "quantity": 1.0} for t, v in (("AAA", 1200.0), ("BBB", 1800.0), ("CCC", 500.0))}
+
+        def inputs(_conn, _agg, _pids, tickers=None):
+            chosen = info if tickers is None else {t: dict(info[t]) for t in tickers}
+            return chosen, {"AAA": {"choice": {"mode": "manual", "symbol": "SPY"}}}, 250.0
+
+        def run(info_arg, choices, cash, *, window, start_date, as_of):
+            calls.append((json_dump(info_arg), choices, cash, window, start_date, as_of))
+            return {"verdict": {"holdings": {"implicated": []}, "nav_lag": []},
+                    "results": [], "summary": {}, "overall": {}}
+
+        with patch.object(app_module, "_nav_assessment_inputs", inputs),                 patch.object(app_module, "_run_nav_assessment", run):
+            app_module._NAV_ASSESSMENT_CACHE.clear()
+            dashboard = self.client.get("/api/nav-assessment?profile_id=1&period=1y")
+            app_module._NAV_ASSESSMENT_CACHE.clear()
+            analytics = self._post_analytics("1y")
+
+        self.assertEqual(dashboard.status_code, 200, dashboard.get_json())
+        self.assertEqual(analytics.status_code, 200, analytics.get_json())
+        self.assertEqual(len(calls), 2, calls)
+        self.assertEqual(calls[0], calls[1])
+        self.assertEqual(calls[0][2], 250.0)
 
     @patch("yfinance.Ticker")
     def test_crypto_nav_benchmarks_are_not_pulled_into_the_grade(self, ticker_mock):
@@ -457,3 +636,17 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptimizerNavGateTest(unittest.TestCase):
+    def test_only_funds_the_shared_assessment_flags_are_penalized(self):
+        # A falling fund that is NAV lag or a market drop (not flagged) gets no
+        # erosion penalty; a flagged one is penalized by its price decline.
+        dates = pd.bdate_range("2025-10-01", periods=120)
+        falling = np.linspace(100, 70, len(dates))
+        close = pd.DataFrame({"LAGG": falling, "ERDR": falling}, index=dates)
+
+        rates = app_module._compute_nav_erosion(close, ["LAGG", "ERDR"], eligible={"ERDR"})
+
+        self.assertEqual(rates["LAGG"], 0.0)
+        self.assertLess(rates["ERDR"], -0.3)
