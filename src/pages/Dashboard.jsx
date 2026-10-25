@@ -32,12 +32,14 @@ import {
   formatAccountingCoverage,
   formatCoverageShortfall,
   isCoverageMaterial,
-  formatPerformanceChartRange,
+  formatPerformanceDate,
   formatPerformanceRange,
+  performancePeriodWindow,
   readSharedPerformanceRange,
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import useSharedTrackerCharts from '../utils/useSharedTrackerCharts'
 import { lifetimeTotalReturnPayload } from '../utils/lifetimePerformance'
 import GradePeriodHelp from '../components/GradePeriodHelp'
@@ -51,6 +53,7 @@ import {
   NAV_HISTORY_INTERVALS,
   isNavHistoryInterval,
   navHistoryCallouts,
+  navHistoryForWindow,
   resampleNavHistory,
   totalReturnGapLines,
   withLiveNavPoint,
@@ -911,6 +914,7 @@ export default function Dashboard() {
     setGradeCustomEnd(next.end)
   })
 
+  const periodUnavailable = usePerformancePeriodAvailability()
   const gradeRangeError = customRangeError(gradePeriod, gradeCustomStart, gradeCustomEnd)
   const trackerChartsEnabled = (
     holdings.length > 0
@@ -1707,13 +1711,19 @@ export default function Dashboard() {
   const liveNavDate = portfolioValue?.live_nav_date || null
   const liveAccountValue = portfolioValue?.account_value ?? null
   const totalReturnGaps = useMemo(() => totalReturnGapLines(navHistory), [navHistory])
-
-  useEffect(() => {
-    const el = navChartRef.current
-    if (!el || !window.Plotly || navHistory.length < 1) return
+  // The chart follows the Shared Performance Date Range above it. All Market
+  // and Open G/L have no fixed start, so they show every recorded value.
+  const navChartWindow = useMemo(
+    () => performancePeriodWindow(gradePeriod, { start: gradeCustomStart, end: gradeCustomEnd }),
+    [gradePeriod, gradeCustomStart, gradeCustomEnd],
+  )
+  const navChartPoints = useMemo(() => {
     const isTotalReturn = navReturnMode === 'total'
-    const history = withLiveNavPoint(navHistory, { date: liveNavDate, value: liveAccountValue })
-    const points = resampleNavHistory(history
+    const history = navHistoryForWindow(
+      withLiveNavPoint(navHistory, { date: liveNavDate, value: liveAccountValue }),
+      navChartWindow,
+    )
+    return resampleNavHistory(history
       .map(r => ({
         date: r.date,
         value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
@@ -1722,7 +1732,14 @@ export default function Dashboard() {
         liveNote: r.source === 'live' ? '<br><i>Live value, not yet recorded</i>' : '',
       }))
       .filter(r => r.date && Number.isFinite(r.value)), navHistoryInterval)
-    if (points.length < 1) return
+  }, [navHistory, liveNavDate, liveAccountValue, navReturnMode, navHistoryInterval, navChartWindow])
+  const navChartPeriodLabel = PERFORMANCE_PERIODS.find(option => option.key === gradePeriod)?.label || ''
+
+  useEffect(() => {
+    const el = navChartRef.current
+    const points = navChartPoints
+    if (!el || !window.Plotly || points.length < 1) return
+    const isTotalReturn = navReturnMode === 'total'
 
     const dates = points.map(r => r.date)
     const values = points.map(r => r.value)
@@ -1780,10 +1797,15 @@ export default function Dashboard() {
       if (callout.role === 'current') return isDark ? '#7ecfff' : '#0369a1'
       return ct.title
     }
+    // A custom range that ends before today ends on its own last value, not on
+    // the current one.
+    const latestName = gradePeriod === 'custom' && navChartWindow && navChartWindow.end < todayInputValue()
+      ? 'End'
+      : 'Current'
     const extremaAnnotations = (range = xRange, plotWidth = Math.max(160, chartWidth - 110)) => {
       const start = range ? dateTime(range[0]) : -Infinity
       const end = range ? dateTime(range[1]) : Infinity
-      return navHistoryCallouts(points, { start, end, dateTime, plotWidth }).map((callout) => {
+      return navHistoryCallouts(points, { start, end, dateTime, plotWidth, latestName }).map((callout) => {
         const color = calloutColor(callout)
         return {
           x: callout.point.date, y: callout.point.value, xref: 'x', yref: 'y',
@@ -1812,12 +1834,17 @@ export default function Dashboard() {
       xaxis.dtick = tickStepDays * oneDayMs
     }
     if (xRange) xaxis.range = xRange
-    const chartRange = formatPerformanceChartRange(
-      dates[0],
-      dates[dates.length - 1],
-      dates[0],
-      dates[dates.length - 1],
-    )
+    // Name the shared range, and say so when the recorded history starts well
+    // after it: a 1Y view of five months of snapshots must not read as a year.
+    const recordedRange = `${formatPerformanceDate(dates[0])} to ${formatPerformanceDate(dates[dates.length - 1])}`
+    const historyStartsLate = navChartWindow
+      && dateTime(dates[0]) - dateTime(navChartWindow.start) > 7 * oneDayMs
+    let chartRange = `${navChartPeriodLabel} · From ${recordedRange}`
+    if (isLifetimePerformancePeriod(gradePeriod)) {
+      chartRange = `Open G/L has no date range · All recorded values, from ${recordedRange}`
+    } else if (historyStartsLate) {
+      chartRange = `${navChartPeriodLabel} range starts ${formatPerformanceDate(navChartWindow.start)} · Recorded values from ${recordedRange}`
+    }
     const layout = {
       template: ct.template,
       paper_bgcolor: ct.paper, plot_bgcolor: ct.plot,
@@ -1880,7 +1907,7 @@ export default function Dashboard() {
         // Plot cleanup should not affect dashboard rendering.
       }
     }
-  }, [navHistory, liveNavDate, liveAccountValue, navReturnMode, navHistoryInterval, isDark])
+  }, [navChartPoints, navChartWindow, navChartPeriodLabel, gradePeriod, navReturnMode, isDark])
 
   if (loading) {
     return <div className="page" style={{ textAlign: 'center', padding: '3rem' }}><span className="spinner" /></div>
@@ -2153,14 +2180,15 @@ export default function Dashboard() {
       <div className="growth-filters" style={{ marginBottom: '0.5rem' }}>
         <div className="growth-filter-group">
           <label>Shared Performance Date Range</label>
-          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
+          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none', flexWrap: 'wrap' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
                 key={option.key}
                 className={`tab${gradePeriod === option.key ? ' active' : ''}`}
                 onClick={() => setGradePeriod(option.key)}
                 style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
-                title={option.hint}
+                disabled={Boolean(periodUnavailable(option.key))}
+                title={periodUnavailable(option.key) || option.hint}
               >
                 {option.label}
               </button>
@@ -2647,7 +2675,13 @@ export default function Dashboard() {
             </div>
           </div>
         )}
-        {navHistory.length >= 1 ? <div ref={navChartRef} /> : (
+        {navHistory.length >= 1 && navChartPoints.length >= 1 ? <div ref={navChartRef} /> : navHistory.length >= 1 ? (
+          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '1rem 0' }}>
+            No values were recorded in the selected {navChartPeriodLabel} range
+            {navChartWindow ? ` (${formatPerformanceRange(navChartWindow.start, navChartWindow.end)})` : ''}.
+            Pick a different Shared Performance Date Range above to see the chart.
+          </p>
+        ) : (
           <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', margin: '1rem 0' }}>
             No NAV snapshots yet. Click "Record NAV" or import data to start tracking.
           </p>

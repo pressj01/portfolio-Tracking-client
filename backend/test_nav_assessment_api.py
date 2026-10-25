@@ -205,7 +205,7 @@ class NavAssessmentApiTest(unittest.TestCase):
                 self.assertEqual(self.client.get('/api/nav-assessment?'+query).status_code, 400)
 
     def test_every_shared_preset_resolves_through_the_common_period_policy(self):
-        for period in ('1d','7d','1m','3m','6m','ytd','1y','5y'):
+        for period in ('1d','7d','1m','3m','6m','ytd','1y','2y','3y','5y','6y','7y','8y','9y','10y'):
             with self.subTest(period=period):
                 data = self.client.get('/api/nav-assessment?period='+period).get_json()
                 expected = module._resolve_total_return_period(period)

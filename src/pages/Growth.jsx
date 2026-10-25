@@ -24,6 +24,7 @@ import {
   todayInputValue,
 } from '../utils/performancePeriods'
 import useSharedPerformanceRange from '../utils/useSharedPerformanceRange'
+import usePerformancePeriodAvailability from '../utils/usePerformancePeriodAvailability'
 import {
   fetchHoldingsJson,
   lifetimeGrowthPayload,
@@ -95,6 +96,7 @@ function ReturnCard({ label, value, dollarValue, benchLabel, benchValue, range, 
 
 export default function Growth({ embedded = false }) {
   const pf = useProfileFetch()
+  const periodUnavailable = usePerformancePeriodAvailability()
   const { selection } = useProfile()
   const { isDark } = useTheme()
   const [initialCustomDates] = useState(() => readSharedPerformanceRange())
@@ -494,14 +496,15 @@ export default function Growth({ embedded = false }) {
         </div>
         <div className="growth-filter-group">
           <label>Shared Performance Date Range</label>
-          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none' }}>
+          <div className="tabs" style={{ marginBottom: 0, borderBottom: 'none', flexWrap: 'wrap' }}>
             {PERFORMANCE_PERIODS.map(option => (
               <button
                 key={option.key}
                 className={`tab${period === option.key ? ' active' : ''}`}
                 onClick={() => setPeriod(option.key)}
                 style={{ padding: '0.3rem 0.8rem', fontSize: '0.85rem' }}
-                title={option.hint}
+                disabled={Boolean(periodUnavailable(option.key))}
+                title={periodUnavailable(option.key) || option.hint}
               >
                 {option.label}
               </button>

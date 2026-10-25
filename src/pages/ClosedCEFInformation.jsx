@@ -755,7 +755,12 @@ export default function ClosedCEFInformation() {
     fetch(`${API_BASE}/api/closed-cef/pricing`, { cache: 'no-store' })
       .then(async r => {
         const payload = await r.json()
-        if (!r.ok || payload.error) throw new Error(payload.error || 'Could not load CEF pricing.')
+        if (!r.ok || payload.error) {
+          const message = payload.error === 'Internal server error' && payload.detail
+            ? payload.detail
+            : (payload.error || payload.detail || 'Could not load CEF pricing.')
+          throw new Error(message)
+        }
         setData(payload)
       })
       .catch(e => setError(e.message))
