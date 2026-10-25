@@ -276,18 +276,19 @@ def create_generic_transactions_template():
         "Price Per Share",
         "Fees",
         "Amount",
+        "Split Ratio",
         "Notes",
     ]
     coverage_start = date(2026, 1, 14)
     coverage_end = date(2026, 3, 12)
     sample_rows = [
-        [date(2026, 1, 14), None, coverage_start, coverage_end, "DEPOSIT", None, None, None, None, 5000.00, "Transfer from checking"],
-        [date(2026, 1, 15), None, coverage_start, coverage_end, "BUY", "SCHD", 10, 27.50, 0.00, None, "Initial purchase"],
-        [date(2026, 2, 3), date(2026, 1, 30), coverage_start, coverage_end, "DIVIDEND", "SCHD", None, None, None, 8.25, "Cash dividend received"],
-        [date(2026, 2, 3), None, coverage_start, coverage_end, "DRIP", "SCHD", 0.30, 27.50, 0.00, None, "Dividend reinvestment shares"],
-        [date(2026, 2, 20), None, coverage_start, coverage_end, "TRANSFER IN", "JEPI", 20, None, None, None, "Shares moved from another broker"],
-        [date(2026, 3, 10), None, coverage_start, coverage_end, "SELL", "SCHD", 2, 29.00, 0.05, None, "Partial sale"],
-        [date(2026, 3, 12), None, coverage_start, coverage_end, "WITHDRAWAL", None, None, None, None, 250.00, "Transfer to checking"],
+        [date(2026, 1, 14), None, coverage_start, coverage_end, "DEPOSIT", None, None, None, None, 5000.00, None, "Transfer from checking"],
+        [date(2026, 1, 15), None, coverage_start, coverage_end, "BUY", "SCHD", 10, 27.50, 0.00, None, None, "Initial purchase"],
+        [date(2026, 2, 3), date(2026, 1, 30), coverage_start, coverage_end, "DIVIDEND", "SCHD", None, None, None, 8.25, None, "Cash dividend received"],
+        [date(2026, 2, 3), None, coverage_start, coverage_end, "DRIP", "SCHD", 0.30, 27.50, 0.00, None, None, "Dividend reinvestment shares"],
+        [date(2026, 2, 20), None, coverage_start, coverage_end, "TRANSFER IN", "JEPI", 20, None, None, None, None, "Shares moved from another broker"],
+        [date(2026, 3, 10), None, coverage_start, coverage_end, "SELL", "SCHD", 2, 29.00, 0.05, None, None, "Partial sale"],
+        [date(2026, 3, 12), None, coverage_start, coverage_end, "WITHDRAWAL", None, None, None, None, 250.00, None, "Transfer to checking"],
     ]
 
     header_fill = PatternFill(start_color="0F3D63", end_color="0F3D63", fill_type="solid")
@@ -307,10 +308,10 @@ def create_generic_transactions_template():
             cell.font = input_font
             cell.border = bottom_border
             cell.alignment = Alignment(
-                horizontal="left" if col_idx in {5, 6, 11} else "right"
+                horizontal="left" if col_idx in {5, 6, 12} else "right"
             )
 
-    ws.auto_filter.ref = f"A1:K{len(sample_rows) + 1}"
+    ws.auto_filter.ref = f"A1:L{len(sample_rows) + 1}"
     ws.column_dimensions["A"].width = 14
     ws.column_dimensions["B"].width = 14
     ws.column_dimensions["C"].width = 16
@@ -321,23 +322,30 @@ def create_generic_transactions_template():
     ws.column_dimensions["H"].width = 18
     ws.column_dimensions["I"].width = 12
     ws.column_dimensions["J"].width = 19
-    ws.column_dimensions["K"].width = 34
+    ws.column_dimensions["K"].width = 14
+    ws.column_dimensions["L"].width = 34
     ws.column_dimensions["A"].number_format = "yyyy-mm-dd"
+    # Text, so a typed 20:1 stays a ratio instead of becoming the time 20:01.
+    ws.column_dimensions["K"].number_format = "@"
     for row_idx in range(2, len(sample_rows) + 2):
         for col_idx in (1, 2, 3, 4):
             ws.cell(row=row_idx, column=col_idx).number_format = "yyyy-mm-dd"
         ws.cell(row=row_idx, column=7).number_format = "#,##0.0000"
         for col_idx in (8, 9, 10):
             ws.cell(row=row_idx, column=col_idx).number_format = "$#,##0.00;[Red]($#,##0.00);-"
+        ws.cell(row=row_idx, column=11).number_format = "@"
 
     type_validation = DataValidation(
         type="list",
-        formula1='"BUY,SELL,DIVIDEND,DRIP,DEPOSIT,WITHDRAWAL,TRANSFER IN,TRANSFER OUT,FEE,INTEREST"',
+        formula1=(
+            '"BUY,SELL,DIVIDEND,DRIP,DEPOSIT,WITHDRAWAL,TRANSFER IN,TRANSFER OUT,'
+            'FEE,INTEREST,SPLIT,REVERSE SPLIT"'
+        ),
         allow_blank=False,
     )
     type_validation.error = (
         "Choose BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, "
-        "TRANSFER OUT, FEE, or INTEREST."
+        "TRANSFER OUT, FEE, INTEREST, SPLIT, or REVERSE SPLIT."
     )
     type_validation.errorTitle = "Invalid transaction type"
     type_validation.prompt = "Select the kind of transaction."
@@ -373,7 +381,8 @@ def create_generic_transactions_template():
         ["Coverage End", "Recommended", "Last date for which this file contains complete broker activity and distributions.", "2026-03-31"],
         [
             "Type", "Yes", "Determines how the row affects holdings, income, and account cash flows.",
-            "BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, or INTEREST",
+            "BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, "
+            "INTEREST, SPLIT, or REVERSE SPLIT",
         ],
         [
             "Ticker", "Securities only",
@@ -397,6 +406,16 @@ def create_generic_transactions_template():
             "positive number; the type decides whether money came in or went out (INTEREST "
             "keeps its sign, so margin interest charged can be negative).",
             "8.25 or 5000",
+        ],
+        [
+            "Split Ratio", "SPLIT rows",
+            "New shares per old share. The cost-basis ledger does not adjust for splits, so a "
+            "SPLIT row restates that ticker's earlier BUY, SELL, and DRIP rows in post-split "
+            "shares: shares are multiplied by the ratio and the price divided by it, leaving the "
+            "cost unchanged. Rows dated before the split are restated, as are rows on the same "
+            "date listed above the SPLIT row. Dividends are left as they are. A REVERSE SPLIT "
+            "row accepts the ratio either way round.",
+            "20:1 or 20 (20-for-1); 1:10 or 0.1 (1-for-10)",
         ],
         ["Notes", "No", "Optional description saved with the transaction.", "Initial purchase"],
     ]
