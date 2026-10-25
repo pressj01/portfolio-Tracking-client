@@ -76,6 +76,22 @@ class SearchWeightsForGradeTest(unittest.TestCase):
         returns, bench, weights = _portfolio()
         self.assertIsNone(search_weights_for_grade(returns, weights * 0, bench, 80, min_obs=30))
 
+    def test_no_eligible_recipient_leaves_the_mix_unchanged(self):
+        returns, bench, weights = _portfolio()
+        out = search_weights_for_grade(returns, weights, bench, 101,
+                                       can_increase=[False] * len(weights))
+        self.assertFalse(out["reached"])
+        self.assertEqual(out["stopped"], "stuck")
+        np.testing.assert_allclose(out["weights"], weights / weights.sum())
+
+    def test_expired_search_budget_reports_a_limit_without_claiming_success(self):
+        returns, bench, weights = _portfolio()
+        out = search_weights_for_grade(returns, weights, bench, 101, time_budget=0)
+        self.assertFalse(out["reached"])
+        self.assertEqual(out["stopped"], "budget")
+        self.assertEqual(out["iterations"], 0)
+        np.testing.assert_allclose(out["weights"], weights / weights.sum())
+
 
 if __name__ == "__main__":
     unittest.main()

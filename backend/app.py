@@ -49463,6 +49463,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
     before = {
         "grade": grade_before.get("overall", "—") if isinstance(grade_before, dict) else str(grade_before),
         "score": grade_before.get("score", 0) if isinstance(grade_before, dict) else 0,
+        "breakdown": grade_before.get("breakdown", []) if isinstance(grade_before, dict) else [],
         "sharpe": pm.get("sharpe"),
         "sortino": pm.get("sortino"),
         "omega": pm.get("omega"),
@@ -49499,6 +49500,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         "after": {
             "grade": pm_after.get("grade", {}).get("overall", "—"),
             "score": pm_after.get("grade", {}).get("score", 0),
+            "breakdown": pm_after.get("grade", {}).get("breakdown", []),
             "sharpe": pm_after.get("sharpe"),
             "sortino": pm_after.get("sortino"),
             "omega": pm_after.get("omega"),
@@ -49910,7 +49912,9 @@ def analytics_data():
     port_metrics = {}
     result_corr = None
     result_dd = None
-    if len(available_tickers) >= 2:
+    grade_tickers = []
+    graded_returns = pd.DataFrame()
+    if len(available_tickers) >= 1:
         # Match Dashboard: adjusted prices, current-value weights, and zero
         # return on dates before a newer holding has its first quote. Pairwise
         # correlation below still uses the raw (unfilled) returns so a young
@@ -50085,7 +50089,7 @@ def analytics_data():
             result["portfolio_type"] = "mixed"
 
     # Optimization modes
-    if mode in ("optimize_returns", "optimize_income", "optimize_balanced", "target_grade") and len(available_tickers) >= 2:
+    if mode in ("optimize_returns", "optimize_income", "optimize_balanced", "target_grade") and (len(available_tickers) >= 2 or mode == "target_grade"):
         returns_df = close[available_tickers].pct_change().dropna()
         current_weights = np.array([weight_map.get(t, 0) for t in available_tickers])
         cw_sum = current_weights.sum()
@@ -50093,7 +50097,7 @@ def analytics_data():
         if has_portfolio:
             current_weights = current_weights / cw_sum
         else:
-            current_weights = np.ones(len(available_tickers)) / len(available_tickers)
+            current_weights = np.ones(len(available_tickers)) / max(len(available_tickers), 1)
 
         # Erosion penalties apply only to funds the shared NAV assessment flags
         # (never NAV lag); the size of each still comes from its price decline.
@@ -50300,17 +50304,25 @@ def analytics_data():
                 "start_grade": start_grade.get("overall"), "start_score": start_grade.get("score"),
                 "max_weight_pct": round(max_weight * 100),
                 # Listed but not held, or held without enough history to grade.
-                "not_held": [t for t in grade_tickers if value_map.get(t, 0) <= 0],
+                "not_held": [t for t in tickers if value_map.get(t, 0) <= 0],
                 "ungraded": [t for t in tickers if value_map.get(t, 0) > 0 and t not in grade_tickers],
             }
             if grade_values.sum() <= 0:
-                result["optimization"] = {"target": {**target, "status": "no_holdings"}}
+                status = "insufficient_history" if target["ungraded"] else "no_holdings"
+                result["optimization"] = {"target": {**target, "status": status}}
             else:
                 blocked = {}
+                # ticker_score rejects penny, collapsed and stale price series.
+                # Their near-zero variance can still flatter a portfolio's ratios,
+                # so the target search must not allocate more money to them.
+                ungradeable = {m["ticker"] for m in metrics
+                               if m.get("sharpe") is None and m.get("ulcer_index") is None}
                 for t in grade_tickers:
                     if value_map.get(t, 0) <= 0:
                         continue
-                    if t in single_stock_etfs:
+                    if t in ungradeable:
+                        blocked[t] = "unreliable or distressed price history"
+                    elif t in single_stock_etfs:
                         blocked[t] = "single-stock ETF"
                     elif nav_flagged and t in nav_flagged:
                         blocked[t] = "flagged for NAV erosion"
@@ -50322,10 +50334,12 @@ def analytics_data():
                 graded_value = float(grade_values.sum())
                 current = grade_values / graded_value
                 model = found["weights"]
-                weights_out = [{"ticker": t, "current_pct": round(current[i] * 100, 2),
-                                "optimal_pct": round(model[i] * 100, 2)}
+                weights_out = [{"ticker": t, "current_pct": float(current[i] * 100),
+                                "optimal_pct": float(model[i] * 100)}
                                for i, t in enumerate(grade_tickers) if value_map.get(t, 0) > 0]
-                weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value)
+                # Preserve every searched move, including tiny positions and capped
+                # transfers. Dollar amounts use the actual weights, not rounded percents.
+                weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value, threshold=1e-8)
                 yields = np.array([yield_map.get(t, 0) for t in grade_tickers], dtype=float)
                 curr_income = float(current @ yields) * graded_value
                 opt_income = float(model @ yields) * graded_value

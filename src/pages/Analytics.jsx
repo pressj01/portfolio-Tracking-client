@@ -5,6 +5,7 @@ import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
 import ToolsPanel from './analytics/ToolsPanel'
+import GradeImprovementPanel from './analytics/GradeImprovementPanel'
 import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 import { gradingSettingsPayload } from '../utils/gradingPreferences'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
@@ -86,6 +87,11 @@ function metricColor(val, thresholds, lowerBetter = false) {
 }
 
 export default function Analytics() {
+  const { profileQueryString } = useProfile()
+  return <AnalyticsForProfile key={profileQueryString} />
+}
+
+function AnalyticsForProfile() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
   const dialog = useDialog()
@@ -108,16 +114,27 @@ export default function Analytics() {
   // Period buttons stay live during a run, so two requests can overlap. Only the
   // newest may write state; otherwise a slow 1M reply can land under a 1Y button.
   const requestSeq = useRef(0)
+  const gradePlanRef = useRef(null)
+  const optimizationDetailsRef = useRef(null)
+
+  useEffect(() => {
+    if (result?.optimization?.target && !loading) {
+      gradePlanRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [result, loading])
 
   // Load portfolio tickers on mount
   useEffect(() => {
+    let active = true
     pf('/api/holdings')
       .then(r => r.json())
       .then(d => {
+        if (!active) return
         const t = (d.holdings || d || []).map(h => h.ticker).filter(Boolean)
         setPortfolioTickers([...new Set(t)])
       })
       .catch(() => {})
+    return () => { active = false; requestSeq.current += 1 }
   }, [pf, selection])
 
   const addTicker = useCallback(() => {
@@ -151,14 +168,18 @@ export default function Analytics() {
     setError(null); setResult(null); setLoading(true)
     lastAnalyzedPeriod.current = period
     const body = { tickers: tickerList, benchmark, period, mode: runMode || mode, grading_settings: gradingSettingsPayload() }
-    if (runMode === 'optimize_balanced') body.balance = balance / 100
+    if ((runMode || mode) === 'optimize_balanced') body.balance = balance / 100
     if ((runMode || mode) === 'target_grade') body.target_grade = targetGrade
     pf('/api/analytics/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-      .then(r => r.json())
+      .then(async r => {
+        const d = await r.json()
+        if (!r.ok) throw new Error(d.error || `Server returned ${r.status}`)
+        return d
+      })
       .then(d => {
         if (seq !== requestSeq.current) return
         if (d.error) { setError(d.error); return }
@@ -226,7 +247,8 @@ export default function Analytics() {
     : mode === 'optimize_balanced' ? `Balanced (${runBalance}%)`
       : mode === 'optimize_income' ? 'Optimize Income' : 'Optimize Returns'
   const showYieldColumn = (result?.optimization?.weights || []).some(w => w.yield_pct != null)
-  const periodLabel = PERIODS.find(p => p.value === period)?.label || period
+  const resultPeriod = result?.data_window?.period || period
+  const periodLabel = PERIODS.find(p => p.value === resultPeriod)?.label || resultPeriod
   const runHint = tickers.length === 0
     ? 'Add a ticker or load your portfolio to enable Analyze.'
     : tickers.length === 1 ? 'The re-weighting tools need at least 2 tickers.' : null
@@ -313,11 +335,11 @@ export default function Analytics() {
           <p style={{ margin: '0 0 0.45rem' }}>
             Pick a grade (B by default) and click <strong>What would it take?</strong>, or use the prompt under the grade card
             when the portfolio is below it. It re-weights <strong>only the holdings you already own</strong>, on the same
-            period and benchmark as the grade, and makes the smallest moves it can that reach the grade: each step trims the
+            period and benchmark as the grade, and searches for a nearby mix with a higher score: each step trims the
             holdings that drag the score most and adds to the ones that lift it most. No holding grows past 25%, and
-            single-stock ETFs and funds flagged for NAV erosion can only shrink. Tickers on the list that you don&apos;t own
-            are left out. If the grade can&apos;t be reached within those limits, it says so and shows the best mix it found.
-            The result lists the holdings to add to and trim with dollar amounts, the before/after grade, and the same
+            single-stock ETFs, funds flagged for NAV erosion and holdings with unreliable or distressed price history can only shrink. Tickers on the list that you don&apos;t own
+            are left out. If the search does not find the target, it shows the best mix tested without claiming the target is impossible.
+            The answer appears directly below the controls and lists the holdings to add to and trim with dollar amounts, the before/after grade, income change, and the same
             scenario table as the optimizers. It is a model to study, not a recommendation to trade.
           </p>
           <p style={{ margin: '0 0 0.7rem' }}>
@@ -559,12 +581,20 @@ export default function Analytics() {
       {loading && (
         <div style={{ textAlign: 'center', padding: '2rem' }}>
           <span className="spinner" />
-          <div style={{ color: 'var(--text-dim)', marginTop: '0.5rem', fontSize: '0.85rem' }}>Fetching data & calculating metrics...</div>
+          <div role="status" style={{ color: 'var(--text-dim)', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+            Fetching data, calculating metrics and searching model weights. Your answer will appear directly below the controls.
+          </div>
         </div>
       )}
 
       {result && !loading && (
         <>
+          {targetResult && (
+            <div ref={gradePlanRef} style={{ scrollMarginTop: '5rem' }}>
+              <GradeImprovementPanel optimization={result.optimization} periodLabel={periodLabel}
+                onViewDetails={() => optimizationDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
+            </div>
+          )}
           {/* Portfolio Grade + Quick Stats */}
           {grade.overall && (
             <div className="card" style={{ padding: '1rem', marginBottom: '1rem' }}>
@@ -980,7 +1010,7 @@ export default function Analytics() {
 
           {/* Optimization results */}
           {result.optimization && (
-            <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+            <div ref={optimizationDetailsRef} className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', scrollMarginTop: '5rem' }}>
               <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
                 Optimization Results
                 {mode === 'optimize_returns' && ' — Max Returns (Sharpe + Sortino)'}
@@ -988,63 +1018,6 @@ export default function Analytics() {
                 {mode === 'optimize_balanced' && ` — Balanced (${runBalance}%) — Income vs Safety (Omega, Calmar, Ulcer, Sortino)`}
                 {mode === 'target_grade' && ` — What it takes to reach a ${targetResult?.letter || targetGrade}`}
               </h3>
-
-              {/* Reach a grade: the headline answer, then the holdings to add to and trim. */}
-              {targetResult && (() => {
-                const t = targetResult
-                const weights = result.optimization.weights || []
-                const adds = weights.filter(w => w.action === 'BUY').sort((a, b) => b.dollar_change - a.dollar_change)
-                const trims = weights.filter(w => w.action === 'SELL').sort((a, b) => a.dollar_change - b.dollar_change)
-                const SHOWN = 12
-                const headline = t.status === 'no_holdings'
-                  ? 'None of the tickers on the list are held, so there is nothing to re-weight. Load your portfolio first.'
-                  : t.status === 'already'
-                    ? `This portfolio is already a ${t.start_grade} (${t.start_score}), at or above a ${t.letter}. No changes are needed.`
-                    : t.status === 'reached'
-                      ? `Shifting about ${formatMoneyWhole(t.moved_value)} (${t.moved_pct}% of the graded holdings) among holdings you already own takes the grade from ${t.start_grade} (${t.start_score}) to ${t.grade} (${t.score}).`
-                      : `A ${t.letter} (score ${t.cutoff}+) can't be reached by re-weighting these holdings within the limits below. The best mix found scores ${t.score} (${t.grade}), up from ${t.start_grade} (${t.start_score}), by shifting about ${formatMoneyWhole(t.moved_value)}.`
-                const list = (items, color) => <>
-                  {items.slice(0, SHOWN).map(w => (
-                    <div key={w.ticker} style={{ fontSize: '0.8rem', lineHeight: 1.6 }}>
-                      <strong style={{ color: 'var(--accent-bright)' }}>{w.ticker}</strong>{' '}
-                      <span style={{ color, fontWeight: 600 }}>{formatMoneyDelta(w.dollar_change, { digits: 0 })}</span>{' '}
-                      <span style={{ color: 'var(--text-dim)' }}>{w.current_pct.toFixed(1)}% {'→'} {w.optimal_pct.toFixed(1)}%</span>
-                    </div>
-                  ))}
-                  {items.length > SHOWN && <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>+{items.length - SHOWN} more in the table below</div>}
-                </>
-                return (
-                  <div style={{
-                    marginBottom: '0.9rem', padding: '0.7rem 0.9rem', borderRadius: 6, background: 'var(--surface-inset)',
-                    border: `1px solid ${t.status === 'unreachable' || t.status === 'no_holdings' ? 'var(--p-5a4a2c)' : 'var(--p-2a5a3c)'}`,
-                  }}>
-                    <div style={{ fontSize: '0.9rem', color: 'var(--text-strong)', fontWeight: 600, lineHeight: 1.45 }}>{headline}</div>
-                    {(adds.length > 0 || trims.length > 0) && (
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '0.5rem 1.5rem', margin: '0.6rem 0' }}>
-                        <div>
-                          <div style={{ color: 'var(--pos)', fontWeight: 600, fontSize: '0.8rem', marginBottom: '0.15rem' }}>Add to ({adds.length})</div>
-                          {adds.length ? list(adds, 'var(--pos)') : <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>None</div>}
-                        </div>
-                        <div>
-                          <div style={{ color: 'var(--neg)', fontWeight: 600, fontSize: '0.8rem', marginBottom: '0.15rem' }}>Trim ({trims.length})</div>
-                          {trims.length ? list(trims, 'var(--neg)') : <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>None</div>}
-                        </div>
-                      </div>
-                    )}
-                    {t.status !== 'no_holdings' && (
-                      <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)', lineHeight: 1.5, marginTop: '0.35rem' }}>
-                        Limits: only holdings you already own, graded on the same {periodLabel} window as the grade above, and no holding
-                        grows past {t.max_weight_pct}%. The search makes the smallest moves it can that reach the grade.
-                        {t.blocked?.length > 0 && ` Can only shrink: ${t.blocked.map(b => `${b.ticker} (${b.reason})`).join(', ')}.`}
-                        {t.not_held?.length > 0 && ` On the list but not held, so left out: ${t.not_held.join(', ')}.`}
-                        {t.ungraded?.length > 0 && ` Held but without enough history to grade, so left as is: ${t.ungraded.join(', ')}.`}
-                        {t.status === 'unreachable' && t.stopped === 'budget' && ' The search hit its time limit; a longer one might find a little more.'}
-                        {' '}Illustrative only: a model mix to study, not a recommendation to buy or sell.
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
 
               {/* Summary stats */}
               {result.optimization.summary && (

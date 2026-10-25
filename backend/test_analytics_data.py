@@ -333,6 +333,93 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         self.assertIn("SPY", target["not_held"])
         self.assertAlmostEqual(sum(w["optimal_pct"] for w in opt["weights"]), 100, delta=0.1)
         self.assertEqual(opt["comparison"]["after"]["score"], target["score"])
+        # Every move the search made is listed, so the listed adds add up to the total shifted.
+        added = sum(w["dollar_change"] for w in opt["weights"] if w["action"] == "BUY")
+        self.assertAlmostEqual(added, target["moved_value"], delta=max(1.0, target["moved_value"] * 0.01))
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_reports_no_owned_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["SPY", "QQQ"], "mode": "target_grade", "target_grade": "A"},
+        ).get_json()
+        self.assertEqual(payload["optimization"]["target"]["status"], "no_holdings")
+        self.assertCountEqual(payload["optimization"]["target"]["not_held"], ["SPY", "QQQ"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_explains_insufficient_history(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _market_frame(8)
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "BBB"], "mode": "target_grade", "period": "1mo"},
+        ).get_json()
+        self.assertEqual(payload["optimization"]["target"]["status"], "insufficient_history")
+        self.assertCountEqual(payload["optimization"]["target"]["ungraded"], ["AAA", "BBB"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_answers_when_only_one_ticker_has_data(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        payload = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "MISSING"], "mode": "target_grade", "target_grade": "A+"},
+        ).get_json()
+        opt = payload["optimization"]
+        self.assertIn(opt["target"]["status"], {"already", "unreachable"})
+        self.assertEqual(len(opt["weights"]), 1)
+        self.assertEqual(opt["weights"][0]["action"], "HOLD")
+        self.assertEqual(opt["target"]["moved_value"], 0)
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_never_increases_penny_or_stale_holdings(self, ticker_mock):
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        for field in ("Close", "Adj Close"):
+            self.market_data[(field, "CCC")] = np.linspace(0.2, 0.5, len(self.market_data))
+        response = self.client.post(
+            "/api/analytics/data?profile_id=1",
+            json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+        )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200, payload)
+        target = payload["optimization"]["target"]
+        self.assertIn("CCC", {b["ticker"] for b in target["blocked"]})
+        weight = next(w for w in payload["optimization"]["weights"] if w["ticker"] == "CCC")
+        self.assertLessEqual(weight["optimal_pct"], weight["current_pct"] + 1e-9)
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_preserves_small_dollar_shifts_and_grade_drivers(self, ticker_mock):
+        from grading import grade_portfolio
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+
+        def small_shift(returns, values, bench, target, **kwargs):
+            weights = values / values.sum()
+            start_score = grade_portfolio(returns, weights, bench)["grade"]["score"]
+            weights[0] += 0.0002
+            weights[1] -= 0.0002
+            grade = grade_portfolio(returns, weights, bench)["grade"]
+            return {"weights": weights, "score": grade["score"], "grade": grade["overall"],
+                    "start_score": start_score, "reached": grade["score"] >= target, "stopped": "budget"}
+
+        with patch("grading.search_weights_for_grade", side_effect=small_shift):
+            payload = self.client.post(
+                "/api/analytics/data?profile_id=1",
+                json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+            ).get_json()
+        opt = payload["optimization"]
+        actions = {w["ticker"]: w for w in opt["weights"]}
+        self.assertEqual(actions["AAA"]["action"], "BUY")
+        self.assertEqual(actions["BBB"]["action"], "SELL")
+        self.assertEqual(actions["CCC"]["action"], "HOLD")
+        self.assertEqual(actions["AAA"]["dollar_change"], 0.70)
+        self.assertEqual(actions["BBB"]["dollar_change"], -0.70)
+        self.assertEqual(opt["target"]["moved_value"], 0.70)
+        self.assertEqual(opt["rebalance_summary"]["total_buy"], opt["rebalance_summary"]["total_sell"])
+        self.assertTrue(opt["comparison"]["before"]["breakdown"])
+        self.assertTrue(opt["comparison"]["after"]["breakdown"])
+        self.assertEqual(opt["comparison"]["after"]["score"], opt["target"]["score"])
 
     @patch("yfinance.Ticker")
     def test_nav_request_matches_the_dashboard_for_the_whole_portfolio(self, ticker_mock):

@@ -119,11 +119,14 @@ class MarketDataProviderTests(unittest.TestCase):
         self.assertEqual(frame.attrs["market_data_sources"], {"ABC": "yahoo"})
 
     def test_valid_opt_in_uses_tiingo_without_yahoo(self):
+        # This is a routing test: keep the request on the fixture's date range
+        # instead of letting a rolling 5d window expire as the calendar advances.
         yahoo = Mock(return_value=pd.DataFrame({"Close": [9.0]}))
         with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
              patch.object(provider.requests, "get", return_value=FakeResponse(payload=tiingo_prices())):
             frame = provider.download(
-                "ABC", yahoo_fetch=yahoo, period="5d", auto_adjust=False, actions=True
+                "ABC", yahoo_fetch=yahoo, period="5d", start="2026-09-19", end="2026-09-26",
+                auto_adjust=False, actions=True
             )
         yahoo.assert_not_called()
         self.assertAlmostEqual(float(frame["Close"].iloc[-1]), 100.0)
@@ -250,7 +253,8 @@ class MarketDataProviderTests(unittest.TestCase):
         with patch.object(provider, "_load_config", return_value=self._enabled_config()), \
              patch.object(provider.requests, "get", side_effect=request_get):
             frame = provider.download(
-                ["GOOD", "MISS"], yahoo_fetch=yahoo, period="5d", auto_adjust=False
+                ["GOOD", "MISS"], yahoo_fetch=yahoo, period="5d", start="2026-09-19", end="2026-09-26",
+                auto_adjust=False
             )
         self.assertIsInstance(frame.columns, pd.MultiIndex)
         self.assertAlmostEqual(float(frame[("Close", "GOOD")].dropna().iloc[-1]), 101.0)

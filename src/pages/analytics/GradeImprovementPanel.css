@@ -1,0 +1,24 @@
+.grade-plan { padding: 1rem 1.25rem; margin-bottom: 1rem; border: 1px solid var(--accent); scroll-margin-top: 5rem; }
+.grade-plan-eyebrow { color: var(--accent-2); font-size: .8rem; font-weight: 600; }
+.grade-plan h2 { margin: .35rem 0 .75rem; font-size: 1.15rem; color: var(--text-strong); }
+.grade-plan p { margin: .65rem 0; font-size: .82rem; line-height: 1.55; color: var(--text-dim); }
+.grade-plan-stats { display: flex; flex-wrap: wrap; gap: .6rem 2rem; padding: .7rem 0; }
+.grade-plan-stats > div { display: flex; flex-direction: column; gap: .3rem; }
+.grade-plan-stats span { color: var(--text-dim); font-size: .75rem; }
+.grade-plan-stats strong { color: var(--text-strong); font-size: 1.2rem; }
+.grade-plan-stats small { font-size: .8rem; font-weight: 400; }
+.grade-plan-income { padding: .65rem .8rem; background: var(--surface-inset); border-radius: 5px; }
+.grade-plan-allocations { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin: .9rem 0; }
+.grade-plan-list { padding: .75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); }
+.grade-plan-list h3 { margin: 0 0 .5rem; font-size: .9rem; }
+.grade-plan-add h3, .grade-plan-add .grade-plan-amount { color: var(--pos); }
+.grade-plan-trim h3, .grade-plan-trim .grade-plan-amount { color: var(--neg); }
+.grade-plan-list ul { list-style: none; margin: 0; padding: 0; }
+.grade-plan-list li { display: grid; grid-template-columns: 1fr auto auto; gap: .75rem; align-items: baseline; padding: .35rem 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
+.grade-plan-list li:last-child { border: 0; }
+.grade-plan-list li strong { color: var(--accent-bright); }
+.grade-plan-list li > span:last-child { font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.grade-plan-limits { margin: .7rem 0; font-size: .78rem; color: var(--text-dim); }
+.grade-plan-limits summary { cursor: pointer; color: var(--accent-2); }
+.grade-plan .grade-plan-note { font-size: .74rem; }
+.grade-plan > .btn { background: var(--surface-inset); color: var(--accent-bright); border: 1px solid var(--border); padding: .4rem .7rem; }
