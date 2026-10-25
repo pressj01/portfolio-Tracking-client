@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
-import Plot from '../components/ThemedPlot'
-import { useTheme } from '../context/ThemeContext'
-import { themedPlotlyLayout } from '../utils/chartTheme'
 import RiskReturnCharts from './analytics/RiskReturnCharts'
 import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
@@ -12,6 +9,56 @@ import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } fro
 import { gradingSettingsPayload } from '../utils/gradingPreferences'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
 import { loadGradingPreferences, portfolioGradeGuideRows } from '../utils/gradingPreferences'
+import { NavFindingLabel, NavLagNote } from '../components/NavFinding'
+import { isNavLag, navProbability, NAV_LAG_EXPLAINER } from '../utils/navAssessment'
+import '../components/NavAssessment.css'
+
+// Grades the "what would it take" search can aim for (backend GRADE_TARGET_CUTOFF_KEYS).
+const TARGET_GRADES = ['A+', 'A', 'A-', 'B+', 'B', 'B-', 'C+', 'C']
+const GRADE_ORDER = ['F', 'D-', 'D', 'D+', 'C-', 'C', 'C+', 'B-', 'B', 'B+', 'A-', 'A', 'A+']
+const gradeBelow = (grade, target) => GRADE_ORDER.indexOf(grade) >= 0 && GRADE_ORDER.indexOf(grade) < GRADE_ORDER.indexOf(target)
+
+// Verdict colors, as NavAssessment.css paints the Dashboard's verdict card.
+const VERDICT_TONE = { strong: 'var(--neg)', weak: 'var(--warning-money)', none: 'var(--pos)', insufficient: 'var(--text-dim)' }
+
+// Sort order for the shared NAV finding, worst first when sorted descending.
+// The labels themselves come from the backend; nothing here re-decides them.
+const NAV_FINDING_SEVERITY = {
+  verified_erosion: 9, estimated_eroder: 8, losing_capital: 7, declined: 6, nav_lag: 4,
+  needs_strategy: 3, limited_evidence: 2, unconfirmed: 2, no_signal: 1, skipped: 0, not_applicable: 0,
+}
+
+// Shown before the first run so the page explains itself.
+const INTRO_TILES = [
+  {
+    title: 'Portfolio grade (A–F)',
+    body: 'One letter grade for how much return the mix earned for the swings and drops it took along the way.',
+  },
+  {
+    title: 'Holding-by-holding scorecard',
+    body: 'Each ticker’s grade, return, volatility and worst drop, so you can see which ones lift the grade and which drag it down.',
+  },
+  {
+    title: 'NAV erosion check',
+    body: 'The Dashboard’s NAV erosion result for each fund. NAV lag, a covered-call fund trailing its underlying, is shown but not counted as erosion.',
+  },
+  {
+    title: 'What-if mixes',
+    body: 'Re-weight toward returns, income or a balance, or see which holdings you own to add to and trim to reach a grade such as B. Nothing is traded.',
+  },
+]
+
+const stepRowStyle = { display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.6rem' }
+const STEP_LABEL_WIDTH = '5.5rem'
+const stepLabelStyle = {
+  width: STEP_LABEL_WIDTH, display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
+  color: 'var(--text-strong)', fontSize: '0.82rem', fontWeight: 600,
+}
+const stepNumStyle = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+  background: 'var(--accent)', color: 'var(--bg)', fontSize: '0.7rem', fontWeight: 700,
+}
 
 const PERIODS = [
   { label: '1M', value: '1mo' },
@@ -37,15 +84,10 @@ function metricColor(val, thresholds, lowerBetter = false) {
   if (lowerBetter) return val <= a ? '#4dff91' : val <= b ? '#7ecfff' : val <= c ? '#ffb74d' : '#ff6b6b'
   return val >= a ? '#4dff91' : val >= b ? '#7ecfff' : val >= c ? '#ffb74d' : '#ff6b6b'
 }
-const navSeverityFromRatio = (v) => v == null ? null : v > 0.75 ? 'High' : v > 0.25 ? 'Medium' : 'Low'
-const navSeverityColor = (severity) => severity === 'High' ? '#ff6b6b' : severity === 'Medium' ? '#ffb300' : severity === 'Low' ? '#4dff91' : '#8899aa'
-const navSeverityBg = (severity) => severity === 'High' ? 'rgba(255,107,107,0.12)' : severity === 'Medium' ? 'rgba(255,179,0,0.12)' : 'rgba(77,255,145,0.12)'
-const navSeverityText = (severity) => severity === 'High' ? 'High Benchmark-Gated Coverage' : severity === 'Medium' ? 'Moderate Benchmark-Gated Coverage' : 'Low Benchmark-Gated Coverage'
 
 export default function Analytics() {
   const pf = useProfileFetch()
   const { selection } = useProfile()
-  const { isDark } = useTheme()
   const dialog = useDialog()
   const [tickers, setTickers] = useState([])
   const [input, setInput] = useState('')
@@ -61,11 +103,11 @@ export default function Analytics() {
   const [balance, setBalance] = useState(50)
   const [snapshots, setSnapshots] = useState([])
   const [chartTab, setChartTab] = useState('risk')
-  const [portfolioCoverage, setPortfolioCoverage] = useState(null)
-  const [portfolioCoverageSeverity, setPortfolioCoverageSeverity] = useState(null)
-  const [tickerCoverage, setTickerCoverage] = useState({})
-  const [tickerCoverageSeverity, setTickerCoverageSeverity] = useState({})
+  const [targetGrade, setTargetGrade] = useState('B')
   const lastAnalyzedPeriod = useRef(null)
+  // Period buttons stay live during a run, so two requests can overlap. Only the
+  // newest may write state; otherwise a slow 1M reply can land under a 1Y button.
+  const requestSeq = useRef(0)
 
   // Load portfolio tickers on mount
   useEffect(() => {
@@ -93,18 +135,24 @@ export default function Analytics() {
   }
 
   const clearAll = () => {
+    requestSeq.current += 1
+    setLoading(false)
     setTickers([])
     setResult(null)
     setError(null)
     lastAnalyzedPeriod.current = null
   }
 
-  const runAnalysis = useCallback((runMode) => {
-    if (tickers.length < 1) { setError('Enter at least 1 ticker.'); return }
+  // tickerList lets "Analyze my portfolio" run on the list it just set,
+  // before the setTickers state update reaches this closure.
+  const runAnalysis = useCallback((runMode, tickerList = tickers) => {
+    if (tickerList.length < 1) { setError('Enter at least 1 ticker.'); return }
+    const seq = ++requestSeq.current
     setError(null); setResult(null); setLoading(true)
     lastAnalyzedPeriod.current = period
-    const body = { tickers, benchmark, period, mode: runMode || mode, grading_settings: gradingSettingsPayload() }
+    const body = { tickers: tickerList, benchmark, period, mode: runMode || mode, grading_settings: gradingSettingsPayload() }
     if (runMode === 'optimize_balanced') body.balance = balance / 100
+    if ((runMode || mode) === 'target_grade') body.target_grade = targetGrade
     pf('/api/analytics/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,26 +160,20 @@ export default function Analytics() {
     })
       .then(r => r.json())
       .then(d => {
+        if (seq !== requestSeq.current) return
         if (d.error) { setError(d.error); return }
         setResult(d)
         setMode(runMode || mode)
-        // Extract coverage from analytics response
-        if (d.coverage) {
-          setPortfolioCoverage(d.coverage.aggregate_coverage ?? null)
-          setPortfolioCoverageSeverity(d.coverage.aggregate_severity ?? null)
-          const map = {}
-          const severityMap = {}
-          if (d.coverage.results) d.coverage.results.forEach(r => {
-            if (r.coverage_ratio != null) map[r.ticker] = r.coverage_ratio
-            if (r.nav_erosion_severity) severityMap[r.ticker] = r.nav_erosion_severity
-          })
-          setTickerCoverage(map)
-          setTickerCoverageSeverity(severityMap)
-        }
       })
-      .catch(e => setError('Request failed: ' + e.message))
-      .finally(() => setLoading(false))
-  }, [tickers, benchmark, period, mode, balance, pf])
+      .catch(e => { if (seq === requestSeq.current) setError('Request failed: ' + e.message) })
+      .finally(() => { if (seq === requestSeq.current) setLoading(false) })
+  }, [tickers, benchmark, period, mode, balance, targetGrade, pf])
+
+  const analyzePortfolio = () => {
+    const list = [...new Set([...tickers, ...portfolioTickers])]
+    setTickers(list)
+    runAnalysis('metrics', list)
+  }
 
   // Dashboard re-grades as soon as the lookback changes. Keep this page on
   // the same window so a 1M click cannot keep showing last run's 1Y scores.
@@ -142,32 +184,31 @@ export default function Analytics() {
     runAnalysis(mode)
   }, [period, tickers.length, mode, runAnalysis])
 
+  // NAV erosion and NAV lag: the Dashboard's assessment, sent by the backend as is.
+  const nav = result?.nav_assessment || null
+  const navVerdict = nav?.verdict || null
+  const navLagging = navVerdict?.nav_lag || []
+  const navFindings = React.useMemo(() => Object.fromEntries(
+    (result?.nav_assessment?.results || []).map(row => [row.ticker, row.finding]),
+  ), [result])
+  const navSeverity = useCallback(ticker => {
+    const code = navFindings[ticker]?.code
+    return code == null ? null : NAV_FINDING_SEVERITY[code] ?? 3
+  }, [navFindings])
+
   // Sort metrics table
   const sortedMetrics = React.useMemo(() => {
     if (!result?.metrics) return []
     if (!sortCol) return result.metrics
     return [...result.metrics].sort((a, b) => {
-      const av = sortCol === '_coverage' ? tickerCoverage[a.ticker] : a[sortCol]
-      const bv = sortCol === '_coverage' ? tickerCoverage[b.ticker] : b[sortCol]
+      const av = sortCol === '_nav' ? navSeverity(a.ticker) : a[sortCol]
+      const bv = sortCol === '_nav' ? navSeverity(b.ticker) : b[sortCol]
       if (av == null && bv == null) return 0
       if (av == null) return 1
       if (bv == null) return -1
       return sortAsc ? av - bv : bv - av
     })
-  }, [result, sortCol, sortAsc, tickerCoverage])
-  const portfolioNavSeverity = portfolioCoverageSeverity || navSeverityFromRatio(portfolioCoverage)
-  const portfolioNavColor = navSeverityColor(portfolioNavSeverity)
-  const portfolioRawErosion = result?.coverage?.aggregate_raw_nav_erosion_rate
-  const portfolioDistributionRate = result?.coverage?.aggregate_distribution_rate_on_starting_nav
-  const portfolioAccountingReturn = result?.coverage?.aggregate_accounting_total_return_rate
-  const portfolioOverallScore = result?.coverage?.aggregate_overall_nav_erosion_score
-  const portfolioOverallSeverity = result?.coverage?.aggregate_overall_nav_erosion_severity
-  const portfolioUpRecoveryScore = result?.coverage?.aggregate_up_market_recovery_score
-  const portfolioUpCapturePct = result?.coverage?.aggregate_up_market_capture_pct
-  const tickerNavAccounting = React.useMemo(() => Object.fromEntries(
-    (result?.coverage?.results || []).map(row => [row.ticker, row]),
-  ), [result])
-  const formatIdentityRate = value => value == null ? '—' : `${(Number(value) * 100).toFixed(2)}%`
+  }, [result, sortCol, sortAsc, navSeverity])
 
   const handleSort = (col) => {
     if (sortCol === col) setSortAsc(!sortAsc)
@@ -177,13 +218,26 @@ export default function Analytics() {
 
   const pm = result?.portfolio_metrics || {}
   const grade = pm.grade || {}
+  // The slider can move after a Balanced run without re-running it, so labels
+  // use the balance the result was computed with.
+  const runBalance = result?.optimization?.summary?.balance ?? balance
+  const targetResult = result?.optimization?.target || null
+  const scenarioLabel = mode === 'target_grade' ? `Reach ${targetResult?.letter || targetGrade}`
+    : mode === 'optimize_balanced' ? `Balanced (${runBalance}%)`
+      : mode === 'optimize_income' ? 'Optimize Income' : 'Optimize Returns'
+  const showYieldColumn = (result?.optimization?.weights || []).some(w => w.yield_pct != null)
+  const periodLabel = PERIODS.find(p => p.value === period)?.label || period
+  const runHint = tickers.length === 0
+    ? 'Add a ticker or load your portfolio to enable Analyze.'
+    : tickers.length === 1 ? 'The re-weighting tools need at least 2 tickers.' : null
 
   return (
     <div className="page">
       <NotFinancialAdviceNotice />
       <h1 style={{ marginBottom: '0.3rem' }}>Portfolio Analytics</h1>
-      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-        Risk-adjusted metrics, portfolio grading, correlation analysis, and optimization.
+      <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem', maxWidth: '62rem', lineHeight: 1.5 }}>
+        Has your portfolio been paid enough for the risk it took? Grade your holdings (or any list of tickers),
+        spot high-yield funds whose payouts are shrinking their share price, and try alternative mixes.
       </p>
 
       <details style={{ marginBottom: '1rem', borderLeft: '3px solid var(--accent-2)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
@@ -195,8 +249,9 @@ export default function Analytics() {
             <strong style={{ color: 'var(--text-strong)' }}>What this page is.</strong> Portfolio Analytics
             grades a set of tickers over a lookback you choose. It scores risk-adjusted quality (Sharpe, Sortino,
             Calmar, Omega, Ulcer, drawdowns), shows a letter grade for the whole portfolio and each holding,
-            flags NAV erosion on high-distribution funds, and can propose a new mix that favors returns, income,
-            or a blend. Nothing is sent to a broker — Analyze and Optimize only compute.
+            shows the Dashboard&apos;s NAV erosion result for each fund (NAV lag included, never counted as erosion),
+            can propose a new mix that favors returns, income, or a blend, and can show what it would take to reach
+            a grade. Nothing is sent to a broker — Analyze and Optimize only compute.
           </p>
           <p style={{ margin: '0 0 0.7rem' }}>
             <strong style={{ color: 'var(--text-strong)' }}>Typical path.</strong> Load your holdings (or type
@@ -230,8 +285,8 @@ export default function Analytics() {
           <p style={{ margin: '0 0 0.45rem' }}>
             Re-weights the tickers already on the list to raise <strong>risk-adjusted total return</strong>
             (about 60% Sharpe, 40% Sortino). It is not “pick the highest-returning ETF.” Needs at least two tickers.
-            Single-stock option ETFs get a 0% model weight. Funds with severe NAV erosion get a smaller
-            max weight. Each name is capped near 40%, and the model cannot cut a current holding below about 25% of
+            Single-stock option ETFs get a 0% model weight. Funds the NAV assessment flags for erosion (the same
+            ones the Dashboard counts) get a smaller max weight; NAV lag is not penalized. Each name is capped near 40%, and the model cannot cut a current holding below about 25% of
             its present weight in one pass. The result is an illustrative scenario showing which weights the model
             would increase, decrease, or leave unchanged versus your current mix — an example to study, not a
             recommendation to trade. Nothing is sent to a broker.
@@ -240,8 +295,9 @@ export default function Analytics() {
           <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Optimize Income</p>
           <p style={{ margin: '0 0 0.45rem' }}>
             Re-weights toward <strong>higher cash yield</strong> while still scoring quality (Ulcer, Calmar, Omega, Sortino).
-            About 70% of the objective is yield and 30% is that quality score. Yield is reduced when a fund’s price
-            has been structurally eroding (so a 40% distribution on a melting NAV does not win). Names with no yield
+            About 70% of the objective is yield and 30% is that quality score. Yield is reduced by the price decline of
+            funds the NAV assessment flags for erosion (so a 40% distribution on a melting NAV does not win); NAV lag
+            is not penalized. Names with no yield
             get no model weight. Per-holding cap is about 20%. Same increase / decrease / no-change scenario; no trades are placed.
           </p>
 
@@ -252,6 +308,17 @@ export default function Analytics() {
             caps loosen from about 10% on the safety end to about 20% on the income end. Single-stock ETFs are
             tapered off toward the safety end and only get full priority on the income end if they yield 10%+.
             Move the slider, then click <strong>Balanced</strong> again — the slider alone does not re-run.
+          </p>
+          <p style={{ margin: '0.7rem 0 0.3rem', color: 'var(--text-strong)', fontWeight: 600 }}>Reach [grade] — What would it take?</p>
+          <p style={{ margin: '0 0 0.45rem' }}>
+            Pick a grade (B by default) and click <strong>What would it take?</strong>, or use the prompt under the grade card
+            when the portfolio is below it. It re-weights <strong>only the holdings you already own</strong>, on the same
+            period and benchmark as the grade, and makes the smallest moves it can that reach the grade: each step trims the
+            holdings that drag the score most and adds to the ones that lift it most. No holding grows past 25%, and
+            single-stock ETFs and funds flagged for NAV erosion can only shrink. Tickers on the list that you don&apos;t own
+            are left out. If the grade can&apos;t be reached within those limits, it says so and shows the best mix it found.
+            The result lists the holdings to add to and trim with dollar amounts, the before/after grade, and the same
+            scenario table as the optimizers. It is a model to study, not a recommendation to trade.
           </p>
           <p style={{ margin: '0 0 0.7rem' }}>
             On any optimization result, <strong>Export CSV</strong> downloads the scenario's model weight changes and
@@ -268,46 +335,61 @@ export default function Analytics() {
         </div>
       </details>
 
-      {/* Controls */}
+      {/* Controls — one row per step: pick tickers, pick a window, run. */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+        <div style={stepRowStyle}>
+          <span style={stepLabelStyle}><span style={stepNumStyle}>1</span>Tickers</span>
           <input
             style={{
-              width: 100, textTransform: 'uppercase', padding: '0.35rem 0.5rem',
+              width: 110, padding: '0.35rem 0.5rem',
               background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4,
               color: 'var(--text)', fontSize: '0.9rem',
             }}
-            maxLength={10} placeholder="Ticker"
+            maxLength={10} placeholder="Add a ticker"
+            aria-label="Ticker to add"
             value={input}
             onChange={e => setInput(e.target.value.toUpperCase())}
             onKeyDown={e => { if (e.key === 'Enter') addTicker() }}
           />
           <button className="btn btn-primary" onClick={addTicker} style={{ padding: '0.35rem 0.8rem' }}>Add</button>
-          <button className="btn" onClick={loadPortfolio} style={{
-            padding: '0.35rem 0.8rem',
-            fontWeight: 600,
-            color: 'var(--accent-bright)',
-            background: 'color-mix(in srgb, var(--accent) 22%, var(--surface))',
-            border: '1px solid var(--accent)',
-          }}>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>or</span>
+          <button className="btn" onClick={loadPortfolio} disabled={portfolioTickers.length === 0}
+            title="Add every holding in the selected account. Tickers already on the list stay."
+            style={{
+              padding: '0.35rem 0.8rem',
+              fontWeight: 600,
+              color: 'var(--accent-bright)',
+              background: 'color-mix(in srgb, var(--accent) 22%, var(--surface))',
+              border: '1px solid var(--accent)',
+            }}>
             Load Portfolio ({portfolioTickers.length})
           </button>
+        </div>
 
-          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
+        {/* Ticker chips */}
+        {tickers.length > 0 && (
+          <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', margin: `0 0 0.6rem ${STEP_LABEL_WIDTH}`, paddingLeft: '0.5rem' }}>
+            {tickers.map(t => (
+              <span key={t} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '0.2rem 0.5rem', background: 'var(--p-1a2a3e)', border: '1px solid var(--p-2a4a6e)',
+                borderRadius: 4, fontSize: '0.82rem', color: 'var(--accent-bright)', fontWeight: 600,
+              }}>
+                {t}
+                <button onClick={() => removeTicker(t)} aria-label={`Remove ${t}`} title={`Remove ${t} from this analysis`} style={{
+                  background: 'none', border: 'none', color: 'var(--neg)', cursor: 'pointer',
+                  fontWeight: 700, fontSize: '0.9rem', padding: '0 2px', lineHeight: 1,
+                }}>&times;</button>
+              </span>
+            ))}
+            <span style={{ color: 'var(--p-556677)', fontSize: '0.78rem', alignSelf: 'center' }}>
+              {tickers.length} ticker{tickers.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+        )}
 
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Bench:</span>
-          <input
-            style={{
-              width: 55, textTransform: 'uppercase', padding: '0.35rem 0.4rem',
-              background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4,
-              color: 'var(--text)', fontSize: '0.82rem', textAlign: 'center',
-            }}
-            maxLength={6} value={benchmark}
-            onChange={e => setBenchmark(e.target.value.toUpperCase())}
-          />
-
-          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
-
+        <div style={stepRowStyle}>
+          <span style={stepLabelStyle}><span style={stepNumStyle}>2</span>Period</span>
           {PERIODS.map(p => (
             <button key={p.value} onClick={() => setPeriod(p.value)} style={{
               padding: '0.25rem 0.5rem', borderRadius: 4, cursor: 'pointer',
@@ -317,6 +399,24 @@ export default function Analytics() {
               fontSize: '0.78rem', fontWeight: period === p.value ? 600 : 400,
             }}>{p.label}</button>
           ))}
+
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.2rem' }}>|</span>
+
+          {/* Wrapping label, not htmlFor: Split View mounts this page twice. */}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', color: 'var(--text-dim)', fontSize: '0.82rem' }}
+            title="The market yardstick for up/down capture and the Risk vs Return chart. SPY is the S&P 500.">
+            Compare to
+            <input
+              style={{
+                width: 60, padding: '0.35rem 0.4rem',
+                background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4,
+                color: 'var(--text)', fontSize: '0.82rem', textAlign: 'center',
+              }}
+              maxLength={6} value={benchmark}
+              onChange={e => setBenchmark(e.target.value.toUpperCase())}
+              onBlur={() => { if (!benchmark.trim()) setBenchmark('SPY') }}
+            />
+          </label>
         </div>
 
         {/* Suggested ETFs based on portfolio type */}
@@ -347,20 +447,26 @@ export default function Analytics() {
           </div>
         )}
 
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+        <div style={{ ...stepRowStyle, marginBottom: 0 }}>
+          <span style={stepLabelStyle}><span style={stepNumStyle}>3</span>Run</span>
           <button className="btn btn-success" onClick={() => runAnalysis('metrics')} disabled={loading || tickers.length < 1}
+            title="Grade these tickers over the selected period"
             style={{ padding: '0.35rem 1rem', fontWeight: 600 }}>
             {loading ? 'Loading...' : 'Analyze'}
           </button>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginLeft: '0.4rem' }}>or try a model mix:</span>
           <button className="btn" onClick={() => runAnalysis('optimize_returns')} disabled={loading || tickers.length < 2}
+            title="Re-weight the list toward better return for the risk taken. Needs 2+ tickers. Nothing is traded."
             style={{ padding: '0.35rem 0.8rem', color: 'var(--accent)', background: 'var(--p-1a2a3e)', border: '1px solid var(--p-3a5a8c)' }}>
             Optimize Returns
           </button>
           <button className="btn" onClick={() => runAnalysis('optimize_income')} disabled={loading || tickers.length < 2}
+            title="Re-weight the list toward higher, sustainable cash yield. Needs 2+ tickers. Nothing is traded."
             style={{ padding: '0.35rem 0.8rem', color: 'var(--pos-muted)', background: 'var(--p-1a2e1e)', border: '1px solid var(--p-2a5a3c)' }}>
             Optimize Income
           </button>
           <button className="btn" onClick={() => runAnalysis('optimize_balanced')} disabled={loading || tickers.length < 2}
+            title="Blend safety and income; a slider appears after the first run. Needs 2+ tickers. Nothing is traded."
             style={{ padding: '0.35rem 0.8rem', color: 'var(--p-ffb74d)', background: 'var(--p-2e2517)', border: '1px solid var(--p-5a4a2c)' }}>
             Balanced
           </button>
@@ -374,33 +480,67 @@ export default function Analytics() {
               <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem', marginLeft: 4 }}>({balance}%)</span>
             </span>
           )}
-          <button className="btn" onClick={clearAll} style={{ padding: '0.35rem 0.6rem', color: 'var(--text-dim)' }}>Clear</button>
+          <span style={{ color: 'var(--p-556677)', margin: '0 0.1rem' }}>|</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--text-dim)', fontSize: '0.78rem' }}
+            title="Grade to aim for when showing what it would take">
+            Reach
+            <select value={targetGrade} onChange={e => setTargetGrade(e.target.value)} aria-label="Target grade"
+              style={{ padding: '0.3rem 0.35rem', background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, fontSize: '0.8rem' }}>
+              {TARGET_GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+            </select>
+          </label>
+          <button className="btn" onClick={() => runAnalysis('target_grade')} disabled={loading || tickers.length < 2}
+            title="Show which of the holdings you already own to add to and trim to reach this grade. Needs 2+ tickers. Nothing is traded."
+            style={{ padding: '0.35rem 0.8rem', color: 'var(--accent-bright)', background: 'var(--p-1a2a3e)', border: '1px solid var(--accent)' }}>
+            What would it take?
+          </button>
+          {/* .btn sets no background, so without one this fell back to the browser's white button. */}
+          <button className="btn" onClick={clearAll} disabled={tickers.length === 0 && !result && !error && !loading}
+            title="Empty the ticker list and the last result"
+            style={{ padding: '0.35rem 0.7rem', marginLeft: 'auto', color: 'var(--text-dim)', background: 'transparent', border: '1px solid var(--p-3a3a5c)' }}>
+            Clear
+          </button>
         </div>
-
-        {/* Ticker chips */}
-        {tickers.length > 0 && (
-          <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
-            {tickers.map(t => (
-              <span key={t} style={{
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-                padding: '0.2rem 0.5rem', background: 'var(--p-1a2a3e)', border: '1px solid var(--p-2a4a6e)',
-                borderRadius: 4, fontSize: '0.82rem', color: 'var(--accent-bright)', fontWeight: 600,
-              }}>
-                {t}
-                <button onClick={() => removeTicker(t)} style={{
-                  background: 'none', border: 'none', color: 'var(--neg)', cursor: 'pointer',
-                  fontWeight: 700, fontSize: '0.9rem', padding: '0 2px', lineHeight: 1,
-                }}>&times;</button>
-              </span>
-            ))}
-            <span style={{ color: 'var(--p-556677)', fontSize: '0.78rem', alignSelf: 'center' }}>
-              {tickers.length} ticker{tickers.length !== 1 ? 's' : ''}
-            </span>
+        {runHint && (
+          <div style={{ margin: `0.35rem 0 0 ${STEP_LABEL_WIDTH}`, paddingLeft: '0.5rem', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+            {runHint}
           </div>
         )}
       </div>
 
       {error && <div className="alert alert-error" style={{ marginBottom: '1rem' }}>{error}</div>}
+
+      {/* Before the first run: say what the page produces and offer a one-click start. */}
+      {!result && !loading && (
+        <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1rem' }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-strong)', fontSize: '0.95rem' }}>What you get</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '0.75rem', margin: '0.6rem 0 1rem' }}>
+            {INTRO_TILES.map(t => (
+              <div key={t.title} style={{ padding: '0.65rem 0.8rem', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--surface-inset)' }}>
+                <div style={{ color: 'var(--accent)', fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.25rem' }}>{t.title}</div>
+                <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem', lineHeight: 1.45 }}>{t.body}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            {tickers.length > 0 ? (
+              <button className="btn btn-success" onClick={() => runAnalysis('metrics')} style={{ padding: '0.45rem 1.1rem', fontWeight: 600 }}>
+                Analyze {tickers.length} ticker{tickers.length !== 1 ? 's' : ''}
+              </button>
+            ) : portfolioTickers.length > 0 ? (
+              <button className="btn btn-success" onClick={analyzePortfolio} style={{ padding: '0.45rem 1.1rem', fontWeight: 600 }}>
+                Analyze my portfolio ({portfolioTickers.length} holdings)
+              </button>
+            ) : null}
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+              {tickers.length > 0 || portfolioTickers.length > 0
+                ? `Uses the ${periodLabel} window, compared with ${benchmark || 'SPY'}. Change either in step 2.`
+                : 'Type a ticker in step 1 to get started.'}
+              {tickers.length === 0 && portfolioTickers.length > 0 && ' Or type tickers in step 1 to grade any list, such as funds you are considering.'}
+            </span>
+          </div>
+        </div>
+      )}
 
       {result && !loading && (!result.metrics || result.metrics.length === 0) && (
         <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
@@ -473,143 +613,58 @@ export default function Analytics() {
                   <Stat label="Est. Annual Income" value={formatMoneyWhole(pm.est_annual_income)} color="#66bb6a" />
                 </div>
 
-                {/* Benchmark-gated coverage plus the raw NAV accounting identity. */}
-                {(portfolioCoverage != null || portfolioRawErosion != null) && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', minWidth: 140, alignItems: 'center' }}>
-                    {portfolioOverallScore != null && (
-                      <div
-                        title="Primary historical verdict, not a forecast. Share-price recovery on benchmark up days can reduce the raw-loss warning by up to 75%, but cannot reduce benchmark-confirmed coverage or relative drag. Distributions and total return are excluded from recovery."
-                        style={{
-                          width: '100%', padding: '0.45rem 0.7rem', borderRadius: 6,
-                          border: `3px solid ${navSeverityColor(portfolioOverallSeverity)}`,
-                          background: navSeverityBg(portfolioOverallSeverity),
-                          color: navSeverityColor(portfolioOverallSeverity),
-                          fontSize: '0.78rem', fontWeight: 700, textAlign: 'center', cursor: 'help',
-                        }}
-                      >
-                        <div>{`${String(portfolioOverallSeverity || 'Unknown').toUpperCase()} NAV EROSION RISK`}</div>
-                        <div style={{ fontWeight: 500, marginTop: 2 }}>{`Overall Verdict · ${Number(portfolioOverallScore).toFixed(1)} / 100 · recovery ${portfolioUpRecoveryScore != null ? Number(portfolioUpRecoveryScore).toFixed(1) : '—'}`}</div>
+                {/* NAV erosion: the Dashboard's verdict for these funds and dates. */}
+                {nav && (
+                  <div style={{ minWidth: 220, maxWidth: 320, flex: '1 1 220px' }}>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-dim)', marginBottom: '0.3rem' }}>NAV Erosion</div>
+                    {navVerdict ? (
+                      <div className="nav-assessment" style={{ margin: 0 }}>
+                        <div className="nav-verdict-row" style={{ margin: 0 }}>
+                          <div className={`summary-card nav-verdict-card nav-verdict-${navVerdict.strength}`} role="status" title={navVerdict.explanation}>
+                            <div className="summary-value">{navVerdict.label}</div>
+                            <div className="summary-sub">{navProbability(navVerdict.probability)} evidence probability</div>
+                            {navVerdict.summary && <div className="summary-sub">{navVerdict.summary}</div>}
+                            {navLagging.length > 0 && (
+                              <div className="summary-sub ci-nav-tone-lag" title={NAV_LAG_EXPLAINER}>
+                                {navLagging.length} covered-call fund{navLagging.length === 1 ? '' : 's'} with NAV lag, not counted as erosion
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
+                    ) : (
+                      <div className="nav-reference-warning" style={{ fontSize: '0.8rem' }}>{nav.error || 'NAV assessment unavailable.'}</div>
                     )}
-                    {portfolioUpRecoveryScore != null && (
-                      <div title="Price-only recovery on mapped-benchmark up days. Distributions and total return are excluded. Higher is better." style={{ fontSize: '0.76rem', color: 'var(--text-dim)', textAlign: 'center', cursor: 'help' }}>
-                        <strong style={{ color: portfolioUpRecoveryScore >= 75 ? 'var(--pos)' : portfolioUpRecoveryScore >= 40 ? '#ffb300' : 'var(--neg)' }}>Up-market recovery {Number(portfolioUpRecoveryScore).toFixed(1)} / 100</strong>
-                        <div>{portfolioUpCapturePct != null ? `${Number(portfolioUpCapturePct).toFixed(1)}% weighted price capture` : 'price capture unavailable'}</div>
-                      </div>
-                    )}
-                    {portfolioCoverage != null && <>
-                      <div title="Benchmark-gated price loss divided by distributions. Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, and above 0.75 High. Check raw e because a falling benchmark can make coverage zero even when NAV fell." style={{ fontSize: '0.82rem', color: 'var(--text-dim)', cursor: 'help' }}>Yield-Funding Coverage (1Y) ⓘ</div>
-                      <div style={{
-                        fontSize: '1.6rem', fontWeight: 700,
-                        color: portfolioNavColor,
-                        cursor: 'help',
-                      }} title="Lower is better. 0 is best; values above 0.75 are High. This is the benchmark-gated income-sustainability screen, not raw NAV erosion.">
-                        {portfolioCoverage.toFixed(4)}
-                      </div>
-                      <div style={{
-                        padding: '0.3rem 0.7rem', borderRadius: 6,
-                        border: `2px solid ${portfolioNavColor}`,
-                        background: navSeverityBg(portfolioNavSeverity),
-                        fontSize: '0.78rem', fontWeight: 600, textAlign: 'center',
-                        color: portfolioNavColor,
-                        cursor: 'help',
-                      }} title="Low is favorable, Medium deserves review, and High is unfavorable. Severity is based on benchmark-gated coverage; raw e remains a separate principal measure.">
-                        {navSeverityText(portfolioNavSeverity)}
-                      </div>
-                    </>}
-                    {portfolioRawErosion != null && (
-                      <div title="Raw e has no benchmark gate: negative is favorable because NAV rose, zero is flat, and positive is erosion. Higher r is better. Higher d means more cash, but is not automatically better if d exceeds r." style={{ fontSize: '0.76rem', lineHeight: 1.45, color: 'var(--text-dim)', textAlign: 'center', cursor: 'help' }}>
-                        <div><strong style={{ color: portfolioRawErosion > 0 ? 'var(--neg)' : 'var(--pos)' }}>e {formatIdentityRate(portfolioRawErosion)}</strong> {portfolioRawErosion > 0 ? 'NAV ERODER' : portfolioRawErosion < 0 ? 'NAV rose' : 'NAV flat'}</div>
-                        <div>d {formatIdentityRate(portfolioDistributionRate)} · r {formatIdentityRate(portfolioAccountingReturn)}</div>
-                        <div style={{ fontFamily: 'monospace' }}>tested funds · e = d − r</div>
+                    {navVerdict && (
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.35rem', lineHeight: 1.4 }}>
+                        {nav.whole_portfolio
+                          ? 'Same assessment as the Dashboard for this period.'
+                          : 'The Dashboard’s method, for only the tickers listed (cash and unlisted holdings left out).'}
+                        {nav.requested_start && nav.as_of && ` ${nav.requested_start} → ${nav.as_of}.`}
                       </div>
                     )}
                   </div>
                 )}
               </div>
+
+              {/* Below the target grade: offer the reach-a-grade scenario right here. */}
+              {mode !== 'target_grade' && tickers.length >= 2 && gradeBelow(grade.overall, targetGrade) && (
+                <div style={{
+                  display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.85rem',
+                  padding: '0.55rem 0.8rem', borderRadius: 6, border: '1px solid var(--p-3a5a8c)', background: 'var(--p-1a2a3e)',
+                }}>
+                  <span style={{ color: 'var(--text-strong)', fontSize: '0.85rem' }}>
+                    What would it take to get this portfolio to a <strong>{targetGrade}</strong>?
+                  </span>
+                  <button className="btn btn-primary" onClick={() => runAnalysis('target_grade')} disabled={loading}
+                    style={{ padding: '0.3rem 0.8rem', fontSize: '0.82rem' }}>
+                    Show what to add to and trim
+                  </button>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Uses only the holdings you already own.</span>
+                </div>
+              )}
             </div>
           )}
-
-          {/* Benchmark-gated yield-funding coverage chart. */}
-          {sortedMetrics.length > 0 && Object.keys(tickerCoverage).length > 0 && (() => {
-            const covTickers = sortedMetrics.filter(m => tickerCoverage[m.ticker] != null)
-            if (covTickers.length === 0) return null
-            const sorted = [...covTickers].sort((a, b) => (tickerCoverage[b.ticker] || 0) - (tickerCoverage[a.ticker] || 0))
-            const tks = sorted.map(m => m.ticker)
-            const rawVals = sorted.map(m => tickerCoverage[m.ticker])
-            const CAP = 5
-            const ZERO_MARKER = 0.04
-            const visualVals = rawVals.map(v => v === 0 ? ZERO_MARKER : Math.min(v, CAP))
-            const colors = sorted.map(m => navSeverityColor(tickerCoverageSeverity[m.ticker] || navSeverityFromRatio(tickerCoverage[m.ticker])))
-            const textLabels = rawVals.map(v => v > CAP ? v.toFixed(1) : v === 0 ? '0.0000' : '')
-            const hoverData = sorted.map(m => {
-              const accounting = tickerNavAccounting[m.ticker] || {}
-              return [
-                tickerCoverage[m.ticker],
-                Number(accounting.raw_nav_erosion_rate) * 100,
-                Number(accounting.distribution_rate_on_starting_nav) * 100,
-                Number(accounting.accounting_total_return_rate) * 100,
-              ]
-            })
-            const yMax = Math.max(...rawVals, 0.75, ZERO_MARKER)
-            return (
-              <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-                <Plot
-                  data={[
-                    {
-                      x: tks, y: visualVals, type: 'bar',
-                      marker: { color: colors },
-                      text: textLabels,
-                      textposition: 'outside',
-                      textfont: { color: '#4dff91', size: 10 },
-                      customdata: hoverData,
-                      showlegend: false,
-                      hovertemplate: '<b>%{x}</b><br>Coverage: %{customdata[0]:.4f} (lower is better)<br>Raw e: %{customdata[1]:.2f}% (≤0% is favorable)<br>Distribution d: %{customdata[2]:.2f}%<br>Accounting return r: %{customdata[3]:.2f}% (higher is better)<extra></extra>',
-                    },
-                    {
-                      x: [tks[0], tks[tks.length - 1]], y: [0.75, 0.75],
-                      type: 'scatter', mode: 'lines',
-                      line: { color: '#ffffff', width: 2, dash: 'dash' },
-                      hoverinfo: 'skip', name: 'High threshold (0.75)',
-                    },
-                    // Color key: legend-only swatches explaining the bar colors.
-                    { x: [null], y: [null], type: 'bar', name: 'Low erosion', marker: { color: '#4dff91' } },
-                    { x: [null], y: [null], type: 'bar', name: 'Medium erosion', marker: { color: '#ffb300' } },
-                    { x: [null], y: [null], type: 'bar', name: 'High erosion', marker: { color: '#ff6b6b' } },
-                  ]}
-                  layout={themedPlotlyLayout({
-                    title: { text: 'Per-Ticker Yield-Funding Coverage', font: { color: '#e0e8f5', size: 14 } },
-                    template: 'plotly_dark',
-                    paper_bgcolor: '#111124',
-                    plot_bgcolor: '#111124',
-                    font: { color: '#e0e8f5' },
-                    margin: { t: 40, l: 50, r: 20, b: 70 },
-                    height: 300, autosize: true,
-                    showlegend: true,
-                    legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: 1.12, font: { color: '#b8c7d9', size: 10 } },
-                    xaxis: {
-                      title: { text: 'Ticker', font: { color: '#e0e8f5' }, standoff: 10 },
-                      color: '#b8c7d9',
-                      gridcolor: '#1a2a3e',
-                      zerolinecolor: '#2a3a4e',
-                    },
-                    yaxis: {
-                      title: { text: 'Coverage Ratio', font: { color: '#e0e8f5' } },
-                      color: '#b8c7d9',
-                      gridcolor: '#1a2a3e',
-                      zeroline: true,
-                      zerolinecolor: '#2a3a4e',
-                      range: [Math.min(...rawVals, 0) - 0.05, Math.min(Math.max(yMax + 0.25, 1), CAP + 0.5)],
-                    },
-                    hoverlabel: { bgcolor: '#111124', bordercolor: '#3a3a5c', font: { color: '#e0e0e0', size: 13 } },
-                  }, isDark)}
-                  useResizeHandler
-                  style={{ width: '100%', height: 300 }}
-                  config={{ responsive: true }}
-                />
-              </div>
-            )
-          })()}
 
           {/* Metrics Table */}
           {sortedMetrics.length > 0 && (
@@ -767,69 +822,28 @@ export default function Analytics() {
                 </div>
               </details>
 
-              {/* Hidden explanation: NAV Erosion Ratio */}
+              {/* What the NAV column is: the shared per-fund result, not a number of its own. */}
               <details style={{ marginBottom: '0.75rem', borderLeft: '3px solid var(--p-ffb74d)', background: 'var(--p-0a1628)', borderRadius: '4px', padding: '0.5rem 0.75rem' }}>
                 <summary style={{ cursor: 'pointer', color: 'var(--p-ffb74d)', fontWeight: 600, fontSize: '0.85rem' }}>
-                  Raw NAV erosion vs. yield-funding coverage {'ⓘ'}
+                  NAV erosion and NAV lag {'ⓘ'}
                 </summary>
                 <div style={{ marginTop: '0.6rem', fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.55 }}>
                   <p style={{ margin: '0 0 0.6rem' }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>Two questions, two measures.</strong> Raw
-                    NAV erosion <strong>e</strong> answers whether the unadjusted share price fell. Yield-funding
-                    coverage asks how much of the distribution looks financed by fund-specific price decay after
-                    applying the benchmark gate.
-                    It is the share of trailing-12-month distributions matched by benchmark-confirmed price decay. Lower is better —
-                    <strong> 0</strong> means there was no qualifying fund-specific decline, while <strong>1.0</strong> means the
-                    qualifying decline equaled the entire year&apos;s distributions. A zero caused by a falling benchmark does not,
-                    by itself, prove that the payout was fully earned; raw e shows the actual principal change.
+                    The <strong style={{ color: 'var(--text-strong)' }}>NAV</strong> column shows the same result for each fund
+                    as the Dashboard and both NAV Erosion screens, over this screen&apos;s period and each fund&apos;s saved reference.
+                    The backend decides it once, so a fund reads the same everywhere.
                   </p>
-
+                  <ul style={{ margin: '0 0 0.6rem 1.1rem', padding: 0 }}>
+                    <li><span className="ci-nav-tone-neg">Red</span>: verified NAV erosion, or an estimated covered-call eroder.</li>
+                    <li><span className="ci-nav-tone-warn">Amber</span>: losing capital against its reference (a price-based review candidate), or published NAV that fell.</li>
+                    <li><span className="ci-nav-tone-lag">Blue</span>: NAV lag. The fund&apos;s price trailed its underlying, which is expected for a fund that sells calls. It is listed, never counted as erosion.</li>
+                  </ul>
                   <p style={{ margin: '0 0 0.4rem' }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>How it's computed.</strong>
+                    Only the red and amber funds count toward the NAV Erosion verdict in the grade card, and only they get the optimizers&apos;
+                    erosion limits. To change a fund&apos;s reference or answer whether it sells calls, use Reference details in the
+                    Dashboard&apos;s NAV panel.
                   </p>
-                  <div style={{ margin: '0 0 0.6rem', padding: '0.4rem 0.6rem', background: 'var(--p-0b0b1c)', borderRadius: 4, border: '1px solid var(--p-2a3a4e)', fontFamily: 'monospace', fontSize: '0.78rem', color: 'var(--text-strong)' }}>
-                    e = d − r = (NAV₀ − NAVₜ) ÷ NAV₀
-                    <br />
-                    coverage = benchmark-gated price decline ÷ TTM distribution yield
-                  </div>
-                  <div style={{ margin: '0 0 0.6rem', padding: '0.5rem 0.65rem', background: 'var(--surface-inset)', border: '1px solid var(--border)', borderRadius: 4 }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>Symbol key</strong>
-                    <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1.1rem' }}>
-                      <li><strong>NAV₀</strong> — unadjusted share price at the start of the window.</li>
-                      <li><strong>NAVₜ</strong> — unadjusted share price at the end of the window.</li>
-                      <li><strong>D</strong> — cash distributions paid per share during the window.</li>
-                      <li><strong>d</strong> — distribution rate, D ÷ NAV₀.</li>
-                      <li><strong>r</strong> — accounting total return, (NAVₜ − NAV₀ + D) ÷ NAV₀.</li>
-                      <li><strong>e</strong> — raw NAV erosion, d − r. Positive means NAV fell; zero means flat; negative means NAV rose.</li>
-                    </ul>
-                  </div>
-                  <ol style={{ margin: '0 0 0.6rem', paddingLeft: '1.1rem' }}>
-                    <li><strong>e, d, and r</strong> — use the same trailing-year window and starting NAV. d is distributions ÷ NAV₀; r is (NAVₜ − NAV₀ + distributions) ÷ NAV₀. The benchmark never changes these accounting values.</li>
-                    <li><strong>Price decline</strong> — the fund's 1-year price (NAV proxy) change, using unadjusted close (so distributions are not added back).</li>
-                    <li><strong>Benchmark gate</strong> — each fund is matched to a benchmark (e.g. an option-income ETF vs its underlying index). If the price <em>rose</em>, or the <em>benchmark also fell</em> over the same window, erosion counts as <strong>0</strong> — a broad market drop isn't treated as structural NAV erosion. Only a fund-specific decline (price down while the benchmark held up) is counted.</li>
-                    <li><strong>TTM distribution yield</strong> — trailing-12-month distributions per share ÷ current price.</li>
-                    <li><strong>Ratio</strong> — the fund-specific decline divided by that yield.</li>
-                  </ol>
-                  <p style={{ margin: '0 0 0.6rem' }}>
-                    The <strong>portfolio</strong> value is the dollar-weighted aggregate: total erosion dollars ÷ total distribution
-                    dollars across holdings.
-                  </p>
-
-                  <p style={{ margin: '0 0 0.4rem' }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>Severity bands.</strong> {'≤'}0.25 ={' '}
-                    <span style={{ color: '#4dff91', fontWeight: 600 }}>Low</span>, {'≤'}0.75 ={' '}
-                    <span style={{ color: '#ffb300', fontWeight: 600 }}>Medium</span>, {'>'}0.75 ={' '}
-                    <span style={{ color: '#ff6b6b', fontWeight: 600 }}>High</span>. Severity is forced to{' '}
-                    <span style={{ color: '#ff6b6b', fontWeight: 600 }}>High</span> for a 50%+ price collapse or a 5%+ ending share deficit.
-                  </p>
-
-                  <p style={{ margin: 0 }}>
-                    <strong style={{ color: 'var(--text-strong)' }}>Significance.</strong> A fund can post an eye-catching yield while
-                    quietly returning your own capital — the NAV bleeds down a little with each payout. This ratio flags that:
-                    a high reading means the distribution is being substantially financed by NAV erosion, so the headline yield
-                    overstates the real, sustainable income. It is benchmark-adjusted, so a fund isn't penalised for falling alongside
-                    a down market — only for losing value its peers didn't.
-                  </p>
+                  <NavLagNote />
                 </div>
               </details>
 
@@ -853,7 +867,7 @@ export default function Analytics() {
                       { key: 'annual_ret', label: 'Ann Ret', tip: 'Price return annualized (excludes dividends)' },
                       { key: 'annual_total_ret', label: 'Tot Ret', tip: 'Price return + dividend yield annualized' },
                       { key: 'annual_vol', label: 'Ann Vol', tip: 'Annualized standard deviation. Lower = less volatile' },
-                      { key: '_coverage', label: 'Coverage / e', tip: 'Top: benchmark-gated yield-funding coverage. Bottom: raw 1Y NAV erosion e. The benchmark gate applies only to coverage.' },
+                      { key: '_nav', label: 'NAV', tip: 'The same NAV result as the Dashboard and NAV Erosion screens. NAV lag is not erosion. Sorts worst first.' },
                     ].map(col => (
                       <th key={col.key} onClick={() => handleSort(col.key)} title={col.tip || ''} style={{
                         padding: '0.4rem 0.5rem', borderBottom: '1px solid var(--p-2a3a4e)',
@@ -900,12 +914,8 @@ export default function Analytics() {
                         {pm.down_capture?.toFixed(0) ?? '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right' }} colSpan={3}></td>
-                      <td
-                        title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(portfolioRawErosion)}, d ${formatIdentityRate(portfolioDistributionRate)}, r ${formatIdentityRate(portfolioAccountingReturn)}; e = d - r. For e, negative is favorable, zero is flat, and positive is erosion. Higher r is better; higher d is not automatically better.`}
-                        style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: portfolioCoverage == null ? 'var(--p-556)' : portfolioNavColor }}
-                      >
-                        <div>{portfolioCoverage != null ? portfolioCoverage.toFixed(2) : '—'}</div>
-                        <small style={{ color: portfolioRawErosion > 0 ? 'var(--neg)' : 'var(--pos)' }}>e {formatIdentityRate(portfolioRawErosion)}</small>
+                      <td title={navVerdict?.explanation || ''} style={{ padding: '0.4rem 0.5rem', textAlign: 'left', fontSize: '0.76rem' }}>
+                        {navVerdict ? <strong style={{ color: VERDICT_TONE[navVerdict.strength] || 'var(--text-strong)' }}>{navVerdict.label}</strong> : '—'}
                       </td>
                     </tr>
                   )}
@@ -940,34 +950,23 @@ export default function Analytics() {
                         {m.down_capture?.toFixed(0) ?? '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: m.annual_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
-                        {m.annual_ret?.toFixed(1)}%
+                        {m.annual_ret != null ? `${m.annual_ret.toFixed(1)}%` : '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: m.annual_total_ret >= 0 ? 'var(--pos)' : 'var(--neg)' }}>
-                        {m.annual_total_ret?.toFixed(1)}%
+                        {m.annual_total_ret != null ? `${m.annual_total_ret.toFixed(1)}%` : '—'}
                       </td>
                       <td style={{ padding: '0.4rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
-                        {m.annual_vol?.toFixed(1)}%
+                        {m.annual_vol != null ? `${m.annual_vol.toFixed(1)}%` : '—'}
                       </td>
                       {(() => {
-                        const cov = tickerCoverage[m.ticker]
-                        const severity = tickerCoverageSeverity[m.ticker] || navSeverityFromRatio(cov)
-                        const accounting = tickerNavAccounting[m.ticker] || {}
+                        const finding = navFindings[m.ticker]
                         return (
-                          <td
-                            title={`Coverage is lower-is-better: 0–0.25 Low, >0.25–0.75 Medium, >0.75 High. Raw accounting: e ${formatIdentityRate(accounting.raw_nav_erosion_rate)}, d ${formatIdentityRate(accounting.distribution_rate_on_starting_nav)}, r ${formatIdentityRate(accounting.accounting_total_return_rate)}; e = d - r. Price-only up-market recovery: ${accounting.up_market_recovery_score != null ? `${Number(accounting.up_market_recovery_score).toFixed(1)}/100 from ${Number(accounting.up_market_capture_pct).toFixed(1)}% capture` : 'insufficient data'}.`}
-                            style={{ padding: '0.4rem 0.5rem', textAlign: 'right', fontWeight: 600, color: cov == null ? 'var(--p-556)' : navSeverityColor(severity) }}
-                          >
-                            <div>{cov != null ? cov.toFixed(2) : '—'}</div>
-                            {accounting.raw_nav_erosion_rate != null && (
-                              <small style={{ color: accounting.raw_nav_erosion_rate > 0 ? 'var(--neg)' : 'var(--pos)' }}>
-                                e {formatIdentityRate(accounting.raw_nav_erosion_rate)}
-                              </small>
-                            )}
-                            {accounting.up_market_recovery_score != null && (
-                              <small style={{ display: 'block', color: 'var(--text-dim)' }}>
-                                recovery {Number(accounting.up_market_recovery_score).toFixed(0)}
-                              </small>
-                            )}
+                          <td style={{ padding: '0.4rem 0.5rem', textAlign: 'left', fontSize: '0.76rem', minWidth: 150 }}>
+                            {finding ? <>
+                              <NavFindingLabel finding={finding} />
+                              {finding.detail && <small style={{ display: 'block', color: 'var(--text-dim)' }}>{finding.detail}</small>}
+                              {isNavLag(finding) && <NavLagNote compact />}
+                            </> : <span style={{ color: 'var(--text-dim)' }}>—</span>}
                           </td>
                         )
                       })()}
@@ -986,8 +985,66 @@ export default function Analytics() {
                 Optimization Results
                 {mode === 'optimize_returns' && ' — Max Returns (Sharpe + Sortino)'}
                 {mode === 'optimize_income' && ' — Max Income (Omega, Calmar, Ulcer, Sortino)'}
-                {mode === 'optimize_balanced' && ` — Balanced (${result.optimization.summary?.balance || balance}%) — Income vs Safety (Omega, Calmar, Ulcer, Sortino)`}
+                {mode === 'optimize_balanced' && ` — Balanced (${runBalance}%) — Income vs Safety (Omega, Calmar, Ulcer, Sortino)`}
+                {mode === 'target_grade' && ` — What it takes to reach a ${targetResult?.letter || targetGrade}`}
               </h3>
+
+              {/* Reach a grade: the headline answer, then the holdings to add to and trim. */}
+              {targetResult && (() => {
+                const t = targetResult
+                const weights = result.optimization.weights || []
+                const adds = weights.filter(w => w.action === 'BUY').sort((a, b) => b.dollar_change - a.dollar_change)
+                const trims = weights.filter(w => w.action === 'SELL').sort((a, b) => a.dollar_change - b.dollar_change)
+                const SHOWN = 12
+                const headline = t.status === 'no_holdings'
+                  ? 'None of the tickers on the list are held, so there is nothing to re-weight. Load your portfolio first.'
+                  : t.status === 'already'
+                    ? `This portfolio is already a ${t.start_grade} (${t.start_score}), at or above a ${t.letter}. No changes are needed.`
+                    : t.status === 'reached'
+                      ? `Shifting about ${formatMoneyWhole(t.moved_value)} (${t.moved_pct}% of the graded holdings) among holdings you already own takes the grade from ${t.start_grade} (${t.start_score}) to ${t.grade} (${t.score}).`
+                      : `A ${t.letter} (score ${t.cutoff}+) can't be reached by re-weighting these holdings within the limits below. The best mix found scores ${t.score} (${t.grade}), up from ${t.start_grade} (${t.start_score}), by shifting about ${formatMoneyWhole(t.moved_value)}.`
+                const list = (items, color) => <>
+                  {items.slice(0, SHOWN).map(w => (
+                    <div key={w.ticker} style={{ fontSize: '0.8rem', lineHeight: 1.6 }}>
+                      <strong style={{ color: 'var(--accent-bright)' }}>{w.ticker}</strong>{' '}
+                      <span style={{ color, fontWeight: 600 }}>{formatMoneyDelta(w.dollar_change, { digits: 0 })}</span>{' '}
+                      <span style={{ color: 'var(--text-dim)' }}>{w.current_pct.toFixed(1)}% {'→'} {w.optimal_pct.toFixed(1)}%</span>
+                    </div>
+                  ))}
+                  {items.length > SHOWN && <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>+{items.length - SHOWN} more in the table below</div>}
+                </>
+                return (
+                  <div style={{
+                    marginBottom: '0.9rem', padding: '0.7rem 0.9rem', borderRadius: 6, background: 'var(--surface-inset)',
+                    border: `1px solid ${t.status === 'unreachable' || t.status === 'no_holdings' ? 'var(--p-5a4a2c)' : 'var(--p-2a5a3c)'}`,
+                  }}>
+                    <div style={{ fontSize: '0.9rem', color: 'var(--text-strong)', fontWeight: 600, lineHeight: 1.45 }}>{headline}</div>
+                    {(adds.length > 0 || trims.length > 0) && (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: '0.5rem 1.5rem', margin: '0.6rem 0' }}>
+                        <div>
+                          <div style={{ color: 'var(--pos)', fontWeight: 600, fontSize: '0.8rem', marginBottom: '0.15rem' }}>Add to ({adds.length})</div>
+                          {adds.length ? list(adds, 'var(--pos)') : <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>None</div>}
+                        </div>
+                        <div>
+                          <div style={{ color: 'var(--neg)', fontWeight: 600, fontSize: '0.8rem', marginBottom: '0.15rem' }}>Trim ({trims.length})</div>
+                          {trims.length ? list(trims, 'var(--neg)') : <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>None</div>}
+                        </div>
+                      </div>
+                    )}
+                    {t.status !== 'no_holdings' && (
+                      <div style={{ fontSize: '0.74rem', color: 'var(--text-dim)', lineHeight: 1.5, marginTop: '0.35rem' }}>
+                        Limits: only holdings you already own, graded on the same {periodLabel} window as the grade above, and no holding
+                        grows past {t.max_weight_pct}%. The search makes the smallest moves it can that reach the grade.
+                        {t.blocked?.length > 0 && ` Can only shrink: ${t.blocked.map(b => `${b.ticker} (${b.reason})`).join(', ')}.`}
+                        {t.not_held?.length > 0 && ` On the list but not held, so left out: ${t.not_held.join(', ')}.`}
+                        {t.ungraded?.length > 0 && ` Held but without enough history to grade, so left as is: ${t.ungraded.join(', ')}.`}
+                        {t.status === 'unreachable' && t.stopped === 'budget' && ' The search hit its time limit; a longer one might find a little more.'}
+                        {' '}Illustrative only: a model mix to study, not a recommendation to buy or sell.
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Summary stats */}
               {result.optimization.summary && (
@@ -1011,7 +1068,7 @@ export default function Analytics() {
                       <th style={thStyle}>Ticker</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
                       <th style={{ ...thStyle, textAlign: 'right' }}>Optimal %</th>
-                      {result.optimization.weights[0]?.yield_pct != null && (
+                      {showYieldColumn && (
                         <th style={{ ...thStyle, textAlign: 'right' }}>Yield %</th>
                       )}
                       <th style={{ ...thStyle, textAlign: 'right' }}>Change</th>
@@ -1025,8 +1082,8 @@ export default function Analytics() {
                           <td style={{ padding: '0.35rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{w.ticker}</td>
                           <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>{w.current_pct.toFixed(1)}</td>
                           <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{w.optimal_pct.toFixed(1)}</td>
-                          {w.yield_pct != null && (
-                            <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--pos)' }}>{w.yield_pct.toFixed(2)}</td>
+                          {showYieldColumn && (
+                            <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--pos)' }}>{w.yield_pct != null ? w.yield_pct.toFixed(2) : '—'}</td>
                           )}
                           <td style={{
                             padding: '0.35rem 0.5rem', textAlign: 'right', fontWeight: 600,
@@ -1096,16 +1153,17 @@ export default function Analytics() {
                         {metricRow('Calmar Ratio', b.calmar, a.calmar, fmtNum, false, 'Return vs max drawdown. >2.0 great, >1.0 good')}
                         {metricRow('Ulcer Index', b.ulcer_index, a.ulcer_index, fmtNum, false, 'Drawdown severity & duration. <3 great, <5 good, >10 poor')}
                         {metricRow('Max Drawdown', b.max_drawdown, a.max_drawdown, fmtPct, false, 'Largest peak-to-trough decline. Closer to 0% is better')}
-                        {(b.coverage != null || a.coverage != null) && (() => {
-                          const covColor = (v) => navSeverityColor(navSeverityFromRatio(v))
-                          const covDelta = b.coverage != null && a.coverage != null ? a.coverage - b.coverage : null
+                        {(b.nav_flagged_share != null || a.nav_flagged_share != null) && (() => {
+                          const pct = v => v != null ? `${(v * 100).toFixed(1)}%` : '—'
+                          const delta = b.nav_flagged_share != null && a.nav_flagged_share != null ? a.nav_flagged_share - b.nav_flagged_share : null
+                          const tip = 'Share of the mix in funds the NAV assessment flags for erosion (the Dashboard verdict’s holdings behind its reading). NAV lag is not counted. Lower is better.'
                           return (
                             <tr style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
-                              <td title="Benchmark-gated yield-funding coverage; lower is better." style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem', cursor: 'help' }}>Yield-Funding Coverage ⓘ</td>
-                              <td title="Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High." style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(b.coverage), fontWeight: 600, cursor: 'help' }}>{b.coverage != null ? b.coverage.toFixed(4) : '—'}</td>
-                              <td title="Lower is better: 0–0.25 Low, above 0.25–0.75 Medium, above 0.75 High." style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covColor(a.coverage), fontWeight: 600, cursor: 'help' }}>{a.coverage != null ? a.coverage.toFixed(4) : '—'}</td>
-                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: covDelta == null ? 'var(--text-dim)' : covDelta < -0.01 ? 'var(--pos)' : covDelta > 0.01 ? 'var(--neg)' : 'var(--text-dim)', fontWeight: 600 }}>
-                                {covDelta != null ? (covDelta > 0 ? '+' : '') + covDelta.toFixed(4) : '—'}
+                              <td title={tip} style={{ padding: '0.3rem 0.5rem', color: 'var(--text-dim)', fontSize: '0.78rem', cursor: 'help' }}>In NAV-flagged funds {'ⓘ'}</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{pct(b.nav_flagged_share)}</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{pct(a.nav_flagged_share)}</td>
+                              <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right', color: delta == null ? 'var(--text-dim)' : delta < -0.001 ? 'var(--pos)' : delta > 0.001 ? 'var(--neg)' : 'var(--text-dim)', fontWeight: 600 }}>
+                                {delta != null ? `${delta > 0 ? '+' : ''}${(delta * 100).toFixed(1)} pts` : '—'}
                               </td>
                             </tr>
                           )
@@ -1140,11 +1198,12 @@ export default function Analytics() {
 
                 // CSV export
                 const exportCsv = () => {
-                  const modeLabel = mode === 'optimize_returns' ? 'Optimize Returns' : mode === 'optimize_income' ? 'Optimize Income' : `Balanced (${balance}%)`
+                  const modeLabel = scenarioLabel
                   const header = `# ${modeLabel} scenario - ${new Date().toLocaleDateString()} - illustrative model weights, not a recommendation to trade\n`
-                  const cols = 'Model Shift,Ticker,USD Change,~Share Equivalent,USD Price,NAV Chg %,Current %,Model %\n'
+                  const cols = 'Model Shift,Ticker,USD Change,~Share Equivalent,USD Price,NAV,Current %,Model %\n'
+                  const csvText = value => `"${String(value ?? '').replace(/"/g, '""')}"`
                   const rows = sorted.map(w =>
-                    `${shiftLabel[w.action] ?? w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${w.nav_change_pct?.toFixed(1) ?? ''},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
+                    `${shiftLabel[w.action] ?? w.action},${w.ticker},${w.dollar_change},${w.shares_change},${w.current_price?.toFixed(2) ?? ''},${csvText(navFindings[w.ticker]?.label)},${w.current_pct.toFixed(1)},${w.optimal_pct.toFixed(1)}`
                   ).join('\n')
                   const blob = new Blob([header + cols + rows], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
@@ -1163,8 +1222,8 @@ export default function Analytics() {
                       }}>Export CSV</button>
                       {result.optimization.comparison && (
                         <button onClick={async () => {
-                          const label = await dialog.prompt('Snapshot label:', `${mode === 'optimize_balanced' ? `Balanced ${balance}%` : mode === 'optimize_income' ? 'Income' : 'Returns'}`)
-                          if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance, optimization: result.optimization, portfolio_metrics: result.portfolio_metrics }])
+                          const label = await dialog.prompt('Snapshot label:', scenarioLabel)
+                          if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance: runBalance, optimization: result.optimization, portfolio_metrics: result.portfolio_metrics }])
                         }} style={{
                           background: 'none', border: '1px solid var(--p-3a5a3c)', borderRadius: 4, color: 'var(--pos-muted)',
                           fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
@@ -1194,7 +1253,7 @@ export default function Analytics() {
                           <th style={{ ...thStyle, textAlign: 'right' }}>Change ({getCurrencyLabel()})</th>
                           <th style={{ ...thStyle, textAlign: 'right' }} title="Approximate share equivalent of the dollar change at the last close">~Share Equiv.</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Price</th>
-                          <th style={{ ...thStyle, textAlign: 'right' }}>NAV Chg</th>
+                          <th style={thStyle} title="The same NAV result as the Dashboard and NAV Erosion screens">NAV</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Current %</th>
                           <th style={{ ...thStyle, textAlign: 'right' }}>Model %</th>
                         </tr>
@@ -1224,11 +1283,8 @@ export default function Analytics() {
                             <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
                               {formatMoney(w.current_price)}
                             </td>
-                            <td style={{
-                              padding: '0.35rem 0.5rem', textAlign: 'right', fontSize: '0.75rem',
-                              color: (w.nav_change_pct ?? 0) >= 0 ? 'var(--pos)' : 'var(--neg)',
-                            }}>
-                              {w.nav_change_pct != null ? (w.nav_change_pct >= 0 ? '+' : '') + w.nav_change_pct.toFixed(1) + '%' : '—'}
+                            <td style={{ padding: '0.35rem 0.5rem', fontSize: '0.75rem' }}>
+                              {navFindings[w.ticker] ? <NavFindingLabel finding={navFindings[w.ticker]} /> : <span style={{ color: 'var(--text-dim)' }}>—</span>}
                             </td>
                             <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>{w.current_pct.toFixed(1)}</td>
                             <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-strong)', fontWeight: 600 }}>{w.optimal_pct.toFixed(1)}</td>

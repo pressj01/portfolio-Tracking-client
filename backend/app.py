@@ -28718,42 +28718,36 @@ def _run_nav_assessment(info, choices, cash, *, window="CUSTOM", start_date=None
                                 market_loader=_nav_screen_market_history, price_loader=loader("prices"))
 
 
-@app.route("/api/nav-assessment", methods=["GET"])
-def nav_assessment_data():
-    is_aggregate, profile_ids = get_profile_filter()
-    window = request.args.get("window", "1Y").upper()
-    if window not in NAV_ASSESSMENT_WINDOWS:
-        return jsonify({"error": "Unsupported NAV assessment window"}), 400
-    if window == "CUSTOM" and "period" not in request.args:
-        return jsonify({"error": "Custom assessment requires period=custom and both dates"}), 400
-    period_range = None
-    if "period" in request.args:
-        try:
-            period_range = _resolve_total_return_period(
-                request.args.get("period"), start_date=request.args.get("start_date"), end_date=request.args.get("end_date"))
-        except ValueError as exc:
-            return jsonify({"error": str(exc)}), 400
-        window = period_range["key"].upper()
-    conn = get_connection()
+def _nav_assessment_period_range(conn, profile_ids, period, start_date=None, end_date=None):
+    """Dates for a shared performance period, resolved the Dashboard's way.
+
+    All Market starts at the portfolio's first trade (shared performance's
+    inception policy), not at the oldest quote any fund has.
+    """
+    period_range = _resolve_total_return_period(period, start_date=start_date, end_date=end_date)
+    if period_range["key"] != "all":
+        return period_range
+    placeholders = ",".join("?" * len(profile_ids))
+    # Include transactions for positions that have since been closed.
+    inception_holdings = [dict(row) for row in conn.execute(
+        f"SELECT * FROM all_account_info WHERE profile_id IN ({placeholders})", profile_ids)]
     try:
-        placeholders = ",".join("?" * len(profile_ids))
-        info, choices, cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids)
-        if period_range and period_range["key"] == "all":
-            # Use the same portfolio inception policy as shared performance,
-            # including transactions for positions that have since been closed.
-            inception_holdings = [dict(row) for row in conn.execute(
-                f"SELECT * FROM all_account_info WHERE profile_id IN ({placeholders})", profile_ids)]
-            try:
-                inception_transactions = [dict(row) for row in conn.execute(
-                    f"SELECT * FROM transactions WHERE profile_id IN ({placeholders})", profile_ids)]
-            except sqlite3.OperationalError:
-                inception_transactions = []
-            inception = _portfolio_inception_date(inception_holdings, inception_transactions)
-            if not inception:
-                return jsonify({"error": "The shared All Market start is unavailable; choose another date range."}), 400
-            period_range = _resolve_total_return_period("all", inception_date=inception)
-    finally:
-        conn.close()
+        inception_transactions = [dict(row) for row in conn.execute(
+            f"SELECT * FROM transactions WHERE profile_id IN ({placeholders})", profile_ids)]
+    except sqlite3.OperationalError:
+        inception_transactions = []
+    inception = _portfolio_inception_date(inception_holdings, inception_transactions)
+    if not inception:
+        raise ValueError("The shared All Market start is unavailable; choose another date range.")
+    return _resolve_total_return_period("all", inception_date=inception)
+
+
+def _cached_nav_assessment(profile_ids, is_aggregate, window, period_range, info, choices, cash):
+    """The shared NAV assessment for these funds and dates, reused for 5 minutes.
+
+    The Dashboard and Portfolio Analytics both come through here, so the same
+    holdings over the same range share one result.
+    """
     # Include quantities, values and settings; cache cannot leak across accounts
     # or survive a changed position/reference. New endpoint ignores legacy caches.
     assessment_end = datetime.date.fromisoformat(period_range["end_date"]) if period_range else datetime.date.today()
@@ -28762,8 +28756,8 @@ def nav_assessment_data():
                  json.dumps(info, sort_keys=True), json.dumps(choices, sort_keys=True), cash)
     cached = _NAV_ASSESSMENT_CACHE.get(cache_key)
     if cached and time.time() - cached[0] < 300:
-        return jsonify(cached[1])
-    result = _run_nav_assessment(info, _nav_saved_reference_choices(choices), cash, window=window,
+        return cached[1]
+    result = _run_nav_assessment(info, choices, cash, window=window,
                                  start_date=assessment_start, as_of=assessment_end)
     if period_range:
         result["period_label"] = "All Market" if window == "ALL" else period_range["label"]
@@ -28773,7 +28767,86 @@ def nav_assessment_data():
         if len(_NAV_ASSESSMENT_CACHE) > 24:
             _NAV_ASSESSMENT_CACHE.clear()
         _NAV_ASSESSMENT_CACHE[cache_key] = (time.time(), result)
-    return jsonify(result)
+    return result
+
+
+@app.route("/api/nav-assessment", methods=["GET"])
+def nav_assessment_data():
+    is_aggregate, profile_ids = get_profile_filter()
+    window = request.args.get("window", "1Y").upper()
+    if window not in NAV_ASSESSMENT_WINDOWS:
+        return jsonify({"error": "Unsupported NAV assessment window"}), 400
+    if window == "CUSTOM" and "period" not in request.args:
+        return jsonify({"error": "Custom assessment requires period=custom and both dates"}), 400
+    period_range = None
+    conn = get_connection()
+    try:
+        if "period" in request.args:
+            try:
+                period_range = _nav_assessment_period_range(
+                    conn, profile_ids, request.args.get("period"),
+                    start_date=request.args.get("start_date"), end_date=request.args.get("end_date"))
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            window = period_range["key"].upper()
+        info, choices, cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids)
+    finally:
+        conn.close()
+    return jsonify(_cached_nav_assessment(profile_ids, is_aggregate, window, period_range, info,
+                                          _nav_saved_reference_choices(choices), cash))
+
+
+# NAV erosion findings the Dashboard verdict counts against a fund
+# ("Holdings behind this reading"). NAV lag is deliberately not one of them.
+def _nav_flagged_tickers(nav_payload):
+    holdings = ((nav_payload or {}).get("verdict") or {}).get("holdings") or {}
+    return {item["ticker"] for item in holdings.get("implicated") or [] if item.get("ticker")}
+
+
+def _analytics_nav_assessment(is_aggregate, profile_ids, tickers, period):
+    """The Dashboard's NAV assessment for the tickers on the Analytics list.
+
+    Same inputs, saved references, date range and cache as /api/nav-assessment.
+    When the list holds every current position it is the Dashboard's exact
+    request, cash included, so the portfolio verdict matches too; a partial
+    list leaves cash out, as the NAV Erosion Screener does.
+    """
+    conn = get_connection()
+    try:
+        placeholders = ",".join("?" * len(profile_ids))
+        held = {str(row[0]).strip().upper() for row in conn.execute(
+            f"SELECT DISTINCT ticker FROM all_account_info WHERE profile_id IN ({placeholders}) AND quantity > 0",
+            profile_ids)}
+        period_range = _nav_assessment_period_range(conn, profile_ids, period)
+        info, choices, cash = _nav_assessment_inputs(conn, is_aggregate, profile_ids, tickers)
+    finally:
+        conn.close()
+    # Tickers typed in but not held weigh nothing here, as in the Analytics grade;
+    # a zero (not missing) value keeps the held funds' account shares exact.
+    for ticker in info:
+        if ticker not in held:
+            info[ticker] = {**info[ticker], "current_value": 0.0}
+    whole_portfolio = bool(held) and held <= set(info)
+    payload = _cached_nav_assessment(profile_ids, is_aggregate, period_range["key"].upper(), period_range, info,
+                                     _nav_saved_reference_choices(choices), cash if whole_portfolio else 0)
+    return payload, whole_portfolio
+
+
+def _analytics_nav_summary(payload, whole_portfolio):
+    """What the Analytics screen shows from the shared NAV assessment."""
+    return {
+        "verdict": payload.get("verdict"),
+        "results": [{
+            "ticker": row["ticker"],
+            "finding": row.get("finding"),
+            "reference": (row.get("reference") or {}).get("selected"),
+        } for row in payload.get("results") or []],
+        "flagged": sorted(_nav_flagged_tickers(payload)),
+        "requested_start": payload.get("requested_start"),
+        "as_of": payload.get("as_of"),
+        "period_label": payload.get("period_label"),
+        "whole_portfolio": whole_portfolio,
+    }
 
 
 @app.route("/api/nav-assessment/reference/<ticker>", methods=["PUT"])
@@ -48860,16 +48933,18 @@ def _optimize_sharpe(returns_df, current_weights=None, weight_caps=None, turnove
     return _clamp_and_normalize(best.x, bounds)
 
 
-def _compute_nav_erosion(close_df, tickers, trading_days=252):
+def _compute_nav_erosion(close_df, tickers, trading_days=252, eligible=None):
     """Compute structural NAV erosion proxy for eligible high-risk income products.
 
     Non-candidates get 0 so ordinary stocks, broad/dividend ETFs, BDCs, and
-    normal preferred funds do not get penalized as NAV erosion.
+    normal preferred funds do not get penalized as NAV erosion. ``eligible``
+    replaces that name-based gate with an explicit set — Analytics passes the
+    funds the shared NAV assessment flags, so NAV lag is never penalized.
     """
     import numpy as np
     erosion = {}
     for t in tickers:
-        if not _is_nav_erosion_candidate(t):
+        if (t not in eligible) if eligible is not None else not _is_nav_erosion_candidate(t):
             erosion[t] = 0.0
             continue
         if t not in close_df.columns:
@@ -49114,14 +49189,15 @@ def _optimize_balanced(returns_df, yields, balance=0.5, current_weights=None, mi
 
 def _before_after_comparison(returns_df, opt_weights, bench_ret,
                               port_metrics_before, curr_income, opt_income,
-                              current_weights=None, coverage_map=None,
+                              current_weights=None, nav_flagged=None,
                               available_tickers=None,
                               grade_returns_df=None, grade_tickers=None,
-                              min_obs=None, grading_settings=None):
-    """Compute before/after grade, income, coverage, and key metrics.
+                              min_obs=None, grading_settings=None, reuse_unchanged=True):
+    """Compute before/after grade, income, NAV-flagged share, and key metrics.
     Uses already-computed port_metrics and income values from the optimization branch
     so numbers match exactly what's shown in the optimization summary.
-    If weights are essentially unchanged, reuses before metrics to avoid grading noise.
+    If weights are essentially unchanged, reuses before metrics to avoid grading noise
+    (unless reuse_unchanged is False: a grade target can be crossed by a small move).
 
     When grade_returns_df / grade_tickers are supplied, the "after" grade is computed
     on the SAME shared window and ticker universe as the "before" grade (port_metrics),
@@ -49133,22 +49209,21 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
     pm = port_metrics_before or {}
     grade_before = pm.get("grade", {})
 
-    # Compute weighted coverage for current and optimal weights
-    def _weighted_coverage(weights_arr):
-        if coverage_map is None or available_tickers is None:
+    # Share of the mix in funds the shared NAV assessment flags (the Dashboard
+    # verdict's "holdings behind this reading"); lower is better.
+    def _flagged_share(weights_arr):
+        if nav_flagged is None or available_tickers is None:
             return None
-        total_w = 0.0
-        weighted_sum = 0.0
-        for i, t in enumerate(available_tickers):
-            cov = coverage_map.get(t)
-            w = float(weights_arr[i]) if i < len(weights_arr) else 0
-            if cov is not None and w > 0.001:
-                weighted_sum += cov * w
-                total_w += w
-        return round(weighted_sum / total_w, 4) if total_w > 0 else None
+        weights = np.array(weights_arr, dtype=float)
+        total = float(weights.sum())
+        if total <= 0:
+            return None
+        flagged = sum(float(weights[i]) for i, t in enumerate(available_tickers)
+                      if i < len(weights) and t in nav_flagged)
+        return round(flagged / total, 4)
 
-    curr_cov = _weighted_coverage(current_weights) if current_weights is not None else None
-    opt_cov = _weighted_coverage(opt_weights)
+    curr_flagged = _flagged_share(current_weights) if current_weights is not None else None
+    opt_flagged = _flagged_share(opt_weights)
 
     before = {
         "grade": grade_before.get("overall", "—") if isinstance(grade_before, dict) else str(grade_before),
@@ -49161,10 +49236,10 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
         "max_drawdown": pm.get("max_drawdown"),
         "annual_income": round(curr_income, 2),
         "monthly_income": round(curr_income / 12, 2),
-        "coverage": curr_cov,
+        "nav_flagged_share": curr_flagged,
     }
     # If weights barely changed (all within 0.5%), reuse before metrics — no real change
-    if current_weights is not None:
+    if current_weights is not None and reuse_unchanged:
         max_change = float(np.max(np.abs(np.array(opt_weights) - np.array(current_weights)))) * 100
         if max_change < 0.5:
             return {"before": before, "after": dict(before)}
@@ -49197,7 +49272,7 @@ def _before_after_comparison(returns_df, opt_weights, bench_ret,
             "max_drawdown": pm_after.get("max_drawdown"),
             "annual_income": round(opt_income, 2),
             "monthly_income": round(opt_income / 12, 2),
-            "coverage": opt_cov,
+            "nav_flagged_share": opt_flagged,
         },
     }
 
@@ -49523,29 +49598,18 @@ def analytics_data():
         for t, value in value_map.items()
     }
 
-    coverage_info = _ticker_info_from_holding_rows(db_rows)
-    for t in tickers:
-        if t not in coverage_info:
-            coverage_info[t] = {
-                "current_price": 1.0,
-                "quantity": 1.0,
-                "description": "",
-                "classification_type": "",
-                "annual_income": 0.0,
-                "current_value": 0.0,
-                "nav_erosion_scope": "auto",
-                "nav_benchmark_override": None,
-            }
-    coverage_payload = _build_nav_coverage_payload(
-        {t: coverage_info[t] for t in tickers if t in coverage_info},
-        cache_key=None,
-        use_cache=False,
-    )
-    coverage_map = {
-        r["ticker"]: r.get("coverage_ratio")
-        for r in coverage_payload.get("results", [])
-        if r.get("coverage_ratio") is not None
-    }
+    # NAV erosion and NAV lag come from the Dashboard's assessment (same
+    # references, dates and per-fund finding as both NAV Erosion screens).
+    # nav_flagged stays None if it can't run, and the optimizers then fall
+    # back to their older price-only erosion gate.
+    nav_summary = None
+    nav_flagged = None
+    try:
+        nav_payload, nav_whole_portfolio = _analytics_nav_assessment(_is_agg, pids, tickers, period)
+        nav_summary = _analytics_nav_summary(nav_payload, nav_whole_portfolio)
+        nav_flagged = _nav_flagged_tickers(nav_payload)
+    except Exception as exc:
+        nav_summary = {"error": f"NAV assessment unavailable: {exc}"}
 
     bench_close = close[benchmark] if benchmark in close.columns else None
     bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
@@ -49692,20 +49756,8 @@ def analytics_data():
         port_metrics["annual_ret"] = round(float(port_daily.mean() * 252) * 100, 2)
         port_metrics["annual_vol"] = round(float(port_daily.std() * np.sqrt(252)) * 100, 2)
 
-    coverage_by_ticker = {r.get("ticker"): r for r in coverage_payload.get("results", [])}
-    cov_results = [coverage_by_ticker.get(t, {"ticker": t, "coverage_ratio": None}) for t in available_tickers]
-
     result = {"metrics": metrics, "portfolio_metrics": port_metrics,
-              "coverage": {
-                  "results": cov_results,
-                  "aggregate_coverage": coverage_payload.get("aggregate_coverage"),
-                  "aggregate_severity": coverage_payload.get("aggregate_severity"),
-                  "aggregate_raw_nav_erosion_rate": coverage_payload.get("aggregate_raw_nav_erosion_rate"),
-                  "aggregate_distribution_rate_on_starting_nav": coverage_payload.get("aggregate_distribution_rate_on_starting_nav"),
-                  "aggregate_accounting_total_return_rate": coverage_payload.get("aggregate_accounting_total_return_rate"),
-                  "accounting_window": coverage_payload.get("accounting_window"),
-                  "accounting_scope": coverage_payload.get("accounting_scope"),
-              },
+              "nav_assessment": nav_summary,
               "window_too_short": window_too_short,
               "min_observations": min_obs,
               "window_observations": window_observations}
@@ -49798,7 +49850,7 @@ def analytics_data():
             result["portfolio_type"] = "mixed"
 
     # Optimization modes
-    if mode in ("optimize_returns", "optimize_income", "optimize_balanced") and len(available_tickers) >= 2:
+    if mode in ("optimize_returns", "optimize_income", "optimize_balanced", "target_grade") and len(available_tickers) >= 2:
         returns_df = close[available_tickers].pct_change().dropna()
         current_weights = np.array([weight_map.get(t, 0) for t in available_tickers])
         cw_sum = current_weights.sum()
@@ -49808,8 +49860,9 @@ def analytics_data():
         else:
             current_weights = np.ones(len(available_tickers)) / len(available_tickers)
 
-        # Compute NAV erosion for yield-based optimizers
-        nav_returns = _compute_nav_erosion(close, available_tickers)
+        # Erosion penalties apply only to funds the shared NAV assessment flags
+        # (never NAV lag); the size of each still comes from its price decline.
+        nav_returns = _compute_nav_erosion(close, available_tickers, eligible=nav_flagged)
         single_stock_etfs = _get_single_stock_etfs()
 
         if mode == "optimize_returns":
@@ -49831,7 +49884,7 @@ def analytics_data():
             curr_vol = float(np.sqrt(current_weights @ cov @ current_weights))
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
                             "optimal_pct": round(opt_w[i] * 100, 2)} for i, t in enumerate(available_tickers)]
-            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val)
             opt_dict = {
                 "weights": weights_out, "frontier": frontier,
                 "optimal_point": {"vol": round(opt_vol * 100, 2), "ret": round(mean_ret * 100, 2)},
@@ -49849,7 +49902,7 @@ def analytics_data():
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, ret_curr_income, ret_opt_income,
                                                                    current_weights=current_weights,
-                                                                   coverage_map=coverage_map,
+                                                                   nav_flagged=nav_flagged,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
@@ -49878,7 +49931,7 @@ def analytics_data():
             weights_out = [{"ticker": t, "current_pct": round(current_weights[i] * 100, 2),
                             "optimal_pct": round(opt_w[i] * 100, 2), "yield_pct": round(yields_list[i] * 100, 2)}
                            for i, t in enumerate(available_tickers)]
-            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val)
             scatter_data = []
             for i, t in enumerate(available_tickers):
                 tc = close[t].dropna()
@@ -49905,7 +49958,7 @@ def analytics_data():
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, curr_income, opt_income,
                                                                    current_weights=current_weights,
-                                                                   coverage_map=coverage_map,
+                                                                   nav_flagged=nav_flagged,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
@@ -49964,7 +50017,7 @@ def analytics_data():
                 scatter_data.append({"ticker": t, "yield_pct": round(yields_list[i] * 100, 2),
                                      "vol_pct": round(vol * 100, 2), "sharpe": sharpe_t if sharpe_t else 0,
                                      "is_optimal": float(opt_w[i]) > 0.01})
-            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val, nav_returns)
+            weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, total_val)
             opt_dict = {
                 "weights": weights_out, "scatter": scatter_data,
                 "summary": {"opt_yield": round(opt_yield * 100, 2), "curr_yield": round(curr_yield * 100, 2),
@@ -49985,13 +50038,81 @@ def analytics_data():
                 opt_dict["comparison"] = _before_after_comparison(returns_df, opt_w, bench_ret,
                                                                    port_metrics, curr_income, opt_income,
                                                                    current_weights=current_weights,
-                                                                   coverage_map=coverage_map,
+                                                                   nav_flagged=nav_flagged,
                                                                    available_tickers=available_tickers,
                                                                    grade_returns_df=graded_returns,
                                                                    grade_tickers=grade_tickers,
                                                                    grading_settings=grading_settings,
                                                                    min_obs=effective_min_obs)
             result["optimization"] = opt_dict
+
+        elif mode == "target_grade":
+            # What it would take to reach a grade by re-weighting only the
+            # holdings already held, on the same window, tickers and dollar
+            # weights as the grade shown above. Holdings may shrink to zero;
+            # single-stock ETFs and NAV-flagged funds may not grow.
+            from grading import GRADE_TARGET_CUTOFF_KEYS, normalize_grading_settings, search_weights_for_grade
+            cuts = normalize_grading_settings(grading_settings)["letterCutoffs"]
+            target_letter = str(data.get("target_grade") or "B").strip().upper()
+            if target_letter not in GRADE_TARGET_CUTOFF_KEYS:
+                target_letter = "B"
+            target_score = float(cuts[GRADE_TARGET_CUTOFF_KEYS[target_letter]])
+            max_weight = 0.25
+            grade_values = np.array([value_map.get(t, 0.0) for t in grade_tickers], dtype=float)
+            start_grade = port_metrics.get("grade") or {}
+            target = {
+                "letter": target_letter, "cutoff": target_score,
+                "start_grade": start_grade.get("overall"), "start_score": start_grade.get("score"),
+                "max_weight_pct": round(max_weight * 100),
+                # Listed but not held, or held without enough history to grade.
+                "not_held": [t for t in grade_tickers if value_map.get(t, 0) <= 0],
+                "ungraded": [t for t in tickers if value_map.get(t, 0) > 0 and t not in grade_tickers],
+            }
+            if grade_values.sum() <= 0:
+                result["optimization"] = {"target": {**target, "status": "no_holdings"}}
+            else:
+                blocked = {}
+                for t in grade_tickers:
+                    if value_map.get(t, 0) <= 0:
+                        continue
+                    if t in single_stock_etfs:
+                        blocked[t] = "single-stock ETF"
+                    elif nav_flagged and t in nav_flagged:
+                        blocked[t] = "flagged for NAV erosion"
+                found = search_weights_for_grade(
+                    graded_returns[grade_tickers], grade_values, bench_ret, target_score,
+                    can_increase=[t not in blocked for t in grade_tickers], max_weight=max_weight,
+                    min_obs=effective_min_obs, grading_settings=grading_settings,
+                )
+                graded_value = float(grade_values.sum())
+                current = grade_values / graded_value
+                model = found["weights"]
+                weights_out = [{"ticker": t, "current_pct": round(current[i] * 100, 2),
+                                "optimal_pct": round(model[i] * 100, 2)}
+                               for i, t in enumerate(grade_tickers) if value_map.get(t, 0) > 0]
+                weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value)
+                yields = np.array([yield_map.get(t, 0) for t in grade_tickers], dtype=float)
+                curr_income = float(current @ yields) * graded_value
+                opt_income = float(model @ yields) * graded_value
+                moved = float(np.abs(model - current).sum()) / 2
+                status = ("already" if found["start_score"] >= target_score
+                          else "reached" if found["reached"] else "unreachable")
+                result["optimization"] = {
+                    "weights": weights_out,
+                    "rebalance_summary": rebal_summary,
+                    "comparison": _before_after_comparison(
+                        graded_returns, model, bench_ret, port_metrics, curr_income, opt_income,
+                        current_weights=current, nav_flagged=nav_flagged, available_tickers=grade_tickers,
+                        grade_returns_df=graded_returns, grade_tickers=grade_tickers,
+                        grading_settings=grading_settings, min_obs=effective_min_obs, reuse_unchanged=False,
+                    ),
+                    "target": {
+                        **target, "status": status, "stopped": found["stopped"],
+                        "score": found["score"], "grade": found["grade"],
+                        "moved_pct": round(moved * 100, 1), "moved_value": round(moved * graded_value, 2),
+                        "blocked": [{"ticker": t, "reason": reason} for t, reason in blocked.items()],
+                    },
+                }
 
     return jsonify(result)
 
