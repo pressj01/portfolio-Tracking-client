@@ -2703,7 +2703,8 @@ class HoldingsTransactionApiTest(unittest.TestCase):
             headers,
             [
                 "Date", "Ex Date", "Coverage Start", "Coverage End", "Type",
-                "Ticker", "Shares", "Price Per Share", "Fees", "Amount", "Notes",
+                "Ticker", "Shares", "Price Per Share", "Fees", "Amount", "Split Ratio",
+                "Notes",
             ],
         )
 

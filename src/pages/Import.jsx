@@ -4,7 +4,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import ImportWorkflowPicker, { TransactionOrderWarning } from '../components/ImportWorkflowPicker'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
-import { formatMoney as formatDisplayMoney } from '../utils/money'
+import { convertMoneyText, formatMoney as formatDisplayMoney } from '../utils/money'
 import {
   NO_FORMAT,
   MULTI_ACCOUNT_FORMATS,
@@ -518,6 +518,9 @@ export default function Import() {
   const [txnFile, setTxnFile] = useState(null)
   const [txnPreview, setTxnPreview] = useState(null)
   const [txnPreviewLoading, setTxnPreviewLoading] = useState(false)
+  // Preview rows (by index) the user chose to import in post-split shares.
+  // Empty by default: a split warning never converts anything on its own.
+  const [splitConvert, setSplitConvert] = useState({})
   const [txnImporting, setTxnImporting] = useState(false)
   const [txnNavOnly, setTxnNavOnly] = useState(false)
   // Account key -> portfolio id (or 'new' / 'skip') for multi-account files
@@ -1711,7 +1714,7 @@ export default function Import() {
 
           {txnFormat === 'generic_transactions' && (
             <div className="alert alert-info" style={{ marginBottom: '1rem' }}>
-              <strong>Generic transactions template available:</strong> download the XLSX template, replace the sample rows, and keep one transaction per row. DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows record money and shares moving in or out for the Dashboard&apos;s Account Alpha. CSV files with the same headers are also supported.
+              <strong>Generic transactions template available:</strong> download the XLSX template, replace the sample rows, and keep one transaction per row. DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows record money and shares moving in or out for the Dashboard&apos;s Account Alpha. A SPLIT row (Ticker, Date, and a Split Ratio such as 20:1) restates that ticker&apos;s earlier trades in post-split shares. CSV files with the same headers are also supported.
               <div style={{ marginTop: '0.75rem' }}>
                 <button className="btn btn-secondary" onClick={handleDownloadGenericTransactionsTemplate}>
                   Download Generic Transactions Template
@@ -1965,6 +1968,7 @@ export default function Import() {
                   const res = await pf(`/api/import/transactions/preview`, { method: 'POST', body: formData })
                   const data = await res.json()
                   if (!res.ok) throw new Error(data.error || 'Preview failed')
+                  setSplitConvert({})
                   setTxnPreview(data)
                   if (data.as_of) {
                     setNavSnapshotDate(data.as_of)
@@ -2015,6 +2019,8 @@ export default function Import() {
                   if (txnFormat === 'portfolio_export') formData.append('export_scope', exportScope)
                   if (txnNavOnly && (txnPreview?.format_type === 'positions' || txnIsMultiPositions)) formData.append('nav_only', 'true')
                   if (txnIsMultiAccount) formData.append('account_map', JSON.stringify(txnAccountMap))
+                  const splitConversions = (txnPreview?.split_warnings || []).filter((w) => splitConvert[w.index])
+                  if (splitConversions.length) formData.append('split_conversions', JSON.stringify(splitConversions))
                   try {
                     await waitForRefreshBeforeImport()
                     const res = await pf(`/api/import/transactions`, { method: 'POST', body: formData })
@@ -2412,9 +2418,54 @@ export default function Import() {
                   <>{txnPreview.summary.filtered} rows filtered out. </>
                 )}
                 {txnPreview.summary.drip_detected > 0 && (
-                  <>{txnPreview.summary.drip_detected} DRIP reinvestments detected.</>
+                  <>{txnPreview.summary.drip_detected} DRIP reinvestments detected. </>
+                )}
+                {txnPreview.summary.splits_applied > 0 && (
+                  <>
+                    {(txnPreview.splits || []).length > 0
+                      ? `Stock splits restated the earlier rows in post-split shares: ${txnPreview.splits.map((s) => (
+                        `${s.ticker} ${s.ratio >= 1 ? `${+s.ratio.toFixed(6)}-for-1` : `1-for-${+(1 / s.ratio).toFixed(6)}`} on ${s.date} (${s.rows_adjusted} row${s.rows_adjusted === 1 ? '' : 's'})`
+                      )).join(', ')}.`
+                      : `${txnPreview.summary.splits_applied} stock split${txnPreview.summary.splits_applied === 1 ? '' : 's'} restated earlier rows in post-split shares.`}
+                  </>
                 )}
               </div>
+
+              {(txnPreview.split_warnings || []).length > 0 && (
+                <div className="alert alert-warning" style={{ marginBottom: '0.75rem' }}>
+                  <strong>
+                    {txnPreview.split_warnings.length === 1
+                      ? '1 trade looks like it is in pre-split shares.'
+                      : `${txnPreview.split_warnings.length} trades look like they are in pre-split shares.`}
+                  </strong>{' '}
+                  The cost-basis ledger does not adjust for splits, so a pre-split lot next to post-split sales
+                  reports false gains and losses. Nothing is converted unless you tick it; leave a row unticked
+                  if its figures are already post-split.
+                  {txnPreview.split_warnings.map((w) => (
+                    <div key={w.index} style={{ marginTop: '0.6rem', paddingTop: '0.5rem', borderTop: '1px solid rgba(255,184,108,0.25)' }}>
+                      <div>{convertMoneyText(w.message)}</div>
+                      {w.already_in_ledger ? (
+                        <div style={{ marginTop: '0.3rem' }}>
+                          This row is already in your records as entered, so converting it here would add a second
+                          copy. Fix the saved row instead: Edit it in Transaction History, which offers the
+                          post-split figures.
+                        </div>
+                      ) : (
+                        <label style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', marginTop: '0.3rem', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={!!splitConvert[w.index]}
+                            onChange={(e) => setSplitConvert((prev) => ({ ...prev, [w.index]: e.target.checked }))}
+                          />
+                          Import as {Number(w.suggested_shares).toLocaleString(undefined, { maximumFractionDigits: 6 })} shares
+                          @ {formatMoney(w.suggested_price_per_share)}
+                          {w.post_split_in_ledger && ' (matches the post-split row already in your records, so it will be skipped as a duplicate)'}
+                        </label>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div style={{ maxHeight: '400px', overflow: 'auto', border: '1px solid var(--p-333)', borderRadius: '6px' }}>
                 <table className="data-table" style={{ fontSize: '0.8rem' }}>

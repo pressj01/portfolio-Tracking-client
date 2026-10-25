@@ -169,6 +169,7 @@ from dividend_safety import (
 from accumulation_sim import run_accumulation_comparison
 import yahoo_gateway
 import market_data_provider
+import split_check
 
 # yfinance stashes each download's frames in a module-level dict keyed by ticker
 # ALONE (yfinance.shared._DFS) — the date range is not part of the key. Two
@@ -11490,6 +11491,128 @@ def _import_portfolio_export_workbook(
     })
 
 
+def _ledger_has_trade(conn, ticker, profile_id, txn_type, txn_date, shares, price):
+    """Whether the account already holds this fill, matched as the import dedupes."""
+    row = conn.execute(
+        "SELECT 1 FROM transactions WHERE ticker = ? AND profile_id = ? "
+        "AND transaction_type = ? AND transaction_date = ? "
+        "AND ABS(shares - ?) < 0.0001 AND ABS(COALESCE(price_per_share, 0) - ?) < ? LIMIT 1",
+        (ticker, profile_id, txn_type, txn_date, shares, price, _txn_price_match_tolerance(shares)),
+    ).fetchone()
+    return row is not None
+
+
+def _import_split_warnings(parsed, profile_id):
+    """Pre-split warnings for the BUY/SELL rows an import preview will add.
+
+    Each row is checked against Yahoo's split-adjusted range for its month,
+    or failing that the same ticker's later rows in the file and this
+    account's ledger. ``index`` points into ``parsed["transactions"]`` so
+    the import can restate the rows the user chooses. Never raises; a ticker
+    whose split history cannot be read gets no warning.
+    """
+    from collections import defaultdict
+
+    trades_by_ticker = defaultdict(list)
+    for index, txn in enumerate(parsed.get("transactions") or []):
+        if txn.get("type") in ("BUY", "SELL") and txn.get("ticker"):
+            trades_by_ticker[txn["ticker"]].append((index, txn))
+    warnings = []
+    if not trades_by_ticker:
+        return warnings
+    conn = get_connection()
+    try:
+        for ticker, trades in sorted(trades_by_ticker.items()):
+            try:
+                if not any(_split_check_possible(txn.get("date")) for _index, txn in trades):
+                    continue
+                history = _yahoo_split_history(ticker)
+                if not history or not history["splits"]:
+                    continue
+                file_rows = [
+                    {"date": txn.get("date"), "price_per_share": txn.get("price_per_share"), "index": index}
+                    for index, txn in trades
+                ]
+                ledger_rows = _ledger_trade_prices(conn, ticker, profile_id)
+                reference_price = _holding_reference_price(conn, ticker, profile_id)
+                for index, txn in trades:
+                    others = ledger_rows + [row for row in file_rows if row["index"] != index]
+                    warning = split_check.pre_split_warning(
+                        ticker, txn["type"], txn.get("date"), txn.get("shares"),
+                        txn.get("price_per_share"), history["splits"], others,
+                        current_price=reference_price,
+                        monthly_ranges=history.get("monthly_ranges"),
+                    )
+                    if not warning:
+                        continue
+                    warning["index"] = index
+                    # A re-import of a row already saved as entered would add
+                    # a second copy if converted; that row is fixed by editing
+                    # it. One already saved in post-split shares is matched,
+                    # and skipped as a duplicate, once this row is converted.
+                    warning["already_in_ledger"] = _ledger_has_trade(
+                        conn, ticker, profile_id, txn["type"], txn.get("date"),
+                        warning["shares"], warning["price_per_share"],
+                    )
+                    warning["post_split_in_ledger"] = _ledger_has_trade(
+                        conn, ticker, profile_id, txn["type"], txn.get("date"),
+                        warning["suggested_shares"], warning["suggested_price_per_share"],
+                    )
+                    warnings.append(warning)
+            except Exception:
+                continue
+    finally:
+        conn.close()
+    return warnings
+
+
+def _apply_import_split_conversions(parsed, raw_conversions):
+    """Restate the preview rows the user chose to import in post-split units.
+
+    The preview only warns. ``raw_conversions`` is a JSON list of the warnings
+    the user accepted, each naming its row by index into the re-parsed file and
+    repeating the row's ticker, date, type, shares, and price. A row that no
+    longer matches means the file changed since the preview, and the import
+    stops rather than converting the wrong row. Returns the rows converted.
+    """
+    if not raw_conversions:
+        return 0
+    try:
+        conversions = json.loads(raw_conversions)
+    except ValueError:
+        raise ValueError("split_conversions must be a JSON list.")
+    if not isinstance(conversions, list):
+        raise ValueError("split_conversions must be a JSON list.")
+    transactions = parsed.get("transactions") or []
+    stale = "The file changed since it was previewed. Preview it again before importing."
+    converted = set()
+    for item in conversions:
+        try:
+            index = int(item["index"])
+            ratio = float(item["split_ratio"])
+            shares = float(item["shares"])
+            price = float(item["price_per_share"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("Each split conversion needs its row index, split ratio, shares, and price.")
+        if index in converted:
+            continue
+        if not 0 <= index < len(transactions) or not ratio > 0:
+            raise ValueError(stale)
+        txn = transactions[index]
+        if (
+            txn.get("type") != str(item.get("transaction_type") or "").upper()
+            or txn.get("ticker") != str(item.get("ticker") or "").upper()
+            or txn.get("date") != item.get("transaction_date")
+            or abs(float(txn.get("shares") or 0) - shares) > 1e-6
+            or abs(float(txn.get("price_per_share") or 0) - price) > 1e-6
+        ):
+            raise ValueError(stale)
+        txn["shares"] = round(shares * ratio, 10)
+        txn["price_per_share"] = price / ratio
+        converted.add(index)
+    return len(converted)
+
+
 @app.route("/api/import/transactions/preview", methods=["POST"])
 def api_import_transactions_preview():
     """Parse a transaction history CSV and return a preview (no DB writes)."""
@@ -11561,6 +11684,11 @@ def api_import_transactions_preview():
                     "This account already has holdings, so this import will update transaction and dividend "
                     "history for recordkeeping only. Live holdings will be preserved."
                 )
+            # Generic files are assembled by hand, which is where a lot copied
+            # from a pre-split statement comes in. Broker exports are left out:
+            # their whole history would cost a Yahoo lookup per ticker.
+            if fmt == "generic_transactions":
+                result["split_warnings"] = _import_split_warnings(result, profile_id)
         if result.get("account_name"):
             result["target_profile_name"] = _get_profile_name(profile_id)
             result["account_match"] = _account_match_info(
@@ -12945,6 +13073,7 @@ def api_account_activity_coverage_delete(coverage_id):
 @app.route("/api/import/transactions", methods=["POST"])
 def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date=None):
     """Import trades, dividends, and optional account-level broker activity."""
+    split_conversions = 0
     if _parsed is not None:
         profile_id = int(_profile_id)
         nav_date = _nav_date
@@ -12995,6 +13124,9 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
             parsed = TXN_PARSERS[fmt](path, f.filename)
             parsed = _filter_shear_group_result_for_profile(parsed, profile_id)
             parsed = _filter_fidelity_activity_for_profile(parsed, profile_id)
+            split_conversions = _apply_import_split_conversions(
+                parsed, request.form.get("split_conversions"),
+            )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         except Exception as e:
@@ -13457,6 +13589,11 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
                 f"{'s' if total_duplicates != 1 else ''} already in your records "
                 f"{'were' if total_duplicates != 1 else 'was'} skipped."
             )
+    if split_conversions:
+        parts.append(
+            f"{split_conversions} pre-split trade{'s were' if split_conversions != 1 else ' was'} "
+            "converted to post-split shares, as chosen in the preview."
+        )
 
     if preserve_positions:
         parts.append("Your current share counts were kept from the broker positions import.")
@@ -13497,6 +13634,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,
         "snapshot_roll_forward": snapshot_roll_forward,
+        "split_conversions": split_conversions,
         "message": " ".join(parts),
     })
 
@@ -26049,6 +26187,82 @@ def holding_opening_lot(ticker):
         conn.close()
 
 
+def _yahoo_split_history(ticker):
+    """Yahoo's splits and monthly ranges for a ledger ticker, asked under Yahoo's spelling."""
+    return split_check.yahoo_split_history(ticker, yahoo_symbol=_yahoo_symbol(ticker))
+
+
+def _ledger_trade_prices(conn, ticker, profile_id, exclude_txn_id=None):
+    """One account's priced BUY/SELL rows for a ticker, as split_check reads them."""
+    rows = conn.execute(
+        "SELECT id, transaction_date, price_per_share FROM transactions "
+        "WHERE ticker = ? AND profile_id = ? "
+        "AND UPPER(COALESCE(transaction_type, 'BUY')) IN ('BUY', 'SELL') "
+        "AND COALESCE(price_per_share, 0) > 0",
+        (ticker, profile_id),
+    ).fetchall()
+    return [
+        {"date": row["transaction_date"], "price_per_share": row["price_per_share"]}
+        for row in rows
+        if exclude_txn_id is None or int(row["id"]) != int(exclude_txn_id)
+    ]
+
+
+def _holding_reference_price(conn, ticker, profile_id):
+    """Today's price for a ticker, preferring this account's holding row."""
+    row = conn.execute(
+        "SELECT current_price FROM all_account_info "
+        "WHERE ticker = ? AND COALESCE(current_price, 0) > 0 "
+        "ORDER BY (profile_id = ?) DESC LIMIT 1",
+        (ticker, profile_id),
+    ).fetchone()
+    return float(row[0]) if row else None
+
+
+def _split_check_possible(txn_date):
+    """False for a trade dated today or later, which no split can follow yet.
+
+    Checked before asking Yahoo anything, so an ordinary same-day trade costs
+    no lookup.
+    """
+    date_key = str(txn_date or "")[:10]
+    return bool(date_key) and date_key < datetime.date.today().isoformat()
+
+
+def _trade_split_warning(conn, ticker, profile_id, txn_type, txn_date, shares, price,
+                         exclude_txn_id=None, current_price=None):
+    """split_check's pre-split warning for one hand-entered BUY/SELL, or None.
+
+    Never raises: a lookup that fails skips the check, so a save is never
+    blocked because Yahoo could not be reached.
+    """
+    try:
+        if not _split_check_possible(txn_date):
+            return None
+        history = _yahoo_split_history(ticker)
+        if not history or not history["splits"]:
+            return None
+        return split_check.pre_split_warning(
+            ticker, txn_type, txn_date, shares, price, history["splits"],
+            _ledger_trade_prices(conn, ticker, profile_id, exclude_txn_id),
+            current_price=(
+                _holding_reference_price(conn, ticker, profile_id)
+                or _optional_float(current_price)
+            ),
+            monthly_ranges=history.get("monthly_ranges"),
+        )
+    except Exception:
+        return None
+
+
+def _split_warning_response(split_warning):
+    """409 that stops a save so the user can choose the post-split figures.
+
+    Re-sending with ``ignore_split_warning`` saves the row as entered.
+    """
+    return jsonify({"error": split_warning["message"], "split_warning": split_warning}), 409
+
+
 @app.route("/api/holdings/<ticker>/transactions", methods=["POST"])
 def add_transaction(ticker):
     """Add a new transaction for a ticker. Auto-seeds if first transaction."""
@@ -26079,6 +26293,16 @@ def add_transaction(ticker):
     if date_error:
         conn.close()
         return jsonify({"error": date_error}), 400
+
+    # Ahead of creating or seeding the holding, so a warning writes nothing.
+    if not data.get("ignore_split_warning"):
+        split_warning = _trade_split_warning(
+            conn, ticker, profile_id, txn_type, txn_date, shares,
+            data.get("price_per_share"), current_price=data.get("current_price"),
+        )
+        if split_warning:
+            conn.close()
+            return _split_warning_response(split_warning)
 
     # Check if the holding exists; if not, create it (new ticker via transaction flow)
     existing = conn.execute(
@@ -26354,6 +26578,17 @@ def update_transaction(ticker, txn_id):
     if new_type not in ("BUY", "SELL"):
         conn.close()
         return jsonify({"error": "transaction_type must be BUY or SELL"}), 400
+
+    if not data.get("ignore_split_warning"):
+        split_warning = _trade_split_warning(
+            conn, ticker, profile_id, new_type,
+            data.get("transaction_date", existing_date), new_shares,
+            data["price_per_share"] if "price_per_share" in data else existing_price,
+            exclude_txn_id=txn_id,
+        )
+        if split_warning:
+            conn.close()
+            return _split_warning_response(split_warning)
 
     try:
         normalized_allocs = []

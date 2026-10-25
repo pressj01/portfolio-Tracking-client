@@ -392,7 +392,20 @@ function ImportHelp() {
         <li>Open the <strong>Generic Transactions</strong> tab, then download the XLSX template and replace its sample rows.</li>
         <li>Required on every row: <strong>Date</strong> and <strong>Type</strong>. <strong>Ticker</strong> is required for every security row and left blank for DEPOSIT, WITHDRAWAL, FEE, and INTEREST.</li>
         <li>BUY, SELL, and DRIP rows also require <strong>Shares</strong> and <strong>Price Per Share</strong>. DIVIDEND, DEPOSIT, WITHDRAWAL, FEE, and INTEREST rows require <strong>Amount</strong> (older files with a <strong>Dividend Amount</strong> column still work). TRANSFER IN and TRANSFER OUT rows need a Ticker and Shares; a blank price values them at that day&apos;s close.</li>
-        <li>Supported types are BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, and INTEREST. Enter amounts as positive numbers; the type decides whether money came in or went out. Fees and Notes are optional.</li>
+        <li>Supported types are BUY, SELL, DIVIDEND, DRIP, DEPOSIT, WITHDRAWAL, TRANSFER IN, TRANSFER OUT, FEE, INTEREST, SPLIT, and REVERSE SPLIT. Enter amounts as positive numbers; the type decides whether money came in or went out. Fees and Notes are optional.</li>
+        <li>
+          <strong>Stock splits:</strong> the cost-basis ledger does not adjust for splits, so every trade has to be in post-split shares. A SPLIT row
+          needs a Ticker, the split Date, and a <strong>Split Ratio</strong> of new shares per old share (<code>20:1</code> or <code>20</code>; <code>1:10</code> or <code>0.1</code> for a reverse split).
+          It restates that ticker&apos;s earlier BUY, SELL, and DRIP rows in the file: shares are multiplied by the ratio and the price divided by it, so the cost is unchanged.
+          Rows dated before the split are restated, as are rows on the same date listed above the SPLIT row. Dividends are left as they are. The preview reports which splits were applied.
+        </li>
+        <li>
+          Even without a SPLIT row, the preview checks each BUY and SELL against the splits Yahoo reports. A trade dated before a split whose price looks pre-split, next to
+          Yahoo&apos;s split-adjusted prices for that month (or, when Yahoo has none, the ticker&apos;s later trades), is flagged with its post-split figures: GOOGL 2 @ $2,871.49 before
+          its 20-for-1 split, when that month traded near $142 in today&apos;s shares, becomes 40 @ $143.57. Nothing is converted
+          unless you tick <strong>Import as&hellip;</strong> for that row; leave it unticked if the figures are already post-split. Trades entered by hand on the Holdings screen get the same
+          check: the save stops with the warning, and you choose <strong>Save as</strong> the post-split figures or <strong>Keep as entered</strong>.
+        </li>
         <li>DEPOSIT, WITHDRAWAL, TRANSFER IN, and TRANSFER OUT rows feed the Dashboard&apos;s <strong>Account Alpha</strong>. When a file contains any of them, its first-to-last date is treated as a complete record of money in and out, so include every one for that stretch.</li>
         <li>The importer previews the normalized events, skips transactions already imported, rolls BUY/SELL/DRIP activity into positions when appropriate, and records dividend payments and realized gains.</li>
         <li>Import one selected portfolio at a time. The same headers are also accepted in a CSV file.</li>

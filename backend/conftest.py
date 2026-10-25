@@ -61,6 +61,20 @@ def _isolate_yahoo_gateway():
 
 
 @pytest.fixture(autouse=True)
+def _no_live_split_history(monkeypatch):
+    """Keep Yahoo's split history out of the suite.
+
+    Every hand-entered BUY/SELL and every generic import preview asks for the
+    ticker's splits, so any test that saves a back-dated trade would otherwise
+    go to the network. Tests of the pre-split check supply their own splits.
+    """
+    import split_check
+
+    monkeypatch.setattr(split_check, "_download_split_history", lambda symbol: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_live_neos_fund_pages(monkeypatch):
     """Keep neosfunds.com out of the suite.
 

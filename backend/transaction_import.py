@@ -34,6 +34,7 @@ import csv
 import re
 from collections import defaultdict
 from datetime import datetime
+from datetime import time as dt_time
 
 from snowball_assign import parse_snowball_category_label
 
@@ -490,6 +491,75 @@ def _rows_to_flexible_dicts(rows, aliases, required, max_scan=40):
     return header_idx, header, data_rows
 
 
+_SPLIT_RATIO_RE = re.compile(
+    r"^\s*(\d+(?:\.\d+)?)\s*(?::|/|-?\s*for\s*-?)\s*(\d+(?:\.\d+)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def parse_split_ratio(value, reverse=False):
+    """New shares per old share, or None when ``value`` is not a ratio.
+
+    Accepts a plain factor (``20``, ``0.1``) or new-to-old notation (``20:1``,
+    ``20-for-1``, ``1:10``, ``1 for 10``). ``reverse`` is set by a REVERSE SPLIT
+    row, whose ratio people write either way round ("10" or "1:10" for a
+    one-for-ten), so it always resolves to the factor below one.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        ratio = float(value)
+    elif isinstance(value, dt_time):
+        # Excel turns a typed "20:1" into the time 20:01 unless the cell is text.
+        ratio = value.hour / value.minute if value.minute else None
+    else:
+        text = str(value).strip()
+        match = _SPLIT_RATIO_RE.match(text)
+        if match:
+            new, old = float(match.group(1)), float(match.group(2))
+            ratio = new / old if old else None
+        else:
+            ratio = _safe_float(text)
+    if not ratio or ratio <= 0 or ratio != ratio or abs(ratio - 1.0) < 1e-12:
+        return None
+    if reverse and ratio > 1:
+        ratio = 1.0 / ratio
+    return ratio
+
+
+def _apply_split_events(kept, split_events):
+    """Restate each ticker's earlier BUY/SELL rows in post-split units.
+
+    The cost-basis ledger has no SPLIT type and replays raw share counts, so a
+    lot bought before a split has to carry today's units to match the sells
+    after it. A row is "earlier" when its date is before the split's, or on the
+    same date but above the SPLIT row in the file (``_row_idx``). Shares scale
+    by the ratio and price by its inverse, so each row's cost is unchanged.
+
+    Returns one entry per split that rescaled at least one row.
+    """
+    applied = []
+    for split in sorted(split_events, key=lambda s: (s["date"], s["row_idx"])):
+        rows_adjusted = 0
+        for txn in kept:
+            if txn["type"] == "DIVIDEND" or txn["ticker"] != split["ticker"]:
+                continue
+            if (txn["date"], txn.get("_row_idx", -1)) >= (split["date"], split["row_idx"]):
+                continue
+            txn["shares"] = round((txn["shares"] or 0) * split["ratio"], 10)
+            if txn["price_per_share"]:
+                txn["price_per_share"] = txn["price_per_share"] / split["ratio"]
+            rows_adjusted += 1
+        if rows_adjusted:
+            applied.append({
+                "ticker": split["ticker"],
+                "date": split["date"],
+                "ratio": split["ratio"],
+                "rows_adjusted": rows_adjusted,
+            })
+    return applied
+
+
 def _parse_reinvest_bool(value):
     """Return True/False for common broker DRIP flag values, or None if blank."""
     if value is None:
@@ -648,20 +718,7 @@ def parse_snowball_csv(file_path, filename):
                 "_row_idx": idx,
             })
 
-    splits_applied = 0
-    for split in sorted(split_events, key=lambda s: (s["date"], s["row_idx"])):
-        adjusted_any = False
-        for txn in kept:
-            if txn["type"] == "DIVIDEND" or txn["ticker"] != split["ticker"]:
-                continue
-            if (txn["date"], txn.get("_row_idx", -1)) >= (split["date"], split["row_idx"]):
-                continue
-            txn["shares"] = round((txn["shares"] or 0) * split["ratio"], 10)
-            if txn["price_per_share"]:
-                txn["price_per_share"] = txn["price_per_share"] / split["ratio"]
-            adjusted_any = True
-        if adjusted_any:
-            splits_applied += 1
+    splits_applied = len(_apply_split_events(kept, split_events))
 
     for txn in kept:
         txn.pop("_row_idx", None)
@@ -1563,6 +1620,7 @@ _GENERIC_TRANSACTION_ALIASES = {
     "Price Per Share": ["Price", "Share Price", "Price/Share", "Price Per Share ($)"],
     "Fees": ["Fee", "Commission", "Commissions", "Fees & Commissions"],
     "Dividend Amount": ["Dividend", "Amount", "Cash Amount", "Income Amount"],
+    "Split Ratio": ["Ratio", "Split", "Split Factor"],
     "Notes": ["Note", "Description", "Memo"],
 }
 
@@ -1603,14 +1661,17 @@ def parse_generic_transactions(file_path, filename):
     share_transfer_actions = {
         "transfer in": "IN", "shares in": "IN", "transfer out": "OUT", "shares out": "OUT",
     }
+    split_actions = {"split", "stock split", "forward split"}
+    reverse_split_actions = {"reverse split", "reverse stock split"}
 
     kept = []
+    split_events = []
     account_activity = []
     filtered_count = 0
     coverage_starts = []
     coverage_ends = []
 
-    for row in rows[header_idx + 1:]:
+    for row_idx, row in enumerate(rows[header_idx + 1:]):
         if not _row_has_values(row):
             continue
 
@@ -1674,6 +1735,22 @@ def parse_generic_transactions(file_path, filename):
             filtered_count += 1
             continue
 
+        if action_key in split_actions or action_key in reverse_split_actions:
+            ratio = parse_split_ratio(
+                record.get("Split Ratio"),
+                reverse=action_key in reverse_split_actions,
+            )
+            if ratio is None:
+                filtered_count += 1
+            else:
+                split_events.append({
+                    "ticker": ticker,
+                    "date": date_str,
+                    "row_idx": row_idx,
+                    "ratio": ratio,
+                })
+            continue
+
         if action_key in buy_actions or action_key in sell_actions or action_key in drip_actions:
             if shares is None or shares == 0 or price is None or price <= 0:
                 filtered_count += 1
@@ -1691,6 +1768,7 @@ def parse_generic_transactions(file_path, filename):
                 "fees": round(fees, 2),
                 "dividend_amount": None,
                 "notes": notes,
+                "_row_idx": row_idx,
             })
             continue
 
@@ -1720,6 +1798,10 @@ def parse_generic_transactions(file_path, filename):
             "Date, Ticker, and Amount; DEPOSIT and WITHDRAWAL rows require Date and Amount."
         )
 
+    applied_splits = _apply_split_events(kept, split_events)
+    for txn in kept:
+        txn.pop("_row_idx", None)
+
     buys = sum(1 for txn in kept if txn["type"] == "BUY")
     sells = sum(1 for txn in kept if txn["type"] == "SELL")
     dividends = sum(1 for txn in kept if txn["type"] == "DIVIDEND")
@@ -1738,8 +1820,9 @@ def parse_generic_transactions(file_path, filename):
             "account_activity": len(account_activity),
             "filtered": filtered_count,
             "drip_detected": drip_count,
-            "splits_applied": 0,
+            "splits_applied": len(applied_splits),
         },
+        "splits": applied_splits,
         "source_format": "generic_transactions",
     }
     if coverage_starts and coverage_ends:

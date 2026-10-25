@@ -5,7 +5,7 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { API_BASE } from '../config'
 import { useMarketRefresh } from '../context/MarketRefreshContext'
 import { clearAllDashboardCache } from '../utils/dashboardCache'
-import { formatMoney } from '../utils/money'
+import { convertMoneyText, formatMoney } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import AccountActivityManager from '../components/AccountActivityManager'
 import { useColumnLayout } from '../utils/useColumnLayout'
@@ -579,6 +579,12 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   // position. Offering to record them turns a silent assumption into a row.
   const [openingLot, setOpeningLot] = useState(null)
   const [recordingLot, setRecordingLot] = useState(false)
+  // A save the backend held back because the trade reads as pre-split. It
+  // carries the payload so either choice re-sends exactly what was entered,
+  // and lapses as soon as the figures it was about are edited.
+  const [heldSplitWarning, setSplitWarning] = useState(null)
+  const splitFormKey = [form.transaction_type, form.shares, form.price_per_share, form.transaction_date].join('|')
+  const splitWarning = heldSplitWarning?.formKey === splitFormKey ? heldSplitWarning : null
   const handleOpeningLotAction = () => {
     if (openingLot?.requires_account_selection || openingLot?.editable_here === false) {
       window.alert(
@@ -713,6 +719,7 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setError(null)
+    setSplitWarning(null)
     const effectiveTicker = (ticker || form.ticker).trim().toUpperCase()
     if (!effectiveTicker) return
 
@@ -773,8 +780,14 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       }
     }
 
+    await saveTransaction(payload)
+  }
+
+  const saveTransaction = async (payload) => {
+    const effectiveTicker = (ticker || form.ticker).trim().toUpperCase()
     if (saving) return
     setSaving(true)
+    setError(null)
     try {
       let res
       const isEdit = !!editId
@@ -792,7 +805,12 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
         })
       }
       const data = await res.json()
+      if (res.status === 409 && data.split_warning) {
+        setSplitWarning({ ...data.split_warning, payload, formKey: splitFormKey })
+        return
+      }
       if (!res.ok) throw new Error(data.error)
+      setSplitWarning(null)
       if (editorOnly) {
         await onSaved()
         onClose()
@@ -806,6 +824,18 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
       onSaved()
     } catch (e) { setError(e.message) }
     finally { setSaving(false) }
+  }
+
+  // Shares times the split ratio, price divided by it: the cost is unchanged.
+  // Specific-lot picks were typed in the same pre-split shares, so they scale too.
+  const saveWithPostSplitFigures = () => {
+    const { payload, split_ratio: ratio, suggested_shares: shares, suggested_price_per_share: price } = splitWarning
+    const converted = { ...payload, shares, price_per_share: price }
+    if (Array.isArray(payload.lot_allocations) && payload.lot_allocations.length) {
+      converted.lot_allocations = payload.lot_allocations.map(alloc => ({ ...alloc, shares: alloc.shares * ratio }))
+    }
+    setForm(prev => ({ ...prev, shares: String(shares), price_per_share: String(price) }))
+    saveTransaction(converted)
   }
 
   const handleEditTxn = async (txn) => {
@@ -1361,6 +1391,32 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
               <input value={form.notes || ''} onChange={(e) => setForm(prev => ({ ...prev, notes: e.target.value }))} style={{ width: '100%' }} />
             </div>
           </div>
+          {splitWarning && (
+            <div role="alert" style={{
+              marginTop: '0.75rem', padding: '0.75rem 1rem', borderRadius: 4,
+              background: 'rgba(255,184,108,0.10)', border: '1px solid rgba(255,184,108,0.35)',
+              fontSize: '0.85rem', lineHeight: 1.5,
+            }}>
+              <strong style={{ color: 'var(--p-ffb86c)' }}>Not saved yet: this trade looks like pre-split shares</strong>
+              <div style={{ marginTop: '0.35rem' }}>{convertMoneyText(splitWarning.message)}</div>
+              <div style={{ marginTop: '0.35rem', color: 'var(--text-dim-2)' }}>
+                Keep it as entered only if these are already post-split figures.
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+                <button type="button" className="btn btn-primary" disabled={saving}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                  onClick={saveWithPostSplitFigures}>
+                  Save as {Number(splitWarning.suggested_shares).toLocaleString(undefined, { maximumFractionDigits: 6 })} shares
+                  @ {fmtM(splitWarning.suggested_price_per_share)}
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={saving}
+                  style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+                  onClick={() => saveTransaction({ ...splitWarning.payload, ignore_split_warning: true })}>
+                  Keep as entered
+                </button>
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
             <button type="submit" className="btn btn-success" disabled={saving}>{saving ? 'Saving…' : editId ? 'Save Transaction' : 'Add Transaction'}</button>
             {editId && !editorOnly && <button type="button" className="btn btn-secondary" onClick={resetTransactionEditor}>Cancel Edit</button>}
