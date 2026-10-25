@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef, useId } from 'react'
 import { Link } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
@@ -41,13 +41,74 @@ const MUTED_KINDS = new Set(['undisclosed', 'undefined'])
 
 const MODE_HELP = {
   economic:
-    'Synthetic funds report mapped economic exposure where it can be calculated accurately. Unmapped option collateral remains visibly separate.',
+    'Funds report what they are exposed to: mapped exposure where one is defined, synthetic option positions and single-stock swaps as the asset they track. Collateral with no single underlying stays visibly separate.',
   literal:
     'Every fund reports exactly what it files. Option-income funds will show their Treasury-bill collateral and option legs as-is.',
 }
 
 const COLLATERAL_HELP =
-  'Fund-level cash, money-market funds, and Treasury bills reported inside derivative or financed funds. It backs those funds’ strategies and is not spendable brokerage cash. Cash-like holdings not identified as collateral appear separately under Cash & equivalents.'
+  'Fund-level cash, money-market funds, and Treasury bills reported inside derivative or financed funds. It backs those funds’ strategies and is not spendable brokerage cash. A negative amount is money a fund has borrowed, for example to run 130% exposure. Cash-like holdings not identified as collateral appear separately under Cash & equivalents.'
+
+const EFFECTIVE_HELP =
+  'How many equal-sized positions would be exactly this concentrated (the inverse Herfindahl index). Thousands of look-through names can still behave like a few dozen when the largest ones dominate. Measured over named exposure only — cash, collateral and undisclosed weight are not positions.'
+
+// Readable names for the holdings sources. Anything else is an issuer key from
+// the Holdings sources registry (neos, nicholas, kurv…) -- the fund's own file.
+const SOURCE_LABELS = {
+  sec_nport: 'SEC N-PORT filing',
+  stockanalysis: 'StockAnalysis top holdings',
+  cefconnect: 'CEF Connect top 10',
+  yahoo: 'Yahoo top 10',
+  exposure: 'Exposure map',
+  manual: 'Defined by hand',
+  nasdaq100_index: 'Nasdaq-100 index',
+}
+
+function sourceLabel(source) {
+  if (!source) return '—'
+  return SOURCE_LABELS[source] || `Issuer file (${source})`
+}
+
+// Largest first. The server's order does not survive JSON (Flask sorts keys),
+// so KQQQ's five synthetic names arrived alphabetically.
+function syntheticList(synthetic) {
+  return Object.entries(synthetic || {}).sort((a, b) => b[1] - a[1])
+}
+
+function ageLabel(days) {
+  if (days == null) return '—'
+  if (days < 1) return 'today'
+  if (days < 2) return '1 day ago'
+  return `${Math.floor(days)} days ago`
+}
+
+function shortDate(stamp) {
+  if (!stamp) return ''
+  const d = new Date(stamp)
+  return Number.isNaN(d.getTime())
+    ? stamp.slice(0, 10)
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fundShare(pct) {
+  return `${pct.toFixed(Math.abs(pct) >= 10 ? 1 : 2)}%`
+}
+
+function plural(n, one, many) {
+  return n === 1 ? one : many
+}
+
+// A page can mount twice in Split View, so the tooltip id comes from useId
+// rather than a fixed string.
+function InlineHelp({ label, text }) {
+  const id = useId()
+  return (
+    <span className="dv-inline-help">
+      <button type="button" aria-label={label} aria-describedby={id} title={text}>?</button>
+      <span id={id} role="tooltip">{text}</span>
+    </span>
+  )
+}
 
 // `initialTab` lets the catalog route straight to a tab, so Sector Exposure is
 // its own destination in the menu and in a Split View pane. The tab stays local
@@ -67,7 +128,11 @@ export default function Diversification({ initialTab = 'holdings' }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [job, setJob] = useState(null)
+  // Why the running job was started, so the progress card can say whether it
+  // is a first download, an update of aged holdings, or new positions.
+  const [jobReason, setJobReason] = useState(null)
   const [showFunds, setShowFunds] = useState(false)
+  const [openKey, setOpenKey] = useState(null)
 
   // The screen charts a top-40 donut over a top-60 list, so the whole
   // constituent set is never displayed. Asking for all of it cost ~2.9 MB on a
@@ -104,33 +169,45 @@ export default function Diversification({ initialTab = 'holdings' }) {
     return () => clearInterval(id)
   }, [job?.running, pf, load])
 
-  const runRefresh = useCallback((force) => {
+  // `tickers` limits the job to those positions -- used for ones bought since
+  // the last resolve, so looking up three new funds is not a full sweep.
+  const runRefresh = useCallback((force, tickers, reason = null) => {
     setError(null)
     pf('/api/diversification/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ force: !!force }),
+      body: JSON.stringify(tickers?.length ? { force: !!force, tickers } : { force: !!force }),
     })
       .then(r => r.json())
       .then(d => {
         if (!d.ok) { setError(d.error || 'Could not start refresh.'); return }
+        setJobReason(reason)
         setJob({ running: true, done: 0, total: d.total, current: '' })
       })
       .catch(e => setError('Request failed: ' + e.message))
   }, [pf])
 
-  // A new installation has never downloaded any fund holdings, so X-Ray opens
-  // on a chart that is 100% "no holdings data" — indistinguishable from funds
-  // whose issuers publish nothing. Kick the first resolve off automatically so
-  // the feature works on a fresh machine without knowing to press a button.
-  // Once per mount, and only when nothing has ever been resolved: every later
-  // refresh stays a deliberate click.
+  // Three states read as "this fund publishes nothing" when they are not:
+  // a new installation that has never downloaded holdings, positions bought
+  // since the last resolve, and holdings that have aged past a week (87% of
+  // one portfolio was charted from 81-day-old files). Each starts its own
+  // resolve the first time X-Ray opens on it. Once per mount, and the server
+  // only reports aged holdings as due when it has not just tried, so a
+  // publisher that is down does not cost a sweep on every visit.
   const autoResolveTried = useRef(false)
   useEffect(() => {
-    if (!xray || job?.running || autoResolveTried.current) return
-    if (!data?.cache_empty || !data?.position_count) return
-    autoResolveTried.current = true
-    runRefresh(false)
+    if (!xray || job?.running || autoResolveTried.current || !data?.position_count) return
+    const fresh = data.freshness || {}
+    if (data.cache_empty) {
+      autoResolveTried.current = true
+      runRefresh(false, null, 'first')
+    } else if (fresh.auto_refresh_due) {
+      autoResolveTried.current = true
+      runRefresh(false, null, 'stale')
+    } else if (fresh.unchecked?.length) {
+      autoResolveTried.current = true
+      runRefresh(false, fresh.unchecked, 'new')
+    }
   }, [xray, data, job?.running, runRefresh])
 
   const rows = data?.constituents || EMPTY_ROWS
@@ -138,19 +215,21 @@ export default function Diversification({ initialTab = 'holdings' }) {
   // constituent count -- the server reports that separately.
   const totalConstituents = data?.constituent_count ?? rows.length
   const shown = useMemo(() => rows.slice(0, 60), [rows])
-  const maxPct = shown.length ? Math.max(...shown.map(r => r.weight_pct)) : 1
+  const maxPct = shown.length ? Math.max(...shown.map(r => Math.abs(r.weight_pct))) : 1
 
   const donut = useMemo(() => {
     if (!rows.length) return null
     // Everything past the top 40 becomes one slice so the ring stays readable.
-    const top = rows.slice(0, 40)
+    // A pie cannot draw a negative slice, so net borrowing is left off the ring
+    // (it still appears in the list).
+    const top = rows.slice(0, 40).filter(r => r.value > 0)
     // Rows the server left out are already summarised, so the Other slice stays
     // correct even though the tail was never sent.
-    const restVal = rows.slice(40).reduce((a, r) => a + r.value, 0)
+    const restVal = rows.slice(40).reduce((a, r) => a + Math.max(r.value, 0), 0)
       + (data?.truncated_value || 0)
     const labels = top.map(r => r.symbol || r.name)
     const values = top.map(r => r.value)
-    const colors = top.map((r, i) => sliceColor(r, i))
+    const colors = top.map(r => sliceColor(r, rows.indexOf(r)))
     if (restVal > 0) {
       labels.push(`Other (${totalConstituents - 40})`)
       values.push(restVal)
@@ -169,9 +248,16 @@ export default function Diversification({ initialTab = 'holdings' }) {
   }, [rows, isDark, data?.truncated_value, totalConstituents])
 
   const cov = data?.coverage
+  const conc = data?.concentration
+  const fresh = data?.freshness
   const undisclosedPct = cov?.undisclosed_pct ?? 0
   const undefinedPct = cov?.undefined_pct ?? 0
+  const uncheckedCount = cov?.unchecked_funds ?? 0
+  // Funds every source came back empty for. Positions that were simply never
+  // looked up are excluded -- they resolve themselves and need no definition.
+  const needsDefinition = Math.max((cov?.unresolved_funds ?? 0) - uncheckedCount, 0)
   const collateral = rows.find(r => r.kind === 'collateral')
+  const synthetics = (data?.funds || []).filter(f => f.synthetic)
   // Nothing has ever been resolved here, so every fund reads as a gap. That is
   // a cache that has not been filled, not twenty funds that publish nothing,
   // and it needs the opposite advice.
@@ -186,6 +272,11 @@ export default function Diversification({ initialTab = 'holdings' }) {
     ? Object.values(lastSummary).reduce((a, n) => a + n, 0)
     : 0
   const reachedNothing = attempted > 0 && (lastSummary.unresolved || 0) === attempted
+  const jobLabel = jobReason === 'stale'
+    ? `Updating fund holdings older than ${fresh?.stale_after_days ?? 7} days…`
+    : jobReason === 'new'
+      ? 'Looking up positions bought since the last resolve…'
+      : 'Resolving fund holdings…'
 
   return (
     <div className="page">
@@ -250,9 +341,14 @@ export default function Diversification({ initialTab = 'holdings' }) {
 
         <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <Link to="/fund-definitions" className="btn btn-secondary btn-sm">
-            Define funds{cov?.unresolved_funds ? ` (${cov.unresolved_funds})` : ''}
+            Define funds{needsDefinition ? ` (${needsDefinition})` : ''}
           </Link>
-          <button className="btn btn-sm" onClick={() => runRefresh(false)} disabled={job?.running}>
+          <button
+            className="btn btn-sm"
+            onClick={() => runRefresh(false)}
+            disabled={job?.running}
+            title="Look up new positions, retry funds with gaps, and re-read holdings older than a week."
+          >
             Resolve gaps
           </button>
           <button className="btn btn-sm" onClick={() => runRefresh(true)} disabled={job?.running}>
@@ -263,7 +359,7 @@ export default function Diversification({ initialTab = 'holdings' }) {
 
       {job?.running && (
         <div className="card" style={{ borderLeft: '3px solid var(--accent)' }}>
-          Resolving fund holdings… {job.done} / {job.total}
+          {jobLabel} {job.done} / {job.total}
           {job.current ? ` — ${job.current}` : ''}
           <div style={{ height: 6, background: 'var(--surface-2, #22252e)', borderRadius: 3, marginTop: '0.5rem' }}>
             <div style={{
@@ -318,8 +414,31 @@ export default function Diversification({ initialTab = 'holdings' }) {
             of minutes the first time, and the result is cached from then on.
           </span>
           <div style={{ marginTop: '0.6rem' }}>
-            <button className="btn btn-sm" onClick={() => runRefresh(false)}>
+            <button className="btn btn-sm" onClick={() => runRefresh(false, null, 'first')}>
               Resolve now
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Shown when aged holdings remain after the automatic update -- usually
+          a publisher that could not be reached, which keeps its last good file
+          rather than being blanked. */}
+      {xray && !cacheEmpty && !job?.running && fresh?.stale_pct >= 1 && (
+        <div className="card" style={{ borderLeft: '3px solid ' + UNDEFINED_COLOR }}>
+          <strong>
+            {fresh.stale_pct.toFixed(1)}% of the portfolio is charted from holdings more
+            than {fresh.stale_after_days} days old.
+          </strong>{' '}
+          <span style={{ color: 'var(--text-muted)' }}>
+            {fresh.stale_funds} {plural(fresh.stale_funds, 'fund', 'funds')}
+            {fresh.oldest_fetched_at ? `, the oldest downloaded ${shortDate(fresh.oldest_fetched_at)}` : ''}.
+            Option-income funds roll their holdings weekly, so these weights may have drifted.
+            The per-fund table below shows each fund's download date.
+          </span>
+          <div style={{ marginTop: '0.6rem' }}>
+            <button className="btn btn-sm" onClick={() => runRefresh(false, null, 'stale')}>
+              Update now
             </button>
           </div>
         </div>
@@ -329,9 +448,19 @@ export default function Diversification({ initialTab = 'holdings' }) {
         <div className="card" style={{ borderLeft: '3px solid ' + COLLATERAL_COLOR }}>
           <strong>{collateral.weight_pct.toFixed(1)}% is cash and Treasury collateral inside funds, not account cash.</strong>{' '}
           <span style={{ color: 'var(--text-muted)' }}>
-            It backs options, swaps, or fund financing. The amount is kept separate because
-            market-value holdings files do not always publish enough option notional or delta
-            data to convert it into an accurate economic exposure.
+            {mode === 'economic' ? (
+              <>
+                It backs option spreads, swaps, or fund borrowing with no single asset to
+                point at. Collateral that rebuilds an asset synthetically — a long call and a
+                short put at the same strike — is already shown as that asset instead.
+              </>
+            ) : (
+              <>
+                It backs options, swaps, or fund financing, shown exactly as each fund files
+                it. Switch to Economic exposure to see synthetic positions as the asset they
+                track.
+              </>
+            )}
           </span>
           {collateral.contributors?.length > 0 && (
             <div style={{ color: 'var(--text-muted)', marginTop: '0.45rem', fontSize: '0.85rem' }}>
@@ -342,31 +471,57 @@ export default function Diversification({ initialTab = 'holdings' }) {
         </div>
       )}
 
+      {xray && mode === 'economic' && synthetics.length > 0 && (
+        <div className="card" style={{ borderLeft: '3px solid var(--accent)', fontSize: '0.88rem' }}>
+          <strong>Synthetic positions read as the asset they track:</strong>{' '}
+          <span style={{ color: 'var(--text-muted)' }}>
+            {synthetics.map(f => `${f.ticker} → ${syntheticList(f.synthetic)
+              .map(([sym, pct]) => `${sym} ${pct.toFixed(1)}%`).join(', ')}`).join(' · ')}.
+            {' '}Each is the fund's collateral plus the option pair's own value. Where one fund
+            holds several, the split between them is estimated from the options' market values.
+          </span>
+        </div>
+      )}
+
       {xray && !cacheEmpty && cov && (undisclosedPct + undefinedPct) >= 0.5 && (
         <div className="card" style={{ borderLeft: '3px solid ' + UNDEFINED_COLOR }}>
-          <div>
-            <span style={{
-              display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
-              background: UNDISCLOSED_COLOR, marginRight: 6,
-            }} />
-            <strong>{undisclosedPct.toFixed(1)}% not disclosed by the issuer.</strong>{' '}
-            <span style={{ color: 'var(--text-muted)' }}>
-              Some fund families publish only their ten largest positions. Those funds
-              <em> are</em> resolved — this is simply everything they choose not to report,
-              charted separately instead of being spread across the names we do know.
-            </span>
-          </div>
+          {undisclosedPct >= 0.05 && (
+            <div>
+              <span style={{
+                display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
+                background: UNDISCLOSED_COLOR, marginRight: 6,
+              }} />
+              <strong>{undisclosedPct.toFixed(1)}% not disclosed by the issuer.</strong>{' '}
+              <span style={{ color: 'var(--text-muted)' }}>
+                Some fund families publish only their ten largest positions. Those funds
+                <em> are</em> resolved — this is simply everything they choose not to report,
+                charted separately instead of being spread across the names we do know.
+              </span>
+            </div>
+          )}
           {undefinedPct >= 0.05 && (
-            <div style={{ marginTop: '0.5rem' }}>
+            <div style={{ marginTop: undisclosedPct >= 0.05 ? '0.5rem' : 0 }}>
               <span style={{
                 display: 'inline-block', width: 9, height: 9, borderRadius: '50%',
                 background: UNDEFINED_COLOR, marginRight: 6,
               }} />
-              <strong>{undefinedPct.toFixed(1)}% has no holdings data at all.</strong>{' '}
+              <strong>{undefinedPct.toFixed(1)}% has no holdings data yet.</strong>{' '}
               <span style={{ color: 'var(--text-muted)' }}>
-                {cov.unresolved_funds} fund{cov.unresolved_funds === 1 ? '' : 's'} — this part
-                is fixable: point them at a holdings source or{' '}
-                <Link to="/fund-definitions">define them by hand</Link>.
+                {uncheckedCount > 0 && (
+                  <>
+                    {uncheckedCount} {plural(uncheckedCount, 'position was', 'positions were')} bought
+                    since the last resolve and {plural(uncheckedCount, 'has', 'have')} not been
+                    looked up{job?.running ? ' — looking up now' : ' yet'}.{' '}
+                  </>
+                )}
+                {needsDefinition > 0 && (
+                  <>
+                    {needsDefinition} {plural(needsDefinition, 'fund', 'funds')} came back empty from
+                    every source — this part is fixable: point {plural(needsDefinition, 'it', 'them')} at
+                    a holdings source or{' '}
+                    <Link to="/fund-definitions">define {plural(needsDefinition, 'it', 'them')} by hand</Link>.
+                  </>
+                )}
               </span>
             </div>
           )}
@@ -403,10 +558,46 @@ export default function Diversification({ initialTab = 'holdings' }) {
             <h2 style={{ margin: 0 }}>
               {xray ? 'Look-through holdings' : 'All holdings'}{' '}
               <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.9rem' }}>
-                {totalConstituents} {xray ? 'constituents' : 'positions'} · {formatMoney(data.total_value, { decimals: 0 })}
+                {totalConstituents.toLocaleString()} {xray ? 'constituents' : 'positions'} · {formatMoney(data.total_value, { decimals: 0 })}
               </span>
             </h2>
           </div>
+
+          {conc && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', marginTop: '0.9rem' }}>
+              <div className="summary-card">
+                <div className="summary-label-row">
+                  <span className="summary-label">Effective holdings</span>
+                  <InlineHelp label="What are effective holdings?" text={EFFECTIVE_HELP} />
+                </div>
+                <div className="summary-value">{Math.round(conc.effective_holdings).toLocaleString()}</div>
+                <div className="summary-sub">
+                  out of {conc.holdings_count.toLocaleString()} {xray ? 'names' : 'positions'}
+                </div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Top 10 share</div>
+                <div className="summary-value">{conc.top10_pct.toFixed(1)}%</div>
+                <div className="summary-sub">of the whole portfolio</div>
+              </div>
+              <div className="summary-card">
+                <div className="summary-label">Largest {xray ? 'exposure' : 'position'}</div>
+                <div className="summary-value">{conc.largest.symbol || conc.largest.name}</div>
+                <div className="summary-sub">
+                  {conc.largest.weight_pct.toFixed(2)}%
+                  {conc.largest.symbol && conc.largest.name !== conc.largest.symbol
+                    ? ` · ${conc.largest.name}` : ''}
+                </div>
+              </div>
+              {xray && (
+                <div className="summary-card">
+                  <div className="summary-label">Named exposure</div>
+                  <div className="summary-value">{conc.measured_pct.toFixed(1)}%</div>
+                  <div className="summary-sub">the rest is cash, collateral or undisclosed</div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', marginTop: '1rem' }}>
             <div style={{ flex: '1 1 340px', minWidth: 300, maxWidth: 520 }}>
@@ -425,60 +616,103 @@ export default function Diversification({ initialTab = 'holdings' }) {
             </div>
 
             <div style={{ flex: '2 1 460px', minWidth: 320 }}>
-              {shown.map((r, i) => (
-                <div key={r.key} style={{ marginBottom: '0.55rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem' }}>
-                    <span style={{
-                      width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
-                      background: sliceColor(r, i),
-                    }} />
-                    <span style={{
-                      fontWeight: 600,
-                      color: MUTED_KINDS.has(r.kind) ? 'var(--text-muted)' : 'inherit',
-                    }}>
-                      {r.symbol || r.name}
-                    </span>
-                    {r.kind === 'collateral' && (
-                      <span className="dv-inline-help">
-                        <button
-                          type="button"
-                          aria-label="What is cash and T-bill collateral?"
-                          aria-describedby="dv-collateral-help"
-                          title={COLLATERAL_HELP}
-                        >
-                          ?
-                        </button>
-                        <span id="dv-collateral-help" role="tooltip">
-                          {COLLATERAL_HELP}
+              {xray && shown.length > 0 && (
+                <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', margin: '0 0 0.6rem' }}>
+                  Select a row to see which funds put you there.
+                </p>
+              )}
+              {shown.map((r, i) => {
+                // Only a look-through row has a story to tell; a position as
+                // held is its own single contributor.
+                const expandable = xray && r.contributors?.length > 0
+                const open = expandable && openKey === r.key
+                const toggle = () => setOpenKey(open ? null : r.key)
+                return (
+                  <div key={r.key} style={{ marginBottom: '0.55rem' }}>
+                    <div
+                      role={expandable ? 'button' : undefined}
+                      tabIndex={expandable ? 0 : undefined}
+                      aria-expanded={expandable ? open : undefined}
+                      onClick={expandable ? toggle : undefined}
+                      onKeyDown={expandable ? (e => {
+                        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle() }
+                      }) : undefined}
+                      style={{ cursor: expandable ? 'pointer' : 'default' }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.88rem' }}>
+                        <span style={{
+                          width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+                          background: sliceColor(r, i),
+                        }} />
+                        <span style={{
+                          fontWeight: 600,
+                          color: MUTED_KINDS.has(r.kind) ? 'var(--text-muted)' : 'inherit',
+                        }}>
+                          {r.symbol || r.name}
                         </span>
-                      </span>
-                    )}
-                    {r.symbol && r.name && r.name !== r.symbol && (
-                      <span style={{
-                        color: 'var(--text-muted)', overflow: 'hidden',
-                        textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        {r.kind === 'collateral' && (
+                          <span onClick={e => e.stopPropagation()}>
+                            <InlineHelp label="What is cash and T-bill collateral?" text={COLLATERAL_HELP} />
+                          </span>
+                        )}
+                        {r.symbol && r.name && r.name !== r.symbol && (
+                          <span style={{
+                            color: 'var(--text-muted)', overflow: 'hidden',
+                            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          }}>
+                            {r.name}
+                          </span>
+                        )}
+                        {expandable && r.contributor_count > 1 && (
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', whiteSpace: 'nowrap' }}>
+                            via {r.contributor_count} funds
+                          </span>
+                        )}
+                        <span style={{ marginLeft: 'auto', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                          {Math.abs(r.weight_pct) < 0.01 ? '<0.01' : r.weight_pct.toFixed(Math.abs(r.weight_pct) < 1 ? 3 : 2)}%
+                        </span>
+                        <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap', minWidth: 88, textAlign: 'right' }}>
+                          {formatMoney(r.value, { decimals: 0 })}
+                        </span>
+                      </div>
+                      <div style={{ height: 4, background: 'var(--surface-2, #22252e)', borderRadius: 2, marginTop: 3 }}>
+                        <div style={{
+                          height: '100%', borderRadius: 2, background: sliceColor(r, i),
+                          width: `${maxPct ? (100 * Math.abs(r.weight_pct) / maxPct) : 0}%`,
+                        }} />
+                      </div>
+                    </div>
+                    {open && (
+                      <div style={{
+                        margin: '0.4rem 0 0.2rem 1.15rem', fontSize: '0.82rem',
+                        color: 'var(--text-muted)', lineHeight: 1.6,
                       }}>
-                        {r.name}
-                      </span>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: '1rem' }}>
+                          {r.contributors.map(c => (
+                            <span key={c.ticker} style={{ whiteSpace: 'nowrap' }}>
+                              <strong style={{ color: 'var(--text)' }}>{c.ticker}</strong>{' '}
+                              {formatMoney(c.value, { decimals: 0 })}
+                              {c.fund_pct != null && ` · ${fundShare(c.fund_pct)} of ${c.ticker}`}
+                            </span>
+                          ))}
+                          {r.contributor_count > r.contributors.length && (
+                            <span>
+                              + {r.contributor_count - r.contributors.length} more{' '}
+                              {plural(r.contributor_count - r.contributors.length, 'fund', 'funds')}
+                            </span>
+                          )}
+                        </div>
+                        {r.listings?.length > 1 && (
+                          <div>Combined listings: {r.listings.join(', ')}</div>
+                        )}
+                      </div>
                     )}
-                    <span style={{ marginLeft: 'auto', fontWeight: 700, whiteSpace: 'nowrap' }}>
-                      {r.weight_pct < 0.01 ? '<0.01' : r.weight_pct.toFixed(r.weight_pct < 1 ? 3 : 2)}%
-                    </span>
-                    <span style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap', minWidth: 88, textAlign: 'right' }}>
-                      {formatMoney(r.value, { decimals: 0 })}
-                    </span>
                   </div>
-                  <div style={{ height: 4, background: 'var(--surface-2, #22252e)', borderRadius: 2, marginTop: 3 }}>
-                    <div style={{
-                      height: '100%', borderRadius: 2, background: sliceColor(r, i),
-                      width: `${maxPct ? (100 * r.weight_pct / maxPct) : 0}%`,
-                    }} />
-                  </div>
-                </div>
-              ))}
+                )
+              })}
               {totalConstituents > shown.length && (
                 <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Showing top {shown.length} of {totalConstituents}.
+                  Showing top {shown.length} of {totalConstituents.toLocaleString()}.
                 </p>
               )}
             </div>
@@ -503,35 +737,53 @@ export default function Diversification({ initialTab = 'holdings' }) {
                     <th style={{ textAlign: 'left' }}>Fund</th>
                     <th style={{ textAlign: 'right' }}>Value</th>
                     <th style={{ textAlign: 'left' }}>Source</th>
-                    <th style={{ textAlign: 'left' }}>As of</th>
+                    <th style={{ textAlign: 'left' }} title="The date the holdings describe, where the source states one (SEC filings are a quarter-end).">
+                      Holdings as of
+                    </th>
+                    <th style={{ textAlign: 'left' }}>Downloaded</th>
                     <th style={{ textAlign: 'left' }}>Basis</th>
                     <th style={{ textAlign: 'right' }}>Coverage</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.funds.map(f => (
-                    <tr key={f.ticker}>
-                      <td style={{ fontWeight: 600 }}>{f.ticker}</td>
-                      <td style={{ textAlign: 'right' }}>{formatMoney(f.value, { decimals: 0 })}</td>
-                      <td style={{ color: 'var(--text-muted)' }}>{f.source || '—'}</td>
-                      <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                        {f.as_of || '—'}
-                      </td>
-                      <td style={{ color: 'var(--text-muted)' }}>
-                        {f.status === 'unresolved' ? 'none' : (f.mode || '—')}
-                      </td>
-                      <td style={{
-                        textAlign: 'right',
-                        color: f.coverage_pct >= 95 ? 'var(--pos)'
-                          : f.coverage_pct >= 50 ? 'inherit' : 'var(--neg-strong)',
-                        fontWeight: 600,
-                      }}>
-                        {f.status === 'unresolved'
-                          ? <Link to="/fund-definitions">no data — define</Link>
-                          : `${(f.coverage_pct ?? 0).toFixed(1)}%`}
-                      </td>
-                    </tr>
-                  ))}
+                  {data.funds.map(f => {
+                    const aged = f.source !== 'exposure'
+                      && (f.age_days ?? 0) >= (fresh?.stale_after_days ?? 7)
+                    return (
+                      <tr key={f.ticker}>
+                        <td style={{ fontWeight: 600 }}>{f.ticker}</td>
+                        <td style={{ textAlign: 'right' }}>{formatMoney(f.value, { decimals: 0 })}</td>
+                        <td style={{ color: 'var(--text-muted)' }}>{sourceLabel(f.source)}</td>
+                        <td style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          {f.as_of || '—'}
+                        </td>
+                        <td
+                          style={{ color: aged ? UNDEFINED_COLOR : 'var(--text-muted)', whiteSpace: 'nowrap' }}
+                          title={f.fetched_at || undefined}
+                        >
+                          {ageLabel(f.age_days)}
+                        </td>
+                        <td style={{ color: 'var(--text-muted)' }}>
+                          {f.status === 'unresolved'
+                            ? (f.never_checked ? 'not looked up yet' : 'none')
+                            : (f.mode || '—')}
+                          {f.synthetic ? ` · synthetic ${syntheticList(f.synthetic).map(([sym]) => sym).join(', ')}` : ''}
+                        </td>
+                        <td style={{
+                          textAlign: 'right',
+                          color: f.coverage_pct >= 95 ? 'var(--pos)'
+                            : f.coverage_pct >= 50 ? 'inherit' : 'var(--neg-strong)',
+                          fontWeight: 600,
+                        }}>
+                          {f.status === 'unresolved'
+                            ? (f.never_checked
+                              ? <span style={{ color: 'var(--text-muted)' }}>pending</span>
+                              : <Link to="/fund-definitions">no data — define</Link>)
+                            : `${(f.coverage_pct ?? 0).toFixed(1)}%`}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

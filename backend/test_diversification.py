@@ -1,3 +1,4 @@
+import datetime
 import sqlite3
 import sys
 import unittest
@@ -1031,6 +1032,560 @@ class NportFetchTest(unittest.TestCase):
     def test_unknown_ticker_returns_empty(self):
         self._stub(_nport_xml([("X", "X", "100.0", "EC")]))
         self.assertEqual(dv._fetch_sec_nport_holdings("NOTAFILER"), [])
+
+
+def _series_nport_xml(rows, series_id, report_date="2026-07-31"):
+    """An open-end fund's filing: as _nport_xml, plus the series it reports."""
+    gen = (f"<genInfo><seriesId>{series_id}</seriesId>"
+           f"<repPdDate>{report_date}</repPdDate></genInfo>")
+    return _nport_xml(rows).replace("<formData>", "<formData>" + gen, 1)
+
+
+class SeriesNportTest(unittest.TestCase):
+    """ETFs and mutual funds, located by series id rather than company CIK."""
+
+    def _stub(self, xml, series="S000038930"):
+        mf_json = {"fields": ["cik", "seriesId", "classId", "symbol"],
+                   "data": [[1100663, series, "C000119715", "TESTETF"]]}
+        atom = ("<feed><entry><content><accession-number>0001004726-26-008816"
+                "</accession-number></content></entry></feed>")
+        requested = []
+
+        def fake_get(url, as_json=False, **kw):
+            requested.append(url)
+            if "company_tickers_mf" in url:
+                return mf_json
+            if "browse-edgar" in url:
+                return atom if series in url else None
+            if "primary_doc.xml" in url:
+                return xml
+            return None
+
+        original = dv._sec_get
+        prior_map = dv._SEC_SERIES_MAP
+        dv._sec_get = fake_get
+        dv._SEC_SERIES_MAP = None
+        self.addCleanup(lambda: setattr(dv, "_sec_get", original))
+        self.addCleanup(lambda: setattr(dv, "_SEC_SERIES_MAP", prior_map))
+        return requested
+
+    def test_etf_filing_is_read_with_its_report_date(self):
+        requested = self._stub(_series_nport_xml([
+            ("ASML Holding N.V.", "", "60.0", "EC"),
+            ("Nestle S.A.", "", "40.0", "EC"),
+        ], "S000038930"))
+        rows = dv._fetch_sec_series_nport_holdings("TESTETF")
+        self.assertEqual([r["name"] for r in rows], ["ASML Holding N.V.", "Nestle S.A."])
+        self.assertEqual(rows[0]["as_of"], "2026-07-31")
+        # Located through the series, under the trust's CIK.
+        self.assertTrue(any("CIK=S000038930" in u for u in requested))
+        self.assertTrue(any("/data/1100663/000100472626008816/" in u for u in requested))
+
+    def test_another_series_filing_is_rejected(self):
+        # iShares Trust files ~400 series under one CIK; charting the wrong one
+        # would show a different fund's portfolio without any error.
+        self._stub(_series_nport_xml([("Other Fund Stock", "", "100.0", "EC")],
+                                     "S000099999"), series="S000038930")
+        self.assertEqual(dv._fetch_sec_series_nport_holdings("TESTETF"), [])
+
+    def test_failed_index_download_is_not_cached_as_no_funds(self):
+        original = dv._sec_get
+        prior_map = dv._SEC_SERIES_MAP
+        dv._sec_get = lambda url, as_json=False, **kw: None
+        dv._SEC_SERIES_MAP = None
+        try:
+            self.assertEqual(dv._sec_series_for("TESTETF"), (None, None))
+            self.assertIsNone(dv._SEC_SERIES_MAP)
+        finally:
+            dv._sec_get = original
+            dv._SEC_SERIES_MAP = prior_map
+
+    def test_shallow_fund_upgrades_to_its_filing(self):
+        conn = _memory_db()
+        patches = {
+            # Yahoo labels SEPQ an EQUITY; the SEC's fund list, not Yahoo's
+            # quote type, decides whether a filing exists.
+            "_security_type": lambda _t: "EQUITY",
+            "_fetch_from_issuer": lambda _c, _t: ([], None),
+            "_fetch_via_app": lambda _t: ([{"symbol": "AAA", "name": "Alpha", "weight_pct": 40.0}],
+                                          "stockanalysis"),
+            "_fetch_yahoo_holdings": lambda _t: [],
+            "_fetch_sec_series_nport_holdings": lambda _t: [
+                {"symbol": "AAA", "name": "Alpha", "weight_pct": 40.0, "as_of": "2026-07-31"},
+                {"symbol": "BBB", "name": "Beta", "weight_pct": 59.0},
+            ],
+        }
+        originals = {k: getattr(dv, k) for k in patches}
+        for k, v in patches.items():
+            setattr(dv, k, v)
+        try:
+            result = dv.resolve_fund("SHALLOW", conn)
+        finally:
+            for k, v in originals.items():
+                setattr(dv, k, v)
+        self.assertEqual(result["source"], "sec_nport")
+        self.assertAlmostEqual(result["coverage_pct"], 99.0)
+        self.assertEqual(result["as_of"], "2026-07-31")
+
+
+class SpreadsheetHoldingsLinkTest(unittest.TestCase):
+    def test_holdings_link_serving_a_spreadsheet_is_read_as_one(self):
+        # InfraCap's download-holdings .php answers with an .xls; reading it as
+        # CSV text yielded nothing, which left QVOL on a 76% top-25 table.
+        seen = {}
+        original_get = dv._http_get
+        original_parse = dv._parse_generic_excel_bytes
+        dv._http_get = lambda url, tries=3, backoff=1.5: SimpleNamespace(
+            content=b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1rest-of-workbook", text="��")
+        dv._parse_generic_excel_bytes = lambda content, limit=None: seen.setdefault(
+            "rows", [{"symbol": "GOOGL", "name": "Alphabet Inc", "weight_pct": 9.34}])
+        try:
+            rows = dv._fetch_generic_csv("QVOL", url="https://example.test/download.php?fund=QVOL")
+        finally:
+            dv._http_get = original_get
+            dv._parse_generic_excel_bytes = original_parse
+        self.assertEqual(rows[0]["symbol"], "GOOGL")
+
+    def test_infracap_seed_carries_a_holdings_url(self):
+        conn = _memory_db()
+        conn.execute(
+            "INSERT INTO fund_issuers (issuer_key, label, url_template, parser, website, enabled) "
+            "VALUES ('infracap','InfraCap / Virtus','','generic_csv','https://infracapfund.com',0)"
+        )
+        conn.commit()
+        dv._seed_issuers(conn)
+        url, enabled = conn.execute(
+            "SELECT url_template, enabled FROM fund_issuers WHERE issuer_key='infracap'").fetchone()
+        self.assertIn("download-holdings", url)
+        self.assertEqual(enabled, 1)
+
+
+class EconomicReadingTest(unittest.TestCase):
+    """Filed holdings are a balance sheet; economic mode reads them as exposure."""
+
+    def test_mapped_treasury_fund_is_cash_not_collateral(self):
+        # CSHI is mapped to T-bills because it is a T-bill fund. Its filed put
+        # spreads used to make that "collateral" anyway.
+        conn = _memory_db()
+        _add_position(conn, "TBILLX", 1000)
+        _add_fund(conn, "TBILLX", [
+            ("912797SA6", "United States Treasury Bill 10/01/2026", 99.0),
+            ("SPXW260813P06375000", "SPXW US 08/13/26 P6375", 1.0),
+        ])
+        conn.execute(
+            "INSERT INTO fund_exposure_map (fund_ticker, symbol, name, exposure_pct, asset_class, source) "
+            "VALUES ('TBILLX','','US Treasury Bills',100.0,'Cash & Equivalents','seed')"
+        )
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="economic")
+
+        self.assertIsNone(_by_key(result, "COLLATERAL"))
+        self.assertAlmostEqual(_by_key(result, "CASH")["value"], 1000.0, places=2)
+
+    def test_us_dollars_line_is_cash_not_a_company(self):
+        conn = _memory_db()
+        _add_position(conn, "FUNDX", 1000)
+        _add_fund(conn, "FUNDX", [("NVDA", "NVIDIA Corp", 95.0), ("", "US DOLLARS", 5.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertIsNone(_by_key(result, "NAME::US DOLLARS"))
+        self.assertAlmostEqual(_by_key(result, "CASH")["value"], 50.0, places=2)
+
+    def _synthetic_fund(self, conn):
+        _add_position(conn, "SYNTH", 1000)
+        _add_fund(conn, "SYNTH", [
+            ("SKHY", "SK hynix Inc", 45.0),
+            ("FGXXX", "First American Government Obligations Fund", 28.0),
+            ("", "Cash & Other", 30.0),
+            ("", "DRAM 09/18/2026 57.01 C", 3.0),
+            ("", "DRAM 09/18/2026 57.01 P", -7.0),
+            ("", "DRAM US 08/07/26 C60", 1.0),
+        ])
+
+    def test_synthetic_long_collateral_becomes_the_underlying(self):
+        conn = _memory_db()
+        self._synthetic_fund(conn)
+
+        economic = dv.build_diversification(conn, None, xray=True, mode="economic")
+        literal = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        # Cash 58 + the pair's own value -4 = what owning DRAM outright is worth.
+        self.assertAlmostEqual(_by_key(economic, "DRAM")["value"], 540.0, places=2)
+        self.assertIsNone(_by_key(economic, "COLLATERAL"))
+        # The lone covered call is not part of the synthetic position.
+        self.assertAlmostEqual(_by_key(economic, "DERIVATIVES")["value"], 10.0, places=2)
+        detail = {f["ticker"]: f for f in economic["funds"]}["SYNTH"]
+        self.assertEqual(detail["mode"], "economic")
+        self.assertEqual(detail["synthetic"], {"DRAM": 54.0})
+        # Literal mode still reports exactly what was filed.
+        self.assertIsNone(_by_key(literal, "DRAM"))
+        self.assertAlmostEqual(_by_key(literal, "COLLATERAL")["value"], 580.0, places=2)
+
+    def test_synthetic_underlying_is_looked_through_when_resolved(self):
+        conn = _memory_db()
+        self._synthetic_fund(conn)
+        _add_fund(conn, "DRAM", [("MU", "Micron Technology Inc", 50.0),
+                                 ("SKHY", "SK hynix Inc", 50.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="economic")
+
+        self.assertIsNone(_by_key(result, "DRAM"))
+        self.assertAlmostEqual(_by_key(result, "MU")["value"], 270.0, places=2)
+        self.assertAlmostEqual(_by_key(result, "SKHY")["value"], 450.0 + 270.0, places=2)
+
+    def test_put_spread_cash_stays_collateral(self):
+        # A put credit spread is not a synthetic long: the cash really is
+        # collateral, and the fund's equity exposure is small.
+        conn = _memory_db()
+        _add_position(conn, "SPREAD", 1000)
+        _add_fund(conn, "SPREAD", [
+            ("", "Cash & Other", 100.4),
+            ("", "MU US 08/07/26 P825", -0.25),
+            ("", "MU US 08/07/26 P810", 0.21),
+        ])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="economic")
+
+        self.assertIsNone(_by_key(result, "MU"))
+        self.assertGreater(_by_key(result, "COLLATERAL")["value"], 990.0)
+
+    def test_index_synthetic_is_read_through_the_tracking_etf(self):
+        conn = _memory_db()
+        _add_position(conn, "IDXFUND", 1000)
+        _add_fund(conn, "IDXFUND", [
+            ("AAPL", "Apple Inc", 90.0),
+            ("", "Cash & Other", 9.0),
+            ("SPXW261016C07500000", "SPX US 10/16/26 C7500", 2.0),
+            ("SPXW261016P07500000", "SPX US 10/16/26 P7500", -1.0),
+        ])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="economic")
+
+        self.assertAlmostEqual(_by_key(result, "VOO")["value"], 100.0, places=2)
+
+    def test_single_name_swap_reads_as_the_company(self):
+        conn = _memory_db()
+        _add_position(conn, "SWAPFUND", 1000)
+        _add_fund(conn, "SWAPFUND", [
+            ("MU", "Micron Technology, Inc.", 60.0),
+            ("595112103TRS050427NM", "MICRON TECHNOLOGY INC SWAP NM", 25.0),
+            ("B0090826", "United States Treasury Bill 09/08/2026", 40.0),
+        ])
+
+        economic = dv.build_diversification(conn, None, xray=True, mode="economic")
+        literal = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        # Swap notional is exposure; the T-bills behind it were counted twice
+        # (125% filed), so the collateral is what gets trimmed.
+        self.assertAlmostEqual(_by_key(economic, "MU")["value"], 850.0, places=2)
+        self.assertAlmostEqual(sum(c["value"] for c in economic["constituents"]), 1000.0, places=2)
+        self.assertIsNone(_by_key(economic, "DERIVATIVES"))
+        self.assertAlmostEqual(_by_key(literal, "MU")["value"], 600.0, places=2)
+        self.assertIsNotNone(_by_key(literal, "DERIVATIVES"))
+
+    def test_leveraged_exposure_map_nets_borrowing_against_collateral(self):
+        conn = _memory_db()
+        _add_position(conn, "LEV", 1000)
+        _add_fund(conn, "LEV", [("", "TAPPALPHA INNVTN SWAP CS", 130.0),
+                                ("", "Cash Offset", -131.0), ("FGXXX", "Govt MMF", 101.0)])
+        _add_fund(conn, "BASE", [("NVDA", "NVIDIA Corp", 100.0)], status="manual")
+        conn.executemany(
+            "INSERT INTO fund_exposure_map (fund_ticker, symbol, name, exposure_pct, asset_class, source) "
+            "VALUES (?,?,?,?,?,'seed')",
+            [("LEV", "BASE", "Base fund", 130.0, "Equity"),
+             ("LEV", "", "Borrowed cash (swap financing)", -30.0, "Cash & Equivalents")],
+        )
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="economic")
+
+        self.assertAlmostEqual(_by_key(result, "NVDA")["value"], 1300.0, places=2)
+        self.assertAlmostEqual(_by_key(result, "COLLATERAL")["value"], -300.0, places=2)
+        self.assertIsNone(_by_key(result, "DERIVATIVES"))
+
+    def test_filed_weights_over_100_never_inflate_the_position(self):
+        # Top-25 tables drop the minus sign from short legs and cash offsets.
+        conn = _memory_db()
+        _add_position(conn, "TOP25", 1000)
+        _add_fund(conn, "TOP25", [
+            ("NVDA", "NVIDIA Corp", 60.0), ("AAPL", "Apple Inc", 40.0),
+            ("", "Cash Offset", 4.0), ("", "CIFR US 07/31/26 C19", 2.0),
+        ])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertAlmostEqual(sum(c["value"] for c in result["constituents"]), 1000.0, places=2)
+        self.assertAlmostEqual(_by_key(result, "NVDA")["value"], 600.0, places=2)
+        self.assertAlmostEqual(_by_key(result, "AAPL")["value"], 400.0, places=2)
+
+    def test_companies_alone_over_100_scale_down(self):
+        conn = _memory_db()
+        _add_position(conn, "LEVCEF", 1000)
+        _add_fund(conn, "LEVCEF", [("NVDA", "NVIDIA Corp", 80.0), ("AAPL", "Apple Inc", 80.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertAlmostEqual(_by_key(result, "NVDA")["value"], 500.0, places=2)
+
+    def test_trust_held_inside_a_fund_reads_as_its_asset(self):
+        # BLOX holds FBTC. A spot trust files no holdings, so it never
+        # "resolves" -- it used to chart as a company called Fidelity Wise
+        # Origin Bitcoin Fund.
+        conn = _memory_db()
+        dv.bootstrap(conn)
+        _add_position(conn, "BLOX", 1000)
+        _add_fund(conn, "BLOX", [("FBTC", "Fidelity Wise Origin Bitcoin Fund", 30.0),
+                                 ("NVDA", "NVIDIA Corp", 70.0)])
+        _add_fund(conn, "FBTC", [], status="unresolved", source=None)
+
+        economic = dv.build_diversification(conn, None, xray=True, mode="economic")
+        literal = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertAlmostEqual(_by_key(economic, "NAME::BITCOIN")["value"], 300.0, places=2)
+        self.assertIsNone(_by_key(economic, "FBTC"))
+        self.assertAlmostEqual(_by_key(literal, "FBTC")["value"], 300.0, places=2)
+        self.assertNotIn("FBTC", dv._discover_nested_candidates(conn, ["BLOX"]))
+
+    def test_stale_seed_is_upgraded_but_a_user_edit_is_kept(self):
+        conn = _memory_db()
+        conn.execute(
+            "INSERT INTO fund_exposure_map (fund_ticker, symbol, name, exposure_pct, asset_class, source) "
+            "VALUES ('XSHP','','SpaceX (private)',100.0,'Private','seed')"
+        )
+        conn.commit()
+        dv._seed_exposures(conn)
+        self.assertEqual(conn.execute(
+            "SELECT symbol FROM fund_exposure_map WHERE fund_ticker='XSHP'").fetchall(), [("SPCX",)])
+
+        conn.execute("UPDATE fund_exposure_map SET exposure_pct=90.0, source='manual' "
+                     "WHERE fund_ticker='XSHP'")
+        conn.commit()
+        dv._seed_exposures(conn)
+        self.assertEqual(conn.execute(
+            "SELECT symbol, exposure_pct FROM fund_exposure_map WHERE fund_ticker='XSHP'").fetchall(),
+            [("SPCX", 90.0)])
+
+    def test_option_leg_shapes(self):
+        self.assertEqual(dv._parse_option_leg("2COPX260918C00045000", "COPX 09/18/2026 45 C"),
+                         ("COPX", "2026-09-18", 45.0, "C"))
+        self.assertEqual(dv._parse_option_leg("", "DRAM 09/18/2026 57.01 P"),
+                         ("DRAM", "2026-09-18", 57.01, "P"))
+        self.assertEqual(dv._parse_option_leg("", "MU US 08/07/26 P825"),
+                         ("MU", "2026-08-07", 825.0, "P"))
+        self.assertEqual(dv._parse_option_leg("", "Ibit 12/18/2026 35.01 C"),
+                         ("IBIT", "2026-12-18", 35.01, "C"))
+        for not_a_leg in ("Put On S&P 500 Jul26", "IREN LIM PUT OPT 08/26 37.500",
+                          "NVIDIA Corp", "B0090326"):
+            self.assertIsNone(dv._parse_option_leg("", not_a_leg), not_a_leg)
+
+
+class CompanyIdentityTest(unittest.TestCase):
+    def test_share_classes_fold_into_one_company(self):
+        conn = _memory_db()
+        _add_position(conn, "FUNDA", 1000)
+        _add_fund(conn, "FUNDA", [("GOOGL", "Alphabet Inc. Class A", 30.0),
+                                  ("GOOG", "Alphabet Inc. Class C", 25.0),
+                                  ("AAPL", "Apple Inc", 45.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        alphabet = _by_key(result, "GOOGL")
+        self.assertIsNone(_by_key(result, "GOOG"))
+        self.assertAlmostEqual(alphabet["value"], 550.0, places=2)
+        self.assertEqual(alphabet["name"], "Alphabet Inc. (GOOGL + GOOG)")
+        self.assertEqual(alphabet["listings"], ["GOOGL", "GOOG"])
+
+    def test_one_company_listed_under_two_symbols_merges(self):
+        conn = _memory_db()
+        _add_position(conn, "KOREA", 1000)
+        _add_position(conn, "MEMORY", 1000)
+        _add_fund(conn, "KOREA", [("000660KS", "SK hynix Inc.", 100.0)])
+        _add_fund(conn, "MEMORY", [("SKHY", "SK HYNIX INC", 100.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        hynix = _by_key(result, "SKHY")
+        self.assertIsNone(_by_key(result, "000660KS"))
+        self.assertAlmostEqual(hynix["value"], 2000.0, places=2)
+        self.assertEqual(hynix["name"], "SK hynix Inc.")
+        self.assertEqual(hynix["contributor_count"], 2)
+
+    def test_different_companies_are_not_merged(self):
+        conn = _memory_db()
+        _add_position(conn, "FUNDA", 1000)
+        _add_fund(conn, "FUNDA", [("FFIN", "First Financial Bankshares Inc", 50.0),
+                                  ("THFF", "First Financial Corp", 50.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertIsNotNone(_by_key(result, "FFIN"))
+        self.assertIsNotNone(_by_key(result, "THFF"))
+
+    def test_held_stock_takes_a_real_name_from_any_fund(self):
+        conn = _memory_db()
+        _add_position(conn, "ARCC", 1000)
+        _add_position(conn, "BDCFUND", 1000)
+        _add_fund(conn, "ARCC", [], status="self")
+        _add_fund(conn, "BDCFUND", [("ARCC", "Ares Capital Corp", 100.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertEqual(_by_key(result, "ARCC")["name"], "Ares Capital Corp")
+
+    def test_contributors_report_their_share_of_each_fund(self):
+        conn = _memory_db()
+        _add_position(conn, "FUNDA", 2000)
+        _add_fund(conn, "FUNDA", [("NVDA", "NVIDIA Corp", 25.0), ("AAPL", "Apple Inc", 75.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        contributor = _by_key(result, "NVDA")["contributors"][0]
+        self.assertEqual(contributor["ticker"], "FUNDA")
+        self.assertAlmostEqual(contributor["fund_pct"], 25.0, places=3)
+
+
+class ConcentrationTest(unittest.TestCase):
+    def test_effective_holdings_is_the_inverse_herfindahl(self):
+        conn = _memory_db()
+        _add_position(conn, "FUNDA", 1000)
+        _add_fund(conn, "FUNDA", [("NVDA", "NVIDIA Corp", 40.0), ("AAPL", "Apple Inc", 40.0),
+                                  ("FGXXX", "Government Obligations Fund", 20.0)])
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+        conc = result["concentration"]
+
+        # Two equal names behave like two positions; cash is not a position.
+        self.assertAlmostEqual(conc["effective_holdings"], 2.0)
+        self.assertEqual(conc["holdings_count"], 2)
+        self.assertAlmostEqual(conc["top10_pct"], 80.0)
+        self.assertAlmostEqual(conc["measured_pct"], 80.0)
+        self.assertAlmostEqual(conc["largest"]["weight_pct"], 40.0)
+
+    def test_positions_as_held_are_measured_when_xray_is_off(self):
+        conn = _memory_db()
+        _add_position(conn, "AAA", 750)
+        _add_position(conn, "BBB", 250)
+
+        conc = dv.build_diversification(conn, None, xray=False)["concentration"]
+
+        self.assertAlmostEqual(conc["effective_holdings"], 1.6)
+        self.assertEqual(conc["largest"]["symbol"], "AAA")
+
+
+def _stamp(days_ago):
+    return (datetime.datetime.now() - datetime.timedelta(days=days_ago)).isoformat(timespec="seconds")
+
+
+class FreshnessTest(unittest.TestCase):
+    """Cached holdings age out; a cache that never did charted 81-day-old data."""
+
+    def _patch(self, **patches):
+        originals = {k: getattr(dv, k) for k in patches}
+        for k, v in patches.items():
+            setattr(dv, k, v)
+        self.addCleanup(lambda: [setattr(dv, k, v) for k, v in originals.items()])
+
+    def _complete_fund(self, conn, ticker, days_ago):
+        _add_fund(conn, ticker, [("AAA", "Alpha", 60.0), ("BBB", "Beta", 40.0)], source="neos")
+        conn.execute("UPDATE fund_holdings_meta SET fetched_at=? WHERE fund_ticker=?",
+                     (_stamp(days_ago), ticker))
+        conn.commit()
+
+    def test_fresh_complete_fund_is_served_from_cache(self):
+        conn = _memory_db()
+        self._complete_fund(conn, "FRESH", 1)
+        self._patch(_security_type=lambda _t: (_ for _ in ()).throw(AssertionError("fetched")))
+
+        self.assertTrue(dv.resolve_fund("FRESH", conn)["cached"])
+
+    def test_stale_complete_fund_is_read_again(self):
+        conn = _memory_db()
+        self._complete_fund(conn, "OLD", 30)
+        self._patch(
+            _security_type=lambda _t: "ETF",
+            _fetch_from_issuer=lambda _c, _t: ([{"symbol": "CCC", "name": "Gamma", "weight_pct": 100.0}],
+                                               "neos"),
+        )
+
+        result = dv.resolve_fund("OLD", conn)
+
+        self.assertNotIn("cached", result)
+        symbols = [r[0] for r in conn.execute(
+            "SELECT symbol FROM fund_holdings WHERE fund_ticker='OLD'")]
+        self.assertEqual(symbols, ["CCC"])
+
+    def test_shallower_answer_does_not_replace_a_complete_file(self):
+        # With the issuer throttled, a stale refresh falls through to a top-25
+        # table. Taking it would turn a complete file into a quarter of one.
+        conn = _memory_db()
+        self._complete_fund(conn, "OLD", 30)
+        self._patch(
+            _security_type=lambda _t: "ETF",
+            _fetch_from_issuer=lambda _c, _t: ([], None),
+            _fetch_via_app=lambda _t: ([{"symbol": "AAA", "name": "Alpha", "weight_pct": 30.0}],
+                                       "stockanalysis"),
+            _fetch_yahoo_holdings=lambda _t: [],
+            _fetch_sec_series_nport_holdings=lambda _t: [],
+        )
+
+        result = dv.resolve_fund("OLD", conn)
+
+        self.assertTrue(result["kept_cached"])
+        self.assertEqual(conn.execute(
+            "SELECT COUNT(*) FROM fund_holdings WHERE fund_ticker='OLD'").fetchone()[0], 2)
+
+    def test_payload_reports_stale_and_never_looked_up_positions(self):
+        conn = _memory_db()
+        _add_position(conn, "OLD", 3000)
+        _add_position(conn, "NEW", 1000)
+        self._complete_fund(conn, "OLD", 30)
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+        fresh = result["freshness"]
+
+        self.assertEqual(fresh["stale_funds"], 1)
+        self.assertAlmostEqual(fresh["stale_pct"], 75.0)
+        self.assertEqual(fresh["unchecked"], ["NEW"])
+        self.assertTrue(fresh["auto_refresh_due"])
+        self.assertEqual(result["coverage"]["unchecked_funds"], 1)
+        self.assertEqual(_by_key(result, "UNDEFINED::NEW")["name"], "NEW — not looked up yet")
+
+    def test_auto_refresh_waits_out_the_cooldown(self):
+        conn = _memory_db()
+        _add_position(conn, "OLD", 1000)
+        self._complete_fund(conn, "OLD", 30)
+        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?)",
+                     (dv._LAST_REFRESH_KEY, _stamp(0.1)))
+        conn.commit()
+
+        result = dv.build_diversification(conn, None, xray=True, mode="literal")
+
+        self.assertEqual(result["freshness"]["stale_funds"], 1)
+        self.assertFalse(result["freshness"]["auto_refresh_due"])
+
+    def test_failed_or_aged_nested_fund_is_offered_again(self):
+        conn = _memory_db()
+        _add_fund(conn, "WRAP", [("IEFA", "iShares Core MSCI EAFE ETF", 75.0),
+                                 ("VOO", "Vanguard S&P 500", 20.0), ("QQQM", "Nasdaq 100", 5.0)])
+        _add_fund(conn, "IEFA", [], status="unresolved", source=None)
+        self._complete_fund(conn, "VOO", 30)
+        self._complete_fund(conn, "QQQM", 1)
+
+        found = dv._discover_nested_candidates(conn, ["WRAP"])
+
+        self.assertIn("IEFA", found)
+        self.assertIn("VOO", found)
+        self.assertNotIn("QQQM", found, "a fresh, complete nested fund is settled")
+
+    def test_synthetic_underlyings_are_discovered(self):
+        conn = _memory_db()
+        _add_fund(conn, "SYNTH", [("", "Cash & Other", 99.0),
+                                  ("", "DRAM 09/18/2026 57.01 C", 3.0),
+                                  ("", "DRAM 09/18/2026 57.01 P", -2.0)])
+
+        self.assertIn("DRAM", dv._discover_nested_candidates(conn, ["SYNTH"]))
 
 
 if __name__ == "__main__":
