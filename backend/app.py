@@ -24078,6 +24078,60 @@ def _broker_holding_baseline(conn, ticker, profile_id):
     }
 
 
+def _closed_position_baseline(conn, ticker, profile_id):
+    """The broker's zero for a ticker its positions files no longer hold.
+
+    _broker_holding_baseline covers held tickers only, so an edit to a closed
+    position's history rebuilt the count from that history. A closed
+    position's history is often partial or being corrected: an export window
+    that misses the original buys, or a per-ticker import of them that is
+    wrong (a pre-split 2 shares beside the post-split 40). Rebuilding from it
+    opened a phantom holding the broker says was sold.
+
+    So the zero is the count as of the account's latest positions file. Trades
+    dated after that file move it; edits to anything before it only correct
+    the history and realized gains.
+
+    Take it before the edit is written. Returns None where the history owns the
+    count: a portfolio with no broker positions import, a ticker it still
+    holds, or no file date on record.
+    """
+    if not _profile_is_positions_managed(profile_id, conn):
+        return None
+    _ensure_basis_columns(conn)
+    held = conn.execute(
+        "SELECT quantity FROM all_account_info WHERE ticker = ? AND profile_id = ?",
+        (ticker, profile_id),
+    ).fetchone()
+    if held and _num_or_zero(held["quantity"] if isinstance(held, dict) else held[0]) > 0:
+        return None
+    # Every positions import stamps all of the account's rows, so the latest
+    # stamp is the latest file.
+    cutoffs = [
+        _broker_snapshot_cutoff(dict(row))
+        for row in conn.execute(
+            "SELECT broker_snapshot_date, broker_snapshot_at, import_date "
+            "FROM all_account_info WHERE profile_id = ?",
+            (profile_id,),
+        ).fetchall()
+    ]
+    cutoffs = [cutoff for cutoff in cutoffs if cutoff[0]]
+    if not cutoffs:
+        return None
+    cutoff_date, cutoff_at = max(cutoffs)
+    return {
+        "holding": {
+            "ticker": ticker,
+            "profile_id": profile_id,
+            "quantity": 0.0,
+            "import_date": datetime.date.today().isoformat(),
+        },
+        "cutoff_date": cutoff_date,
+        "cutoff_at": cutoff_at,
+        "trades": _trades_after_broker_snapshot(conn, ticker, profile_id, cutoff_date, cutoff_at),
+    }
+
+
 def _broker_count_covers_sell(conn, ticker, profile_id, baseline, proposed):
     """True when a sell dated after the broker's file fits the broker's count.
 
@@ -26343,7 +26397,10 @@ def update_transaction(ticker, txn_id):
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
     existing_allocs = _load_lot_alloc_map(conn, [txn_id]).get(txn_id, [])
-    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
+    broker_baseline = (
+        _broker_holding_baseline(conn, ticker, profile_id)
+        or _closed_position_baseline(conn, ticker, profile_id)
+    )
 
     new_type = (data.get("transaction_type") or existing_type).upper()
     try:
@@ -26486,7 +26543,10 @@ def delete_transaction(ticker, txn_id):
         conn.close()
         return jsonify({"error": "Transaction does not belong to this holding/profile"}), 404
 
-    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
+    broker_baseline = (
+        _broker_holding_baseline(conn, ticker, profile_id)
+        or _closed_position_baseline(conn, ticker, profile_id)
+    )
     conn.execute("DELETE FROM transactions WHERE id = ?", (txn_id,))
     conn.commit()
 
