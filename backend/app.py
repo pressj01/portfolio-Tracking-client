@@ -49819,12 +49819,15 @@ def analytics_data():
     # the final row for a ticker, which understated its weight and income.
     value_map = {}
     income_map = {}
+    quantity_map = {}
     for _, r in db_df.iterrows():
         t = r["ticker"]
         cv = float(r["current_value"]) if pd.notna(r.get("current_value")) else 0
         ep = float(r["estim_payment_per_year"]) if pd.notna(r.get("estim_payment_per_year")) else 0
+        qty = float(r["quantity"]) if pd.notna(r.get("quantity")) else 0
         value_map[t] = value_map.get(t, 0) + cv
         income_map[t] = income_map.get(t, 0) + ep
+        quantity_map[t] = quantity_map.get(t, 0) + qty
 
     weight_map = {
         t: value / total_val if total_val > 0 else 0
@@ -50340,6 +50343,19 @@ def analytics_data():
                 # Preserve every searched move, including tiny positions and capped
                 # transfers. Dollar amounts use the actual weights, not rounded percents.
                 weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value, threshold=1e-8)
+                for w in weights_out:
+                    t = w["ticker"]
+                    # Annual income each move adds or gives up at the holding's current
+                    # payout yield; the rows add up to the after-minus-before income.
+                    w["yield_pct"] = round(yield_map.get(t, 0) * 100, 2)
+                    w["income_change"] = round(w["dollar_change"] * yield_map.get(t, 0), 2)
+                    # Shares at the holding's own price (the dollars come from its value),
+                    # so trimming a position to zero sells exactly the shares held.
+                    qty = quantity_map.get(t, 0)
+                    if qty > 0:
+                        w["current_price"] = round(value_map[t] / qty, 2)
+                        w["shares_change"] = round(
+                            (w["optimal_pct"] - w["current_pct"]) / 100 * graded_value * qty / value_map[t], 4)
                 yields = np.array([yield_map.get(t, 0) for t in grade_tickers], dtype=float)
                 curr_income = float(current @ yields) * graded_value
                 opt_income = float(model @ yields) * graded_value
