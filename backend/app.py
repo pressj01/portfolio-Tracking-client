@@ -50384,32 +50384,150 @@ def analytics_data():
 
 # ── Correlation Matrix ─────────────────────────────────────────────────────────
 
+CORRELATION_MAX_PORTFOLIOS = 10
+
+
+def _correlation_requested_portfolios(raw_items):
+    """Normalize the request's ``portfolios`` list to unique picks.
+
+    Each pick is {kind, id, holdings}; ``holdings`` asks for the portfolio's
+    holdings as their own rows next to the whole-portfolio row.
+    """
+    picks = []
+    seen = set()
+    for item in raw_items or []:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in ("profile", "aggregate"):
+            continue
+        try:
+            pid = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if (kind, pid) in seen:
+            continue
+        seen.add((kind, pid))
+        picks.append({"kind": kind, "id": pid, "holdings": bool(item.get("holdings"))})
+    return picks
+
+
+def _correlation_portfolio_holdings(conn, kind, scope_id):
+    """Return (name, {ticker: current value}) for one saved portfolio.
+
+    Same holding gate and value weights as Analytics: rows with a positive
+    current value and quantity, summed per ticker across accounts. An
+    aggregate reads its member accounts (Owner expanded to its sources), a
+    single profile reads its own rows, so Owner reads its rollup. Returns
+    (None, {}) when the portfolio does not exist.
+    """
+    if kind == "aggregate":
+        row = conn.execute("SELECT name FROM aggregates WHERE id = ?", (scope_id,)).fetchone()
+        if not row:
+            return None, {}
+        pids = _get_aggregate_member_profile_ids(conn, scope_id)
+    else:
+        row = conn.execute("SELECT name FROM profiles WHERE id = ?", (scope_id,)).fetchone()
+        if not row:
+            return None, {}
+        pids = [scope_id]
+    name = str(row["name"] or "").strip() or f"Portfolio {scope_id}"
+    if not pids:
+        return name, {}
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        "SELECT ticker, current_value FROM all_account_info "
+        "WHERE current_value IS NOT NULL AND current_value > 0 AND quantity > 0 "
+        f"AND profile_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    values = {}
+    for r in rows:
+        ticker = str(r["ticker"] or "").strip().upper()
+        if ticker:
+            values[ticker] = values.get(ticker, 0.0) + float(r["current_value"] or 0)
+    return name, values
+
+
+def _correlation_portfolio_returns(close, values):
+    """Daily returns of a portfolio's current holdings at today's value weights.
+
+    Uses the Dashboard/Analytics convention (portfolio_returns_frame): interior
+    gaps carried forward, and a holding that began trading inside the window
+    counts as a zero return before its first quote. Holdings with no price
+    data are left out and the remaining weights renormalized. Returns
+    (returns Series or None, priced tickers).
+    """
+    import numpy as np
+    from grading import portfolio_returns_frame
+
+    priced =[t for t in values if t in close.columns and close[t].notna().any()]
+    if not priced:
+        return None, []
+    weights = np.array([values[t] for t in priced], dtype=float)
+    total = float(weights.sum())
+    if total <= 0:
+        return None, []
+    held_close = close[priced].dropna(how="all")
+    if len(held_close) < 2:
+        return None, priced
+    returns = portfolio_returns_frame(held_close).dot(weights / total)
+    return returns, priced
+
+
 @app.route("/api/correlation/data", methods=["POST"])
 def correlation_data():
-    """Compute correlation matrix for arbitrary tickers over a given period."""
+    """Correlation matrix for tickers and saved portfolios over a period.
+
+    Each portfolio is one series: the daily return of its current holdings
+    weighted by today's market value (cash excluded), the same basket the
+    Analytics page grades. With ``holdings`` set, its holdings also get rows
+    of their own, so one portfolio alone makes a matrix.
+    """
     import math
     import warnings
-    import numpy as np
-    import yfinance as yf
     warnings.filterwarnings("ignore")
 
     data = request.get_json(force=True, silent=True) or {}
     tickers = [str(t).strip().upper() for t in data.get("tickers", []) if str(t).strip()]
+    portfolio_picks = _correlation_requested_portfolios(data.get("portfolios"))
     period = data.get("period", "1y")
 
-    if len(tickers) < 2:
-        return jsonify(error="Please enter at least 2 tickers.")
     if len(tickers) > 50:
         return jsonify(error="Maximum 50 tickers allowed.")
+    if len(portfolio_picks) > CORRELATION_MAX_PORTFOLIOS:
+        return jsonify(error=f"Maximum {CORRELATION_MAX_PORTFOLIOS} portfolios allowed.")
+
+    unique = list(dict.fromkeys(tickers))
+    # A portfolio shown with its holdings is a whole matrix by itself.
+    expands = any(p["holdings"] for p in portfolio_picks)
+    if len(unique) + len(portfolio_picks) < 2 and not expands:
+        return jsonify(error="Please add at least 2 tickers or portfolios.")
 
     valid_periods = {"3mo", "6mo", "1y", "2y", "5y", "max"}
     if period not in valid_periods:
         period = "1y"
 
-    unique = list(dict.fromkeys(tickers))
+    portfolios = []
+    if portfolio_picks:
+        conn = get_connection()
+        try:
+            for pick in portfolio_picks:
+                name, values = _correlation_portfolio_holdings(conn, pick["kind"], pick["id"])
+                portfolios.append({**pick, "name": name, "values": values})
+        finally:
+            conn.close()
+
+    # One download covers the typed tickers and every portfolio's holdings.
+    download = list(unique)
+    for p in portfolios:
+        download.extend(p["values"].keys())
+    download = list(dict.fromkeys(download))
+    if not download:
+        return jsonify(error="The selected portfolios have no holdings.")
 
     try:
-        raw = _chunked_yf_download(" ".join(unique), period=period, auto_adjust=True, progress=False)
+        raw = _chunked_yf_download(" ".join(download), period=period, auto_adjust=True, progress=False)
         if raw.empty:
             return jsonify(error="No price data returned from Yahoo Finance.")
     except Exception as e:
@@ -50419,16 +50537,96 @@ def correlation_data():
         close = raw["Close"].dropna(how="all")
     else:
         close = raw[["Close"]].dropna(how="all")
-        close.columns = [unique[0]]
+        close.columns = [download[0]]
 
-    available = [t for t in unique if t in close.columns and close[t].dropna().count() >= 30]
+    def _has_history(t):
+        return t in close.columns and close[t].dropna().count() >= 30
+
+    # Each ticker's returns come from its own trading days, so a portfolio
+    # holding on another calendar (a TSX listing, crypto) cannot blank or
+    # shift the cells between plain tickers.
+    def _own_returns(t):
+        return close[t].dropna().pct_change().iloc[1:]
+
+    available = [t for t in unique if _has_history(t)]
     missing = [t for t in unique if t not in available]
 
-    if len(available) < 2:
-        return jsonify(error="Need at least 2 tickers with sufficient data.")
+    series = {t: _own_returns(t) for t in available}
+    series_info = [{"label": t, "kind": "ticker"} for t in available]
+    price_columns = list(available)
+    used_labels = {t.upper() for t in unique}
 
-    daily_returns = close[available].pct_change()
+    # Holdings rows go after the typed tickers, largest position first; a
+    # ticker already in the matrix (typed, or held by an earlier portfolio)
+    # keeps its first row. Whole-portfolio rows go last.
+    built = []
+    for p in portfolios:
+        returns, priced = (None, [])
+        if p["name"] is not None and p["values"]:
+            returns, priced = _correlation_portfolio_returns(close, p["values"])
+            if returns is not None and returns.count() < 30:
+                returns = None
+        built.append((p, returns, priced))
+        if returns is None or not p["holdings"]:
+            continue
+        priced_value = sum(p["values"][t] for t in priced)
+        for t in sorted(priced, key=lambda t: -p["values"][t]):
+            if t.upper() in used_labels or not _has_history(t):
+                continue
+            used_labels.add(t.upper())
+            series[t] = _own_returns(t)
+            price_columns.append(t)
+            series_info.append({
+                "label": t,
+                "kind": "holding",
+                "portfolio": p["name"],
+                "weight_pct": round(p["values"][t] / priced_value * 100, 1) if priced_value > 0 else None,
+            })
+
+    for p, returns, priced in built:
+        label = p["name"] or "Portfolio"
+        if label.upper() in used_labels:
+            label = f"{label} (portfolio)"
+        base, n = label, 2
+        while label.upper() in used_labels:
+            label = f"{base} {n}"
+            n += 1
+        used_labels.add(label.upper())
+
+        if p["name"] is None:
+            missing.append(f"{label} (not found)")
+            continue
+        if not p["values"]:
+            missing.append(f"{label} (no holdings)")
+            continue
+        if returns is None:
+            missing.append(label)
+            continue
+        total_value = sum(p["values"].values())
+        priced_value = sum(p["values"][t] for t in priced)
+        series[label] = returns
+        price_columns.extend(priced)
+        series_info.append({
+            "label": label,
+            "kind": "portfolio",
+            "portfolio_kind": p["kind"],
+            "id": p["id"],
+            "holdings": p["holdings"],
+            "holdings_total": len(p["values"]),
+            "holdings_priced": len(priced),
+            "value_coverage_pct": round(priced_value / total_value * 100, 1) if total_value > 0 else None,
+            "unpriced": sorted(t for t in p["values"] if t not in priced),
+            # In the portfolio's line, but under 30 days of prices to stand alone.
+            "short_history": sorted(t for t in priced if not _has_history(t)) if p["holdings"] else [],
+        })
+
+    if len(series) < 2:
+        return jsonify(error="Need at least 2 tickers or portfolios with sufficient data.", missing=missing)
+
+    labels = [s["label"] for s in series_info]
+    daily_returns = pd.DataFrame(series)[labels]
     corr = daily_returns.corr(min_periods=30).fillna(0)
+    available = labels
 
     def _safe(v):
         if v is None:
@@ -50441,12 +50639,17 @@ def correlation_data():
 
     matrix = [[_safe(corr.iloc[i, j]) for j in range(len(available))] for i in range(len(available))]
 
+    # Trading days with a price for anything in the matrix (a portfolio counts
+    # through its holdings), the same count the ticker-only page always showed.
+    data_points = len(close[list(dict.fromkeys(price_columns))].dropna(how="all"))
+
     return jsonify(
         tickers=available,
+        series=series_info,
         matrix=matrix,
         missing=missing,
         period=period,
-        data_points=len(daily_returns),
+        data_points=data_points,
     )
 
 

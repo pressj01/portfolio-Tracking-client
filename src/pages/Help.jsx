@@ -5216,10 +5216,25 @@ function CorrelationHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Tickers</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Type a ticker and click <strong>Add</strong> (or press Enter). It appears as a chip below the input.</li>
-        <li>Add at least <strong>2 tickers</strong> — the Run button is disabled until you have 2 or more.</li>
+        <li>Add at least <strong>2 tickers or portfolios</strong>, or one portfolio with <strong>holdings</strong> ticked. The Run button stays disabled until then.</li>
         <li>Remove a ticker by clicking the <strong>×</strong> on its chip.</li>
         <li>Click <strong>Clear</strong> to reset everything.</li>
       </ol>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Portfolios</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        Pick an account or aggregate from <strong>+ Add portfolio…</strong>. Its chip has a <strong>holdings</strong>{' '}
+        box, ticked by default: each holding gets its own row (largest position first), plus one purple row for the
+        whole portfolio, so a single portfolio can be run on its own. Untick it to keep just the whole-portfolio row,
+        which is tidier when comparing portfolios with each other or against SPY and TLT.
+      </p>
+      <p style={{ marginBottom: '1rem' }}>
+        The whole-portfolio row is its current holdings weighted by today's market value (cash excluded), the same
+        basket the Analytics page grades. Hover a holding's name for its weight. Under the table, each portfolio shows
+        how many of its holdings had price data and what share of its value they cover. A holding with under 30 days
+        of prices still counts in the portfolio row but gets no row of its own. With more than 50 rows the heatmap
+        hides the numbers inside its cells; hover a cell to read it.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Period Selection</h3>
       <p style={{ marginBottom: '1rem' }}>
@@ -5233,17 +5248,26 @@ function CorrelationHelp() {
         <li>
           <strong>Correlation Heatmap</strong> — A color-coded grid. <span style={{ color: 'var(--p-81c784)' }}>Green</span> cells
           (near +1.0) mean tickers move together. <span style={{ color: 'var(--p-ef9a9a)' }}>Red</span> cells (near −1.0) mean they
-          move opposite. Yellow/orange near 0 means uncorrelated. Hover over any cell for the exact value to 3 decimal places.
+          move opposite. Yellow/orange near 0 means uncorrelated. A big heatmap lists the column names along its top as
+          well as its bottom.
         </li>
         <li>
           <strong>Correlation Table</strong> — The same data as a numeric matrix. Diagonal cells show 1.00 (each ticker vs itself) and are grayed out.
+          The header row and the name column are frozen, as in Excel: scroll down the page and the column names stay pinned
+          under the menu bar; scroll sideways (the scrollbar sits just under the column names) and the row names stay put.
+        </li>
+        <li>
+          <strong>Hover any cell</strong> (table or heatmap) to see the two names, the value, and a plain reading of it:
+          <em> Not correlated</em> (under 0.20), <em>Weakly</em> (0.20–0.39), <em>Somewhat</em> (0.40–0.69),
+          <em> Strongly</em> (0.70–0.89) or <em>Very strongly correlated</em> (0.90 and up). A negative value reads the
+          same way as <em>inversely</em> correlated.
         </li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>How to Use</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li>Add your main income ETFs (JEPI, SCHD, QYLD, etc.) and run to see how correlated they are. High correlation between income funds means your income sources could all be hit at once in a downturn.</li>
-        <li>Add SPY or TLT (bonds) to see how your portfolio correlates to broad market moves. A negative correlation with TLT suggests bond exposure would help in a market selloff.</li>
+        <li>Add your portfolio plus SPY or TLT (bonds) to see how your portfolio correlates to broad market moves. A negative correlation with TLT suggests bond exposure would help in a market selloff.</li>
         <li>Use 1Y for recent behavior and 5Y for long-term structural relationships — compare the two to spot regime changes.</li>
         <li>Target correlations below 0.7 between holdings for meaningful diversification. Anything above 0.9 means you essentially have the same asset twice.</li>
       </ol>
