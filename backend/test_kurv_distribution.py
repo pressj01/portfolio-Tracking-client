@@ -137,14 +137,11 @@ class KurvDistributionTests(unittest.TestCase):
                     f"/api/div-calendar?month={pay_date:%Y-%m}"
                 )
                 self.assertEqual(response.status_code, 200, response.get_json())
-                data = response.get_json()
-                for rows in (data["events"], data["agenda_payments"], data["payments"]):
-                    self.assertEqual(len(rows), 1)
-                    self.assertEqual(rows[0]["pay_date"], pay_date.isoformat())
-                    self.assertFalse(rows[0]["pay_estimated"])
-                    self.assertTrue(rows[0]["amount_estimated"])
-                    self.assertEqual(rows[0]["amount"], 0.35)
-                    self.assertEqual(rows[0]["payment_income"], 35)
+                for row in self._upcoming_rows(response.get_json(), pay_date):
+                    self.assertFalse(row["pay_estimated"])
+                    self.assertTrue(row["amount_estimated"])
+                    self.assertEqual(row["amount"], 0.35)
+                    self.assertEqual(row["payment_income"], 35)
 
                 # The next issuer refresh declares this cycle's actual amount.
                 official.update({
@@ -157,13 +154,29 @@ class KurvDistributionTests(unittest.TestCase):
                     f"/api/div-calendar?month={pay_date:%Y-%m}"
                 )
                 self.assertEqual(response.status_code, 200, response.get_json())
-                data = response.get_json()
-                for rows in (data["events"], data["agenda_payments"], data["payments"]):
-                    self.assertFalse(rows[0]["amount_estimated"])
-                    self.assertEqual(rows[0]["amount"], 0.42)
-                    self.assertEqual(rows[0]["payment_income"], 42)
+                for row in self._upcoming_rows(response.get_json(), pay_date):
+                    self.assertFalse(row["amount_estimated"])
+                    self.assertEqual(row["amount"], 0.42)
+                    self.assertEqual(row["payment_income"], 42)
             finally:
                 app_module._clear_dividend_event_caches()
+
+    def _upcoming_rows(self, data, pay_date):
+        """The upcoming payment's row in the events, agenda and month lists.
+
+        Events and the requested month hold just that payment. The agenda also
+        keeps the current month's earlier payments, so when the upcoming one
+        falls in next month (a run in the last days of a month) it carries this
+        month's estimated payment as well. That row is not under test.
+        """
+        self.assertEqual(len(data["events"]), 1, data["events"])
+        self.assertEqual(len(data["payments"]), 1, data["payments"])
+        agenda = [row for row in data["agenda_payments"] if row["pay_date"] == pay_date.isoformat()]
+        self.assertEqual(len(agenda), 1, data["agenda_payments"])
+        rows = [data["events"][0], agenda[0], data["payments"][0]]
+        for row in rows:
+            self.assertEqual(row["pay_date"], pay_date.isoformat())
+        return rows
 
     def test_keo_routes_from_issuer_metadata_without_a_ticker_list_entry(self):
         self.assertFalse(_is_kurv_fund("KEO"))
