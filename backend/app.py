@@ -50292,8 +50292,9 @@ def analytics_data():
             # What it would take to reach a grade by re-weighting only the
             # holdings already held, on the same window, tickers and dollar
             # weights as the grade shown above. Holdings may shrink to zero;
-            # single-stock ETFs and NAV-flagged funds may not grow.
-            from grading import GRADE_TARGET_CUTOFF_KEYS, normalize_grading_settings, search_weights_for_grade
+            # single-stock ETFs and NAV-flagged funds may not grow. Up to five
+            # different plans are offered; the first is also the top-level answer.
+            from grading import GRADE_TARGET_CUTOFF_KEYS, normalize_grading_settings, search_grade_options
             cuts = normalize_grading_settings(grading_settings)["letterCutoffs"]
             target_letter = str(data.get("target_grade") or "B").strip().upper()
             if target_letter not in GRADE_TARGET_CUTOFF_KEYS:
@@ -50329,55 +50330,62 @@ def analytics_data():
                         blocked[t] = "single-stock ETF"
                     elif nav_flagged and t in nav_flagged:
                         blocked[t] = "flagged for NAV erosion"
-                found = search_weights_for_grade(
-                    graded_returns[grade_tickers], grade_values, bench_ret, target_score,
-                    can_increase=[t not in blocked for t in grade_tickers], max_weight=max_weight,
-                    min_obs=effective_min_obs, grading_settings=grading_settings,
-                )
                 graded_value = float(grade_values.sum())
                 current = grade_values / graded_value
-                model = found["weights"]
-                weights_out = [{"ticker": t, "current_pct": float(current[i] * 100),
-                                "optimal_pct": float(model[i] * 100)}
-                               for i, t in enumerate(grade_tickers) if value_map.get(t, 0) > 0]
-                # Preserve every searched move, including tiny positions and capped
-                # transfers. Dollar amounts use the actual weights, not rounded percents.
-                weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value, threshold=1e-8)
-                for w in weights_out:
-                    t = w["ticker"]
-                    # Annual income each move adds or gives up at the holding's current
-                    # payout yield; the rows add up to the after-minus-before income.
-                    w["yield_pct"] = round(yield_map.get(t, 0) * 100, 2)
-                    w["income_change"] = round(w["dollar_change"] * yield_map.get(t, 0), 2)
-                    # Shares at the holding's own price (the dollars come from its value),
-                    # so trimming a position to zero sells exactly the shares held.
-                    qty = quantity_map.get(t, 0)
-                    if qty > 0:
-                        w["current_price"] = round(value_map[t] / qty, 2)
-                        w["shares_change"] = round(
-                            (w["optimal_pct"] - w["current_pct"]) / 100 * graded_value * qty / value_map[t], 4)
                 yields = np.array([yield_map.get(t, 0) for t in grade_tickers], dtype=float)
                 curr_income = float(current @ yields) * graded_value
-                opt_income = float(model @ yields) * graded_value
-                moved = float(np.abs(model - current).sum()) / 2
-                status = ("already" if found["start_score"] >= target_score
-                          else "reached" if found["reached"] else "unreachable")
-                result["optimization"] = {
-                    "weights": weights_out,
-                    "rebalance_summary": rebal_summary,
-                    "comparison": _before_after_comparison(
-                        graded_returns, model, bench_ret, port_metrics, curr_income, opt_income,
-                        current_weights=current, nav_flagged=nav_flagged, available_tickers=grade_tickers,
-                        grade_returns_df=graded_returns, grade_tickers=grade_tickers,
-                        grading_settings=grading_settings, min_obs=effective_min_obs, reuse_unchanged=False,
-                    ),
-                    "target": {
-                        **target, "status": status, "stopped": found["stopped"],
-                        "score": found["score"], "grade": found["grade"],
-                        "moved_pct": round(moved * 100, 1), "moved_value": round(moved * graded_value, 2),
-                        "blocked": [{"ticker": t, "reason": reason} for t, reason in blocked.items()],
-                    },
-                }
+                found_options = search_grade_options(
+                    graded_returns[grade_tickers], grade_values, bench_ret, target_score,
+                    can_increase=[t not in blocked for t in grade_tickers], yields=yields,
+                    max_weight=max_weight, min_obs=effective_min_obs, grading_settings=grading_settings,
+                )
+
+                def grade_plan(found):
+                    model = found["weights"]
+                    weights_out = [{"ticker": t, "current_pct": float(current[i] * 100),
+                                    "optimal_pct": float(model[i] * 100)}
+                                   for i, t in enumerate(grade_tickers) if value_map.get(t, 0) > 0]
+                    # Preserve every searched move, including tiny positions and capped
+                    # transfers. Dollar amounts use the actual weights, not rounded percents.
+                    weights_out, rebal_summary = _enrich_weights_with_actions(weights_out, close, graded_value, threshold=1e-8)
+                    for w in weights_out:
+                        t = w["ticker"]
+                        # Annual income each move adds or gives up at the holding's current
+                        # payout yield; the rows add up to the after-minus-before income.
+                        w["yield_pct"] = round(yield_map.get(t, 0) * 100, 2)
+                        w["income_change"] = round(w["dollar_change"] * yield_map.get(t, 0), 2)
+                        # Shares at the holding's own price (the dollars come from its value),
+                        # so trimming a position to zero sells exactly the shares held.
+                        qty = quantity_map.get(t, 0)
+                        if qty > 0:
+                            w["current_price"] = round(value_map[t] / qty, 2)
+                            w["shares_change"] = round(
+                                (w["optimal_pct"] - w["current_pct"]) / 100 * graded_value * qty / value_map[t], 4)
+                    opt_income = float(model @ yields) * graded_value
+                    moved = float(np.abs(model - current).sum()) / 2
+                    status = ("already" if found["start_score"] >= target_score
+                              else "reached" if found["reached"] else "unreachable")
+                    return {
+                        # How this plan differs from the first: see search_grade_options.
+                        "kind": found["kind"], "rule_ticker": found["ticker"],
+                        "weights": weights_out,
+                        "rebalance_summary": rebal_summary,
+                        "comparison": _before_after_comparison(
+                            graded_returns, model, bench_ret, port_metrics, curr_income, opt_income,
+                            current_weights=current, nav_flagged=nav_flagged, available_tickers=grade_tickers,
+                            grade_returns_df=graded_returns, grade_tickers=grade_tickers,
+                            grading_settings=grading_settings, min_obs=effective_min_obs, reuse_unchanged=False,
+                        ),
+                        "target": {
+                            **target, "status": status, "stopped": found["stopped"],
+                            "score": found["score"], "grade": found["grade"],
+                            "moved_pct": round(moved * 100, 1), "moved_value": round(moved * graded_value, 2),
+                            "blocked": [{"ticker": t, "reason": reason} for t, reason in blocked.items()],
+                        },
+                    }
+
+                plans = [grade_plan(found) for found in found_options]
+                result["optimization"] = {**plans[0], "options": plans}
 
     return jsonify(result)
 
