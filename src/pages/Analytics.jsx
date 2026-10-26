@@ -1251,7 +1251,7 @@ function AnalyticsForProfile() {
                               padding: '0.35rem 0.5rem', textAlign: 'right',
                               color: w.action === 'BUY' ? 'var(--pos)' : w.action === 'SELL' ? 'var(--neg)' : 'var(--text-dim)',
                             }}>
-                              {w.shares_change > 0 ? '+' : ''}{w.shares_change ?? '—'}
+                              {w.shares_change > 0 ? '+' : ''}{w.shares_change?.toLocaleString(undefined, { maximumFractionDigits: 2 }) ?? '—'}
                             </td>
                             <td style={{ padding: '0.35rem 0.5rem', textAlign: 'right', color: 'var(--text-dim)' }}>
                               {formatMoney(w.current_price)}

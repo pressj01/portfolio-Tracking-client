@@ -8,16 +8,26 @@
 .grade-plan-stats strong { color: var(--text-strong); font-size: 1.2rem; }
 .grade-plan-stats small { font-size: .8rem; font-weight: 400; }
 .grade-plan-income { padding: .65rem .8rem; background: var(--surface-inset); border-radius: 5px; }
+.grade-plan-income .pos, .grade-plan-income-cell.pos { color: var(--pos); font-weight: 600; }
+.grade-plan-income .neg, .grade-plan-income-cell.neg { color: var(--neg); font-weight: 600; }
 .grade-plan-allocations { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin: .9rem 0; }
-.grade-plan-list { padding: .75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); }
-.grade-plan-list h3 { margin: 0 0 .5rem; font-size: .9rem; }
+.grade-plan-list { padding: .75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-inset); overflow-x: auto; }
+.grade-plan-list h3 { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem 1rem; margin: 0 0 .5rem; font-size: .9rem; }
+.grade-plan-list-income { font-size: .78rem; font-weight: 600; }
 .grade-plan-add h3, .grade-plan-add .grade-plan-amount { color: var(--pos); }
 .grade-plan-trim h3, .grade-plan-trim .grade-plan-amount { color: var(--neg); }
-.grade-plan-list ul { list-style: none; margin: 0; padding: 0; }
-.grade-plan-list li { display: grid; grid-template-columns: 1fr auto auto; gap: .75rem; align-items: baseline; padding: .35rem 0; border-bottom: 1px solid var(--border); font-size: .8rem; }
-.grade-plan-list li:last-child { border: 0; }
-.grade-plan-list li strong { color: var(--accent-bright); }
-.grade-plan-list li > span:last-child { font-size: .75rem; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.grade-plan-list table { width: 100%; border-collapse: collapse; font-size: .8rem; font-variant-numeric: tabular-nums; }
+.grade-plan-list th { position: static; background: none; }
+.grade-plan-list thead th { padding: 0 0 .3rem; font-size: .7rem; font-weight: 500; color: var(--text-dim); text-align: right; border-bottom: 1px solid var(--border); }
+.grade-plan-list thead th:first-child, .grade-plan-list tbody th { text-align: left; }
+.grade-plan-list tbody th { color: var(--accent-bright); font-weight: 700; }
+.grade-plan-list tbody th, .grade-plan-list td { padding: .35rem 0 .35rem .75rem; border-bottom: 1px solid var(--border); text-align: right; }
+.grade-plan-list tbody th { padding-left: 0; }
+.grade-plan-list tbody tr:last-child > * { border-bottom: 0; }
+.grade-plan-list td:nth-child(3) { font-size: .75rem; color: var(--text-dim); white-space: nowrap; }
+.grade-plan-amount, .grade-plan-shares { white-space: nowrap; }
+.grade-plan-shares { margin-left: .5rem; font-size: .75rem; color: var(--text-dim); }
+.grade-plan-income-cell { color: var(--text-dim); white-space: nowrap; }
 .grade-plan-limits { margin: .7rem 0; font-size: .78rem; color: var(--text-dim); }
 .grade-plan-limits summary { cursor: pointer; color: var(--accent-2); }
 .grade-plan .grade-plan-note { font-size: .74rem; }

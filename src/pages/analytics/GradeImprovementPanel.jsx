@@ -1,5 +1,17 @@
-import { formatMoneyDelta, formatMoneyWhole } from '../../utils/money'
+import { formatMoney, formatMoneyDelta, formatMoneyWhole } from '../../utils/money'
 import './GradeImprovementPanel.css'
+
+// Signed share count, up to two decimals; a full trim shows the exact position size.
+function formatShares(n) {
+  const abs = Math.abs(n)
+  const text = abs > 0 && abs < 0.01 ? '<0.01' : abs.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  return `${n < 0 ? '-' : '+'}${text} ${abs === 1 ? 'share' : 'shares'}`
+}
+
+// Whole-dollar income change; anything that rounds to $0 is shown unsigned.
+function formatIncome(n) {
+  return Math.round(Math.abs(n)) === 0 ? '$0' : formatMoneyDelta(n, { digits: 0 })
+}
 
 export default function GradeImprovementPanel({ optimization, periodLabel, onViewDetails }) {
   const titleId = useId()
@@ -23,20 +35,41 @@ export default function GradeImprovementPanel({ optimization, periodLabel, onVie
       : already ? `Your portfolio already meets ${target.letter}`
         : reached ? `A model mix that reaches ${target.letter}` : `Target ${target.letter} not found — best mix tested`
 
-  const allocationList = (items, action) => (
-    <div className={`grade-plan-list grade-plan-${action}`}>
-      <h3>{action === 'add' ? 'Increase' : 'Trim'} ({items.length})</h3>
-      <ul>
-        {items.map(w => (
-          <li key={w.ticker}>
-            <strong>{w.ticker}</strong>
-            <span className="grade-plan-amount">{formatMoneyDelta(w.dollar_change, { digits: 0 })}</span>
-            <span>{w.current_pct.toFixed(2)}% → {w.optimal_pct.toFixed(2)}%</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
+  const allocationList = (items, action) => {
+    const label = action === 'add' ? 'Increase' : 'Trim'
+    const income = items.reduce((sum, w) => sum + (w.income_change ?? 0), 0)
+    return (
+      <div className={`grade-plan-list grade-plan-${action}`}>
+        <h3>{label} ({items.length})<span className="grade-plan-list-income">{formatIncome(income)}/yr income</span></h3>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Ticker</th>
+              <th scope="col">Amount</th>
+              <th scope="col">Weight</th>
+              <th scope="col" title="Estimated annual income this change adds or gives up, at the holding’s current payout yield">Income/yr</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(w => (
+              <tr key={w.ticker}>
+                <th scope="row">{w.ticker}</th>
+                <td>
+                  <span className="grade-plan-amount">{formatMoneyDelta(w.dollar_change, { digits: 0 })}</span>
+                  {w.shares_change != null && <span className="grade-plan-shares" title={w.current_price ? `At ${formatMoney(w.current_price)} a share` : undefined}>{formatShares(w.shares_change)}</span>}
+                </td>
+                <td>{w.current_pct.toFixed(2)}% → {w.optimal_pct.toFixed(2)}%</td>
+                <td className={`grade-plan-income-cell${w.income_change > 0.5 ? ' pos' : w.income_change < -0.5 ? ' neg' : ''}`}
+                  title={w.yield_pct != null ? `${w.ticker} yields an estimated ${w.yield_pct.toFixed(2)}% a year` : undefined}>
+                  {w.income_change != null ? formatIncome(w.income_change) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
 
   return (
     <section className="card grade-plan" aria-labelledby={titleId} tabIndex={-1}>
@@ -57,10 +90,12 @@ export default function GradeImprovementPanel({ optimization, periodLabel, onVie
                   : 'The search found no improving shift within its limits. Try a lower target or compare a broader set of holdings with the other model tools.'}
                 {!reached && (target.stopped === 'budget' ? ' It stopped at its search limit; this does not prove the target is impossible.'
                   : ' A different combination could still do better.')}</p>}
-            {incomeDelta != null && <p className="grade-plan-income"><strong>Estimated annual income: </strong>
-              {formatMoneyWhole(before.annual_income)} → {formatMoneyWhole(after.annual_income)}
-              {' '}({formatMoneyDelta(incomeDelta, { digits: 0 })}/year; {formatMoneyDelta(incomeDelta / 12, { digits: 0 })}/month).
-              {' '}Uses today’s payout estimates on the graded holdings.
+            {incomeDelta != null && <p className="grade-plan-income"><strong>Income change from this plan: </strong>
+              <span className={incomeDelta > 0.5 ? 'pos' : incomeDelta < -0.5 ? 'neg' : ''}>
+                {formatIncome(incomeDelta)}/year ({formatIncome(incomeDelta / 12)}/month)
+              </span>
+              {' '}— estimated annual income {formatMoneyWhole(before.annual_income)} → {formatMoneyWhole(after.annual_income)}.
+              {' '}Uses today’s payout estimates on the graded holdings; Income/yr shows each change’s share.
             </p>}
             {changed && <div className="grade-plan-allocations">{allocationList(adds, 'add')}{allocationList(trims, 'trim')}</div>}
             {drivers.length > 0 && <p><strong>What lifts the model’s grade: </strong>{drivers.map(d => `${d.category} score ${d.before} → ${d.score}`).join('; ')}. Each category is scored out of 100.</p>}

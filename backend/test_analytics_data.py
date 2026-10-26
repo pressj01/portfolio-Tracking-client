@@ -393,6 +393,12 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         from grading import grade_portfolio
         ticker_mock.return_value.info = {}
         self.market_data = _volatile_market_frame()
+        conn = sqlite3.connect(self.db_path)
+        # 10% yield on AAA, 20% on BBB, nothing on CCC.
+        conn.execute("UPDATE all_account_info SET estim_payment_per_year = 120 WHERE ticker = 'AAA'")
+        conn.execute("UPDATE all_account_info SET estim_payment_per_year = 360 WHERE ticker = 'BBB'")
+        conn.commit()
+        conn.close()
 
         def small_shift(returns, values, bench, target, **kwargs):
             weights = values / values.sum()
@@ -416,10 +422,47 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         self.assertEqual(actions["AAA"]["dollar_change"], 0.70)
         self.assertEqual(actions["BBB"]["dollar_change"], -0.70)
         self.assertEqual(opt["target"]["moved_value"], 0.70)
+        # Each move carries the income it adds or gives up; together they are the plan's income change.
+        self.assertEqual(actions["AAA"]["income_change"], 0.07)
+        self.assertEqual(actions["BBB"]["income_change"], -0.14)
+        self.assertEqual(actions["CCC"]["income_change"], 0)
+        self.assertEqual(actions["BBB"]["yield_pct"], 20.0)
+        before, after = opt["comparison"]["before"], opt["comparison"]["after"]
+        self.assertAlmostEqual(sum(w["income_change"] for w in opt["weights"]),
+                               after["annual_income"] - before["annual_income"], places=2)
         self.assertEqual(opt["rebalance_summary"]["total_buy"], opt["rebalance_summary"]["total_sell"])
         self.assertTrue(opt["comparison"]["before"]["breakdown"])
         self.assertTrue(opt["comparison"]["after"]["breakdown"])
         self.assertEqual(opt["comparison"]["after"]["score"], opt["target"]["score"])
+
+    @patch("yfinance.Ticker")
+    def test_target_grade_share_counts_use_the_holdings_own_price(self, ticker_mock):
+        from grading import grade_portfolio
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+
+        def sell_ccc(returns, values, bench, target, **kwargs):
+            start = values / values.sum()
+            weights = start.copy()
+            weights[0] += weights[2]
+            weights[2] = 0.0
+            grade = grade_portfolio(returns, weights, bench)["grade"]
+            return {"weights": weights, "score": grade["score"], "grade": grade["overall"],
+                    "start_score": 0, "reached": True, "stopped": None}
+
+        with patch("grading.search_weights_for_grade", side_effect=sell_ccc):
+            payload = self.client.post(
+                "/api/analytics/data?profile_id=1",
+                json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+            ).get_json()
+        actions = {w["ticker"]: w for w in payload["optimization"]["weights"]}
+        # CCC: 8 shares worth $500. Trimming it to zero sells all 8, at $62.50 a share.
+        self.assertEqual(actions["CCC"]["shares_change"], -8)
+        self.assertEqual(actions["CCC"]["current_price"], 62.5)
+        # AAA: 10 shares worth $1,200 ($120 each) receives the $500.
+        self.assertEqual(actions["AAA"]["current_price"], 120.0)
+        self.assertAlmostEqual(actions["AAA"]["shares_change"], 500 / 120, places=4)
+        self.assertEqual(actions["BBB"]["shares_change"], 0)
 
     @patch("yfinance.Ticker")
     def test_nav_request_matches_the_dashboard_for_the_whole_portfolio(self, ticker_mock):
