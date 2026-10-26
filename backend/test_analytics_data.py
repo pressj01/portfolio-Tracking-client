@@ -465,6 +465,66 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         self.assertEqual(actions["BBB"]["shares_change"], 0)
 
     @patch("yfinance.Ticker")
+    def test_target_grade_options_each_carry_a_full_plan(self, ticker_mock):
+        from grading import grade_portfolio
+        ticker_mock.return_value.info = {}
+        self.market_data = _volatile_market_frame()
+        conn = sqlite3.connect(self.db_path)
+        # 10% yield on AAA, 20% on BBB, nothing on CCC.
+        conn.execute("UPDATE all_account_info SET estim_payment_per_year = 120 WHERE ticker = 'AAA'")
+        conn.execute("UPDATE all_account_info SET estim_payment_per_year = 360 WHERE ticker = 'BBB'")
+        conn.commit()
+        conn.close()
+        seen = {}
+
+        def two_plans(returns, values, bench, target, **kwargs):
+            seen.update(kwargs, columns=list(returns.columns))
+            start = values / values.sum()
+            plans = []
+            # The main plan moves CCC into AAA; the alternative keeps CCC and moves BBB.
+            for kind, ticker, source in (("main", None, 2), ("keep", "CCC", 1)):
+                weights = start.copy()
+                weights[0] += weights[source]
+                weights[source] = 0.0
+                grade = grade_portfolio(returns, weights, bench)["grade"]
+                plans.append({"weights": weights, "score": grade["score"], "grade": grade["overall"],
+                              "start_score": 0, "reached": True, "stopped": "reached",
+                              "kind": kind, "ticker": ticker})
+            return plans
+
+        with patch("grading.search_grade_options", side_effect=two_plans):
+            payload = self.client.post(
+                "/api/analytics/data?profile_id=1",
+                json={"tickers": ["AAA", "BBB", "CCC"], "mode": "target_grade", "target_grade": "A+"},
+            ).get_json()
+        opt = payload["optimization"]
+        self.assertEqual([o["kind"] for o in opt["options"]], ["main", "keep"])
+        self.assertEqual([o["rule_ticker"] for o in opt["options"]], [None, "CCC"])
+        # The search receives each holding's yield, in its own column order.
+        self.assertEqual(seen["columns"], ["AAA", "BBB", "CCC"])
+        np.testing.assert_allclose(seen["yields"], [0.10, 0.20, 0.0])
+        # The top level is the first option, so readers of a single plan see the main one.
+        for key in ("weights", "rebalance_summary", "comparison", "target"):
+            self.assertEqual(json_dump(opt[key]), json_dump(opt["options"][0][key]), key)
+        # Every option carries the same plan details.
+        for option in opt["options"]:
+            target, before, after = option["target"], option["comparison"]["before"], option["comparison"]["after"]
+            self.assertEqual(target["status"], "reached")
+            self.assertEqual(target["start_grade"], payload["portfolio_metrics"]["grade"]["overall"])
+            self.assertEqual(after["score"], target["score"])
+            self.assertTrue(after["breakdown"])
+            self.assertAlmostEqual(sum(w["income_change"] for w in option["weights"]),
+                                   after["annual_income"] - before["annual_income"], places=2)
+            added = sum(w["dollar_change"] for w in option["weights"] if w["action"] == "BUY")
+            self.assertAlmostEqual(added, target["moved_value"], delta=0.01)
+        main = {w["ticker"]: w for w in opt["options"][0]["weights"]}
+        keep = {w["ticker"]: w for w in opt["options"][1]["weights"]}
+        self.assertEqual(main["CCC"]["shares_change"], -8)
+        self.assertEqual(keep["CCC"]["action"], "HOLD")
+        self.assertEqual(keep["BBB"]["shares_change"], -20)
+        self.assertEqual(keep["BBB"]["income_change"], -360)
+
+    @patch("yfinance.Ticker")
     def test_nav_request_matches_the_dashboard_for_the_whole_portfolio(self, ticker_mock):
         # Same funds, references, dates and cash reach _run_nav_assessment from
         # the Dashboard route and from Analytics.

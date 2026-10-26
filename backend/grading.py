@@ -642,19 +642,22 @@ GRADE_TARGET_CUTOFF_KEYS = {
 
 
 def search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score, *,
-                             can_increase=None, max_weight=0.25, min_obs=MIN_RATIO_OBSERVATIONS,
+                             can_increase=None, can_decrease=None, yields=None, max_pairs=3,
+                             max_weight=0.25, min_obs=MIN_RATIO_OBSERVATIONS,
                              grading_settings=None, max_iterations=60, time_budget=10.0):
     """Re-weight the holdings already in a portfolio until its grade reaches target_score.
 
     Only weights change. Nothing that is not held (weight 0) is added, a holding
-    with can_increase False may shrink but not grow, and no holding grows past
-    max_weight. Each step pairs the holdings that raise the score fastest with
-    those that drag it most and moves the same amount across each pair (up to
-    three pairs at once, or the single best pair when that does better). The
-    step that reaches the target uses the smallest amount that does, so the
-    result stays close to the current mix. The search stops when the target is
-    reached ("reached"), no swap helps ("stuck"), or the iteration/time budget
-    runs out ("budget").
+    with can_increase False may shrink but not grow, one with can_decrease False
+    may not shrink, and no holding grows past max_weight. With yields given,
+    money only moves into a holding that yields at least as much as the one it
+    leaves, so the mix's estimated income cannot fall. Each step pairs the
+    holdings that raise the score fastest with those that drag it most and moves
+    the same amount across each pair (up to max_pairs pairs at once, or the
+    single best pair when that does better). The step that reaches the target
+    uses the smallest amount that does, so the result stays close to the current
+    mix. The search stops when the target is reached ("reached"), no swap helps
+    ("stuck"), or the iteration/time budget runs out ("budget").
 
     Returns None when nothing is held, else the final weights (fractions), their
     score and letter grade, the starting score, and whether the target was met.
@@ -671,6 +674,10 @@ def search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score, *
     growable = held.copy()
     if can_increase is not None:
         growable &= np.array(can_increase, dtype=bool)
+    shrinkable = held.copy()
+    if can_decrease is not None:
+        shrinkable &= np.array(can_decrease, dtype=bool)
+    pays = None if yields is None else np.array(yields, dtype=float)
 
     def grade(vec):
         pm = grade_portfolio(returns_df, vec, bench_ret, min_obs=min_obs, grading_settings=settings)
@@ -695,15 +702,22 @@ def search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score, *
             slopes[i] = (grade(mixed)[0] - raw) / probe
         buyers = sorted((i for i in slopes if growable[i] and w[i] < max_weight - 1e-9),
                         key=lambda i: -slopes[i])
-        sellers = sorted((j for j in slopes if w[j] > 1e-9), key=lambda j: slopes[j])
-        # Steepest buyer with flattest seller, next with next, never reusing one.
+        sellers = sorted((j for j in slopes if shrinkable[j] and w[j] > 1e-9), key=lambda j: slopes[j])
+        # Steepest buyer with the flattest seller it may draw from, next with
+        # next, never reusing one.
         pairs, used = [], set()
-        for i, j in zip(buyers, sellers):
-            if len(pairs) == 3:
+        for i in buyers:
+            if len(pairs) == max_pairs:
                 break
-            if i != j and i not in used and j not in used and slopes[i] > slopes[j]:
-                pairs.append((i, j, min(w[j], max_weight - w[i])))
-                used.update((i, j))
+            if i in used:
+                continue
+            for j in sellers:
+                if slopes[j] >= slopes[i]:
+                    break
+                if j != i and j not in used and (pays is None or pays[i] >= pays[j]):
+                    pairs.append((i, j, min(w[j], max_weight - w[i])))
+                    used.update((i, j))
+                    break
         best = None      # (raw, shown, weights): the biggest gain
         reaching = None  # ((moved, -raw), raw, shown, weights): the smallest move that reaches the target
         for batch in ([pairs] + ([pairs[:1]] if len(pairs) > 1 else [])) if pairs else []:
@@ -740,3 +754,100 @@ def search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score, *
         "stopped": stop,
         "iterations": iterations,
     }
+
+
+# Two plans must differ by at least this share of the portfolio, and by this
+# share of the larger plan's own move, to both be offered.
+_OPTION_MIN_DIFFERENCE = 0.0025
+_OPTION_MIN_DIFFERENCE_SHARE = 0.10
+
+
+def _changed_holdings(weights, start):
+    return int((np.abs(weights - start) > 1e-10).sum())
+
+
+def _near_repeat(a, b, start):
+    """True when two plans differ by too little to offer both."""
+    differ = float(np.abs(a - b).sum()) / 2
+    moved = max(float(np.abs(a - start).sum()), float(np.abs(b - start).sum())) / 2
+    return differ <= max(_OPTION_MIN_DIFFERENCE, _OPTION_MIN_DIFFERENCE_SHARE * moved)
+
+
+def search_grade_options(returns_df, weights_arr, bench_ret, target_score, *,
+                         can_increase=None, yields=None, max_options=5, total_time_budget=20.0,
+                         **search_kwargs):
+    """Up to max_options different re-weightings that each reach target_score.
+
+    The first ("main") is search_weights_for_grade's own result. When it had to
+    move money to reach the target, the search reruns with one extra rule each
+    time, so every alternative reaches the grade a different way:
+
+      "income"  money moves only into holdings that yield at least as much as
+                the ones funding them, so estimated income cannot fall;
+      "keep"    a holding the main plan trims is left as it is (the trim giving
+                up the most income first, or the most dollars when none pays);
+      "avoid"   a holding the main plan increases may not grow (largest first);
+      "fewer"   one buyer/seller pair per step, kept only when it changes fewer
+                holdings than the main plan.
+
+    Alternatives that miss the target or nearly repeat an earlier option are
+    dropped, and no new search starts after total_time_budget seconds. Each
+    option is search_weights_for_grade's result plus "kind" and, for "keep" and
+    "avoid", the "ticker" (returns_df column) the rule applies to. Returns []
+    when nothing is held.
+    """
+    import time
+
+    deadline = time.monotonic() + total_time_budget
+    main = search_weights_for_grade(returns_df, weights_arr, bench_ret, target_score,
+                                    can_increase=can_increase, **search_kwargs)
+    if main is None:
+        return []
+    options = [{**main, "kind": "main", "ticker": None}]
+    if not main["reached"] or main["start_score"] >= target_score:
+        return options
+
+    start = np.array(weights_arr, dtype=float)
+    start = start / start.sum()
+    n = len(start)
+    names = list(returns_df.columns)
+    growable = np.ones(n, dtype=bool) if can_increase is None else np.array(can_increase, dtype=bool)
+    pays = np.zeros(n) if yields is None else np.array(yields, dtype=float)
+    change = main["weights"] - start
+    trimmed = np.flatnonzero(change < -1e-10)
+    # What each trim gives up: income, or dollars when none of the trims pays.
+    cost = -change * pays if (pays[trimmed] > 0).any() else -change
+    trims = sorted(trimmed, key=lambda j: -cost[j])
+    adds = sorted(np.flatnonzero(change > 1e-10), key=lambda i: -change[i])
+    everyone = np.arange(n)
+
+    candidates = []
+    if (pays > 0).any():
+        candidates.append(("income", None, {"yields": pays}))
+    if trims:
+        candidates.append(("keep", trims[0], {"can_decrease": everyone != trims[0]}))
+    if adds:
+        candidates.append(("avoid", adds[0], {"can_increase": growable & (everyone != adds[0])}))
+    candidates.append(("fewer", None, {"max_pairs": 1}))
+    if len(adds) > 1:
+        candidates.append(("avoid", adds[1], {"can_increase": growable & (everyone != adds[1])}))
+    if len(trims) > 1:
+        candidates.append(("keep", trims[1], {"can_decrease": everyone != trims[1]}))
+
+    per_search = search_kwargs.pop("time_budget", 10.0)
+    for kind, index, rule in candidates:
+        remaining = deadline - time.monotonic()
+        if len(options) >= max_options or remaining <= 0:
+            break
+        found = search_weights_for_grade(
+            returns_df, weights_arr, bench_ret, target_score,
+            **{"can_increase": can_increase, **search_kwargs, **rule,
+               "time_budget": min(per_search, remaining)})
+        if not found["reached"]:
+            continue
+        if kind == "fewer" and _changed_holdings(found["weights"], start) >= _changed_holdings(main["weights"], start):
+            continue
+        if any(_near_repeat(found["weights"], o["weights"], start) for o in options):
+            continue
+        options.append({**found, "kind": kind, "ticker": None if index is None else names[index]})
+    return options

@@ -6,6 +6,7 @@ import IncomeCharts from './analytics/IncomeCharts'
 import BacktestCharts from './analytics/BacktestCharts'
 import ToolsPanel from './analytics/ToolsPanel'
 import GradeImprovementPanel from './analytics/GradeImprovementPanel'
+import { planOptionLabel } from './analytics/gradePlanOptions'
 import { formatMoney, formatMoneyDelta, formatMoneyWhole, getCurrencyLabel } from '../utils/money'
 import { gradingSettingsPayload } from '../utils/gradingPreferences'
 import NotFinancialAdviceNotice from '../components/NotFinancialAdviceNotice'
@@ -110,6 +111,7 @@ function AnalyticsForProfile() {
   const [snapshots, setSnapshots] = useState([])
   const [chartTab, setChartTab] = useState('risk')
   const [targetGrade, setTargetGrade] = useState('B')
+  const [planIndex, setPlanIndex] = useState(0)
   const lastAnalyzedPeriod = useRef(null)
   // Period buttons stay live during a run, so two requests can overlap. Only the
   // newest may write state; otherwise a slow 1M reply can land under a 1Y button.
@@ -184,6 +186,7 @@ function AnalyticsForProfile() {
         if (seq !== requestSeq.current) return
         if (d.error) { setError(d.error); return }
         setResult(d)
+        setPlanIndex(0)
         setMode(runMode || mode)
       })
       .catch(e => { if (seq === requestSeq.current) setError('Request failed: ' + e.message) })
@@ -239,14 +242,23 @@ function AnalyticsForProfile() {
 
   const pm = result?.portfolio_metrics || {}
   const grade = pm.grade || {}
+  // "What would it take?" can offer several plans. The one picked drives the
+  // grade panel, the full comparison, the export and snapshots alike.
+  const planOptions = result?.optimization?.options || []
+  const optimization = React.useMemo(() => {
+    const opt = result?.optimization
+    const plan = opt?.options?.[planIndex]
+    return plan ? { ...opt, ...plan } : opt || null
+  }, [result, planIndex])
   // The slider can move after a Balanced run without re-running it, so labels
   // use the balance the result was computed with.
-  const runBalance = result?.optimization?.summary?.balance ?? balance
-  const targetResult = result?.optimization?.target || null
-  const scenarioLabel = mode === 'target_grade' ? `Reach ${targetResult?.letter || targetGrade}`
+  const runBalance = optimization?.summary?.balance ?? balance
+  const targetResult = optimization?.target || null
+  const scenarioLabel = mode === 'target_grade'
+    ? `Reach ${targetResult?.letter || targetGrade}${planOptions.length > 1 ? ` · Option ${planIndex + 1} (${planOptionLabel(planOptions[planIndex])})` : ''}`
     : mode === 'optimize_balanced' ? `Balanced (${runBalance}%)`
       : mode === 'optimize_income' ? 'Optimize Income' : 'Optimize Returns'
-  const showYieldColumn = (result?.optimization?.weights || []).some(w => w.yield_pct != null)
+  const showYieldColumn = (optimization?.weights || []).some(w => w.yield_pct != null)
   const resultPeriod = result?.data_window?.period || period
   const periodLabel = PERIODS.find(p => p.value === resultPeriod)?.label || resultPeriod
   const runHint = tickers.length === 0
@@ -591,7 +603,8 @@ function AnalyticsForProfile() {
         <>
           {targetResult && (
             <div ref={gradePlanRef} style={{ scrollMarginTop: '5rem' }}>
-              <GradeImprovementPanel optimization={result.optimization} periodLabel={periodLabel}
+              <GradeImprovementPanel optimization={optimization} periodLabel={periodLabel}
+                options={planOptions} selectedIndex={planIndex} onSelectOption={setPlanIndex}
                 onViewDetails={() => optimizationDetailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })} />
             </div>
           )}
@@ -1009,7 +1022,7 @@ function AnalyticsForProfile() {
           )}
 
           {/* Optimization results */}
-          {result.optimization && (
+          {optimization && (
             <div ref={optimizationDetailsRef} className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem', scrollMarginTop: '5rem' }}>
               <h3 style={{ color: 'var(--accent-2)', margin: '0 0 0.5rem', fontSize: '0.95rem' }}>
                 Optimization Results
@@ -1020,9 +1033,9 @@ function AnalyticsForProfile() {
               </h3>
 
               {/* Summary stats */}
-              {result.optimization.summary && (
+              {optimization.summary && (
                 <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
-                  {Object.entries(result.optimization.summary).map(([k, v]) => (
+                  {Object.entries(optimization.summary).map(([k, v]) => (
                     <div key={k} style={{ fontSize: '0.82rem' }}>
                       <span style={{ color: 'var(--text-dim)' }}>{k.replace(/_/g, ' ')}: </span>
                       <span style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
@@ -1034,7 +1047,7 @@ function AnalyticsForProfile() {
               )}
 
               {/* Weights table */}
-              {result.optimization.weights && (
+              {optimization.weights && (
                 <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%', marginBottom: '0.75rem' }}>
                   <thead>
                     <tr>
@@ -1048,7 +1061,7 @@ function AnalyticsForProfile() {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.optimization.weights.map(w => {
+                    {optimization.weights.map(w => {
                       const change = w.optimal_pct - w.current_pct
                       return (
                         <tr key={w.ticker} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
@@ -1072,8 +1085,8 @@ function AnalyticsForProfile() {
               )}
 
               {/* Before / After Comparison */}
-              {result.optimization.comparison && (() => {
-                const c = result.optimization.comparison
+              {optimization.comparison && (() => {
+                const c = optimization.comparison
                 const b = c.before, a = c.after
                 const delta = (v1, v2, fmt, isDollar = false) => {
                   if (v1 == null || v2 == null) return '—'
@@ -1148,20 +1161,20 @@ function AnalyticsForProfile() {
               })()}
 
               {/* Model allocation scenario */}
-              {result.optimization.weights?.[0]?.action && (() => {
-                const sorted = [...result.optimization.weights].sort((a, b) => {
+              {optimization.weights?.[0]?.action && (() => {
+                const sorted = [...optimization.weights].sort((a, b) => {
                   const pri = { SELL: 0, BUY: 1, HOLD: 2 }
                   if (pri[a.action] !== pri[b.action]) return pri[a.action] - pri[b.action]
                   return Math.abs(b.dollar_change) - Math.abs(a.dollar_change)
                 })
-                const rs = result.optimization.rebalance_summary || {}
+                const rs = optimization.rebalance_summary || {}
                 // BUY / SELL / HOLD are the API's direction codes. The screen shows them as
                 // model weight shifts so the table reads as a scenario, not trade instructions.
                 const shiftLabel = { BUY: 'Increase', SELL: 'Decrease', HOLD: 'No change' }
                 const actionColor = { BUY: '#4dff91', SELL: '#ff6b6b', HOLD: '#8899aa' }
                 const actionBg = { BUY: 'rgba(77,255,145,0.12)', SELL: 'rgba(255,107,107,0.12)', HOLD: 'rgba(136,153,170,0.08)' }
                 // Quick action summary
-                const comp = result.optimization.comparison
+                const comp = optimization.comparison
                 const incomeChange = comp ? (comp.after.annual_income - comp.before.annual_income) : null
                 const summaryParts = []
                 if (rs.num_sells > 0) summaryParts.push(`${rs.num_sells} lower weight${rs.num_sells > 1 ? 's' : ''}`)
@@ -1181,7 +1194,7 @@ function AnalyticsForProfile() {
                   const blob = new Blob([header + cols + rows], { type: 'text/csv' })
                   const url = URL.createObjectURL(blob)
                   const a = document.createElement('a')
-                  a.href = url; a.download = `optimization-scenario-${mode}-${new Date().toISOString().slice(0,10)}.csv`
+                  a.href = url; a.download = `optimization-scenario-${mode}${planOptions.length > 1 ? `-option-${planIndex + 1}` : ''}-${new Date().toISOString().slice(0,10)}.csv`
                   a.click(); URL.revokeObjectURL(url)
                 }
 
@@ -1193,10 +1206,10 @@ function AnalyticsForProfile() {
                         background: 'none', border: '1px solid var(--p-3a5a8c)', borderRadius: 4, color: 'var(--accent-bright)',
                         fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',
                       }}>Export CSV</button>
-                      {result.optimization.comparison && (
+                      {optimization.comparison && (
                         <button onClick={async () => {
                           const label = await dialog.prompt('Snapshot label:', scenarioLabel)
-                          if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance: runBalance, optimization: result.optimization, portfolio_metrics: result.portfolio_metrics }])
+                          if (label) setSnapshots(prev => [...prev.slice(-2), { label, mode, balance: runBalance, optimization, portfolio_metrics: result.portfolio_metrics }])
                         }} style={{
                           background: 'none', border: '1px solid var(--p-3a5a3c)', borderRadius: 4, color: 'var(--pos-muted)',
                           fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer',

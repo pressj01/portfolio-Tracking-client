@@ -32,3 +32,17 @@
 .grade-plan-limits summary { cursor: pointer; color: var(--accent-2); }
 .grade-plan .grade-plan-note { font-size: .74rem; }
 .grade-plan > .btn { background: var(--surface-inset); color: var(--accent-bright); border: 1px solid var(--border); padding: .4rem .7rem; }
+.grade-plan-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); gap: .6rem; margin: .5rem 0 .9rem; }
+.grade-plan-option { display: flex; flex-direction: column; align-items: flex-start; gap: .3rem; padding: .6rem .75rem; text-align: left; font: inherit; color: var(--text-dim); background: var(--surface-inset); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+.grade-plan-option:hover { border-color: var(--accent-2); }
+.grade-plan-option.selected { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.grade-plan-option:focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; }
+.grade-plan-option-number { font-size: .7rem; color: var(--text-dim); }
+.grade-plan-option-label { font-size: .86rem; color: var(--text-strong); overflow-wrap: anywhere; }
+.grade-plan-option-facts { display: flex; flex-wrap: wrap; gap: .15rem .7rem; font-size: .74rem; font-variant-numeric: tabular-nums; }
+.grade-plan-option-facts .pos { color: var(--pos); font-weight: 600; }
+.grade-plan-option-facts .neg { color: var(--neg); font-weight: 600; }
+.grade-plan-option-badges { display: flex; flex-wrap: wrap; gap: .3rem; }
+.grade-plan-option-badges span { padding: 1px 6px; font-size: .66rem; font-weight: 600; color: var(--accent-bright); border: 1px solid var(--border); border-radius: 10px; }
+.grade-plan .grade-plan-option-note { margin-top: 0; }
+.grade-plan-option-note strong { color: var(--text-strong); }
