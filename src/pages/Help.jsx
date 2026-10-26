@@ -5133,14 +5133,37 @@ function FundDefinitionsHelp() {
         free constituent source, and newer ETFs often have no published page yet. This page
         lists them, largest position first, so you can fill in what they hold by hand.
         Anything you define here immediately joins the{' '}
-        <strong>Diversification</strong> look-through.
+        <strong>Diversification</strong> look-through. The <strong>How this works</strong>{' '}
+        button under the page title opens a short version of this guide.
+      </p>
+
+      <h3>New positions are looked up first</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        A fund bought since the last lookup has not been checked against any source yet, so
+        opening this page looks it up straight away. It shows <em>Looking up…</em> in the
+        meantime, and its Define button waits until the lookup finishes. Only a fund that still
+        has no data afterwards stays in <em>Needs definition</em>. Overlay Shares funds (OVL,
+        OVS, OVQ and the rest) are read from lsfunds.com this way. Each holds one index ETF
+        plus SPX put spreads, so OVS opens into IJR and OVQ into QQQM.
+      </p>
+
+      <h3>Suggested definitions</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        When nothing is on file for a fund and its name names an index (Nasdaq-100, S&amp;P 500,
+        Russell 2000, small-cap, mid-cap and so on), the editor fills in an ETF tracking that index
+        at 100% as a starting point. That ETF is then looked through into its own companies.
+        A suggestion is <strong>not saved until you press Save</strong>, so check it against the
+        fund&apos;s fact sheet first. A name that signals a tilt or a multiple of the index
+        (value, growth, dividend, a sector, equal-weight, 2x, inverse) gets no suggestion.
       </p>
 
       <h3>The two tabs</h3>
       <ul style={{ marginBottom: '1rem' }}>
         <li><strong>Constituents</strong> — what the fund holds, as percentages of the fund.
           You do not have to account for all 100%: whatever you leave out simply stays in the
-          Undisclosed slice, so entering a fund's top ten is a real improvement over nothing.</li>
+          Undisclosed slice, so entering a fund's top ten is a real improvement over nothing.
+          If the fund just holds another ETF, enter that ETF's symbol at its weight. The
+          look-through opens it into its companies, so the definition never goes stale.</li>
         <li><strong>Economic exposure</strong> — for funds whose filed holdings misrepresent
           them. Use this when a fund holds Treasuries and options but is economically tracking
           gold, bitcoin, or a single stock. This is what the Diversification page uses in
@@ -5179,7 +5202,7 @@ function FundDefinitionsHelp() {
           issuers' specific file formats.</li>
         <li><code>generic_csv</code> — any plain CSV; columns are detected by name.</li>
         <li><code>html_table</code> — scrapes a holdings table straight off an issuer page.
-          Works for Reaves (UTG) and Adams (ADX).</li>
+          Works for Reaves (UTG), First Trust and LS Funds (Overlay Shares).</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
         <strong>Test</strong> fetches a fund you actually own through that issuer and reports

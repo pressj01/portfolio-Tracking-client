@@ -1037,20 +1037,32 @@ def _parse_holdings_table_html(html, limit=None):
         si = next((i for i, h in enumerate(header)
                    if h.strip() in {"ticker", "symbol", "identifier", "holding ticker"}), None)
 
-        def looks_like_tickers(col):
+        def sleeve_row(cells, col):
+            """An option leg or cash line, whatever its ticker cell says."""
+            name = _strip_tags(cells[ni]) if ni is not None and len(cells) > ni else ""
+            row = {"name": name, "symbol": _norm_symbol(_strip_tags(cells[col]))}
+            return _is_cash_row(row) or _is_derivative_row(row)
+
+        def looks_like_tickers(col, named=False):
             """True when a column's values are mostly exchange symbols.
 
             'Identifier' carries tickers on First Trust's equity funds but
             CUSIPs on their bond funds, so the header alone cannot be trusted.
+
+            Option legs and the cash line are left out of the count: they carry
+            contract ids or "Cash&Other" in the ticker column. An LS Funds
+            wrapper is one ETF plus eight option legs, so counting them threw
+            the column away and IJR/QQQM arrived with no symbol to look
+            through. One real ticker is enough when the header says "Ticker".
             """
-            vals = [_strip_tags(c[col]) for c in body if len(c) > col]
-            vals = [v for v in vals if v]
+            vals = [_strip_tags(c[col]) for c in body
+                    if len(c) > col and _strip_tags(c[col]) and not sleeve_row(c, col)]
             if not vals:
                 return False
             hits = sum(1 for v in vals if _TICKER_PAT.match(v.upper()))
-            return hits >= max(2, int(len(vals) * 0.6))
+            return hits >= max(1 if named else 2, int(len(vals) * 0.6))
 
-        if si is not None and not looks_like_tickers(si):
+        if si is not None and not looks_like_tickers(si, named=True):
             si = None
         if si is None:
             si = next((i for i in range(len(header))
@@ -1076,6 +1088,9 @@ def _parse_holdings_table_html(html, limit=None):
             # Skip roll-up rows like "Total" / "Top Ten Holdings".
             if re.match(r"(?i)^(total|top\s|net\s|subtotal)", name.strip()):
                 continue
+            # "Cash&Other" in the ticker column is a placeholder, not a symbol.
+            if name and _CASH_PAT.search(name) and not _TICKER_PAT.match(_norm_symbol(sym)):
+                sym = ""
             out.append(_row(sym, name or sym, weight))
             if limit and len(out) >= limit:
                 break
@@ -1210,6 +1225,11 @@ ISSUER_SEED = [
      "https://adamsfunds.com",
      "Complete Schedule of Investments from the newest linked financial report; "
      "PEO uses a per-fund page override."),
+    ("lsfunds", "LS Funds / Overlay Shares", "html_table",
+     "https://lsfunds.com/etfs/{ticker_lower}",
+     "https://lsfunds.com",
+     "Complete daily holdings table on each fund page: one index ETF (OVS holds "
+     "IJR, OVQ holds QQQM) plus SPX put spreads."),
 ]
 
 # Ticker -> issuer. Seeded from the families confirmed while building this;
@@ -1244,6 +1264,8 @@ ISSUER_MAP_SEED = {
     "aberdeen": ["ASGI", "AOD", "AEF", "IAE", "IHD"],
     "adams": ["ADX", "PEO"],
     "infracap": ["QVOL"],
+    # Each fund page verified to publish its full table (2026-10-26).
+    "lsfunds": ["OVL", "OVLH", "OVS", "OVQ", "OVF", "OVB", "OVM", "OVT"],
 }
 
 
@@ -1311,6 +1333,8 @@ ISSUER_MATCH = {
     "goldman": "goldman",
     "stf": "stf ",
     "invesco": "invesco",
+    # Not "ls funds": as a substring it also matches "...als funds".
+    "lsfunds": "overlay shares|liquid strategies",
 }
 
 
@@ -2039,6 +2063,98 @@ def _seed_wrappers(conn):
     if added:
         conn.commit()
     return added
+
+
+# A fund no source can open often says in its name which index it follows:
+# "Small Cap Equity", "Nasdaq 100 Income". An ETF tracking that index stands in
+# for it, the same way WRAPPER_SEED points TSPY at VOO, so the look-through
+# expands it into live constituents. Proxies are funds the look-through can
+# open in full (Vanguard's API, the Nasdaq-100 list, SEC N-PORT).
+# First match wins, so named indexes come before the bare size words.
+_INDEX_NAME_PROXIES = [
+    (r"nasdaq[\s-]*100", "Nasdaq-100", "QQQM", "Invesco Nasdaq 100 ETF"),
+    (r"s\s*&\s*p\s*500", "S&P 500", "VOO", "Vanguard S&P 500 ETF"),
+    (r"s\s*&\s*p\s*(?:small[\s-]*cap\s*)?600", "S&P SmallCap 600", "IJR",
+     "iShares Core S&P Small-Cap ETF"),
+    (r"s\s*&\s*p\s*(?:mid[\s-]*cap\s*)?400", "S&P MidCap 400", "IJH",
+     "iShares Core S&P Mid-Cap ETF"),
+    (r"russell\s*2000", "Russell 2000", "VTWO", "Vanguard Russell 2000 ETF"),
+    (r"dow\s+jones\s+industrial|\bdjia\b", "Dow Jones Industrial Average", "DIA",
+     "SPDR Dow Jones Industrial Average ETF Trust"),
+    (r"total\s+(?:u\.?s\.?\s+)?(?:stock\s+)?market", "US total market", "VTI",
+     "Vanguard Total Stock Market ETF"),
+    (r"small[\s-]*cap", "US small-cap", "VB", "Vanguard Small-Cap ETF"),
+    (r"mid[\s-]*cap", "US mid-cap", "VO", "Vanguard Mid-Cap ETF"),
+    (r"large[\s-]*cap", "US large-cap", "VOO", "Vanguard S&P 500 ETF"),
+    (r"emerging\s+markets?", "emerging markets", "VWO", "Vanguard FTSE Emerging Markets ETF"),
+    (r"developed\s+markets?|\beafe\b", "developed international", "VEA",
+     "Vanguard FTSE Developed Markets ETF"),
+    (r"international|foreign|ex[\s-]*u\.?s\b", "international", "VXUS",
+     "Vanguard Total International Stock ETF"),
+    (r"municipal|\bmuni\b", "municipal bonds", "VTEB", "Vanguard Tax-Exempt Bond ETF"),
+    (r"aggregate\s+bond|total\s+bond|core\s+bond", "US investment-grade bonds", "BND",
+     "Vanguard Total Bond Market ETF"),
+]
+# A name that also says any of these is a tilt, a slice or a multiple of the
+# index, not the index -- "Small Cap Value" is not VB, "Nasdaq 100
+# Technology" is not QQQM, a 2x fund is not 100% of anything. No guess.
+_INDEX_NAME_EXCLUDE = re.compile(
+    r"\b(value|growth|dividend|quality|momentum|low\s+vol\w*|equal[\s-]*weight\w*|esg|"
+    r"[23]x|ultra\w*|leverag\w*|inverse|short|bear|"
+    r"technology|tech|financials?|health\s*care|energy|utilit\w+|real\s+estate|reit|"
+    r"semiconductor\w*|biotech\w*)\b",
+    re.I,
+)
+
+
+def _index_proxy_for_name(text):
+    """(index label, proxy symbol, proxy name, matched words) or None."""
+    if not text or _INDEX_NAME_EXCLUDE.search(text):
+        return None
+    for pattern, label, proxy, proxy_name in _INDEX_NAME_PROXIES:
+        m = re.search(pattern, text, re.I)
+        if m:
+            return label, proxy, proxy_name, m.group(0)
+    return None
+
+
+def suggest_definition(conn, ticker):
+    """A starting definition for a fund nothing could open, read from its name.
+
+    Only a suggestion: the Fund Definitions editor fills it in and the user
+    saves it (or not). The broker's description is tried before Yahoo's name
+    so the common case costs no request. Any name carrying an excluded word
+    vetoes the guess outright.
+    """
+    sym = ticker.strip().upper()
+    texts = [r[0] for r in conn.execute(
+        "SELECT DISTINCT description FROM all_account_info "
+        "WHERE UPPER(TRIM(ticker))=? AND description IS NOT NULL AND TRIM(description) != ''",
+        (sym,),
+    ).fetchall()]
+
+    def pick(candidates):
+        if any(_INDEX_NAME_EXCLUDE.search(t) for t in candidates):
+            return None, True
+        for t in candidates:
+            hit = _index_proxy_for_name(t)
+            if hit and hit[1] != sym:
+                return (t, hit), False
+        return None, False
+
+    found, vetoed = pick(texts)
+    if not found and not vetoed:
+        yahoo = _fund_family_text(sym)
+        found, _ = pick([yahoo] if yahoo else [])
+    if not found:
+        return None
+    text, (label, proxy, proxy_name, matched) = found
+    return {
+        "index": label,
+        "matched": matched.strip(),
+        "from_name": text,
+        "rows": [{"symbol": proxy, "name": proxy_name, "weight_pct": 100.0}],
+    }
 
 
 def _seed_exposures(conn):
@@ -3209,6 +3325,10 @@ def register_routes(app):
                     "security_type": info.get("security_type"),
                     "is_manual": info.get("is_manual", False),
                     "has_exposure": bool(exposure.get(tkr)),
+                    # Bought since the last resolve: no source has been asked
+                    # yet, so "Needs definition" would be premature. The page
+                    # looks these up itself.
+                    "never_checked": tkr not in meta,
                 })
             rows.sort(key=lambda r: -r["value"])
             return jsonify({"funds": rows, "total_value": round(total, 2)})
@@ -3242,6 +3362,16 @@ def register_routes(app):
                           "holdings_count": meta[3], "security_type": meta[4],
                           "is_manual": bool(meta[5]), "as_of": meta[6]} if meta else None),
             })
+        finally:
+            conn.close()
+
+    @app.route("/api/diversification/suggest/<ticker>", methods=["GET"])
+    def api_diversification_suggest(ticker):
+        """A starting definition read from the fund's name. Never saved here."""
+        sym = ticker.strip().upper()
+        conn = get_connection()
+        try:
+            return jsonify({"ticker": sym, "suggestion": suggest_definition(conn, sym)})
         finally:
             conn.close()
 
