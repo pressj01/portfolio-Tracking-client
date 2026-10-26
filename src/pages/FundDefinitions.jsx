@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
@@ -35,6 +35,7 @@ function FundEditor({ ticker, onClose, onSaved }) {
   const [holdings, setHoldings] = useState([blankRow()])
   const [exposure, setExposure] = useState([{ symbol: '', name: '', exposure_pct: '', asset_class: 'Equity' }])
   const [meta, setMeta] = useState(null)
+  const [suggested, setSuggested] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
@@ -57,6 +58,19 @@ function FundEditor({ ticker, onClose, onSaved }) {
             }))
           : [{ symbol: '', name: '', exposure_pct: '', asset_class: 'Equity' }])
         if ((d.exposure || []).length && !manual.length) setTab('exposure')
+        // Nothing on file at all: start from the index the fund's name names
+        // (OVS "Small Cap Equity" -> a small-cap ETF). Filled in, not saved.
+        if (seedRows.length || (d.exposure || []).length) return null
+        return pf(`/api/diversification/suggest/${ticker}`)
+          .then(r => r.json())
+          .then(s => {
+            if (!s.suggestion?.rows?.length) return
+            setHoldings(s.suggestion.rows.map(h => ({
+              symbol: h.symbol || '', name: h.name || '', weight_pct: h.weight_pct ?? '',
+            })))
+            setSuggested(s.suggestion)
+          })
+          .catch(() => {})
       })
       .catch(() => setMsg('Could not load this fund.'))
       .finally(() => setLoading(false))
@@ -94,6 +108,7 @@ function FundEditor({ ticker, onClose, onSaved }) {
       .then(d => {
         if (!d.ok) { setMsg(d.error || 'Save failed.'); return }
         setMsg(`Saved ${d.saved} row${d.saved === 1 ? '' : 's'}.`)
+        setSuggested(null)
         onSaved?.()
       })
       .catch(e => setMsg('Save failed: ' + e.message))
@@ -140,15 +155,30 @@ function FundEditor({ ticker, onClose, onSaved }) {
 
         {loading ? <div>Loading…</div> : (
           <>
+            {suggested && tab === 'holdings' && (
+              <div className="alert alert-info" style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                <strong>Suggested from the fund&apos;s name.</strong> &ldquo;{suggested.from_name}&rdquo;
+                reads as a {suggested.index} fund, so{' '}
+                {suggested.rows.map(r => r.symbol).join(', ')} stands in for it at 100%. Nothing is
+                saved until you press Save. If the fund&apos;s fact sheet shows it holds something
+                else, change the symbol or percentage first.
+              </div>
+            )}
             <div style={{ overflowX: 'auto' }}>
-              <table className="table" style={{ width: '100%', fontSize: '0.85rem' }}>
+              {/* Fixed layout: the column widths are honoured and Name absorbs
+                  any squeeze. Auto layout took the room out of Symbol instead,
+                  so in a narrower window QQQM was cut off. */}
+              <table className="table" style={{
+                width: '100%', fontSize: '0.85rem', tableLayout: 'fixed',
+                minWidth: tab === 'exposure' ? 600 : 420,
+              }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left', width: 110 }}>Symbol</th>
+                    <th style={{ textAlign: 'left', width: 125 }}>Symbol</th>
                     <th style={{ textAlign: 'left' }}>Name</th>
                     {tab === 'exposure' && <th style={{ textAlign: 'left', width: 150 }}>Asset class</th>}
-                    <th style={{ textAlign: 'right', width: 90 }}>%</th>
-                    <th style={{ width: 34 }} />
+                    <th style={{ textAlign: 'right', width: 110 }}>%</th>
+                    <th style={{ width: 52 }} />
                   </tr>
                 </thead>
                 <tbody>
@@ -159,7 +189,8 @@ function FundEditor({ ticker, onClose, onSaved }) {
                           value={r.symbol}
                           onChange={e => update(i, 'symbol', e.target.value.toUpperCase())}
                           placeholder="NVDA"
-                          style={{ width: '100%' }}
+                          title={r.symbol || undefined}
+                          style={{ width: '100%', padding: '0.5rem' }}
                         />
                       </td>
                       <td>
@@ -182,11 +213,14 @@ function FundEditor({ ticker, onClose, onSaved }) {
                         </td>
                       )}
                       <td>
+                        {/* Text, not number: the spinner arrows ate half the box,
+                            and wrappers legitimately run past 100 (IJR 100.26). */}
                         <input
-                          type="number" step="0.01" min="0" max="100"
+                          type="text" inputMode="decimal"
                           value={r[pctKey]}
                           onChange={e => update(i, pctKey, e.target.value)}
-                          style={{ width: '100%', textAlign: 'right' }}
+                          placeholder="100"
+                          style={{ width: '100%', textAlign: 'right', padding: '0.5rem' }}
                         />
                       </td>
                       <td>
@@ -423,6 +457,49 @@ function IssuerTable({ funds }) {
   )
 }
 
+/** The page's hidden help, opened from "How this works". */
+function FundDefinitionsQuickHelp() {
+  return (
+    <div className="alert alert-info" style={{ marginBottom: '1rem', lineHeight: 1.55, fontSize: '0.88rem' }}>
+      <h3 style={{ marginTop: 0 }}>How Fund Definitions works</h3>
+      <p>
+        The <Link to="/diversification">Diversification</Link> X-Ray looks through every fund to the
+        companies inside it. It finds those holdings by itself, from the fund issuer&apos;s own site
+        first, then public holdings tables, Yahoo and the fund&apos;s SEC filings. This page shows what
+        it found for each position, and lets you fill in the funds nothing could open.
+      </p>
+      <ul style={{ paddingLeft: '1.35rem', marginBottom: '0.75rem' }}>
+        <li><strong>New positions are looked up for you.</strong> A fund bought since the last lookup
+          shows <em>Looking up…</em> while this page asks its sources. Only a fund that still has no
+          data afterwards lands in <em>Needs definition</em>.</li>
+        <li><strong>Filters:</strong> <em>Needs definition</em> means no holdings data at all.{' '}
+          <em>Partial coverage</em> means found, but under 90% of the fund is named, usually an issuer
+          that publishes only a top 10. <em>Hand-defined</em> is everything you entered.
+          The list runs largest position first, so the top rows move the chart most.</li>
+        <li><strong>Define</strong> opens the editor. On <em>Constituents</em>, enter one row per
+          holding as a percentage of the fund. If the fund simply holds another ETF (OVS holds IJR,
+          OVQ holds QQQM), enter that ETF&apos;s symbol at its weight. The look-through then opens that
+          ETF into its companies, so the definition stays current by itself.</li>
+        <li><strong>Suggested definitions:</strong> when nothing is on file and the fund&apos;s name
+          names an index (Nasdaq-100, S&amp;P 500, small-cap…), the editor fills in an ETF that
+          tracks that index at 100%. That is only a starting point. It is not saved until you press
+          Save, so check it against the fund&apos;s fact sheet first. Names that signal a tilt or a
+          multiple (value, dividend, a sector, 2x) get no suggestion.</li>
+        <li><strong>Leaving part of a fund out is fine.</strong> Whatever your rows do not account for
+          stays in the Undisclosed slice. It is never spread across the rest, so entering only a top
+          10 still helps.</li>
+        <li><strong>Economic exposure</strong> is for funds whose filed holdings misstate what they do.
+          An option-income fund that holds T-bills plus gold options is economically gold, not cash.
+          The Diversification page uses this in its Economic exposure mode.</li>
+        <li><strong>Your entries always win.</strong> A refresh never overwrites a hand definition.
+          To hand a fund back to the automatic sources, clear its rows and press Save.</li>
+        <li><strong>Holdings sources</strong> (the second tab) lists where each fund family publishes
+          its holdings. Fix a URL or assign tickers to a family there, and use Test to check it.</li>
+      </ul>
+    </div>
+  )
+}
+
 export default function FundDefinitions() {
   const pf = useProfileFetch()
   const [funds, setFunds] = useState([])
@@ -432,6 +509,10 @@ export default function FundDefinitions() {
   const [filter, setFilter] = useState('needs')
   const [tab, setTab] = useState('funds')
   const [error, setError] = useState(null)
+  const [showHelp, setShowHelp] = useState(false)
+  // The resolve job's status while positions never looked up are being looked up.
+  const [lookup, setLookup] = useState(null)
+  const lookupTried = useRef(false)
 
   const load = useCallback(() => {
     setLoading(true)
@@ -448,6 +529,46 @@ export default function FundDefinitions() {
 
   useEffect(() => { load() }, [load])
 
+  // A position with no lookup on file was bought since the last resolve, so
+  // "Needs definition" would be premature: OVS and OVQ sat there although
+  // their issuer publishes complete holdings. Look them up once per visit.
+  useEffect(() => {
+    if (loading || lookupTried.current || lookup?.running) return
+    const unchecked = funds.filter(f => f.never_checked).map(f => f.ticker)
+    if (!unchecked.length) return
+    lookupTried.current = true
+    pf('/api/diversification/refresh', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force: false, tickers: unchecked }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) { setLookup({ running: true, done: 0, total: d.total }); return }
+        // Another resolve is already running (the Diversification page's):
+        // wait for it, then try again for anything it did not cover.
+        if (d.job?.running) {
+          lookupTried.current = false
+          setLookup({ ...d.job, running: true })
+        }
+      })
+      .catch(() => {})
+  }, [funds, loading, lookup?.running, pf])
+
+  useEffect(() => {
+    if (!lookup?.running) return undefined
+    const id = setInterval(() => {
+      pf('/api/diversification/refresh/status')
+        .then(r => r.json())
+        .then(s => {
+          setLookup(s)
+          if (!s.running) { clearInterval(id); load() }
+        })
+        .catch(() => clearInterval(id))
+    }, 1500)
+    return () => clearInterval(id)
+  }, [lookup?.running, pf, load])
+
   const visible = useMemo(() => {
     if (filter === 'needs') return funds.filter(f => f.status === 'unresolved')
     if (filter === 'partial') return funds.filter(f => f.status === 'resolved' && (f.coverage_pct ?? 0) < 90)
@@ -456,9 +577,11 @@ export default function FundDefinitions() {
   }, [funds, filter])
 
   const needsValue = useMemo(
-    () => funds.filter(f => f.status === 'unresolved').reduce((a, f) => a + f.value, 0),
+    () => funds.filter(f => f.status === 'unresolved' && !f.never_checked)
+      .reduce((a, f) => a + f.value, 0),
     [funds],
   )
+  const lookingUp = !!lookup?.running
 
   return (
     <div className="page">
@@ -469,6 +592,17 @@ export default function FundDefinitions() {
         <Link to="/diversification">Diversification</Link> look-through. Hand-entered
         definitions are never overwritten by a refresh.
       </p>
+      <button
+        type="button"
+        className="btn btn-sm"
+        style={{ marginBottom: '1rem' }}
+        onClick={() => setShowHelp(v => !v)}
+        aria-expanded={showHelp}
+      >
+        {showHelp ? 'Hide help' : 'How this works'}
+      </button>
+
+      {showHelp && <FundDefinitionsQuickHelp />}
 
       {error && <div className="card" style={{ color: 'var(--neg-strong)' }}>{error}</div>}
 
@@ -508,6 +642,14 @@ export default function FundDefinitions() {
         </span>
       </div>
 
+      {lookingUp && (
+        <div className="card" style={{ color: 'var(--text-muted)', fontSize: '0.87rem' }}>
+          Looking up holdings for positions bought since the last lookup
+          {lookup.total ? ` — ${lookup.done || 0} of ${lookup.total}` : ''}
+          {lookup.current ? ` (${lookup.current})` : ''}…
+        </div>
+      )}
+
       {loading && <div className="card">Loading…</div>}
 
       {!loading && (
@@ -535,8 +677,12 @@ export default function FundDefinitions() {
                       <td style={{ textAlign: 'right' }}>{formatMoney(f.value, { decimals: 0 })}</td>
                       <td style={{ textAlign: 'right' }}>{f.portfolio_pct.toFixed(2)}%</td>
                       <td style={{ color: 'var(--text-muted)' }}>{f.security_type || '—'}</td>
-                      <td style={{ color: STATUS_COLOR[f.status] || 'inherit' }}>
-                        {STATUS_LABEL[f.status] || f.status}
+                      <td style={{
+                        color: f.never_checked ? 'var(--text-muted)' : (STATUS_COLOR[f.status] || 'inherit'),
+                      }}>
+                        {f.never_checked
+                          ? (lookingUp ? 'Looking up…' : 'Not looked up yet')
+                          : (STATUS_LABEL[f.status] || f.status)}
                         {f.has_exposure && (
                           <span style={{ color: 'var(--accent)', fontSize: '0.75rem' }}> · exposure set</span>
                         )}
@@ -545,7 +691,13 @@ export default function FundDefinitions() {
                         {f.status === 'unresolved' ? '—' : `${(f.coverage_pct ?? 0).toFixed(1)}%`}
                       </td>
                       <td style={{ textAlign: 'right' }}>
-                        <button className="btn btn-sm" onClick={() => setEditing(f.ticker)}>
+                        {/* Defining a fund mid-lookup would pin a guess over the
+                            issuer's real holdings: hand entries always win. */}
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => setEditing(f.ticker)}
+                          disabled={f.never_checked && lookingUp}
+                        >
                           {f.status === 'unresolved' ? 'Define' : 'Edit'}
                         </button>
                       </td>

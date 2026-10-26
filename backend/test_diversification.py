@@ -583,6 +583,63 @@ class OfficialHoldingsParserTest(unittest.TestCase):
     def test_broker_normalised_preferred_share_is_not_an_undefined_fund(self):
         self.assertEqual(dv._security_type("CODIPRB"), "EQUITY")
 
+    # The lsfunds.com table, trimmed: one ETF, the cash line and option legs
+    # whose Ticker cells are contract ids. Counting those legs used to reject
+    # the whole column, so OVS arrived as a nameless 100% and was never opened.
+    LSFUNDS_TABLE = (
+        "<table><tr><th>Security Name</th><th>CUSIP</th><th>Ticker</th>"
+        "<th>Shares</th><th>Weight</th></tr>"
+        "<tr><td>First American Government Obligations Fund 12/01/2031</td>"
+        "<td>31846V336</td><td>FGXXX</td><td>166,816</td><td>0.40%</td></tr>"
+        "<tr><td>iShares Core S&amp;P Small-Cap ETF</td><td>464287804</td>"
+        "<td>IJR</td><td>305,570</td><td>100.26%</td></tr>"
+        + "".join(
+            f"<tr><td>SPXW US 10/{d}/26 P{k}</td><td>SPXW 2610{d}P0{k}000</td>"
+            f"<td>SPXW 2610{d}P0{k}000</td><td>{n}</td><td>{w}%</td></tr>"
+            for d, k, n, w in (("29", "7600", "13", "0.14"), ("29", "7700", "-13", "-0.29"),
+                               ("30", "7600", "13", "0.17"), ("30", "7800", "-13", "-0.53"))
+        )
+        + "<tr><td>Cash &amp; Other</td><td>Cash&amp;Other</td><td>Cash&amp;Other</td>"
+        "<td>37,831</td><td>0.09%</td></tr></table>"
+    )
+
+    def test_ticker_column_survives_option_legs_and_cash_placeholders(self):
+        rows = dv._parse_holdings_table_html(self.LSFUNDS_TABLE)
+        by_name = {r["name"]: r for r in rows}
+
+        self.assertEqual(by_name["iShares Core S&P Small-Cap ETF"]["symbol"], "IJR")
+        self.assertEqual(by_name["Cash & Other"]["symbol"], "",
+                         "a placeholder in the ticker column is not a symbol")
+        leg = by_name["SPXW US 10/29/26 P7600"]
+        self.assertIsNotNone(dv._parse_option_leg(leg["symbol"], leg["name"]))
+
+    def test_single_wrapped_etf_keeps_its_symbol(self):
+        """OVQ is QQQM plus cash plus legs: one real ticker under a Ticker header."""
+        html = self.LSFUNDS_TABLE.replace("FGXXX", "").replace(
+            "iShares Core S&amp;P Small-Cap ETF", "Invesco Nasdaq 100 ETF").replace(
+            ">IJR<", ">QQQM<")
+        rows = dv._parse_holdings_table_html(html)
+        self.assertIn("QQQM", [r["symbol"] for r in rows])
+
+    def test_cusip_identifier_column_is_still_rejected(self):
+        """First Trust bond funds put CUSIPs under 'Identifier' -- not tickers."""
+        html = (
+            "<table><tr><th>Name</th><th>Identifier</th><th>Weight</th></tr>"
+            "<tr><td>US Treasury 4.25% 2030</td><td>91282CJL6</td><td>40.00%</td></tr>"
+            "<tr><td>Fannie Mae 5% 2054</td><td>3140XRFZ6</td><td>35.00%</td></tr>"
+            "<tr><td>Cash</td><td>CASH</td><td>25.00%</td></tr></table>"
+        )
+        rows = dv._parse_holdings_table_html(html)
+        self.assertEqual({r["symbol"] for r in rows}, {""})
+
+    def test_overlay_shares_route_to_lsfunds(self):
+        conn = _memory_db()
+        dv._seed_issuers(conn)
+        for ticker in ("OVL", "OVS", "OVQ", "OVF"):
+            key, parser, url = dv._issuer_for(conn, ticker, allow_detect=False)
+            self.assertEqual((key, parser), ("lsfunds", "html_table"))
+            self.assertEqual(url, f"https://lsfunds.com/etfs/{ticker.lower()}")
+
     def test_adams_report_schedule_yields_full_portfolio_weights(self):
         report_text = """
         S CHEDULE OF I NVESTMENTS
@@ -608,6 +665,129 @@ class OfficialHoldingsParserTest(unittest.TestCase):
         self.assertIn("Morgan Stanley", rows[2]["name"])
         self.assertAlmostEqual(rows[3]["weight_pct"], -0.2)
         self.assertTrue(all(row["as_of"] == "2026-06-30" for row in rows))
+
+
+class SuggestDefinitionTest(unittest.TestCase):
+    def setUp(self):
+        self.conn = _memory_db()
+        self._yahoo = dv._fund_family_text
+        self.yahoo_calls = []
+
+        def fake_yahoo(ticker):
+            self.yahoo_calls.append(ticker)
+            return self.yahoo_name
+
+        self.yahoo_name = ""
+        dv._fund_family_text = fake_yahoo
+
+    def tearDown(self):
+        dv._fund_family_text = self._yahoo
+
+    def _hold(self, ticker, description):
+        self.conn.execute(
+            "INSERT INTO all_account_info (profile_id, ticker, description, quantity, current_value) "
+            "VALUES (1,?,?,1,100)", (ticker, description))
+        self.conn.commit()
+
+    def test_small_cap_name_suggests_a_small_cap_etf_without_asking_yahoo(self):
+        # The broker's own spelling, run-together words and all.
+        self._hold("OVS", "OVERLAY SHARES SMALL CAPEQUITY ETF")
+        s = dv.suggest_definition(self.conn, "OVS")
+
+        self.assertEqual(s["rows"], [{"symbol": "VB", "name": "Vanguard Small-Cap ETF",
+                                      "weight_pct": 100.0}])
+        self.assertEqual(s["index"], "US small-cap")
+        self.assertEqual(self.yahoo_calls, [])
+
+    def test_named_index_beats_the_generic_size_word(self):
+        self._hold("OVQ", "OVERLAY SHARES NASDAQ 100 INCOME ETF")
+        self.assertEqual(dv.suggest_definition(self.conn, "OVQ")["rows"][0]["symbol"], "QQQM")
+
+        self._hold("SPSC", "Example S&P SmallCap 600 Fund")
+        self.assertEqual(dv.suggest_definition(self.conn, "SPSC")["rows"][0]["symbol"], "IJR")
+
+    def test_yahoo_name_is_the_fallback(self):
+        self._hold("ABCD", "ABCD TR")
+        self.yahoo_name = "Example Funds Example Russell 2000 Index Fund"
+        s = dv.suggest_definition(self.conn, "ABCD")
+        self.assertEqual(s["rows"][0]["symbol"], "VTWO")
+        self.assertEqual(self.yahoo_calls, ["ABCD"])
+
+    def test_tilted_or_leveraged_funds_get_no_guess(self):
+        for ticker, name in (("SCV", "Example Small Cap Value ETF"),
+                             ("QTK", "Example Nasdaq-100 Technology Sector Fund"),
+                             ("SPUU", "Example Daily S&P 500 Bull 2X Shares"),
+                             ("SDV", "Example Mid-Cap Dividend ETF")):
+            self._hold(ticker, name)
+            self.assertIsNone(dv.suggest_definition(self.conn, ticker), name)
+        self.assertEqual(self.yahoo_calls, [], "a vetoed name is not second-guessed")
+
+    def test_a_proxy_is_never_suggested_for_itself(self):
+        self._hold("VB", "VANGUARD SMALL-CAP ETF")
+        self.assertIsNone(dv.suggest_definition(self.conn, "VB"))
+
+    def test_unrecognised_name_returns_nothing(self):
+        self._hold("XYZ", "Example Global Macro Fund")
+        self.assertIsNone(dv.suggest_definition(self.conn, "XYZ"))
+
+
+class _KeepOpen:
+    """A connection the routes may close without losing the in-memory data."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def close(self):
+        pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class FundListRouteTest(unittest.TestCase):
+    def setUp(self):
+        from flask import Flask
+        self.conn = _memory_db()
+        self._patched = {name: getattr(dv, name) for name in
+                         ("get_connection", "_scope_profile_ids", "_fund_family_text")}
+        dv.get_connection = lambda: _KeepOpen(self.conn)
+        dv._scope_profile_ids = lambda: None
+        dv._fund_family_text = lambda _t: ""
+        app = Flask(__name__)
+        dv.register_routes(app)
+        self.client = app.test_client()
+
+    def tearDown(self):
+        for name, fn in self._patched.items():
+            setattr(dv, name, fn)
+
+    def test_position_never_looked_up_is_flagged(self):
+        _add_position(self.conn, "OVS", 2180.30)
+        _add_position(self.conn, "MUTF", 900.0)
+        self.conn.execute(
+            "INSERT INTO fund_holdings_meta (fund_ticker, status, coverage_pct) "
+            "VALUES ('MUTF','unresolved',0)")
+        self.conn.commit()
+
+        funds = {f["ticker"]: f for f in self.client.get("/api/diversification/funds").get_json()["funds"]}
+
+        self.assertTrue(funds["OVS"]["never_checked"])
+        self.assertEqual(funds["OVS"]["status"], "unresolved")
+        self.assertFalse(funds["MUTF"]["never_checked"],
+                         "a fund that was looked up and failed really does need a definition")
+
+    def test_suggest_route_saves_nothing(self):
+        self.conn.execute(
+            "INSERT INTO all_account_info (profile_id, ticker, description, quantity, current_value) "
+            "VALUES (1,'OVQ','OVERLAY SHARES NASDAQ 100 INCOME ETF',50,1272.46)")
+        self.conn.commit()
+
+        body = self.client.get("/api/diversification/suggest/ovq").get_json()
+
+        self.assertEqual(body["ticker"], "OVQ")
+        self.assertEqual(body["suggestion"]["rows"][0]["symbol"], "QQQM")
+        self.assertEqual(self.conn.execute(
+            "SELECT COUNT(*) FROM fund_holdings WHERE fund_ticker='OVQ'").fetchone()[0], 0)
 
 
 class DerivativeFilterTest(unittest.TestCase):
