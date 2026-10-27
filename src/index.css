@@ -1604,6 +1604,18 @@ html { scroll-padding-top: var(--app-header-height); }
   opacity: 0.5;
   cursor: not-allowed;
 }
+/* A .btn with no color variant used to fall back to the browser's light-gray
+   button face, so accent-colored labels on it were unreadable in dark mode.
+   :where() keeps this at .btn's own specificity: it beats the border: none
+   above, and any later page class or inline style still overrides it. */
+.btn:where(:not(.btn-primary, .btn-secondary, .btn-success, .btn-danger, .btn-warning, .btn-scan, .btn-sm, .btn-del)) {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--p-3a3a5c);
+}
+.btn:where(:not(.btn-primary, .btn-secondary, .btn-success, .btn-danger, .btn-warning, .btn-scan, .btn-sm, .btn-del):hover:not(:disabled)) {
+  background: var(--p-1a3a5c);
+}
 .btn-primary {
   background: var(--primary);
   color: white;
@@ -4295,40 +4307,188 @@ th.col-drag-target {
   margin: 0;
   padding: 0 0.9rem 0.85rem;
 }
-/* ── Portfolio Tester help ── */
-.pt-help {
-  margin: 0 0 1rem;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+/* ── Portfolio Tester ── */
+.pt-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 0.3rem;
 }
-.pt-help > summary {
-  padding: 0.65rem 0.85rem;
+.pt-header h1 {
+  margin: 0;
+}
+.pt-help-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.65rem 0.2rem 0.25rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   color: var(--accent-soft);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 700;
-  list-style: none;
 }
-.pt-help > summary::-webkit-details-marker {
-  display: none;
-}
-.pt-help > summary::before {
+.pt-help-toggle::before {
   content: '?';
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 18px;
   height: 18px;
-  margin-right: 0.45rem;
   background: color-mix(in srgb, var(--accent) 18%, var(--surface-inset));
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
   border-radius: 50%;
   font-size: 0.68rem;
 }
-.pt-help[open] > summary {
-  border-bottom: 1px solid var(--border);
+.pt-help-toggle:hover,
+.pt-help-toggle[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+
+/* One segmented-toggle look for the source, picker-source, Mode and range presets. */
+.pt-toggle-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+.pt-toggle {
+  padding: 0.25rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--p-3a3a5c);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.pt-toggle-sm {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+}
+.pt-toggle:not(.is-active):hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.pt-toggle.is-active {
+  background: var(--p-1a3a5c);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.pt-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* Portfolio card: entry controls sit beside the holdings table when the card is
+   wide, and stack above it when it is not. */
+.pt-editor {
+  flex: 1;
+  min-width: 360px;
+  margin-bottom: 0;
+  padding: 0.75rem;
+}
+.pt-editor-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.pt-editor-name {
+  flex: 1 1 160px;
+  max-width: 320px;
+  padding: 0.3rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--p-3a3a5c);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+.pt-editor-source {
+  margin-left: auto;
+}
+.pt-editor-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem 1rem;
+}
+.pt-editor-controls {
+  flex: 1 1 280px;
+  max-width: 400px;
+}
+.pt-editor-holdings {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.pt-editor-caption {
+  margin: 0 0 0.3rem;
+  color: var(--text-faint-2);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.pt-editor-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+.pt-editor-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.pt-run-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--grid-line);
+}
+.pt-run-hint {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+.pt-empty {
+  padding: 1.25rem 1.5rem;
+  border-style: dashed;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+.pt-empty h3 {
+  margin: 0 0 0.5rem;
+  color: var(--text-strong);
+  font-size: 1rem;
+}
+.pt-empty ol {
+  margin: 0 0 0.6rem;
+  padding-left: 1.2rem;
+  line-height: 1.7;
+}
+.pt-empty p {
+  margin: 0;
+}
+
+/* Portfolio Tester help */
+.pt-help {
+  margin: 0 0 1rem;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
 }
 .pt-help-grid {
   display: grid;
