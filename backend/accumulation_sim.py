@@ -173,6 +173,13 @@ OPTION_STRATEGY_PHASE_ADJUSTMENTS = {
     },
 }
 
+# The shared classifier files any unrecognized income payer as equity income.
+# Ordinary equity income does not pay 20%+ a year; a holding that does is
+# almost always an option-income fund the metadata missed, and the equity-
+# income yield ceiling would credit it with only a third of its payout.
+HIGH_DISTRIBUTION_YIELD_PCT = 20.0
+_UNRECOGNIZED_INCOME_TYPES = {"equity_income", "other"}
+
 MAX_TICKERS_PER_STRATEGY = 250
 # Larger path cubes transparently spill to a temporary float32 memory map.
 # This threshold is a performance choice, not a user-facing workload limit.
@@ -248,6 +255,28 @@ def _percentiles(values: np.ndarray) -> dict[str, float]:
 def _stable_seed(base_seed: int, *parts: str) -> int:
     material = "|".join([str(base_seed), *parts]).encode("utf-8")
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big") % (2**32)
+
+
+def refine_scenario_type(
+    scenario_type: str, current_yield_pct: Any, strategy_style: str = ""
+) -> str:
+    """Correct the shared classifier's fallbacks for this simulator.
+
+    A very high payer that fell through to equity income is modeled as a
+    high-distribution option fund. In a Growth strategy, a low-yield broad
+    equity should not become "equity income" merely because it pays a small
+    dividend.
+    """
+    yield_pct = max(0.0, _finite(current_yield_pct, 0.0))
+    if scenario_type in _UNRECOGNIZED_INCOME_TYPES and yield_pct >= HIGH_DISTRIBUTION_YIELD_PCT:
+        return "high_distribution_option"
+    if (
+        str(strategy_style or "").strip().lower() == "growth"
+        and scenario_type == "equity_income"
+        and yield_pct < 3.0
+    ):
+        return "non_income_equity"
+    return scenario_type
 
 
 def _choice(value: Any, allowed: set[str], default: str) -> str:
@@ -790,6 +819,7 @@ def build_market_assumptions(
         expected_return = prior_return
         volatility = prior_vol
         beta = prior_beta
+        historical_beta = None
         current_price = supplied_price
         current_yield = supplied_yield
         trailing_yield = None
@@ -812,16 +842,24 @@ def build_market_assumptions(
                     prior_return * (1.0 - history_weight)
                     + _clip(historical_return, -0.05, 0.18) * history_weight
                 )
+                # Volatility and market sensitivity are measured far more
+                # reliably from a few years of monthly data than the mean is,
+                # so they lean on the fund's own record sooner. A T-bill fund
+                # filed under option income should not inherit equity risk.
                 historical_vol = float(returns.std() * math.sqrt(12.0))
+                risk_history_weight = _clip((len(returns) - 6) / 48.0, 0.0, 0.80)
                 volatility = _clip(
-                    prior_vol * (1.0 - history_weight) + historical_vol * history_weight,
+                    prior_vol * (1.0 - risk_history_weight)
+                    + historical_vol * risk_history_weight,
                     0.01,
                     0.65,
                 )
                 aligned = pd.concat([returns.rename("ticker"), spy_returns.rename("market")], axis=1).dropna()
                 if market_var > 0 and len(aligned) >= 24:
                     estimated_beta = float(aligned.cov().loc["ticker", "market"] / market_var)
-                    beta = _clip(estimated_beta, -0.25, 2.0)
+                    historical_beta = _clip(estimated_beta, -0.25, 2.0)
+                    beta_weight = _clip((len(aligned) - 12) / 48.0, 0.0, 0.80)
+                    beta = prior_beta * (1.0 - beta_weight) + historical_beta * beta_weight
                 if not monthly_close.empty:
                     current_price = max(0.01, float(monthly_close.iloc[-1]))
                     cutoff = monthly_close.index[-1] - pd.Timedelta(days=365)
@@ -842,6 +880,7 @@ def build_market_assumptions(
         history_confidence = _clip(history_years / 5.0, 0.0, 1.0)
         uncertainty_multiplier = 1.0 + (1.0 - history_confidence) * 0.25
         forecast_volatility = _clip(volatility * uncertainty_multiplier, 0.01, 0.80)
+        shock_scale = _market_shock_scale(beta, scenario_type)
 
         if history_years < 3:
             warnings.append(
@@ -873,6 +912,10 @@ def build_market_assumptions(
             "forecast_annual_volatility": round(forecast_volatility, 8),
             "history_confidence_pct": round(history_confidence * 100.0, 1),
             "beta": round(beta, 6),
+            "historical_beta": (
+                round(historical_beta, 6) if historical_beta is not None else None
+            ),
+            "shock_scale": round(shock_scale, 6),
             "neutral_distribution_growth": round(_clip(div_growth, -0.15, 0.15), 8),
             "distribution_growth_source": distribution_growth_source,
             "sustainable_yield_cap": SUSTAINABLE_YIELD_CAPS[scenario_type],
@@ -884,6 +927,26 @@ def build_market_assumptions(
             _ASSUMPTION_CACHE[cache_key] = (now, dict(row))
     _attach_correlation_assumptions(assumptions, returns_by_ticker)
     return assumptions, list(dict.fromkeys(warnings))
+
+
+def _market_shock_scale(beta: float, scenario_type: str) -> float:
+    """How strongly one holding moves with the class's bull/bear swing.
+
+    The scenario profiles describe a typical holding of each class, whose
+    market sensitivity is the class beta prior. A holding measured at half that
+    beta takes half the swing; cash has no meaningful beta and keeps 1.0.
+    """
+    prior_beta = BETA_PRIORS.get(scenario_type, BETA_PRIORS["other"])
+    if prior_beta < 0.10:
+        return 1.0
+    return _clip(_finite(beta, prior_beta) / prior_beta, 0.25, 2.0)
+
+
+def _is_nav_linked(assumption: dict[str, Any]) -> bool:
+    payout_model = assumption.get("payout_model")
+    if payout_model:
+        return payout_model == "nav_yield"
+    return assumption.get("scenario_type") in NAV_LINKED_PAYOUT_TYPES
 
 
 def _apply_option_adjustment(
@@ -906,7 +969,18 @@ def _scenario_month_parameters(
     scenario: str,
     month_index: int,
 ) -> tuple[float, float, float]:
-    """Return annual total return, volatility multiplier, and DPS growth."""
+    """Return annual total return, volatility multiplier, and DPS growth.
+
+    Bull, bear, and recovery returns are the class profile's swing away from
+    its neutral return, applied to this holding's own neutral return and
+    scaled by its market sensitivity (``shock_scale``).
+
+    The profiles' income changes describe dollar income. A per-share payer
+    applies them to its dividend. A NAV-linked payer's dollars already move
+    with its NAV in every scenario, so its distribution *rate* keeps its
+    neutral path; applying the scenario's income change as well would count
+    the bear cut (or the bull rise) twice.
+    """
     scenario_type = assumption["scenario_type"]
     profile = HOLDING_SCENARIO_PROFILES[scenario_type]
     neutral_return = _finite(assumption["expected_total_return"], RETURN_PRIORS[scenario_type])
@@ -914,25 +988,28 @@ def _scenario_month_parameters(
         assumption["neutral_distribution_growth"],
         profile["neutral"].get("income_growth", 0.0),
     )
+    class_neutral_return = _finite(profile["neutral"].get("total_return"), neutral_return)
+    shock_scale = _clip(_finite(assumption.get("shock_scale"), 1.0), 0.25, 2.0)
+    nav_linked = _is_nav_linked(assumption)
+
+    def swing(class_return: Any) -> float:
+        return (_finite(class_return, class_neutral_return) - class_neutral_return) * shock_scale
+
+    def income(scenario_growth: float) -> float:
+        return neutral_income_growth if nav_linked else scenario_growth
 
     if scenario == "bullish":
         if month_index < 36:
-            uplift = (
-                _finite(profile["bullish"].get("total_return"), neutral_return)
-                - _finite(profile["neutral"].get("total_return"), neutral_return)
-            )
+            uplift = swing(profile["bullish"].get("total_return"))
             annual_return = neutral_return + uplift
             income_growth = _finite(profile["bullish"].get("income_growth"), neutral_income_growth)
             annual_return, vol_multiplier = _apply_option_adjustment(
                 assumption, "bull", annual_return, 0.90
             )
-            return annual_return, vol_multiplier, income_growth
+            return annual_return, vol_multiplier, income(income_growth)
         if month_index < 48:
             fade = 1.0 - (month_index - 36) / 12.0
-            uplift = (
-                _finite(profile["bullish"].get("total_return"), neutral_return)
-                - _finite(profile["neutral"].get("total_return"), neutral_return)
-            )
+            uplift = swing(profile["bullish"].get("total_return"))
             bull_income = _finite(profile["bullish"].get("income_growth"), neutral_income_growth)
             annual_return, vol_multiplier = _apply_option_adjustment(
                 assumption,
@@ -943,32 +1020,32 @@ def _scenario_month_parameters(
             return (
                 annual_return,
                 vol_multiplier,
-                neutral_income_growth + (bull_income - neutral_income_growth) * fade,
+                income(neutral_income_growth + (bull_income - neutral_income_growth) * fade),
             )
     elif scenario == "bearish":
         bear = profile["bearish"]
+        recovery_return = neutral_return + swing(bear.get("recovery_total_return"))
         if month_index < 12:
-            annual_return = _finite(bear.get("total_return"), -0.20)
-            annual_income_factor = max(0.05, 1.0 + _finite(bear.get("income_shock"), -0.10))
+            annual_return = neutral_return + swing(bear.get("total_return", -0.20))
+            income_shock = max(0.05, 1.0 + _finite(bear.get("income_shock"), -0.10)) - 1.0
             annual_return, vol_multiplier = _apply_option_adjustment(
                 assumption, "bear_shock", annual_return, 1.50
             )
-            return annual_return, vol_multiplier, annual_income_factor - 1.0
+            return annual_return, vol_multiplier, income(income_shock)
         if month_index < 36:
             annual_return, vol_multiplier = _apply_option_adjustment(
                 assumption,
                 "recovery",
-                _finite(bear.get("recovery_total_return"), neutral_return),
+                recovery_return,
                 1.15,
             )
             return (
                 annual_return,
                 vol_multiplier,
-                _finite(bear.get("recovery_income_growth"), neutral_income_growth),
+                income(_finite(bear.get("recovery_income_growth"), neutral_income_growth)),
             )
         if month_index < 48:
             fade = 1.0 - (month_index - 36) / 12.0
-            recovery_return = _finite(bear.get("recovery_total_return"), neutral_return)
             recovery_income = _finite(bear.get("recovery_income_growth"), neutral_income_growth)
             annual_return, vol_multiplier = _apply_option_adjustment(
                 assumption,
@@ -979,7 +1056,7 @@ def _scenario_month_parameters(
             return (
                 annual_return,
                 vol_multiplier,
-                neutral_income_growth + (recovery_income - neutral_income_growth) * fade,
+                income(neutral_income_growth + (recovery_income - neutral_income_growth) * fade),
             )
 
     annual_return, vol_multiplier = _apply_option_adjustment(
