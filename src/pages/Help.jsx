@@ -5496,11 +5496,13 @@ function PortfolioTesterHelp() {
         <li><strong>Load Filtered</strong> — pick a category from the dropdown (disabled if no categories are defined) to load only the subset of current holdings in that category.</li>
       </ul>
       <p style={{ marginBottom: '1rem' }}>
-        Weights must sum to <strong>100%</strong> before you can run. The <strong>Equal</strong> button splits
-        weight evenly across all tickers in the portfolio; <strong>Normalize</strong> rescales whatever
-        weights you already entered so they sum to 100%. <strong>Clear</strong> empties the portfolio.
-        You can edit each row's weight directly with whole numbers or decimals. The row footer shows the
-        running total in green (at 100%) or amber (off).
+        Weights must sum to <strong>100%</strong> before you can run. Until they do, <strong>Run Backtest</strong>{' '}
+        stays disabled and the line beside it names the portfolio that is off. The <strong>Equal</strong>,{' '}
+        <strong>Normalize</strong>, and <strong>Clear</strong> buttons sit under the holdings table, next to the
+        running total: Equal splits weight evenly across all tickers in the portfolio; Normalize rescales
+        whatever weights you already entered so they sum to 100%; Clear empties the portfolio. You can edit
+        each row's weight directly with whole numbers or decimals. The total shows green at 100%, amber when
+        it is off, and gray while the portfolio is empty.
       </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Shared Run Settings</h3>

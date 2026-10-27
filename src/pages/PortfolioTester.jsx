@@ -155,6 +155,7 @@ function PortfolioEditor({
   const totalWeight = portfolio.holdings.reduce((s, h) => s + (Number(h.weight) || 0), 0)
   const wtDelta = Math.abs(totalWeight - 1)
   const wtOK = wtDelta < 0.001
+  const hasHoldings = portfolio.holdings.length > 0
   const actualHistory = portfolio.source === SOURCE_ACTUAL
   const actualScope = portfolio.actual_scope === 'selected' ? 'selected' : 'all'
   const actualTickerSet = new Set(
@@ -226,48 +227,37 @@ function PortfolioEditor({
   const clearAll = () => onChange({ ...portfolio, holdings: [] })
 
   return (
-    <div className="card" style={{ padding: '0.75rem', flex: 1, minWidth: 360 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+    <div className="card pt-editor">
+      <div className="pt-editor-head">
         <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>{label}</span>
         <input
+          className="pt-editor-name"
           value={portfolio.name}
           onChange={e => onChange({ ...portfolio, name: e.target.value })}
-          style={{
-            flex: 1, padding: '0.3rem 0.5rem', background: 'var(--bg)',
-            border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.9rem',
-          }}
+          aria-label={`${label} name`}
         />
-      </div>
-
-      <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.65rem' }} role="group" aria-label={`${label} source`}>
-        <button
-          type="button"
-          className="btn"
-          onClick={() => onSourceChange(SOURCE_HYPOTHETICAL)}
-          style={{
-            padding: '0.28rem 0.65rem', fontSize: '0.78rem',
-            borderColor: !actualHistory ? 'var(--accent)' : undefined,
-            color: !actualHistory ? 'var(--accent)' : 'var(--text-dim)',
-          }}
-        >
-          Hypothetical weights
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={actualDisabled || !currentAvailable}
-          onClick={() => onSourceChange(SOURCE_ACTUAL)}
-          title={actualDisabled
-            ? 'The other side already uses this account history'
-            : (!currentAvailable ? 'The selected account has no current holdings' : 'Use dated transactions and the shared Tracker Total Return history')}
-          style={{
-            padding: '0.28rem 0.65rem', fontSize: '0.78rem',
-            borderColor: actualHistory ? 'var(--accent)' : undefined,
-            color: actualHistory ? 'var(--accent)' : 'var(--text-dim)',
-          }}
-        >
-          Actual account history
-        </button>
+        <div className="pt-toggle-group pt-editor-source" role="group" aria-label={`${label} source`}>
+          <button
+            type="button"
+            className={`pt-toggle${!actualHistory ? ' is-active' : ''}`}
+            aria-pressed={!actualHistory}
+            onClick={() => onSourceChange(SOURCE_HYPOTHETICAL)}
+          >
+            Hypothetical weights
+          </button>
+          <button
+            type="button"
+            className={`pt-toggle${actualHistory ? ' is-active' : ''}`}
+            aria-pressed={actualHistory}
+            disabled={actualDisabled || !currentAvailable}
+            onClick={() => onSourceChange(SOURCE_ACTUAL)}
+            title={actualDisabled
+              ? 'The other side already uses this account history'
+              : (!currentAvailable ? 'The selected account has no current holdings' : 'Use dated transactions and the shared Tracker Total Return history')}
+          >
+            Actual account history
+          </button>
+        </div>
       </div>
 
       {actualHistory ? (<>
@@ -346,110 +336,155 @@ function PortfolioEditor({
         </div>
       </>
       ) : <>
-      <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-        <input
-          value={input}
-          onChange={e => setInput(e.target.value.toUpperCase())}
-          onKeyDown={e => { if (e.key === 'Enter') addRow() }}
-          placeholder="Ticker"
-          maxLength={10}
-          style={{
-            width: 90, textTransform: 'uppercase', padding: '0.3rem 0.5rem',
-            background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.85rem',
-          }}
-        />
-        <input
-          value={wt}
-          onChange={e => setWt(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') addRow() }}
-          placeholder="Wt %"
-          style={{
-            width: 70, padding: '0.3rem 0.5rem',
-            background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)', borderRadius: 4, color: 'var(--text)', fontSize: '0.85rem',
-          }}
-        />
-        <button className="btn btn-primary" style={{ padding: '0.3rem 0.75rem' }} onClick={addRow}>Add</button>
-        <button className="btn" style={{ padding: '0.3rem 0.7rem' }} onClick={equalWeight} title="Set every row to equal weight">Equal</button>
-        <button className="btn" style={{ padding: '0.3rem 0.7rem' }} onClick={normalize} title="Scale weights to sum 100%">Normalize</button>
-        <button className="btn" style={{ padding: '0.3rem 0.7rem', color: 'var(--p-ff9090)' }} onClick={clearAll}>Clear</button>
-      </div>
+      <div className="pt-editor-body">
+        <div className="pt-editor-controls">
+          <div className="pt-editor-caption">Add a ticker</div>
+          <div className="pt-editor-row">
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value.toUpperCase())}
+              onKeyDown={e => { if (e.key === 'Enter') addRow() }}
+              placeholder="Ticker"
+              aria-label={`${label} ticker`}
+              maxLength={10}
+              style={{ ...dateStyle, width: 90, textTransform: 'uppercase' }}
+            />
+            <input
+              value={wt}
+              onChange={e => setWt(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') addRow() }}
+              placeholder="Wt %"
+              aria-label={`${label} weight percent`}
+              style={{ ...dateStyle, width: 70 }}
+            />
+            <button className="btn btn-primary" style={{ padding: '0.3rem 0.75rem' }} onClick={addRow}>Add</button>
+          </div>
 
-      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-        <button
-          className="btn"
-          style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
-          disabled={!currentAvailable}
-          onClick={() => onLoadCurrent('')}
-          title="Replace with your current holdings, weighted by current value"
-        >
-          Load Portfolio
-        </button>
-        <button
-          className="btn"
-          style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
-          disabled={!currentAvailable && !canPickAllAccounts}
-          onClick={() => setPickerOpen(o => !o)}
-          title={canPickAllAccounts
-            ? 'Cherry-pick tickers from this account, or from any of your accounts'
-            : 'Cherry-pick individual tickers from your current holdings'}
-        >
-          {pickerOpen ? 'Close Picker' : 'Pick Tickers…'}
-        </button>
-        <select
-          value={filter}
-          onChange={e => setFilter(e.target.value)}
-          disabled={categories.length === 0}
-          title={categories.length === 0 ? 'Define categories on the Categories page to enable filtered loading' : ''}
-          style={{
-            padding: '0.3rem 0.5rem', background: 'var(--bg)', border: '1px solid var(--p-3a3a5c)',
-            borderRadius: 4, color: categories.length === 0 ? 'var(--p-556677)' : 'var(--text)', fontSize: '0.82rem',
-            cursor: categories.length === 0 ? 'not-allowed' : 'pointer',
-          }}
-        >
-          <option value="">
-            {categories.length === 0 ? 'No categories defined' : 'Filter by category…'}
-          </option>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <button
-          className="btn"
-          style={{ padding: '0.3rem 0.7rem' }}
-          disabled={!filter || categories.length === 0}
-          onClick={() => onFilterLoad(filter)}
-        >
-          Load Filtered
-        </button>
+          <div className="pt-editor-caption">Or load from your accounts</div>
+          <div className="pt-editor-row">
+            <button
+              className="btn"
+              style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
+              disabled={!currentAvailable}
+              onClick={() => onLoadCurrent('')}
+              title="Replace with your current holdings, weighted by current value"
+            >
+              Load Portfolio
+            </button>
+            <button
+              className="btn"
+              style={{ padding: '0.3rem 0.7rem', color: 'var(--accent-2)' }}
+              disabled={!currentAvailable && !canPickAllAccounts}
+              onClick={() => setPickerOpen(o => !o)}
+              title={canPickAllAccounts
+                ? 'Cherry-pick tickers from this account, or from any of your accounts'
+                : 'Cherry-pick individual tickers from your current holdings'}
+            >
+              {pickerOpen ? 'Close Picker' : 'Pick Tickers…'}
+            </button>
+          </div>
+          <div className="pt-editor-row">
+            <select
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+              disabled={categories.length === 0}
+              aria-label={`${label} category filter`}
+              title={categories.length === 0 ? 'Define categories on the Categories page to enable filtered loading' : ''}
+              style={{
+                ...dateStyle, fontSize: '0.82rem',
+                color: categories.length === 0 ? 'var(--p-556677)' : 'var(--text)',
+                cursor: categories.length === 0 ? 'not-allowed' : 'pointer',
+              }}
+            >
+              <option value="">
+                {categories.length === 0 ? 'No categories defined' : 'Filter by category…'}
+              </option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <button
+              className="btn"
+              style={{ padding: '0.3rem 0.7rem' }}
+              disabled={!filter || categories.length === 0}
+              onClick={() => onFilterLoad(filter)}
+            >
+              Load Filtered
+            </button>
+          </div>
+        </div>
+
+        <div className="pt-editor-holdings">
+          <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--p-2a2a44)', borderRadius: 4 }}>
+            <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
+                  <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Ticker</th>
+                  <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Weight %</th>
+                  <th style={{ padding: '0.3rem 0.5rem', width: 30 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {portfolio.holdings.length === 0 && (
+                  <tr><td colSpan={3} style={{ padding: '0.75rem', color: 'var(--p-556677)', textAlign: 'center' }}>No tickers yet</td></tr>
+                )}
+                {portfolio.holdings.map(h => (
+                  <tr key={h.ticker} style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
+                    <td style={{ padding: '0.3rem 0.5rem' }}>{h.ticker}</td>
+                    <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
+                      <PortfolioWeightInput ticker={h.ticker} weight={h.weight} onChange={updateWeight} />
+                    </td>
+                    <td style={{ padding: '0.3rem 0.5rem', width: 30 }}>
+                      <button
+                        onClick={() => removeRow(h.ticker)}
+                        style={{
+                          background: 'transparent', border: 'none', color: 'var(--neg)',
+                          cursor: 'pointer', fontSize: '0.95rem',
+                        }}
+                        title="Remove"
+                        aria-label={`Remove ${h.ticker}`}
+                      >×</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="pt-editor-foot">
+            {/* Neutral until there is something to weigh; amber only flags a real mismatch. */}
+            <span style={{ color: !hasHoldings ? 'var(--text-dim)' : (wtOK ? 'var(--pos)' : 'var(--p-ffb74d)') }}>
+              {portfolio.holdings.length} ticker{portfolio.holdings.length === 1 ? '' : 's'} · Total weight {(totalWeight * 100).toFixed(2)}%
+              {!wtOK && hasHoldings && ' — click Normalize to scale to 100%'}
+            </span>
+            <div className="pt-editor-row" style={{ marginLeft: 'auto', marginBottom: 0 }}>
+              <button className="btn" style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} disabled={!hasHoldings} onClick={equalWeight} title="Set every row to equal weight">Equal</button>
+              <button className="btn" style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }} disabled={!hasHoldings} onClick={normalize} title="Scale weights to sum 100%">Normalize</button>
+              <button className="btn" style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', color: 'var(--p-ff9090)' }} disabled={!hasHoldings} onClick={clearAll}>Clear</button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {pickerOpen && (
         <div style={{
-          border: '1px solid var(--p-3a3a5c)', borderRadius: 4, marginBottom: '0.5rem',
+          border: '1px solid var(--p-3a3a5c)', borderRadius: 4, marginTop: '0.65rem',
           background: 'var(--p-0f0f1e)', padding: '0.5rem',
         }}>
           {canPickAllAccounts && (
-            <div style={{ display: 'flex', gap: '0.3rem', marginBottom: '0.4rem' }} role="group" aria-label="Ticker source">
+            <div className="pt-toggle-group" style={{ marginBottom: '0.4rem' }} role="group" aria-label="Ticker source">
               <button
                 type="button"
-                className="btn"
+                className={`pt-toggle pt-toggle-sm${pickerSource === 'current' ? ' is-active' : ''}`}
+                aria-pressed={pickerSource === 'current'}
                 onClick={() => setPickerSource('current')}
-                style={{
-                  padding: '0.2rem 0.55rem', fontSize: '0.74rem',
-                  borderColor: pickerSource === 'current' ? 'var(--accent)' : undefined,
-                  color: pickerSource === 'current' ? 'var(--accent)' : 'var(--text-dim)',
-                }}
               >
                 This account
               </button>
               <button
                 type="button"
-                className="btn"
+                className={`pt-toggle pt-toggle-sm${pickerSource === 'all' ? ' is-active' : ''}`}
+                aria-pressed={pickerSource === 'all'}
                 onClick={() => setPickerSource('all')}
                 title="Every ticker held anywhere across your visible accounts, not just the one currently selected up top"
-                style={{
-                  padding: '0.2rem 0.55rem', fontSize: '0.74rem',
-                  borderColor: pickerSource === 'all' ? 'var(--accent)' : undefined,
-                  color: pickerSource === 'all' ? 'var(--accent)' : 'var(--text-dim)',
-                }}
               >
                 All my accounts
               </button>
@@ -556,46 +591,6 @@ function PortfolioEditor({
           </div>
         </div>
       )}
-
-      <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--p-2a2a44)', borderRadius: 4 }}>
-        <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ background: 'var(--bg)', color: 'var(--text-dim)' }}>
-              <th style={{ padding: '0.3rem 0.5rem', textAlign: 'left' }}>Ticker</th>
-              <th style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>Weight %</th>
-              <th style={{ padding: '0.3rem 0.5rem' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {portfolio.holdings.length === 0 && (
-              <tr><td colSpan={3} style={{ padding: '0.75rem', color: 'var(--p-556677)', textAlign: 'center' }}>No tickers yet</td></tr>
-            )}
-            {portfolio.holdings.map(h => (
-              <tr key={h.ticker} style={{ borderTop: '1px solid var(--p-2a2a44)' }}>
-                <td style={{ padding: '0.3rem 0.5rem' }}>{h.ticker}</td>
-                <td style={{ padding: '0.3rem 0.5rem', textAlign: 'right' }}>
-                  <PortfolioWeightInput ticker={h.ticker} weight={h.weight} onChange={updateWeight} />
-                </td>
-                <td style={{ padding: '0.3rem 0.5rem', width: 30 }}>
-                  <button
-                    onClick={() => removeRow(h.ticker)}
-                    style={{
-                      background: 'transparent', border: 'none', color: 'var(--neg)',
-                      cursor: 'pointer', fontSize: '0.95rem',
-                    }}
-                    title="Remove"
-                  >×</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div style={{ marginTop: '0.4rem', fontSize: '0.8rem', color: wtOK ? 'var(--pos)' : 'var(--p-ffb74d)' }}>
-        {portfolio.holdings.length} ticker{portfolio.holdings.length === 1 ? '' : 's'} · Total weight {(totalWeight * 100).toFixed(2)}%
-        {!wtOK && portfolio.holdings.length > 0 && ' — click Normalize to scale to 100%'}
-      </div>
       </>}
     </div>
   )
@@ -870,6 +865,7 @@ export default function PortfolioTester() {
   const [error, setError] = useState(null)
   const [invalidTickers, setInvalidTickers] = useState([])
   const [result, setResult] = useState(null)
+  const [helpOpen, setHelpOpen] = useState(false)
   const actualHistoryActive = portfolioA.source === SOURCE_ACTUAL || portfolioB.source === SOURCE_ACTUAL
 
   const changePortfolioSource = (setter, defaultName) => (source) => {
@@ -1036,44 +1032,48 @@ export default function PortfolioTester() {
     [invalidTickers, portfolioB]
   )
 
-  const run = async () => {
-    setError(null); setResult(null); setInvalidTickers([])
+  const runnable = [portfolioA, portfolioB].filter(p => (
+    p.source === SOURCE_ACTUAL || p.holdings.length > 0
+  ))
 
-    const valid = [portfolioA, portfolioB].filter(p => (
-      p.source === SOURCE_ACTUAL || p.holdings.length > 0
-    ))
-    if (valid.length === 0) { setError('Add tickers or choose actual history for at least one portfolio.'); return }
-    if (valid.filter(p => p.source === SOURCE_ACTUAL).length > 1) {
-      setError('Choose actual transaction-aware history for only one portfolio.')
-      return
+  // Pre-flight checks. Run Backtest stays disabled and shows this text beside
+  // it while any of them fail, so the reason is visible before clicking.
+  const runProblem = (() => {
+    if (runnable.length === 0) {
+      return 'Add tickers to Portfolio A or B, or switch one to Actual account history.'
+    }
+    if (runnable.filter(p => p.source === SOURCE_ACTUAL).length > 1) {
+      return 'Choose actual transaction-aware history for only one portfolio.'
     }
     if (actualHistoryActive && mode !== 'growth') {
-      setError('Actual transaction-aware history is available in Growth mode.')
-      return
+      return 'Actual transaction-aware history is available in Growth mode.'
     }
-    const emptyActualScope = valid.find(portfolio => (
+    const emptyActualScope = runnable.find(portfolio => (
       portfolio.source === SOURCE_ACTUAL
       && portfolio.actual_scope === 'selected'
       && !(portfolio.actual_tickers || []).length
     ))
     if (emptyActualScope) {
-      setError(`${emptyActualScope.name}: select at least one holding or use the entire account.`)
-      return
+      return `${emptyActualScope.name}: select at least one holding or use the entire account.`
     }
-
-    for (const p of valid) {
+    for (const p of runnable) {
       if (p.source === SOURCE_ACTUAL) continue
-      if (p.holdings.length > MAX_TICKERS) { setError(`${p.name}: max ${MAX_TICKERS} tickers.`); return }
+      if (p.holdings.length > MAX_TICKERS) return `${p.name}: max ${MAX_TICKERS} tickers.`
       const sum = p.holdings.reduce((s, h) => s + Number(h.weight || 0), 0)
       if (Math.abs(sum - 1) > 0.005) {
-        setError(`${p.name}: weights sum to ${(sum * 100).toFixed(2)}%. Click Normalize on the portfolio card, then run again.`)
-        return
+        return `${p.name}: weights sum to ${(sum * 100).toFixed(2)}%. Click Normalize on its card.`
       }
     }
-
     const days = (new Date(end) - new Date(start)) / (1000 * 60 * 60 * 24)
-    if (days < 150) { setError('Minimum backtest range is 6 months.'); return }
-    if (days / 365.25 > 25.1) { setError('Maximum backtest range is 25 years.'); return }
+    if (days < 150) return 'Minimum backtest range is 6 months.'
+    if (days / 365.25 > 25.1) return 'Maximum backtest range is 25 years.'
+    return null
+  })()
+
+  const run = async () => {
+    setError(null); setResult(null); setInvalidTickers([])
+    if (runProblem) { setError(runProblem); return }
+    const valid = runnable
 
     setLoading(true)
     try {
@@ -1304,52 +1304,24 @@ export default function PortfolioTester() {
 
   return (
     <div className="page">
-      <h1 style={{ marginBottom: '0.3rem' }}>Portfolio Tester</h1>
+      <div className="pt-header">
+        <h1>Portfolio Tester</h1>
+        <button
+          type="button"
+          className="pt-help-toggle"
+          aria-expanded={helpOpen}
+          onClick={() => setHelpOpen(o => !o)}
+        >
+          {helpOpen ? 'Hide help' : 'How it works'}
+        </button>
+      </div>
       <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem', marginBottom: '1rem' }}>
-        Backtest two portfolios head-to-head (up to 75 tickers each) against a benchmark.
-        6 months to 25 years of Yahoo Finance history. <strong>Growth</strong> mode compares total return;
-        <strong>Income</strong> mode adds distribution tax, spend-vs-reinvest, and a sell-the-index comparison.
-        Toggle either side between hypothetical target weights and the selected account&apos;s actual
-        transaction-aware history.
+        Backtest up to two portfolios ({MAX_TICKERS} tickers each) against a benchmark, over 6 months to
+        25 years of Yahoo Finance history.
       </p>
 
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-        <PortfolioEditor
-          label="Portfolio A"
-          portfolio={portfolioA}
-          onChange={setPortfolioA}
-          onSourceChange={changePortfolioSource(setPortfolioA, 'Portfolio A')}
-          actualDisabled={portfolioB.source === SOURCE_ACTUAL}
-          actualAccountName={currentProfileName}
-          onLoadCurrent={loadCurrent(setPortfolioA)}
-          onFilterLoad={loadCurrent(setPortfolioA)}
-          onPickApply={applyPick(setPortfolioA)}
-          currentHoldings={currentHoldings}
-          currentAvailable={currentHoldings.length > 0}
-          categories={categories}
-          allAccountHoldings={allAccountHoldings}
-          onAllAccountPickApply={applyAllAccountPick(setPortfolioA)}
-        />
-        <PortfolioEditor
-          label="Portfolio B"
-          portfolio={portfolioB}
-          onChange={setPortfolioB}
-          onSourceChange={changePortfolioSource(setPortfolioB, 'Portfolio B')}
-          actualDisabled={portfolioA.source === SOURCE_ACTUAL}
-          actualAccountName={currentProfileName}
-          onLoadCurrent={loadCurrent(setPortfolioB)}
-          onFilterLoad={loadCurrent(setPortfolioB)}
-          onPickApply={applyPick(setPortfolioB)}
-          currentHoldings={currentHoldings}
-          currentAvailable={currentHoldings.length > 0}
-          categories={categories}
-          allAccountHoldings={allAccountHoldings}
-          onAllAccountPickApply={applyAllAccountPick(setPortfolioB)}
-        />
-      </div>
-
-      <details className="pt-help">
-        <summary>Hypothetical weights vs. actual history, and Growth vs. Income mode</summary>
+      {helpOpen && (
+      <div className="pt-help">
         <p className="pt-help-footer">
           <strong>Two different questions live on this page.</strong> The source buttons on each portfolio
           card (<strong>Hypothetical weights</strong> vs. <strong>Actual account history</strong>) decide
@@ -1464,29 +1436,63 @@ export default function PortfolioTester() {
             </p>
           </section>
         </div>
-      </details>
+      </div>
+      )}
+
+      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+        <PortfolioEditor
+          label="Portfolio A"
+          portfolio={portfolioA}
+          onChange={setPortfolioA}
+          onSourceChange={changePortfolioSource(setPortfolioA, 'Portfolio A')}
+          actualDisabled={portfolioB.source === SOURCE_ACTUAL}
+          actualAccountName={currentProfileName}
+          onLoadCurrent={loadCurrent(setPortfolioA)}
+          onFilterLoad={loadCurrent(setPortfolioA)}
+          onPickApply={applyPick(setPortfolioA)}
+          currentHoldings={currentHoldings}
+          currentAvailable={currentHoldings.length > 0}
+          categories={categories}
+          allAccountHoldings={allAccountHoldings}
+          onAllAccountPickApply={applyAllAccountPick(setPortfolioA)}
+        />
+        <PortfolioEditor
+          label="Portfolio B"
+          portfolio={portfolioB}
+          onChange={setPortfolioB}
+          onSourceChange={changePortfolioSource(setPortfolioB, 'Portfolio B')}
+          actualDisabled={portfolioA.source === SOURCE_ACTUAL}
+          actualAccountName={currentProfileName}
+          onLoadCurrent={loadCurrent(setPortfolioB)}
+          onFilterLoad={loadCurrent(setPortfolioB)}
+          onPickApply={applyPick(setPortfolioB)}
+          currentHoldings={currentHoldings}
+          currentAvailable={currentHoldings.length > 0}
+          categories={categories}
+          allAccountHoldings={allAccountHoldings}
+          onAllAccountPickApply={applyAllAccountPick(setPortfolioB)}
+        />
+      </div>
 
       {/* Shared settings */}
       <div className="card" style={{ padding: '0.75rem 1rem', marginBottom: '1rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
           <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>Mode</span>
-          {[['growth', 'Growth'], ['income', 'Income']].map(([v, l]) => (
-            <button
-              key={v}
-              disabled={v === 'income' && actualHistoryActive}
-              onClick={() => { setMode(v); setError(null) }}
-              title={v === 'income' && actualHistoryActive
-                ? 'Actual transaction-aware history is a total-return series and is available in Growth mode'
-                : undefined}
-              style={{
-                padding: '0.25rem 0.7rem', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem',
-                border: mode === v ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
-                background: mode === v ? 'var(--p-1a3a5c)' : 'var(--bg)',
-                color: mode === v ? 'var(--accent)' : 'var(--text-dim)',
-                fontWeight: mode === v ? 600 : 400,
-              }}
-            >{l}</button>
-          ))}
+          <div className="pt-toggle-group" role="group" aria-label="Mode">
+            {[['growth', 'Growth'], ['income', 'Income']].map(([v, l]) => (
+              <button
+                key={v}
+                type="button"
+                className={`pt-toggle${mode === v ? ' is-active' : ''}`}
+                aria-pressed={mode === v}
+                disabled={v === 'income' && actualHistoryActive}
+                onClick={() => { setMode(v); setError(null) }}
+                title={v === 'income' && actualHistoryActive
+                  ? 'Actual transaction-aware history is a total-return series and is available in Growth mode'
+                  : undefined}
+              >{l}</button>
+            ))}
+          </div>
           <span style={{ color: 'var(--text-dim)', fontSize: '0.76rem', marginLeft: '0.3rem' }}>
             {mode === 'income'
               ? 'Realistic income view: distribution tax, spend vs reinvest, and a sell-the-index comparison.'
@@ -1502,21 +1508,16 @@ export default function PortfolioTester() {
             <span style={{ color: 'var(--text-dim)', fontSize: '0.82rem' }}>End</span>
             <input type="date" value={end} onChange={e => { setEnd(e.target.value); setError(null); setInvalidTickers([]) }} style={dateStyle} />
           </div>
-          <div style={{ display: 'flex', gap: '0.25rem' }}>
+          <div className="pt-toggle-group" role="group" aria-label="Date range presets">
             {PRESETS.map(p => {
               const active = start === subYearsISO(todayISO(), p.years) && end === todayISO()
               return (
                 <button
                   key={p.label}
-                  className="btn"
+                  type="button"
+                  className={`pt-toggle pt-toggle-sm${active ? ' is-active' : ''}`}
+                  aria-pressed={active}
                   onClick={() => applyPreset(p.years)}
-                  style={{
-                    padding: '0.25rem 0.55rem', fontSize: '0.78rem',
-                    border: active ? '1px solid var(--accent)' : '1px solid var(--p-3a3a5c)',
-                    background: active ? 'var(--p-1a3a5c)' : 'var(--bg)',
-                    color: active ? 'var(--accent)' : 'var(--text-dim)',
-                    fontWeight: active ? 600 : 400,
-                  }}
                 >
                   {p.label}
                 </button>
@@ -1641,11 +1642,18 @@ export default function PortfolioTester() {
               </label>
             </>
           )}
+        </div>
 
-          <div style={{ flex: 1 }} />
-          <button className="btn btn-primary" onClick={run} disabled={loading} style={{ padding: '0.4rem 1.2rem' }}>
+        <div className="pt-run-row">
+          <button
+            className="btn btn-primary"
+            onClick={run}
+            disabled={loading || !!runProblem}
+            style={{ padding: '0.45rem 1.4rem' }}
+          >
             {loading ? 'Running…' : 'Run Backtest'}
           </button>
+          {runProblem && !loading && <span className="pt-run-hint">{runProblem}</span>}
         </div>
       </div>
 
@@ -1690,6 +1698,25 @@ export default function PortfolioTester() {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {!result && !error && (
+        <div className="card pt-empty">
+          {loading ? (
+            <p>Fetching price history and running the backtest…</p>
+          ) : (<>
+            <h3>Results appear here</h3>
+            <ol>
+              <li>Add tickers to Portfolio A, B, or both. Type them in, or load them from your accounts.</li>
+              <li>Pick a mode, a date range, and a benchmark.</li>
+              <li>Click <strong>Run Backtest</strong>.</li>
+            </ol>
+            <p>
+              You&apos;ll get a head-to-head score card, a growth chart, a performance summary, annual
+              returns, and rolling 1-year CAGR, plus an income summary in Income mode.
+            </p>
+          </>)}
         </div>
       )}
 
