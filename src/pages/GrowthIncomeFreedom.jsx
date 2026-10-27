@@ -47,6 +47,21 @@ const BEHAVIOR_OPTIONS = [
   ['non_income_equity', 'Growth / non-income equity'],
   ['other', 'Other'],
 ]
+const BEHAVIOR_LABELS = Object.fromEntries(BEHAVIOR_OPTIONS.filter(([value]) => value))
+
+// Display mirror of refine_scenario_type in backend/accumulation_sim.py; the
+// run endpoint re-derives the type itself, so this only labels the Auto choice.
+const HIGH_DISTRIBUTION_YIELD_PCT = 20
+
+function detectedScenarioType(row, style) {
+  const type = BEHAVIOR_LABELS[row.scenario_type] ? row.scenario_type : 'other'
+  const yieldPct = Number(row.current_yield_pct) || 0
+  if ((type === 'equity_income' || type === 'other') && yieldPct >= HIGH_DISTRIBUTION_YIELD_PCT) {
+    return 'high_distribution_option'
+  }
+  if (style === 'growth' && type === 'equity_income' && yieldPct < 3) return 'non_income_equity'
+  return type
+}
 
 const OPTION_STRATEGY_OPTIONS = [
   ['auto', 'Auto detect'],
@@ -114,6 +129,30 @@ function createStrategy(name, style) {
   }
 }
 
+function roundWeight(value) {
+  return Math.round((Number(value) || 0) * 100) / 100
+}
+
+// Shows weights to 0.01% while keeping the total at exactly 100 (largest
+// remainder). Unrounded imports showed as clipped decimals in the narrow inputs.
+function roundWeightsTo100(weights) {
+  const total = weights.reduce((sum, weight) => sum + weight, 0)
+  if (total <= 0) return weights
+  const hundredths = weights.map(weight => weight / total * 10000)
+  const floors = hundredths.map(Math.floor)
+  let remaining = 10000 - floors.reduce((sum, value) => sum + value, 0)
+  hundredths
+    .map((value, index) => [value - floors[index], index])
+    .sort((left, right) => right[0] - left[0])
+    .forEach(([, index]) => {
+      if (remaining > 0) {
+        floors[index] += 1
+        remaining -= 1
+      }
+    })
+  return floors.map(value => value / 100)
+}
+
 function normalizeHoldings(holdings) {
   const active = holdings.filter(row => row.enabled !== false && Number(row.weight) > 0)
   const total = active.reduce((sum, row) => sum + Number(row.weight || 0), 0)
@@ -122,13 +161,16 @@ function normalizeHoldings(holdings) {
 }
 
 function normalizeEnabledRows(holdings) {
-  const active = holdings.filter(row => row.enabled !== false && Number(row.weight) > 0)
-  const total = active.reduce((sum, row) => sum + Number(row.weight || 0), 0)
-  if (total <= 0) return holdings
-  return holdings.map(row => (
+  const activeIndexes = holdings
+    .map((row, index) => (row.enabled !== false && Number(row.weight) > 0 ? index : -1))
+    .filter(index => index >= 0)
+  if (!activeIndexes.length) return holdings
+  const rounded = roundWeightsTo100(activeIndexes.map(index => Number(holdings[index].weight)))
+  const byIndex = new Map(activeIndexes.map((index, position) => [index, rounded[position]]))
+  return holdings.map((row, index) => (
     row.enabled === false
       ? row
-      : { ...row, weight: Number(row.weight || 0) / total * 100 }
+      : { ...row, weight: byIndex.get(index) ?? 0 }
   ))
 }
 
@@ -248,6 +290,7 @@ function StrategyBuilder({
   profiles,
   aggregates,
   loading,
+  startingCapital,
   onChange,
   onLoadPortfolio,
 }) {
@@ -258,7 +301,12 @@ function StrategyBuilder({
   const [lookupError, setLookupError] = useState('')
   const [portfolioSearch, setPortfolioSearch] = useState('')
   const [holdingPickerOpen, setHoldingPickerOpen] = useState(false)
+  const [showOverrides, setShowOverrides] = useState(false)
   const active = strategy.holdings.filter(row => row.enabled !== false)
+  const overrideCount = strategy.holdings.filter(row => (
+    (row.option_strategy && row.option_strategy !== 'auto')
+    || (row.correlation_group && row.correlation_group !== 'auto')
+  )).length
   const importedHoldings = strategy.holdings.filter(row => row.imported === true)
   const importedSelected = importedHoldings.filter(row => row.enabled !== false)
   const visibleImportedHoldings = importedHoldings.filter(row => {
@@ -305,24 +353,16 @@ function StrategyBuilder({
   }
 
   const equalWeight = () => {
-    const count = active.length
-    if (!count) return
-    const each = 100 / count
+    if (!active.length) return
     onChange({
-      holdings: strategy.holdings.map(row => (
-        row.enabled === false ? row : { ...row, weight: each }
-      )),
+      holdings: normalizeEnabledRows(strategy.holdings.map(row => (
+        row.enabled === false ? row : { ...row, weight: 1 }
+      ))),
     })
   }
 
   const normalizeWeights = () => {
-    const normalized = normalizeHoldings(strategy.holdings)
-    const byTicker = new Map(normalized.map(row => [row.ticker, row.weight]))
-    onChange({
-      holdings: strategy.holdings.map(row => (
-        byTicker.has(row.ticker) ? { ...row, weight: byTicker.get(row.ticker) } : row
-      )),
-    })
+    onChange({ holdings: normalizeEnabledRows(strategy.holdings) })
   }
 
   const applyEqualDrip = () => {
@@ -412,11 +452,11 @@ function StrategyBuilder({
         const annualDistribution = (Number(info.div) || 0) * multiplier
         const currentYield = price > 0 ? annualDistribution / price * 100 : 0
         const nextCount = active.length + 1
-        const defaultWeight = nextCount > 0 ? 100 / nextCount : 100
+        const defaultWeight = roundWeight(nextCount > 0 ? 100 / nextCount : 100)
         const scaled = strategy.holdings.map(row => (
           row.enabled === false
             ? row
-            : { ...row, weight: Number(row.weight || 0) * (100 - defaultWeight) / 100 }
+            : { ...row, weight: roundWeight(Number(row.weight || 0) * (100 - defaultWeight) / 100) }
         ))
         onChange({
           holdings: [...scaled, {
@@ -514,7 +554,15 @@ function StrategyBuilder({
             {loading
               ? 'Loading holdings…'
               : strategy.currentValue > 0
-                ? `${compactMoney(strategy.currentValue)} current value imported`
+                ? (
+                  <>
+                    {compactMoney(strategy.currentValue)} portfolio imported
+                    <small>
+                      Its weights are simulated on the shared {compactMoney(startingCapital)} starting
+                      capital, so both strategies start equal.
+                    </small>
+                  </>
+                )
                 : 'Import a portfolio, then edit its holdings and weights below.'}
           </div>
         </div>
@@ -642,10 +690,21 @@ function StrategyBuilder({
         </div>
         <button onClick={applyEqualDrip} disabled={!active.length}>Apply equally</button>
       </div>
-      <div className="gif-field-note">
-        Fund type is detected automatically from ticker metadata and strategy history.
-        Use the Fund type menu only when you need to correct the detection. Unreinvested
-        distributions remain as non-interest-bearing strategy cash.
+      <div className="gif-holdings-note">
+        <span>
+          Fund type is detected automatically; the Auto choice shows what was detected. Change it
+          only to correct the detection. Unreinvested distributions stay as non-interest-bearing
+          strategy cash.
+        </span>
+        <button
+          type="button"
+          className="gif-link-btn"
+          onClick={() => setShowOverrides(open => !open)}
+          aria-expanded={showOverrides}
+        >
+          {showOverrides ? 'Hide' : 'Show'} option &amp; correlation overrides
+          {overrideCount > 0 ? ` (${overrideCount} set)` : ''}
+        </button>
       </div>
 
       <div className="gif-holdings-wrap">
@@ -654,22 +713,27 @@ function StrategyBuilder({
             Select a portfolio or add tickers to build this strategy.
           </div>
         ) : (
-          <table className="gif-holdings-table">
+          <table className={`gif-holdings-table${showOverrides ? ' show-overrides' : ''}`}>
             <thead>
               <tr>
                 <th aria-label="Include"></th>
                 <th>Ticker</th>
                 <th>Weight</th>
-                <th>Current yield</th>
+                <th title="Annualized distribution rate from the portfolio's income estimate">Yield</th>
                 <th>DRIP</th>
                 <th>Fund type</th>
-                <th>Option structure</th>
-                <th>Correlation group</th>
-                <th></th>
+                {showOverrides && <th>Option structure</th>}
+                {showOverrides && <th>Correlation group</th>}
+                <th aria-label="Remove"></th>
               </tr>
             </thead>
             <tbody>
-              {strategy.holdings.map(row => (
+              {strategy.holdings.map(row => {
+                const detectedType = detectedScenarioType(row, strategy.style)
+                const fundName = row.description && row.description.toUpperCase() !== row.ticker
+                  ? row.description
+                  : ''
+                return (
                 <tr key={row.ticker} className={row.enabled === false ? 'disabled' : ''}>
                   <td>
                     <input
@@ -681,7 +745,7 @@ function StrategyBuilder({
                   </td>
                   <td title={row.description}>
                     <strong>{row.ticker}</strong>
-                    <small>{row.scenario_label || row.description || ''}</small>
+                    {fundName && <small>{fundName}</small>}
                   </td>
                   <td>
                     <div className="gif-weight-input">
@@ -720,7 +784,7 @@ function StrategyBuilder({
                   </td>
                   <td>
                     <select
-                      className="gif-holding-select"
+                      className="gif-holding-select gif-fund-type-select"
                       value={row.scenario_type_override || ''}
                       disabled={row.enabled === false}
                       onChange={event => updateHolding(row.ticker, {
@@ -729,40 +793,46 @@ function StrategyBuilder({
                       aria-label={`${row.ticker} fund type`}
                     >
                       {BEHAVIOR_OPTIONS.map(([value, label]) => (
-                        <option key={value || 'auto'} value={value}>{label}</option>
+                        <option key={value || 'auto'} value={value}>
+                          {value ? label : `Auto · ${BEHAVIOR_LABELS[detectedType]}`}
+                        </option>
                       ))}
                     </select>
                   </td>
-                  <td>
-                    <select
-                      className="gif-holding-select"
-                      value={row.option_strategy || 'auto'}
-                      disabled={row.enabled === false}
-                      onChange={event => updateHolding(row.ticker, {
-                        option_strategy: event.target.value,
-                      })}
-                      aria-label={`${row.ticker} option structure`}
-                    >
-                      {OPTION_STRATEGY_OPTIONS.map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <select
-                      className="gif-holding-select"
-                      value={row.correlation_group || 'auto'}
-                      disabled={row.enabled === false}
-                      onChange={event => updateHolding(row.ticker, {
-                        correlation_group: event.target.value,
-                      })}
-                      aria-label={`${row.ticker} correlation group`}
-                    >
-                      {CORRELATION_GROUP_OPTIONS.map(([value, label]) => (
-                        <option key={value} value={value}>{label}</option>
-                      ))}
-                    </select>
-                  </td>
+                  {showOverrides && (
+                    <td>
+                      <select
+                        className="gif-holding-select"
+                        value={row.option_strategy || 'auto'}
+                        disabled={row.enabled === false}
+                        onChange={event => updateHolding(row.ticker, {
+                          option_strategy: event.target.value,
+                        })}
+                        aria-label={`${row.ticker} option structure`}
+                      >
+                        {OPTION_STRATEGY_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
+                  {showOverrides && (
+                    <td>
+                      <select
+                        className="gif-holding-select"
+                        value={row.correlation_group || 'auto'}
+                        disabled={row.enabled === false}
+                        onChange={event => updateHolding(row.ticker, {
+                          correlation_group: event.target.value,
+                        })}
+                        aria-label={`${row.ticker} correlation group`}
+                      >
+                        {CORRELATION_GROUP_OPTIONS.map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </td>
+                  )}
                   <td>
                     <button
                       className="gif-remove-ticker"
@@ -773,7 +843,8 @@ function StrategyBuilder({
                     </button>
                   </td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         )}
@@ -814,6 +885,11 @@ function StrategyResultCard({ result, index, targetEnabled }) {
           label="Real monthly income"
           value={money(summary.final_real_monthly_income.p50)}
           sub={`${money(summary.final_monthly_income.p50)} nominal`}
+        />
+        <Metric
+          label="Modeled starting yield"
+          value={pct(summary.starting_yield_pct, 2)}
+          sub="Weighted, after each fund type's yield ceiling"
         />
         <Metric
           label="Spending capacity (4% reference)"
@@ -1092,7 +1168,7 @@ function ScenarioOverviewCards({
                 <span>Monthly income</span>
               </div>
               {strategies.map((strategy, index) => (
-                <div className="gif-scenario-overview-row" key={strategy.name}>
+                <div className="gif-scenario-overview-row" key={index}>
                   <strong style={{ color: STRATEGY_COLORS[index] }}>{strategy.name}</strong>
                   <span>{money(strategy.summary.final_real_value.p50)}</span>
                   <span>{money(strategy.summary.final_real_monthly_income.p50)}</span>
@@ -1128,7 +1204,7 @@ function ProjectedIncomePanel({ strategies, years, scenario }) {
           const nominalMonthly = strategy.summary.final_monthly_income
           return (
             <article
-              key={strategy.name}
+              key={index}
               className="gif-income-summary-card"
               style={{ '--strategy-color': STRATEGY_COLORS[index] }}
             >
@@ -1252,13 +1328,14 @@ export default function GrowthIncomeFreedom() {
           autoName: true,
           currentValue: body.current_value || 0,
           selectionMode: 'all',
-          holdings: (body.holdings || []).map(row => ({
+          // portfolio_weight keeps full precision for re-normalizing subsets.
+          holdings: normalizeEnabledRows((body.holdings || []).map(row => ({
             ...row,
             enabled: true,
             imported: true,
             portfolio_weight: row.weight,
             drip_pct: clampDrip(row.drip_pct ?? 100),
-          })),
+          }))),
         })
       })
       .catch(loadError => setError(loadError.message))
@@ -1453,7 +1530,8 @@ export default function GrowthIncomeFreedom() {
         </div>
         <p>
           Each run blends market history with strategy-specific assumptions. Both sides receive the
-          same market shocks, while distributions and volatility remain specific to each holding.
+          same market shocks, scaled to each holding&apos;s measured market sensitivity, while
+          distributions and volatility remain specific to each holding.
         </p>
         <div className="gif-method-horizon">
           <label htmlFor={`${uid}-gif-simulation-years`}>Simulation length</label>
@@ -1485,6 +1563,7 @@ export default function GrowthIncomeFreedom() {
             profiles={profiles}
             aggregates={aggregates}
             loading={portfolioLoading[index]}
+            startingCapital={startingCapital}
             onChange={patch => patchStrategy(index, patch)}
             onLoadPortfolio={profileId => loadPortfolio(index, profileId)}
           />
@@ -1756,7 +1835,7 @@ export default function GrowthIncomeFreedom() {
           <div className="gif-result-grid">
             {selectedResults.map((strategy, index) => (
               <StrategyResultCard
-                key={strategy.name}
+                key={index}
                 result={strategy}
                 index={index}
                 targetEnabled={targetEnabled}
@@ -1830,7 +1909,7 @@ export default function GrowthIncomeFreedom() {
                 <tbody>
                   {SCENARIOS.flatMap(scenario => (
                     (result.scenarios[scenario.key]?.strategies || []).map((strategy, index) => (
-                      <tr key={`${scenario.key}-${strategy.name}`}>
+                      <tr key={`${scenario.key}-${index}`}>
                         <td>
                           <span className="gif-scenario-dot" style={{ background: scenario.color }}></span>
                           {scenario.label}
@@ -1905,6 +1984,7 @@ export default function GrowthIncomeFreedom() {
                     <th>Forecast volatility</th>
                     <th>Avg. correlation</th>
                     <th>Beta</th>
+                    <th title="Share of the fund type's bull and bear swing this holding takes, from its beta">Bull/bear swing</th>
                     <th>Yield ceiling</th>
                     <th>History</th>
                   </tr>
@@ -1946,7 +2026,15 @@ export default function GrowthIncomeFreedom() {
                         )}
                       </td>
                       <td>{pct((row.average_correlation || 0) * 100, 0)}</td>
-                      <td>{Number(row.beta).toFixed(2)}</td>
+                      <td>
+                        {Number(row.beta).toFixed(2)}
+                        {row.historical_beta != null && (
+                          <small className="gif-table-sub">
+                            {Number(row.historical_beta).toFixed(2)} measured
+                          </small>
+                        )}
+                      </td>
+                      <td>{Number.isFinite(Number(row.shock_scale)) ? `${Number(row.shock_scale).toFixed(2)}×` : '—'}</td>
                       <td>{pct(row.sustainable_yield_cap * 100, 1)}</td>
                       <td>
                         {row.history_years > 0 ? `${row.history_years} years` : 'Class fallback'}
@@ -1968,8 +2056,10 @@ export default function GrowthIncomeFreedom() {
             additionally keeps real starting value intact. “Spending capacity (4% reference)” is an
             informational value × rate figure only and does not drive the FI dates. The value/income charts
             use the selected per-holding DRIP rates; unreinvested distributions stay in non-interest-bearing
-            strategy cash and no growth-phase withdrawals are made. Estimated taxes apply only when enabled
-            — leave them off for Roth or other tax-free accounts.
+            strategy cash and no growth-phase withdrawals are made. Bull and bear swings scale with each
+            holding&apos;s measured beta; NAV-linked option-income funds keep their neutral distribution rate in
+            every scenario because their income already rises and falls with NAV. Estimated taxes apply only when
+            enabled — leave them off for Roth or other tax-free accounts.
           </div>
         </section>
       )}

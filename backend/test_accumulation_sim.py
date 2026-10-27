@@ -13,11 +13,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from accumulation_sim import (
     _annual_distribution_growth,
     _infer_correlation_group,
+    _market_shock_scale,
     _release_return_paths,
     _scenario_month_parameters,
     build_market_assumptions,
     generate_return_paths,
     normalize_strategy,
+    refine_scenario_type,
     run_accumulation_comparison,
     validate_settings,
 )
@@ -953,6 +955,106 @@ class AccumulationSimulationTest(unittest.TestCase):
         protective_bear = _scenario_month_parameters(protective, "bearish", 0)[0]
         self.assertLess(covered_bull, unspecified_bull)
         self.assertGreater(protective_bear, covered_bear)
+
+    def test_market_shock_scale_follows_beta_relative_to_class(self):
+        self.assertAlmostEqual(_market_shock_scale(0.75, "option_income"), 1.0)
+        self.assertAlmostEqual(_market_shock_scale(0.375, "option_income"), 0.5)
+        self.assertAlmostEqual(_market_shock_scale(0.0, "option_income"), 0.25)
+        self.assertAlmostEqual(_market_shock_scale(5.0, "non_income_equity"), 2.0)
+        # Cash has no meaningful class beta, so it keeps the class swing.
+        self.assertAlmostEqual(_market_shock_scale(0.5, "cash"), 1.0)
+
+    def test_bull_and_bear_swings_scale_with_market_sensitivity(self):
+        typical = assumption("TYP", total_return=0.07, scenario_type="option_income")
+        calm = assumption("CALM", total_return=0.07, scenario_type="option_income")
+        typical["shock_scale"] = 1.0
+        calm["shock_scale"] = 0.25
+        for row in (typical, calm):
+            row["option_strategy"] = "none"
+
+        # A class-typical holding reproduces the class profile exactly.
+        self.assertAlmostEqual(_scenario_month_parameters(typical, "bearish", 0)[0], -0.18)
+        self.assertAlmostEqual(_scenario_month_parameters(typical, "bullish", 0)[0], 0.10)
+        self.assertAlmostEqual(_scenario_month_parameters(typical, "bearish", 12)[0], 0.08)
+        # A quarter of the market sensitivity takes a quarter of the swing.
+        self.assertAlmostEqual(
+            _scenario_month_parameters(calm, "bearish", 0)[0], 0.07 - 0.25 * 0.25
+        )
+        self.assertAlmostEqual(
+            _scenario_month_parameters(calm, "bullish", 0)[0], 0.07 + 0.03 * 0.25
+        )
+        # Neutral never depends on the swing.
+        self.assertAlmostEqual(
+            _scenario_month_parameters(calm, "neutral", 0)[0],
+            _scenario_month_parameters(typical, "neutral", 0)[0],
+        )
+
+    def test_nav_linked_rate_keeps_neutral_path_while_dividends_take_scenarios(self):
+        nav_linked = assumption("NAV", total_return=0.07, scenario_type="high_distribution_option")
+        nav_linked["payout_model"] = "nav_yield"
+        nav_linked["neutral_distribution_growth"] = -0.04
+        per_share = assumption("DIV", total_return=0.08, scenario_type="dividend_growth")
+        per_share["payout_model"] = "per_share_growth"
+        per_share["neutral_distribution_growth"] = 0.03
+
+        # NAV-linked income already moves with NAV, so the rate never takes the
+        # scenario's dollar-income change on top of it.
+        for scenario, month in (("bearish", 0), ("bearish", 12), ("bearish", 40), ("bullish", 0)):
+            self.assertAlmostEqual(
+                _scenario_month_parameters(nav_linked, scenario, month)[2], -0.04
+            )
+        self.assertAlmostEqual(_scenario_month_parameters(per_share, "bearish", 0)[2], -0.06)
+        self.assertAlmostEqual(_scenario_month_parameters(per_share, "bearish", 12)[2], 0.04)
+        self.assertAlmostEqual(_scenario_month_parameters(per_share, "bullish", 0)[2], 0.05)
+
+    def test_measured_low_risk_fund_gets_low_volatility_and_small_shocks(self):
+        months = 60
+        dates = pd.date_range("2020-01-31", periods=months + 1, freq="ME")
+        market = np.tile([0.04, -0.05, 0.03, -0.02, 0.05, -0.04], months // 6)
+
+        def frame(monthly_returns):
+            closes = [100.0]
+            for monthly_return in monthly_returns:
+                closes.append(closes[-1] * (1.0 + monthly_return))
+            return pd.DataFrame(
+                {"Close": closes, "Dividends": np.zeros(len(closes))}, index=dates
+            )
+
+        # A T-bill-like fund: steady ~0.4% a month with a little noise that is
+        # unrelated to the market.
+        bills = 0.004 + np.tile([0.001, -0.001, 0.0005, -0.0005, 0.0, 0.0], months // 6)
+        histories = {"SPY": frame(market), "BILLS": frame(bills), "LIKEMKT": frame(market)}
+        holdings = [
+            {"ticker": "BILLS", "weight": 1, "scenario_type": "option_income"},
+            {"ticker": "LIKEMKT", "weight": 1, "scenario_type": "non_income_equity"},
+        ]
+        assumptions, _warnings = build_market_assumptions(
+            holdings, history_loader=lambda _tickers: histories
+        )
+        bills_row = assumptions["BILLS"]
+        self.assertLess(bills_row["annual_volatility"], 0.05)
+        self.assertLess(abs(bills_row["historical_beta"]), 0.05)
+        self.assertLess(bills_row["shock_scale"], 0.35)
+        market_row = assumptions["LIKEMKT"]
+        self.assertAlmostEqual(market_row["historical_beta"], 1.0, places=6)
+        self.assertGreater(market_row["shock_scale"], 0.9)
+        self.assertLess(
+            _scenario_month_parameters(market_row, "bearish", 0)[0],
+            _scenario_month_parameters(bills_row, "bearish", 0)[0] - 0.15,
+        )
+
+    def test_unrecognized_very_high_payer_is_modeled_as_high_distribution(self):
+        self.assertEqual(refine_scenario_type("equity_income", 43.9), "high_distribution_option")
+        self.assertEqual(refine_scenario_type("other", 25), "high_distribution_option")
+        self.assertEqual(refine_scenario_type("equity_income", 12), "equity_income")
+        # Recognized classes keep their identity even at a high yield.
+        self.assertEqual(refine_scenario_type("bdc", 24), "bdc")
+        self.assertEqual(refine_scenario_type("option_income", 19), "option_income")
+        # The Growth-strategy rule for low-yield broad equity still applies.
+        self.assertEqual(
+            refine_scenario_type("equity_income", 1.5, "growth"), "non_income_equity"
+        )
+        self.assertEqual(refine_scenario_type("equity_income", 1.5, "income"), "equity_income")
 
     def test_strategy_normalization_preserves_model_overrides(self):
         strategy = normalize_strategy({

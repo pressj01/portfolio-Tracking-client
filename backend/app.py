@@ -166,7 +166,7 @@ from dividend_safety import (
     get_dividend_safety_for_holdings,
     summarize_dividend_safety,
 )
-from accumulation_sim import run_accumulation_comparison
+from accumulation_sim import refine_scenario_type, run_accumulation_comparison
 import yahoo_gateway
 import market_data_provider
 import split_check
@@ -37679,13 +37679,17 @@ def _accumulation_compare_snapshot_payload(source_id, name, snapshot, source_typ
         if value <= 0:
             continue
         annual_income = max(0.0, float(row.get("annual_income") or 0))
-        scenario_type = row.get("scenario_type") or "other"
+        current_yield_pct = round(annual_income / value * 100.0, 4)
+        # The style-specific rule waits for the run, where the style is known.
+        scenario_type = refine_scenario_type(
+            row.get("scenario_type") or "other", current_yield_pct
+        )
         holdings.append({
             "ticker": row.get("ticker"),
             "description": row.get("description") or row.get("ticker"),
             "weight": round(value / total_value * 100.0, 6),
             "current_value": round(value, 2),
-            "current_yield_pct": round(annual_income / value * 100.0, 4),
+            "current_yield_pct": current_yield_pct,
             "scenario_type": scenario_type,
             "scenario_type_override": "",
             "classification_type": row.get("classification_type") or "",
@@ -37774,8 +37778,8 @@ def accumulation_compare_run():
 
     payload = request.get_json(force=True, silent=True) or {}
     # Apply explicit per-holding overrides first, otherwise classify from the
-    # richest metadata available. A low-yield broad equity in a Growth strategy
-    # should not become "equity income" merely because it pays a small dividend.
+    # richest metadata available and correct the classifier's fallbacks for
+    # this simulator (very high payers, low-yield equity in a Growth strategy).
     for strategy in payload.get("strategies") or []:
         strategy_style = str(strategy.get("style") or "custom").strip().lower()
         for holding in strategy.get("holdings") or []:
@@ -37790,15 +37794,18 @@ def accumulation_compare_run():
                 continue
             scenario_type = str(holding.get("scenario_type") or "").strip()
             override_field_present = "scenario_type_override" in holding
+            current_yield_pct = max(
+                0.0, float(holding.get("current_yield_pct") or 0)
+            )
             if (
                 not override_field_present
                 and scenario_type in HOLDING_SCENARIO_PROFILES
                 and scenario_type != "other"
             ):
+                holding["scenario_type"] = refine_scenario_type(
+                    scenario_type, current_yield_pct, strategy_style
+                )
                 continue
-            current_yield_pct = max(
-                0.0, float(holding.get("current_yield_pct") or 0)
-            )
             classified = _classify_cash_flow_holding({
                 "ticker": holding.get("ticker"),
                 "description": holding.get("description"),
@@ -37810,13 +37817,9 @@ def accumulation_compare_run():
                 "annual_income": current_yield_pct,
                 "value": 100.0,
             })
-            if (
-                strategy_style == "growth"
-                and classified == "equity_income"
-                and current_yield_pct < 3.0
-            ):
-                classified = "non_income_equity"
-            holding["scenario_type"] = classified
+            holding["scenario_type"] = refine_scenario_type(
+                classified, current_yield_pct, strategy_style
+            )
     try:
         result = run_accumulation_comparison(payload)
         return jsonify(**result)
