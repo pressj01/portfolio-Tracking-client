@@ -51913,15 +51913,125 @@ def drip_score_set_item(set_id):
 
 # ── Portfolio Builder CRUD ────────────────────────────────────────────────────
 
+def _builder_clean_ticker(raw):
+    """Upper-cased symbol, or None when it cannot be a ticker."""
+    ticker = str(raw or "").strip().upper()
+    if not ticker or len(ticker) > 20 or any(ch.isspace() for ch in ticker):
+        return None
+    return ticker
+
+
+def _builder_clean_amount(raw):
+    """A positive, finite dollar amount rounded to cents, or None.
+
+    A zero or negative position has no weight in any grade; storing one only
+    left a row that shifted nothing but still counted as a holding.
+    """
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(amount) or amount <= 0:
+        return None
+    return round(amount, 2)
+
+
+def _builder_clean_holdings(raw_holdings):
+    """Validate a list of {ticker, dollar_amount}; same ticker twice is summed.
+
+    Returns (holdings, error). Order is kept so a strategy applies in the
+    order it was generated.
+    """
+    if not isinstance(raw_holdings, list):
+        return None, "holdings must be a list"
+    merged = {}
+    for item in raw_holdings:
+        if not isinstance(item, dict):
+            return None, "Each holding needs a ticker and a dollar amount"
+        ticker = _builder_clean_ticker(item.get("ticker"))
+        amount = _builder_clean_amount(item.get("dollar_amount"))
+        if ticker is None:
+            return None, f"Invalid ticker: {item.get('ticker')!r}"
+        if amount is None:
+            return None, f"{ticker}: the dollar amount must be greater than zero"
+        merged[ticker] = round(merged.get(ticker, 0.0) + amount, 2)
+    return [{"ticker": t, "dollar_amount": a} for t, a in merged.items()], None
+
+
+def _builder_portfolio_row(conn, port_id):
+    """The Builder portfolio when it belongs to the requesting profile, else None."""
+    return conn.execute(
+        "SELECT id, name FROM builder_portfolios WHERE id = ? AND profile_id = ?",
+        (port_id, get_profile_id()),
+    ).fetchone()
+
+
+def _builder_load_holdings(conn, port_id):
+    rows = conn.execute(
+        "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ? ORDER BY added_at, id",
+        (port_id,),
+    ).fetchall()
+    return [
+        {"ticker": str(r["ticker"]).upper(), "dollar_amount": float(r["dollar_amount"] or 0)}
+        for r in rows
+    ]
+
+
+def _builder_write_holdings(conn, port_id, holdings, replace):
+    if replace:
+        conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ?", (port_id,))
+    # Update in place: INSERT OR REPLACE re-created the row, which moved an
+    # edited holding to the bottom of the table. Written as UPDATE-then-INSERT
+    # so it needs no UNIQUE constraint an older database may lack.
+    for h in holdings:
+        cur = conn.execute(
+            "UPDATE builder_holdings SET dollar_amount = ? WHERE portfolio_id = ? AND ticker = ?",
+            (h["dollar_amount"], port_id, h["ticker"]),
+        )
+        if cur.rowcount == 0:
+            conn.execute(
+                "INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (?, ?, ?)",
+                (port_id, h["ticker"], h["dollar_amount"]),
+            )
+    conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
+
+
+def _builder_live_holdings(conn):
+    """The selected account's (or aggregate's) real positions at market value.
+
+    Same rows and weights Dashboard grades: every held ticker with a positive
+    current value, summed across accounts.
+    """
+    _is_agg, pids = get_profile_filter()
+    placeholders = ",".join("?" * len(pids))
+    rows = conn.execute(
+        f"""SELECT ticker, SUM(current_value) AS current_value
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND quantity > 0 AND current_value > 0
+            GROUP BY ticker
+            ORDER BY SUM(current_value) DESC""",
+        pids,
+    ).fetchall()
+    holdings = []
+    for r in rows:
+        ticker = _builder_clean_ticker(r["ticker"])
+        amount = _builder_clean_amount(r["current_value"])
+        if ticker and amount:
+            holdings.append({"ticker": ticker, "dollar_amount": amount})
+    return holdings
+
+
 @app.route("/api/builder/portfolios", methods=["GET"])
 def builder_list_portfolios():
     pid = get_profile_id()
     conn = get_connection()
     rows = conn.execute("""
         SELECT p.id, p.name, p.notes, p.created_at, p.updated_at,
-               (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count
+               (SELECT COUNT(*) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS holding_count,
+               (SELECT COALESCE(SUM(h.dollar_amount), 0) FROM builder_holdings h WHERE h.portfolio_id = p.id) AS total_value
         FROM builder_portfolios p WHERE p.profile_id = ?
-        ORDER BY p.updated_at DESC
+        ORDER BY p.updated_at DESC, p.id DESC
     """, (pid,)).fetchall()
     conn.close()
     return jsonify({"portfolios": rows_to_dicts(rows)})
@@ -51929,46 +52039,73 @@ def builder_list_portfolios():
 
 @app.route("/api/builder/portfolios", methods=["POST"])
 def builder_create_portfolio():
+    """Create a model portfolio, optionally seeded with holdings.
+
+    ``holdings`` copies a list in one step (Save As). ``from_holdings`` copies
+    the selected account's real positions at their current market value, so
+    the model starts out graded exactly as Dashboard grades the account.
+    """
     pid = get_profile_id()
-    data = request.get_json()
-    name = (data.get("name") or "").strip()
+    data = request.get_json(silent=True) or {}
+    name = str(data.get("name") or "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
-    notes = (data.get("notes") or "").strip()
+    notes = str(data.get("notes") or "").strip()
+    holdings = []
     conn = get_connection()
     try:
-        cur = conn.execute(
-            "INSERT INTO builder_portfolios (profile_id, name, notes) VALUES (?, ?, ?)",
-            (pid, name, notes))
-        conn.commit()
+        if data.get("from_holdings"):
+            holdings = _builder_live_holdings(conn)
+            if not holdings:
+                return jsonify({"error": "The selected account has no priced holdings to copy."}), 400
+        elif data.get("holdings") is not None:
+            holdings, error = _builder_clean_holdings(data.get("holdings"))
+            if error:
+                return jsonify({"error": error}), 400
+        try:
+            cur = conn.execute(
+                "INSERT INTO builder_portfolios (profile_id, name, notes) VALUES (?, ?, ?)",
+                (pid, name, notes))
+        except sqlite3.IntegrityError:
+            return jsonify({"error": f'A portfolio named "{name}" already exists.'}), 409
         new_id = cur.lastrowid
-    except Exception as e:
+        if holdings:
+            _builder_write_holdings(conn, new_id, holdings, replace=True)
+        conn.commit()
+    finally:
         conn.close()
-        return jsonify({"error": str(e)}), 400
-    conn.close()
-    return jsonify({"id": new_id, "name": name}), 201
+    return jsonify({"id": new_id, "name": name, "holding_count": len(holdings)}), 201
 
 
 @app.route("/api/builder/portfolios/<int:port_id>", methods=["PATCH"])
 def builder_update_portfolio(port_id):
     pid = get_profile_id()
-    data = request.get_json()
-    conn = get_connection()
+    data = request.get_json(silent=True) or {}
     fields, vals = [], []
     if "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "Name is required"}), 400
         fields.append("name = ?")
-        vals.append(data["name"].strip())
+        vals.append(name)
     if "notes" in data:
         fields.append("notes = ?")
-        vals.append(data["notes"].strip())
+        vals.append(str(data.get("notes") or "").strip())
     if not fields:
-        conn.close()
         return jsonify({"error": "Nothing to update"}), 400
     fields.append("updated_at = CURRENT_TIMESTAMP")
     vals.extend([port_id, pid])
-    conn.execute(f"UPDATE builder_portfolios SET {', '.join(fields)} WHERE id = ? AND profile_id = ?", vals)
-    conn.commit()
-    conn.close()
+    conn = get_connection()
+    try:
+        cur = conn.execute(
+            f"UPDATE builder_portfolios SET {', '.join(fields)} WHERE id = ? AND profile_id = ?", vals)
+        conn.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({"error": f'A portfolio named "{data.get("name", "").strip()}" already exists.'}), 409
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Portfolio not found"}), 404
     return jsonify({"ok": True})
 
 
@@ -52653,463 +52790,659 @@ def rebalance_category_plan():
 
 @app.route("/api/builder/portfolios/<int:port_id>", methods=["DELETE"])
 def builder_delete_portfolio(port_id):
-    pid = get_profile_id()
     conn = get_connection()
-    conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ?", (port_id,))
-    conn.execute("DELETE FROM builder_portfolios WHERE id = ? AND profile_id = ?", (port_id, pid))
-    conn.commit()
-    conn.close()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ?", (port_id,))
+        conn.execute("DELETE FROM builder_portfolios WHERE id = ?", (port_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({"ok": True})
 
 
 @app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["GET"])
 def builder_list_holdings(port_id):
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, ticker, dollar_amount, added_at FROM builder_holdings WHERE portfolio_id = ? ORDER BY added_at",
-        (port_id,)).fetchall()
-    conn.close()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        rows = conn.execute(
+            "SELECT id, ticker, dollar_amount, added_at FROM builder_holdings "
+            "WHERE portfolio_id = ? ORDER BY added_at, id",
+            (port_id,)).fetchall()
+    finally:
+        conn.close()
     return jsonify({"holdings": rows_to_dicts(rows)})
 
 
 @app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["POST"])
 def builder_add_holding(port_id):
-    data = request.get_json()
-    ticker = (data.get("ticker") or "").strip().upper()
-    dollar_amount = float(data.get("dollar_amount", 0))
-    if not ticker:
+    """Add a holding, or set the amount of one already in the portfolio."""
+    data = request.get_json(silent=True) or {}
+    ticker = _builder_clean_ticker(data.get("ticker"))
+    if ticker is None:
         return jsonify({"error": "Ticker is required"}), 400
+    dollar_amount = _builder_clean_amount(data.get("dollar_amount"))
+    if dollar_amount is None:
+        return jsonify({"error": "Enter a dollar amount greater than zero"}), 400
     conn = get_connection()
-    conn.execute(
-        "INSERT OR REPLACE INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (?, ?, ?)",
-        (port_id, ticker, dollar_amount))
-    conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
-    conn.commit()
-    conn.close()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        _builder_write_holdings(
+            conn, port_id, [{"ticker": ticker, "dollar_amount": dollar_amount}], replace=False)
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({"ticker": ticker, "dollar_amount": dollar_amount})
 
 
-@app.route("/api/builder/portfolios/<int:port_id>/holdings/<ticker>", methods=["DELETE"])
+@app.route("/api/builder/portfolios/<int:port_id>/holdings", methods=["PUT"])
+def builder_set_holdings(port_id):
+    """Write many holdings in one transaction.
+
+    ``replace`` (default true) makes the list the whole portfolio, which is how
+    Clear, a strategy that replaces the model, and a template rebalance apply.
+    With ``replace: false`` the list is merged in, each ticker's amount set.
+    Writing row by row from the browser left a half-applied portfolio whenever
+    one request failed.
+    """
+    data = request.get_json(silent=True) or {}
+    holdings, error = _builder_clean_holdings(data.get("holdings", []))
+    if error:
+        return jsonify({"error": error}), 400
+    replace = data.get("replace", True) is not False
+    conn = get_connection()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        _builder_write_holdings(conn, port_id, holdings, replace=replace)
+        conn.commit()
+        result = _builder_load_holdings(conn, port_id)
+    finally:
+        conn.close()
+    return jsonify({"holdings": result})
+
+
+@app.route("/api/builder/portfolios/<int:port_id>/holdings/<path:ticker>", methods=["DELETE"])
 def builder_delete_holding(port_id, ticker):
     conn = get_connection()
-    conn.execute("DELETE FROM builder_holdings WHERE portfolio_id = ? AND ticker = ?", (port_id, ticker.upper()))
-    conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
-    conn.commit()
-    conn.close()
+    try:
+        if _builder_portfolio_row(conn, port_id) is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        conn.execute(
+            "DELETE FROM builder_holdings WHERE portfolio_id = ? AND ticker = ?",
+            (port_id, ticker.strip().upper()))
+        conn.execute("UPDATE builder_portfolios SET updated_at = CURRENT_TIMESTAMP WHERE id = ?", (port_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({"ok": True})
 
 
 # ── Portfolio Builder Analyze ────────────────────────────────────────────────
+#
+# A model portfolio is graded exactly the way Dashboard grades a real one
+# (portfolio_summary_data): the same calendar windows, the same window-scaled
+# observation floor, the same rule for which holdings carry a grade, and the
+# same portfolio return frame, in which a holding that starts trading inside
+# the window counts as cash (0% return) until its first quote. Dashboard does
+# not put NAV Health into the portfolio grade, so neither does the Builder.
+# The Builder used to: from total-return prices, which made the factor read
+# "no erosion" for nearly every fund and nudged every grade upward.
+
+_BUILDER_PERIOD_KEYS = {"1m", "3m", "6m", "ytd", "1y", "2y", "3y", "5y", "10y", "max"}
+_BUILDER_PERIOD_ALIASES = {"1mo": "1m", "3mo": "3m", "6mo": "6m", "all": "max"}
+
+
+def _builder_period_range(period):
+    """Dashboard's window for a Builder period key, defaulting to 1Y."""
+    key = str(period or "1y").strip().lower()
+    key = _BUILDER_PERIOD_ALIASES.get(key, key)
+    if key not in _BUILDER_PERIOD_KEYS:
+        key = "1y"
+    if key == "max":
+        # A model has no first trade for "All" to start from. Download the full
+        # history; _builder_analyze_holdings cuts it to the holdings' common
+        # history so no holding sits in the grade as decades of cash.
+        period_range = dict(_resolve_total_return_period("all"))
+        period_range.update({"key": "max", "label": "Max (common history)"})
+        return period_range
+    return _resolve_total_return_period(key)
+
+
+def _builder_finite(value, digits=2):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(number, digits)
+
+
+def _builder_price_frames(symbols, period_range):
+    """Total-return and price-only closes for the Builder, from one download.
+
+    Grades use the adjusted close. Dashboard downloads with auto_adjust, which
+    copies Adj Close into Close, so the two read the same series. The
+    unadjusted close is what the price (an ETF's NAV) actually did over the
+    window, which the Price change column reports beside the yield.
+    """
+    symbols = list(dict.fromkeys(s for s in symbols if s))
+    if not symbols:
+        return pd.DataFrame(), pd.DataFrame()
+    raw = _chunked_yf_download(
+        " ".join(symbols),
+        **period_range["yf_kwargs"],
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+    if raw is None or raw.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    def field(name):
+        if isinstance(raw.columns, pd.MultiIndex):
+            if name not in raw.columns.get_level_values(0):
+                return None
+            frame = raw[name]
+            if isinstance(frame, pd.Series):
+                frame = frame.to_frame(symbols[0])
+        elif name in raw.columns:
+            frame = raw[[name]].copy()
+            frame.columns = [symbols[0]]
+        else:
+            return None
+        frame = frame.loc[:, ~frame.columns.duplicated()]
+        cols = [s for s in symbols if s in frame.columns]
+        return frame[cols].apply(pd.to_numeric, errors="coerce")
+
+    price = field("Close")
+    adjusted = field("Adj Close")
+    if adjusted is None:
+        adjusted = price
+    if adjusted is None:
+        return pd.DataFrame(), pd.DataFrame()
+    if price is not None:
+        # A symbol whose adjusted column came back empty still has a price.
+        for col in price.columns:
+            if col not in adjusted.columns or not adjusted[col].notna().any():
+                adjusted[col] = price[col]
+    adjusted = adjusted.dropna(how="all")
+    price = price.reindex(adjusted.index) if price is not None else pd.DataFrame(index=adjusted.index)
+    return adjusted, price
+
+
+def _builder_last_prices(adjusted, price, tickers):
+    """Latest close per ticker over the whole download (for yield and shares)."""
+    out = {}
+    for t in tickers:
+        for frame in (price, adjusted):
+            if t in frame.columns:
+                series = frame[t].dropna()
+                if not series.empty and float(series.iloc[-1]) > 0:
+                    out[t] = float(series.iloc[-1])
+                    break
+    return out
+
+
+def _builder_distribution_yield(ticker, price):
+    """(annual yield %, source) for one Builder holding.
+
+    Same precedence as the Watchlist: TappAlpha's published rate, then the
+    fund's own payments annualized at their current cadence, and Yahoo's quote
+    fields only as a last resort. Yahoo's quote yield is unreliable for
+    option-income funds (it has reported 0.09% for QQQI, which pays about 13%),
+    and it is what the Builder used to read first.
+    """
+    from watchlist_market import as_float, quote_yield_pct
+
+    try:
+        if _is_tappalpha_fund(ticker):
+            profile = _fetch_tappalpha_etf_profile(ticker) or {}
+            rate = as_float(profile.get("distribution_rate_pct"))
+            if rate is None:
+                rate = as_float(profile.get("estimated_yield_pct"))
+            if rate is None:
+                snapshot = _fetch_tappalpha_distribution_snapshot(ticker) or {}
+                rate = as_float(snapshot.get("distribution_rate_pct"))
+            if rate is not None and rate >= 0:
+                return round(rate, 2), "TappAlpha"
+    except Exception:
+        pass
+    if price and price > 0:
+        try:
+            dividends = _cached_yf_dividends(_yf_ticker(ticker), ticker)
+            value, _source = _expected_annual_distribution_yield_pct(ticker, price, dividends)
+            if value is not None and value > 0:
+                return float(value), "Distribution history"
+        except Exception:
+            pass
+    try:
+        info = _cached_yf_info(_yf_ticker(ticker), ticker) or {}
+        value = quote_yield_pct(info.get("trailingAnnualDividendYield"), info.get("dividendYield"))
+        if value is not None:
+            return float(value), "Yahoo quote"
+    except Exception:
+        pass
+    return 0.0, None
+
+
+def _builder_yields(tickers, prices):
+    """{ticker: (yield %, source)}, fetched in parallel; Yahoo calls are slow."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    unique = list(dict.fromkeys(tickers))
+    if not unique:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(6, len(unique))) as pool:
+        values = list(pool.map(lambda t: _builder_distribution_yield(t, prices.get(t)), unique))
+    return dict(zip(unique, values))
+
+
+def _builder_sample_positions(length, limit=400, keep=()):
+    """Chart positions: an even stride, the last point, and any that must show.
+
+    A plain stride can skip the trough, and then the drawdown chart's lowest
+    point disagrees with the Max Drawdown the grade reports.
+    """
+    if length <= limit:
+        return list(range(length))
+    step = max(1, length // limit)
+    picks = set(range(0, length, step))
+    picks.add(length - 1)
+    picks.update(i for i in keep if 0 <= i < length)
+    return sorted(picks)
+
+
+def _builder_analyze_holdings(holdings, adjusted, price, benchmark, period_range,
+                              grading_settings, yields):
+    """Grade one model portfolio from downloaded closes, Dashboard's way."""
+    import numpy as np
+    from grading import (ABSOLUTE_MIN_RATIO_OBSERVATIONS, ticker_score, grade_portfolio,
+                         letter_grade, min_observations_for_window,
+                         portfolio_returns_frame, _capture_ratios)
+
+    tickers = [h["ticker"] for h in holdings]
+    amounts = {h["ticker"]: float(h["dollar_amount"] or 0) for h in holdings}
+    total_value = sum(amounts.values())
+
+    # Only this portfolio's symbols: a weekend print from some other symbol in
+    # a shared download would otherwise add days to the window.
+    cols = [c for c in dict.fromkeys([*tickers, benchmark]) if c in adjusted.columns]
+    close = adjusted[cols].dropna(how="all") if cols else pd.DataFrame()
+    limited_by = None
+    if period_range["key"] == "max" and not close.empty:
+        firsts = {
+            t: close[t].first_valid_index() for t in tickers
+            if t in close.columns and close[t].notna().any()
+        }
+        if firsts:
+            limited_by = max(firsts, key=lambda t: firsts[t])
+            close = close.loc[firsts[limited_by]:].dropna(how="all")
+    if price is not None and not price.empty:
+        price_close = price.reindex(index=close.index)
+    else:
+        price_close = pd.DataFrame(index=close.index)
+
+    bench_close = close[benchmark].dropna() if benchmark in close.columns else None
+    bench_ret = (
+        bench_close.pct_change().dropna()
+        if bench_close is not None and len(bench_close) > 1 else None
+    )
+
+    # Dashboard's floor: the ratios need 30 daily returns, scaled down to what a
+    # short window can hold (1M is ~21) and blank below 15.
+    window_observations = max(len(close.index) - 1, 0)
+    min_obs = min_observations_for_window(window_observations)
+    window_too_short = min_obs is None
+    effective_min_obs = min_obs if min_obs is not None else 10 ** 9
+    window_start = close.index[0] if len(close.index) else None
+
+    rows, graded, unpriced, late_starters, short_history = [], [], [], [], []
+    for t in tickers:
+        amt = amounts[t]
+        y_pct, y_source = yields.get(t) or (0.0, None)
+        y_pct = _builder_finite(y_pct) or 0.0
+        row = {
+            "ticker": t,
+            "dollar_amount": round(amt, 2),
+            "weight_pct": _builder_finite(amt / total_value * 100) if total_value > 0 else 0.0,
+            "shares": None, "current_price": None, "first_date": None,
+            "score": None, "grade": "N/A", "graded": False,
+            "ulcer_index": None, "sharpe": None, "sortino": None, "calmar": None,
+            "omega": None, "up_capture": None, "down_capture": None,
+            "max_drawdown": None, "annual_ret": None, "annual_vol": None,
+            "total_return_pct": None, "price_change_pct": None,
+            "annual_yield_pct": y_pct, "yield_source": y_source,
+            "annual_income": round(amt * y_pct / 100, 2),
+            "monthly_income": round(amt * y_pct / 1200, 2),
+        }
+        rows.append(row)
+
+        tc = close[t].dropna() if t in close.columns else pd.Series(dtype=float)
+        if tc.empty:
+            unpriced.append(t)
+            continue
+        pc = price_close[t].dropna() if t in price_close.columns else pd.Series(dtype=float)
+        last_price = float(pc.iloc[-1]) if not pc.empty else float(tc.iloc[-1])
+        row["current_price"] = _builder_finite(last_price)
+        row["shares"] = _builder_finite(amt / last_price, 4) if last_price > 0 else None
+        row["first_date"] = pd.Timestamp(tc.index[0]).strftime("%Y-%m-%d")
+        if window_start is not None and tc.index[0] > window_start + pd.Timedelta(days=5):
+            late_starters.append({"ticker": t, "first_date": row["first_date"]})
+
+        daily_ret = tc.pct_change().dropna()
+        n_returns = len(daily_ret)
+        first_close = float(tc.iloc[0])
+        if n_returns >= 1 and first_close > 0:
+            growth = float(tc.iloc[-1]) / first_close
+            row["total_return_pct"] = _builder_finite((growth - 1) * 100)
+            # Annualizing a handful of days turns noise into a headline number.
+            if n_returns >= ABSOLUTE_MIN_RATIO_OBSERVATIONS and growth > 0:
+                row["annual_ret"] = _builder_finite((growth ** (252 / n_returns) - 1) * 100)
+                row["annual_vol"] = _builder_finite(float(daily_ret.std()) * math.sqrt(252) * 100)
+        pc_window = pc.loc[tc.index[0]:] if not pc.empty else pc
+        if len(pc_window) > 1 and float(pc_window.iloc[0]) > 0:
+            row["price_change_pct"] = _builder_finite(
+                (float(pc_window.iloc[-1]) / float(pc_window.iloc[0]) - 1) * 100)
+
+        # Dashboard's rule: min_obs returns need min_obs + 1 closes. With fewer,
+        # ticker_score's dead-series guard scores 0, an "F" for nothing worse
+        # than a short history, so the holding stays ungraded instead.
+        if len(tc) <= effective_min_obs:
+            if not window_too_short:
+                short_history.append({"ticker": t, "first_date": row["first_date"],
+                                      "observations": n_returns})
+            continue
+        score, sharpe, sortino, calmar, omega, mdd, dc, ulcer = ticker_score(
+            tc, daily_ret, bench_ret, min_obs=effective_min_obs,
+            grading_settings=grading_settings,
+        )
+        row.update({
+            "score": score,
+            "grade": letter_grade(score, grading_settings),
+            "graded": True,
+            "sharpe": sharpe, "sortino": sortino, "calmar": calmar, "omega": omega,
+            "ulcer_index": ulcer, "down_capture": dc,
+            "max_drawdown": _builder_finite(mdd * 100) if mdd is not None else None,
+        })
+        if bench_ret is not None:
+            uc, _dc = _capture_ratios(daily_ret, bench_ret, min_obs=effective_min_obs)
+            row["up_capture"] = _builder_finite(uc, 1)
+        if amt > 0:
+            graded.append(t)
+
+    graded_value = sum(amounts[t] for t in graded)
+    ann_income = sum(r["annual_income"] for r in rows)
+    metrics = {
+        "n_holdings": len(tickers),
+        "n_graded": len(graded),
+        "total_value": round(total_value, 2),
+        "graded_value": round(graded_value, 2),
+        "est_annual_income": round(ann_income, 2),
+        "est_monthly_income": round(ann_income / 12, 2),
+        "yield_pct": _builder_finite(ann_income / total_value * 100) if total_value > 0 else None,
+        "grade": {"overall": "N/A", "score": None, "breakdown": []},
+    }
+    for key in ("sharpe", "sortino", "calmar", "omega", "max_drawdown", "ulcer_index",
+                "up_capture", "down_capture", "capture_ratio", "beta", "top_weight",
+                "effective_n", "diversification_ratio", "total_return_pct",
+                "benchmark_total_return_pct", "annual_ret", "annual_vol",
+                "benchmark_annual_ret", "benchmark_annual_vol"):
+        metrics[key] = None
+    if bench_ret is not None and len(bench_ret) >= ABSOLUTE_MIN_RATIO_OBSERVATIONS:
+        bench_growth = float(bench_close.iloc[-1]) / float(bench_close.iloc[0])
+        if bench_growth > 0:
+            metrics["benchmark_annual_ret"] = _builder_finite(
+                (bench_growth ** (252 / len(bench_ret)) - 1) * 100)
+        metrics["benchmark_annual_vol"] = _builder_finite(float(bench_ret.std()) * math.sqrt(252) * 100)
+
+    corr_data = drawdown_series = growth_series = None
+    if graded:
+        returns_df = portfolio_returns_frame(close[graded])
+        weights = np.array([amounts[t] for t in graded], dtype=float)
+        pm = grade_portfolio(
+            returns_df, weights, bench_ret, min_obs=effective_min_obs,
+            grading_settings=grading_settings,
+        )
+        grade = dict(pm.get("grade") or {})
+        grade.pop("settings", None)
+        metrics["grade"] = grade
+        for key in ("sharpe", "sortino", "calmar", "omega", "max_drawdown", "ulcer_index",
+                    "up_capture", "down_capture", "capture_ratio", "beta", "top_weight",
+                    "effective_n", "diversification_ratio"):
+            metrics[key] = pm.get(key)
+
+        # Seat the curve at 1.0 on the window's first close, as the grade does,
+        # so a loss on day one shows as a drawdown and the chart's trough is
+        # the Max Drawdown above.
+        port_daily = returns_df.dot(weights / weights.sum())
+        port_cum = pd.concat([
+            pd.Series([1.0], index=close.index[:1]),
+            (1 + port_daily).cumprod(),
+        ])
+        drawdown = port_cum / port_cum.cummax() - 1
+        metrics["total_return_pct"] = _builder_finite((float(port_cum.iloc[-1]) - 1) * 100)
+        n_returns = len(port_daily)
+        if n_returns >= ABSOLUTE_MIN_RATIO_OBSERVATIONS and float(port_cum.iloc[-1]) > 0:
+            metrics["annual_ret"] = _builder_finite(
+                (float(port_cum.iloc[-1]) ** (252 / n_returns) - 1) * 100)
+            metrics["annual_vol"] = _builder_finite(float(port_daily.std()) * math.sqrt(252) * 100)
+
+        bench_cum = None
+        if bench_close is not None and not bench_close.empty:
+            aligned = close[benchmark].reindex(port_cum.index).ffill()
+            first = aligned.first_valid_index()
+            if first is not None and float(aligned.loc[first]) > 0:
+                bench_cum = aligned / float(aligned.loc[first])
+                metrics["benchmark_total_return_pct"] = _builder_finite(
+                    (float(bench_cum.iloc[-1]) - 1) * 100)
+
+        picks = _builder_sample_positions(
+            len(port_cum), keep=(int(np.argmin(drawdown.to_numpy())),))
+        dates = [pd.Timestamp(port_cum.index[i]).strftime("%Y-%m-%d") for i in picks]
+        drawdown_series = {
+            "dates": dates,
+            "values": [round(float(drawdown.iloc[i]) * 100, 2) for i in picks],
+        }
+        growth_series = {
+            "dates": dates,
+            "start_value": round(graded_value, 2),
+            "portfolio": [round(float(port_cum.iloc[i]) * graded_value, 2) for i in picks],
+            "benchmark": (
+                [_builder_finite(float(bench_cum.iloc[i]) * graded_value) for i in picks]
+                if bench_cum is not None else None
+            ),
+        }
+
+        if len(graded) > 1:
+            # Pairwise overlap, so a young fund is correlated over the days it
+            # actually traded rather than against a run of zero-filled cash.
+            corr = close[graded].pct_change().corr(
+                min_periods=min_obs if min_obs is not None else 2)
+
+            def _corr_cell(a, b):
+                try:
+                    v = float(corr.loc[a, b])
+                except Exception:
+                    return None
+                return round(v, 3) if math.isfinite(v) else None
+
+            corr_data = {
+                "labels": list(graded),
+                "matrix": [[_corr_cell(a, b) for b in graded] for a in graded],
+            }
+
+    index = close.index
+    return {
+        "benchmark": benchmark,
+        "portfolio_metrics": metrics,
+        "holdings": rows,
+        "correlation": corr_data,
+        "drawdown_series": drawdown_series,
+        "growth_series": growth_series,
+        "window": {
+            "period_key": period_range["key"],
+            "period_label": period_range["label"],
+            "requested_start_date": period_range.get("start_date"),
+            "requested_end_date": period_range.get("end_date"),
+            "actual_start_date": pd.Timestamp(index[0]).strftime("%Y-%m-%d") if len(index) else None,
+            "actual_end_date": pd.Timestamp(index[-1]).strftime("%Y-%m-%d") if len(index) else None,
+            "window_observations": window_observations,
+            "min_observations": min_obs,
+            "window_too_short": window_too_short,
+            "benchmark": benchmark,
+            "benchmark_priced": bench_ret is not None,
+            "limited_by": limited_by,
+        },
+        "notices": {
+            "unpriced": unpriced,
+            "late_starters": late_starters,
+            "short_history": short_history,
+        },
+    }
+
+
+def _builder_request_options(data):
+    return (
+        _request_grading_settings(data),
+        _builder_clean_ticker(data.get("benchmark")) or "SPY",
+        _builder_period_range(data.get("period")),
+    )
+
+
+_BUILDER_NO_PRICES = (
+    "No price data came back. Yahoo Finance may be rate-limiting requests; "
+    "wait a minute and try again."
+)
+
 
 @app.route("/api/builder/portfolios/<int:port_id>/analyze", methods=["POST"])
 def builder_analyze(port_id):
-    import numpy as np
-    import math
-    import yfinance as yf
-    from grading import (ticker_score, grade_portfolio, letter_grade,
-                         _ulcer_index, _sharpe, _sortino, _calmar, _omega,
-                         _max_drawdown, _capture_ratios, _safe,
-                         _is_stale_or_dead)
-
-    data = request.get_json() or {}
-    grading_settings = _request_grading_settings(data)
-    benchmark = (data.get("benchmark") or "SPY").strip().upper()
-    period = data.get("period", "1y")
+    data = request.get_json(silent=True) or {}
+    grading_settings, benchmark, period_range = _builder_request_options(data)
 
     conn = get_connection()
-    rows = conn.execute(
-        "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?",
-        (port_id,)).fetchall()
-    pname = conn.execute("SELECT name FROM builder_portfolios WHERE id = ?", (port_id,)).fetchone()
-    conn.close()
-
-    if not rows:
+    try:
+        port = _builder_portfolio_row(conn, port_id)
+        if port is None:
+            return jsonify({"error": "Portfolio not found"}), 404
+        holdings = _builder_load_holdings(conn, port_id)
+    finally:
+        conn.close()
+    if not holdings:
         return jsonify({"error": "No holdings in this portfolio"}), 400
 
-    holdings_raw = [{"ticker": r["ticker"].upper(), "dollar_amount": float(r["dollar_amount"])} for r in rows]
-    tickers = [h["ticker"] for h in holdings_raw]
-    all_tickers = list(set(tickers + [benchmark]))
-
-    # Download price data
+    tickers = [h["ticker"] for h in holdings]
     try:
-        df = _chunked_yf_download(all_tickers, period=period, auto_adjust=True, progress=False)
+        adjusted, price = _builder_price_frames([*tickers, benchmark], period_range)
     except Exception as e:
-        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+        return jsonify({"error": f"Price download failed: {e}"}), 502
+    if adjusted.empty:
+        return jsonify({"error": _BUILDER_NO_PRICES}), 503
 
-    if df.empty:
-        return jsonify({"error": "No price data returned"}), 500
-
-    if isinstance(df.columns, pd.MultiIndex):
-        close_df = df["Close"] if "Close" in df.columns.get_level_values(0) else df
-    else:
-        close_df = df if len(all_tickers) == 1 else df
-        if len(all_tickers) == 1:
-            close_df = pd.DataFrame({all_tickers[0]: df["Close"] if "Close" in df.columns else df.iloc[:, 0]})
-
-    close_df = close_df.ffill().dropna(how="all")
-    bench_close = close_df[benchmark] if benchmark in close_df.columns else None
-    bench_ret = bench_close.pct_change().dropna() if bench_close is not None else None
-
-    # NAV erosion
-    nav_erosion = _compute_nav_erosion(close_df, tickers)
-
-    # Total portfolio value
-    total_value = sum(h["dollar_amount"] for h in holdings_raw)
-    if total_value <= 0:
-        total_value = 1.0
-
-    # Per-ticker analysis
-    result_holdings = []
-    returns_cols = {}
-    weights_list = []
-
-    for h in holdings_raw:
-        t = h["ticker"]
-        amt = h["dollar_amount"]
-        weight = amt / total_value
-
-        row = {
-            "ticker": t, "dollar_amount": amt, "weight_pct": round(weight * 100, 2),
-            "shares": 0, "current_price": 0, "score": 0, "grade": "N/A",
-            "ulcer_index": None, "sharpe": None, "sortino": None, "calmar": None,
-            "omega": None, "up_capture": None, "down_capture": None,
-            "annual_ret": None, "annual_vol": None, "max_drawdown": None,
-            "week52_high": None, "week52_low": None,
-            "annual_yield_pct": 0, "annual_income": 0, "monthly_income": 0,
-            "nav_erosion_pct": round((nav_erosion.get(t, 0)) * 100, 2),
-        }
-
-        if t not in close_df.columns:
-            result_holdings.append(row)
-            weights_list.append(weight)
-            continue
-
-        tc = close_df[t].dropna()
-        if len(tc) < 10:
-            result_holdings.append(row)
-            weights_list.append(weight)
-            continue
-
-        daily_ret = tc.pct_change().dropna()
-        returns_cols[t] = daily_ret
-
-        # Current price and shares
-        cur_price = float(tc.iloc[-1])
-        row["current_price"] = round(cur_price, 2)
-        row["shares"] = round(amt / cur_price, 4) if cur_price > 0 else 0
-
-        # 52-week
-        row["week52_high"] = round(float(tc.max()), 2)
-        row["week52_low"] = round(float(tc.min()), 2)
-
-        # Annualized return and vol
-        n_days = len(tc)
-        total_ret = float(tc.iloc[-1] / tc.iloc[0]) - 1.0
-        ann_ret = (1 + total_ret) ** (252 / max(n_days, 1)) - 1.0
-        ann_vol = float(daily_ret.std()) * np.sqrt(252) if len(daily_ret) > 1 else None
-
-        row["annual_ret"] = round(ann_ret * 100, 2)
-        row["annual_vol"] = round(ann_vol * 100, 2) if ann_vol is not None else None
-        row["annual_total_ret"] = row["annual_ret"]
-
-        # Ticker score (includes ulcer index)
-        score, sharpe, sortino, calmar, omega, mdd, dc, ulcer = ticker_score(
-            tc, daily_ret, bench_ret, grading_settings=grading_settings,
-        )
-        row["score"] = score
-        row["grade"] = letter_grade(score, grading_settings)
-        row["sharpe"] = sharpe
-        row["sortino"] = sortino
-        row["calmar"] = calmar
-        row["omega"] = omega
-        row["max_drawdown"] = round(mdd * 100, 2) if mdd is not None else None
-        row["down_capture"] = dc
-        row["ulcer_index"] = ulcer
-
-        # Up capture
-        if bench_ret is not None:
-            uc, _ = _capture_ratios(daily_ret, bench_ret)
-            row["up_capture"] = uc
-
-        # Dividend income — try info first, fall back to dividend history
-        try:
-            yf_ticker = _yf_ticker(t)
-            info = yf_ticker.info or {}
-            div_yield = info.get("yield") or 0
-            # dividendYield from yfinance can be a percentage (e.g. 11.84) or
-            # decimal (e.g. 0.1184) depending on the ticker — use "yield" which
-            # is consistently a decimal, and fall back to dividendYield only if
-            # it looks like a decimal (< 1)
-            if div_yield == 0:
-                dy = info.get("dividendYield") or 0
-                if dy > 0:
-                    div_yield = dy / 100 if dy > 1 else dy
-
-            # Fallback: compute yield from dividend history, annualizing if < 1 year
-            if div_yield == 0 and cur_price > 0:
-                try:
-                    divs = yf_ticker.dividends
-                    if divs is not None and len(divs) > 0:
-                        cutoff = divs.index[-1] - pd.Timedelta(days=365)
-                        recent_divs = divs[divs.index >= cutoff]
-                        if len(recent_divs) > 0:
-                            total_div = float(recent_divs.sum())
-                            span_days = (recent_divs.index[-1] - recent_divs.index[0]).days
-                            if span_days < 300 and len(recent_divs) >= 2:
-                                # Short history: annualize using avg payment × estimated frequency
-                                avg_gap = span_days / (len(recent_divs) - 1)
-                                payments_per_year = 365.0 / max(avg_gap, 1)
-                                avg_payment = total_div / len(recent_divs)
-                                annual_div_per_share = avg_payment * payments_per_year
-                            else:
-                                annual_div_per_share = total_div
-                            div_yield = annual_div_per_share / cur_price
-                except Exception:
-                    pass
-
-            # Fallback 2: check distributions (for return-of-capital / covered-call ETFs)
-            if div_yield == 0 and cur_price > 0:
-                try:
-                    actions = yf_ticker.actions
-                    if actions is not None and "Dividends" in actions.columns:
-                        div_col = actions["Dividends"]
-                        div_col = div_col[div_col > 0]
-                        if len(div_col) > 0:
-                            cutoff = div_col.index[-1] - pd.Timedelta(days=365)
-                            recent = div_col[div_col.index >= cutoff]
-                            if len(recent) > 0:
-                                total_div = float(recent.sum())
-                                span_days = (recent.index[-1] - recent.index[0]).days
-                                if span_days < 300 and len(recent) >= 2:
-                                    avg_gap = span_days / (len(recent) - 1)
-                                    payments_per_year = 365.0 / max(avg_gap, 1)
-                                    avg_payment = total_div / len(recent)
-                                    annual_div_per_share = avg_payment * payments_per_year
-                                else:
-                                    annual_div_per_share = total_div
-                                div_yield = annual_div_per_share / cur_price
-                except Exception:
-                    pass
-
-            row["annual_yield_pct"] = round(div_yield * 100, 2)
-            row["annual_income"] = round(amt * div_yield, 2)
-            row["monthly_income"] = round(amt * div_yield / 12, 2)
-        except Exception:
-            pass
-
-        result_holdings.append(row)
-        weights_list.append(weight)
-
-    # Portfolio-level metrics
-    if returns_cols:
-        # Exclude tickers with < 30 data points so they don't truncate
-        # the overlap window below the grading minimum
-        long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
-        if not long_cols:
-            long_cols = returns_cols  # fallback: use whatever we have
-        # Drop delisted / flat-lined / penny-stock series so they don't mask
-        # the portfolio's real risk profile in the overall grade.
-        live_cols = {
-            t: s for t, s in long_cols.items()
-            if not _is_stale_or_dead(close_df[t].dropna(), s)
-        }
-        if not live_cols:
-            live_cols = long_cols  # fallback: avoid empty grade
-        returns_df = pd.DataFrame(live_cols).dropna()
-        available = [t for t in tickers if t in live_cols]
-        avail_weights = np.array([weights_list[tickers.index(t)] for t in available])
-        if avail_weights.sum() > 0:
-            avail_weights = avail_weights / avail_weights.sum()
-        # NAV Health is a portfolio-grade factor: the weighted NAV erosion of
-        # the graded holdings, scored by the user's NAV Health formula.
-        weighted_nav = sum(
-            avail_weights[i] * nav_erosion.get(available[i], 0)
-            for i in range(len(available))
-        ) if available else None
-        port_grade = grade_portfolio(
-            returns_df[available], avail_weights, bench_ret,
-            grading_settings=grading_settings, nav_erosion=weighted_nav,
-        )
-    else:
-        port_grade = {"grade": {"overall": "N/A", "score": 0, "breakdown": []}}
-        returns_df = pd.DataFrame()
-        available = []
-
-    port_grade["n_holdings"] = len(tickers)
-    port_grade["total_value"] = round(total_value, 2)
-    ann_income = sum(h["annual_income"] for h in result_holdings)
-    port_grade["est_annual_income"] = round(ann_income, 2)
-    port_grade["est_monthly_income"] = round(ann_income / 12, 2)
-
-    # Correlation matrix
-    corr_data = None
-    if len(returns_cols) > 1:
-        corr_df = pd.DataFrame(returns_cols).dropna().corr()
-        labels = list(corr_df.columns)
-        matrix = []
-        for i in range(len(labels)):
-            row = []
-            for j in range(len(labels)):
-                v = corr_df.iloc[i, j]
-                row.append(round(float(v), 3) if not (math.isnan(v) or math.isinf(v)) else 0)
-            matrix.append(row)
-        corr_data = {"labels": labels, "matrix": matrix}
-
-    # Drawdown series
-    dd_data = None
-    if returns_cols and available:
-        port_daily = returns_df[available].dot(avail_weights)
-        port_cum = (1 + port_daily).cumprod()
-        running_max = port_cum.cummax()
-        drawdown = ((port_cum - running_max) / running_max) * 100
-        dates = [d.strftime("%Y-%m-%d") for d in drawdown.index]
-        vals = [round(float(v), 2) for v in drawdown.values]
-        # Subsample if > 300 points
-        if len(dates) > 300:
-            step = len(dates) // 300
-            dates = dates[::step]
-            vals = vals[::step]
-        dd_data = {"dates": dates, "values": vals}
-
-    return jsonify({
-        "portfolio_id": port_id,
-        "portfolio_name": pname["name"] if pname else "",
-        "portfolio_metrics": port_grade,
-        "holdings": result_holdings,
-        "correlation": corr_data,
-        "drawdown_series": dd_data,
-    })
+    yields = _builder_yields(tickers, _builder_last_prices(adjusted, price, tickers))
+    result = _builder_analyze_holdings(
+        holdings, adjusted, price, benchmark, period_range, grading_settings, yields)
+    result.update({"portfolio_id": port_id, "portfolio_name": port["name"]})
+    return jsonify(result)
 
 
 # ── Portfolio Builder Compare ────────────────────────────────────────────────
 
 @app.route("/api/builder/compare", methods=["POST"])
 def builder_compare():
-    import numpy as np
-    import yfinance as yf
-    from grading import grade_portfolio, letter_grade, _is_stale_or_dead
+    """Grade several model portfolios over one shared download.
 
-    data = request.get_json() or {}
-    grading_settings = _request_grading_settings(data)
-    port_ids = data.get("portfolio_ids", [])
-    period = data.get("period", "1y")
-    benchmark = (data.get("benchmark") or "SPY").strip().upper()
-
+    Each one goes through the same path as Analyze, so a portfolio's grade and
+    income here match what its own page shows for the same period.
+    """
+    data = request.get_json(silent=True) or {}
+    grading_settings, benchmark, period_range = _builder_request_options(data)
+    port_ids = []
+    for raw in data.get("portfolio_ids") or []:
+        try:
+            port_ids.append(int(raw))
+        except (TypeError, ValueError):
+            continue
+    port_ids = list(dict.fromkeys(port_ids))
     if len(port_ids) < 2:
         return jsonify({"error": "Select at least 2 portfolios"}), 400
 
+    portfolios, skipped = [], []
     conn = get_connection()
-    results = []
-
-    # Gather all tickers across all portfolios
-    all_tickers_set = {benchmark}
-    port_data = []
-    for pid in port_ids:
-        rows = conn.execute(
-            "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?", (pid,)).fetchall()
-        pname = conn.execute("SELECT name FROM builder_portfolios WHERE id = ?", (pid,)).fetchone()
-        holdings = [{"ticker": r["ticker"].upper(), "dollar_amount": float(r["dollar_amount"])} for r in rows]
-        for h in holdings:
-            all_tickers_set.add(h["ticker"])
-        port_data.append({"id": pid, "name": pname["name"] if pname else f"Portfolio {pid}", "holdings": holdings})
-    conn.close()
-
-    all_tickers = list(all_tickers_set)
     try:
-        df = _chunked_yf_download(all_tickers, period=period, auto_adjust=True, progress=False)
+        for pid in port_ids:
+            port = _builder_portfolio_row(conn, pid)
+            if port is None:
+                continue
+            holdings = [h for h in _builder_load_holdings(conn, pid) if h["dollar_amount"] > 0]
+            if not holdings:
+                skipped.append({"id": pid, "name": port["name"], "reason": "has no holdings"})
+                continue
+            portfolios.append({"id": pid, "name": port["name"], "holdings": holdings})
+    finally:
+        conn.close()
+    if not portfolios:
+        return jsonify({"error": "None of the selected portfolios has holdings to compare.",
+                        "skipped": skipped}), 400
+
+    tickers = list(dict.fromkeys(h["ticker"] for p in portfolios for h in p["holdings"]))
+    try:
+        adjusted, price = _builder_price_frames([*tickers, benchmark], period_range)
     except Exception as e:
-        return jsonify({"error": f"yfinance download failed: {e}"}), 500
+        return jsonify({"error": f"Price download failed: {e}"}), 502
+    if adjusted.empty:
+        return jsonify({"error": _BUILDER_NO_PRICES}), 503
+    yields = _builder_yields(tickers, _builder_last_prices(adjusted, price, tickers))
 
-    if df.empty:
-        return jsonify({"error": "No price data"}), 500
-
-    if isinstance(df.columns, pd.MultiIndex):
-        close_df = df["Close"]
-    else:
-        close_df = df if len(all_tickers) > 1 else pd.DataFrame({all_tickers[0]: df["Close"]})
-
-    close_df = close_df.ffill().dropna(how="all")
-    bench_ret = close_df[benchmark].pct_change().dropna() if benchmark in close_df.columns else None
-
-    for p in port_data:
-        holdings = p["holdings"]
-        total_val = sum(h["dollar_amount"] for h in holdings)
-        if total_val <= 0:
+    results = []
+    for p in portfolios:
+        analysis = _builder_analyze_holdings(
+            p["holdings"], adjusted, price, benchmark, period_range, grading_settings, yields)
+        pm = analysis["portfolio_metrics"]
+        grade = pm.get("grade") or {}
+        if not pm.get("n_graded"):
+            skipped.append({"id": p["id"], "name": p["name"],
+                            "reason": "has no holding with enough price history to grade"})
             continue
-
-        avail_tickers = [h["ticker"] for h in holdings if h["ticker"] in close_df.columns]
-        if not avail_tickers:
-            continue
-
-        # Build returns per ticker, then exclude short-history tickers
-        # (< 30 days) so they don't truncate the overlap below grading minimum
-        returns_cols = {}
-        for t in avail_tickers:
-            col = close_df[t].dropna()
-            if len(col) >= 2:
-                returns_cols[t] = col.pct_change().dropna()
-        if not returns_cols:
-            continue
-        long_cols = {t: s for t, s in returns_cols.items() if len(s) >= 30}
-        if not long_cols:
-            long_cols = returns_cols  # fallback
-        # Drop delisted / flat-lined / penny-stock series from the portfolio grade
-        live_cols = {
-            t: s for t, s in long_cols.items()
-            if not _is_stale_or_dead(close_df[t].dropna(), s)
-        }
-        if not live_cols:
-            live_cols = long_cols  # fallback: avoid empty grade
-        returns_df = pd.DataFrame(live_cols).dropna()
-        if len(returns_df) < 2:
-            returns_df = pd.DataFrame(live_cols).fillna(0)
-        used_tickers = list(live_cols.keys())
-        weights = np.array([next(h["dollar_amount"] for h in holdings if h["ticker"] == t) for t in used_tickers])
-        weights = weights / weights.sum()
-
-        # NAV Health is included to match the analyze endpoint's grading.
-        nav_erosion = _compute_nav_erosion(close_df, used_tickers)
-        weighted_nav = sum(
-            weights[i] * nav_erosion.get(used_tickers[i], 0)
-            for i in range(len(used_tickers))
-        )
-        pg = grade_portfolio(
-            returns_df[used_tickers], weights, bench_ret,
-            grading_settings=grading_settings, nav_erosion=weighted_nav,
-        )
-
-        ann_income = 0
-        for h in holdings:
-            try:
-                info = _yf_ticker(h["ticker"]).info or {}
-                dy = info.get("yield") or 0
-                if dy == 0:
-                    raw_dy = info.get("dividendYield") or 0
-                    if raw_dy > 0:
-                        dy = raw_dy / 100 if raw_dy > 1 else raw_dy
-                ann_income += h["dollar_amount"] * dy
-            except Exception:
-                pass
-
         results.append({
             "id": p["id"],
             "name": p["name"],
-            "score": pg["grade"]["score"],
-            "grade": pg["grade"]["overall"],
-            "monthly_income": round(ann_income / 12, 2),
-            "sharpe": pg.get("sharpe"),
-            "sortino": pg.get("sortino"),
-            "calmar": pg.get("calmar"),
-            "omega": pg.get("omega"),
-            "ulcer_index": pg.get("ulcer_index"),
-            "max_drawdown": pg.get("max_drawdown"),
-            "effective_n": pg.get("effective_n"),
-            "diversification_ratio": pg.get("diversification_ratio"),
-            "capture_ratio": pg.get("capture_ratio"),
-            "breakdown": {b["category"]: b["score"] for b in pg["grade"]["breakdown"]},
+            "score": grade.get("score"),
+            "grade": grade.get("overall"),
+            "total_value": pm.get("total_value"),
+            "monthly_income": pm.get("est_monthly_income"),
+            "annual_income": pm.get("est_annual_income"),
+            "yield_pct": pm.get("yield_pct"),
+            "total_return_pct": pm.get("total_return_pct"),
+            "sharpe": pm.get("sharpe"),
+            "sortino": pm.get("sortino"),
+            "calmar": pm.get("calmar"),
+            "omega": pm.get("omega"),
+            "ulcer_index": pm.get("ulcer_index"),
+            "max_drawdown": pm.get("max_drawdown"),
+            "down_capture": pm.get("down_capture"),
+            "capture_ratio": pm.get("capture_ratio"),
+            "beta": pm.get("beta"),
+            "effective_n": pm.get("effective_n"),
+            "diversification_ratio": pm.get("diversification_ratio"),
+            "breakdown": {b["category"]: b["score"] for b in grade.get("breakdown") or []},
+            "window": analysis["window"],
+            "notices": analysis["notices"],
         })
 
-    return jsonify({"results": results})
+    return jsonify({
+        "results": results,
+        "skipped": skipped,
+        "benchmark": benchmark,
+        "period_key": period_range["key"],
+        "period_label": period_range["label"],
+    })
 
 
 # ── Portfolio Builder All Weather ────────────────────────────────────────────
@@ -53267,9 +53600,14 @@ def get_strategy_targets(strategy, mode):
 def builder_all_weather():
     data = request.get_json() or {}
     mode = data.get("mode", "income")
-    budget = float(data.get("budget", 100000))
+    budget = _builder_clean_amount(data.get("budget", 100000))
+    if budget is None:
+        return jsonify({"error": "Enter a budget greater than zero"}), 400
     strategy = data.get("strategy", "all_weather")
-    funds_per_class = min(int(data.get("funds_per_class", 1)), 4)
+    try:
+        funds_per_class = min(int(data.get("funds_per_class", 1)), 4)
+    except (TypeError, ValueError):
+        funds_per_class = 1
     if funds_per_class < 1:
         funds_per_class = 1
 
@@ -53745,6 +54083,9 @@ def builder_rebalance(pid):
 
     # Fetch portfolio holdings
     conn = get_connection()
+    if _builder_portfolio_row(conn, pid) is None:
+        conn.close()
+        return jsonify({"error": "Portfolio not found"}), 404
     rows = conn.execute(
         "SELECT ticker, dollar_amount FROM builder_holdings WHERE portfolio_id = ?", (pid,)
     ).fetchall()
@@ -53837,11 +54178,33 @@ def builder_rebalance(pid):
             "suggested_ticker": suggested,
         })
 
+    # The model the template describes, at today's total value. A class that
+    # holds several funds keeps them in their current proportions; setting
+    # only the largest one to the class target left the rest on top of it, so
+    # the class (and the portfolio) overshot. Holdings outside the template are
+    # not part of it, so applying drops them; the page confirms that first.
+    apply_amounts = {}
+    for s in suggestions:
+        held = s["holdings"]
+        held_total = sum(h["amount"] for h in held)
+        if held and held_total > 0:
+            for h in held:
+                share = s["target_amount"] * h["amount"] / held_total
+                apply_amounts[h["ticker"]] = apply_amounts.get(h["ticker"], 0.0) + share
+        else:
+            ticker = s["suggested_ticker"].upper()
+            apply_amounts[ticker] = apply_amounts.get(ticker, 0.0) + s["target_amount"]
+    apply_holdings = [
+        {"ticker": t, "dollar_amount": round(a, 2)}
+        for t, a in apply_amounts.items() if round(a, 2) > 0
+    ]
+
     return jsonify({
         "total_value": round(total_value, 2),
         "mode": mode,
         "suggestions": suggestions,
         "unclassified": unclassified,
+        "apply_holdings": apply_holdings,
     })
 
 

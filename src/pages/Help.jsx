@@ -5388,63 +5388,85 @@ function PortfolioBuilderHelp() {
     <div>
       <h2>Portfolio Builder</h2>
       <p style={{ marginBottom: '1rem' }}>
-        Portfolio Builder lets you create, name, and analyze hypothetical portfolios without
-        touching your real holdings. You can build from scratch, load your live portfolio as a
-        starting point, test different allocations side by side, and even generate pre-built
-        strategy portfolios (like All Weather). It uses the same analytics engine as the Analytics
-        page, so you get full grades, risk metrics, and optimization for any combination of tickers.
+        Portfolio Builder lets you create, name, and grade model portfolios without touching your real
+        holdings. Build one from scratch, copy your current holdings as a starting point, generate a
+        strategy template, and compare models side by side. Every model is graded with exactly the same
+        formula as the <strong>Dashboard</strong> grade: the same calendar windows, the same scoring bands
+        and weights from Settings › Grading, and the same rules for young or missing price histories. Copy
+        your holdings, pick the Dashboard's period with SPY as the benchmark, and the Builder shows the
+        Dashboard's grade.
       </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
-        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder optimizer" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
+        <img src="./help-screenshots/portfolio-builder/Screenshot 2026-05-09 122850.jpg" alt="Portfolio Builder" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
       </div>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Managing Portfolios</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li>Saved portfolios appear in a <strong>left sidebar list</strong>. Click one to load it.</li>
-        <li>Click the portfolio title to <strong>rename</strong> it inline.</li>
-        <li>Use <strong>Save As</strong> to duplicate the current portfolio under a new name.</li>
-        <li>Delete portfolios with the trash icon in the sidebar.</li>
+        <li>Saved portfolios appear in the <strong>left sidebar</strong> with their holding count and total. Click one to open it; the Builder reopens the last one you used.</li>
+        <li><strong>Copy my holdings</strong> creates a model from the selected account's (or aggregate's) current positions at market value.</li>
+        <li>Click the portfolio title to <strong>rename</strong> it (Enter saves, Esc cancels).</li>
+        <li>Use <strong>Save As</strong> to duplicate the current portfolio under a new name, and <strong>Clear</strong> to remove every holding.</li>
+        <li>Delete a portfolio with the <strong>×</strong> next to it in the sidebar.</li>
       </ul>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Adding Holdings</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Type a ticker symbol in the input field.</li>
-        <li>Enter a <strong>dollar amount</strong> for that position.</li>
-        <li>Click <strong>Add</strong>. The holding appears in the holdings table.</li>
-        <li>Click any dollar amount in the table to <strong>edit it inline</strong> — press Enter to save.</li>
+        <li>Type a ticker symbol and a <strong>dollar amount</strong> greater than zero, then press <strong>Add</strong> (or Enter).</li>
+        <li>Adding a ticker that is already in the portfolio asks before changing its amount.</li>
+        <li>Click any amount in the table to <strong>edit it inline</strong>. Enter saves, Esc cancels.</li>
         <li>Remove a holding with the <strong>×</strong> button on its row.</li>
       </ol>
 
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Running Analysis</h3>
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Grading</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Set the <strong>Period</strong> and <strong>Benchmark</strong> (default SPY), then click
-        <strong> Analyze</strong>. Results are identical in format to the Portfolio Analytics page:
-        grade card, NAV erosion ratio, per-ticker metrics table, and chart tabs (Risk & Returns,
-        Income & Allocation, Backtesting, Tools).
+        The portfolio is graded automatically whenever its holdings, the period, or the benchmark change;
+        <strong> Refresh</strong> re-runs it with fresh prices. Choose a period from 1M to 10Y, or
+        <strong> Max</strong>, which covers the longest stretch every holding has traded. The benchmark
+        (default SPY, the Dashboard's) is used for downside capture, capture ratio, beta, and the comparison line.
       </p>
-
-      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table Columns</h3>
-      <p style={{ marginBottom: '0.75rem' }}>After analysis runs, the holdings table expands with metrics:</p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Ticker, Grade, Score, Weight %, Current Price, Shares, Dollar Amount</strong></li>
-        <li><strong>Ulcer Index, Sharpe, Sortino, Calmar, Omega</strong> — Risk metrics</li>
-        <li><strong>Max Drawdown, Annual Return, Total Return, Annual Volatility, Yield-Funding Coverage / Raw e</strong></li>
+        <li>The line under the toolbar shows the exact dates and number of trading days that were graded.</li>
+        <li>A holding without enough history in the window shows <strong>N/A</strong> and is left out of the portfolio grade, as on the Dashboard.</li>
+        <li>A holding that started trading inside the window counts as cash (0% return) before its first price, the Dashboard's convention. The page names those holdings.</li>
+        <li>Symbols with no price data are listed so you can fix a typo. They are never graded F.</li>
       </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Holdings Table</h3>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li><strong>Position:</strong> amount, weight, shares, and latest price.</li>
+        <li><strong>Grade:</strong> each holding's grade and score, computed as the Dashboard grades a holding.</li>
+        <li><strong>Risk:</strong> Ulcer Index, Sharpe, Sortino, Calmar, Omega, max drawdown, downside and upside capture, and volatility. Colors follow your grading bands: green is excellent, blue good, amber fair, red poor.</li>
+        <li><strong>Return:</strong> total return with distributions reinvested, the price (NAV) change alone, and the annualized return. A high yield beside a falling price is NAV erosion.</li>
+        <li><strong>Income:</strong> forward yield and estimated annual and monthly income. The yield annualizes the fund's recent distributions at their current cadence (the issuer's rate for TappAlpha funds), because Yahoo's quoted yield badly understates many option-income funds.</li>
+        <li>The <strong>Portfolio</strong> row at the bottom shows the same measures for the whole model. Use the column chips to show only the risk or the return-and-income columns, and click a header to sort.</li>
+      </ul>
+
+      <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Report Card and Charts</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The report card shows the overall grade, each factor's measured value, its 0–100 score, letter,
+        and share of the grade, plus income, total return against the benchmark, beta, and capture. NAV
+        Health is not part of the portfolio grade, matching the Dashboard. The charts show cumulative
+        total return against the benchmark, risk versus return for every holding, the portfolio, and the
+        benchmark, the correlation of daily returns, and the portfolio's drawdown.
+      </p>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Comparing Portfolios</h3>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
-        <li>Check the checkbox next to <strong>2 or more portfolios</strong> in the left sidebar.</li>
-        <li>Click <strong>Compare</strong>. A radar chart and metrics comparison table appear.</li>
-        <li>The comparison table highlights the <strong>winner</strong> (▲) and <strong>loser</strong> (▼) for each metric between portfolios.</li>
+        <li>Check <strong>2 or more portfolios</strong> under Compare in the sidebar.</li>
+        <li>Click <strong>Compare</strong>. They are graded over the selected period and benchmark, exactly as each one's own page grades it.</li>
+        <li>A radar chart shows each factor score, and the table marks the best (▲) and worst (▼) value for each measure. Monthly income is only ranked when the portfolios are the same size.</li>
       </ol>
 
       <h3 style={{ color: 'var(--accent)', marginTop: '1.5rem', marginBottom: '0.5rem' }}>Strategies</h3>
       <p style={{ marginBottom: '1rem' }}>
-        Click <strong>Strategies</strong> to access pre-built allocation templates. The All Weather
-        strategy builder lets you choose fund classes (stocks, bonds, gold, etc.), select mode
-        (income-focused or growth-focused), enter a total budget, and toggle between auto or manual
-        fund selection. The app generates a full allocation you can load into a portfolio and analyze.
+        Click <strong>Strategies</strong> for allocation templates: All Weather, Income Factory, Covered Call,
+        Dividend Growth, Retirement, and Growth. Choose income or growth mode, a budget, how many funds per
+        asset class, and auto or manual fund selection, then <strong>Generate</strong> and apply the result to
+        the open portfolio (replacing its holdings or adding to them). <strong>Compare to template</strong> shows
+        how far the open portfolio sits from a template; applying it sets each asset class to its target, keeps
+        the funds within a class in proportion, and removes holdings the template does not include, after
+        asking first.
       </p>
     </div>
   )
