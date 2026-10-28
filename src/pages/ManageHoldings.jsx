@@ -34,6 +34,8 @@ import {
   sharesIfReinvested,
 } from '../utils/holdingsTableTotals'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
+import { useNavAssessment } from '../utils/navAssessment'
+import { formatGapPoints, fundUnderlyingReturn } from '../utils/fundUnderlyingReturn'
 import { useTickerResearch } from '../context/TickerResearchContext'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
 import OpenLotsView from '../components/OpenLotsView'
@@ -1954,6 +1956,7 @@ const COLUMNS = [
   { key: 'delta_up', label: 'Δ Up', type: 'number', width: 72, tip: 'Approximate effective delta on benchmark up-days from return regression' },
   { key: 'delta_down', label: 'Δ Down', type: 'number', width: 80, tip: 'Approximate effective delta on benchmark down-days from return regression' },
   { key: 'ret_vs_yld', label: 'RvY', type: 'string', width: 88, tip: 'Return vs yield over the selected range. Good means total return exceeds yield; Poor means yield exceeds total return.' },
+  { key: 'trVsUnd', label: 'TR/Und', type: 'number', width: 88, tip: 'Fund total return divided by its underlying\'s total return over the selected range, both with distributions reinvested. The underlying is the fund\'s documented exposure (SOXX for CHPY), not the NAV benchmark box. 100% means the fund matched its underlying. When the underlying fell or rose less than 2%, the cell shows the gap in points instead of a ratio. N/A means the ETF is younger than the window. Blank for stocks, BDCs, mortgage REITs, skipped funds, and Open G/L. This is not Capture Ratio.' },
   { key: 'closure_risk', label: 'Close?', type: 'string', width: 76, tip: 'Risk the ETF issuer shuts the fund down for being too small. Stocks are not rated.' },
   { key: 'grade', label: 'Grd', type: 'string', sortFirst: 'desc', width: 56, tip: 'Composite grade for the selected market window. Blank on Life.' },
   { key: 'annual_yield_on_cost', label: 'YOC', type: 'number', width: 80, tip: 'Yield on Cost — annual dividend income as a percentage of your original cost basis' },
@@ -2404,6 +2407,16 @@ export default function ManageHoldings() {
   })
 
   const trackerChartsEnabled = holdings.length > 0 && !isLifetimeRange && !performanceRangeError
+  const { data: navAssessment } = useNavAssessment(
+    isLifetimeRange || performanceRangeError
+      ? '1Y'
+      : { period: performancePeriod, start: customStart, end: customEnd },
+    { enabled: !isLifetimeRange && !performanceRangeError },
+  )
+  const coverageMeta = useMemo(
+    () => Object.fromEntries((navAssessment?.results || []).map(row => [row.ticker, row])),
+    [navAssessment],
+  )
   const sharedTrackerCharts = useSharedTrackerCharts({
     pf,
     profileQueryString,
@@ -2464,7 +2477,8 @@ export default function ManageHoldings() {
       { key: 'delta_up', after: 'beta' },
       { key: 'delta_down', after: 'delta_up' },
       { key: 'ret_vs_yld', after: 'delta_down' },
-      { key: 'closure_risk', after: 'ret_vs_yld' },
+      { key: 'trVsUnd', after: 'ret_vs_yld' },
+      { key: 'closure_risk', after: 'trVsUnd' },
       { key: 'grade', after: 'closure_risk' },
     ]),
   })
@@ -2539,6 +2553,7 @@ export default function ManageHoldings() {
     if (key === 'delta_up') return h._risk?.delta_up ?? null
     if (key === 'delta_down') return h._risk?.delta_down ?? null
     if (key === 'ret_vs_yld') return h.ret_vs_yld_sort
+    if (key === 'trVsUnd') return h.trVsUnd?.ratio ?? null
     if (key === 'closure_risk') return h._closure_sort
     if (key === 'grade') return h._grade_sort
     return h[key]
@@ -2598,6 +2613,11 @@ export default function ManageHoldings() {
         drip_shares_yearly: sharesFromDrip(holding.estim_payment_per_year, holding),
         ret_vs_yld: rvy,
         ret_vs_yld_sort: rvy ? rvy.spread : -999,
+        trVsUnd: fundUnderlyingReturn(coverageMeta[holding.ticker], {
+          lifetimeRange: isLifetimeRange,
+          requestedStart: navAssessment?.requested_start,
+          periodLabel: navAssessment?.period_label,
+        }),
         _risk: risk,
         _closure: closure,
         _closure_sort: CLOSURE_TIER[closure?.tier] ? { high: 3, elevated: 2, watch: 1, ok: 0, unknown: -1 }[closure.tier] : -2,
@@ -2605,7 +2625,7 @@ export default function ManageHoldings() {
         grade,
       }
     })
-  ), [filteredHoldings, trackerPerformanceByTicker, totalCurrentValue, isLifetimeRange, tickerRisk, tickerGrades, tickerClosureRisk, rvyMode])
+  ), [filteredHoldings, trackerPerformanceByTicker, totalCurrentValue, isLifetimeRange, tickerRisk, tickerGrades, tickerClosureRisk, rvyMode, coverageMeta, navAssessment])
 
   // Same series Growth, Total Return cards, Dashboard PrRtn, and Gains & Losses
   // use: the portfolio replay for the shared range, including lots that closed
@@ -3224,6 +3244,27 @@ export default function ManageHoldings() {
         return (
           <td style={{ textAlign: 'center', color: rvy?.color || 'var(--text-dim)', fontWeight: 600 }} title={rvy ? `Total return ${rvy.totalReturnPct?.toFixed(2)}% vs yield ${rvy.yieldOnCost?.toFixed(2)}%` : 'N/A'}>
             {rvy?.label || '—'}
+          </td>
+        )
+      }
+      case 'trVsUnd': {
+        const capture = h.trVsUnd || {}
+        const ratio = capture.ratio
+        const measured = ratio != null || capture.gap != null
+        const unavailable = capture.insufficientHistory || capture.lifetimeRange
+        return (
+          <td
+            style={{
+              textAlign: 'right',
+              whiteSpace: 'nowrap',
+              color: !measured ? 'var(--text-dim)' : capture.gap >= 0 ? 'var(--pos)' : 'var(--neg)',
+            }}
+            title={capture.note}
+          >
+            {!measured ? (unavailable ? 'N/A' : '—') : ratio != null ? `${(ratio * 100).toFixed(2)}%` : formatGapPoints(capture.gap)}
+            {capture.reference && measured && (
+              <span style={{ color: 'var(--text-dim)', fontSize: '0.8em', marginLeft: 3 }}>vs {capture.reference}</span>
+            )}
           </td>
         )
       }

@@ -14,6 +14,7 @@ import { holdingLifetimeReturnParts } from '../utils/lifetimePerformance'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
 import ColumnCustomizer from '../components/ColumnCustomizer'
+import { formatGapPoints, fundUnderlyingReturn } from '../utils/fundUnderlyingReturn'
 
 // Each view keeps its own column order and hidden set — the views curate
 // different columns, so one shared layout would fight itself.
@@ -24,21 +25,34 @@ const LOCKED_COLUMNS = ['holding']
 // this a new column joins the end of that saved order, far from the column it
 // belongs beside. Only applied to layouts the user actually saved.
 const ADOPTED_COLUMNS = {
+  common: [
+    { key: 'trVsUnd', after: 'totalProfit' },
+  ],
   general: [
     { key: 'unrealizedGain', after: 'currentValue' },
     { key: 'unrealizedPct', after: 'unrealizedGain' },
     { key: 'beta', after: 'unrealizedPct' },
     { key: 'alpha', after: 'beta' },
+    { key: 'trVsUnd', after: 'nav', hidden: true },
+  ],
+  dividends: [
+    { key: 'trVsUnd', after: 'nav', hidden: true },
   ],
   returns: [
     { key: 'realizedAllTime', after: 'realizedProfit' },
+    { key: 'trVsUnd', after: 'totalProfit', hidden: true },
   ],
 }
+
+// Columns every view can add from the Columns picker, even when they are not
+// in that view's default set. Common shows TR/Und; the other views hide it
+// until the user checks it.
+const OPTIONAL_COLUMNS = ['trVsUnd']
 
 const VIEW_COLUMNS = {
   common: [
     'holding', 'grade', 'shares', 'avgCost', 'currentPrice', 'category', 'subcategory', 'costBasis', 'currentValue', 'dividends',
-    'dividendYield', 'estimatedYield', 'dividendGrowth', 'paidForItself', 'totalProfit', 'shareOfPortfolio', 'nav',
+    'dividendYield', 'estimatedYield', 'dividendGrowth', 'paidForItself', 'totalProfit', 'trVsUnd', 'shareOfPortfolio', 'nav',
   ],
   general: [
     'holding', 'status', 'shares', 'category', 'subcategory', 'shareOfPortfolio',
@@ -108,6 +122,7 @@ const COLUMN_HELP = {
   estimatedYield: 'Column: forward yield estimate based on next-12-month dividends and current value.',
   dividendGrowth: 'Column: five-year dividend growth when available from the source data.',
   totalProfit: 'Column: current price gain or loss plus dividends received plus realized profit from sold shares. Dividends and realized profit both count from when your oldest remaining lot was bought, so an earlier position you sold out of before buying back does not carry over.',
+  trVsUnd: 'Column: TR/Und is the fund total return divided by its underlying\'s total return over the Shared Performance Date Range, both with distributions reinvested and on the same dates. Changing YTD, 1Y, 5Y, or another market window recomputes it. 100% means the fund matched its underlying (QQQI vs QQQ, for example). The underlying is the fund\'s documented exposure (SOXX for CHPY, a semiconductor fund), not the NAV benchmark box; the box is used only for a fund with no known underlying. The hover says how close a match the underlying is. When the underlying fell or rose less than 2%, a ratio would flip sign or explode, so the cell shows the gap in points instead (+6.8 pts = the fund returned 6.8 points more). N/A with a hover note means the ETF has not been around long enough for that window. Blank for stocks, BDCs and mortgage REITs (companies, not funds tracking an underlying), skipped funds, and Open G/L. This is not Capture Ratio, which is upside vs downside against SPY.',
   shareOfPortfolio: 'Column: the holding current value as a percentage of the visible open portfolio value. Sold rows are 0%.',
   paidForItself: 'Column: distributions received on the position you hold now, counted from when its oldest remaining lot was bought, as a percent of original cost. 100% means dividends have paid back the amount invested.',
   nav: 'Column: NAV assessment over the shared date range: published NAV where available, otherwise a price-based estimate, against the reference shown. Funds outside the reviewed list get an inferred type and reference ("auto, inferred"). Include screens the holding automatically; Include (manual) screens it against the benchmark you type in the box, even when its type was not recognized; Skip leaves it out. When the app cannot tell from the fund\'s holdings, name or category whether it sells options, the cell asks "Sells call options?". Details opens the reference guide, where the detected strategy can be corrected. A market decline or reference shortfall alone does not prove destructive erosion.',
@@ -154,6 +169,7 @@ const HELP_ITEMS = [
   { kind: 'Table column', label: 'Estimated yield', body: COLUMN_HELP.estimatedYield.replace('Column: ', '') },
   { kind: 'Table column', label: 'Dividend growth (5Y)', body: COLUMN_HELP.dividendGrowth.replace('Column: ', '') },
   { kind: 'Table column', label: 'Total profit', body: COLUMN_HELP.totalProfit.replace('Column: ', '') },
+  { kind: 'Table column', label: 'TR/Und', body: COLUMN_HELP.trVsUnd.replace('Column: ', '') },
   { kind: 'Table column', label: 'Share in portfolio', body: COLUMN_HELP.shareOfPortfolio.replace('Column: ', '') },
   { kind: 'Table column', label: 'Paid for itself', body: COLUMN_HELP.paidForItself.replace('Column: ', '') },
   { kind: 'Table column', label: 'Next payment', body: COLUMN_HELP.nextPayment.replace('Column: ', '') },
@@ -838,6 +854,32 @@ const COLUMN_DEFS = {
       />
     ),
   },
+  trVsUnd: {
+    label: 'TR/Und',
+    align: 'right',
+    sortValue: row => finite(row.trVsUnd?.ratio) ?? -999,
+    render: row => {
+      const capture = row.trVsUnd || {}
+      const ratio = finite(capture.ratio)
+      const gap = finite(capture.gap)
+      if (ratio === null && gap === null) {
+        const unavailable = capture.insufficientHistory || capture.lifetimeRange
+        return (
+          <span className="ci-muted" title={capture.note}>
+            {unavailable ? 'N/A' : '--'}
+          </span>
+        )
+      }
+      return (
+        <StackValue
+          primary={ratio === null ? formatGapPoints(gap) : pct(ratio)}
+          secondary={capture.reference ? `vs ${capture.reference}` : 'vs underlying'}
+          tone={valueTone(gap)}
+          title={capture.note}
+        />
+      )
+    },
+  },
   shareOfPortfolio: {
     label: 'Share in portfolio',
     align: 'right',
@@ -1024,10 +1066,15 @@ function footerValue(key, index, totals, filteredRows) {
  * carry the previous view's order into the new view's storage key.
  */
 function HoldingsOverviewTable({ view, columns, rows, filteredRows, totals, sortKey, sortDir, onSort }) {
+  const defaultVisible = new Set(VIEW_COLUMNS[view])
   const layout = useColumnLayout({
     storageKey: COLUMN_LAYOUT_KEY(view),
     columns,
     lockedKeys: LOCKED_COLUMNS,
+    defaultLayout: allKeys => {
+      const hidden = allKeys.filter(key => !defaultVisible.has(key))
+      return hidden.length ? { order: allKeys, hidden } : undefined
+    },
     adoptNewKeys: saved => insertMissingKeysAfter(saved, ADOPTED_COLUMNS[view] || []),
   })
   const activeColumns = layout.activeColumns
@@ -1253,11 +1300,16 @@ export function CommonInfoPanel({
         navMeta: meta,
         navStatus,
         onNavScope: updateNavScope,
+        trVsUnd: fundUnderlyingReturn(meta, {
+          lifetimeRange: !navEnabled,
+          requestedStart: navAssessment?.requested_start,
+          periodLabel: navAssessment?.period_label,
+        }),
       }
     }
     const rows = showSold ? [...openRows, ...closedRows] : openRows
     return rows.map(withNav)
-  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverageMeta, navStatus, onTickerClick, tickerGrades, tickerRisk, updateNavScope])
+  }, [holdings, gainsLosses, categoryLookup, dividendGrowth, showSold, coverageMeta, navStatus, navEnabled, navAssessment, onTickerClick, tickerGrades, tickerRisk, updateNavScope])
 
   const selectedCategory = useMemo(() => {
     if (!categoryId) return null
@@ -1284,7 +1336,11 @@ export function CommonInfoPanel({
   const viewColumns = useMemo(() => {
     const hasCategory = filteredRows.some(hasDefinedCategory)
     const hasSubcategory = filteredRows.some(hasDefinedSubcategory)
-    return VIEW_COLUMNS[view]
+    const keys = [...VIEW_COLUMNS[view]]
+    OPTIONAL_COLUMNS.forEach(key => {
+      if (!keys.includes(key)) keys.push(key)
+    })
+    return keys
       .filter(key => key !== 'category' || hasCategory)
       .filter(key => key !== 'subcategory' || hasSubcategory)
       .map(key => ({ key, ...COLUMN_DEFS[key] }))

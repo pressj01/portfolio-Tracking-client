@@ -3,6 +3,7 @@
 Inputs are split-restated closes and distributions on the same share basis.
 They must never be relabeled as published NAV, including for BDCs and CEFs.
 """
+import bisect
 import datetime as dt
 import calendar
 
@@ -17,6 +18,9 @@ WINDOW_GAP = .005
 # erosion, and is reported only when the erosion tests found nothing.
 LAG_MIN = .01
 NAV_LAG_LABEL = 'NAV lag — not erosion'
+# TR/Und is a ratio only when the underlying rose at least this much. At 1%,
+# FSCO -11.5% against HYG +1.3% still read as -918%.
+UNDERLYING_RATIO_FLOOR = .02
 
 try:
     from .nav_assessment_service import date, number, compare_reference
@@ -318,6 +322,66 @@ def screen(source, start, end, plan, reference_loader, price_loader=None, *, ver
             'window_decline_floor':WINDOW_DECLINE, 'window_gap_floor':WINDOW_GAP,
             'estimated_eroder':bool(eroder), 'nav_lag':lag, 'label':label, 'reason':reason,
             'limitation':'Preliminary price-based estimate. Premiums/discounts, exposure differences and payout timing can affect it; this is not verified NAV erosion.'}
+
+
+def underlying_comparison(source, start, end, plan, loader):
+    """TR/Und: the fund's total return over its underlying's, on the same dates.
+
+    Both sides reinvest: the fund's distributions are reinvested at that day's
+    close, as the underlying's total-return closes already are, so a high
+    payer is not measured on cash while its underlying compounds. `plan` is
+    the underlying from underlying_plan (via underlying_pending), never the
+    NAV screen's benchmark. A ratio against an underlying that fell or barely
+    moved flips sign or explodes (ARCC +0.5% against BIZD -6.3% read as -9%),
+    so below UNDERLYING_RATIO_FLOOR only the gap in points is given.
+    """
+    out = {key: plan.get(key) for key in ('selected', 'legs', 'source', 'fit', 'why')}
+    out['status'] = 'unavailable'
+    if any(leg['symbol'].endswith('-USD') for leg in plan['legs']):
+        return {**out, 'reason': 'Crypto trades around the clock; its midnight close is not matched to a US fund close.'}
+    if not source or source.get('basis') != 'split_adjusted_market_price':
+        return {**out, 'reason': 'Split-adjusted price and payout history is unavailable.'}
+    if not source.get('distributions_complete') or not source.get('corporate_actions_resolved'):
+        return {**out, 'reason': 'Price/payout history or split adjustments are incomplete.'}
+    prices = {}
+    for row in source.get('prices', []):
+        day, value = date(row['date']), number(row.get('close'))
+        if day <= end and value is not None and value > 0:
+            prices[day] = value
+    if len(prices) < 2:
+        return {**out, 'reason': 'At least two valid closing prices are required.'}
+    lo, hi = min(prices), max(prices)
+    histories = []
+    for leg in plan['legs']:
+        raw = loader(leg['symbol'], lo, hi) or {}
+        histories.append({date(day): number(value) for day, value in raw.items()
+                          if number(value) is not None and number(value) > 0})
+    days = sorted(set(prices).intersection(*(set(history) for history in histories)))
+    before = [day for day in days if day <= start]
+    days = [day for day in days if day >= (before[-1] if before else start)]
+    if len(days) < 2 or (before and (start-days[0]).days > 7) or (end-days[-1]).days > 7:
+        return {**out, 'reason': f'{plan["selected"]} and the fund have no shared closes matching the selected range.'}
+    if any((b-a).days > 7 for a, b in zip(days, days[1:])):
+        return {**out, 'reason': 'Price history has an unexplained gap.'}
+    first, last = days[0], days[-1]
+    # A distribution counts on the first shared close on or after its ex-date.
+    paid = {}
+    for row in source.get('distributions', []):
+        day, amount = date(row['date']), number(row.get('amount')) or 0
+        if first < day <= last:
+            landing = days[bisect.bisect_left(days, day)]
+            paid[landing] = paid.get(landing, 0) + amount
+    fund = underlying = 1.0
+    for previous, day in zip(days, days[1:]):
+        fund *= (prices[day] + paid.get(day, 0)) / prices[previous]
+        underlying *= 1 + sum(leg['weight'] * (history[day]/history[previous]-1)
+                              for leg, history in zip(plan['legs'], histories))
+    fund_return, underlying_return = fund-1, underlying-1
+    return {**out, 'status': 'available', 'basis': 'market_price', 'start': first.isoformat(), 'end': last.isoformat(),
+            'shorter_history': start.year != 1900 and first > start,
+            'fund_return': fund_return, 'underlying_return': underlying_return,
+            'gap': fund_return-underlying_return, 'ratio_floor': UNDERLYING_RATIO_FLOOR,
+            'ratio': fund_return/underlying_return if underlying_return >= UNDERLYING_RATIO_FLOOR else None}
 
 
 def summarize(results):
