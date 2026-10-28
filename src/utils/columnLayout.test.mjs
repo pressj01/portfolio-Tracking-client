@@ -134,3 +134,12 @@ test('insertMissingKeysAfter leaves a user-placed new column where it is', () =>
   ])
   assert.equal(next, layout)
 })
+
+test('insertMissingKeysAfter can park a new optional column in the hidden set', () => {
+  const next = insertMissingKeysAfter(
+    { order: ['holding', 'shares', 'nav'], hidden: [] },
+    [{ key: 'trVsUnd', after: 'nav', hidden: true }],
+  )
+  assert.deepEqual(next.order, ['holding', 'shares', 'nav', 'trVsUnd'])
+  assert.deepEqual(next.hidden, ['trVsUnd'])
+})

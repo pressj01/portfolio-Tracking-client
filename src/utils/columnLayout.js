@@ -68,16 +68,21 @@ export function insertMissingKeysAfter(layout, insertions = []) {
   // explicit order whose only entry is the new key — first place in the table.
   if (!order.length) return layout
   let changed = false
+  const hidden = [...(layout?.hidden || [])]
   for (const item of insertions) {
     const key = item?.key
     if (!key || order.includes(key)) continue
     const after = order.indexOf(item.after)
     if (after >= 0) order.splice(after + 1, 0, key)
     else order.push(key)
+    // hidden: true only applies to a column the saved layout has never seen.
+    // A key already in `order` was skipped above, so a user who already turned
+    // the column on keeps it.
+    if (item.hidden && !hidden.includes(key)) hidden.push(key)
     changed = true
   }
   if (!changed) return layout
-  return { order, hidden: [...(layout?.hidden || [])] }
+  return { order, hidden }
 }
 
 // Drop `fromKey` where `toKey` currently sits. Dragging left lands on the target

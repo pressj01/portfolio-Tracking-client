@@ -18,7 +18,7 @@ except ImportError:
     from nav_assessment import CapitalObservation, assess, same_cash_reference
     from nav_auto_guidance import infer_guidance, name_says_option_income, strategy_from_holdings
 
-VERSION = "nav-assessment-v10-nav-lag"
+VERSION = "nav-assessment-v11-underlying"
 VERDICT_LABELS = {
     "strong": "Strong NAV Erosion",
     "weak": "Weak NAV Erosion",
@@ -266,6 +266,52 @@ def reference_plan(ticker, info, guide, choice=None):
             "requires_aligned_crypto_close": any(leg["symbol"].endswith("-USD") for leg in legs),
             "annual_cost": choice.get("annual_cost", 0), "effective_date": choice.get("effective_date"),
             "status": "needs_review" if warning or not legs else "awaiting_data"}
+
+
+# BDCs and mortgage REITs are companies with their own loan books: a sector
+# ETF is a peer, not something they track.
+NO_UNDERLYING_KINDS = {"stock", "cash", "bdc", "reit"}
+
+
+def underlying_plan(ticker, info, guide, choice=None):
+    """The fund's own underlying for TR/Und, which is not the NAV benchmark box.
+
+    A reference saved in the reference editor wins, then the documented or
+    inferred exposure. The Include (manual) benchmark is used only when the
+    fund has nothing else: it is a screening choice, and old holdings rows
+    still carry legacy defaults that are not the underlying (QQQ for CHPY,
+    ULTY for KYLD). None when the security has no underlying to track.
+    """
+    if guide["security_kind"] in NO_UNDERLYING_KINDS:
+        return None
+    bad = BAD_REFERENCES.get(ticker, set())
+    choice = validate_choice(choice or {"mode": "auto"})
+    if choice["mode"] == "symbol" and choice["symbol"] not in bad:
+        return {"label": choice["symbol"], "legs": [{"symbol": choice["symbol"], "weight": 1.0}],
+                "source": "saved", "fit": "Your saved reference", "why": None}
+    if choice["mode"] == "custom":
+        return {"label": "Custom basket", "legs": choice["legs"], "source": "saved",
+                "fit": "Custom daily context", "why": choice["reason"]}
+    legs = guide.get("automatic_legs") or []
+    if legs:
+        return {"label": guide.get("automatic_label") or guide.get("suggestion"), "legs": legs,
+                "source": "inferred" if guide.get("inferred") else "documented",
+                "fit": guide.get("automatic_fit"), "why": guide.get("automatic_reason")}
+    legacy = str(info.get("nav_benchmark_override") or "").strip().upper()
+    if manual_scope(info) and SYMBOL.fullmatch(legacy) and legacy not in bad:
+        return {"label": legacy, "legs": [{"symbol": legacy, "weight": 1.0}], "source": "manual",
+                "fit": "Your Include (manual) benchmark", "why": None}
+    return None
+
+
+def underlying_pending(plan, kind):
+    """TR/Und before market data arrives; the price screen fills it in."""
+    if not plan:
+        return {"status": "not_applicable", "selected": None, "legs": [],
+                "reason": "No underlying: this is a company, not a fund that tracks one." if kind in NO_UNDERLYING_KINDS
+                else "No underlying is known for this fund. Choose one in the NAV reference editor (Details)."}
+    return {"status": "unavailable", "selected": plan["label"], "legs": plan["legs"], "source": plan["source"],
+            "fit": plan["fit"], "why": plan["why"], "reason": "Market price and payout history are unavailable."}
 
 
 def normalize_source(source, start, as_of):
@@ -792,6 +838,8 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
                "nav_erosion_scope": info.get("nav_erosion_scope") or "auto",
                "nav_benchmark_override": str(info.get("nav_benchmark_override") or "").strip().upper(),
                "metrics": None,
+               "underlying": underlying_pending(underlying_plan(ticker, info, guide, choices.get(ticker)),
+                                                guide["security_kind"]),
                "reason": "Published NAV and complete distribution/share-adjustment history are needed."}
         kind = guide["security_kind"]
         if kind in {"stock", "cash"}:
@@ -863,18 +911,28 @@ def build_payload(ticker_info, source_loader, reference_loader, *, window="1Y", 
         results = list(pool.map(one, sorted(ticker_info.items())))
     if market_loader is not None:
         try:
-            from .nav_price_screen import screen, summarize
+            from .nav_price_screen import screen, summarize, underlying_comparison
         except ImportError:
-            from nav_price_screen import screen, summarize
+            from nav_price_screen import screen, summarize, underlying_comparison
         def preliminary(row):
+            if row['nav_erosion_scope'] == 'skip' and row['underlying']['legs']:
+                row['underlying'] = {**row['underlying'], 'reason': 'Skipped by the NAV setting, so TR/Und is not measured.'}
             if row['capital_status'] == 'not_applicable' or row['nav_erosion_scope'] == 'skip':
                 return row
             try:
-                row['price_screen'] = screen(market_loader(row['ticker'], start, as_of), start, as_of,
+                source = market_loader(row['ticker'], start, as_of)
+                row['price_screen'] = screen(source, start, as_of,
                                              row['reference'], reference_loader, price_loader,
                                              verified_erosion=verified_erosion_candidate(row))
             except Exception as exc:
                 row['price_screen'] = {'status':'unavailable', 'reason':str(exc) if isinstance(exc,ValueError) else 'Market data is temporarily unavailable.'}
+                return row
+            if row['underlying']['legs']:
+                try:
+                    row['underlying'] = underlying_comparison(source, start, as_of, row['underlying'], reference_loader)
+                except Exception as exc:
+                    row['underlying'] = {**row['underlying'], 'reason': str(exc) if isinstance(exc, ValueError)
+                                         else 'Market data is temporarily unavailable.'}
             return row
         with ThreadPoolExecutor(max_workers=4) as pool:
             results = list(pool.map(preliminary,results))
