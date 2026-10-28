@@ -702,23 +702,26 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         conn = sqlite3.connect(self.db_path)
         conn.executescript(
             """
-            CREATE TABLE builder_portfolios (id INTEGER PRIMARY KEY, name TEXT);
-            CREATE TABLE builder_holdings (
-                portfolio_id INTEGER, ticker TEXT, dollar_amount REAL
+            CREATE TABLE builder_portfolios (
+                id INTEGER PRIMARY KEY, profile_id INTEGER, name TEXT,
+                updated_at TEXT
             );
-            INSERT INTO builder_portfolios VALUES (1, 'Model');
-            INSERT INTO builder_holdings VALUES (1, 'AAA', 1200);
-            INSERT INTO builder_holdings VALUES (1, 'BBB', 1800);
-            INSERT INTO builder_holdings VALUES (1, 'CCC', 500);
+            CREATE TABLE builder_holdings (
+                id INTEGER PRIMARY KEY, portfolio_id INTEGER, ticker TEXT,
+                dollar_amount REAL, added_at TEXT
+            );
+            INSERT INTO builder_portfolios (id, profile_id, name) VALUES (1, 1, 'Model');
+            INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (1, 'AAA', 1200);
+            INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (1, 'BBB', 1800);
+            INSERT INTO builder_holdings (portfolio_id, ticker, dollar_amount) VALUES (1, 'CCC', 500);
             """
         )
         conn.commit()
         conn.close()
 
-        with patch.object(app_module, "_yf_ticker") as ticker_mock:
-            ticker_mock.return_value.info = {}
+        with patch.object(app_module, "_builder_distribution_yield", return_value=(0.0, None)):
             response = self.client.post(
-                "/api/builder/portfolios/1/analyze",
+                "/api/builder/portfolios/1/analyze?profile_id=1",
                 json={"benchmark": "SPY", "period": "1y"},
             )
         payload = response.get_json()
@@ -728,13 +731,17 @@ class AnalyticsDataPeriodTest(unittest.TestCase):
         out_of_range = [v for v in values if not -100 <= v <= 0]
         self.assertEqual(out_of_range, [], out_of_range[:5])
 
-        # Builder drops the first (return-less) row instead of zero-filling it.
+        # The curve starts at 1.0 on the window's first close, as the grade's
+        # does, so a loss on day one is a drawdown and the chart's trough is the
+        # Max Drawdown the report card shows.
         close = self.market_data["Close"][list(self.HELD_VALUES)]
-        port_daily = close.pct_change().dropna().dot(self._weight_fractions())
-        cum = (1 + port_daily).cumprod()
+        port_daily = close.pct_change().iloc[1:].dot(self._weight_fractions())
+        cum = pd.concat([pd.Series([1.0]), (1 + port_daily).cumprod().reset_index(drop=True)])
         expected = (cum / cum.cummax() - 1) * 100
         self.assertLess(float(expected.min()), -3)
         np.testing.assert_allclose(values, expected.values, atol=0.0051)
+        self.assertAlmostEqual(
+            min(values), payload["portfolio_metrics"]["max_drawdown"] * 100, delta=0.0051)
 
 
 if __name__ == "__main__":
