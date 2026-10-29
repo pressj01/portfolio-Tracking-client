@@ -2569,8 +2569,10 @@ export default function Import() {
             </strong>
             <div style={{ marginTop: '0.35rem' }}>
               The file shows a large drop that no recorded sale explains, so the portfolio kept its
-              existing count. If the file is right, take the broker&apos;s count. A sale or transfer
-              missing from the transaction history, or a buy there that should not be, can cause this.
+              existing count. If you sold these shares, import this account&apos;s transactions next:
+              once the sale is recorded, the broker&apos;s count is used automatically. If the file is
+              right for another reason, take the broker&apos;s count now. A transfer missing from the
+              transaction history, or a buy there that should not be, can also cause this.
             </div>
             <table style={{ marginTop: '0.75rem', borderCollapse: 'collapse', fontSize: '0.9rem' }}>
               <thead>

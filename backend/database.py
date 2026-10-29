@@ -485,6 +485,10 @@ def ensure_tables_exist(conn=None):
             -- (app._broker_holding_baseline).
             broker_snapshot_date       TEXT,
             broker_snapshot_at         TEXT,
+            -- The positions file's own row (JSON) for a holding whose share
+            -- count the drop guard kept, until the sale that explains the drop
+            -- is on record (app._settle_broker_file_positions).
+            broker_file_position       TEXT,
             -- Per seeded share, how much more was originally paid than the
             -- price the ledger's seed lot carries (app._original_basis_from_lots).
             original_seed_premium      REAL,
