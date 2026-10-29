@@ -6002,6 +6002,10 @@ def _ensure_basis_columns(conn):
         # count only if it falls after the file — see _broker_holding_baseline.
         "broker_snapshot_date": "TEXT",
         "broker_snapshot_at": "TEXT",
+        # The positions file's own row (JSON) for a holding whose share count
+        # the drop guard kept, held until the sale that explains the drop is
+        # on record — see _settle_broker_file_positions.
+        "broker_file_position": "TEXT",
     }
     for col, col_type in needed.items():
         if col not in cols:
@@ -6520,22 +6524,8 @@ def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
     if txn_count <= 0:
         return None
 
-    import_date = existing["import_date"] if isinstance(existing, dict) else existing[4]
-    params = [ticker, profile_id]
-    date_clause = ""
-    if import_date:
-        date_clause = "AND transaction_date >= ?"
-        params.append(import_date)
-    sell_row = conn.execute(
-        f"""SELECT COALESCE(SUM(shares), 0) AS shares
-            FROM transactions
-            WHERE ticker = ? AND profile_id = ?
-              AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
-              AND NOT (LOWER(COALESCE(notes, '')) LIKE '%transfer%')
-              {date_clause}""",
-        params,
-    ).fetchone()
-    recent_sell_shares = _num_or_zero(sell_row["shares"] if isinstance(sell_row, dict) else sell_row[0])
+    since = _broker_file_drop_since(existing)
+    recent_sell_shares = _sells_since_broker_file(conn, ticker, profile_id, since)
     if recent_sell_shares >= reduction - _basis_share_tolerance(existing_qty):
         return None
 
@@ -6564,6 +6554,149 @@ def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
         "unexplained_drop": round(reduction, 6),
     }
     return corrected
+
+
+def _held_broker_file_position(raw):
+    """The positions-file row the drop guard held back, or None."""
+    if not raw:
+        return None
+    try:
+        held = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return held if isinstance(held, dict) else None
+
+
+def _broker_file_drop_since(existing):
+    """First day a SELL can explain a positions file's drop: the previous file's.
+
+    A guarded import still stamps import_date with the new file's date, so
+    re-importing a file the guard held back would otherwise shrink the window
+    to that day and miss the sale it was waiting for.
+    """
+    import_date = existing["import_date"] if isinstance(existing, dict) else existing[4]
+    keys = existing.keys() if hasattr(existing, "keys") else ()
+    held = (
+        _held_broker_file_position(existing["broker_file_position"])
+        if "broker_file_position" in keys
+        else None
+    )
+    candidates = [str(day)[:10] for day in (import_date, (held or {}).get("since")) if day]
+    return min(candidates) if candidates else None
+
+
+def _sells_since_broker_file(conn, ticker, profile_id, since, until=None):
+    """Shares sold from `since` through `until`; transfers out are not sales."""
+    params = [ticker, profile_id]
+    date_clause = ""
+    if since:
+        date_clause += " AND transaction_date >= ?"
+        params.append(since)
+    if until:
+        date_clause += " AND substr(transaction_date, 1, 10) <= ?"
+        params.append(str(until)[:10])
+    sell_row = conn.execute(
+        f"""SELECT COALESCE(SUM(shares), 0) AS shares
+            FROM transactions
+            WHERE ticker = ? AND profile_id = ?
+              AND UPPER(COALESCE(transaction_type, '')) = 'SELL'
+              AND NOT (LOWER(COALESCE(notes, '')) LIKE '%transfer%')
+              {date_clause}""",
+        params,
+    ).fetchone()
+    return _num_or_zero(sell_row["shares"] if isinstance(sell_row, dict) else sell_row[0])
+
+
+def _settle_broker_file_positions(conn, profile_id):
+    """Hand a held-back share count to the positions file once its sale is on record.
+
+    The import checklist runs the positions file first and the transactions
+    file second, so on a day with a sale the drop guard never sees the SELL:
+    a file showing 90 shares after 50 of 140 were sold kept 140, and the
+    transactions import that then recorded the sale left it there, so the
+    account stayed above the broker by the shares it no longer held. Every
+    transactions import asks the guard's question again. Once SELLs dated
+    from the previous file through this one cover the drop, the holding
+    takes the file's own row.
+
+    A count that has moved since the file (a manual trade, "Use broker count")
+    is no longer the one the guard kept, so its held row is dropped instead.
+    Returns the holdings that took the file's count.
+    """
+    _ensure_basis_columns(conn)
+    rows = conn.execute(
+        """SELECT ticker, quantity, purchase_value, current_value, current_price,
+                  broker_purchase_value, original_price_paid, original_purchase_value,
+                  estim_payment_per_year, broker_file_position
+             FROM all_account_info
+            WHERE profile_id = ? AND broker_file_position IS NOT NULL""",
+        (profile_id,),
+    ).fetchall()
+    settled = []
+    for raw in rows:
+        row = dict(raw)
+        ticker = row["ticker"]
+        held = _held_broker_file_position(row["broker_file_position"]) or {}
+        quantity = _num_or_zero(row["quantity"])
+        kept_qty = _num_or_zero(held.get("kept_quantity"))
+        file_qty = _num_or_zero(held.get("quantity"))
+        tolerance = _basis_share_tolerance(kept_qty)
+        if file_qty <= 0 or abs(quantity - kept_qty) > tolerance:
+            conn.execute(
+                "UPDATE all_account_info SET broker_file_position = NULL "
+                "WHERE ticker = ? AND profile_id = ?",
+                (ticker, profile_id),
+            )
+            continue
+        sold = _sells_since_broker_file(
+            conn, ticker, profile_id, held.get("since"), until=held.get("as_of"),
+        )
+        if sold < kept_qty - file_qty - tolerance:
+            continue
+
+        cost_per_share = _num_or_zero(held.get("cost_per_share"))
+        purchase_value = round(_num_or_zero(held.get("purchase_value")), 2)
+        original_price, original_total = _carried_original_basis(
+            row["original_price_paid"], row["original_purchase_value"], quantity,
+            _first_not_none(row["broker_purchase_value"], row["purchase_value"]),
+            file_qty, cost_per_share, purchase_value,
+        )
+        price = _num_or_zero(row["current_price"])
+        if price > 0:
+            current_value = round(file_qty * price, 2)
+        else:
+            current_value = round(_num_or_zero(row["current_value"]) * file_qty / quantity, 2)
+        conn.execute(
+            """UPDATE all_account_info
+                  SET quantity = ?, base_quantity = ?,
+                      price_paid = ?, purchase_value = ?,
+                      broker_price_paid = ?, broker_purchase_value = ?,
+                      original_price_paid = ?, original_purchase_value = ?,
+                      current_value = ?, gain_or_loss = ?,
+                      broker_file_position = NULL
+                WHERE ticker = ? AND profile_id = ?""",
+            (
+                file_qty, file_qty,
+                cost_per_share, purchase_value,
+                cost_per_share, purchase_value,
+                original_price, original_total,
+                current_value, round(current_value - purchase_value, 2),
+                ticker, profile_id,
+            ),
+        )
+        _recompute_position_income_fields(
+            conn,
+            profile_id,
+            ticker,
+            previous_quantity=quantity,
+            previous_annual_income=row["estim_payment_per_year"],
+        )
+        settled.append({
+            "ticker": ticker,
+            "kept_quantity": round(kept_qty, 6),
+            "broker_quantity": round(file_qty, 6),
+        })
+    return settled
 
 
 def _cash_profile_ids_for_read(conn, is_aggregate, profile_ids):
@@ -11824,7 +11957,7 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                 """SELECT quantity, price_paid, purchase_value, current_value,
                           import_date, broker_price_paid, broker_purchase_value,
                           original_price_paid, original_purchase_value,
-                          description, classification_type
+                          description, classification_type, broker_file_position
                    FROM all_account_info WHERE ticker = ? AND profile_id = ?""",
                 (ticker, profile_id),
             ).fetchone()
@@ -11835,10 +11968,21 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                 pos,
                 existing,
             )
+            held_file_position = None
             if corrected_pos and ticker.upper() in accept_broker_quantity:
                 accepted_quantity.append(ticker)
             elif corrected_pos:
                 preserved_quantity.append(corrected_pos["_quantity_preserved"])
+                # The usual reason is a sale the transactions file has not
+                # recorded yet; that import hands the count back to this row.
+                held_file_position = json.dumps({
+                    "quantity": pos["quantity"],
+                    "cost_per_share": pos["cost_per_share"],
+                    "purchase_value": pos["purchase_value"],
+                    "kept_quantity": corrected_pos["quantity"],
+                    "since": _broker_file_drop_since(existing),
+                    "as_of": snapshot_date,
+                })
                 pos = corrected_pos
 
             if existing:
@@ -11862,6 +12006,7 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                     "gain_or_loss = ?",
                     "base_quantity = ?",
                     "import_date = ?",
+                    "broker_file_position = ?",
                     """description = CASE WHEN description IS NULL OR description = ''
                                        THEN ? ELSE description END""",
                 ]
@@ -11871,6 +12016,7 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                     original_price, original_total,
                     pos["current_value"], pos["gain_or_loss"],
                     pos["quantity"], snapshot_date,
+                    held_file_position,
                     pos["description"],
                 ]
                 optional_fields = [
@@ -12023,6 +12169,8 @@ def _import_positions(parsed, profile_id, nav_date=None, accept_broker_quantity=
                 f" Preserved existing quantity for {len(preserved_quantity)} holding"
                 f"{'' if len(preserved_quantity) == 1 else 's'} with an unexplained large "
                 f"drop in the import: {kept}{f', +{more} more' if more > 0 else ''}."
+                " If you sold those shares, import this account's transactions next and"
+                " the broker's count will be used once the sale is recorded."
             )
         if accepted_quantity:
             msg += (
@@ -13254,6 +13402,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         "positions_created": 0,
         "trades_applied": 0,
     }
+    broker_count_settled = []
 
     from collections import Counter
 
@@ -13482,6 +13631,12 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         )
         conn.commit()
 
+        if preserve_positions:
+            # Ahead of the IB roll-forward, which moves the count this sets.
+            broker_count_settled = _settle_broker_file_positions(conn, profile_id)
+            tickers_seen_txns.update(item["ticker"] for item in broker_count_settled)
+            conn.commit()
+
         if preserve_positions and fmt == "interactive_brokers_transactions":
             snapshot_roll_forward = _roll_forward_interactive_brokers_snapshot(
                 conn, profile_id,
@@ -13596,6 +13751,15 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
 
     if preserve_positions:
         parts.append("Your current share counts were kept from the broker positions import.")
+        if broker_count_settled:
+            settled = ", ".join(
+                f"{item['ticker']} ({item['kept_quantity']:g} to {item['broker_quantity']:g})"
+                for item in broker_count_settled
+            )
+            parts.append(
+                "The sales in this file explain the drop the positions import held back, "
+                f"so the broker's share count is now used for {settled}."
+            )
         if snapshot_roll_forward["trades_applied"]:
             parts.append(
                 f"Applied {snapshot_roll_forward['trades_applied']} trade"
@@ -13633,6 +13797,7 @@ def api_import_transactions(_parsed=None, _profile_id=None, _fmt=None, _nav_date
         "original_basis_skipped": original_basis_skipped,
         "original_basis_mismatches": original_basis_mismatches,
         "snapshot_roll_forward": snapshot_roll_forward,
+        "broker_count_settled": broker_count_settled,
         "split_conversions": split_conversions,
         "message": " ".join(parts),
     })

@@ -38,7 +38,8 @@ class DividendAnalysisLockingTest(unittest.TestCase):
                     div_dates_manual_until TEXT,
                     div_dates_manual_set_at TEXT,
                     broker_snapshot_date TEXT,
-                    broker_snapshot_at TEXT
+                    broker_snapshot_at TEXT,
+                    broker_file_position TEXT
                 );
                 CREATE TABLE holdings (description TEXT);
                 INSERT INTO all_account_info (
