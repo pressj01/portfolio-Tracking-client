@@ -9,6 +9,7 @@ import hashlib
 import datetime
 import calendar
 import statistics
+from functools import wraps
 from html.parser import HTMLParser
 
 # Ensure backend directory is on the Python path so sibling imports work
@@ -159,6 +160,7 @@ from refresh_sessions import (
     align_to_sessions,
     apply_extended_prices,
     closes_by_session,
+    current_sessions,
 )
 from dividend_ledger import build_ledger as build_dividend_ledger
 from dividend_safety import (
@@ -14016,16 +14018,11 @@ def api_portfolio_value():
             excluded_tickers=irr_excluded_tickers,
         )
         irr_details["source_profile_ids"] = irr_profile_ids
-        # The date a Record NAV would stamp right now, or None when the market
-        # is closed today; the Dashboard chart's last point follows the live
-        # account value on that date until the official close is recorded.
-        today = datetime.date.today()
-        live_nav_date = None if nyse_closure_reason(today) else today.isoformat()
         return jsonify({
             "holdings_value": round(holdings_value, 2),
             "cash_value": round(cash_value, 2),
             "account_value": round(holdings_value + cash_value, 2),
-            "live_nav_date": live_nav_date,
+            "live_nav_date": _live_nav_date(),
             "irr": irr_details.get("irr"),
             "irr_pct": irr_details.get("irr_pct"),
             "irr_details": irr_details,
@@ -14301,32 +14298,49 @@ def _restore_extended_prices_after_capture():
         return False
 
 
+def _live_nav_date():
+    """The date of the Dashboard chart's last point, which shows the account value.
+
+    It is the latest session that has opened, so overnight and over a weekend the
+    chart still ends on the same figure as the Portfolio Value card.
+    """
+    _, latest_session = current_sessions(eastern_now())
+    return latest_session.isoformat()
+
+
+# The 10-minute poll suits the evening of the close, while Yahoo is still posting
+# bars. A catch-up can poll for a whole weekend, and one fund Yahoo has no bar for
+# would keep it re-running the full refresh that entire time.
+_CLOSE_CATCH_UP_RETRY_SEC = 60 * 60
+_close_catch_up_tried = {}
+
+# Reentrant because the capture holds it while calling the refresh, which takes it too.
+_market_refresh_lock = threading.RLock()
+
+
 @app.route("/api/nav/auto-capture", methods=["POST"])
 def api_nav_auto_capture():
-    """Record the official closing NAV once the market has closed for the day.
+    """Record the official closing NAV of the latest finished NYSE session.
 
     Polled by the frontend on a timer and at app launch. It is a cheap no-op
-    until the regular NYSE session has ended (16:00 ET + settle buffer) on a
-    trading day; then it refreshes prices to the settled close and upserts a NAV
-    snapshot tagged 'close'. Because the snapshot is keyed on
-    (profile_id, nav_date), it cleanly overwrites any intraday value recorded
-    earlier the same day. Once today's close is captured it skips until the next
-    trading day, so the heavy price refresh runs at most once per day.
+    while a session is running (until 16:00 ET + settle buffer); then it
+    refreshes prices to the settled close and upserts a NAV snapshot tagged
+    'close'. Because the snapshot is keyed on (profile_id, nav_date), it cleanly
+    overwrites any intraday value recorded earlier for that date. Once that close
+    is captured it skips until the next session ends, so the heavy price refresh
+    runs at most once per session.
+
+    Prices stay on a session's close until the next opening bell, so a close
+    missed with the app shut is still caught up overnight, over a weekend or over
+    a holiday. Once the next session opens, that close can no longer be read.
     """
     profile_id = get_profile_id()
     now_et = eastern_now()
-    market_date = now_et.date()
+    _, market_date = current_sessions(now_et)
     market_date_str = market_date.isoformat()
+    catching_up = market_date != now_et.date()
 
-    if not is_nyse_trading_day(market_date):
-        return jsonify({
-            "captured": False,
-            "skipped": True,
-            "reason": f"{market_date_str} is not a trading day.",
-            "nav_date": market_date_str,
-        })
-
-    if not market_has_closed(now_et):
+    if not catching_up and not market_has_closed(now_et):
         return jsonify({
             "captured": False,
             "skipped": True,
@@ -14334,6 +14348,15 @@ def api_nav_auto_capture():
             "nav_date": market_date_str,
         })
 
+    # Held from the refresh through the snapshot: the snapshot reads the holdings
+    # table, and the page-load refresh that starts alongside this poll would put
+    # after-hours prices there if it landed in between.
+    with _market_refresh_lock:
+        return _capture_session_close(profile_id, market_date_str, catching_up)
+
+
+def _capture_session_close(profile_id, market_date_str, catching_up):
+    """Refresh to the regular close and stamp it. The caller holds the refresh lock."""
     conn = get_connection()
     try:
         already_captured = conn.execute(
@@ -14349,9 +14372,20 @@ def api_nav_auto_capture():
         return jsonify({
             "captured": False,
             "skipped": True,
-            "reason": "Today's closing NAV was already captured.",
+            "reason": f"The {market_date_str} closing NAV was already captured.",
             "nav_date": market_date_str,
         })
+
+    attempt_key = (profile_id, market_date_str)
+    tried_at = _close_catch_up_tried.get(attempt_key)
+    if catching_up and tried_at is not None and time.monotonic() - tried_at < _CLOSE_CATCH_UP_RETRY_SEC:
+        return jsonify({
+            "captured": False,
+            "skipped": True,
+            "reason": f"The {market_date_str} close was just tried; retrying within the hour.",
+            "nav_date": market_date_str,
+        })
+    _close_catch_up_tried[attempt_key] = time.monotonic()
 
     # Pull the settled closing prices before snapshotting, so 'close' matches
     # "refresh, then Record NAV" exactly rather than reusing a stale intraday
@@ -14392,7 +14426,7 @@ def api_nav_auto_capture():
         extra = len(failures) - 8
         detail = shown + (f", +{extra} more" if extra > 0 else "")
         reason = (
-            "Price refresh was incomplete; today's close was not recorded "
+            f"Price refresh was incomplete; the {market_date_str} close was not recorded "
             f"because {len(failures)} ticker(s) kept a prior price"
         )
         if detail:
@@ -20336,7 +20370,17 @@ def _apply_extended_hours_prices(price_map, close_history, rename_map, price_sta
         return {"applied": {}, "change_history": {}}
 
 
+def _one_refresh_at_a_time(view):
+    """Run a price refresh only while no other refresh or close capture is running."""
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        with _market_refresh_lock:
+            return view(*args, **kwargs)
+    return wrapper
+
+
 @app.route("/api/refresh", methods=["POST"])
+@_one_refresh_at_a_time
 def refresh_market_data():
     """Update current price, div/share, ex-div date, and frequency for all holdings from Yahoo Finance."""
     import yfinance as yf

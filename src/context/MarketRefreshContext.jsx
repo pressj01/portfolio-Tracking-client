@@ -59,19 +59,21 @@ export default function MarketRefreshProvider({ children }) {
     return promise
   }, [pf, profileQueryString])
 
-  // Automatic end-of-day NAV capture. Once the regular session has closed on a
-  // trading day, record the official closing NAV (overwriting any intraday
-  // value taken earlier that day). Fires on mount -- so a close is caught up the
-  // next time the app opens even if it was shut at 4pm -- and every 10 minutes
-  // while the app stays open. All gating (trading day / past close / already
+  // Automatic end-of-day NAV capture. Once a regular session has closed, record
+  // its official closing NAV (overwriting any intraday value taken earlier that
+  // day). Fires on mount -- so a close is caught up the next time the app opens
+  // before the next session does, even if it was shut at 4pm -- and every 10
+  // minutes while the app stays open. All gating (session running / already
   // captured) is server-side, so this is a cheap no-op until the actual close.
   useEffect(() => {
-    let cancelled = false
     const attempt = () => {
       pf('/api/nav/auto-capture', { method: 'POST' })
         .then(res => (res.ok ? res.json() : null))
         .then(data => {
-          if (cancelled || !data?.captured) return
+          // Deliberately not dropped once this effect is retired. StrictMode or a
+          // profile switch can retire it while its capture is still running, and
+          // the later poll then finds the close already recorded and says nothing.
+          if (!data?.captured) return
           clearAllDashboardCache()
           setMessage('Recorded end-of-day NAV.')
           window.dispatchEvent(new CustomEvent('nav-auto-captured', { detail: data }))
@@ -80,7 +82,7 @@ export default function MarketRefreshProvider({ children }) {
     }
     attempt()
     const id = setInterval(attempt, 10 * 60 * 1000)
-    return () => { cancelled = true; clearInterval(id) }
+    return () => clearInterval(id)
   }, [pf])
 
   // Daily IV Rank collector. Scans only record ATM IV for the names they

@@ -174,6 +174,12 @@ const persistNavHistoryInterval = (interval) => {
 
 
 const fmt = (v, d = 2) => formatMoney(v, { digits: d, zeroIfInvalid: true })
+// Hover text for the chart's last point, which shows the Portfolio Value figure.
+const navLiveNote = (point) => {
+  if (point.source !== 'live') return ''
+  if (point.recorded_close == null) return '<br><i>Live value, not yet recorded</i>'
+  return `<br><i>Matches Portfolio Value. Recorded 4 PM close: ${fmt(point.recorded_close)}</i>`
+}
 const dripSharePrice = (h) => {
   const currentPrice = Number(h?.current_price || 0)
   if (currentPrice > 0) return currentPrice
@@ -1706,8 +1712,8 @@ export default function Dashboard() {
     return 'Holding estimates'
   }, [incomeSummary])
 
-  // The same live account value as the Portfolio Value card; the chart's last
-  // point follows it on a market day until the official close is recorded.
+  // The same live account value as the Portfolio Value card, which the chart's
+  // last point always shows; an earlier recorded close only appears in its hover.
   const liveNavDate = portfolioValue?.live_nav_date || null
   const liveAccountValue = portfolioValue?.account_value ?? null
   const totalReturnGaps = useMemo(() => totalReturnGapLines(navHistory), [navHistory])
@@ -1729,7 +1735,7 @@ export default function Dashboard() {
         value: Number(isTotalReturn ? (r.total_return_value ?? r.value) : r.value),
         portfolioValue: Number(r.value),
         withdrawnAfter: Number(r.net_withdrawn_after) || 0,
-        liveNote: r.source === 'live' ? '<br><i>Live value, not yet recorded</i>' : '',
+        liveNote: navLiveNote(r),
       }))
       .filter(r => r.date && Number.isFinite(r.value)), navHistoryInterval)
   }, [navHistory, liveNavDate, liveAccountValue, navReturnMode, navHistoryInterval, navChartWindow])

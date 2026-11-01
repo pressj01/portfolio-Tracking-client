@@ -149,10 +149,35 @@ test('live value is appended when today has no recorded point yet', () => {
   assert.equal(result[1].value, 104)
 })
 
-test('a recorded official close is kept over the live value', () => {
-  const history = [saved('2026-09-28', 110, 'close')]
+test('the last point matches the card over a recorded close, and keeps the close for the hover', () => {
+  const history = [saved('2026-10-29', 100, 'close'), saved('2026-10-30', 110, 'close')]
+  const result = withLiveNavPoint(history, { date: '2026-10-30', value: 112 })
 
-  assert.equal(withLiveNavPoint(history, { date: '2026-09-28', value: 112 }), history)
+  assert.equal(result.length, 2)
+  assert.deepEqual(result[1], {
+    date: '2026-10-30',
+    value: 112,
+    total_return_value: 112,
+    net_withdrawn_after: 0,
+    source: 'live',
+    recorded_close: 110,
+  })
+  assert.equal(history[1].value, 110)
+})
+
+test('once the next session opens, the earlier close shows its recorded value again', () => {
+  const history = [saved('2026-10-30', 110, 'close')]
+  const result = withLiveNavPoint(history, { date: '2026-11-02', value: 112 })
+
+  assert.deepEqual(dates(result), ['2026-10-30', '2026-11-02'])
+  assert.equal(result[0], history[0])
+  assert.equal(result[1].value, 112)
+})
+
+test('a close that already equals the card is left alone, with no live note', () => {
+  const history = [saved('2026-10-30', 112, 'close')]
+
+  assert.equal(withLiveNavPoint(history, { date: '2026-10-30', value: 112 }), history)
 })
 
 test('no live date, a stale live date, or an empty history change nothing', () => {

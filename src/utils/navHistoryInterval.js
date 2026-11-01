@@ -170,11 +170,13 @@ export const navHistoryForWindow = (points = [], window = null) => {
   return [...(keepBaseline ? [baseline] : []), ...inside].map(item => item.point)
 }
 
-// Today's chart point follows the live Dashboard account value, so the chart's
-// "Current" matches Portfolio Value between recorded snapshots. The official
-// close, once recorded, is kept as-is; a live date older than the history (a
-// stale cached value) changes nothing; and an empty history stays empty so a
-// portfolio with no recorded snapshots still says so.
+// The latest session's chart point shows the Dashboard account value, so the
+// chart's "Current" always matches Portfolio Value. That holds even over a
+// recorded close, which can differ when the card includes after-hours trades:
+// the close stays in the history and carries `recorded_close` for the hover, and
+// the point falls back to it once the next session opens. A live date older than
+// the history (a stale cached value) changes nothing, and an empty history stays
+// empty so a portfolio with no recorded snapshots still says so.
 export const withLiveNavPoint = (history = [], live = null) => {
   const date = live?.date
   const value = Number(live?.value)
@@ -183,8 +185,9 @@ export const withLiveNavPoint = (history = [], live = null) => {
   const livePoint = { date, value, total_return_value: value, net_withdrawn_after: 0, source: 'live' }
   if (last.date > date) return history
   if (last.date === date) {
-    if (last.source === 'close') return history
-    return [...history.slice(0, -1), { ...last, ...livePoint }]
+    if (last.source !== 'close') return [...history.slice(0, -1), { ...last, ...livePoint }]
+    if (last.value === value) return history
+    return [...history.slice(0, -1), { ...last, ...livePoint, recorded_close: last.value }]
   }
   return [...history, livePoint]
 }
