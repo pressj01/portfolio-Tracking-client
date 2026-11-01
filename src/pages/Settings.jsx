@@ -1527,7 +1527,8 @@ export default function Settings() {
         <p style={{ color: 'var(--text-dim)', fontSize: '0.78rem', marginTop: '0.9rem', marginBottom: 0 }}>
           This only changes the <strong>price</strong> shown from the next refresh. It never
           affects your holdings, transactions, cost basis or dividend records, and the official
-          end-of-day NAV point on the Dashboard chart is always recorded from the regular close.
+          end-of-day NAV on the Dashboard chart is always recorded from the regular close. Until
+          the next session opens, the chart&apos;s last point shows the same value as Portfolio Value.
         </p>
       </div>
 
