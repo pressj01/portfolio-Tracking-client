@@ -5,6 +5,13 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useTheme } from '../context/ThemeContext'
 import { chartTheme } from '../utils/chartTheme'
 import { formatMoney } from '../utils/money'
+import {
+  carryOverNote,
+  copyChangeNote,
+  readCarrySelection,
+  rememberCarrySelection,
+  seedCarrySelections,
+} from '../utils/cashFlowCarryOver'
 
 const FREQUENCIES = [
   ['one_time', 'One time'],
@@ -107,7 +114,143 @@ function SummaryTile({ label, value, sub, detail, tone = '' }) {
   )
 }
 
-function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
+function CarryOverField({ carry, selected, onToggle, scopeName, isAggregate }) {
+  if (!carry) return null
+  if (carry.source_profile_id == null) {
+    return (
+      <small className="cf-carry-note">
+        {isAggregate
+          ? 'Expenses added to an aggregate stay here. Add it from one of your own portfolios to carry it over.'
+          : `${scopeName} is marked Test / non-owned, so its expenses stay here. You can change that in Manage Portfolios.`}
+      </small>
+    )
+  }
+  if (!carry.targets.length) return null
+  const open = carry.targets.filter(target => target.state === 'open')
+  const shared = carry.targets.filter(target => target.state === 'shared')
+  const borrowed = carry.targets.filter(target => target.state === 'borrowed')
+  return (
+    <fieldset className="cf-carry">
+      <legend>Also add to your other portfolios</legend>
+      {open.length > 0 && (
+        <div className="cf-carry-options">
+          {open.map(target => (
+            <label key={target.profile_id}>
+              <input
+                type="checkbox"
+                checked={selected.includes(target.profile_id)}
+                onChange={() => onToggle(target.profile_id)}
+              />
+              <span>{target.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {shared.length > 0 && (
+        <small>Already show this plan&apos;s entries: {shared.map(target => target.name).join(', ')}.</small>
+      )}
+      {borrowed.length > 0 && (
+        <small>
+          Follow another plan, so add it there:{' '}
+          {borrowed.map(target => `${target.name} (${target.source_label})`).join(', ')}.
+        </small>
+      )}
+      <small>
+        Only portfolios marked User-owned in Manage Portfolios are listed. Your ticks are remembered.
+        When you later edit or delete a copy, you choose which of the others change with it.
+      </small>
+    </fieldset>
+  )
+}
+
+function CopyCheckboxes({ copies, selected, onToggle }) {
+  return (
+    <div className="cf-carry-options">
+      {copies.map(copy => (
+        <label key={copy.id}>
+          <input
+            type="checkbox"
+            checked={selected.includes(copy.id)}
+            onChange={() => onToggle(copy.id)}
+          />
+          <span>{copy.name}</span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function LinkedCopiesField({ copies, selected, onToggle }) {
+  if (!copies?.length) return null
+  return (
+    <fieldset className="cf-carry">
+      <legend>Also update the copies in</legend>
+      <CopyCheckboxes copies={copies} selected={selected} onToggle={onToggle} />
+      <small>
+        Only what you change here is copied, so anything set differently in another portfolio stays as it is.
+        Untick a portfolio to leave its copy alone.
+      </small>
+    </fieldset>
+  )
+}
+
+const COPY_ACTIONS = {
+  delete: {
+    title: 'Delete',
+    message: 'This permanently deletes the expense and its payment history. Use "Save off" instead if you may need it again.',
+    legend: 'Also delete the copies in',
+    confirm: 'Delete',
+    busy: 'Deleting...',
+  },
+  save_off: {
+    title: 'Save off',
+    message: 'It will be removed from expense totals but kept under Saved expenses so it can be restored later.',
+    legend: 'Also save off the copies in',
+    confirm: 'Save off',
+    busy: 'Saving...',
+  },
+  restore: {
+    title: 'Restore',
+    message: 'It will count in expense totals again.',
+    legend: 'Also restore the copies in',
+    confirm: 'Restore',
+    busy: 'Restoring...',
+  },
+}
+
+function LinkedCopiesDialog({ choice, selected, onToggle, onCancel, onConfirm, busy }) {
+  const titleId = useId()
+  if (!choice) return null
+  const action = COPY_ACTIONS[choice.action]
+  return (
+    <div className="dialog-overlay" role="presentation" onMouseDown={event => {
+      if (event.target === event.currentTarget && !busy) onCancel()
+    }}>
+      <div className="dialog-box cf-move-box cf-copy-box" role="dialog" aria-modal="true" aria-labelledby={titleId}>
+        <h3 id={titleId}>{action.title} &quot;{choice.item.name}&quot;</h3>
+        <p>{action.message}</p>
+        <fieldset className="cf-carry">
+          <legend>{action.legend}</legend>
+          <CopyCheckboxes copies={choice.item.linked_copies} selected={selected} onToggle={onToggle} />
+          <small>Untick a portfolio to leave its copy alone.</small>
+        </fieldset>
+        <div className="dialog-buttons">
+          <button type="button" className="btn btn-secondary" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button
+            type="button"
+            className={`btn ${choice.action === 'delete' ? 'btn-danger' : 'btn-primary'}`}
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? action.busy : action.confirm}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving, extra = null }) {
   // Per-instance ids: Split View can mount this page in both panes, and a
   // label or datalist pointing at a repeated id resolves to the other pane's
   // field.
@@ -185,6 +328,8 @@ function ItemEditor({ kind, value, onChange, onSubmit, onCancel, saving }) {
           {saving ? 'Saving...' : isEdit ? 'Save changes' : kind === 'expense' ? 'Add expense' : 'Add income'}
         </button>
       </div>
+
+      {extra}
 
       <button
         type="button"
@@ -304,6 +449,11 @@ function ItemTable({
                 <td>
                   <strong>{item.name}</strong>
                   {item.notes && <small>{item.notes}</small>}
+                  {!readOnly && item.linked_copies?.length > 0 && (
+                    <small className="cf-linked-copies">
+                      Also in {item.linked_copies.map(copy => copy.name).join(', ')}
+                    </small>
+                  )}
                 </td>
                 <td>{item.category || 'Uncategorized'}</td>
                 <td>{frequencyLabel[item.frequency] || item.frequency}</td>
@@ -510,6 +660,7 @@ function MoveCashFlowItemDialog({
         <p>
           <strong>{item.name}</strong> will be removed from {sourceName} and added to the destination
           account&apos;s monthly cash-flow plan. Its dates, notes, saved status, and any payment history will move with it.
+          {item.linked_copies?.length > 0 && ' It stops being linked to its copies, which stay where they are.'}
         </p>
         <label>
           <span>Destination account</span>
@@ -601,6 +752,13 @@ export default function CashFlowSustainability() {
   const [sourceOptions, setSourceOptions] = useState([])
   const [sourcePlan, setSourcePlan] = useState(null)
   const [borrowed, setBorrowed] = useState(false)
+  const [carry, setCarry] = useState(null)
+  const [carrySelected, setCarrySelected] = useState([])
+  const [carryNote, setCarryNote] = useState('')
+  const [editCopySelected, setEditCopySelected] = useState([])
+  const [copyChoice, setCopyChoice] = useState(null)
+  const [copyChoiceSelected, setCopyChoiceSelected] = useState([])
+  const [copyChoiceBusy, setCopyChoiceBusy] = useState(false)
   const [settings, setSettings] = useState(null)
   const [summary, setSummary] = useState(null)
   const [simulation, setSimulation] = useState(null)
@@ -647,10 +805,13 @@ export default function CashFlowSustainability() {
     setLoading(true)
     setError('')
     try {
-      const [itemData, settingData, sourceData] = await Promise.all([
+      const [itemData, settingData, sourceData, carryData] = await Promise.all([
         apiJson(`/api/cash-flow/items?plan_id=${activePlanId}`),
         apiJson(`/api/cash-flow/settings?plan_id=${activePlanId}`),
         apiJson(`/api/cash-flow/plan-sources?plan_id=${activePlanId}`),
+        // A convenience must not take the budget down with it: if this fails,
+        // the boxes are hidden and the expense simply stays in this portfolio.
+        apiJson(`/api/cash-flow/carry-targets?plan_id=${activePlanId}`).catch(() => null),
       ])
       if (planRequestRef.current !== token) return
       setItems(itemData.items || [])
@@ -658,6 +819,12 @@ export default function CashFlowSustainability() {
       setBorrowed(Boolean(itemData.read_only))
       setSourceOptions(sourceData.sources || [])
       setSourcePlan(sourceData.plan || null)
+      setCarry(carryData)
+      setCarrySelected(
+        carryData?.source_profile_id != null
+          ? readCarrySelection(carryData.source_profile_id, carryData.targets)
+          : [],
+      )
       await loadSummary(activePlanId)
       setSimulation(null)
     } catch (err) {
@@ -695,6 +862,8 @@ export default function CashFlowSustainability() {
     // new scope and 404 before the real id arrives.
     setPlanId(null)
     setPlanScope(null)
+    setCarry(null)
+    setCarrySelected([])
     apiJson('/api/cash-flow/plans')
       .then(data => {
         const nextPlans = data.plans || []
@@ -709,6 +878,10 @@ export default function CashFlowSustainability() {
   useEffect(() => {
     if (planId && planScope === profileQueryString) loadPlanData(planId)
   }, [planId, planScope, profileQueryString, loadPlanData, calendarDay])
+
+  useEffect(() => {
+    setCarryNote('')
+  }, [planId])
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -734,16 +907,32 @@ export default function CashFlowSustainability() {
     const draft = kind === 'expense' ? expenseDraft : incomeDraft
     setSaving(true)
     setError('')
+    setCarryNote('')
     try {
       const isEdit = Boolean(draft.id)
-      await apiJson(
+      const carryTo = kind === 'expense' && !isEdit ? carrySelected : []
+      const copies = kind === 'expense' && isEdit
+        ? (draft.linked_copies || []).filter(copy => editCopySelected.includes(copy.id))
+        : []
+      const data = await apiJson(
         isEdit ? `/api/cash-flow/items/${draft.id}` : '/api/cash-flow/items',
         {
           method: isEdit ? 'PUT' : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...draft, plan_id: planId }),
+          body: JSON.stringify({
+            ...draft,
+            plan_id: planId,
+            carry_to: carryTo,
+            copy_ids: copies.map(copy => copy.id),
+          }),
         },
       )
+      if (carryTo.length) {
+        seedCarrySelections(carry.source_profile_id, carryTo)
+        setCarryNote(carryOverNote(data.carried))
+      } else if (copies.length) {
+        setCarryNote(copyChangeNote('updated in', copies, data.copies, data.changed))
+      }
       if (kind === 'expense') setExpenseDraft(blankItem('expense', month))
       else setIncomeDraft(blankItem('income', month))
       await loadPlanData(planId)
@@ -754,31 +943,66 @@ export default function CashFlowSustainability() {
     }
   }
 
-  const deleteItem = async item => {
-    const confirmed = await dialog.confirm(
-      item.kind === 'expense'
-        ? `Permanently delete "${item.name}" and its payment history?\n\nUse "Save off" instead if you may need this expense again.`
-        : `Permanently delete "${item.name}" from additional income?\n\nUse "Save off" instead if you may need this income again.`,
-    )
-    if (!confirmed) return
+  const toggleCarry = profileId => {
+    const next = carrySelected.includes(profileId)
+      ? carrySelected.filter(id => id !== profileId)
+      : [...carrySelected, profileId]
+    setCarrySelected(next)
+    rememberCarrySelection(carry.source_profile_id, next)
+  }
+
+  const openCopyChoice = (action, item) => {
+    setCopyChoice({ action, item })
+    setCopyChoiceSelected(item.linked_copies.map(copy => copy.id))
+  }
+
+  const removeItem = async (item, copies = []) => {
     setError('')
+    setCarryNote('')
     try {
-      await apiJson(`/api/cash-flow/items/${item.id}`, { method: 'DELETE' })
+      const data = await apiJson(`/api/cash-flow/items/${item.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ copy_ids: copies.map(copy => copy.id) }),
+      })
+      if (copies.length) setCarryNote(copyChangeNote('deleted from', copies, data.copies))
       await loadPlanData(planId)
     } catch (err) {
       setError(err.message)
     }
   }
 
-  const setItemActive = async (item, active) => {
+  const deleteItem = async item => {
+    if (item.linked_copies?.length) {
+      openCopyChoice('delete', item)
+      return
+    }
+    const confirmed = await dialog.confirm(
+      item.kind === 'expense'
+        ? `Permanently delete "${item.name}" and its payment history?\n\nUse "Save off" instead if you may need this expense again.`
+        : `Permanently delete "${item.name}" from additional income?\n\nUse "Save off" instead if you may need this income again.`,
+    )
+    if (confirmed) await removeItem(item)
+  }
+
+  const setItemActive = async (item, active, copies = []) => {
     setSaving(true)
     setError('')
+    setCarryNote('')
     try {
-      await apiJson(`/api/cash-flow/items/${item.id}`, {
+      const data = await apiJson(`/api/cash-flow/items/${item.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...item, active, plan_id: planId }),
+        body: JSON.stringify({
+          ...item,
+          active,
+          plan_id: planId,
+          copy_ids: copies.map(copy => copy.id),
+        }),
       })
+      if (copies.length) {
+        setCarryNote(copyChangeNote(active ? 'restored in' : 'saved off in', copies, data.copies, data.changed))
+      }
       if (item.kind === 'expense' && expenseDraft.id === item.id) {
         setExpenseDraft(blankItem('expense', month))
       }
@@ -794,6 +1018,10 @@ export default function CashFlowSustainability() {
   }
 
   const saveOffItem = async item => {
+    if (item.linked_copies?.length) {
+      openCopyChoice('save_off', item)
+      return
+    }
     const label = item.kind === 'income' ? 'additional income' : 'expense'
     const confirmed = await dialog.confirm(
       `Save off "${item.name}"?\n\nIt will be removed from ${label} totals but kept under Saved ${label} so it can be restored later.`,
@@ -801,7 +1029,33 @@ export default function CashFlowSustainability() {
     if (confirmed) await setItemActive(item, false)
   }
 
-  const restoreItem = item => setItemActive(item, true)
+  const restoreItem = item => {
+    if (item.linked_copies?.length) openCopyChoice('restore', item)
+    else setItemActive(item, true)
+  }
+
+  const closeCopyChoice = () => {
+    if (!copyChoiceBusy) setCopyChoice(null)
+  }
+
+  const toggleCopyChoice = copyId => {
+    setCopyChoiceSelected(current => (
+      current.includes(copyId) ? current.filter(id => id !== copyId) : [...current, copyId]
+    ))
+  }
+
+  const confirmCopyChoice = async () => {
+    const { action, item } = copyChoice
+    const copies = item.linked_copies.filter(copy => copyChoiceSelected.includes(copy.id))
+    setCopyChoiceBusy(true)
+    try {
+      if (action === 'delete') await removeItem(item, copies)
+      else await setItemActive(item, action === 'restore', copies)
+      setCopyChoice(null)
+    } finally {
+      setCopyChoiceBusy(false)
+    }
+  }
 
   const openMoveItem = item => {
     setMoveItem(item)
@@ -846,8 +1100,12 @@ export default function CashFlowSustainability() {
   }
 
   const editItem = item => {
-    if (item.kind === 'expense') setExpenseDraft({ ...item })
-    else setIncomeDraft({ ...item })
+    if (item.kind === 'expense') {
+      setExpenseDraft({ ...item })
+      setEditCopySelected((item.linked_copies || []).map(copy => copy.id))
+    } else {
+      setIncomeDraft({ ...item })
+    }
     window.scrollTo({ top: 300, behavior: 'smooth' })
   }
 
@@ -1184,8 +1442,26 @@ export default function CashFlowSustainability() {
             onSubmit={event => saveItem('expense', event)}
             onCancel={() => setExpenseDraft(blankItem('expense', month))}
             saving={saving}
+            extra={expenseDraft.id ? (
+              <LinkedCopiesField
+                copies={expenseDraft.linked_copies}
+                selected={editCopySelected}
+                onToggle={copyId => setEditCopySelected(current => (
+                  current.includes(copyId) ? current.filter(id => id !== copyId) : [...current, copyId]
+                ))}
+              />
+            ) : (
+              <CarryOverField
+                carry={carry}
+                selected={carrySelected}
+                onToggle={toggleCarry}
+                scopeName={currentProfileName}
+                isAggregate={isAggregate}
+              />
+            )}
           />
         )}
+        {carryNote && <div className="cf-backup-note" role="status">{carryNote}</div>}
         {loading ? <div className="cf-empty">Loading expenses...</div> : (
           <>
             <ItemTable
@@ -1295,6 +1571,15 @@ export default function CashFlowSustainability() {
         onCancel={closeMoveItem}
         onMove={confirmMoveItem}
         moving={movingItem}
+      />
+
+      <LinkedCopiesDialog
+        choice={copyChoice}
+        selected={copyChoiceSelected}
+        onToggle={toggleCopyChoice}
+        onCancel={closeCopyChoice}
+        onConfirm={confirmCopyChoice}
+        busy={copyChoiceBusy}
       />
 
       <section className="cf-sim-panel">

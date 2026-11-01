@@ -74,6 +74,11 @@ from cash_flow import (
     HOLDING_SCENARIO_PROFILES,
     OPTION_INCOME_TICKERS,
     backfill_owner_subaccount_sources as _backfill_owner_subaccount_sources,
+    CARRY_CHANGE_FIELDS as _CASH_FLOW_CARRY_CHANGE_FIELDS,
+    carry_eligible_profiles as _cash_flow_carry_eligible_profiles,
+    carry_source_profile_id as _cash_flow_carry_source_profile_id,
+    carry_target_state as _cash_flow_carry_target_state,
+    linked_copies as _cash_flow_linked_copies,
     build_plan_export as _build_cash_flow_export,
     classify_holding_scenario_type as _classify_cash_flow_holding,
     expand_plan as _expand_cash_flow_plan,
@@ -4229,6 +4234,7 @@ def _cash_flow_touch_plan(conn, plan_id):
 def _cash_flow_item_result(conn, row):
     item = _serialize_cash_flow_item(row)
     schedule = _next_cash_flow_bill(row)
+    item["linked_copies"] = _cash_flow_linked_copies(conn, row)
     item["current_due_date"] = schedule["due_date"]
     item["current_pay_date"] = schedule["pay_date"]
     item["paid"] = False
@@ -4569,6 +4575,187 @@ def cash_flow_plan_source(plan_id):
     return jsonify(plan=result)
 
 
+@app.route("/api/cash-flow/carry-targets", methods=["GET"])
+def cash_flow_carry_targets():
+    """The person's other portfolios, and how a new entry here reaches each."""
+    conn = get_connection()
+    ensure_tables_exist(conn)
+    plan = _cash_flow_plan_for_scope(conn, request.args.get("plan_id"))
+    if not plan:
+        conn.close()
+        return jsonify(error="Cash-flow plan not found."), 404
+    source_profile_id = _cash_flow_carry_source_profile_id(conn, plan)
+    targets = []
+    if source_profile_id is not None:
+        for row in _cash_flow_carry_eligible_profiles(conn):
+            if row["id"] == source_profile_id:
+                continue
+            state, state_plan_id = _cash_flow_carry_target_state(
+                conn, plan["id"], row["id"]
+            )
+            target = {
+                "profile_id": row["id"],
+                "name": row["name"],
+                "state": state,
+            }
+            if state == "borrowed":
+                source = conn.execute(
+                    "SELECT scope_type, scope_id FROM cash_flow_plans WHERE id = ?",
+                    (state_plan_id,),
+                ).fetchone()
+                target["source_label"] = _cash_flow_scope_label(
+                    conn, source["scope_type"], source["scope_id"]
+                )
+            targets.append(target)
+    conn.close()
+    return jsonify(source_profile_id=source_profile_id, targets=targets)
+
+
+def _cash_flow_parse_id_list(raw):
+    """The ids a request names for carrying, in the order sent."""
+    if raw in (None, ""):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Choose which portfolios this applies to.")
+    ids = []
+    for value in raw:
+        # bool is an int in Python, and True would otherwise mean id 1.
+        if isinstance(value, bool):
+            raise ValueError("Choose which portfolios this applies to.")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            raise ValueError("Choose which portfolios this applies to.")
+        if parsed not in ids:
+            ids.append(parsed)
+    return ids
+
+
+def _cash_flow_requested_copies(conn, row, copy_ids):
+    """The linked copies the request names and the entry is allowed to reach."""
+    return [
+        copy for copy in _cash_flow_linked_copies(conn, row)
+        if copy["id"] in copy_ids
+    ]
+
+
+def _cash_flow_delete_item(conn, item_id, plan_id):
+    conn.execute(
+        "DELETE FROM cash_flow_item_payments WHERE item_id = ?", (item_id,)
+    )
+    conn.execute(
+        "DELETE FROM cash_flow_month_overrides WHERE item_id = ?", (item_id,)
+    )
+    conn.execute("DELETE FROM cash_flow_items WHERE id = ?", (item_id,))
+    _cash_flow_touch_plan(conn, plan_id)
+
+
+def _cash_flow_carry_destinations(conn, plan, profile_ids):
+    """Decide where a new entry carries to before anything is written.
+
+    A portfolio's first plan commits as it is created, so this runs ahead of the
+    inserts: the entry and its copies then land in one transaction. A portfolio
+    that stopped qualifying since the page loaded is reported, not an error, so
+    the entry the person typed is still saved.
+    """
+    eligible_ids = {row["id"] for row in _cash_flow_carry_eligible_profiles(conn)}
+    source_profile_id = _cash_flow_carry_source_profile_id(conn, plan)
+    destinations = []
+    for profile_id in profile_ids:
+        if profile_id == source_profile_id:
+            continue
+        destination = {
+            "profile_id": profile_id,
+            "name": _cash_flow_scope_label(conn, "profile", profile_id),
+        }
+        if source_profile_id is None or profile_id not in eligible_ids:
+            destination["status"] = "not_owned"
+        else:
+            state, _state_plan_id = _cash_flow_carry_target_state(
+                conn, plan["id"], profile_id
+            )
+            destination["status"] = state
+            if state == "open":
+                destination["plan_id"] = _get_or_create_default_cash_flow_plan(
+                    conn, "profile", profile_id
+                )["id"]
+        destinations.append(destination)
+    return destinations
+
+
+def _cash_flow_insert_item(conn, plan_id, item, carry_group_id=None):
+    return conn.execute(
+        """INSERT INTO cash_flow_items
+           (carry_group_id, plan_id, kind, name, category, amount_cents, frequency,
+            start_date, end_date, due_date, pay_date, essential, tax_rate_pct,
+            annual_change_pct, notes, active)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            carry_group_id,
+            plan_id,
+            item["kind"],
+            item["name"],
+            item["category"],
+            item["amount_cents"],
+            item["frequency"],
+            item["start_date"],
+            item["end_date"],
+            item["due_date"],
+            item["pay_date"],
+            item["essential"],
+            item["tax_rate_pct"],
+            item["annual_change_pct"],
+            item["notes"],
+            item["active"],
+        ),
+    )
+
+
+def _cash_flow_carry_item(conn, destinations, item, item_id):
+    """Copy a new entry to each open destination and link it to its copies.
+
+    A destination that already has the same bill keeps its own row, but that row
+    joins the link so a later edit reaches it, unless it already belongs to one.
+    """
+    signature = _cash_flow_import_signature(item)
+    carried = []
+    linked = False
+    for destination in destinations:
+        plan_id = destination.pop("plan_id", None)
+        if plan_id is not None:
+            matches = [
+                row
+                for row in conn.execute(
+                    "SELECT * FROM cash_flow_items WHERE plan_id = ? ORDER BY id",
+                    (plan_id,),
+                ).fetchall()
+                if _cash_flow_import_signature(dict(row)) == signature
+            ]
+            if matches:
+                destination["status"] = "duplicate"
+                unlinked = next(
+                    (row for row in matches if not row["carry_group_id"]), None
+                )
+                if unlinked:
+                    conn.execute(
+                        "UPDATE cash_flow_items SET carry_group_id = ? WHERE id = ?",
+                        (item_id, unlinked["id"]),
+                    )
+                    linked = True
+            else:
+                _cash_flow_insert_item(conn, plan_id, item, carry_group_id=item_id)
+                _cash_flow_touch_plan(conn, plan_id)
+                destination["status"] = "added"
+                linked = True
+        carried.append(destination)
+    if linked:
+        conn.execute(
+            "UPDATE cash_flow_items SET carry_group_id = ? WHERE id = ?",
+            (item_id, item_id),
+        )
+    return carried
+
+
 @app.route("/api/cash-flow/items", methods=["GET", "POST"])
 def cash_flow_items():
     conn = get_connection()
@@ -4604,41 +4791,26 @@ def cash_flow_items():
         return jsonify(error="Cash-flow plan not found."), 404
     try:
         item = _validate_cash_flow_item(data)
+        carry_to = _cash_flow_parse_id_list(data.get("carry_to"))
     except ValueError as exc:
         conn.close()
         return jsonify(error=str(exc)), 400
-    cur = conn.execute(
-        """INSERT INTO cash_flow_items
-           (plan_id, kind, name, category, amount_cents, frequency,
-            start_date, end_date, due_date, pay_date, essential, tax_rate_pct,
-            annual_change_pct, notes, active)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            plan["id"],
-            item["kind"],
-            item["name"],
-            item["category"],
-            item["amount_cents"],
-            item["frequency"],
-            item["start_date"],
-            item["end_date"],
-            item["due_date"],
-            item["pay_date"],
-            item["essential"],
-            item["tax_rate_pct"],
-            item["annual_change_pct"],
-            item["notes"],
-            item["active"],
-        ),
-    )
-    _cash_flow_touch_plan(conn, plan["id"])
-    conn.commit()
+    destinations = _cash_flow_carry_destinations(conn, plan, carry_to)
+    try:
+        cur = _cash_flow_insert_item(conn, plan["id"], item)
+        _cash_flow_touch_plan(conn, plan["id"])
+        carried = _cash_flow_carry_item(conn, destinations, item, cur.lastrowid)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     row = conn.execute(
         "SELECT * FROM cash_flow_items WHERE id = ?", (cur.lastrowid,)
     ).fetchone()
     result = _cash_flow_item_result(conn, row)
     conn.close()
-    return jsonify(item=result), 201
+    return jsonify(item=result, carried=carried), 201
 
 
 @app.route("/api/cash-flow/items/<int:item_id>", methods=["PUT", "DELETE"])
@@ -4661,59 +4833,91 @@ def cash_flow_item_detail(item_id):
         conn.close()
         return jsonify(error="Cash-flow item not found."), 404
 
-    if request.method == "DELETE":
-        conn.execute(
-            "DELETE FROM cash_flow_item_payments WHERE item_id = ?", (item_id,)
-        )
-        conn.execute(
-            "DELETE FROM cash_flow_month_overrides WHERE item_id = ?", (item_id,)
-        )
-        conn.execute("DELETE FROM cash_flow_items WHERE id = ?", (item_id,))
-        _cash_flow_touch_plan(conn, row["plan_id"])
-        conn.commit()
-        conn.close()
-        return jsonify(ok=True)
-
     data = request.get_json(silent=True) or {}
+    try:
+        copy_ids = _cash_flow_parse_id_list(data.get("copy_ids"))
+    except ValueError as exc:
+        conn.close()
+        return jsonify(error=str(exc)), 400
+
+    # Copies only change when the request names them. Moving, paying or restoring
+    # a backup of one portfolio's entry leaves the others alone.
+    if request.method == "DELETE":
+        copies = _cash_flow_requested_copies(conn, row, copy_ids)
+        try:
+            _cash_flow_delete_item(conn, item_id, row["plan_id"])
+            for copy in copies:
+                _cash_flow_delete_item(conn, copy["id"], copy["plan_id"])
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            conn.close()
+            raise
+        conn.close()
+        return jsonify(ok=True, copies=copies)
+
     try:
         item = _validate_cash_flow_item(data)
     except ValueError as exc:
         conn.close()
         return jsonify(error=str(exc)), 400
-    conn.execute(
-        """UPDATE cash_flow_items
-           SET kind = ?, name = ?, category = ?, amount_cents = ?,
-               frequency = ?, start_date = ?, end_date = ?, due_date = ?,
-               pay_date = ?, essential = ?, tax_rate_pct = ?,
-               annual_change_pct = ?, notes = ?, active = ?,
-               updated_at = CURRENT_TIMESTAMP
-           WHERE id = ?""",
-        (
-            item["kind"],
-            item["name"],
-            item["category"],
-            item["amount_cents"],
-            item["frequency"],
-            item["start_date"],
-            item["end_date"],
-            item["due_date"],
-            item["pay_date"],
-            item["essential"],
-            item["tax_rate_pct"],
-            item["annual_change_pct"],
-            item["notes"],
-            item["active"],
-            item_id,
-        ),
-    )
-    _cash_flow_touch_plan(conn, row["plan_id"])
-    conn.commit()
+    # Only what this edit changed goes to the copies, so an amount or date set
+    # differently in another portfolio survives an unrelated edit here.
+    changes = {
+        field: item[field]
+        for field in _CASH_FLOW_CARRY_CHANGE_FIELDS
+        if row[field] != item[field]
+    }
+    copies = _cash_flow_requested_copies(conn, row, copy_ids) if changes else []
+    try:
+        conn.execute(
+            """UPDATE cash_flow_items
+               SET kind = ?, name = ?, category = ?, amount_cents = ?,
+                   frequency = ?, start_date = ?, end_date = ?, due_date = ?,
+                   pay_date = ?, essential = ?, tax_rate_pct = ?,
+                   annual_change_pct = ?, notes = ?, active = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?""",
+            (
+                item["kind"],
+                item["name"],
+                item["category"],
+                item["amount_cents"],
+                item["frequency"],
+                item["start_date"],
+                item["end_date"],
+                item["due_date"],
+                item["pay_date"],
+                item["essential"],
+                item["tax_rate_pct"],
+                item["annual_change_pct"],
+                item["notes"],
+                item["active"],
+                item_id,
+            ),
+        )
+        _cash_flow_touch_plan(conn, row["plan_id"])
+        if copies:
+            assignments = ", ".join(f"{field} = ?" for field in changes)
+            for copy in copies:
+                conn.execute(
+                    f"""UPDATE cash_flow_items
+                        SET {assignments}, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?""",
+                    (*changes.values(), copy["id"]),
+                )
+                _cash_flow_touch_plan(conn, copy["plan_id"])
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        conn.close()
+        raise
     updated = conn.execute(
         "SELECT * FROM cash_flow_items WHERE id = ?", (item_id,)
     ).fetchone()
     result = _cash_flow_item_result(conn, updated)
     conn.close()
-    return jsonify(item=result)
+    return jsonify(item=result, copies=copies, changed=bool(changes))
 
 
 @app.route("/api/cash-flow/items/<int:item_id>/move", methods=["POST"])
@@ -4768,9 +4972,11 @@ def cash_flow_item_move(item_id):
     target_plan = _get_or_create_default_cash_flow_plan(
         conn, target_scope_type, target_scope_id
     )
+    # A moved entry belongs to its new portfolio on its own terms, so it leaves
+    # any group of carried copies. It may be moving somewhere they cannot follow.
     conn.execute(
         """UPDATE cash_flow_items
-           SET plan_id = ?, updated_at = CURRENT_TIMESTAMP
+           SET plan_id = ?, carry_group_id = NULL, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?""",
         (target_plan["id"], item_id),
     )

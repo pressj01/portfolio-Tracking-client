@@ -357,7 +357,8 @@ def ensure_tables_exist(conn=None):
             notes               TEXT,
             active              INTEGER NOT NULL DEFAULT 1,
             created_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            updated_at          TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            carry_group_id      INTEGER
         )
     """)
     cur.execute("""
@@ -371,6 +372,14 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE cash_flow_items ADD COLUMN due_date TEXT")
     if "pay_date" not in item_cols:
         cur.execute("ALTER TABLE cash_flow_items ADD COLUMN pay_date TEXT")
+    # An entry carried to the person's other portfolios and its copies share this
+    # id (the original entry's), so a later edit or delete can reach them.
+    if "carry_group_id" not in item_cols:
+        cur.execute("ALTER TABLE cash_flow_items ADD COLUMN carry_group_id INTEGER")
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cash_flow_items_carry_group
+        ON cash_flow_items (carry_group_id)
+    """)
     cur.execute("""
         UPDATE cash_flow_items
            SET due_date = COALESCE(due_date, start_date)
