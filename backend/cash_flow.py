@@ -700,6 +700,124 @@ def resolve_source_plan_id(conn, plan_id):
     return int(source_id) if exists else int(plan_id)
 
 
+# Each portfolio keeps its own plan, so a household bill had to be typed once per
+# portfolio. A new entry can also be written to the person's other portfolios,
+# but only between their own: ``is_user_owned`` is the "User-owned" versus
+# "Test / non-owned" choice in Manage Portfolios, so a test portfolio or someone
+# else's tracked account never sends or receives a bill. Aggregates have no such
+# flag and their membership can span households, so they are out both ways.
+
+# What a later change to an entry can carry to its copies. ``kind`` is left out
+# because an entry and its copies are always the same kind.
+CARRY_CHANGE_FIELDS = (
+    "name", "category", "amount_cents", "frequency", "start_date", "end_date",
+    "due_date", "pay_date", "essential", "tax_rate_pct", "annual_change_pct",
+    "notes", "active",
+)
+
+
+def carry_source_profile_id(conn, plan):
+    """The plan's portfolio if an entry may carry from it, otherwise None."""
+    if plan["scope_type"] != "profile":
+        return None
+    row = conn.execute(
+        "SELECT is_user_owned FROM profiles WHERE id = ?", (int(plan["scope_id"]),)
+    ).fetchone()
+    return int(plan["scope_id"]) if row and row["is_user_owned"] else None
+
+
+def linked_copies(conn, row):
+    """The copies of an entry that a change to it may also reach.
+
+    The add's rule holds for as long as they stay linked: a portfolio since marked
+    Test / non-owned neither sends nor receives a change, and a portfolio now
+    following another plan is left out because its screen would never show it.
+    """
+    group_id = row["carry_group_id"]
+    if not group_id:
+        return []
+    plan = conn.execute(
+        "SELECT scope_type, scope_id FROM cash_flow_plans WHERE id = ?",
+        (row["plan_id"],),
+    ).fetchone()
+    if plan is None or carry_source_profile_id(conn, plan) is None:
+        return []
+    names = {
+        profile["id"]: profile["name"] for profile in carry_eligible_profiles(conn)
+    }
+    rows = conn.execute(
+        """SELECT i.id, i.plan_id, p.scope_id
+           FROM cash_flow_items i
+           JOIN cash_flow_plans p ON p.id = i.plan_id
+           WHERE i.carry_group_id = ? AND i.id != ? AND p.scope_type = 'profile'
+           ORDER BY i.id""",
+        (group_id, row["id"]),
+    ).fetchall()
+    copies = []
+    for copy in rows:
+        name = names.get(int(copy["scope_id"]))
+        if name is None:
+            continue
+        if resolve_source_plan_id(conn, copy["plan_id"]) != copy["plan_id"]:
+            continue
+        copies.append({
+            "id": copy["id"],
+            "plan_id": copy["plan_id"],
+            "profile_id": int(copy["scope_id"]),
+            "name": name,
+        })
+    return copies
+
+
+def carry_eligible_profiles(conn):
+    """The portfolios a new entry may carry between, in selector order."""
+    return conn.execute(
+        """SELECT id, name FROM profiles
+           WHERE is_user_owned = 1
+             AND hidden_from_selector = 0
+             AND (id != ? OR owner_active = 1)
+           ORDER BY display_order, id""",
+        (OWNER_PROFILE_ID,),
+    ).fetchall()
+
+
+def carry_target_state(conn, source_plan_id, profile_id):
+    """How an entry added to one plan would reach another portfolio.
+
+    Returns ``(state, plan_id)``:
+
+    ``shared``    the portfolio already displays that plan's entries
+    ``borrowed``  it displays another plan's (``plan_id``), so a copy would
+                  land where its screen never shows it
+    ``open``      it keeps its own entries (``plan_id``, or None if it has no
+                  plan yet), so a copy is what it needs
+
+    Reads only. A portfolio nobody has opened has no plan, so this mirrors how
+    ``get_or_create_default_plan`` would link it to Owner's budget.
+    """
+    row = conn.execute(
+        """SELECT id FROM cash_flow_plans
+           WHERE scope_type = 'profile' AND scope_id = ?
+           ORDER BY is_default DESC, id ASC LIMIT 1""",
+        (int(profile_id),),
+    ).fetchone()
+    if row:
+        own_plan_id = int(row["id"])
+        items_plan_id = resolve_source_plan_id(conn, own_plan_id)
+    else:
+        own_plan_id = None
+        items_plan_id = (
+            owner_default_plan_id(conn)
+            if inherits_owner_budget(conn, "profile", profile_id)
+            else None
+        )
+    if items_plan_id == int(source_plan_id):
+        return "shared", items_plan_id
+    if items_plan_id and items_plan_id != own_plan_id:
+        return "borrowed", items_plan_id
+    return "open", own_plan_id
+
+
 def serialize_plan(row, conn=None):
     source_plan_id = _plan_value(row, "source_plan_id")
     result = {

@@ -308,6 +308,662 @@ class CashFlowApiTest(unittest.TestCase):
         )
         self.assertEqual(same_aggregate.status_code, 400)
 
+    def _add_profiles(self, *rows):
+        conn = self._get_connection()
+        try:
+            for profile_id, name, owned in rows:
+                conn.execute(
+                    "INSERT INTO profiles (id, name, is_user_owned) VALUES (?, ?, ?)",
+                    (profile_id, name, owned),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _items_for_profile(self, profile_id):
+        plans = self.client.get(
+            f"/api/cash-flow/plans?profile_id={profile_id}"
+        ).get_json()["plans"]
+        conn = self._get_connection()
+        try:
+            return conn.execute(
+                "SELECT * FROM cash_flow_items WHERE plan_id = ? ORDER BY id",
+                (plans[0]["id"],),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    def _carry_targets(self, query="profile_id=1"):
+        return self.client.get(f"/api/cash-flow/carry-targets?{query}").get_json()
+
+    def _link_plan(self, profile_id, source_plan_id):
+        plans = self.client.get(
+            f"/api/cash-flow/plans?profile_id={profile_id}"
+        ).get_json()["plans"]
+        response = self.client.put(
+            f"/api/cash-flow/plans/{plans[0]['id']}/source?profile_id={profile_id}",
+            json={"source_plan_id": source_plan_id},
+        )
+        self.assertEqual(response.status_code, 200)
+        return plans[0]["id"]
+
+    def test_new_expense_carries_to_ticked_owned_portfolios(self):
+        self._add_profiles((2, "IRA", 1), (3, "Roth IRA", 1), (4, "Joint", 1))
+
+        response = self._add(
+            name="Water",
+            amount=61.25,
+            category="Utilities",
+            frequency="quarterly",
+            start_date="2026-02-01",
+            due_date="2026-02-15",
+            pay_date="2026-02-11",
+            annual_change_pct=4,
+            notes="City bill",
+            carry_to=[2, 3],
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            [(row["name"], row["status"]) for row in response.get_json()["carried"]],
+            [("IRA", "added"), ("Roth IRA", "added")],
+        )
+        source = self._items_for_profile(1)
+        self.assertEqual([row["name"] for row in source], ["Water"])
+        compared = (
+            "kind", "name", "category", "amount_cents", "frequency", "start_date",
+            "end_date", "due_date", "pay_date", "essential", "tax_rate_pct",
+            "annual_change_pct", "notes", "active",
+        )
+        for profile_id in (2, 3):
+            copies = self._items_for_profile(profile_id)
+            self.assertEqual(len(copies), 1)
+            self.assertNotEqual(copies[0]["id"], source[0]["id"])
+            self.assertNotEqual(copies[0]["plan_id"], source[0]["plan_id"])
+            for field in compared:
+                self.assertEqual(copies[0][field], source[0][field], field)
+        # Unticked stays untouched.
+        self.assertEqual(self._items_for_profile(4), [])
+
+    def _carried(self, **overrides):
+        """Add Water from Owner to IRA and Roth IRA; return (item, ira, roth)."""
+        self._add_profiles((2, "IRA", 1), (3, "Roth IRA", 1))
+        # Activating Owner shows it in the selector, as /api/owner does.
+        conn = self._get_connection()
+        try:
+            conn.execute("UPDATE profiles SET hidden_from_selector = 0 WHERE id = 1")
+            conn.commit()
+        finally:
+            conn.close()
+        item = self._add(
+            name="Water", amount=50, due_date="2026-01-15", carry_to=[2, 3], **overrides
+        ).get_json()["item"]
+        return item, self._items_for_profile(2)[0], self._items_for_profile(3)[0]
+
+    def test_copies_are_listed_on_every_entry_in_the_group(self):
+        item, ira, roth = self._carried()
+        self.assertEqual(
+            [(copy["id"], copy["name"]) for copy in item["linked_copies"]],
+            [(ira["id"], "IRA"), (roth["id"], "Roth IRA")],
+        )
+        listed = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={ira['plan_id']}"
+        ).get_json()["items"][0]
+        self.assertEqual(
+            [copy["name"] for copy in listed["linked_copies"]], ["Owner", "Roth IRA"]
+        )
+
+    def test_entry_added_without_carrying_has_no_link(self):
+        created = self._add(name="Water").get_json()["item"]
+        self.assertEqual(created["linked_copies"], [])
+        self.assertIsNone(self._items_for_profile(1)[0]["carry_group_id"])
+
+    def test_edit_reaches_only_the_copies_named(self):
+        item, ira, roth = self._carried()
+        response = self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75, "copy_ids": [ira["id"]]},
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertTrue(body["changed"])
+        self.assertEqual([copy["name"] for copy in body["copies"]], ["IRA"])
+        self.assertEqual(self._items_for_profile(1)[0]["amount_cents"], 7500)
+        self.assertEqual(self._items_for_profile(2)[0]["amount_cents"], 7500)
+        self.assertEqual(self._items_for_profile(3)[0]["amount_cents"], 5000)
+
+    def test_edit_without_copy_ids_stays_in_its_portfolio(self):
+        item, _ira, _roth = self._carried()
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75},
+        )
+        self.assertEqual(self._items_for_profile(2)[0]["amount_cents"], 5000)
+        self.assertEqual(self._items_for_profile(3)[0]["amount_cents"], 5000)
+
+    def test_edit_only_copies_the_fields_that_changed(self):
+        item, ira, _roth = self._carried()
+        # IRA's copy deliberately pays a different amount with its own note.
+        self.client.put(
+            f"/api/cash-flow/items/{ira['id']}?profile_id=2",
+            json={
+                **{key: ira[key] for key in ira.keys()},
+                "amount": 80,
+                "essential": True,
+                "notes": "IRA share",
+            },
+        )
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={
+                **item,
+                "name": "City Water",
+                "due_date": "2026-01-20",
+                "pay_date": "2026-01-18",
+                "copy_ids": [ira["id"]],
+            },
+        )
+        copy = self._items_for_profile(2)[0]
+        self.assertEqual(copy["name"], "City Water")
+        self.assertEqual(copy["due_date"], "2026-01-20")
+        self.assertEqual(copy["pay_date"], "2026-01-18")
+        self.assertEqual(copy["amount_cents"], 8000)
+        self.assertEqual(copy["notes"], "IRA share")
+
+    def test_saving_without_a_change_touches_no_copy(self):
+        item, ira, _roth = self._carried()
+        self.client.put(
+            f"/api/cash-flow/items/{ira['id']}?profile_id=2",
+            json={**{key: ira[key] for key in ira.keys()}, "amount": 80, "essential": True},
+        )
+        response = self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "copy_ids": [ira["id"]]},
+        )
+        body = response.get_json()
+        self.assertFalse(body["changed"])
+        self.assertEqual(body["copies"], [])
+        self.assertEqual(self._items_for_profile(2)[0]["amount_cents"], 8000)
+
+    def test_a_copy_can_edit_the_others_in_its_group(self):
+        item, ira, roth = self._carried()
+        ira_view = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={ira['plan_id']}"
+        ).get_json()["items"][0]
+        self.client.put(
+            f"/api/cash-flow/items/{ira['id']}?profile_id=2",
+            json={**ira_view, "amount": 90, "copy_ids": [item["id"], roth["id"]]},
+        )
+        for profile_id in (1, 2, 3):
+            self.assertEqual(self._items_for_profile(profile_id)[0]["amount_cents"], 9000)
+
+    def test_save_off_and_restore_reach_the_copies_named(self):
+        item, ira, roth = self._carried()
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "active": False, "copy_ids": [ira["id"]]},
+        )
+        self.assertEqual(self._items_for_profile(1)[0]["active"], 0)
+        self.assertEqual(self._items_for_profile(2)[0]["active"], 0)
+        self.assertEqual(self._items_for_profile(3)[0]["active"], 1)
+
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "active": True, "copy_ids": [ira["id"], roth["id"]]},
+        )
+        for profile_id in (1, 2, 3):
+            self.assertEqual(self._items_for_profile(profile_id)[0]["active"], 1)
+
+    def test_delete_reaches_only_the_copies_named(self):
+        item, ira, roth = self._carried()
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                "INSERT INTO cash_flow_item_payments (item_id, due_date) VALUES (?, '2026-01-15')",
+                (ira["id"],),
+            )
+            conn.execute(
+                "INSERT INTO cash_flow_month_overrides (item_id, month, amount_cents) VALUES (?, '2026-01', 100)",
+                (ira["id"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        response = self.client.delete(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={"copy_ids": [ira["id"]]},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [copy["name"] for copy in response.get_json()["copies"]], ["IRA"]
+        )
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(self._items_for_profile(2), [])
+        self.assertEqual(len(self._items_for_profile(3)), 1)
+        conn = self._get_connection()
+        try:
+            for table in ("cash_flow_item_payments", "cash_flow_month_overrides"):
+                count = conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE item_id = ?", (ira["id"],)
+                ).fetchone()[0]
+                self.assertEqual(count, 0, table)
+        finally:
+            conn.close()
+
+    def test_delete_without_copy_ids_stays_in_its_portfolio(self):
+        item, _ira, _roth = self._carried()
+        self.client.delete(f"/api/cash-flow/items/{item['id']}?profile_id=1")
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(len(self._items_for_profile(2)), 1)
+        self.assertEqual(len(self._items_for_profile(3)), 1)
+
+    def test_change_never_reaches_a_copy_in_a_portfolio_since_marked_test(self):
+        item, ira, roth = self._carried()
+        self.client.put("/api/profiles/2/ownership", json={"is_user_owned": False})
+
+        listed = self.client.get(
+            f"/api/cash-flow/items?profile_id=1&plan_id={self.plan_id}"
+        ).get_json()["items"][0]
+        self.assertEqual(
+            [copy["name"] for copy in listed["linked_copies"]], ["Roth IRA"]
+        )
+
+        response = self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75, "copy_ids": [ira["id"], roth["id"]]},
+        )
+        self.assertEqual(
+            [copy["name"] for copy in response.get_json()["copies"]], ["Roth IRA"]
+        )
+        self.assertEqual(self._items_for_profile(2)[0]["amount_cents"], 5000)
+        self.assertEqual(self._items_for_profile(3)[0]["amount_cents"], 7500)
+
+        deleted = self.client.delete(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={"copy_ids": [ira["id"]]},
+        )
+        self.assertEqual(deleted.get_json()["copies"], [])
+        self.assertEqual(len(self._items_for_profile(2)), 1)
+
+    def test_portfolio_since_marked_test_cannot_send_a_change(self):
+        item, ira, _roth = self._carried()
+        self.client.put("/api/profiles/2/ownership", json={"is_user_owned": False})
+        ira_view = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={ira['plan_id']}"
+        ).get_json()["items"][0]
+        self.assertEqual(ira_view["linked_copies"], [])
+
+        self.client.put(
+            f"/api/cash-flow/items/{ira['id']}?profile_id=2",
+            json={**ira_view, "amount": 75, "copy_ids": [item["id"]]},
+        )
+        self.assertEqual(self._items_for_profile(2)[0]["amount_cents"], 7500)
+        self.assertEqual(self._items_for_profile(1)[0]["amount_cents"], 5000)
+
+    def test_change_skips_a_copy_whose_portfolio_now_follows_another_plan(self):
+        item, ira, roth = self._carried()
+        self._link_plan(2, roth["plan_id"])
+        response = self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75, "copy_ids": [ira["id"], roth["id"]]},
+        )
+        self.assertEqual(
+            [copy["name"] for copy in response.get_json()["copies"]], ["Roth IRA"]
+        )
+
+    def test_copy_ids_cannot_reach_an_entry_outside_the_group(self):
+        self._add_profiles((2, "IRA", 1))
+        item = self._add(name="Water", amount=50, carry_to=[2]).get_json()["item"]
+        other = self.client.post(
+            "/api/cash-flow/items?profile_id=2",
+            json={
+                "kind": "expense",
+                "name": "Separate bill",
+                "amount": 10,
+                "start_date": "2026-01-01",
+            },
+        ).get_json()["item"]
+
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75, "copy_ids": [other["id"]]},
+        )
+        self.client.delete(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={"copy_ids": [other["id"]]},
+        )
+        names = {row["name"]: row["amount_cents"] for row in self._items_for_profile(2)}
+        self.assertEqual(names["Separate bill"], 1000)
+
+    def test_malformed_copy_ids_change_nothing(self):
+        item, _ira, _roth = self._carried()
+        updated = self.client.put(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={**item, "amount": 75, "copy_ids": "all"},
+        )
+        self.assertEqual(updated.status_code, 400)
+        deleted = self.client.delete(
+            f"/api/cash-flow/items/{item['id']}?profile_id=1",
+            json={"copy_ids": [True]},
+        )
+        self.assertEqual(deleted.status_code, 400)
+        self.assertEqual(self._items_for_profile(1)[0]["amount_cents"], 5000)
+
+    def test_move_ends_the_link_for_the_moved_entry_only(self):
+        item, ira, roth = self._carried()
+        self._add_profiles((4, "Friend", 0))
+        moved = self.client.post(
+            f"/api/cash-flow/items/{item['id']}/move?profile_id=1",
+            json={"target_profile_id": 4},
+        )
+        self.assertEqual(moved.status_code, 200)
+        self.assertEqual(moved.get_json()["item"]["linked_copies"], [])
+        self.assertIsNone(self._items_for_profile(4)[0]["carry_group_id"])
+
+        # The two left behind still reach each other, and not the moved one.
+        ira_view = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={ira['plan_id']}"
+        ).get_json()["items"][0]
+        self.assertEqual(
+            [copy["id"] for copy in ira_view["linked_copies"]], [roth["id"]]
+        )
+
+    def test_paying_one_copy_leaves_the_others_unpaid(self):
+        due_date = datetime.date.today() + datetime.timedelta(days=1)
+        self._add_profiles((2, "IRA", 1))
+        item = self._add(
+            name="Water",
+            frequency="one_time",
+            start_date=due_date.isoformat(),
+            due_date=due_date.isoformat(),
+            carry_to=[2],
+        ).get_json()["item"]
+        self.client.put(
+            f"/api/cash-flow/items/{item['id']}/payments/{due_date.isoformat()}?profile_id=1",
+            json={"paid": True},
+        )
+        copy_plan = self._items_for_profile(2)[0]["plan_id"]
+        copy = self.client.get(
+            f"/api/cash-flow/items?profile_id=2&plan_id={copy_plan}"
+        ).get_json()["items"][0]
+        self.assertFalse(copy["paid"])
+
+    def test_bill_already_in_a_portfolio_joins_the_group(self):
+        self._add_profiles((2, "IRA", 1))
+        ira_plan = self.client.get(
+            "/api/cash-flow/plans?profile_id=2"
+        ).get_json()["plans"][0]["id"]
+        typed = self.client.post(
+            "/api/cash-flow/items?profile_id=2",
+            json={
+                "plan_id": ira_plan,
+                "kind": "expense",
+                "name": "Water",
+                "amount": 50,
+                "frequency": "monthly",
+                "start_date": "2026-01-01",
+                "notes": "Typed by hand",
+            },
+        ).get_json()["item"]
+
+        added = self._add(name="water", amount=50, carry_to=[2]).get_json()
+        self.assertEqual(added["carried"][0]["status"], "duplicate")
+        self.assertEqual(
+            [copy["id"] for copy in added["item"]["linked_copies"]], [typed["id"]]
+        )
+        # Linking does not rewrite what was already there.
+        self.assertEqual(self._items_for_profile(2)[0]["notes"], "Typed by hand")
+
+    def test_backup_of_a_carried_entry_does_not_export_its_link(self):
+        self._carried()
+        document = self.client.get(
+            f"/api/cash-flow/export?profile_id=1&plan_id={self.plan_id}&format=json"
+        ).get_json()
+        self.assertNotIn("carry_group_id", document["items"][0])
+        self.assertNotIn("linked_copies", document["items"][0])
+
+    def test_expense_without_carry_to_stays_put_and_reports_nothing(self):
+        self._add_profiles((2, "IRA", 1))
+        response = self._add(name="Water")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["carried"], [])
+        self.assertEqual(self._items_for_profile(2), [])
+
+    def test_test_or_tracked_portfolio_never_receives_a_carried_expense(self):
+        self._add_profiles((2, "IRA", 1), (3, "Test Port", 0), (4, "Friend", 0))
+
+        listed = self._carry_targets()
+        self.assertEqual(listed["source_profile_id"], 1)
+        self.assertEqual([row["name"] for row in listed["targets"]], ["IRA"])
+
+        # Even a request that names them, such as a page loaded before the
+        # portfolio was reclassified, must not write there.
+        response = self._add(name="Water", carry_to=[2, 3, 4])
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            [(row["name"], row["status"]) for row in response.get_json()["carried"]],
+            [("IRA", "added"), ("Test Port", "not_owned"), ("Friend", "not_owned")],
+        )
+        self.assertEqual(len(self._items_for_profile(2)), 1)
+        self.assertEqual(self._items_for_profile(3), [])
+        self.assertEqual(self._items_for_profile(4), [])
+
+    def test_test_or_tracked_portfolio_never_sends_a_carried_expense(self):
+        self._add_profiles((2, "IRA", 1), (3, "Test Port", 0))
+        test_plan = self.client.get(
+            "/api/cash-flow/plans?profile_id=3"
+        ).get_json()["plans"][0]["id"]
+
+        listed = self._carry_targets("profile_id=3")
+        self.assertIsNone(listed["source_profile_id"])
+        self.assertEqual(listed["targets"], [])
+
+        response = self.client.post(
+            "/api/cash-flow/items?profile_id=3",
+            json={
+                "plan_id": test_plan,
+                "kind": "expense",
+                "name": "Test bill",
+                "amount": 10,
+                "start_date": "2026-01-01",
+                "carry_to": [1, 2],
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            [row["status"] for row in response.get_json()["carried"]],
+            ["not_owned", "not_owned"],
+        )
+        self.assertEqual(len(self._items_for_profile(3)), 1)
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(self._items_for_profile(2), [])
+
+    def test_reclassifying_a_portfolio_takes_it_out_of_carry_over(self):
+        self._add_profiles((2, "IRA", 1))
+        self.assertEqual(len(self._carry_targets()["targets"]), 1)
+        self.client.put("/api/profiles/2/ownership", json={"is_user_owned": False})
+        self.assertEqual(self._carry_targets()["targets"], [])
+
+    def test_aggregates_are_out_of_carry_over_both_ways(self):
+        self._add_profiles((2, "IRA", 1))
+        conn = self._get_connection()
+        try:
+            conn.execute("INSERT INTO aggregates (id, name) VALUES (1, 'Household')")
+            conn.commit()
+        finally:
+            conn.close()
+
+        self.assertNotIn(
+            "Household", [row["name"] for row in self._carry_targets()["targets"]]
+        )
+
+        plan = self.client.get(
+            "/api/cash-flow/plans?aggregate_id=1"
+        ).get_json()["plans"][0]
+        listed = self._carry_targets(f"aggregate_id=1&plan_id={plan['id']}")
+        self.assertIsNone(listed["source_profile_id"])
+        self.assertEqual(listed["targets"], [])
+
+        response = self.client.post(
+            "/api/cash-flow/items?aggregate_id=1",
+            json={
+                "plan_id": plan["id"],
+                "kind": "expense",
+                "name": "Shared bill",
+                "amount": 10,
+                "start_date": "2026-01-01",
+                "carry_to": [1, 2],
+            },
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(self._items_for_profile(2), [])
+
+    def test_hidden_and_inactive_owner_portfolios_are_not_offered(self):
+        self._add_profiles((2, "IRA", 1), (3, "Old Account", 1))
+        conn = self._get_connection()
+        try:
+            conn.execute("UPDATE profiles SET hidden_from_selector = 1 WHERE id = 3")
+            conn.execute("UPDATE profiles SET owner_active = 0 WHERE id = 1")
+            conn.commit()
+        finally:
+            conn.close()
+        names = [row["name"] for row in self._carry_targets("profile_id=2")["targets"]]
+        self.assertEqual(names, [])
+
+    def test_same_bill_is_not_doubled_in_a_portfolio_that_already_has_it(self):
+        self._add_profiles((2, "IRA", 1))
+        self._add(name="Water", amount=50, carry_to=[2])
+        again = self._add(name="water ", amount=50, carry_to=[2])
+        self.assertEqual(again.status_code, 201)
+        self.assertEqual(again.get_json()["carried"][0]["status"], "duplicate")
+        self.assertEqual(len(self._items_for_profile(2)), 1)
+
+        # A different amount is a different bill.
+        different = self._add(name="Water", amount=55, carry_to=[2])
+        self.assertEqual(different.get_json()["carried"][0]["status"], "added")
+        self.assertEqual(len(self._items_for_profile(2)), 2)
+
+    def test_portfolio_linked_to_a_plan_gets_no_hidden_copy(self):
+        self._add_profiles((2, "IRA", 1), (3, "Roth IRA", 1), (4, "Joint", 1))
+        self._add(name="Seed", amount=1)
+        # 2 already follows this plan; 3 follows 4's plan.
+        self._link_plan(2, self.plan_id)
+        joint_plan = self.client.get(
+            "/api/cash-flow/plans?profile_id=4"
+        ).get_json()["plans"][0]["id"]
+        self._link_plan(3, joint_plan)
+
+        states = {
+            row["name"]: row for row in self._carry_targets()["targets"]
+        }
+        self.assertEqual(states["IRA"]["state"], "shared")
+        self.assertEqual(states["Roth IRA"]["state"], "borrowed")
+        self.assertEqual(states["Roth IRA"]["source_label"], "Joint")
+        self.assertEqual(states["Joint"]["state"], "open")
+
+        response = self._add(name="Water", carry_to=[2, 3, 4])
+        self.assertEqual(
+            [(row["name"], row["status"]) for row in response.get_json()["carried"]],
+            [("IRA", "shared"), ("Roth IRA", "borrowed"), ("Joint", "added")],
+        )
+        self.assertEqual(self._items_for_profile(2), [])
+        self.assertEqual(self._items_for_profile(3), [])
+        self.assertEqual(
+            [row["name"] for row in self._items_for_profile(4)], ["Water"]
+        )
+
+    def test_unopened_owner_subaccount_follows_owner_instead_of_taking_a_copy(self):
+        self._add_profiles((2, "IRA", 1))
+        conn = self._get_connection()
+        try:
+            conn.execute("UPDATE profiles SET include_in_owner = 1 WHERE id = 2")
+            conn.commit()
+        finally:
+            conn.close()
+        self._add(name="Seed", amount=1)
+        self.assertEqual(self._carry_targets()["targets"][0]["state"], "shared")
+
+    def test_malformed_carry_to_saves_nothing(self):
+        self._add_profiles((2, "IRA", 1))
+        for bad in ("2", [True], ["abc"], [None], {"id": 2}):
+            response = self._add(name="Water", carry_to=bad)
+            self.assertEqual(response.status_code, 400, bad)
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(self._items_for_profile(2), [])
+
+    def test_unknown_portfolio_is_reported_and_the_entry_is_still_saved(self):
+        response = self._add(name="Water", carry_to=[99])
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.get_json()["carried"][0]["status"], "not_owned")
+        self.assertEqual(len(self._items_for_profile(1)), 1)
+
+    def test_own_portfolio_in_carry_to_is_not_added_twice(self):
+        response = self._add(name="Water", carry_to=[1])
+        self.assertEqual(response.get_json()["carried"], [])
+        self.assertEqual(len(self._items_for_profile(1)), 1)
+
+    def test_entry_and_copies_land_together_when_a_copy_fails(self):
+        self._add_profiles((2, "IRA", 1), (3, "Roth IRA", 1))
+        for profile_id in (2, 3):
+            self.client.get(f"/api/cash-flow/plans?profile_id={profile_id}")
+        real_insert = app_module._cash_flow_insert_item
+        calls = {"count": 0}
+
+        def failing_insert(conn, plan_id, item, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 3:
+                raise sqlite3.OperationalError("disk full")
+            return real_insert(conn, plan_id, item, **kwargs)
+
+        app_module._cash_flow_insert_item = failing_insert
+        original_propagate = app_module.app.config.get("PROPAGATE_EXCEPTIONS")
+        app_module.app.config["PROPAGATE_EXCEPTIONS"] = False
+        original_testing = app_module.app.testing
+        app_module.app.testing = False
+        try:
+            response = self._add(name="Water", carry_to=[2, 3])
+        finally:
+            app_module._cash_flow_insert_item = real_insert
+            app_module.app.config["PROPAGATE_EXCEPTIONS"] = original_propagate
+            app_module.app.testing = original_testing
+
+        self.assertGreaterEqual(response.status_code, 500)
+        self.assertEqual(self._items_for_profile(1), [])
+        self.assertEqual(self._items_for_profile(2), [])
+        self.assertEqual(self._items_for_profile(3), [])
+
+    def test_edit_and_copies_land_together_when_a_copy_fails(self):
+        item, ira, roth = self._carried()
+        real_touch = app_module._cash_flow_touch_plan
+        calls = {"count": 0}
+
+        def failing_touch(conn, plan_id):
+            calls["count"] += 1
+            if calls["count"] == 3:
+                raise ValueError("not a database error")
+            return real_touch(conn, plan_id)
+
+        app_module._cash_flow_touch_plan = failing_touch
+        original_propagate = app_module.app.config.get("PROPAGATE_EXCEPTIONS")
+        app_module.app.config["PROPAGATE_EXCEPTIONS"] = False
+        original_testing = app_module.app.testing
+        app_module.app.testing = False
+        try:
+            response = self.client.put(
+                f"/api/cash-flow/items/{item['id']}?profile_id=1",
+                json={**item, "amount": 75, "copy_ids": [ira["id"], roth["id"]]},
+            )
+        finally:
+            app_module._cash_flow_touch_plan = real_touch
+            app_module.app.config["PROPAGATE_EXCEPTIONS"] = original_propagate
+            app_module.app.testing = original_testing
+
+        self.assertGreaterEqual(response.status_code, 500)
+        for profile_id in (1, 2, 3):
+            self.assertEqual(self._items_for_profile(profile_id)[0]["amount_cents"], 5000)
+
     def test_paid_check_is_tied_to_due_occurrence_not_view_month(self):
         today = datetime.date.today()
         due_date = today + datetime.timedelta(days=1)
