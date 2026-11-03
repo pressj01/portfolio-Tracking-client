@@ -5903,6 +5903,48 @@ def _realized_all_time_accounts_by_ticker(conn, profile_ids):
     return accounts
 
 
+def _quantity_accounts_by_ticker(conn, profile_ids):
+    """Per-account share counts behind a combined Owner/aggregate holdings row.
+
+    The combined quantity is already the sum of these accounts; this names each
+    contribution so the dashboard can show where the shares sit without a
+    second round-trip per member portfolio.
+    """
+    ids = list(dict.fromkeys(int(pid) for pid in (profile_ids or []) if pid is not None))
+    if len(ids) < 2:
+        return {}
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT ticker, profile_id, quantity
+            FROM all_account_info
+            WHERE profile_id IN ({placeholders})
+              AND COALESCE(quantity, 0) > 1e-9
+            ORDER BY ticker, profile_id""",
+        ids,
+    ).fetchall()
+    names = _load_profile_name_map(conn, ids)
+    accounts = {}
+    for row in rows:
+        profile_id = int(row["profile_id"])
+        accounts.setdefault(row["ticker"], []).append({
+            "profile_id": profile_id,
+            "account": names.get(profile_id) or f"Portfolio {profile_id}",
+            "quantity": round(_num_or_zero(row["quantity"]), 6),
+        })
+    return accounts
+
+
+def _apply_quantity_accounts(results, quantity_accounts_by_ticker):
+    """Attach quantity_accounts when a combined view has a per-account split."""
+    if not quantity_accounts_by_ticker:
+        return results
+    for row in results:
+        parts = quantity_accounts_by_ticker.get(row.get("ticker")) or []
+        if parts:
+            row["quantity_accounts"] = parts
+    return results
+
+
 def _resolve_aggregate_profile(ticker, profile_ids):
     """For aggregate writes, find the profile with the largest position for a ticker."""
     conn = get_connection()
@@ -23037,6 +23079,10 @@ def list_holdings():
         _realized_gains_by_ticker(conn, payment_profile_ids),
         _realized_gains_by_ticker(conn, payment_profile_ids, all_time=True),
         _realized_all_time_accounts_by_ticker(conn, payment_profile_ids),
+    )
+    _apply_quantity_accounts(
+        results,
+        _quantity_accounts_by_ticker(conn, payment_profile_ids),
     )
     _apply_holding_display_quantities(results)
 

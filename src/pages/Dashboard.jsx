@@ -475,6 +475,10 @@ const overviewReturnParts = (h) => {
     income: Number(h?.total_return_divs_component ?? h?.total_divs_received) || 0,
     realized: Number(h?.total_return_realized_component) || 0,
     trBasis: Number(h?.total_return_basis || h?.purchase_value) || 0,
+    quantity: Number(h?.quantity) || 0,
+    // Combined Owner/aggregate views name each account behind the summed share
+    // count; single portfolios leave this empty and the rollover stays off.
+    quantityAccounts: Array.isArray(h?.quantity_accounts) ? h.quantity_accounts : [],
   }
 }
 
@@ -485,13 +489,47 @@ const addReturnParts = (bucket, parts) => {
   bucket.income += Number(parts.income) || 0
   bucket.realized += Number(parts.realized) || 0
   bucket.trBasis += Number(parts.trBasis) || Number(parts.invested) || 0
+  bucket.quantity += Number(parts.quantity) || 0
   bucket.count += 1
   return bucket
 }
 
-const emptyReturnBucket = (name) => ({ name, value: 0, invested: 0, gain: 0, income: 0, realized: 0, trBasis: 0, count: 0 })
+const emptyReturnBucket = (name, extras = {}) => ({
+  name,
+  value: 0,
+  invested: 0,
+  gain: 0,
+  income: 0,
+  realized: 0,
+  trBasis: 0,
+  quantity: 0,
+  quantityAccounts: [],
+  count: 0,
+  isTicker: false,
+  ...extras,
+})
 
-const sumReturnParts = (name, items) => items.reduce(addReturnParts, emptyReturnBucket(name))
+const sumReturnParts = (name, items, extras = {}) => (
+  items.reduce(addReturnParts, emptyReturnBucket(name, extras))
+)
+
+const formatOverviewShares = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return '—'
+  return n.toLocaleString(undefined, { maximumFractionDigits: 3 })
+}
+
+// Native title rollover naming each portfolio behind a combined share total —
+// same pattern as CommonInfo's realized_all_time_accounts hover.
+const sharesBreakdownTitle = (g) => {
+  const accounts = Array.isArray(g?.quantityAccounts) ? g.quantityAccounts : []
+  if (accounts.length < 2) return undefined
+  const lines = [`${formatOverviewShares(g.quantity)} shares total:`]
+  accounts.forEach(account => {
+    lines.push(`  ${account.account}: ${formatOverviewShares(account.quantity)}`)
+  })
+  return lines.join('\n')
+}
 
 // Gain shown for one row, in the selected mode. Groups cached before this
 // feature existed have no income/basis fields, so both fall back to the
@@ -536,7 +574,10 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
     if (subId != null) {
       return selectedCat.tickers
         .filter(t => String(t.subcategory_id ?? '') === String(subId))
-        .map(t => sumReturnParts(t.ticker, [t]))
+        .map(t => sumReturnParts(t.ticker, [t], {
+          isTicker: true,
+          quantityAccounts: Array.isArray(t.quantityAccounts) ? t.quantityAccounts : [],
+        }))
         .sort((a, b) => b.value - a.value)
     }
 
@@ -555,7 +596,10 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
     }
 
     return selectedCat.tickers
-      .map(t => sumReturnParts(t.ticker, [t]))
+      .map(t => sumReturnParts(t.ticker, [t], {
+        isTicker: true,
+        quantityAccounts: Array.isArray(t.quantityAccounts) ? t.quantityAccounts : [],
+      }))
       .sort((a, b) => b.value - a.value)
   }, [groups, selectedCat, subId])
 
@@ -734,6 +778,10 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                 const alloc = totalValue ? ((g.value / totalValue) * 100) : 0
                 const target = Number(g.target_pct) || 0
                 const diff = showTargetRing && target > 0 ? alloc - target : null
+                // Per-portfolio split only exists on Owner/aggregate holdings; a
+                // regular portfolio never gets quantity_accounts, so ticker rows
+                // there stay a plain share count with no ⓘ rollover.
+                const accountSplit = g.isTicker ? sharesBreakdownTitle(g) : undefined
                 return (
                   <tr key={g.name} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
                     <td style={{ padding: '0.5rem' }}>
@@ -741,7 +789,25 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                         <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
                         <div>
                           <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{g.name}</div>
-                          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{g.count} item{g.count !== 1 ? 's' : ''}</div>
+                          {g.isTicker ? (
+                            <div
+                              style={{
+                                color: 'var(--text-dim)',
+                                fontSize: '0.75rem',
+                                cursor: accountSplit ? 'help' : undefined,
+                              }}
+                              title={accountSplit}
+                            >
+                              {formatOverviewShares(g.quantity)} share{Number(g.quantity) === 1 ? '' : 's'}
+                              {accountSplit && (
+                                <span aria-hidden="true" style={{ marginLeft: 4, opacity: 0.8 }}>ⓘ</span>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+                              {g.count} item{g.count !== 1 ? 's' : ''}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>

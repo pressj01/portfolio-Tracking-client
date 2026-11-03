@@ -3409,6 +3409,44 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         self.assertEqual(member_row["realized_all_time"], 7.0)
         self.assertNotIn("realized_all_time_accounts", member_row)
 
+    def test_owner_quantity_accounts_names_each_portfolio_behind_the_total(self):
+        # Owner stores a rolled-up quantity. The dashboard needs the member
+        # split so a hover can show where those shares sit — without making
+        # the user open each portfolio.
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (1, 'Owner', 0)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (20, 'IRA', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (21, 'Taxable', 1)")
+        self._execute("INSERT INTO profiles (id, name, include_in_owner) VALUES (22, 'Outside', 0)")
+        for profile_id, qty in ((1, 15.0), (20, 10.0), (21, 5.0), (22, 99.0)):
+            self._execute(
+                "INSERT INTO all_account_info "
+                "(ticker, profile_id, description, quantity, price_paid, purchase_value, purchase_date) "
+                "VALUES ('QQQI', ?, 'Nasdaq Income', ?, 10, ?, '2026-01-01')",
+                (profile_id, qty, qty * 10),
+            )
+
+        owner = self.client.get("/api/holdings?profile_id=1")
+        member = self.client.get("/api/holdings?profile_id=20")
+
+        self.assertEqual(owner.status_code, 200, owner.get_data(as_text=True))
+        row = owner.get_json()[0]
+        self.assertEqual(row["quantity"], 15.0)
+        self.assertEqual(
+            row["quantity_accounts"],
+            [
+                {"profile_id": 20, "account": "IRA", "quantity": 10.0},
+                {"profile_id": 21, "account": "Taxable", "quantity": 5.0},
+            ],
+        )
+        self.assertEqual(
+            sum(part["quantity"] for part in row["quantity_accounts"]),
+            row["quantity"],
+        )
+        # A single account has nothing to split.
+        member_row = member.get_json()[0]
+        self.assertEqual(member_row["quantity"], 10.0)
+        self.assertNotIn("quantity_accounts", member_row)
+
     def test_hand_edits_to_a_member_refresh_the_owner_rollup(self):
         # Owner stores a copy of its members' positions. A trade typed in by
         # hand or a cleared member used to leave that copy as it was, listing
@@ -3647,6 +3685,13 @@ class HoldingsTransactionApiTest(unittest.TestCase):
         combined, _ = self._assert_row_is_the_sum_of_its_accounts("aggregate_id=1", [2, 3], "PAIR")
 
         self.assertEqual(combined["quantity"], 30)
+        self.assertEqual(
+            combined["quantity_accounts"],
+            [
+                {"profile_id": 2, "account": "Ledger Ahead", "quantity": 10.0},
+                {"profile_id": 3, "account": "Stored Ahead", "quantity": 20.0},
+            ],
+        )
         self.assertEqual(combined["purchase_value"], 305.0)
         self.assertEqual(combined["gain_or_loss"], 85.0)
         # $80 (ledger ahead) + $90 (stored ahead), not the larger of $140 and $90.
