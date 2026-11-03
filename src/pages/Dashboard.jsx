@@ -757,7 +757,10 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Name</th>
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Value/Invested</th>
+                <th
+                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)', cursor: 'help' }}
+                  title="Top: current market value of the holdings. Bottom: invested amount (cost basis) for the shares currently held, using the selected basis mode."
+                >Value/Invested</th>
                 <th
                   style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}
                   title={isTotalMode
@@ -812,8 +815,16 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                       </div>
                     </td>
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
-                      <div style={{ color: 'var(--text-strong)' }}>{fmt(g.value)}</div>
-                      <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{fmt(g.invested)}</div>
+                      <div
+                        style={{ color: 'var(--text-strong)', cursor: 'help' }}
+                        title="Current market value of the holdings"
+                        aria-label={`Current market value: ${fmt(g.value)}`}
+                      >{fmt(g.value)}</div>
+                      <div
+                        style={{ color: 'var(--text-dim)', fontSize: '0.75rem', cursor: 'help' }}
+                        title="Invested amount (cost basis) for the shares currently held, using the selected basis mode"
+                        aria-label={`Invested amount (cost basis): ${fmt(g.invested)}`}
+                      >{fmt(g.invested)}</div>
                     </td>
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                       <div style={{ color: gain >= 0 ? 'var(--pos)' : 'var(--neg)' }}>{gain >= 0 ? '+' : ''}{fmt(gain)}</div>
