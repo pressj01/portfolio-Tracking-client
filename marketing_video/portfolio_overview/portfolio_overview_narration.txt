@@ -1,0 +1,67 @@
+Portfolio Tracker: A Quick Tour (narration)
+Voice: en-US-AvaMultilingualNeural, rate -2%
+
+
+## Introduction
+[0:03.2] Hi! This is a quick tour of Portfolio Tracker. It's a desktop program for Windows and Mac that you buy once, with no subscription.
+[0:13.7] For this tour, I've set up two demo accounts, a brokerage account and a Roth IRA. Up top, I'm viewing them together as one household. Let's walk through the main screens.
+
+## Dashboard
+[0:25.3] We'll start on the Dashboard. The first row is the big picture. Your portfolio value, the change since the last close, and your return over the period you pick.
+[0:35.6] These range buttons set that period. One year, five years, year to date, and so on. The grade and risk cards below follow the same window.
+[0:45.7] Next come the income cards. Dividends so far this year, what you've been paid this month, and your estimated monthly and annual income. Yield on cost compares that income with what you paid.
+[0:58.2] Portfolio Value Over Time charts your account history. It's rebuilt from your transactions, so you can see how you got here.
+[1:06.8] Below that, the dividends expected this week, and your allocation by category, next to the targets you set. The Diff column shows where you're over or under.
+[1:16.5] And at the bottom, every holding, with its cost basis, current value, dividends, yield, and total profit.
+
+## Dividend Calendar
+[1:24.5] Now the Dividend Calendar. Open the Portfolio menu, and choose Dividend Calendar.
+[1:32.2] The month view puts each payment on the day the cash arrives. Days before today are payments you've already received. Later days are the ones still coming. The small icons tell you whether a date is confirmed, estimated, or matched to your imported history.
+[1:48.7] Each day shows its total, and the top right shows the total for the month. That makes it easy to spot the lighter months.
+[1:56.5] The Agenda view lists the same payments in order. For each one, you'll see the ex-dividend date, the amount per share, and whether the pay date is confirmed or estimated.
+
+## Import: supported brokers
+[2:08.8] Next, importing. Imports go into one account at a time, so I'll switch the selector to the brokerage account. Then open Admin, and choose Import.
+[2:22.3] The Broker Import tab reads exports straight from your broker. Right now, that's Charles Schwab, E*TRADE, Fidelity, Robinhood, Shear Group, and Interactive Brokers.
+[2:33.6] It works in three steps. Step 1, Positions, is a snapshot of what you own today. Step 2, Transactions, brings in your history, like dividends, DRIP, and buys and sells. Step 3, Refresh, updates prices and dividend data.
+
+## Generic import
+[2:50.7] What if your broker isn't on that list, or you keep your own spreadsheet? That's what the generic import is for. Start on the Generic Positions tab.
+[2:59.3] Click Download Holdings Template to get a ready-made Excel file. Only two columns are required, Ticker and Shares. You can add price paid, dividend, frequency, and more, and market data is filled in for you.
+[3:13.8] For your history, use Generic Transactions. Its template has one row per transaction, with a date, a type like buy, sell, or dividend, then the ticker, shares, price, and amount.
+[3:27.2] Here's a small file I made in that format. I'll drop it in, and click Preview.
+[3:34.0] The preview shows exactly what's in the file, before anything changes. And when you do import, any row that's already in your history is skipped. I won't import this one. It was just to show you the format.
+
+## ETF Comparer
+[3:50.3] Now a couple of research tools. Open Analysis, then ETF Comparer.
+[3:56.6] I'll add three popular dividend funds. SCHD, VYM, and JEPI.
+[4:03.5] The chart shows total return, with dividends reinvested, over the period you choose. You can also switch to price only, to see the difference dividends make.
+[4:13.5] Scroll down for more. There's yield on cost over time, each fund's distribution history, and a side by side table with yield, expense ratio, and returns.
+[4:25.6] Further down, you'll find average returns over several periods, and each fund's top holdings.
+
+## ETF Overlap
+[4:33.2] Right next to it is ETF Overlap. It answers a simple question. If I own both of these funds, how much am I really diversifying?
+[4:42.7] I'll pick a popular pair, VOO and QQQ.
+[4:47.8] The circle shows overlap by weight, not just shared tickers. Here, a big part of each fund sits in the same companies.
+[4:56.2] The sector chart shows where each fund leans, and the table lists the shared holdings. When two funds overlap a lot, buying both can add more of the same risk, instead of spreading it out.
+
+## Cash Flow & Sustainability (budgeting)
+[5:08.4] Now, Cash Flow and Sustainability. It's in the Portfolio menu.
+[5:15.9] This screen is also a full budgeting tool. You list your income and expenses once, with categories, due dates, and how often they repeat. Portfolio Tracker adds your dividend income for you.
+[5:28.7] Adding an expense only takes a moment. I'll add a gym membership, thirty dollars a month, under Health, and click Add expense.
+[5:41.8] The cards up top update right away. Expenses this month, portfolio income before and after tax, and what's left over. The green banner tells you whether your income covers this month's bills.
+[5:54.9] Further down, there's a stress test. It runs bull, neutral, and bear markets over the years ahead, with and without your other income.
+[6:04.3] In this demo, the tougher cases run short over twenty years, mostly because expenses keep growing with inflation. That's exactly the kind of thing you want to find out early.
+
+## Retirement Readiness
+[6:15.1] That brings us to Retirement Readiness. It's in the Portfolio menu, too.
+[6:22.5] It uses your budget and your portfolios together. Monthly expenses and other income are pulled straight from the cash flow plan. Here, that's Social Security and a pension, about thirty six hundred a month before tax.
+[6:36.1] Then you set your assumptions. I'll use a six percent yield in good markets, four and a half percent in a bear market, and fifteen thousand dollars of cash set aside.
+[6:48.2] The cards show the result. What the portfolio needs to pay each month, the income it can produce in good and bad markets, and the gap to a safety buffer of three times that need.
+[6:59.1] The badge sums it up. In this demo, it says Building. The portfolio covers the gap today, even in a bear market, but the full buffer isn't there yet. The chart and milestones below show how that changes over time.
+
+## Wrap-up
+[7:14.1] And that's the tour. Portfolio Tracker is a one-time purchase for Windows and Mac, and you can find it on Gumroad. Thanks for watching!
+
+## End card
+[7:24.4] For informational purposes only. Not financial advice.

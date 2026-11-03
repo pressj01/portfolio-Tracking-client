@@ -1,0 +1,78 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "total_duration": 284.19,
+  "scenes": [
+    {
+      "id": "welcome",
+      "audio": "welcome.mp3",
+      "audio_duration": 20.45,
+      "scene_duration": 21.7,
+      "start": 0.0
+    },
+    {
+      "id": "navigate",
+      "audio": "navigate.mp3",
+      "audio_duration": 22.92,
+      "scene_duration": 24.17,
+      "start": 21.7
+    },
+    {
+      "id": "owner",
+      "audio": "owner.mp3",
+      "audio_duration": 27.53,
+      "scene_duration": 28.78,
+      "start": 45.870000000000005
+    },
+    {
+      "id": "two_accounts",
+      "audio": "two_accounts.mp3",
+      "audio_duration": 29.14,
+      "scene_duration": 30.39,
+      "start": 74.65
+    },
+    {
+      "id": "aggregate",
+      "audio": "aggregate.mp3",
+      "audio_duration": 28.56,
+      "scene_duration": 29.81,
+      "start": 105.04
+    },
+    {
+      "id": "positions_file",
+      "audio": "positions_file.mp3",
+      "audio_duration": 25.87,
+      "scene_duration": 27.12,
+      "start": 134.85
+    },
+    {
+      "id": "positions_preview",
+      "audio": "positions_preview.mp3",
+      "audio_duration": 28.01,
+      "scene_duration": 29.26,
+      "start": 161.97
+    },
+    {
+      "id": "transactions_warning",
+      "audio": "transactions_warning.mp3",
+      "audio_duration": 32.09,
+      "scene_duration": 33.34,
+      "start": 191.23
+    },
+    {
+      "id": "transactions_preview",
+      "audio": "transactions_preview.mp3",
+      "audio_duration": 29.59,
+      "scene_duration": 30.84,
+      "start": 224.57
+    },
+    {
+      "id": "recap",
+      "audio": "recap.mp3",
+      "audio_duration": 27.53,
+      "scene_duration": 28.78,
+      "start": 255.41
+    }
+  ]
+}

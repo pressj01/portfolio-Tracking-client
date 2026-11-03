@@ -1,0 +1,94 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "lead_seconds": 0.55,
+  "tail_seconds": 0.8,
+  "total_duration": 466.19,
+  "scenes": [
+    {
+      "id": "00-title",
+      "audio": "00-title.mp3",
+      "audio_duration": 15.86,
+      "scene_duration": 17.21
+    },
+    {
+      "id": "01-dashboard-top",
+      "audio": "01-dashboard-top.mp3",
+      "audio_duration": 27.34,
+      "scene_duration": 28.69
+    },
+    {
+      "id": "02-dashboard-metrics",
+      "audio": "02-dashboard-metrics.mp3",
+      "audio_duration": 24.0,
+      "scene_duration": 25.35
+    },
+    {
+      "id": "03-dashboard-history",
+      "audio": "03-dashboard-history.mp3",
+      "audio_duration": 23.47,
+      "scene_duration": 24.82
+    },
+    {
+      "id": "04-dashboard-calendar",
+      "audio": "04-dashboard-calendar.mp3",
+      "audio_duration": 18.77,
+      "scene_duration": 20.12
+    },
+    {
+      "id": "05-dashboard-holdings",
+      "audio": "05-dashboard-holdings.mp3",
+      "audio_duration": 20.54,
+      "scene_duration": 21.89
+    },
+    {
+      "id": "06-total-return",
+      "audio": "06-total-return.mp3",
+      "audio_duration": 55.32,
+      "scene_duration": 56.67
+    },
+    {
+      "id": "07-gains-losses",
+      "audio": "07-gains-losses.mp3",
+      "audio_duration": 49.94,
+      "scene_duration": 51.29
+    },
+    {
+      "id": "08-growth",
+      "audio": "08-growth.mp3",
+      "audio_duration": 29.86,
+      "scene_duration": 31.21
+    },
+    {
+      "id": "09-watchlists",
+      "audio": "09-watchlists.mp3",
+      "audio_duration": 37.97,
+      "scene_duration": 39.32
+    },
+    {
+      "id": "10-watchlist-home",
+      "audio": "10-watchlist-home.mp3",
+      "audio_duration": 33.41,
+      "scene_duration": 34.76
+    },
+    {
+      "id": "11-dividend-portfolio",
+      "audio": "11-dividend-portfolio.mp3",
+      "audio_duration": 52.73,
+      "scene_duration": 54.08
+    },
+    {
+      "id": "12-dividend-income",
+      "audio": "12-dividend-income.mp3",
+      "audio_duration": 40.58,
+      "scene_duration": 41.93
+    },
+    {
+      "id": "13-outro",
+      "audio": "13-outro.mp3",
+      "audio_duration": 17.5,
+      "scene_duration": 18.85
+    }
+  ]
+}

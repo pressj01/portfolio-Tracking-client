@@ -1,0 +1,3 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/06-watchlist-home/00-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/06-watchlist-home/00-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/06-watchlist-home/01-hold.mp4'

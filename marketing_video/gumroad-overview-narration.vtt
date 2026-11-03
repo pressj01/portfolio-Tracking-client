@@ -1,0 +1,237 @@
+WEBVTT
+
+1
+00:00:00.550 --> 00:00:02.219
+Welcome to Portfolio Tracker.
+
+2
+00:00:02.219 --> 00:00:16.410
+This is a show-and-tell tour of the actual screens, starting at the top of the Portfolio Dashboard and moving all the way through Total Return, Gains and Losses, Growth, Watchlists, and the Dividend Calculator.
+
+3
+00:00:17.760 --> 00:00:21.966
+We begin at the top of the current Portfolio Dashboard.
+
+4
+00:00:21.966 --> 00:00:31.220
+The headline cards summarize the latest account movement, price return, and total return for open positions and for the complete tracker history.
+
+5
+00:00:31.220 --> 00:00:38.370
+The shared performance date range keeps the Dashboard, Total Return, Gains and Losses, and Growth views aligned.
+
+6
+00:00:38.370 --> 00:00:45.100
+Just below, the NAV erosion summary shows whether portfolio income has been supported by underlying value.
+
+7
+00:00:46.450 --> 00:00:58.995
+The next dashboard group adds the current portfolio grade and risk context, including beta, alpha, drawdown, Sharpe, Sortino, Calmar, Omega, and related measures.
+
+8
+00:00:58.995 --> 00:01:10.450
+The income cards bring together lifetime income, current-period dividends, forward monthly and annual estimates, reinvestment, yield on cost, and current yield.
+
+9
+00:01:11.800 --> 00:01:21.020
+Portfolio Value Over Time displays the account history by day, week, or month and can switch between price return and total return.
+
+10
+00:01:21.020 --> 00:01:28.564
+Directly below it, expandable guides explain the grade and exposure readings and show how account alpha is interpreted.
+
+11
+00:01:28.564 --> 00:01:35.270
+These reference panels can stay collapsed during everyday use and open when more context is needed.
+
+12
+00:01:36.620 --> 00:01:44.914
+Farther down, the weekly dividend calendar shows expected payments for each day and the estimated total for the week.
+
+13
+00:01:44.914 --> 00:01:55.390
+The portfolio overview then breaks the account into categories, targets, current weights, and drift so allocations can be reviewed before opening an individual category.
+
+14
+00:01:56.740 --> 00:02:06.076
+At the bottom of the Dashboard, the holdings overview can be filtered and switched among Common, General, Dividends, and Returns.
+
+15
+00:02:06.076 --> 00:02:14.479
+The current Returns table separates current value, cost basis, distributions, realized results, and total profit for each position.
+
+16
+00:02:14.479 --> 00:02:17.280
+This completes the top-to-bottom Dashboard tour.
+
+17
+00:02:18.630 --> 00:02:24.525
+The Total Return screen starts with the portfolio summary and a return-by-ticker chart.
+
+18
+00:02:24.525 --> 00:02:32.687
+Price gain or loss and recorded distributions stay separate, while Total Return combines them into dollars and percentages.
+
+19
+00:02:32.687 --> 00:02:39.942
+The benchmark line makes it easy to see which holdings finished above or below the comparison.
+
+20
+00:02:39.942 --> 00:02:49.918
+Scrolling down, Performance Comparison places selected portfolio and outside tickers on the same normalized timeline, with controls for period and return type.
+
+21
+00:02:49.918 --> 00:02:58.986
+The next chart plots total return against yield on cost, with bubble size representing position size and color representing category.
+
+22
+00:02:58.986 --> 00:03:13.950
+The holdings table at the bottom exposes the numbers behind the charts: shares, price paid, current price, invested amount, current value, price gain or loss, distributions received, and total return for each ticker.
+
+23
+00:03:15.300 --> 00:03:21.425
+Gains and Losses opens with the accounting summary and a full position table.
+
+24
+00:03:21.425 --> 00:03:34.145
+The cards separate total invested, current value, unrealized price gain or loss, unrealized results including dividends, realized price-only results, realized results including dividends, and the combined totals.
+
+25
+00:03:34.145 --> 00:03:41.212
+Use the Unrealized, Realized, and Combined tabs to change the table without leaving the screen.
+
+26
+00:03:41.212 --> 00:03:48.279
+As we scroll, the cumulative chart shows how price-only and dividend-inclusive results developed over time.
+
+27
+00:03:48.279 --> 00:03:55.817
+The ticker comparison makes the difference between price gain and total gain visible for each holding.
+
+28
+00:03:55.817 --> 00:04:05.240
+At the bottom, the winners-versus-losers chart ranks positions, and the realized-gains timeline shows when completed gains or losses were recorded.
+
+29
+00:04:06.590 --> 00:04:12.057
+Growth opens on the current Dollars tab with the shared performance date range.
+
+30
+00:04:12.057 --> 00:04:20.048
+The cards connect the selected period with starting value, ending value, transaction-aware return in dollars, and the matching percentage.
+
+31
+00:04:20.048 --> 00:04:23.833
+The first chart places portfolio value beside invested capital.
+
+32
+00:04:23.833 --> 00:04:29.300
+The second separates price return from distributions and shows the combined tracker return.
+
+33
+00:04:29.300 --> 00:04:36.450
+The Vs market and Lots tabs remain available from the same screen for benchmark and open-lot views.
+
+34
+00:04:37.800 --> 00:04:41.416
+Watchlists keep research ideas separate from owned positions.
+
+35
+00:04:41.416 --> 00:04:49.553
+The main page supports multiple named lists, and the Home badge identifies the list connected to the Dashboard.
+
+36
+00:04:49.553 --> 00:05:01.757
+The current table shows the symbol and name, price, daily move, yield, five-year dividend growth, next ex-date, assets under management, one-year return, NAV status, notes, and actions.
+
+37
+00:05:01.757 --> 00:05:11.250
+Use Add Stocks to extend the active list, Edit to change an item, or Remove to take it off the list.
+
+38
+00:05:11.250 --> 00:05:15.770
+None of these research tickers are treated as portfolio holdings.
+
+39
+00:05:17.120 --> 00:05:22.056
+The Watchlists page controls whether the current Watchlist is embedded in the Dashboard.
+
+40
+00:05:22.056 --> 00:05:28.889
+Check Show the watchlist on the Dashboard, and the list marked Home appears as this live Dashboard card.
+
+41
+00:05:28.889 --> 00:05:34.205
+When several lists exist, the picker in the card chooses which list is displayed.
+
+42
+00:05:34.205 --> 00:05:40.279
+The card shows symbol, name, price, daily change, and yield, with links to edit the list.
+
+43
+00:05:40.279 --> 00:05:47.493
+Click Hide on the card, or clear the setting on the Watchlists page, to remove it from the Dashboard.
+
+44
+00:05:47.493 --> 00:05:50.530
+The saved lists, tickers, and notes remain intact.
+
+45
+00:05:51.880 --> 00:05:55.902
+The current Dividend Calculator is a full planning workspace.
+
+46
+00:05:55.902 --> 00:06:05.286
+Add tickers individually or load selected holdings from a portfolio, then review the current monthly and annual payout at the top.
+
+47
+00:06:05.286 --> 00:06:10.648
+In Portfolio Growth mode, enter a target portfolio value and projection length.
+
+48
+00:06:10.648 --> 00:06:21.820
+Contributions can be annual or monthly, continue for the full period or stop after a limited window, and be split evenly or by custom percentages.
+
+49
+00:06:21.820 --> 00:06:25.842
+Price growth, dividend reinvestment, taxes, and inflation remain editable.
+
+50
+00:06:25.842 --> 00:06:34.779
+The goal banner reports when the target is reached, and the chart compares nominal value, today's dollars, and the target.
+
+51
+00:06:34.779 --> 00:06:44.610
+Scrolling down shows result cards, the return breakdown, shares over time, growth projections, the year-by-year table, and final values for each ticker.
+
+52
+00:06:45.960 --> 00:06:52.272
+Switch to Income Growth when the objective is portfolio payments rather than account size.
+
+53
+00:06:52.272 --> 00:07:00.388
+Enter the target annual income, and the banner shows whether that payment target is reached within the projection.
+
+54
+00:07:00.388 --> 00:07:07.603
+The Annual Income Growth chart compares nominal income with inflation-adjusted income and marks the target line.
+
+55
+00:07:07.603 --> 00:07:17.973
+The result cards translate the plan into total income, monthly income, annual income, portfolio value, yield on cost, current yield, and estimated taxes.
+
+56
+00:07:17.973 --> 00:07:26.540
+The lower charts and tables show how portfolio value, payments, cumulative dividends, shares, and per-ticker results change over time.
+
+57
+00:07:27.890 --> 00:07:41.787
+That is the show-and-tell overview of Portfolio Tracker: the complete home dashboard, return and gain analysis, growth and benchmark views, flexible watchlists, and portfolio-growth and income targets.
+
+58
+00:07:41.787 --> 00:07:43.846
+For informational purposes only.
+
+59
+00:07:43.846 --> 00:07:45.390
+Not financial advice.

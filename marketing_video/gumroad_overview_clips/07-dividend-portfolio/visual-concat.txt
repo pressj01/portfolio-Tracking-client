@@ -1,0 +1,7 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/00-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/00-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/01-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/01-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/02-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/02-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/07-dividend-portfolio/03-hold.mp4'

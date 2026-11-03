@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/08-dividend-income/00-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/08-dividend-income/00-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/08-dividend-income/01-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/08-dividend-income/01-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/08-dividend-income/02-hold.mp4'

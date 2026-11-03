@@ -1,0 +1,59 @@
+;FFMETADATA1
+title=Portfolio Tracker - Fidelity Click-by-Click Guide
+artist=Portfolio Tracker
+comment=Live clicks, real Fidelity imports, test account navigation, and Owner aggregation
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=19470
+title=Navigate to the Portfolios screen
+[CHAPTER]
+TIMEBASE=1/1000
+START=19470
+END=39240
+title=Start a regular portfolio
+[CHAPTER]
+TIMEBASE=1/1000
+START=39240
+END=60310
+title=Name the portfolio and save it
+[CHAPTER]
+TIMEBASE=1/1000
+START=60310
+END=81910
+title=Choose Fidelity and add Owner members
+[CHAPTER]
+TIMEBASE=1/1000
+START=81910
+END=105650
+title=Import the current Fidelity positions snapshot
+[CHAPTER]
+TIMEBASE=1/1000
+START=105650
+END=132080
+title=Preview and perform the positions import
+[CHAPTER]
+TIMEBASE=1/1000
+START=132080
+END=161460
+title=Import the Fidelity activity workbook
+[CHAPTER]
+TIMEBASE=1/1000
+START=161460
+END=185290
+title=Navigate to the first test account
+[CHAPTER]
+TIMEBASE=1/1000
+START=185290
+END=206790
+title=Navigate to the second test account
+[CHAPTER]
+TIMEBASE=1/1000
+START=206790
+END=231960
+title=Navigate to Owner: matching tickers combine
+[CHAPTER]
+TIMEBASE=1/1000
+START=231960
+END=263060
+title=Owner keeps unique tickers at their source totals

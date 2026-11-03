@@ -1,0 +1,108 @@
+{
+  "capturedAt": "2026-10-05T21:05:19.303Z",
+  "debugPort": 9230,
+  "pages": [
+    {
+      "id": "dividend-portfolio",
+      "route": "/dividend-calculator",
+      "state": {
+        "ready": true,
+        "signature": "23004:8124:20:85",
+        "height": 8124,
+        "pending": [],
+        "busyCount": 0,
+        "heading": "Dividend Calculator"
+      },
+      "positions": [
+        0,
+        690,
+        1380,
+        2069,
+        2759
+      ],
+      "captures": [
+        {
+          "filename": "dividend-portfolio-01.png",
+          "requestedY": 0,
+          "actualY": 0,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-portfolio-02.png",
+          "requestedY": 690,
+          "actualY": 690,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-portfolio-03.png",
+          "requestedY": 1380,
+          "actualY": 1380,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-portfolio-04.png",
+          "requestedY": 2069,
+          "actualY": 2069,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-portfolio-05.png",
+          "requestedY": 2759,
+          "actualY": 2759,
+          "protectedCount": 4
+        }
+      ]
+    },
+    {
+      "id": "dividend-income",
+      "route": "/dividend-calculator",
+      "state": {
+        "ready": true,
+        "signature": "5940:3839:20:14",
+        "height": 3839,
+        "pending": [],
+        "busyCount": 0,
+        "heading": "Dividend Calculator"
+      },
+      "positions": [
+        0,
+        690,
+        1380,
+        2069,
+        2759
+      ],
+      "captures": [
+        {
+          "filename": "dividend-income-01.png",
+          "requestedY": 0,
+          "actualY": 0,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-income-02.png",
+          "requestedY": 690,
+          "actualY": 690,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-income-03.png",
+          "requestedY": 1380,
+          "actualY": 1380,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-income-04.png",
+          "requestedY": 2069,
+          "actualY": 2069,
+          "protectedCount": 4
+        },
+        {
+          "filename": "dividend-income-05.png",
+          "requestedY": 2759,
+          "actualY": 2759,
+          "protectedCount": 4
+        }
+      ]
+    }
+  ]
+}
