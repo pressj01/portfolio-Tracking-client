@@ -23204,6 +23204,17 @@ def list_holdings():
     return jsonify(results)
 
 
+@app.route("/api/holdings/ttm-income", methods=["GET"])
+def holdings_ttm_income():
+    """Trailing-12-month income per held ticker, for the Portfolio overview."""
+    is_agg, pids = get_profile_filter()
+    conn = get_connection()
+    try:
+        return jsonify(_ttm_dividend_income_by_held_ticker(conn, is_agg, pids))
+    finally:
+        conn.close()
+
+
 @app.route("/api/holdings", methods=["POST"])
 def add_holding():
     """Add a single holding manually."""
@@ -34961,6 +34972,117 @@ def _recorded_dividend_amounts_by_ticker(conn, profile_ids, start_date, end_date
         if ticker:
             by_ticker[ticker] = by_ticker.get(ticker, 0.0) + _num_or_zero(row["amount"])
     return by_ticker, payment_rows
+
+
+def _ttm_dividend_income_by_held_ticker(conn, is_aggregate, profile_ids, today=None):
+    """Trailing-12-month dividend income from the positions held right now.
+
+    The window is the 365 days ending today with the start excluded, so a
+    monthly payer on a fixed day counts 12 payments, not 13.
+
+    Each account counts only tickers it still holds, so cash from a position
+    closed in one account never lifts the same ticker held in another (the
+    rule _holding_figures_summed_by_account uses). Owner reads its linked
+    accounts and an aggregate its members (_income_payment_profile_ids).
+
+    Recorded broker cash covers the days an account's imports reach. Days in
+    the window outside that span (imports that start late or stop early) are
+    filled with the holding's estimated annual income prorated by day, and
+    only from its purchase date on. Without the fill an account imported
+    through May would show five months of income as if it were twelve.
+
+    Returns {"start_date", "end_date", "total", "estimated_total",
+    "by_ticker": {TICKER: income}, "estimated_by_ticker": {TICKER: part}}.
+    """
+    today = today or datetime.date.today()
+    window_days = 365
+    first_day = today - datetime.timedelta(days=window_days - 1)
+    start_exclusive = (today - datetime.timedelta(days=window_days)).isoformat()
+    today_iso = today.isoformat()
+    account_ids = _income_payment_profile_ids(conn, is_aggregate, profile_ids)
+
+    def day_count(lo, hi):
+        """Days in [lo, hi] (inclusive), 0 when empty."""
+        if lo is None or hi is None or hi < lo:
+            return 0
+        return (hi - lo).days + 1
+
+    by_ticker = {}
+    estimated_by_ticker = {}
+    for account_id in account_ids:
+        held = conn.execute(
+            """SELECT UPPER(TRIM(ticker)) AS ticker,
+                      SUM(COALESCE(estim_payment_per_year, 0)) AS estimate,
+                      MIN(purchase_date) AS purchase_date
+               FROM all_account_info
+               WHERE profile_id = ? AND COALESCE(quantity, 0) > 1e-9
+               GROUP BY UPPER(TRIM(ticker))""",
+            (account_id,),
+        ).fetchall()
+        if not held:
+            continue
+        paid = {
+            row["ticker"]: _num_or_zero(row["amount"])
+            for row in conn.execute(
+                """SELECT UPPER(TRIM(ticker)) AS ticker, SUM(amount) AS amount
+                   FROM dividend_payments
+                   WHERE profile_id = ?
+                     AND SUBSTR(payment_date, 1, 10) > ?
+                     AND SUBSTR(payment_date, 1, 10) <= ?
+                     AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'
+                   GROUP BY UPPER(TRIM(ticker))""",
+                (account_id, start_exclusive, today_iso),
+            ).fetchall()
+        }
+        reach = conn.execute(
+            """SELECT MIN(COALESCE(coverage_start_date, payment_date)) AS first_covered,
+                      MAX(payment_date) AS last_payment,
+                      MAX(coverage_end_date) AS coverage_end
+               FROM dividend_payments
+               WHERE profile_id = ?
+                 AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'""",
+            (account_id,),
+        ).fetchone()
+        covered_lo = _date_from_value(reach["first_covered"]) if reach else None
+        ends = [
+            d for d in (
+                _date_from_value(reach["last_payment"]) if reach else None,
+                _date_from_value(reach["coverage_end"]) if reach else None,
+            ) if d is not None
+        ]
+        covered_hi = min(max(ends), today) if ends else None
+        if covered_lo is not None:
+            covered_lo = max(covered_lo, first_day)
+
+        for row in held:
+            ticker = row["ticker"]
+            if not ticker:
+                continue
+            recorded = paid.get(ticker, 0.0)
+            # Days this position was held in the window: from purchase on.
+            held_from = _date_from_value(row["purchase_date"]) or first_day
+            held_from = max(held_from, first_day)
+            held_days = day_count(held_from, today)
+            if covered_lo is None or covered_hi is None:
+                covered_days = 0
+            else:
+                covered_days = day_count(max(covered_lo, held_from), covered_hi)
+            uncovered_days = max(0, held_days - covered_days)
+            estimate = _num_or_zero(row["estimate"]) * uncovered_days / window_days
+            by_ticker[ticker] = by_ticker.get(ticker, 0.0) + recorded + estimate
+            if estimate > 0:
+                estimated_by_ticker[ticker] = estimated_by_ticker.get(ticker, 0.0) + estimate
+
+    by_ticker = {t: round(v, 2) for t, v in by_ticker.items()}
+    estimated_by_ticker = {t: round(v, 2) for t, v in estimated_by_ticker.items()}
+    return {
+        "start_date": first_day.isoformat(),
+        "end_date": today_iso,
+        "total": round(sum(by_ticker.values()), 2),
+        "estimated_total": round(sum(estimated_by_ticker.values()), 2),
+        "by_ticker": by_ticker,
+        "estimated_by_ticker": estimated_by_ticker,
+    }
 
 
 def _portfolio_ytd_dividend_income(conn, is_aggregate, profile_ids, today=None):

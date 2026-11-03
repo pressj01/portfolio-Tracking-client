@@ -459,7 +459,10 @@ function UpcomingDividends({ payments, today, loading }) {
 // return is just value − invested; total return adds lifetime dividends and
 // gains already realized on trimmed shares, over the same invested-cost floor
 // the holdings table uses (see backend _apply_basis_mode_to_holdings).
-const overviewReturnParts = (h) => {
+// ttm is the /api/holdings/ttm-income payload (or null): trailing-12-month
+// dividend income per held ticker, behind the overview's Income column.
+const overviewReturnParts = (h, ttm = null) => {
+  const ttmKey = String(h?.ticker || '').trim().toUpperCase()
   const value = Number(h?.current_value) || 0
   const invested = Number(h?.purchase_value) || 0
   // Use the backend's gain_or_loss (recomputed against the selected basis) so
@@ -479,6 +482,8 @@ const overviewReturnParts = (h) => {
     // Combined Owner/aggregate views name each account behind the summed share
     // count; single portfolios leave this empty and the rollover stays off.
     quantityAccounts: Array.isArray(h?.quantity_accounts) ? h.quantity_accounts : [],
+    ttmIncome: Number(ttm?.by_ticker?.[ttmKey]) || 0,
+    ttmEstimated: Number(ttm?.estimated_by_ticker?.[ttmKey]) || 0,
   }
 }
 
@@ -490,6 +495,8 @@ const addReturnParts = (bucket, parts) => {
   bucket.realized += Number(parts.realized) || 0
   bucket.trBasis += Number(parts.trBasis) || Number(parts.invested) || 0
   bucket.quantity += Number(parts.quantity) || 0
+  bucket.ttmIncome += Number(parts.ttmIncome) || 0
+  bucket.ttmEstimated += Number(parts.ttmEstimated) || 0
   bucket.count += 1
   return bucket
 }
@@ -504,6 +511,8 @@ const emptyReturnBucket = (name, extras = {}) => ({
   trBasis: 0,
   quantity: 0,
   quantityAccounts: [],
+  ttmIncome: 0,
+  ttmEstimated: 0,
   count: 0,
   isTicker: false,
   ...extras,
@@ -553,7 +562,7 @@ const DONUT_COLORS = [
   '#90a4ae', '#a1887f',
 ]
 
-function PortfolioOverview({ groups, categories, totalValue, categoryId, subcategoryId, onFilterChange, returnMode, onReturnModeChange }) {
+function PortfolioOverview({ groups, categories, totalValue, income, categoryId, subcategoryId, onFilterChange, returnMode, onReturnModeChange }) {
   const chartRef = React.useRef(null)
   const { isDark } = useTheme()
   const catId = categoryId ?? null
@@ -623,6 +632,21 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
   const parentAccountPct = (!atTopLevel && totalValue > 0 && parentValue > 0)
     ? (parentValue / totalValue) * 100
     : null
+
+  // Income column: each row's share of trailing-12-month dividend income.
+  // The denominator is the whole account's TTM income from the backend (every
+  // held ticker, categorized or not), never the sum of the rows on screen, so
+  // drilled-in rows add up to their parent's share rather than to 100%. The
+  // second line is the share of the parent group, the same split Allocation
+  // shows for value.
+  const incomeTotal = Number(income?.total) || 0
+  const hasIncome = income != null && incomeTotal > 0
+  const parentIncome = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.ttmIncome) || 0), 0)
+  const incomeTitle = income
+    ? `Share of trailing-12-month dividend income (${income.start_date} to ${income.end_date}) from the positions held now. `
+      + 'Recorded broker payments, plus the estimated run-rate prorated over days an account\'s imports do not cover yet. '
+      + `Account total: ${fmt(incomeTotal)}.`
+    : 'Trailing-12-month dividend income is not available for this view.'
 
   useEffect(() => {
     if (!displayGroups.length || !window.Plotly || !chartRef.current) return
@@ -759,6 +783,10 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                 <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Name</th>
                 <th
                   style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)', cursor: 'help' }}
+                  title={incomeTitle}
+                >Income</th>
+                <th
+                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)', cursor: 'help' }}
                   title="Top: current market value of the holdings. Bottom: invested amount (cost basis) for the shares currently held, using the selected basis mode."
                 >Value/Invested</th>
                 <th
@@ -813,6 +841,30 @@ function PortfolioOverview({ groups, categories, totalValue, categoryId, subcate
                           )}
                         </div>
                       </div>
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                      {hasIncome ? (
+                        <>
+                          <div style={{ color: 'var(--text-strong)' }}>
+                            {((g.ttmIncome / incomeTotal) * 100).toFixed(2)}%
+                          </div>
+                          {!atTopLevel && parentIncome > 0 && (
+                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+                              {((g.ttmIncome / parentIncome) * 100).toFixed(1)}% of {parentName}
+                            </div>
+                          )}
+                          <div
+                            style={{ color: 'var(--text-dim)', fontSize: '0.7rem', cursor: g.ttmEstimated >= 0.005 ? 'help' : undefined }}
+                            title={g.ttmEstimated >= 0.005
+                              ? `${fmt(g.ttmIncome - g.ttmEstimated)} recorded + ${fmt(g.ttmEstimated)} estimated for days not yet imported`
+                              : undefined}
+                          >
+                            {fmt(g.ttmIncome)} TTM{g.ttmEstimated >= 0.005 ? ` · ~${fmt(g.ttmEstimated)} est.` : ''}
+                          </div>
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--text-dim)' }}>—</span>
+                      )}
                     </td>
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                       <div
@@ -931,6 +983,7 @@ export default function Dashboard() {
   const { openTickerResearch } = useTickerResearch()
   const [overviewGroups, setOverviewGroups] = useState(null)
   const [overviewCategories, setOverviewCategories] = useState(null)
+  const [overviewIncome, setOverviewIncome] = useState(null)
   const [overviewCategoryId, setOverviewCategoryId] = useState(null)
   const [overviewSubcategoryId, setOverviewSubcategoryId] = useState(null)
   const [overviewReturnMode, setOverviewReturnMode] = useState(readOverviewReturnMode)
@@ -1096,6 +1149,7 @@ export default function Dashboard() {
       }
       setOverviewGroups(cached.overviewGroups || null)
       setOverviewCategories(cached.overviewCategories || null)
+      setOverviewIncome(cached.overviewIncome || null)
       setDailyChange(cached.dailyChange || null)
       setLoading(true)
     } else {
@@ -1113,6 +1167,7 @@ export default function Dashboard() {
       setGradeResultKey(null)
       setOverviewGroups(null)
       setOverviewCategories(null)
+      setOverviewIncome(null)
       setDailyChange(null)
       setLoading(true)
     }
@@ -1162,11 +1217,23 @@ export default function Dashboard() {
             .then(safeJson)
             .then(d => { if (!stale) setActionCenter(d) })
             .catch(() => {})
-          // Build portfolio overview groups from categories or classification_type
-          pf('/api/categories/data')
-            .then(safeJson)
-            .then(catData => {
+          // Build portfolio overview groups from categories or classification_type.
+          // TTM income feeds the Income column; if it fails the column shows a
+          // dash and the rest of the overview is unaffected.
+          Promise.all([
+            pf('/api/categories/data').then(safeJson),
+            pf('/api/holdings/ttm-income').then(safeJson).catch(() => null),
+          ])
+            .then(([catData, ttm]) => {
               if (stale) return
+              setOverviewIncome(ttm && Number.isFinite(Number(ttm.total))
+                ? {
+                    total: Number(ttm.total),
+                    estimated_total: Number(ttm.estimated_total) || 0,
+                    start_date: ttm.start_date,
+                    end_date: ttm.end_date,
+                  }
+                : null)
               const cats = catData.categories || []
               if (cats.length > 0) {
                 // Use category grouping — need purchase_value per ticker from holdings
@@ -1185,7 +1252,7 @@ export default function Dashboard() {
                       ticker: t.ticker,
                       description: t.description || holdingMap[t.ticker]?.description || '',
                       subcategory_id: t.subcategory_id ?? null,
-                      ...overviewReturnParts(holdingMap[t.ticker]),
+                      ...overviewReturnParts(holdingMap[t.ticker], ttm),
                     })),
                 }))
                 const groups = enrichedCats
@@ -1204,7 +1271,7 @@ export default function Dashboard() {
                   if (h.quantity <= 0) return
                   const ct = h.classification_type || 'Other'
                   if (!byType[ct]) byType[ct] = emptyReturnBucket(ct)
-                  addReturnParts(byType[ct], overviewReturnParts(h))
+                  addReturnParts(byType[ct], overviewReturnParts(h, ttm))
                 })
                 setOverviewGroups(Object.values(byType).sort((a, b) => b.value - a.value))
                 setOverviewCategories(null)
@@ -1458,6 +1525,7 @@ export default function Dashboard() {
       portfolioGrade: canStoreGrades ? activePortfolioGrade : (previousCached.portfolioGrade || {}),
       overviewGroups,
       overviewCategories,
+      overviewIncome,
       dailyChange,
     })
   }, [
@@ -1477,6 +1545,7 @@ export default function Dashboard() {
     gradeUnpriced,
     overviewGroups,
     overviewCategories,
+    overviewIncome,
     dailyChange,
   ])
 
@@ -2923,6 +2992,7 @@ export default function Dashboard() {
           groups={overviewGroups}
           categories={overviewCategories}
           totalValue={totals.currentValue}
+          income={overviewIncome}
           categoryId={overviewCategoryId}
           subcategoryId={overviewSubcategoryId}
           onFilterChange={(categoryId, subcategoryId) => {
