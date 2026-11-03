@@ -1,3 +1,5 @@
+import { formatMoney } from './money.js'
+
 export const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 export function paymentsPerYear(freq) {
@@ -35,7 +37,13 @@ export function calendarPaymentStatus(ev) {
   const label = dateEstimated
     ? '~ Estimated'
     : amountEstimated ? 'Scheduled · Estimated amount' : '✓ Confirmed'
-  const description = `${dateEstimated ? 'Estimated' : 'Confirmed'} pay date · ${amountEstimated ? 'Estimated' : 'Declared'} amount`
+  const recorded = Number(ev.recorded_income || 0)
+  const pending = Number(ev.pending_income || 0)
+  const description = recorded > 0 && pending > 0
+    ? `Recorded ${formatMoney(recorded)} + estimated ${formatMoney(pending)} for accounts not yet imported through this date`
+    : recorded > 0
+      ? 'Recorded payment'
+      : `${dateEstimated ? 'Estimated' : 'Confirmed'} pay date · ${amountEstimated ? 'Estimated' : 'Declared'} amount`
   return { dateEstimated, amountEstimated, estimated, label, description }
 }
 

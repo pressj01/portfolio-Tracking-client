@@ -43507,7 +43507,9 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
         })
         purchased_on = _date_from_value(row["purchase_date"])
         holding["entitlement_lots"].append({
+            "profile_id": int(row["profile_id"]),
             "quantity": quantity,
+            "payment_income": round(payment_income, 6),
             "purchase_date": purchased_on.isoformat() if purchased_on else None,
             "flows": share_flows.get((int(row["profile_id"]), ticker), []),
         })
@@ -43603,9 +43605,63 @@ def _dividend_calendar_holdings_for_view(conn, is_aggregate, profile_ids):
                 if cash > 0:
                     last_payment_cash[row["ticker"]] = cash
                     payment_cash_by_ticker_date.setdefault(row["ticker"], {})[pay_iso] = round(cash, 2)
+        # Per-account cash and import reach let a paid date combine recorded
+        # cash with estimates for member accounts not imported that far yet.
+        account_rows = conn.execute(
+            f"""SELECT UPPER(TRIM(ticker)) AS ticker, profile_id, payment_date,
+                       SUM(amount) AS amount
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                  AND UPPER(TRIM(ticker)) IN ({ticker_placeholders})
+                  AND payment_date >= ?
+                  AND payment_date <= ?
+                  AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
+                  AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'
+                GROUP BY UPPER(TRIM(ticker)), profile_id, payment_date""",
+            [*ids, *tickers, history_start, date.today().isoformat()],
+        ).fetchall()
+        cash_by_account = {}
+        for row in account_rows:
+            parsed = _parse_timestamp_value(row["payment_date"])
+            try:
+                cash = float(row["amount"] or 0)
+            except (TypeError, ValueError):
+                cash = 0.0
+            if parsed is None or cash <= 0:
+                continue
+            day = cash_by_account.setdefault(row["ticker"], {}).setdefault(
+                parsed.date().isoformat(), {}
+            )
+            pid = str(int(row["profile_id"]))
+            day[pid] = round(day.get(pid, 0.0) + cash, 2)
+        imported_through = {}
+        reach_rows = conn.execute(
+            f"""SELECT profile_id, MAX(payment_date) AS last_payment,
+                       MAX(coverage_end_date) AS coverage_end
+                FROM dividend_payments
+                WHERE profile_id IN ({placeholders})
+                  AND LOWER(COALESCE(source, '')) != 'refresh_estimate'
+                  AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'
+                GROUP BY profile_id""",
+            ids,
+        ).fetchall()
+        for row in reach_rows:
+            reached = [
+                parsed.date() for parsed in (
+                    _parse_timestamp_value(row["last_payment"]),
+                    _parse_timestamp_value(row["coverage_end"]),
+                ) if parsed is not None
+            ]
+            if reached:
+                imported_through[int(row["profile_id"])] = min(
+                    max(reached), date.today()
+                ).isoformat()
         for holding in holdings:
             holding["payment_history"] = history_by_ticker.get(holding["ticker"], [])
             holding["payment_cash_by_date"] = payment_cash_by_ticker_date.get(holding["ticker"], {})
+            holding["payment_cash_by_account"] = cash_by_account.get(holding["ticker"], {})
+            for lot in holding.get("entitlement_lots") or []:
+                lot["imported_through"] = imported_through.get(lot.get("profile_id"))
             amt = holding.get("amount")
             if (amt is None or amt <= 0) and holding["quantity"] > 0:
                 cash = last_payment_cash.get(holding["ticker"])
@@ -43945,11 +44001,8 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
             frequency = _payment_history_frequency(history, stored_frequency)
             schedule_history = history
 
-        def entitled_share(payment, pay_value, source):
-            """Fraction of today's shares that were held before this payment's ex-date."""
-            lots = item.get("entitlement_lots")
-            if not isinstance(lots, list) or not lots:
-                return 1.0
+        def cycle_ex_date(payment, pay_value, source):
+            """Ex-date of the distribution paid on ``pay_value``."""
             ex_date = None
             if source == "confirmed":
                 ex_date = _date_from_value(payment.get("date"))
@@ -43964,11 +44017,53 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                     else {"W": 1, "52": 1, "M": 7, "Q": 24, "SA": 30, "A": 32}.get(frequency, 21)
                 )
                 ex_date = pay_value - datetime.timedelta(days=lag)
+            return ex_date
+
+        def entitled_share(payment, pay_value, source):
+            """Fraction of today's shares that were held before this payment's ex-date."""
+            lots = item.get("entitlement_lots")
+            if not isinstance(lots, list) or not lots:
+                return 1.0
+            ex_date = cycle_ex_date(payment, pay_value, source)
             held = _entitled_quantity_at_ex_date(lots, ex_date)
             total = sum(max(0.0, float(lot.get("quantity") or 0)) for lot in lots)
             if held is None or total <= 0:
                 return 1.0
             return min(1.0, held / total)
+
+        def pending_account_income(payment, pay_value, source):
+            """Estimated cash for accounts whose imports stop before ``pay_value``.
+
+            An account with recorded cash on this date contributes that cash
+            (counted by the caller). One imported through the date without a
+            payment really was not paid. Only accounts not imported that far
+            fall back to their share of the run-rate estimate, limited to the
+            shares they held before the ex-date.
+            """
+            lots = item.get("entitlement_lots")
+            paid = ((item.get("payment_cash_by_account") or {}).get(pay_value.isoformat())) or {}
+            if not isinstance(lots, list) or not lots:
+                return 0.0
+            total_estimate = _dividend_payment_value(payment)
+            weights = [max(0.0, float(lot.get("payment_income") or 0)) for lot in lots]
+            if sum(weights) <= 0:
+                weights = [max(0.0, float(lot.get("quantity") or 0)) for lot in lots]
+            weight_total = sum(weights)
+            if total_estimate <= 0 or weight_total <= 0:
+                return 0.0
+            ex_date = cycle_ex_date(payment, pay_value, source)
+            pending = 0.0
+            for lot, weight in zip(lots, weights):
+                if float(paid.get(str(lot.get("profile_id"))) or 0) > 0:
+                    continue
+                reached = _date_from_value(lot.get("imported_through"))
+                if reached is not None and reached >= pay_value:
+                    continue
+                quantity = max(0.0, float(lot.get("quantity") or 0))
+                held = _entitled_quantity_at_ex_date([lot], ex_date) if quantity > 0 else None
+                fraction = 1.0 if held is None or quantity <= 0 else min(1.0, held / quantity)
+                pending += total_estimate * (weight / weight_total) * fraction
+            return pending
 
         def add_payment(value, source, payment_item=None):
             if value is None or value < start or value > end:
@@ -43992,15 +44087,26 @@ def _project_dividend_payments_for_month(holdings, events, selected_month):
                 cash = float(cash_map.get(value.isoformat()) or 0)
             except (TypeError, ValueError):
                 cash = 0.0
-            payment_income = max(declared, cash)
+            # Recorded cash is what each imported account was actually paid,
+            # whether above or below the estimate. Member accounts not imported
+            # through this date still add their estimate, so a paid day does not
+            # shrink just because one brokerage export is a few days behind.
+            recorded = cash > 0
+            pending = pending_account_income(payment, value, source) if recorded else 0.0
+            payment_income = (cash + pending) if recorded else declared
             payment.update({
                 "ticker": ticker,
                 "freq": payment_frequency,
                 "calendar_pay_date": value.isoformat(),
                 "calendar_source": source,
-                "calendar_projected": source == "projected",
-                "calendar_estimated": source == "projected",
-                "amount_estimated": source == "projected" or payment.get("amount_estimated", True),
+                "calendar_projected": source == "projected" and not recorded,
+                "calendar_estimated": source == "projected" and not recorded,
+                "calendar_recorded": recorded,
+                "recorded_income": round(cash, 2) if recorded else 0.0,
+                "pending_income": round(pending, 2),
+                "amount_estimated": pending > 0.005 or ((not recorded) and (
+                    source == "projected" or payment.get("amount_estimated", True)
+                )),
             })
             if payment_income > 0:
                 payment["payment_income"] = round(payment_income, 2)
@@ -44341,7 +44447,15 @@ def _dividend_agenda_payments(holdings, events, today=None):
 
     for payment in month_rows:
         append_row(payment)
+    # The Month projection already resolved every current-month date
+    # (recorded cash > confirmed > projected). A raw event dated inside this
+    # month that it did not keep is a stale cycle -- e.g. a pay date left on
+    # a distribution already paid earlier -- and would double-count it here.
+    month_prefix = today.strftime("%Y-%m")
     for event in events or []:
+        event_pay = _parse_timestamp_value(event.get("pay_date"))
+        if event_pay is not None and event_pay.date().isoformat()[:7] == month_prefix:
+            continue
         append_row(event)
 
     return sorted(agenda, key=lambda row: (row["pay_date"], row["ticker"]))
