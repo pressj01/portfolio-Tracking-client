@@ -4,6 +4,26 @@ import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useDialog } from '../components/DialogProvider'
 import { formatMoney } from '../utils/money'
 import { withSignalFormula } from '../utils/gradingPreferences'
+import LotSortHeader from '../components/LotSortHeader'
+import {
+  GROUP_ORDER_MODES,
+  buildSubcategoryTree,
+  indentedName,
+  moveId,
+  nextSort,
+  normalizeGroupOrder,
+  normalizeSort,
+  orderGroups,
+  readStoredJson,
+  rollUpCategoryTree,
+  sharePct,
+  sortRows,
+  subtreeIds,
+  writeStoredJson,
+} from '../utils/categoryHierarchy'
+
+const GROUP_ORDER_STORAGE_KEY = 'categories.groupOrder'
+const POSITION_SORT_STORAGE_KEY = 'categories.positionSort'
 
 function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   const [name, setName] = useState(category?.name || '')
@@ -55,40 +75,104 @@ function CategoryModal({ category, onSave, onCancel, targetBaseTotal = 0 }) {
   )
 }
 
-function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = null, onMove = null }) {
+// Columns of the holdings table inside a category / sub-category card. Every
+// one but the sub-category picker and the remove button sorts on click.
+// pct_l0, pct_l1, … are the shares of each sub-category level above a holding
+// (sub-categories nest to any depth).
+const POSITION_SORT_KEYS = [
+  'ticker', 'description', 'value', 'income', 'freq', 'pct_portfolio', 'pct_category',
+  ...Array.from({ length: 20 }, (_, i) => `pct_l${i}`),
+]
+const POSITION_TEXT_KEYS = ['ticker', 'description', 'freq']
+const DEFAULT_POSITION_SORT = { key: 'ticker', direction: 'asc' }
+const positionValue = t => Number(t.current_value) || 0
+const POSITION_ACCESSORS = {
+  ticker: t => t.ticker,
+  description: t => t.description || null,
+  value: positionValue,
+  income: t => Number(t.monthly_income) || 0,
+  freq: t => (t.weekly ? 'Weekly' : (t.div_frequency || null)),
+  // Within one table every share has the same denominator, so the share
+  // columns sort exactly like Value; they are still sortable so any header
+  // can be clicked. (The per-level pct_l* keys are added per table.)
+  pct_portfolio: positionValue,
+  pct_category: positionValue,
+}
+
+const fmtShare = (part, whole) => {
+  const pct = sharePct(part, whole)
+  return pct == null ? '—' : `${pct.toFixed(1)}%`
+}
+
+// shareLevels: one "% of" column per level above the holdings — Portfolio,
+// the category, then each sub-category down to the one they sit in. Each is
+// { key, name, total, tip }.
+function TickerTable({ tickers, shareLevels, sort, onSort, onUnassign, fmt, moveTargets = null, onMove = null }) {
   const showMove = moveTargets && moveTargets.length > 0 && onMove
+  // The share headers sit on two lines ("% of" over the level) so the table
+  // fits beside the Unallocated panel.
+  const twoLine = (top, bottom) => (
+    <span className="cat-th-two-line">{top}<br /><span className="cat-th-level">{bottom}</span></span>
+  )
+  const columns = [
+    { key: 'ticker', label: 'Ticker' },
+    { key: 'description', label: 'Description' },
+    { key: 'value', label: 'Value', align: 'right', tip: 'Current market value.' },
+    { key: 'income', label: 'Income/mo', display: twoLine('Income', '/mo'), align: 'right', tip: 'Projected monthly income from the shares held now.' },
+    { key: 'freq', label: 'Freq', align: 'right', tip: 'How often it pays.' },
+    ...shareLevels.map(level => ({
+      key: level.key,
+      label: `% of ${level.name}`,
+      display: twoLine('% of', level.name),
+      align: 'right',
+      tip: level.tip,
+    })),
+  ]
+  const accessors = { ...POSITION_ACCESSORS }
+  shareLevels.forEach(level => { accessors[level.key] = positionValue })
+  const rows = sortRows(tickers, sort, accessors)
+  // Scrolls sideways inside its card on a narrow window instead of spilling
+  // under the Unallocated panel beside it.
   return (
-    <table style={{ width: '100%', fontSize: '0.82rem' }}>
+    <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+    <table className="cat-positions-table" style={{ width: '100%', fontSize: '0.82rem' }}>
       <thead>
         <tr>
-          <th>Ticker</th>
-          <th>Description</th>
-          <th style={{ textAlign: 'right' }}>Value</th>
-          <th style={{ textAlign: 'right' }}>Freq</th>
-          <th style={{ textAlign: 'right' }}>% of Category</th>
+          {columns.map(column => (
+            <LotSortHeader
+              key={column.key}
+              column={column}
+              sort={sort}
+              onSort={onSort}
+              style={column.align ? { textAlign: column.align } : undefined}
+            />
+          ))}
           {showMove && <th style={{ textAlign: 'right' }}>Sub-category</th>}
           <th></th>
         </tr>
       </thead>
       <tbody>
-        {tickers.map(t => (
+        {rows.map(t => (
           <tr key={t.ticker}>
             <td style={{ fontWeight: 600, color: 'var(--accent)' }}>{t.ticker}</td>
-            <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
+            <td title={t.description || undefined} style={{ maxWidth: 170, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description || '-'}</td>
             <td style={{ textAlign: 'right' }}>{fmt(t.current_value)}</td>
+            <td style={{ textAlign: 'right' }}>{Number(t.monthly_income) > 0 ? fmt(t.monthly_income) : '-'}</td>
             <td style={{ textAlign: 'right', color: t.weekly ? 'var(--pos-bright)' : 'var(--text-dim-2)' }}>{t.weekly ? 'Weekly' : (t.div_frequency || '-')}</td>
-            <td style={{ textAlign: 'right' }}>{categoryValue ? (t.current_value / categoryValue * 100).toFixed(1) + '%' : '-'}</td>
+            {shareLevels.map(level => (
+              <td key={level.key} style={{ textAlign: 'right' }}>{fmtShare(t.current_value, level.total)}</td>
+            ))}
             {showMove && (
               <td style={{ textAlign: 'right' }}>
                 <select
                   value={t.subcategory_id ?? ''}
                   onClick={(e) => e.stopPropagation()}
                   onChange={(e) => { e.stopPropagation(); onMove(t.ticker, e.target.value === '' ? null : Number(e.target.value)) }}
-                  style={{ fontSize: '0.78rem', padding: '0.15rem 0.3rem', background: 'var(--bg)', color: 'var(--p-cfd8dc)', border: '1px solid var(--border)', borderRadius: 4 }}
+                  style={{ maxWidth: 150, fontSize: '0.78rem', padding: '0.15rem 0.3rem', background: 'var(--bg)', color: 'var(--p-cfd8dc)', border: '1px solid var(--border)', borderRadius: 4 }}
                 >
                   <option value="">— no sub-category —</option>
                   {moveTargets.map(s => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
+                    <option key={s.id} value={s.id}>{indentedName(s)}</option>
                   ))}
                 </select>
               </td>
@@ -104,14 +188,19 @@ function TickerTable({ tickers, categoryValue, onUnassign, fmt, moveTargets = nu
         ))}
       </tbody>
     </table>
+    </div>
   )
 }
 
+// subModal: { categoryId, categoryName, parentId, parentName, pathLabel,
+// siblings, sub? }. parentName is the category or the sub-category this one
+// sits in; its target is a % of that parent.
 function SubcategoryModal({ subModal, onSave, onCancel }) {
   const [name, setName] = useState(subModal?.sub?.name || '')
   const [target, setTarget] = useState(subModal?.sub?.target_pct ?? '')
-  // Sub-category targets are expressed as a % of the parent category and should
-  // sum to 100% within that category. Base = siblings' targets (excluding this one).
+  // A sub-category's target is a % of its parent, and siblings should sum to
+  // 100% of that parent. Base = siblings' targets (excluding this one).
+  const parentName = subModal?.parentName || subModal?.categoryName
   const siblings = subModal?.siblings || []
   const targetBaseTotal = siblings
     .filter(s => !subModal?.sub || s.id !== subModal.sub.id)
@@ -129,11 +218,11 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
   }
   return (
     <div className="modal-overlay" onClick={onCancel}>
-      <div className="modal-content" style={{ maxWidth: 400 }} onClick={e => e.stopPropagation()}>
+      <div className="modal-content" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
         <button className="modal-close" onClick={onCancel}>&times;</button>
         <h2>{subModal?.sub ? 'Edit Sub-category' : 'New Sub-category'}</h2>
         <p style={{ color: 'var(--text-dim-2)', marginTop: '-0.4rem', marginBottom: '0.9rem', fontSize: '0.85rem' }}>
-          Within <strong style={{ color: 'var(--accent-bright)' }}>{subModal?.categoryName}</strong>
+          Inside <strong style={{ color: 'var(--accent-bright)' }}>{subModal?.pathLabel || subModal?.categoryName}</strong>
         </p>
         <form onSubmit={handleSubmit}>
           <div className="form-group">
@@ -141,17 +230,17 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
             <input value={name} onChange={e => setName(e.target.value)} required maxLength={100} style={{ width: '100%' }} autoFocus placeholder="e.g. Gold" />
           </div>
           <div className="form-group">
-            <label>Target Allocation % (of {subModal?.categoryName})</label>
+            <label>Target Allocation % (of {parentName})</label>
             <input type="number" step="0.1" min="0" max="100" value={target} onChange={e => setTarget(e.target.value)} placeholder="Optional" style={{ width: '100%' }} />
             <div style={{ marginTop: '0.55rem', border: '1px solid var(--border)', background: 'var(--bg)', borderRadius: 6, padding: '0.6rem 0.7rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center' }}>
-                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>Category total after save</span>
+                <span style={{ color: 'var(--text-dim-2)', fontSize: '0.8rem' }}>{parentName} total after save</span>
                 <strong style={{ color: totalColor }}>{projectedTotal.toFixed(1)}% / 100%</strong>
               </div>
               <div style={{ marginTop: '0.25rem', color: remaining < 0 ? 'var(--p-ffb3b3)' : 'var(--text-muted)', fontSize: '0.78rem' }}>
                 {remaining < 0
-                  ? `${Math.abs(remaining).toFixed(1)}% over category target`
-                  : `${remaining.toFixed(1)}% remaining in category`}
+                  ? `${Math.abs(remaining).toFixed(1)}% over ${parentName}'s target`
+                  : `${remaining.toFixed(1)}% remaining in ${parentName}`}
               </div>
             </div>
           </div>
@@ -166,7 +255,36 @@ function SubcategoryModal({ subModal, onSave, onCancel }) {
 }
 
 const norm = (s) => String(s || '').trim().toLowerCase()
-const subKey = (catName, subName) => `${norm(catName)}›${norm(subName)}`
+
+// Move up / Move down for one category or sub-category card. Only active in
+// "My order"; in the other orders the list is sorted, so a move would be lost.
+function MoveButtons({ name, index, count, enabled, onMove }) {
+  const blocked = 'Choose “My order” in Order by to move this by hand.'
+  return (
+    <span className="cat-move" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        className="cat-move-btn"
+        disabled={!enabled || index <= 0}
+        onClick={() => onMove(-1)}
+        title={enabled ? `Move ${name} up` : blocked}
+        aria-label={`Move ${name} up`}
+      >▲</button>
+      <button
+        type="button"
+        className="cat-move-btn"
+        disabled={!enabled || index >= count - 1}
+        onClick={() => onMove(1)}
+        title={enabled ? `Move ${name} down` : blocked}
+        aria-label={`Move ${name} down`}
+      >▼</button>
+    </span>
+  )
+}
+// A sub-category's identity across accounts is its path of names:
+// "category›sub›nested sub", compared case-insensitively.
+const pathKey = (parts) => parts.map(norm).join('›')
+const subPathParts = (catName, node) => [catName, ...(node.path || []).map(p => p.name), node.name]
 const ROW_BTN = { padding: '0.2rem 0.5rem', fontSize: '0.75rem' }
 const SUB_ROW_BTN = { padding: '0.1rem 0.4rem', fontSize: '0.7rem' }
 
@@ -217,16 +335,13 @@ function CopyCategoriesModal({ pf, categories, sourceName, onCancel, onDone }) {
   // and only missing sub-categories are added underneath them.
   const missingFor = (acct) => {
     const have = new Set((acct.category_names || []).map(norm))
-    const haveSubs = new Set((acct.subcategory_keys || []).map(k => {
-      const [c, s] = String(k).split('›')
-      return subKey(c, s)
-    }))
+    const haveSubs = new Set((acct.subcategory_keys || []).map(k => pathKey(String(k).split('›'))))
     let cats = 0, subs = 0, skipped = 0
     chosenCats.forEach(c => {
       have.has(norm(c.name)) ? skipped++ : cats++
       if (includeSubs) {
-        (c.subcategories || []).forEach(s => {
-          if (!haveSubs.has(subKey(c.name, s.name))) subs++
+        buildSubcategoryTree(c.subcategories).ordered.forEach(node => {
+          if (!haveSubs.has(pathKey(subPathParts(c.name, node)))) subs++
         })
       }
     })
@@ -319,9 +434,9 @@ function CopyCategoriesModal({ pf, categories, sourceName, onCancel, onDone }) {
                       </span>
                     )}
                   </label>
-                  {includeSubs && (c.subcategories || []).map(s => (
+                  {includeSubs && buildSubcategoryTree(c.subcategories).ordered.map(s => (
                     <div key={s.id} style={{
-                      ...rowStyle, paddingLeft: '1.7rem', fontSize: '0.78rem',
+                      ...rowStyle, paddingLeft: `${1.7 + s.depth}rem`, fontSize: '0.78rem',
                       color: pickedCats.has(c.id) ? 'var(--text-muted)' : 'var(--text-dim-2)',
                     }}>
                       <span>&rsaquo; {s.name}</span>
@@ -687,22 +802,6 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
     }
   }
 
-  const buildSubcategory = (def, subTickers, catValue) => {
-    const sValue = subTickers.reduce((s, t) => s + Number(t.current_value || 0), 0)
-    const sMonthly = subTickers.reduce((s, t) => s + Number(t.monthly_income || 0), 0)
-    const sWeeklyValue = subTickers.reduce((s, t) => s + (t.weekly ? Number(t.current_value || 0) : 0), 0)
-    return {
-      ...def,
-      tickers: subTickers,
-      actual_value: sValue,
-      actual_pct: totalValue ? sValue / totalValue * 100 : 0,
-      category_pct: catValue > 0 ? sValue / catValue * 100 : 0,
-      monthly_income: sMonthly,
-      current_yield: sValue > 0 ? sMonthly * 12 / sValue * 100 : 0,
-      weekly_value_pct: sValue > 0 ? sWeeklyValue / sValue * 100 : 0,
-    }
-  }
-
   const categories = (categoryData.categories || []).map(cat => {
     const tickers = (cat.tickers || []).map(enrichTicker)
     const catValue = tickers.reduce((s, t) => s + Number(t.current_value || 0), 0)
@@ -715,20 +814,12 @@ function enrichCategoryData(categoryData, holdings = [], navCoverage = null) {
     const weightedGainLoss = catValue > 0
       ? tickers.reduce((s, t) => s + Number(t.gain_or_loss_percentage || 0) * Number(t.current_value || 0), 0) / catValue
       : 0
-    const subDefs = cat.subcategories || []
-    const subTickersById = {}
-    tickers.forEach(t => {
-      if (t.subcategory_id != null) {
-        (subTickersById[t.subcategory_id] = subTickersById[t.subcategory_id] || []).push(t)
-      }
-    })
-    const subcategories = subDefs.map(def => buildSubcategory(def, subTickersById[def.id] || [], catValue))
-    const unclassifiedTickers = subDefs.length ? tickers.filter(t => t.subcategory_id == null) : []
+    // Sub-categories stay a flat list (tree order, with parent_id); the page
+    // rolls holdings up the tree when it renders, so a move shows at once.
     return {
       ...cat,
       tickers,
-      subcategories,
-      unclassified_tickers: unclassifiedTickers,
+      subcategories: cat.subcategories || [],
       actual_value: catValue || Number(cat.actual_value || 0),
       actual_pct: totalValue ? (catValue || Number(cat.actual_value || 0)) / totalValue * 100 : 0,
       monthly_income: catMonthlyIncome,
@@ -773,10 +864,12 @@ export default function Categories() {
   const [data, setData] = useState({ categories: [], unallocated: [], total_value: 0 })
   const [loading, setLoading] = useState(true)
   const [expandedId, setExpandedId] = useState(null)
-  const [expandedSubId, setExpandedSubId] = useState(null)
+  // Open sub-category rows (any depth), and the one click-to-assign targets.
+  const [expandedSubIds, setExpandedSubIds] = useState(() => new Set())
+  const [activeSubId, setActiveSubId] = useState(null)
   const [showModal, setShowModal] = useState(false)
   const [editCat, setEditCat] = useState(null)
-  const [subModal, setSubModal] = useState(null) // { categoryId, categoryName, sub? }
+  const [subModal, setSubModal] = useState(null) // see SubcategoryModal
   const [selectedUnalloc, setSelectedUnalloc] = useState(new Set())
   const [error, setError] = useState(null)
   const [assistantMode, setAssistantMode] = useState('balanced')
@@ -798,6 +891,17 @@ export default function Categories() {
   const [flashId, setFlashId] = useState(null)
   const catRefs = useRef({})
   const reloadSeq = useRef(0)
+  // How the category / sub-category cards are listed, and how the holdings
+  // inside them are sorted. Both are remembered per viewer.
+  const [groupOrder, setGroupOrder] = useState(() => normalizeGroupOrder(readStoredJson(GROUP_ORDER_STORAGE_KEY, null)))
+  const [positionSort, setPositionSort] = useState(() => normalizeSort(
+    readStoredJson(POSITION_SORT_STORAGE_KEY, null),
+    POSITION_SORT_KEYS,
+    DEFAULT_POSITION_SORT,
+  ))
+  // Order saves run one after another, so two quick clicks can't land on the
+  // server in the wrong order and leave the older order saved.
+  const orderSaveChain = useRef(Promise.resolve())
   const isOwnerProfile = !isAggregate && Number(profileId) === 1
   // "Copy to Accounts" only makes sense when there is somewhere else to copy into.
   const hasOtherAccounts = (profiles?.length || 0) > 1
@@ -911,6 +1015,69 @@ export default function Categories() {
     return res
   }
 
+  const changeGroupOrder = (mode) => {
+    const next = normalizeGroupOrder(mode)
+    setGroupOrder(next)
+    writeStoredJson(GROUP_ORDER_STORAGE_KEY, next)
+  }
+
+  const sortPositions = (key) => {
+    setPositionSort(prev => {
+      const next = nextSort(prev, key, { textKeys: POSITION_TEXT_KEYS })
+      writeStoredJson(POSITION_SORT_STORAGE_KEY, next)
+      return next
+    })
+  }
+
+  // Shows the new order at once, then saves it. A failed save says so and
+  // reloads, so the screen never shows an order the server doesn't have.
+  const saveOrder = (path, order) => {
+    const run = orderSaveChain.current.then(() => mutate(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    }))
+    orderSaveChain.current = run.catch(() => {})
+    return run.catch(async (e) => {
+      setError(e.message || 'Could not save the new order.')
+      await reload({ refreshMarketData: false })
+    })
+  }
+
+  const handleMoveCategory = (catId, delta) => {
+    const order = moveId(data.categories.map(c => c.id), catId, delta)
+    if (!order) return
+    setError(null)
+    setData(prev => {
+      const byId = new Map(prev.categories.map(c => [c.id, c]))
+      return { ...prev, categories: order.map(id => byId.get(id)).filter(Boolean) }
+    })
+    saveOrder('/api/categories/reorder', order)
+  }
+
+  // Moves a sub-category among its siblings (same parent).
+  const handleMoveSub = (catId, node, delta) => {
+    const tree = catTrees.get(catId)
+    if (!tree) return
+    const siblings = node.parent_id == null
+      ? tree.roots
+      : (tree.byId.get(String(node.parent_id))?.children || [])
+    const order = moveId(siblings.map(s => s.id), node.id, delta)
+    if (!order) return
+    const rank = new Map(order.map((id, i) => [String(id), i]))
+    setError(null)
+    setData(prev => ({
+      ...prev,
+      categories: prev.categories.map(c => (c.id !== catId ? c : {
+        ...c,
+        subcategories: (c.subcategories || []).map(s => (
+          rank.has(String(s.id)) ? { ...s, sort_order: rank.get(String(s.id)) } : s
+        )),
+      })),
+    }))
+    saveOrder(`/api/categories/${catId}/subcategories/reorder`, order)
+  }
+
   const handleSave = async ({ name, target_pct }) => {
     if (isAggregate) {
       setError('Select an individual account before editing categories.')
@@ -990,7 +1157,8 @@ export default function Categories() {
         .filter(s => !subModal.sub || s.id !== subModal.sub.id)
         .reduce((sum, s) => sum + (Number(s.target_pct) || 0), 0)
       if (otherTotal + target_pct > 100) {
-        setError(`Sub-category targets in ${subModal.categoryName} would total ${(otherTotal + target_pct).toFixed(1)}% — cannot exceed 100% of the category. Available: ${(100 - otherTotal).toFixed(1)}%`)
+        const parentName = subModal.parentName || subModal.categoryName
+        setError(`Sub-category targets in ${parentName} would total ${(otherTotal + target_pct).toFixed(1)}% — cannot exceed 100% of ${parentName}. Available: ${(100 - otherTotal).toFixed(1)}%`)
         return
       }
     }
@@ -1003,8 +1171,12 @@ export default function Categories() {
       } else {
         await mutate(`/api/categories/${subModal.categoryId}/subcategories`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, target_pct }),
+          body: JSON.stringify({ name, target_pct, parent_id: subModal.parentId ?? null }),
         })
+        // Open the parent so the new sub-category is visible straight away.
+        if (subModal.parentId != null) {
+          setExpandedSubIds(prev => new Set(prev).add(subModal.parentId))
+        }
       }
       setSubModal(null)
       await reload({ refreshMarketData: false })
@@ -1017,20 +1189,30 @@ export default function Categories() {
     await dialog.alert(message)
   }
 
-  const handleDeleteSub = async (sub) => {
+  const handleDeleteSub = async (cat, node) => {
     if (isAggregate) {
       setError('Select an individual account before editing sub-categories.')
       return
     }
-    if (!await dialog.confirm(`Delete sub-category "${sub.name}"? Its tickers stay in the parent category but become unclassified.`)) return
+    const branch = subtreeIds(node)
+    const nested = branch.size - 1
+    const holdings = (node.all || []).length
+    const parentName = node.path?.length ? node.path[node.path.length - 1].name : cat.name
+    const parts = [`Delete sub-category "${node.name}"?`]
+    if (nested > 0) parts.push(`The ${nested} sub-${nested === 1 ? 'category' : 'categories'} inside it ${nested === 1 ? 'is' : 'are'} deleted too.`)
+    parts.push(holdings > 0
+      ? `Its ${holdings} holding${holdings === 1 ? '' : 's'} move${holdings === 1 ? 's' : ''} up to ${parentName}.`
+      : 'It has no holdings.')
+    if (!await dialog.confirm(parts.join(' '))) return
     setError(null)
     try {
-      await mutate(`/api/subcategories/${sub.id}`, { method: 'DELETE' })
+      await mutate(`/api/subcategories/${node.id}`, { method: 'DELETE' })
     } catch (e) {
       setError(e.message || 'Could not delete the sub-category.')
       return
     }
-    if (expandedSubId === sub.id) setExpandedSubId(null)
+    setExpandedSubIds(prev => new Set([...prev].filter(id => !branch.has(String(id)))))
+    if (activeSubId != null && branch.has(String(activeSubId))) setActiveSubId(node.parent_id ?? null)
     await reload({ refreshMarketData: false })
   }
 
@@ -1054,26 +1236,177 @@ export default function Categories() {
     })
   }
 
-  // The currently targeted bucket for click-to-assign: an expanded sub-category,
-  // otherwise the expanded parent category with no sub-category.
+  // Each category's sub-categories as a tree, with holdings rolled up every
+  // level (value and projected income per branch).
+  const catTrees = useMemo(
+    () => new Map(data.categories.map(c => [c.id, rollUpCategoryTree(c.subcategories, c.tickers)])),
+    [data.categories],
+  )
+  const subPathLabel = (cat, node) => [cat.name, ...(node.path || []).map(p => p.name), node.name].join(' › ')
+
+  // Opening a sub-category makes it the click-to-assign target; closing one
+  // closes everything inside it too.
+  const toggleSub = (node) => {
+    if (expandedSubIds.has(node.id)) {
+      const branch = subtreeIds(node)
+      setExpandedSubIds(prev => new Set([...prev].filter(id => !branch.has(String(id)))))
+      if (activeSubId != null && branch.has(String(activeSubId))) {
+        setActiveSubId(node.parent_id != null && expandedSubIds.has(node.parent_id) ? node.parent_id : null)
+      }
+    } else {
+      setExpandedSubIds(prev => new Set(prev).add(node.id))
+      setActiveSubId(node.id)
+    }
+  }
+
+  // The currently targeted bucket for click-to-assign: the active open
+  // sub-category (any depth), otherwise the open category itself.
   const expandedCat = data.categories.find(c => c.id === expandedId)
   const assignTarget = (() => {
-    if (expandedSubId != null && expandedCat) {
-      const sub = (expandedCat.subcategories || []).find(s => s.id === expandedSubId)
-      if (sub) return { categoryId: expandedCat.id, subId: sub.id, label: `${expandedCat.name} › ${sub.name}` }
-    }
-    if (expandedCat) return { categoryId: expandedCat.id, subId: null, label: `${expandedCat.name} (no sub-category)` }
-    return null
+    if (!expandedCat) return null
+    const node = activeSubId != null ? catTrees.get(expandedCat.id)?.byId.get(String(activeSubId)) : null
+    if (node) return { categoryId: expandedCat.id, subId: node.id, label: subPathLabel(expandedCat, node) }
+    return { categoryId: expandedCat.id, subId: null, label: `${expandedCat.name} (no sub-category)` }
   })()
 
   // Flat list of valid assignment targets for the bulk-assign buttons.
   const assignmentTargets = data.categories.flatMap(cat => {
-    const subs = cat.subcategories || []
+    const nodes = catTrees.get(cat.id)?.ordered || []
     return [
-      { categoryId: cat.id, subId: null, label: subs.length ? `${cat.name} (no sub-category)` : cat.name },
-      ...subs.map(s => ({ categoryId: cat.id, subId: s.id, label: `${cat.name} › ${s.name}` })),
+      { categoryId: cat.id, subId: null, label: nodes.length ? `${cat.name} (no sub-category)` : cat.name },
+      ...nodes.map(n => ({ categoryId: cat.id, subId: n.id, label: subPathLabel(cat, n) })),
     ]
   })
+
+  const tableBase = { sort: positionSort, onSort: sortPositions, onUnassign: handleUnassign, fmt }
+
+  // "% of" columns for a holdings table: Portfolio, the category, then each
+  // sub-category down to the one the holdings sit in.
+  const shareLevelsFor = (cat, nodes) => [
+    { key: 'pct_portfolio', name: 'Portfolio', total: data.total_value, tip: 'Share of the whole portfolio value.' },
+    { key: 'pct_category', name: cat.name, total: cat.actual_value, tip: `Share of the ${cat.name} category.` },
+    ...nodes.map((n, i) => ({ key: `pct_l${i}`, name: n.name, total: n.value, tip: `Share of the ${n.name} sub-category.` })),
+  ]
+
+  const branchOrder = nodes => orderGroups(nodes, groupOrder, { valueKey: 'value', incomeKey: 'income' })
+
+  // One sub-category row, at any depth: its labeled share of the portfolio,
+  // of the category and of every sub-category above it, plus value and
+  // projected income for its whole branch. Open, it lists the sub-categories
+  // inside it and the holdings sitting directly in it.
+  const renderSubNode = (cat, tree, node, siblings, index) => {
+    const isOpen = expandedSubIds.has(node.id)
+    const isActive = isOpen && activeSubId === node.id
+    const children = branchOrder(node.children)
+    const ancestors = node.path || []
+    const parent = ancestors.length ? ancestors[ancestors.length - 1] : null
+    const parentName = parent ? parent.name : cat.name
+    const incomeShare = sharePct(node.income, parent ? parent.income : cat.monthly_income)
+    const portfolioPct = sharePct(node.value, data.total_value)
+    const upperShares = [
+      { key: `c${cat.id}`, label: cat.name, pct: sharePct(node.value, cat.actual_value) },
+      ...ancestors.map(a => ({ key: `s${a.id}`, label: a.name, pct: sharePct(node.value, a.value) })),
+    ].filter(x => x.pct != null)
+    const pathNodes = [...ancestors, node]
+    const moveHere = (ticker, subId) => handleAssign([ticker], cat.id, subId)
+    const holdingsTable = (
+      <TickerTable
+        {...tableBase}
+        tickers={node.direct}
+        shareLevels={shareLevelsFor(cat, pathNodes)}
+        moveTargets={tree.ordered}
+        onMove={moveHere}
+      />
+    )
+    return (
+      <div key={node.id} style={{ border: isActive ? '1px solid var(--primary)' : '1px solid var(--border)', borderRadius: 6, background: 'var(--p-161b2e)' }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem 0.65rem' }}
+          onClick={() => toggleSub(node)}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', minWidth: 0 }}>
+            <MoveButtons
+              name={node.name}
+              index={index}
+              count={siblings.length}
+              enabled={groupOrder === 'custom'}
+              onMove={(delta) => handleMoveSub(cat.id, node, delta)}
+            />
+            <span style={{ fontSize: '0.72rem', opacity: 0.5 }}>{isOpen ? '▼' : '▶'}</span>
+            <strong style={{ fontSize: '0.92rem', color: 'var(--p-cfd8dc)' }}>{node.name}</strong>
+            <span
+              title={`${node.all.length} holding${node.all.length === 1 ? '' : 's'} in ${node.name}, including the sub-categories inside it`}
+              style={{ background: 'var(--border)', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.7rem', color: 'var(--accent-bright)' }}
+            >{node.all.length}</span>
+            {children.length > 0 && (
+              <span style={{ background: 'var(--p-1a2c4e)', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.68rem', color: 'var(--p-bb86fc)' }}>
+                {children.length} sub
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.3rem 1rem' }}>
+            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--p-bb86fc)' }}>
+              {portfolioPct == null ? '—' : `${portfolioPct.toFixed(1)}%`} <span className="cat-share-label">of portfolio</span>
+            </span>
+            {upperShares.map(x => (
+              <span key={x.key} style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{x.pct.toFixed(1)}% of {x.label}</span>
+            ))}
+            {node.target_pct != null && (
+              <span style={{ fontSize: '0.78rem', color: 'var(--accent-2)' }}>Target {Number(node.target_pct).toFixed(1)}% of {parentName}</span>
+            )}
+            <span style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)' }}>{fmt(node.value)}</span>
+            <span
+              style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}
+              title={`Projected monthly income from ${node.name}${incomeShare != null ? `: ${incomeShare.toFixed(1)}% of ${parentName}'s income` : ''}.`}
+            >
+              {fmt(node.income)}<span className="cat-share-label">/mo income</span>
+            </span>
+            <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
+              <button
+                className="btn btn-secondary"
+                style={SUB_ROW_BTN}
+                title={`Add a sub-category inside ${node.name}`}
+                onClick={() => setSubModal({
+                  categoryId: cat.id, categoryName: cat.name,
+                  parentId: node.id, parentName: node.name, pathLabel: subPathLabel(cat, node),
+                  siblings: node.children,
+                })}
+              >+ Sub</button>
+              <button
+                className="btn btn-secondary"
+                style={SUB_ROW_BTN}
+                title={`Rename ${node.name} or change its target`}
+                onClick={() => setSubModal({
+                  categoryId: cat.id, categoryName: cat.name,
+                  parentId: node.parent_id, parentName, pathLabel: parent ? subPathLabel(cat, parent) : cat.name,
+                  sub: node, siblings,
+                })}
+              >Edit</button>
+              <button className="btn btn-danger" style={SUB_ROW_BTN} title={`Delete sub-category ${node.name}`} onClick={() => handleDeleteSub(cat, node)}>Delete</button>
+            </div>
+          </div>
+        </div>
+        {isOpen && (
+          <div style={{ padding: '0 0.65rem 0.6rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {children.map((child, i) => renderSubNode(cat, tree, child, children, i))}
+            {children.length > 0 && node.direct.length > 0 && (
+              <div style={{ border: '1px dashed var(--secondary-solid)', borderRadius: 6, padding: '0.5rem 0.65rem', background: 'rgba(69,90,100,0.08)' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)', marginBottom: '0.35rem', fontWeight: 700 }}>
+                  Directly in {node.name} ({node.direct.length}) — not in a sub-category inside it
+                </div>
+                {holdingsTable}
+              </div>
+            )}
+            {children.length === 0 && (node.direct.length === 0 ? (
+              <p style={{ color: 'var(--pos-bright)', fontSize: '0.8rem', fontStyle: 'italic', margin: '0.25rem 0' }}>
+                Click a ticker on the right to assign it here, or use + Sub to add a sub-category inside it.
+              </p>
+            ) : holdingsTable)}
+          </div>
+        )}
+      </div>
+    )
+  }
 
   const handleUnallocClick = (ticker) => {
     if (assignTarget) {
@@ -1410,6 +1743,11 @@ export default function Categories() {
     return Object.fromEntries(rows.map(row => [row.id, row]))
   }, [targetAssistant])
 
+  const orderedCategories = useMemo(
+    () => orderGroups(data.categories, groupOrder),
+    [data.categories, groupOrder],
+  )
+
   const barColor = (cat) => {
     if (cat.target_pct == null) return '#7ecfff'
     const diff = Math.abs(cat.actual_pct - cat.target_pct)
@@ -1739,9 +2077,26 @@ export default function Categories() {
           {data.categories.length === 0 && (
             <div className="card"><p style={{ color: 'var(--text-dim-2)' }}>No categories yet. Create one or import holdings to auto-generate.</p></div>
           )}
-          {data.categories.map(cat => {
+          {data.categories.length > 0 && (
+            <div className="cat-list-toolbar">
+              <label>
+                Order by
+                <select value={groupOrder} onChange={(e) => changeGroupOrder(e.target.value)}>
+                  {GROUP_ORDER_MODES.map(mode => <option key={mode.key} value={mode.key}>{mode.label}</option>)}
+                </select>
+              </label>
+              <span>
+                {groupOrder === 'custom'
+                  ? 'Use ▲ ▼ to move a category, or a sub-category within its category.'
+                  : 'Applies to categories and sub-categories. Choose My order to move them by hand.'}
+                {' '}Click a column header to sort the holdings.
+              </span>
+            </div>
+          )}
+          {orderedCategories.map((cat, catIndex) => {
             const expanded = expandedId === cat.id
             const assistantRow = assistantRowsById[cat.id]
+            const catIncomeShare = sharePct(cat.monthly_income, data.monthly_income)
             return (
               <div
                 key={cat.id}
@@ -1759,9 +2114,16 @@ export default function Categories() {
                 {/* Header */}
                 <div
                   style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer' }}
-                  onClick={() => { setExpandedSubId(null); setExpandedId(expanded ? null : cat.id) }}
+                  onClick={() => { setExpandedSubIds(new Set()); setActiveSubId(null); setExpandedId(expanded ? null : cat.id) }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+                    <MoveButtons
+                      name={cat.name}
+                      index={catIndex}
+                      count={orderedCategories.length}
+                      enabled={groupOrder === 'custom'}
+                      onMove={(delta) => handleMoveCategory(cat.id, delta)}
+                    />
                     <span style={{ fontSize: '0.8rem', opacity: 0.5 }}>{expanded ? '\u25BC' : '\u25B6'}</span>
                     <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{cat.name}</h2>
                     <span style={{ background: 'var(--border)', padding: '0.15rem 0.5rem', borderRadius: 10, fontSize: '0.75rem', color: 'var(--accent-bright)' }}>
@@ -1773,7 +2135,7 @@ export default function Categories() {
                       </span>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.4rem 1.25rem' }}>
                     {cat.target_pct != null && (
                       <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>Target: {cat.target_pct.toFixed(1)}%</span>
                     )}
@@ -1795,10 +2157,16 @@ export default function Categories() {
                         Quality: {assistantRow.quality.score}
                       </button>
                     )}
-                    <span style={{ fontWeight: 700, color: barColor(cat), fontSize: '0.95rem' }}>
-                      {cat.actual_pct.toFixed(1)}%
+                    <span style={{ fontWeight: 700, color: barColor(cat), fontSize: '0.95rem' }} title={`${cat.name} is ${cat.actual_pct.toFixed(1)}% of the whole portfolio value.`}>
+                      {cat.actual_pct.toFixed(1)}% <span className="cat-share-label">of portfolio</span>
                     </span>
                     <span style={{ fontSize: '0.85rem', color: 'var(--text-dim-2)' }}>{fmt(cat.actual_value)}</span>
+                    <span
+                      style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}
+                      title={`Projected monthly income from ${cat.name}${catIncomeShare != null ? `: ${catIncomeShare.toFixed(1)}% of the portfolio's income` : ''}.`}
+                    >
+                      {fmt(cat.monthly_income)}<span className="cat-share-label">/mo income</span>
+                    </span>
                     <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
                       <button className="btn btn-primary" style={ROW_BTN} title={`Rename ${cat.name} or change its target`} onClick={() => handleEdit(cat)}>Edit</button>
                       <button className="btn btn-danger" style={ROW_BTN} title={`Delete ${cat.name}`} onClick={() => handleDelete(cat)}>Delete</button>
@@ -1811,14 +2179,23 @@ export default function Categories() {
                   <div style={{ height: '100%', width: `${Math.min(cat.actual_pct, 100)}%`, background: barColor(cat), borderRadius: 3, transition: 'width 0.3s' }} />
                 </div>
 
-                {/* Expanded: sub-categories and/or ticker list */}
+                {/* Expanded: sub-categories (nested to any depth) and/or ticker list */}
                 {expanded && (() => {
-                  const subs = cat.subcategories || []
-                  const hasSubs = subs.length > 0
+                  const tree = catTrees.get(cat.id)
+                  const roots = branchOrder(tree?.roots || [])
+                  const hasSubs = roots.length > 0
                   return (
                     <div style={{ marginTop: '0.75rem' }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                        <button className="btn btn-secondary" style={ROW_BTN} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, siblings: cat.subcategories || [] })}>+ Sub-category</button>
+                        <button
+                          className="btn btn-secondary"
+                          style={ROW_BTN}
+                          onClick={() => setSubModal({
+                            categoryId: cat.id, categoryName: cat.name,
+                            parentId: null, parentName: cat.name, pathLabel: cat.name,
+                            siblings: tree?.roots || [],
+                          })}
+                        >+ Sub-category</button>
                         {!hasSubs && cat.tickers.length > 0 && (
                           <button className="btn btn-secondary" style={ROW_BTN}
                             onClick={() => handleUnassign(cat.tickers.map(t => t.ticker))}>
@@ -1829,52 +2206,19 @@ export default function Categories() {
 
                       {hasSubs ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                          {subs.map(sub => {
-                            const subExpanded = expandedSubId === sub.id
-                            return (
-                              <div key={sub.id} style={{ border: subExpanded ? '1px solid var(--primary)' : '1px solid var(--border)', borderRadius: 6, background: 'var(--p-161b2e)' }}>
-                                <div
-                                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', padding: '0.5rem 0.65rem' }}
-                                  onClick={() => setExpandedSubId(subExpanded ? null : sub.id)}
-                                >
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                                    <span style={{ fontSize: '0.72rem', opacity: 0.5 }}>{subExpanded ? '▼' : '▶'}</span>
-                                    <strong style={{ fontSize: '0.92rem', color: 'var(--p-cfd8dc)' }}>{sub.name}</strong>
-                                    <span style={{ background: 'var(--border)', padding: '0.1rem 0.45rem', borderRadius: 10, fontSize: '0.7rem', color: 'var(--accent-bright)' }}>{sub.tickers.length}</span>
-                                  </div>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--p-bb86fc)' }}>{sub.actual_pct.toFixed(1)}%</span>
-                                    <span style={{ fontSize: '0.78rem', color: 'var(--text-dim-2)' }}>{sub.category_pct.toFixed(1)}% of {cat.name}</span>
-                                    {sub.target_pct != null && (
-                                      <span style={{ fontSize: '0.78rem', color: 'var(--accent-2)' }}>Target {sub.target_pct.toFixed(1)}% of cat</span>
-                                    )}
-                                    <span style={{ fontSize: '0.82rem', color: 'var(--text-dim-2)' }}>{fmt(sub.actual_value)}</span>
-                                    <div style={{ display: 'flex', gap: '0.35rem' }} onClick={(e) => e.stopPropagation()}>
-                                      <button className="btn btn-secondary" style={SUB_ROW_BTN} title={`Rename ${sub.name} or change its target`} onClick={() => setSubModal({ categoryId: cat.id, categoryName: cat.name, sub, siblings: cat.subcategories || [] })}>Edit</button>
-                                      <button className="btn btn-danger" style={SUB_ROW_BTN} title={`Delete sub-category ${sub.name}`} onClick={() => handleDeleteSub(sub)}>Delete</button>
-                                    </div>
-                                  </div>
-                                </div>
-                                {subExpanded && (
-                                  <div style={{ padding: '0 0.65rem 0.6rem' }}>
-                                    {sub.tickers.length === 0 ? (
-                                      <p style={{ color: 'var(--pos-bright)', fontSize: '0.8rem', fontStyle: 'italic', margin: '0.25rem 0' }}>
-                                        Click a ticker on the right to assign it here
-                                      </p>
-                                    ) : (
-                                      <TickerTable tickers={sub.tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} moveTargets={subs} onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)} />
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )
-                          })}
-                          {cat.unclassified_tickers.length > 0 && (
+                          {roots.map((node, i) => renderSubNode(cat, tree, node, roots, i))}
+                          {tree.unassigned.length > 0 && (
                             <div style={{ border: '1px dashed var(--secondary-solid)', borderRadius: 6, padding: '0.5rem 0.65rem', background: 'rgba(69,90,100,0.08)' }}>
                               <div style={{ fontSize: '0.8rem', color: 'var(--text-dim-2)', marginBottom: '0.35rem', fontWeight: 700 }}>
-                                Not in a sub-category ({cat.unclassified_tickers.length}) — use the dropdown to choose one
+                                Not in a sub-category ({tree.unassigned.length}) — use the dropdown to choose one
                               </div>
-                              <TickerTable tickers={cat.unclassified_tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} moveTargets={subs} onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)} />
+                              <TickerTable
+                                {...tableBase}
+                                tickers={tree.unassigned}
+                                shareLevels={shareLevelsFor(cat, [])}
+                                moveTargets={tree.ordered}
+                                onMove={(ticker, subId) => handleAssign([ticker], cat.id, subId)}
+                              />
                             </div>
                           )}
                         </div>
@@ -1884,7 +2228,7 @@ export default function Categories() {
                             Click a ticker on the right to assign it here, or add a sub-category to organize holdings.
                           </p>
                         ) : (
-                          <TickerTable tickers={cat.tickers} categoryValue={cat.actual_value} onUnassign={handleUnassign} fmt={fmt} />
+                          <TickerTable {...tableBase} tickers={cat.tickers} shareLevels={shareLevelsFor(cat, [])} />
                         )
                       )}
                     </div>

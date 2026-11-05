@@ -22915,6 +22915,8 @@ def list_holdings():
             )
             category_params.extend(category_ids)
         if subcategory_ids:
+            # A sub-category also brings in everything nested under it.
+            subcategory_ids = _expand_subcategory_ids(conn, pids, subcategory_ids)
             conditions.append(
                 f"subcategory_id IN ({','.join('?' * len(subcategory_ids))})"
             )
@@ -23054,6 +23056,10 @@ def list_holdings():
 
     # Recalculate percent_of_account
     results = rows_to_dicts(rows)
+    # Sub-categories nest to any depth. Give each holding its chain of
+    # sub-categories (top first), so a client-side filter on a parent
+    # sub-category also matches holdings in the ones nested inside it.
+    _attach_subcategory_paths(conn, pids, results)
     if selected_tickers is not None:
         results = [
             row for row in results
@@ -35453,18 +35459,136 @@ _CLASSIFICATION_NAMES = {
 }
 
 
-def _attach_subcategories(conn, profile_ids, categories):
-    """Add a 'subcategories' list to each category dict (for filter dropdowns)."""
-    if not categories:
-        return categories
+def _subcategory_parent_column(conn):
+    """parent_id, or NULL for a test fixture's hand-built pre-nesting table."""
+    return "parent_id" if "parent_id" in _table_columns(conn, "subcategories") else "NULL"
+
+
+def _subcategory_tree_order(rows):
+    """Sub-categories in tree order: each one followed by everything nested
+    under it, siblings by (sort_order, name). Each dict gains 'parent_id' and
+    'depth' (0 = directly under the category). A row whose parent is missing,
+    in another category, or part of a cycle is treated as top level, so a
+    damaged tree still lists every row exactly once.
+    """
+    items = [dict(r) for r in rows]
+    by_id = {item["id"]: item for item in items}
+    children = {}
+    for item in items:
+        parent = by_id.get(item.get("parent_id"))
+        if parent is None or parent.get("category_id") != item.get("category_id"):
+            item["parent_id"] = None
+        children.setdefault((item.get("category_id"), item["parent_id"]), []).append(item)
+    sort_key = lambda s: (s.get("sort_order") or 0, str(s.get("name") or "").lower(), s["id"])
+    for siblings in children.values():
+        siblings.sort(key=sort_key)
+
+    ordered, seen = [], set()
+
+    def visit(item, depth):
+        if item["id"] in seen:
+            return
+        seen.add(item["id"])
+        item["depth"] = depth
+        ordered.append(item)
+        for child in children.get((item.get("category_id"), item["id"]), []):
+            visit(child, depth + 1)
+
+    roots = sorted(
+        (item for item in items if item["parent_id"] is None),
+        key=lambda s: (s.get("category_id") or 0, *sort_key(s)),
+    )
+    for root in roots:
+        visit(root, 0)
+    # Anything left was only reachable through a cycle: list it at the top.
+    for item in sorted(items, key=sort_key):
+        if item["id"] not in seen:
+            item["parent_id"] = None
+            visit(item, 0)
+    return ordered
+
+
+def _subcategory_rows(conn, profile_ids, columns="id, category_id, name"):
+    """All sub-categories for these profiles, in tree order with depth."""
+    if not profile_ids:
+        return []
     ph = ",".join("?" * len(profile_ids))
+    has_sort = "sort_order" in _table_columns(conn, "subcategories")
     rows = conn.execute(
-        f"SELECT id, category_id, name FROM subcategories WHERE profile_id IN ({ph}) ORDER BY sort_order, name",
+        f"SELECT {columns}, {_subcategory_parent_column(conn)} AS parent_id"
+        f"{', sort_order' if has_sort and 'sort_order' not in columns else ''} "
+        f"FROM subcategories WHERE profile_id IN ({ph})",
         list(profile_ids),
     ).fetchall()
+    return _subcategory_tree_order(rows)
+
+
+def _subcategories_by_category(conn, profile_ids):
+    """{category_id: [{id, name, parent_id, depth}, ...]} in tree order."""
     subs_by_cat = {}
-    for s in rows:
-        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
+    for s in _subcategory_rows(conn, profile_ids):
+        subs_by_cat.setdefault(s["category_id"], []).append({
+            "id": s["id"],
+            "name": s["name"],
+            "parent_id": s["parent_id"],
+            "depth": s["depth"],
+        })
+    return subs_by_cat
+
+
+def _attach_subcategory_paths(conn, profile_ids, rows):
+    """Add subcategory_path_ids / subcategory_path (names) to each row that
+    has a subcategory_id: the chain from the top sub-category down to it."""
+    if not rows or not any(r.get("subcategory_id") is not None for r in rows):
+        return rows
+    try:
+        by_id = {s["id"]: s for s in _subcategory_rows(conn, profile_ids)}
+    except sqlite3.OperationalError:
+        return rows
+    for r in rows:
+        sub_id = r.get("subcategory_id")
+        ids, names, node, guard = [], [], by_id.get(sub_id), 0
+        while node is not None and guard < 1000:
+            ids.append(node["id"])
+            names.append(node["name"])
+            node = by_id.get(node["parent_id"]) if node["parent_id"] is not None else None
+            guard += 1
+        r["subcategory_path_ids"] = list(reversed(ids))
+        r["subcategory_path"] = list(reversed(names))
+    return rows
+
+
+def _subcategory_path_keys(conn, profile_ids, cat_name_by_id):
+    """{profile_id: ["Category›Sub›Nested", ...]} — every sub-category keyed
+    by its full path of names."""
+    by_profile = {}
+    if not profile_ids:
+        return by_profile
+    ph = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"SELECT id, category_id, name, profile_id, {_subcategory_parent_column(conn)} AS parent_id "
+        f"FROM subcategories WHERE profile_id IN ({ph})",
+        list(profile_ids),
+    ).fetchall()
+    ordered = _subcategory_tree_order(rows)
+    names_by_id = {s["id"]: s for s in ordered}
+    for s in ordered:
+        parts, node, guard = [], s, 0
+        while node is not None and guard < 1000:
+            parts.append(node["name"])
+            node = names_by_id.get(node["parent_id"]) if node["parent_id"] is not None else None
+            guard += 1
+        cat_name = cat_name_by_id.get(s["category_id"], "")
+        by_profile.setdefault(s["profile_id"], []).append("›".join([cat_name, *reversed(parts)]))
+    return by_profile
+
+
+def _attach_subcategories(conn, profile_ids, categories):
+    """Add a 'subcategories' list to each category dict (for filter dropdowns).
+    Listed in tree order with parent_id and depth, so a dropdown can indent."""
+    if not categories:
+        return categories
+    subs_by_cat = _subcategories_by_category(conn, profile_ids)
     for c in categories:
         c["subcategories"] = subs_by_cat.get(c["id"], [])
     return categories
@@ -35475,10 +35599,37 @@ def _parse_subcategory_ids(value):
     return [int(s) for s in str(value or "").split(",") if s.strip().isdigit()]
 
 
+def _expand_subcategory_ids(conn, profile_ids, sub_ids):
+    """The given sub-category ids plus every sub-category nested under them,
+    so filtering by a sub-category includes the holdings in its children."""
+    wanted = {int(s) for s in (sub_ids or [])}
+    if not wanted or not profile_ids:
+        return sorted(wanted)
+    if _subcategory_parent_column(conn) == "NULL":
+        return sorted(wanted)
+    ph = ",".join("?" * len(profile_ids))
+    rows = conn.execute(
+        f"SELECT id, parent_id FROM subcategories WHERE profile_id IN ({ph}) AND parent_id IS NOT NULL",
+        list(profile_ids),
+    ).fetchall()
+    children = {}
+    for r in rows:
+        children.setdefault(r["parent_id"], []).append(r["id"])
+    stack = list(wanted)
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in wanted:
+                wanted.add(child)
+                stack.append(child)
+    return sorted(wanted)
+
+
 def _subcategory_ticker_set(conn, profile_ids, sub_ids):
-    """Tickers assigned to any of the given subcategory ids."""
+    """Tickers assigned to any of the given subcategory ids, or to any
+    sub-category nested under them."""
     if not sub_ids:
         return set()
+    sub_ids = _expand_subcategory_ids(conn, profile_ids, sub_ids)
     ph = ",".join("?" * len(profile_ids))
     sph = ",".join("?" * len(sub_ids))
     rows = conn.execute(
@@ -35583,11 +35734,11 @@ def categories_data():
         "SELECT ticker, category_id, subcategory_id FROM ticker_categories WHERE profile_id = ?",
         (profile_id,),
     ).fetchall()
-    # Fetch subcategories (second tier within a category)
-    subcat_rows = conn.execute(
-        "SELECT id, category_id, name, target_pct, sort_order FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
-        (profile_id,),
-    ).fetchall()
+    # Fetch subcategories, nested to any depth, in tree order (each one is
+    # followed by the sub-categories inside it).
+    subcat_rows = _subcategory_rows(
+        conn, [profile_id], columns="id, category_id, name, target_pct, sort_order",
+    )
     subcats_by_category = {}
     for s in subcat_rows:
         subcats_by_category.setdefault(s["category_id"], []).append({
@@ -35595,6 +35746,8 @@ def categories_data():
             "name": s["name"],
             "target_pct": s["target_pct"],
             "sort_order": s["sort_order"],
+            "parent_id": s["parent_id"],
+            "depth": s["depth"],
         })
     # Build response
     holding_map = {h["ticker"]: h for h in all_holdings}
@@ -36013,6 +36166,45 @@ def reorder_categories():
     return jsonify({"message": "Reordered"})
 
 
+@app.route("/api/categories/<int:cat_id>/subcategories/reorder", methods=["POST"])
+def reorder_subcategories(cat_id):
+    """Save the order of one category's sub-categories.
+
+    Body: {"order": [sub_id, ...]}. Only sub-categories that belong to this
+    category and account are touched; ids from anywhere else are ignored.
+    """
+    aggregate_error = _reject_aggregate_category_write()
+    if aggregate_error:
+        return aggregate_error
+    profile_id = get_profile_id()
+    data = request.get_json(silent=True) or {}
+    order = data.get("order")
+    if not isinstance(order, list):
+        return jsonify({"error": "order must be a list of sub-category ids"}), 400
+    try:
+        order = [int(sub_id) for sub_id in order]
+    except (TypeError, ValueError):
+        return jsonify({"error": "order must be a list of sub-category ids"}), 400
+    conn = get_connection()
+    try:
+        parent = conn.execute(
+            "SELECT id FROM categories WHERE id = ? AND profile_id = ?",
+            (cat_id, profile_id),
+        ).fetchone()
+        if not parent:
+            return jsonify({"error": "Category not found"}), 404
+        for i, sub_id in enumerate(order):
+            conn.execute(
+                "UPDATE subcategories SET sort_order = ? "
+                "WHERE id = ? AND category_id = ? AND profile_id = ?",
+                (i, sub_id, cat_id, profile_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"message": "Reordered"})
+
+
 @app.route("/api/categories/<int:cat_id>/subcategories", methods=["POST"])
 def create_subcategory(cat_id):
     aggregate_error = _reject_aggregate_category_write()
@@ -36024,6 +36216,13 @@ def create_subcategory(cat_id):
     if not name:
         return jsonify({"error": "Name is required"}), 400
     target_pct = data.get("target_pct")
+    # parent_id: the sub-category to nest this one inside (omit or null for
+    # directly under the category). Nesting has no depth limit.
+    parent_id = data.get("parent_id")
+    try:
+        parent_id = int(parent_id) if parent_id not in (None, "") else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "parent_id must be a sub-category id"}), 400
     conn = get_connection()
     # Ensure the parent category exists for this profile
     parent = conn.execute(
@@ -36033,21 +36232,33 @@ def create_subcategory(cat_id):
     if not parent:
         conn.close()
         return jsonify({"error": "Category not found"}), 404
+    if parent_id is not None:
+        parent_sub = conn.execute(
+            "SELECT id FROM subcategories WHERE id = ? AND category_id = ? AND profile_id = ?",
+            (parent_id, cat_id, profile_id),
+        ).fetchone()
+        if not parent_sub:
+            conn.close()
+            return jsonify({"error": "Parent sub-category not found in this category"}), 404
     max_order = conn.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM subcategories WHERE category_id = ? AND profile_id = ?",
-        (cat_id, profile_id),
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 as n FROM subcategories "
+        "WHERE category_id = ? AND profile_id = ? AND parent_id IS ?",
+        (cat_id, profile_id, parent_id),
     ).fetchone()["n"]
     try:
-        conn.execute(
-            "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) VALUES (?, ?, ?, ?, ?)",
-            (cat_id, name, target_pct, profile_id, max_order),
+        cur = conn.execute(
+            "INSERT INTO subcategories (category_id, parent_id, name, target_pct, profile_id, sort_order) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cat_id, parent_id, name, target_pct, profile_id, max_order),
         )
+        new_id = cur.lastrowid
         conn.commit()
-    except Exception:
+    except sqlite3.IntegrityError:
         conn.close()
-        return jsonify({"error": f"Sub-category '{name}' already exists in this category"}), 409
+        where = "inside that sub-category" if parent_id is not None else "in this category"
+        return jsonify({"error": f"Sub-category '{name}' already exists {where}"}), 409
     conn.close()
-    return jsonify({"message": f"Sub-category '{name}' created"})
+    return jsonify({"message": f"Sub-category '{name}' created", "id": new_id})
 
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["PUT"])
@@ -36081,30 +36292,43 @@ def update_subcategory(sub_id):
         conn.commit()
     except Exception:
         conn.close()
-        return jsonify({"error": "Sub-category already exists in this category"}), 409
+        return jsonify({"error": "A sub-category with that name already exists at this level"}), 409
     conn.close()
     return jsonify({"message": "Sub-category updated"})
 
 
 @app.route("/api/subcategories/<int:sub_id>", methods=["DELETE"])
 def delete_subcategory(sub_id):
+    """Delete a sub-category and everything nested inside it. Their holdings
+    move up one level, to the deleted sub-category's parent (or straight into
+    the category when it was at the top), so nothing leaves the category."""
     aggregate_error = _reject_aggregate_category_write()
     if aggregate_error:
         return aggregate_error
     profile_id = get_profile_id()
     conn = get_connection()
-    # Tickers in this sub-category fall back to their parent category (unclassified within it)
-    conn.execute(
-        "UPDATE ticker_categories SET subcategory_id = NULL WHERE subcategory_id = ? AND profile_id = ?",
-        (sub_id, profile_id),
-    )
-    conn.execute(
-        "DELETE FROM subcategories WHERE id = ? AND profile_id = ?",
-        (sub_id, profile_id),
-    )
-    conn.commit()
-    conn.close()
-    return jsonify({"message": "Sub-category deleted"})
+    try:
+        row = conn.execute(
+            "SELECT id, parent_id FROM subcategories WHERE id = ? AND profile_id = ?",
+            (sub_id, profile_id),
+        ).fetchone()
+        if not row:
+            return jsonify({"message": "Sub-category deleted"})
+        branch = _expand_subcategory_ids(conn, [profile_id], [sub_id])
+        bph = ",".join("?" * len(branch))
+        conn.execute(
+            f"UPDATE ticker_categories SET subcategory_id = ? "
+            f"WHERE profile_id = ? AND subcategory_id IN ({bph})",
+            [row["parent_id"], profile_id] + branch,
+        )
+        conn.execute(
+            f"DELETE FROM subcategories WHERE profile_id = ? AND id IN ({bph})",
+            [profile_id] + branch,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"message": "Sub-category deleted", "removed": len(branch)})
 
 
 @app.route("/api/categories/copy-targets", methods=["GET"])
@@ -36124,17 +36348,18 @@ def category_copy_targets():
     cat_names_by_profile = {}
     for r in conn.execute("SELECT profile_id, name FROM categories").fetchall():
         cat_names_by_profile.setdefault(r["profile_id"], []).append(r["name"])
-    # Sub-categories are keyed by "category name › sub name" so the frontend can
-    # tell which of the source's sub-categories a target account is missing
-    # without needing that account's category ids.
+    # Sub-categories are keyed by their path, "category › sub › nested sub",
+    # so the frontend can tell which of the source's sub-categories a target
+    # account is missing without needing that account's ids.
+    cat_name_by_id = {
+        r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM categories").fetchall()
+    }
+    all_profile_ids = [r["profile_id"] for r in conn.execute(
+        "SELECT DISTINCT profile_id FROM subcategories"
+    ).fetchall()]
     sub_keys_by_profile = {}
-    for r in conn.execute(
-        "SELECT s.profile_id AS profile_id, c.name AS cat_name, s.name AS sub_name "
-        "FROM subcategories s JOIN categories c ON c.id = s.category_id"
-    ).fetchall():
-        sub_keys_by_profile.setdefault(r["profile_id"], []).append(
-            f"{r['cat_name']}›{r['sub_name']}"
-        )
+    for pid, keys in _subcategory_path_keys(conn, all_profile_ids, cat_name_by_id).items():
+        sub_keys_by_profile[pid] = keys
     conn.close()
     return jsonify({
         "source_profile_id": source_id,
@@ -36200,12 +36425,12 @@ def copy_categories_to_accounts():
 
     src_subs_by_cat = {}
     if include_subs:
-        for s in conn.execute(
-            f"SELECT category_id, name, target_pct FROM subcategories "
-            f"WHERE profile_id = ? AND category_id IN ({cph}) ORDER BY sort_order, name",
-            [source_id, *category_ids],
-        ).fetchall():
-            src_subs_by_cat.setdefault(s["category_id"], []).append(s)
+        wanted_cats = set(category_ids)
+        for s in _subcategory_rows(
+            conn, [source_id], columns="id, category_id, name, target_pct, sort_order",
+        ):
+            if s["category_id"] in wanted_cats:
+                src_subs_by_cat.setdefault(s["category_id"], []).append(s)
 
     tph = ",".join("?" * len(target_ids))
     valid_targets = {
@@ -36254,28 +36479,40 @@ def copy_categories_to_accounts():
             src_subs = [s for s in src_subs_by_cat.get(sc["id"], []) if (s["name"] or "").strip()]
             if not src_subs:
                 continue
-            existing_sub_names = {
-                (r["name"] or "").strip().lower()
-                for r in conn.execute(
-                    "SELECT name FROM subcategories WHERE category_id = ? AND profile_id = ?",
-                    (cat_id, pid),
-                ).fetchall()
-            }
-            next_sub_sort = conn.execute(
-                "SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM subcategories "
+            # Match level by level: a sub-category is "already there" when the
+            # target has the same name under the matching parent. Source rows
+            # come in tree order, so a parent is always mapped before its
+            # children.
+            existing_subs = {}
+            next_sort_by_parent = {}
+            for r in conn.execute(
+                "SELECT id, parent_id, name, sort_order FROM subcategories "
                 "WHERE category_id = ? AND profile_id = ?",
                 (cat_id, pid),
-            ).fetchone()["n"]
+            ).fetchall():
+                existing_subs[(r["parent_id"], (r["name"] or "").strip().lower())] = r["id"]
+                next_sort_by_parent[r["parent_id"]] = max(
+                    next_sort_by_parent.get(r["parent_id"], 0), int(r["sort_order"] or 0) + 1,
+                )
+            target_id_for = {}
             for ss in src_subs:
                 sub_name = (ss["name"] or "").strip()
-                if sub_name.lower() in existing_sub_names:
-                    continue  # additive only — never re-target an existing sub-category
-                conn.execute(
-                    "INSERT INTO subcategories (category_id, name, target_pct, profile_id, sort_order) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (cat_id, sub_name, ss["target_pct"] if include_targets else None, pid, next_sub_sort),
+                target_parent = target_id_for.get(ss["parent_id"]) if ss["parent_id"] is not None else None
+                if ss["parent_id"] is not None and target_parent is None:
+                    continue  # its parent couldn't be placed, so neither can it
+                key = (target_parent, sub_name.lower())
+                if key in existing_subs:
+                    # additive only — never re-target an existing sub-category
+                    target_id_for[ss["id"]] = existing_subs[key]
+                    continue
+                sort_order = next_sort_by_parent.get(target_parent, 0)
+                cur = conn.execute(
+                    "INSERT INTO subcategories (category_id, parent_id, name, target_pct, profile_id, sort_order) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (cat_id, target_parent, sub_name, ss["target_pct"] if include_targets else None, pid, sort_order),
                 )
-                next_sub_sort += 1
+                next_sort_by_parent[target_parent] = sort_order + 1
+                target_id_for[ss["id"]] = existing_subs[key] = cur.lastrowid
                 acct_subs += 1
         cats_created += acct_cats
         subs_created += acct_subs
@@ -36345,13 +36582,7 @@ def dividend_analysis_data():
         "SELECT id, name FROM categories WHERE profile_id = ? ORDER BY sort_order, name",
         (profile_id,),
     ).fetchall()
-    subcat_rows = conn.execute(
-        "SELECT id, category_id, name FROM subcategories WHERE profile_id = ? ORDER BY sort_order, name",
-        (profile_id,),
-    ).fetchall()
-    subs_by_cat = {}
-    for s in subcat_rows:
-        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
+    subs_by_cat = _subcategories_by_category(conn, [profile_id])
     categories = [
         {"id": c["id"], "name": c["name"], "subcategories": subs_by_cat.get(c["id"], [])}
         for c in cats
@@ -36437,11 +36668,8 @@ def dividend_analysis_data():
             if cat_names:
                 keep |= set(df[df["category_name"].isin(cat_names)]["ticker"])
         if sub_ids:
-            sub_tickers = conn.execute(
-                f"SELECT ticker FROM ticker_categories WHERE profile_id = ? AND subcategory_id IN ({','.join('?' * len(sub_ids))})",
-                [profile_id] + sub_ids,
-            ).fetchall()
-            keep |= {r["ticker"] for r in sub_tickers}
+            # Includes holdings in sub-categories nested under the chosen ones.
+            keep |= _subcategory_ticker_set(conn, [profile_id], sub_ids)
         df = df[df["ticker"].isin(keep)]
 
     if df.empty:
@@ -41500,6 +41728,8 @@ def growth_data():
             conds.append(f"category_id IN ({','.join('?' * len(cat_ids))})")
             qparams += cat_ids
         if sub_ids:
+            # A sub-category also brings in everything nested under it.
+            sub_ids = _expand_subcategory_ids(conn, profile_ids, sub_ids)
             conds.append(f"subcategory_id IN ({','.join('?' * len(sub_ids))})")
             qparams += sub_ids
         selected_category_tickers = {
@@ -41580,15 +41810,9 @@ def growth_data():
         f"SELECT id, name FROM categories WHERE profile_id IN ({placeholders}) ORDER BY sort_order, name",
         profile_ids,
     ).fetchall()
-    subcat_rows = conn.execute(
-        f"SELECT id, category_id, name FROM subcategories WHERE profile_id IN ({placeholders}) ORDER BY sort_order, name",
-        profile_ids,
-    ).fetchall()
+    subs_by_cat = _subcategories_by_category(conn, profile_ids)
     conn.close()
 
-    subs_by_cat = {}
-    for s in subcat_rows:
-        subs_by_cat.setdefault(s["category_id"], []).append({"id": s["id"], "name": s["name"]})
     categories = [
         {"id": c["id"], "name": c["name"], "subcategories": subs_by_cat.get(c["id"], [])}
         for c in cats

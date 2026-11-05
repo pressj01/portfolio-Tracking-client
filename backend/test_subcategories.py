@@ -274,6 +274,197 @@ class SubcategoryApiTest(unittest.TestCase):
         self.assertEqual(row["name"], "Gold")  # name preserved
         self.assertEqual(row["target_pct"], 40)
 
+    # ── ordering (Move up / Move down on the Categories screen) ──────────────────
+    def _sub_id(self, name, category_id=1):
+        return self._row(
+            "SELECT id FROM subcategories WHERE name = ? AND category_id = ?",
+            (name, category_id),
+        )["id"]
+
+    def test_reorder_subcategories_changes_data_order(self):
+        for name in ("Gold", "Silver", "Copper"):
+            self._create_sub(name)
+        order = [self._sub_id("Copper"), self._sub_id("Gold"), self._sub_id("Silver")]
+        res = self.client.post(
+            "/api/categories/1/subcategories/reorder?profile_id=1", json={"order": order},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        names = [s["name"] for s in self._category(data)["subcategories"]]
+        self.assertEqual(names, ["Copper", "Gold", "Silver"])
+
+    def test_reorder_subcategories_ignores_other_categories(self):
+        self.client.post("/api/categories?profile_id=1", json={"name": "Crypto"})
+        crypto_id = self._row("SELECT id FROM categories WHERE name = 'Crypto'")["id"]
+        self._create_sub("Gold")
+        self._create_sub("Bitcoin", category_id=crypto_id)
+        bitcoin_id = self._sub_id("Bitcoin", crypto_id)
+        before = self._row("SELECT sort_order FROM subcategories WHERE id = ?", (bitcoin_id,))["sort_order"]
+        self.client.post(
+            "/api/categories/1/subcategories/reorder?profile_id=1",
+            json={"order": [bitcoin_id, self._sub_id("Gold")]},
+        )
+        after = self._row("SELECT sort_order FROM subcategories WHERE id = ?", (bitcoin_id,))["sort_order"]
+        self.assertEqual(after, before)
+        self.assertEqual(self._row("SELECT sort_order FROM subcategories WHERE name = 'Gold'")["sort_order"], 1)
+
+    def test_reorder_subcategories_unknown_category_404(self):
+        res = self.client.post("/api/categories/999/subcategories/reorder?profile_id=1", json={"order": []})
+        self.assertEqual(res.status_code, 404)
+
+    def test_reorder_subcategories_rejects_bad_order(self):
+        res = self.client.post("/api/categories/1/subcategories/reorder?profile_id=1", json={"order": "x"})
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post("/api/categories/1/subcategories/reorder?profile_id=1", json={"order": ["a"]})
+        self.assertEqual(res.status_code, 400)
+
+    def test_reorder_subcategories_rejects_aggregate_context(self):
+        res = self.client.post("/api/categories/1/subcategories/reorder?aggregate_id=1", json={"order": []})
+        self.assertEqual(res.status_code, 400)
+
+    def test_reorder_categories_changes_data_order(self):
+        self.client.post("/api/categories?profile_id=1", json={"name": "Crypto"})
+        crypto_id = self._row("SELECT id FROM categories WHERE name = 'Crypto'")["id"]
+        res = self.client.post("/api/categories/reorder?profile_id=1", json={"order": [crypto_id, 1]})
+        self.assertEqual(res.status_code, 200)
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        self.assertEqual([c["name"] for c in data["categories"]], ["Crypto", "Metals"])
+
+    # ── nesting (sub-categories inside sub-categories, any depth) ────────────────
+    def _create_nested(self, name, parent_id, category_id=1, **extra):
+        return self.client.post(
+            f"/api/categories/{category_id}/subcategories?profile_id=1",
+            json={"name": name, "parent_id": parent_id, **extra},
+        )
+
+    def _gold_tree(self):
+        """Metals › Gold › Miners › Juniors, plus Metals › Silver."""
+        gold = self._create_sub("Gold").get_json()["id"]
+        self._create_sub("Silver")
+        miners = self._create_nested("Miners", gold).get_json()["id"]
+        juniors = self._create_nested("Juniors", miners).get_json()["id"]
+        return gold, miners, juniors
+
+    def test_nested_subcategories_come_back_in_tree_order_with_depth(self):
+        gold, miners, juniors = self._gold_tree()
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        subs = [(s["name"], s["parent_id"], s["depth"]) for s in self._category(data)["subcategories"]]
+        self.assertEqual(subs, [
+            ("Gold", None, 0),
+            ("Miners", gold, 1),
+            ("Juniors", miners, 2),
+            ("Silver", None, 0),
+        ])
+
+    def test_same_name_allowed_under_different_parents_but_not_siblings(self):
+        gold, _, _ = self._gold_tree()
+        silver = self._row("SELECT id FROM subcategories WHERE name = 'Silver'")["id"]
+        self.assertEqual(self._create_nested("Miners", silver).status_code, 200)
+        self.assertEqual(self._create_nested("Miners", gold).status_code, 409)
+
+    def test_parent_from_another_category_is_rejected(self):
+        self.client.post("/api/categories?profile_id=1", json={"name": "Crypto"})
+        crypto_id = self._row("SELECT id FROM categories WHERE name = 'Crypto'")["id"]
+        gold = self._create_sub("Gold").get_json()["id"]
+        res = self._create_nested("Coins", gold, category_id=crypto_id)
+        self.assertEqual(res.status_code, 404)
+
+    def test_filtering_by_a_parent_includes_nested_holdings(self):
+        gold, miners, juniors = self._gold_tree()
+        self.client.post(
+            "/api/categories/assign?profile_id=1",
+            json={"category_id": 1, "subcategory_id": juniors, "tickers": ["GLD"]},
+        )
+        self.client.post(
+            "/api/categories/assign?profile_id=1",
+            json={"category_id": 1, "subcategory_id": gold, "tickers": ["SLV"]},
+        )
+        conn = self._get_connection()
+        try:
+            self.assertEqual(app_module._subcategory_ticker_set(conn, [1], [gold]), {"GLD", "SLV"})
+            self.assertEqual(app_module._subcategory_ticker_set(conn, [1], [miners]), {"GLD"})
+            self.assertEqual(
+                app_module._expand_subcategory_ids(conn, [1], [miners]), sorted([miners, juniors]),
+            )
+        finally:
+            conn.close()
+
+    def test_holding_rows_get_their_subcategory_path(self):
+        gold, miners, juniors = self._gold_tree()
+        conn = self._get_connection()
+        try:
+            rows = app_module._attach_subcategory_paths(
+                conn, [1], [{"ticker": "GLD", "subcategory_id": juniors}, {"ticker": "X", "subcategory_id": None}],
+            )
+        finally:
+            conn.close()
+        self.assertEqual(rows[0]["subcategory_path_ids"], [gold, miners, juniors])
+        self.assertEqual(rows[0]["subcategory_path"], ["Gold", "Miners", "Juniors"])
+        self.assertEqual(rows[1]["subcategory_path_ids"], [])
+
+    def test_deleting_a_middle_level_moves_its_holdings_up_one_level(self):
+        gold, miners, juniors = self._gold_tree()
+        self.client.post(
+            "/api/categories/assign?profile_id=1",
+            json={"category_id": 1, "subcategory_id": juniors, "tickers": ["GLD"]},
+        )
+        res = self.client.delete(f"/api/subcategories/{miners}?profile_id=1")
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNone(self._row("SELECT id FROM subcategories WHERE id IN (?, ?)", (miners, juniors)))
+        row = self._row("SELECT category_id, subcategory_id FROM ticker_categories WHERE ticker = 'GLD'")
+        self.assertEqual((row["category_id"], row["subcategory_id"]), (1, gold))
+
+    def test_deleting_a_top_level_branch_keeps_holdings_in_the_category(self):
+        gold, _, juniors = self._gold_tree()
+        self.client.post(
+            "/api/categories/assign?profile_id=1",
+            json={"category_id": 1, "subcategory_id": juniors, "tickers": ["GLD"]},
+        )
+        self.client.delete(f"/api/subcategories/{gold}?profile_id=1")
+        row = self._row("SELECT category_id, subcategory_id FROM ticker_categories WHERE ticker = 'GLD'")
+        self.assertEqual((row["category_id"], row["subcategory_id"]), (1, None))
+        self.assertEqual(self._row("SELECT COUNT(*) AS n FROM subcategories")["n"], 1)  # Silver
+
+    def test_reorder_works_among_nested_siblings(self):
+        gold, miners, _ = self._gold_tree()
+        royalties = self._create_nested("Royalties", gold).get_json()["id"]
+        self.client.post(
+            "/api/categories/1/subcategories/reorder?profile_id=1", json={"order": [royalties, miners]},
+        )
+        data = self.client.get("/api/categories/data?profile_id=1").get_json()
+        names = [s["name"] for s in self._category(data)["subcategories"]]
+        self.assertEqual(names, ["Gold", "Royalties", "Miners", "Juniors", "Silver"])
+
+    def test_old_database_gains_nesting_without_losing_assignments(self):
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        tmp.close()
+        conn = sqlite3.connect(tmp.name)
+        conn.row_factory = sqlite3.Row
+        try:
+            # The pre-nesting table, with its category-wide UNIQUE name rule.
+            conn.execute("""
+                CREATE TABLE subcategories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER NOT NULL,
+                    name TEXT NOT NULL, target_pct REAL, profile_id INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 0, UNIQUE (category_id, name, profile_id)
+                )
+            """)
+            conn.execute("INSERT INTO subcategories (id, category_id, name, profile_id) VALUES (7, 1, 'Gold', 1)")
+            conn.commit()
+            database.ensure_tables_exist(conn)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(subcategories)").fetchall()}
+            self.assertIn("parent_id", cols)
+            self.assertEqual(conn.execute("SELECT name FROM subcategories WHERE id = 7").fetchone()[0], "Gold")
+            conn.execute("INSERT INTO subcategories (category_id, parent_id, name, profile_id) VALUES (1, 7, 'Gold', 1)")
+            with self.assertRaises(sqlite3.IntegrityError):
+                conn.execute("INSERT INTO subcategories (category_id, parent_id, name, profile_id) VALUES (1, NULL, 'Gold', 1)")
+        finally:
+            conn.close()
+            try:
+                Path(tmp.name).unlink(missing_ok=True)
+            except PermissionError:
+                pass
+
     # ── copy categories to other accounts ────────────────────────────────────────
     # Copying the category *shell* into any account. Strictly additive: an
     # account's own categories, targets and ticker assignments are never touched.
@@ -444,6 +635,32 @@ class SubcategoryApiTest(unittest.TestCase):
         self._copy()
         self.assertEqual(self._row("SELECT sort_order FROM categories WHERE name='Income' AND profile_id=2")["sort_order"], 0)
         self.assertEqual(self._row("SELECT sort_order FROM categories WHERE name='Metals' AND profile_id=2")["sort_order"], 1)
+
+    def test_copy_carries_the_nested_tree_and_is_idempotent(self):
+        self._seed_account(pid=2)
+        self._gold_tree()
+        self.assertEqual(self._copy().status_code, 200)
+        conn = self._get_connection()
+        try:
+            def tree():
+                rows = app_module._subcategory_rows(conn, [2])
+                return [(s["name"], s["depth"]) for s in rows]
+            self.assertEqual(tree(), [("Gold", 0), ("Miners", 1), ("Juniors", 2), ("Silver", 0)])
+            # A second copy finds every level already there and adds nothing.
+            body = self._copy().get_json()
+            self.assertEqual(body["subcategories_created"], 0)
+            self.assertEqual(tree(), [("Gold", 0), ("Miners", 1), ("Juniors", 2), ("Silver", 0)])
+        finally:
+            conn.close()
+
+    def test_copy_targets_key_nested_subcategories_by_path(self):
+        self._seed_account(pid=2)
+        self._gold_tree()
+        self._copy()
+        body = self.client.get("/api/categories/copy-targets?profile_id=1").get_json()
+        keys = next(a for a in body["accounts"] if a["id"] == 2)["subcategory_keys"]
+        self.assertIn("Metals›Gold›Miners›Juniors", keys)
+        self.assertIn("Metals›Silver", keys)
 
     def test_copy_requires_a_category(self):
         self._seed_account(pid=2)

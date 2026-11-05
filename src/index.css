@@ -2315,6 +2315,96 @@ label {
   line-height: 1.25;
 }
 
+/* Categories list: order selector, Move up/down buttons, labeled shares */
+.cat-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.cat-list-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.cat-list-toolbar select {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+}
+.cat-move {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cat-move-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.55rem;
+  line-height: 1;
+  padding: 1px 4px;
+}
+.cat-move-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.cat-move-btn:disabled {
+  cursor: default;
+  opacity: 0.3;
+}
+.cat-share-label {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.cat-positions-table th,
+.cat-positions-table td {
+  padding: 0.4rem 0.45rem;
+}
+.cat-th-two-line,
+.mh-lot-sort .cat-th-two-line {
+  display: inline-block;
+  font-size: inherit;
+  line-height: 1.15;
+  opacity: 1;
+  text-align: right;
+}
+/* The level name under "% of": long names are cut off (the tooltip has it). */
+.mh-lot-sort .cat-th-level {
+  display: block;
+  font-size: inherit;
+  max-width: 7rem;
+  opacity: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Dashboard Portfolio overview: rows that open the next level down */
+.po-drill-row {
+  cursor: pointer;
+}
+.po-drill-row:hover,
+.po-drill-row:focus-visible {
+  background: var(--surface-inset);
+}
+.po-drill-row:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.po-drill-chevron {
+  color: var(--accent-2);
+  margin-left: 0.35rem;
+}
+
 .owner-target-reference {
   padding: 1rem;
 }

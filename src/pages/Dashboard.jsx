@@ -9,12 +9,24 @@ import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
 import {
+  formatShare,
+  indentedName,
+  nextSort,
+  normalizeSort,
+  readStoredJson,
+  rollUpCategoryTree,
+  shareLines,
+  sortRows,
+  writeStoredJson,
+} from '../utils/categoryHierarchy'
+import {
   isoDate,
   monthKeysForWeek,
   buildWeekCells,
   weekPaymentTotal,
 } from '../utils/dividendCalendar'
 import { DividendWeekGrid } from '../components/DividendMonthGrid'
+import LotSortHeader from '../components/LotSortHeader'
 import HomeWatchlist from '../components/HomeWatchlist'
 import {
   MIN_PERFORMANCE_DATE,
@@ -484,6 +496,10 @@ const overviewReturnParts = (h, ttm = null) => {
     quantityAccounts: Array.isArray(h?.quantity_accounts) ? h.quantity_accounts : [],
     ttmIncome: Number(ttm?.by_ticker?.[ttmKey]) || 0,
     ttmEstimated: Number(ttm?.estimated_by_ticker?.[ttmKey]) || 0,
+    // What the shares held now are projected to pay (the holding's own
+    // estimate), next to the TTM income actually received.
+    projectedMonthly: Number(h?.approx_monthly_income) || 0,
+    projectedAnnual: Number(h?.estim_payment_per_year) || (Number(h?.approx_monthly_income) || 0) * 12,
   }
 }
 
@@ -497,6 +513,8 @@ const addReturnParts = (bucket, parts) => {
   bucket.quantity += Number(parts.quantity) || 0
   bucket.ttmIncome += Number(parts.ttmIncome) || 0
   bucket.ttmEstimated += Number(parts.ttmEstimated) || 0
+  bucket.projectedMonthly += Number(parts.projectedMonthly) || 0
+  bucket.projectedAnnual += Number(parts.projectedAnnual) || 0
   bucket.count += 1
   return bucket
 }
@@ -513,6 +531,8 @@ const emptyReturnBucket = (name, extras = {}) => ({
   quantityAccounts: [],
   ttmIncome: 0,
   ttmEstimated: 0,
+  projectedMonthly: 0,
+  projectedAnnual: 0,
   count: 0,
   isTicker: false,
   ...extras,
@@ -562,6 +582,21 @@ const DONUT_COLORS = [
   '#90a4ae', '#a1887f',
 ]
 
+// Sub-category filter values beyond a real sub-category id: every holding in
+// the category, or only the ones not in any sub-category.
+// Sub-categories nest to any depth; "direct:<id>" is the holdings sitting
+// directly in sub-category <id> rather than in one nested inside it.
+const OVERVIEW_SUB_ALL = 'all'
+const OVERVIEW_SUB_UNASSIGNED = 'unassigned'
+const OVERVIEW_SUB_DIRECT = 'direct:'
+const isOverviewSubSpecial = value => value === OVERVIEW_SUB_ALL
+  || value === OVERVIEW_SUB_UNASSIGNED
+  || (typeof value === 'string' && value.startsWith(OVERVIEW_SUB_DIRECT))
+
+const OVERVIEW_SORT_STORAGE_KEY = 'dashboard.portfolioOverviewSort'
+const OVERVIEW_SORT_KEYS = ['name', 'income', 'projected', 'value', 'gain', 'target', 'allocation', 'diff']
+const DEFAULT_OVERVIEW_SORT = { key: 'value', direction: 'desc' }
+
 function PortfolioOverview({ groups, categories, totalValue, income, categoryId, subcategoryId, onFilterChange, returnMode, onReturnModeChange }) {
   const chartRef = React.useRef(null)
   const { isDark } = useTheme()
@@ -573,44 +608,94 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
     [categories, catId]
   )
 
-  // Groups actually shown in the donut + table, derived from the active filter.
-  // Top level → one slice per category; drill into a category → its
-  // sub-categories (+ an "Unassigned" bucket); drill into a sub-category (or a
-  // category without sub-categories) → individual holdings.
-  const displayGroups = useMemo(() => {
-    if (!selectedCat) return groups || []
+  // The selected category's sub-categories as a tree (any depth), with each
+  // branch's value, TTM income and projected income rolled up.
+  const tree = useMemo(() => {
+    if (!selectedCat) return null
+    const t = rollUpCategoryTree(selectedCat.subcategories, selectedCat.tickers, { valueKey: 'value', incomeKey: 'ttmIncome' })
+    const sum = (rows, key) => rows.reduce((total, r) => total + (Number(r?.[key]) || 0), 0)
+    t.byId.forEach(node => {
+      node.projectedMonthly = sum(node.all, 'projectedMonthly')
+      node.projectedAnnual = sum(node.all, 'projectedAnnual')
+    })
+    return t
+  }, [selectedCat])
+  const nodeFor = useCallback(
+    id => (tree && id != null ? tree.byId.get(String(id)) || null : null),
+    [tree],
+  )
+  const directNodeId = typeof subId === 'string' && subId.startsWith(OVERVIEW_SUB_DIRECT)
+    ? subId.slice(OVERVIEW_SUB_DIRECT.length)
+    : null
+  const directNode = directNodeId != null ? nodeFor(directNodeId) : null
+  const selectedNode = selectedCat && subId != null && !isOverviewSubSpecial(subId) ? nodeFor(subId) : null
+  const pathLabel = (node) => [selectedCat?.name, ...(node.path || []).map(p => p.name), node.name].join(' › ')
 
-    if (subId != null) {
-      return selectedCat.tickers
-        .filter(t => String(t.subcategory_id ?? '') === String(subId))
-        .map(t => sumReturnParts(t.ticker, [t], {
+  // Groups actually shown in the donut + table, derived from the active filter.
+  // Top level → one slice per category. Drill into a category or a
+  // sub-category → the sub-categories inside it (plus a bucket for holdings
+  // sitting directly in it); a level with nothing nested → its holdings.
+  // "All holdings" / "Not in a sub-category" list a category's holdings.
+  // Each row's pathIds are the sub-categories whose share it also shows.
+  const displayGroups = useMemo(() => {
+    if (!selectedCat) {
+      // Groups cached before rows carried their category id match by name.
+      return (groups || []).map(g => (g.categoryId != null || !categories
+        ? g
+        : { ...g, categoryId: categories.find(c => c.name === g.name)?.id ?? null }))
+    }
+    const byValue = (a, b) => b.value - a.value
+    const tickerNode = t => (t?.subcategory_id == null ? null : tree.byId.get(String(t.subcategory_id)) || null)
+    const positions = (tickers) => tickers
+      .map(t => {
+        const node = tickerNode(t)
+        return sumReturnParts(t.ticker, [t], {
           isTicker: true,
           quantityAccounts: Array.isArray(t.quantityAccounts) ? t.quantityAccounts : [],
-        }))
-        .sort((a, b) => b.value - a.value)
-    }
-
-    const subcats = selectedCat.subcategories || []
-    if (subcats.length) {
-      const bySub = new Map()
-      subcats.forEach(s => bySub.set(s.id, emptyReturnBucket(s.name)))
-      const unassigned = emptyReturnBucket('Unassigned')
-      selectedCat.tickers.forEach(t => {
-        const bucket = (t.subcategory_id != null && bySub.get(t.subcategory_id)) || unassigned
-        addReturnParts(bucket, t)
+          subId: node?.id ?? null,
+          pathIds: node ? [...node.path.map(n => n.id), node.id] : [],
+        })
       })
-      return [...bySub.values(), unassigned]
-        .filter(g => g.count > 0)
-        .sort((a, b) => b.value - a.value)
-    }
+      .sort(byValue)
+    const branches = (children, extra) => [
+      ...children.map(child => sumReturnParts(child.name, child.all, {
+        subId: child.id,
+        pathIds: child.path.map(n => n.id),
+      })),
+      ...(extra ? [extra] : []),
+    ].filter(g => g.count > 0).sort(byValue)
 
-    return selectedCat.tickers
-      .map(t => sumReturnParts(t.ticker, [t], {
-        isTicker: true,
-        quantityAccounts: Array.isArray(t.quantityAccounts) ? t.quantityAccounts : [],
-      }))
-      .sort((a, b) => b.value - a.value)
-  }, [groups, selectedCat, subId])
+    if (subId === OVERVIEW_SUB_ALL) return positions(selectedCat.tickers)
+    if (subId === OVERVIEW_SUB_UNASSIGNED) return positions(tree.unassigned)
+    if (directNodeId != null) return directNode ? positions(directNode.direct) : []
+    if (subId != null) {
+      const node = nodeFor(subId)
+      if (!node) return []
+      if (!node.children.length) return positions(node.direct)
+      const direct = node.direct.length
+        ? sumReturnParts(`Directly in ${node.name}`, node.direct, {
+          subId: `${OVERVIEW_SUB_DIRECT}${node.id}`,
+          pathIds: [...node.path.map(n => n.id), node.id],
+        })
+        : null
+      return branches(node.children, direct)
+    }
+    if (tree.roots.length) {
+      const unassigned = tree.unassigned.length
+        ? sumReturnParts('Unassigned', tree.unassigned, { subId: OVERVIEW_SUB_UNASSIGNED, pathIds: [] })
+        : null
+      return branches(tree.roots, unassigned)
+    }
+    return positions(selectedCat.tickers)
+  }, [groups, categories, selectedCat, subId, tree, nodeFor, directNode, directNodeId])
+
+  // Value and TTM income of the selected category: the denominators behind
+  // "% of <category>" on every row below the top level.
+  const catTotals = useMemo(() => {
+    if (!selectedCat) return null
+    const sum = key => selectedCat.tickers.reduce((total, t) => total + (Number(t[key]) || 0), 0)
+    return { value: sum('value'), income: sum('ttmIncome') }
+  }, [selectedCat])
 
   // Target ring only makes sense at the top level (sub-categories / holdings
   // have no allocation targets).
@@ -619,29 +704,93 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
   const totalTarget = atTopLevel ? displayGroups.reduce((s, g) => s + (Number(g.target_pct) || 0), 0) : 0
   const showTargetRing = hasTargets && totalTarget > 0
 
-  // When drilled into a category (or sub-category), each row's Allocation also
-  // shows its share of the parent group, alongside its share of the whole
-  // portfolio. The displayed groups sum to the parent's value in every
-  // drill-down case (sub-categories of a category, or holdings of either).
-  const parentValue = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.value) || 0), 0)
-  const parentName = !selectedCat
-    ? null
-    : (subId != null
-        ? (selectedCat.subcategories?.find(s => s.id === subId)?.name || selectedCat.name)
-        : selectedCat.name)
-  const parentAccountPct = (!atTopLevel && totalValue > 0 && parentValue > 0)
-    ? (parentValue / totalValue) * 100
-    : null
-
   // Income column: each row's share of trailing-12-month dividend income.
   // The denominator is the whole account's TTM income from the backend (every
   // held ticker, categorized or not), never the sum of the rows on screen, so
-  // drilled-in rows add up to their parent's share rather than to 100%. The
-  // second line is the share of the parent group, the same split Allocation
-  // shows for value.
+  // drilled-in rows add up to their parent's share rather than to 100%.
   const incomeTotal = Number(income?.total) || 0
   const hasIncome = income != null && incomeTotal > 0
-  const parentIncome = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.ttmIncome) || 0), 0)
+
+  // Every row lists its share of each level above it, each one labeled:
+  // the portfolio, the category, then every sub-category down to the row.
+  // Allocation uses value; Income uses TTM income.
+  const levelsFor = (pathIds, field) => {
+    const levels = [{ label: 'portfolio', total: field === 'value' ? totalValue : incomeTotal }]
+    if (!selectedCat || !catTotals) return levels
+    levels.push({ label: selectedCat.name, total: catTotals[field] })
+    ;(pathIds || []).forEach(id => {
+      const node = nodeFor(id)
+      if (node) levels.push({ label: node.name, total: field === 'value' ? node.value : node.income })
+    })
+    return levels
+  }
+  const rowLevels = (g, field) => levelsFor(g.pathIds, field)
+
+  // The group the rows on screen make up, and its own labeled shares. The
+  // displayed rows sum to it in every drill-down case.
+  const parentValue = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.value) || 0), 0)
+  const parentName = !selectedCat
+    ? null
+    : selectedNode
+      ? pathLabel(selectedNode)
+      : directNode
+        ? `${pathLabel(directNode)} (not in a sub-category inside it)`
+        : subId === OVERVIEW_SUB_UNASSIGNED
+          ? `${selectedCat.name} (not in a sub-category)`
+          : selectedCat.name
+  const parentPathIds = selectedNode
+    ? selectedNode.path.map(n => n.id)
+    : directNode
+      ? [...directNode.path.map(n => n.id), directNode.id]
+      : []
+  const parentShares = atTopLevel ? [] : shareLines(parentValue, (() => {
+    const levels = levelsFor(parentPathIds, 'value')
+    // The category's own share of itself is always 100%; leave it out.
+    return selectedNode || directNode || subId === OVERVIEW_SUB_UNASSIGNED ? levels : levels.slice(0, 1)
+  })())
+  const parentProjected = atTopLevel ? 0 : displayGroups.reduce((s, g) => s + (Number(g.projectedMonthly) || 0), 0)
+
+  // One level up from where you are.
+  const upTarget = !selectedCat || subId == null
+    ? null
+    : selectedNode
+      ? { sub: selectedNode.parent_id ?? null, name: selectedNode.path.length ? selectedNode.path[selectedNode.path.length - 1].name : selectedCat.name }
+      : directNode
+        ? { sub: directNode.id, name: directNode.name }
+        : { sub: null, name: selectedCat.name }
+
+  // Clicking a category or sub-category row opens it (its sub-categories, or
+  // its holdings when nothing is nested inside). Holdings are the bottom.
+  const drillTarget = (g) => {
+    if (!selectedCat) return g.categoryId != null ? { cat: g.categoryId, sub: null } : null
+    if (!g.isTicker && g.subId != null) return { cat: selectedCat.id, sub: g.subId }
+    return null
+  }
+
+  // Table sort. The donut keeps value order (and each row keeps its donut
+  // color), so re-sorting the table never reshuffles the chart.
+  const [sort, setSort] = useState(() => normalizeSort(
+    readStoredJson(OVERVIEW_SORT_STORAGE_KEY, null),
+    OVERVIEW_SORT_KEYS,
+    DEFAULT_OVERVIEW_SORT,
+  ))
+  const onSort = (key) => setSort(prev => {
+    const next = nextSort(prev, key, { textKeys: ['name'] })
+    writeStoredJson(OVERVIEW_SORT_STORAGE_KEY, next)
+    return next
+  })
+  const colorByRow = new Map(displayGroups.map((g, i) => [g, DONUT_COLORS[i % DONUT_COLORS.length]]))
+  const allocOf = g => (totalValue ? (Number(g.value) || 0) / totalValue * 100 : 0)
+  const tableRows = sortRows(displayGroups, sort, {
+    name: g => g.name,
+    income: g => Number(g.ttmIncome) || 0,
+    projected: g => Number(g.projectedMonthly) || 0,
+    value: g => Number(g.value) || 0,
+    gain: g => groupGain(g, returnMode).gain,
+    target: g => (g.target_pct == null ? null : Number(g.target_pct)),
+    allocation: allocOf,
+    diff: g => (g.target_pct == null || !(Number(g.target_pct) > 0) ? null : allocOf(g) - Number(g.target_pct)),
+  })
   const incomeTitle = income
     ? `Share of trailing-12-month dividend income (${income.start_date} to ${income.end_date}) from the positions held now. `
       + 'Recorded broker payments, plus the estimated run-rate prorated over days an account\'s imports do not cover yet. '
@@ -735,23 +884,44 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
             <option value="">All categories</option>
             {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
-          {selectedCat && (selectedCat.subcategories?.length > 0) && (
+          {selectedCat && tree && tree.ordered.length > 0 && (
             <>
               <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Sub-category:</span>
               <select
                 value={subId ?? ''}
-                onChange={e => { const v = e.target.value; onFilterChange?.(catId, v === '' ? null : Number(v)) }}
+                onChange={e => {
+                  const v = e.target.value
+                  const next = v === '' ? null : (isOverviewSubSpecial(v) ? v : Number(v))
+                  onFilterChange?.(catId, next)
+                }}
                 style={selectStyle}
               >
                 <option value="">All sub-categories</option>
-                {selectedCat.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {tree.ordered.map(n => <option key={n.id} value={n.id}>{indentedName(n)}</option>)}
+                {directNode && (
+                  <option value={subId}>{directNode.name}: not in a sub-category inside it</option>
+                )}
+                {tree.unassigned.length > 0 && (
+                  <option value={OVERVIEW_SUB_UNASSIGNED}>Not in a sub-category</option>
+                )}
+                <option value={OVERVIEW_SUB_ALL}>All holdings in {selectedCat.name}</option>
               </select>
             </>
           )}
-          {parentAccountPct != null && (
+          {parentShares.length > 0 && (
             <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem', fontWeight: 600 }}>
-              {parentName}: {parentAccountPct.toFixed(2)}% of account
+              {parentName}: {parentShares.map((line, i) => formatShare(line, i === 0 ? 2 : 1)).join(' · ')}
+              {parentProjected > 0 ? ` · ${fmt(parentProjected)}/mo projected` : ''}
             </span>
+          )}
+          {upTarget && (
+            <button
+              onClick={() => onFilterChange?.(catId, upTarget.sub)}
+              style={{ ...selectStyle, cursor: 'pointer', color: 'var(--accent-2)' }}
+              title={`Up one level, to ${upTarget.name}`}
+            >
+              ↑ {upTarget.name}
+            </button>
           )}
           {catId != null && (
             <button
@@ -780,31 +950,50 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
           <table style={{ width: '100%', fontSize: '0.85rem', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Name</th>
-                <th
-                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)', cursor: 'help' }}
-                  title={incomeTitle}
-                >Income</th>
-                <th
-                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)', cursor: 'help' }}
-                  title="Top: current market value of the holdings. Bottom: invested amount (cost basis) for the shares currently held, using the selected basis mode."
-                >Value/Invested</th>
-                <th
-                  style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}
-                  title={isTotalMode
-                    ? 'Price change + lifetime dividends received + gains realized on shares already sold'
-                    : 'Share-price change only — dividends received are excluded'}
-                >
-                  {isTotalMode ? 'Gain (total return)' : 'Gain (price return)'}
-                </th>
-                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Target</th>}
-                <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Allocation</th>
-                {showTargetRing && <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Diff</th>}
+                {[
+                  { key: 'name', label: 'Name', align: 'left' },
+                  { key: 'income', label: 'Income', tip: incomeTitle },
+                  {
+                    key: 'projected',
+                    label: 'Projected',
+                    tip: 'What the shares held now are projected to pay: per month on top, per year below (each holding’s own payout estimate).',
+                  },
+                  {
+                    key: 'value',
+                    label: 'Value/Invested',
+                    tip: 'Top: current market value of the holdings. Bottom: invested amount (cost basis) for the shares currently held, using the selected basis mode.',
+                  },
+                  {
+                    key: 'gain',
+                    label: isTotalMode ? 'Gain (total return)' : 'Gain (price return)',
+                    tip: isTotalMode
+                      ? 'Price change + lifetime dividends received + gains realized on shares already sold.'
+                      : 'Share-price change only — dividends received are excluded.',
+                  },
+                  ...(showTargetRing ? [{ key: 'target', label: 'Target' }] : []),
+                  {
+                    key: 'allocation',
+                    label: 'Allocation',
+                    tip: 'Share of the portfolio value; below the top level, also the share of each category and sub-category above it.',
+                  },
+                  ...(showTargetRing ? [{ key: 'diff', label: 'Diff' }] : []),
+                ].map(column => (
+                  <LotSortHeader
+                    key={column.key}
+                    column={column}
+                    sort={sort}
+                    onSort={onSort}
+                    style={{ textAlign: column.align || 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}
+                  />
+                ))}
               </tr>
             </thead>
             <tbody>
-              {displayGroups.map((g, i) => {
-                const color = DONUT_COLORS[i % DONUT_COLORS.length]
+              {tableRows.map((g) => {
+                const color = colorByRow.get(g) || DONUT_COLORS[0]
+                const drill = canFilter ? drillTarget(g) : null
+                const valueShares = shareLines(g.value, rowLevels(g, 'value'))
+                const incomeShares = shareLines(g.ttmIncome, rowLevels(g, 'income'))
                 const { gain, income, realized, pct: gainPct } = groupGain(g, returnMode)
                 const alloc = totalValue ? ((g.value / totalValue) * 100) : 0
                 const target = Number(g.target_pct) || 0
@@ -813,13 +1002,33 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
                 // regular portfolio never gets quantity_accounts, so ticker rows
                 // there stay a plain share count with no ⓘ rollover.
                 const accountSplit = g.isTicker ? sharesBreakdownTitle(g) : undefined
+                const rowSubName = subId === OVERVIEW_SUB_ALL && g.pathIds?.length
+                  ? g.pathIds.map(id => nodeFor(id)?.name).filter(Boolean).join(' › ')
+                  : null
+                const drillTitle = drill ? `Click to open ${g.name}` : undefined
                 return (
-                  <tr key={g.name} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
+                  <tr
+                    key={`${g.isTicker ? 't' : 'g'}:${g.name}`}
+                    className={drill ? 'po-drill-row' : undefined}
+                    style={{ borderBottom: '1px solid var(--p-0a1628)' }}
+                    onClick={drill ? () => onFilterChange?.(drill.cat, drill.sub) : undefined}
+                    onKeyDown={drill ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault()
+                        onFilterChange?.(drill.cat, drill.sub)
+                      }
+                    } : undefined}
+                    tabIndex={drill ? 0 : undefined}
+                    title={drillTitle}
+                  >
                     <td style={{ padding: '0.5rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
                         <div>
-                          <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>{g.name}</div>
+                          <div style={{ color: 'var(--text-strong)', fontWeight: 600 }}>
+                            {g.name}
+                            {drill && <span aria-hidden="true" className="po-drill-chevron">›</span>}
+                          </div>
                           {g.isTicker ? (
                             <div
                               style={{
@@ -833,6 +1042,7 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
                               {accountSplit && (
                                 <span aria-hidden="true" style={{ marginLeft: 4, opacity: 0.8 }}>ⓘ</span>
                               )}
+                              {rowSubName && <span> · {rowSubName}</span>}
                             </div>
                           ) : (
                             <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
@@ -845,14 +1055,16 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
                       {hasIncome ? (
                         <>
-                          <div style={{ color: 'var(--text-strong)' }}>
-                            {((g.ttmIncome / incomeTotal) * 100).toFixed(2)}%
-                          </div>
-                          {!atTopLevel && parentIncome > 0 && (
-                            <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-                              {((g.ttmIncome / parentIncome) * 100).toFixed(1)}% of {parentName}
+                          {incomeShares.map((line, lineIndex) => (
+                            <div
+                              key={line.label + lineIndex}
+                              style={lineIndex === 0
+                                ? { color: 'var(--text-strong)' }
+                                : { color: 'var(--text-dim)', fontSize: '0.75rem' }}
+                            >
+                              {formatShare(line, lineIndex === 0 ? 2 : 1)}
                             </div>
-                          )}
+                          ))}
                           <div
                             style={{ color: 'var(--text-dim)', fontSize: '0.7rem', cursor: g.ttmEstimated >= 0.005 ? 'help' : undefined }}
                             title={g.ttmEstimated >= 0.005
@@ -861,6 +1073,16 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
                           >
                             {fmt(g.ttmIncome)} TTM{g.ttmEstimated >= 0.005 ? ` · ~${fmt(g.ttmEstimated)} est.` : ''}
                           </div>
+                        </>
+                      ) : (
+                        <span style={{ color: 'var(--text-dim)' }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }}>
+                      {Number(g.projectedMonthly) > 0 || Number(g.projectedAnnual) > 0 ? (
+                        <>
+                          <div style={{ color: 'var(--text-strong)' }}>{fmt(g.projectedMonthly)}/mo</div>
+                          <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>{fmt(g.projectedAnnual)}/yr</div>
                         </>
                       ) : (
                         <span style={{ color: 'var(--text-dim)' }}>—</span>
@@ -895,12 +1117,16 @@ function PortfolioOverview({ groups, categories, totalValue, income, categoryId,
                       </td>
                     )}
                     <td style={{ textAlign: 'right', padding: '0.5rem' }}>
-                      <div style={{ color: 'var(--text-strong)' }}>{alloc.toFixed(2)}%</div>
-                      {!atTopLevel && parentValue > 0 && (
-                        <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-                          {((g.value / parentValue) * 100).toFixed(1)}% of {parentName}
+                      {valueShares.length ? valueShares.map((line, lineIndex) => (
+                        <div
+                          key={line.label + lineIndex}
+                          style={lineIndex === 0
+                            ? { color: 'var(--text-strong)' }
+                            : { color: 'var(--text-dim)', fontSize: '0.75rem' }}
+                        >
+                          {formatShare(line, lineIndex === 0 ? 2 : 1)}
                         </div>
-                      )}
+                      )) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
                     </td>
                     {showTargetRing && (
                       <td style={{ textAlign: 'right', padding: '0.5rem' }}>
@@ -1257,7 +1483,7 @@ export default function Dashboard() {
                 }))
                 const groups = enrichedCats
                   .map(c => ({
-                    ...sumReturnParts(c.name, c.tickers),
+                    ...sumReturnParts(c.name, c.tickers, { categoryId: c.id }),
                     target_pct: c.target_pct,
                   }))
                   .filter(g => g.count > 0)
@@ -1562,9 +1788,17 @@ export default function Dashboard() {
       setOverviewSubcategoryId(null)
       return
     }
-    if (overviewSubcategoryId != null && !(category.subcategories || []).some(item => String(item.id) === String(overviewSubcategoryId))) {
-      setOverviewSubcategoryId(null)
-    }
+    // A sub-category id (at any depth) or "direct:<id>" must still exist in
+    // this category; "all" / "unassigned" always do.
+    const subExists = id => (category.subcategories || []).some(item => String(item.id) === String(id))
+    const sub = overviewSubcategoryId
+    const stillValid = sub == null
+      || sub === OVERVIEW_SUB_ALL
+      || sub === OVERVIEW_SUB_UNASSIGNED
+      || (typeof sub === 'string' && sub.startsWith(OVERVIEW_SUB_DIRECT)
+        ? subExists(sub.slice(OVERVIEW_SUB_DIRECT.length))
+        : subExists(sub))
+    if (!stillValid) setOverviewSubcategoryId(null)
   }, [overviewCategories, overviewCategoryId, overviewSubcategoryId])
 
   // Derived totals

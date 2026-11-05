@@ -5,6 +5,7 @@ import { useTheme } from '../context/ThemeContext'
 import { themedPlotlyLayout } from '../utils/chartTheme'
 import { formatMoneyWhole } from '../utils/money'
 import { PRICE_SHOCK_PRESETS, PRICE_SENSITIVITY_POINTS, projectPriceImpact } from '../utils/priceImpactModel'
+import { holdingInSubcategories } from '../utils/categoryHierarchy'
 
 const fmt$ = v => formatMoneyWhole(v)
 const fmtShares = v => v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -349,7 +350,7 @@ export default function ReinvestmentImpact() {
       .filter(h => !projScopeTicker || h.ticker === projScopeTicker)
       .filter(h => (!projCategories.length && !projSubcats.length)
         || projCategories.includes(String(h.category))
-        || (h.subcategory_id != null && projSubcats.includes(String(h.subcategory_id))))
+        || holdingInSubcategories(h, projSubcats))
     const override = scoped.map(h => ({
       ticker: h.ticker,
       shares: h.quantity,
@@ -543,7 +544,7 @@ export default function ReinvestmentImpact() {
     .filter(h => !projScopeTicker || h.ticker === projScopeTicker)
     .filter(h => (!projCategories.length && !projSubcats.length)
       || projCategories.includes(String(h.category))
-      || (h.subcategory_id != null && projSubcats.includes(String(h.subcategory_id)))), [holdings, projScopeTicker, projCategories, projSubcats])
+      || holdingInSubcategories(h, projSubcats)), [holdings, projScopeTicker, projCategories, projSubcats])
 
   const priceImpact = useMemo(() => projectPriceImpact(scopedProjectionHoldings, {
     years,
@@ -767,7 +768,7 @@ export default function ReinvestmentImpact() {
                           </label>
                           {subs.map(s => (
                             <label key={`sub-${s.id}`} className="growth-cat-option"
-                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}>
                               <input type="checkbox" disabled={catChecked}
                                 checked={catChecked || subcategories.includes(String(s.id))}
                                 onChange={e => {
@@ -855,7 +856,7 @@ export default function ReinvestmentImpact() {
                           </label>
                           {subs.map(s => (
                             <label key={`sub-${s.id}`} className="growth-cat-option"
-                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}>
                               <input type="checkbox" disabled={catChecked}
                                 checked={catChecked || projSubcats.includes(String(s.id))}
                                 onChange={e => {

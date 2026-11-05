@@ -2109,10 +2109,11 @@ function CategoriesHelp() {
         </li>
         <li>
           <strong>Category Cards (left panel)</strong> — One card per category showing the category name,
-          number of tickers, actual allocation percentage, dollar value, a small progress bar,
-          and a Quality score (when the Target Assistant is active).
+          number of tickers, its share of the portfolio (labeled <em>% of portfolio</em>), dollar value,
+          projected monthly income, a small progress bar, and a Quality score (when the Target Assistant is active).
           Cards are expandable to show the individual tickers inside. If a category has sub-categories, the
-          card also shows a sub-category count badge and expands into nested sub-category rows.
+          card also shows a sub-category count badge and expands into nested sub-category rows. The
+          <strong> ▲ ▼</strong> buttons beside each name move it up or down the list.
         </li>
         <li>
           <strong>Unallocated Assets (right panel, sticky)</strong> — Lists all tickers that haven't been
@@ -2156,18 +2157,23 @@ function CategoriesHelp() {
       {/* ── Creating Sub-categories ───────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Creating Sub-categories</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Sub-categories live inside a parent category. They let you keep the same top-level allocation target while
-        organizing the holdings inside that bucket more precisely.
+        Sub-categories live inside a parent category, and sub-categories can hold their own sub-categories, as
+        many levels deep as you need (for example Metals › Gold › Miners › Juniors). They let you keep the same
+        top-level allocation target while organizing the holdings inside that bucket more precisely.
       </p>
       <ol style={{ paddingLeft: '1.5rem', lineHeight: '2' }}>
         <li><strong>Expand a category</strong> by clicking its card header.</li>
-        <li>Click <strong>"+ Sub-category"</strong> in the expanded category controls.</li>
-        <li>Enter a name such as "Preferreds", "REITs", "Gold", "Covered Calls", or any label that fits your portfolio.</li>
-        <li>Click <strong>"Create"</strong>. The new sub-category appears under the parent category.</li>
+        <li>Click <strong>"+ Sub-category"</strong> in the expanded category controls to add one directly under the category,
+          or click <strong>"+ Sub"</strong> on any sub-category row to add one inside it.</li>
+        <li>Enter a name such as "Preferreds", "REITs", "Gold", "Covered Calls", or any label that fits your portfolio.
+          Names only have to be different from the others at the same level, so two branches can each have a "Tech".</li>
+        <li>Click <strong>"Create"</strong>. The new sub-category appears under its parent, which opens so you can see it.</li>
       </ol>
       <p style={{ marginBottom: '1rem' }}>
-        Sub-categories do not have separate target allocation percentages. The parent category owns the portfolio
-        target, while each sub-category shows its own dollar value, portfolio percentage, and share of the parent category.
+        The parent category owns the portfolio target. A sub-category can have its own target, entered as a
+        percentage of whatever it sits in (the category, or the sub-category above it). Every sub-category, at any
+        depth, shows its dollar value, its share of the portfolio, its share of the category, its share of each
+        sub-category above it, and projected monthly income. All of these count everything nested inside it.
       </p>
 
       {/* ── Assigning Tickers ─────────────────────────────────── */}
@@ -2250,10 +2256,23 @@ function CategoriesHelp() {
       {/* ── Managing Sub-categories ───────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Managing Sub-categories</h3>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
-        <li><strong>Rename</strong> — expand the parent category, then click <strong>Rename</strong> on the sub-category row.</li>
-        <li><strong>Delete</strong> — click the <strong>&times;</strong> button on the sub-category row. Its tickers stay assigned to the parent category but move to the <em>no sub-category</em> group.</li>
-        <li><strong>Unclassified holdings</strong> — if a category has sub-categories, any ticker that belongs to the parent but not to a sub-category appears under <strong>Not in a sub-category</strong>. Use the dropdown beside the ticker to place it.</li>
+        <li><strong>Rename</strong> — open the sub-category's parent, then click <strong>Edit</strong> on the sub-category row.</li>
+        <li><strong>Delete</strong> — click <strong>Delete</strong> on the sub-category row. Any sub-categories inside it are deleted too, and all of their holdings move up one level, into the deleted sub-category's parent. They never leave the category.</li>
+        <li><strong>Unclassified holdings</strong> — if a category has sub-categories, any ticker that belongs to the parent but not to a sub-category appears under <strong>Not in a sub-category</strong>. Likewise, a sub-category with sub-categories inside it lists the holdings sitting in it directly under <strong>Directly in …</strong>. Use the dropdown beside the ticker to place it at any level.</li>
       </ul>
+
+      {/* ── Ordering ──────────────────────────────────────────── */}
+      <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Ordering Categories and Sub-categories</h3>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Order by</strong> menu above the category cards sets how both levels are listed:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>My order</strong> — the order you set. Click <strong>▲</strong> or <strong>▼</strong> beside a category to move it up or down the list, or beside a sub-category to move it among the others at the same level. The order is saved straight away, and the Dashboard&apos;s category menu and the category filters on other pages follow it.</li>
+        <li><strong>Name</strong>, <strong>Value</strong>, or <strong>Income</strong> — sorts categories, and the sub-categories at every level inside them, alphabetically or largest first. Your own order is kept; switch back to My order to see it or change it.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        The choice is remembered on this computer.
+      </p>
 
       {/* ── Editing a Category ────────────────────────────────── */}
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Editing a Category</h3>
@@ -2370,21 +2389,30 @@ function CategoriesHelp() {
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Expanded Category Details</h3>
       <p style={{ marginBottom: '0.75rem' }}>
         When you expand a category card, you see a table listing each ticker in that category. If the category has
-        sub-categories, the expanded view first shows each sub-category with its own ticker count, portfolio
-        percentage, percentage of the parent category, and dollar value.
+        sub-categories, the expanded view first shows each sub-category with its holding count (including everything
+        nested inside it), share of the portfolio, share of the category and of each sub-category above it, dollar
+        value, and projected monthly income. Click a sub-category to open it and see the sub-categories inside it, as
+        deep as they go.
       </p>
       <p style={{ marginBottom: '0.75rem' }}>
-        Expanding a sub-category shows the tickers inside it with:
+        The tickers sitting in a sub-category are listed with:
       </p>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Ticker</strong> — The stock/ETF symbol.</li>
         <li><strong>Description</strong> — The holding's name.</li>
         <li><strong>Value</strong> — Current market value of that position.</li>
+        <li><strong>Income/mo</strong> — Projected monthly income from the shares held now.</li>
         <li><strong>Freq</strong> — Dividend payment frequency. Weekly payers are highlighted in green.</li>
-        <li><strong>% of Category</strong> — What percentage of the category's total value this ticker represents.</li>
+        <li><strong>% of Portfolio</strong> — The ticker's share of the whole portfolio value.</li>
+        <li><strong>% of [category]</strong> — The ticker's share of the category's value.</li>
+        <li><strong>% of [each sub-category]</strong> — One column for every sub-category level the table sits under, each headed with that sub-category's name, giving the ticker's share of it.</li>
         <li><strong>Sub-category</strong> — When sub-categories exist, a dropdown for moving the ticker within the parent category.</li>
         <li><strong>&times;</strong> — Unassign button to remove the ticker from this category.</li>
       </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        Click any column header to sort the tickers by it; click it again to reverse the order. The same sort
+        applies to every category and sub-category table on the page and is remembered on this computer.
+      </p>
       <p>
         If the category is empty, a hint message appears: <em>"Click a ticker on the right to assign it here"</em>,
         directing you to the Unallocated Assets panel.
@@ -2404,7 +2432,7 @@ function CategoriesHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li>Select a <strong>parent category</strong> to include every holding in that category.</li>
-        <li>Select one or more <strong>sub-categories</strong> to focus on only those narrower groups.</li>
+        <li>Select one or more <strong>sub-categories</strong> to focus on only those narrower groups. Nested sub-categories are indented under their parent, and choosing a sub-category includes everything nested inside it.</li>
         <li>Selecting a whole parent category supersedes any sub-category selections inside it, so the dropdown clears those child selections automatically.</li>
         <li>Use <strong>All Holdings</strong> to clear both category and sub-category filters.</li>
       </ul>
@@ -2418,11 +2446,28 @@ function CategoriesHelp() {
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
         <li><strong>Name</strong> — Category name and number of holdings.</li>
+        <li><strong>Income</strong> — The category&apos;s share of the portfolio&apos;s trailing-12-month dividend income, with the dollar amount underneath.</li>
+        <li><strong>Projected</strong> — What the shares held now are projected to pay: per month on top, per year below.</li>
         <li><strong>Value / Invested</strong> — Current market value and original cost basis for the category.</li>
         <li><strong>Gain</strong> — Dollar gain or loss with a percentage, color-coded green (gain) or red (loss).</li>
         <li><strong>Target</strong> — If any category has a target allocation set, a Target column appears showing the target percentage.</li>
-        <li><strong>Allocation</strong> — The category's actual percentage of total portfolio value.</li>
+        <li><strong>Allocation</strong> — The category&apos;s share of total portfolio value.</li>
       </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        <strong>Drilling down:</strong> click a category row (or pick it from the <strong>Category</strong> menu)
+        to see its sub-categories, then keep clicking sub-category rows to go deeper, as far as the levels go. When
+        a level has nothing nested inside it, it opens to its holdings. Holdings that sit directly in a sub-category
+        that also has sub-categories inside it get their own <em>Directly in …</em> row. The <strong>Sub-category</strong>
+        menu lists every level (indented), plus <em>Not in a sub-category</em> and <em>All holdings in</em> the
+        category. Use the <strong>↑</strong> button to go back up one level, or <strong>Clear</strong> to return to
+        all categories.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        At every level the Allocation and Income columns label each percentage: the share of the portfolio
+        first, then the share of the category, then the share of every sub-category above the row. The line above
+        the table shows the same shares for the level you are in, with its projected monthly income. Click a
+        column header to sort the table; the donut keeps its largest-first order and colors.
+      </p>
       <p style={{ marginBottom: '0.75rem' }}>
         If no categories have been defined yet, the overview falls back to grouping holdings by
         asset class (ETF, Equity, CEF, REIT, etc.) so you always have a high-level breakdown

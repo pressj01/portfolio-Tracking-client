@@ -15,6 +15,7 @@ import { useColumnLayout } from '../utils/useColumnLayout'
 import { insertMissingKeysAfter } from '../utils/columnLayout'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { formatGapPoints, fundUnderlyingReturn } from '../utils/fundUnderlyingReturn'
+import { buildSubcategoryTree, expandSubcategorySelection, indentedName } from '../utils/categoryHierarchy'
 
 // Each view keeps its own column order and hidden set — the views curate
 // different columns, so one shared layout would fight itself.
@@ -550,7 +551,9 @@ function buildCategoryLookup(categoryData) {
 
   categories.forEach(category => {
     byName.set(String(category.name || '').toLowerCase(), category.id)
-    const subById = new Map((category.subcategories || []).map(sub => [String(sub.id), sub.name]))
+    // Sub-categories nest to any depth: show the whole path, e.g. "Gold › Miners".
+    const subById = new Map(buildSubcategoryTree(category.subcategories).ordered
+      .map(node => [String(node.id), [...node.path.map(p => p.name), node.name].join(' › ')]))
     ;(category.tickers || []).forEach(ticker => {
       byTicker.set(String(ticker.ticker || '').toUpperCase(), {
         categoryId: category.id,
@@ -1316,11 +1319,17 @@ export function CommonInfoPanel({
     return (categoryData.categories || []).find(category => String(category.id) === String(categoryId)) || null
   }, [categoryData, categoryId])
 
+  // A chosen sub-category also matches holdings in the ones nested inside it.
+  const subcategoryMatch = useMemo(
+    () => expandSubcategorySelection(selectedCategory?.subcategories, subcategoryId ? [subcategoryId] : []),
+    [selectedCategory, subcategoryId],
+  )
+
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase()
     return allRows.filter(row => {
       if (categoryId && String(row.categoryId ?? '') !== String(categoryId)) return false
-      if (subcategoryId && String(row.subcategoryId ?? '') !== String(subcategoryId)) return false
+      if (subcategoryId && !subcategoryMatch.has(String(row.subcategoryId ?? ''))) return false
       if (!query) return true
       return (
         row.ticker.toLowerCase().includes(query) ||
@@ -1328,7 +1337,7 @@ export function CommonInfoPanel({
         String(row.categoryName || '').toLowerCase().includes(query)
       )
     })
-  }, [allRows, categoryId, subcategoryId, search])
+  }, [allRows, categoryId, subcategoryId, subcategoryMatch, search])
 
   // Every column this view can show, in the order the view defines it. Each one
   // carries its own key so the layout hook and the cells do not have to look it
@@ -1494,7 +1503,7 @@ export function CommonInfoPanel({
           >
             <option value="">All sub categories</option>
             {(selectedCategory?.subcategories || []).map(subcategory => (
-              <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>
+              <option key={subcategory.id} value={subcategory.id}>{indentedName(subcategory)}</option>
             ))}
           </select>
         </label>
