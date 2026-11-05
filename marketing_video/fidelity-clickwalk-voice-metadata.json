@@ -1,0 +1,85 @@
+{
+  "voice": "en-US-AndrewMultilingualNeural",
+  "rate": "-4%",
+  "pitch": "-2Hz",
+  "total_duration": 263.0,
+  "scenes": [
+    {
+      "id": "navigate_admin",
+      "audio": "navigate_admin.mp3",
+      "audio_duration": 18.26,
+      "scene_duration": 19.46,
+      "start": 0
+    },
+    {
+      "id": "new_portfolio",
+      "audio": "new_portfolio.mp3",
+      "audio_duration": 18.55,
+      "scene_duration": 19.75,
+      "start": 19.46
+    },
+    {
+      "id": "name_portfolio",
+      "audio": "name_portfolio.mp3",
+      "audio_duration": 19.87,
+      "scene_duration": 21.07,
+      "start": 39.21
+    },
+    {
+      "id": "set_fidelity_owner",
+      "audio": "set_fidelity_owner.mp3",
+      "audio_duration": 20.4,
+      "scene_duration": 21.599999999999998,
+      "start": 60.28
+    },
+    {
+      "id": "positions_upload",
+      "audio": "positions_upload.mp3",
+      "audio_duration": 22.54,
+      "scene_duration": 23.74,
+      "start": 81.88
+    },
+    {
+      "id": "positions_preview",
+      "audio": "positions_preview.mp3",
+      "audio_duration": 25.22,
+      "scene_duration": 26.419999999999998,
+      "start": 105.61999999999999
+    },
+    {
+      "id": "transactions",
+      "audio": "transactions.mp3",
+      "audio_duration": 28.18,
+      "scene_duration": 29.38,
+      "start": 132.04
+    },
+    {
+      "id": "income_holdings",
+      "audio": "income_holdings.mp3",
+      "audio_duration": 22.63,
+      "scene_duration": 23.83,
+      "start": 161.42
+    },
+    {
+      "id": "activity_holdings",
+      "audio": "activity_holdings.mp3",
+      "audio_duration": 20.3,
+      "scene_duration": 21.5,
+      "start": 185.25
+    },
+    {
+      "id": "owner_shared",
+      "audio": "owner_shared.mp3",
+      "audio_duration": 23.95,
+      "scene_duration": 25.15,
+      "start": 206.75
+    },
+    {
+      "id": "owner_unique",
+      "audio": "owner_unique.mp3",
+      "audio_duration": 29.9,
+      "scene_duration": 31.099999999999998,
+      "start": 231.9
+    }
+  ]
+}

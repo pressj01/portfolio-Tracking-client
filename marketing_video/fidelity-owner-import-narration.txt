@@ -1,0 +1,32 @@
+Portfolio Tracker — Fidelity Owner and Import Guide
+Voice: en-US-AndrewMultilingualNeural; rate -4%; pitch -2Hz
+
+00:00:00.000  01. Create portfolios and import Fidelity data
+In this show-and-tell, we will create two regular Fidelity portfolios, add them to an Owner account, create a separate aggregate portfolio, and import example Fidelity positions and transactions. We will start on the Portfolios screen, where every portfolio begins as its own regular account.
+
+00:00:21.700  02. Navigate to Portfolios
+From anywhere in the application, open Admin and choose Portfolios. This screen is where you create, select, organize, and import into individual accounts. A regular portfolio represents one real brokerage or manual account. It is the account that owns its own holdings, cash, transactions, and import history.
+
+00:00:45.870  03. What the Owner account means
+Owner is an optional personal rollup. Think of it as the combined view of the real accounts that belong to one owner. You create Owner once, then use the Owner column to choose its member accounts. Owner adds those accounts together for viewing; it does not replace them, and it has no broker file of its own. Continue importing positions and transactions into each regular account, and Owner reflects the combined result.
+
+00:01:14.650  04. Create two Fidelity portfolios
+Here are the two regular demo accounts: Fidelity Income Demo and Fidelity Activity Demo. To make each one, choose New Portfolio, enter a descriptive account name, select Fidelity as the broker source, and save it as a user-owned account. Then check the Owner box for each account you want included. In this example, both Fidelity portfolios are members, so Owner shows their combined data while each remains an independent portfolio.
+
+00:01:45.040  05. Use regular aggregates for flexible views
+A regular aggregate portfolio is different from Owner. It is a read-only virtual view that you name and define by selecting any regular portfolios. Here, Demo Fidelity Aggregate contains the two Fidelity demos. It does not move data or change either account. You can create as many aggregates as you need for any comparison or grouping, and the same regular portfolio can belong to more than one aggregate at the same time.
+
+00:02:14.850  06. Import Fidelity positions first
+For a Fidelity account, select the destination portfolio first, open Import Portfolio Data, choose Broker Import, and start with Step 1, Positions. Select Fidelity and upload the renamed fidelity_positions_Demo spreadsheet. A positions file establishes the current holdings and cash snapshot, so it should normally be imported before transaction history.
+
+00:02:41.970  07. Preview before importing positions
+Always use Preview before importing. The preview confirms the file account and the selected destination, then shows the holdings, cash, and total account value it found. In this demo, the Fidelity snapshot identifies two securities plus cash. Check those results against the exported statement, then choose Import into Fidelity Income Demo. The completed import reports two new positions.
+
+00:03:11.230  08. Import Fidelity transactions second
+Next, select Fidelity Activity Demo and choose Step 2, Transactions. Transaction files add buys, sells, dividends, and DRIP activity. The application warns when there is no current positions snapshot, because a partial history can rebuild the wrong share counts. In this controlled demonstration, the supplied file is complete sample history, so we acknowledge the confirmation. In normal use, import positions first, then add the full transaction export.
+
+00:03:44.570  09. Validate and import the transaction preview
+Preview the transaction spreadsheet and verify the activity types, dates, tickers, quantities, and destination portfolio. This Fidelity example finds two buys, one dividend, and one DRIP reinvestment. When the preview matches the export, import it into Fidelity Activity Demo. The confirmation shows the activity that was added, while Owner and the Demo Fidelity Aggregate remain combined views of their chosen regular accounts.
+
+00:04:15.410  10. Portfolio setup recap
+To recap: create a regular portfolio for every real account and import directly into it. Use the optional Owner account when you want one personal rollup of selected user-owned accounts. Use regular aggregates for any other virtual grouping. You can have many aggregates, reuse accounts across them, and change their members without changing the original account data. For informational purposes only. Not financial advice.

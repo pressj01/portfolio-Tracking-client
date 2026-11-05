@@ -1,0 +1,35 @@
+Portfolio Tracker — Fidelity Click-by-Click Guide
+Voice: en-US-AndrewMultilingualNeural; rate -4%; pitch -2Hz
+
+00:00:00.000  01. Navigate to the Portfolios screen
+Start from any application page. Move to the Admin menu in the top navigation and click it. In the menu that opens, click Portfolios. This is the place to create and organize regular brokerage accounts, decide which accounts belong to Owner, and create regular aggregate views.
+
+00:00:19.460  02. Start a regular portfolio
+On Manage Portfolios, click New Portfolio. A regular portfolio is the real account record. It owns its own holdings, cash snapshot, transaction history, and imports. Create one regular portfolio for each brokerage account you want to track separately.
+
+00:00:39.210  03. Name the portfolio and save it
+Type a clear account name in the New Portfolio dialog, then click OK. In this walkthrough, the two import targets are Fidelity Income Demo and Fidelity Activity Demo. I also create a small Fidelity Creation Walkthrough account on screen so you can see the real creation process end to end.
+
+00:01:00.280  04. Choose Fidelity and add Owner members
+After creation, set the Broker Source to Fidelity. The two demo accounts are user-owned and their Owner checkboxes are selected. Owner is an optional personal rollup: it combines only the regular user-owned accounts you check. It is not a brokerage account, so you never import a Fidelity file into Owner itself.
+
+00:01:21.880  05. Import the current Fidelity positions snapshot
+Select Fidelity Income Demo in the portfolio selector. Then open Admin, Import, Broker Import, and Step 1 Positions. Choose Fidelity and upload fidelity_positions_Demo.xlsx. The positions file establishes the account’s current holdings and cash, so this is normally the first import.
+
+00:01:45.620  06. Preview and perform the positions import
+Use Preview before importing. The live preview identifies Fidelity Income Demo as both the file account and destination. It shows eight VTI shares, one hundred fifty JEPQ shares, and the separate cash row. After verifying that result, click Import into Fidelity Income Demo. The import was performed in the test account and refreshed its two positions.
+
+00:02:12.040  07. Import the Fidelity activity workbook
+Now select Fidelity Activity Demo. In Broker Import, click Step 2 Transactions and upload fidelity_transactions_Demo.xlsx. The preview finds two buys, one dividend, and one DRIP reinvestment. I performed this import in the test account. Because it already has a broker positions snapshot, the transaction import records the history while keeping the current broker share counts.
+
+00:02:41.420  08. Navigate to the first test account
+To inspect a test account, choose it in the top portfolio selector and open Portfolio, Holdings. Fidelity Income Demo now shows its imported positions: eight VTI shares and one hundred fifty JEPQ shares. Those are this regular account’s own positions; they remain separate even when included in Owner.
+
+00:03:05.250  09. Navigate to the second test account
+Switch the same selector to Fidelity Activity Demo, then stay on Portfolio, Holdings. Its imported history supports twelve VTI shares and point three seven JEPI shares. Notice that VTI is shared by both test accounts, while JEPI exists only in this activity account.
+
+00:03:26.750  10. Navigate to Owner: matching tickers combine
+Now choose Owner in the portfolio selector and open Holdings. Owner combines matching tickers from its selected member accounts into one row. Here, the Owner VTI row shows twenty shares: eight from Fidelity Income Demo plus twelve from Fidelity Activity Demo. This proves that matching ticker shares aggregate together in Owner.
+
+00:03:51.900  11. Owner keeps unique tickers at their source totals
+The unique tickers illustrate the other half of the rule. JEPQ appears only in Fidelity Income Demo, so Owner shows the same one hundred fifty shares. JEPI appears only in Fidelity Activity Demo, so Owner shows the same point three seven shares. Owner is a combined view, not a data move. Regular aggregates work the same way: create as many named, read-only groupings as needed, without changing the real account data.

@@ -3271,6 +3271,22 @@ th.col-drag-target {
   font-weight: 600;
   padding: 1px 4px;
 }
+/* Realized ticker cell: opens Transaction History on that ticker */
+.gl-manage-trades {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.65rem;
+  font-weight: 600;
+  padding: 1px 5px;
+}
+.gl-manage-trades:hover,
+.gl-manage-trades:focus-visible {
+  border-color: var(--accent-bright);
+}
 
 .holdings-table {
   font-size: 0.74rem;

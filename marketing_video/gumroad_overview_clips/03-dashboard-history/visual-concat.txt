@@ -1,0 +1,5 @@
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/03-dashboard-history/00-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/03-dashboard-history/00-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/03-dashboard-history/01-hold.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/03-dashboard-history/01-scroll.mp4'
+file 'C:/Users/Press/Portfolio_Tracking_client/marketing_video/gumroad_overview_clips/03-dashboard-history/02-hold.mp4'

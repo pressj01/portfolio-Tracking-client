@@ -1,0 +1,202 @@
+WEBVTT
+
+00:00:00.604 --> 00:00:04.068
+Start from any application page Move to the Admin
+
+00:00:04.068 --> 00:00:06.906
+menu in the top navigation and click it In
+
+00:00:06.906 --> 00:00:10.370
+the menu that opens click Portfolios This is the
+
+00:00:10.370 --> 00:00:14.445
+place to create and organize regular brokerage accounts decide
+
+00:00:14.458 --> 00:00:17.857
+which accounts belong to Owner and create regular aggregate
+
+00:00:17.857 --> 00:00:18.378
+views
+
+00:00:20.025 --> 00:00:24.869
+On Manage Portfolios click New Portfolio A regular portfolio
+
+00:00:25.155 --> 00:00:27.590
+is the real account record It owns its own
+
+00:00:27.590 --> 00:00:33.632
+holdings cash snapshot transaction history and imports Create one
+
+00:00:33.645 --> 00:00:37.043
+regular portfolio for each brokerage account you want to
+
+00:00:37.043 --> 00:00:38.111
+track separately
+
+00:00:39.801 --> 00:00:42.327
+Type a clear account name in the New Portfolio
+
+00:00:42.327 --> 00:00:46.442
+dialog then click OK In this walkthrough the two
+
+00:00:46.455 --> 00:00:51.233
+import targets are Fidelity Income Demo and Fidelity Activity
+
+00:00:51.233 --> 00:00:55.127
+Demo I also create a small Fidelity Creation Walkthrough
+
+00:00:55.127 --> 00:00:57.262
+account on screen so you can see the real
+
+00:00:57.275 --> 00:00:59.202
+creation process end to end
+
+00:01:00.884 --> 00:01:04.595
+After creation set the Broker Source to Fidelity The
+
+00:01:04.595 --> 00:01:08.046
+two demo accounts are user-owned and their Owner checkboxes
+
+00:01:08.059 --> 00:01:11.887
+are selected Owner is an optional personal rollup it
+
+00:01:11.900 --> 00:01:15.533
+combines only the regular user-owned accounts you check It
+
+00:01:15.533 --> 00:01:18.306
+is not a brokerage account so you never import
+
+00:01:18.319 --> 00:01:20.793
+a Fidelity file into Owner itself
+
+00:01:22.484 --> 00:01:26.872
+Select Fidelity Income Demo in the portfolio selector Then
+
+00:01:26.885 --> 00:01:31.052
+open Admin Import Broker Import and Step 1 Positions
+
+00:01:31.482 --> 00:01:38.630
+Choose Fidelity and upload fidelity_positions_Demo . xlsx The positions
+
+00:01:38.630 --> 00:01:42.640
+file establishes the account’s current holdings and cash so
+
+00:01:42.653 --> 00:01:44.528
+this is normally the first import
+
+00:01:46.224 --> 00:01:50.612
+Use Preview before importing The live preview identifies Fidelity
+
+00:01:50.625 --> 00:01:54.479
+Income Demo as both the file account and destination
+
+00:01:54.909 --> 00:01:58.841
+It shows eight VTI shares one hundred fifty JEPQ
+
+00:01:58.841 --> 00:02:02.474
+shares and the separate cash row After verifying that
+
+00:02:02.474 --> 00:02:07.071
+result click Import into Fidelity Income Demo The import
+
+00:02:07.071 --> 00:02:09.974
+was performed in the test account and refreshed its
+
+00:02:09.987 --> 00:02:10.964
+two positions
+
+00:02:12.644 --> 00:02:17.214
+Now select Fidelity Activity Demo In Broker Import click
+
+00:02:17.214 --> 00:02:24.233
+Step 2 Transactions and upload fidelity_transactions_Demo . xlsx The
+
+00:02:24.233 --> 00:02:28.191
+preview finds two buys one dividend and one DRIP
+
+00:02:28.204 --> 00:02:31.785
+reinvestment I performed this import in the test account
+
+00:02:32.214 --> 00:02:35.431
+Because it already has a broker positions snapshot the
+
+00:02:35.431 --> 00:02:39.142
+transaction import records the history while keeping the current
+
+00:02:39.142 --> 00:02:40.300
+broker share counts
+
+00:02:42.024 --> 00:02:44.081
+To inspect a test account choose it in the
+
+00:02:44.094 --> 00:02:49.876
+top portfolio selector and open Portfolio Holdings Fidelity Income
+
+00:02:49.889 --> 00:02:54.954
+Demo now shows its imported positions eight VTI shares
+
+00:02:55.201 --> 00:02:58.665
+and one hundred fifty JEPQ shares Those are this
+
+00:02:58.678 --> 00:03:03.118
+regular account’s own positions they remain separate even when
+
+00:03:03.118 --> 00:03:04.160
+included in Owner
+
+00:03:05.841 --> 00:03:09.474
+Switch the same selector to Fidelity Activity Demo then
+
+00:03:09.474 --> 00:03:14.435
+stay on Portfolio Holdings Its imported history supports twelve
+
+00:03:14.448 --> 00:03:19.122
+VTI shares and point three seven JEPI shares Notice
+
+00:03:19.122 --> 00:03:22.755
+that VTI is shared by both test accounts while
+
+00:03:22.768 --> 00:03:25.659
+JEPI exists only in this activity account
+
+00:03:27.354 --> 00:03:30.674
+Now choose Owner in the portfolio selector and open
+
+00:03:30.674 --> 00:03:35.128
+Holdings Owner combines matching tickers from its selected member
+
+00:03:35.128 --> 00:03:39.125
+accounts into one row Here the Owner VTI row
+
+00:03:39.125 --> 00:03:43.826
+shows twenty shares eight from Fidelity Income Demo plus
+
+00:03:43.826 --> 00:03:47.693
+twelve from Fidelity Activity Demo This proves that matching
+
+00:03:47.706 --> 00:03:50.818
+ticker shares aggregate together in Owner
+
+00:03:52.504 --> 00:03:55.538
+The unique tickers illustrate the other half of the
+
+00:03:55.538 --> 00:04:00.512
+rule JEPQ appears only in Fidelity Income Demo so
+
+00:04:00.525 --> 00:04:03.715
+Owner shows the same one hundred fifty shares JEPI
+
+00:04:03.715 --> 00:04:07.660
+appears only in Fidelity Activity Demo so Owner shows
+
+00:04:07.660 --> 00:04:10.629
+the same point three seven shares Owner is a
+
+00:04:10.642 --> 00:04:14.535
+combined view not a data move Regular aggregates work
+
+00:04:14.548 --> 00:04:19.132
+the same way create as many named read-only groupings
+
+00:04:19.145 --> 00:04:21.905
+as needed without changing the real account data

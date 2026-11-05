@@ -39,7 +39,8 @@ import { formatGapPoints, fundUnderlyingReturn } from '../utils/fundUnderlyingRe
 import { useTickerResearch } from '../context/TickerResearchContext'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
 import OpenLotsView from '../components/OpenLotsView'
-import { sortByValue } from '../utils/lotTableSort'
+import LotSortHeader from '../components/LotSortHeader'
+import { nextLotSort, sortByValue, sortLotRows } from '../utils/lotTableSort'
 
 const EMPTY_HOLDING = {
   ticker: '', description: '', category: '',
@@ -1431,13 +1432,23 @@ function TransactionModal({ ticker, onClose, onSaved, onOpeningLotRecorded, pf, 
   )
 }
 
-function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, onClose }) {
+// With no `ticker` the first step asks for one, suggesting `tickerSuggestions`:
+// Transaction History adds trades to any position, closed ones included.
+// `onSaved` receives the ticker that was saved.
+function LedgerTransactionEditor({
+  ticker: fixedTicker, transaction, pf, basisMode, onSaved, onClose,
+  tickerSuggestions = [], defaultTicker = '', defaultAccountId = '',
+}) {
   // Per-instance ids: Split View can mount this page in both panes, and a
   // label or datalist pointing at a repeated id resolves to the other pane's
   // field.
   const uid = useId()
   const [accounts, setAccounts] = useState([])
-  const [accountId, setAccountId] = useState(transaction?.profile_id ? String(transaction.profile_id) : '')
+  const [tickerInput, setTickerInput] = useState(defaultTicker)
+  const ticker = (fixedTicker || tickerInput).trim().toUpperCase()
+  const [accountId, setAccountId] = useState(
+    transaction?.profile_id ? String(transaction.profile_id) : String(defaultAccountId || ''),
+  )
   const [kind, setKind] = useState(transaction?.record_type === 'dividend' ? 'dividend' : 'trade')
   const [started, setStarted] = useState(!!transaction)
   const [error, setError] = useState(null)
@@ -1450,7 +1461,10 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
   })
   useEffect(() => {
     const controller = new AbortController()
-    pf(`/api/holdings/${ticker}/transaction-accounts`, { signal: controller.signal })
+    // A ticker still being typed must not refetch per keystroke; the list
+    // does not depend on it anyway.
+    const path = fixedTicker ? `/api/holdings/${fixedTicker}/transaction-accounts` : '/api/transaction-accounts'
+    pf(path, { signal: controller.signal })
       .then(async res => {
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Could not load accounts')
@@ -1459,7 +1473,7 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
       })
       .catch(e => { if (e.name !== 'AbortError') setError(e.message) })
     return () => controller.abort()
-  }, [pf, ticker, transaction])
+  }, [pf, fixedTicker, transaction])
   // Use the row's actual account, never an aggregate's inferred first holding.
   const accountFetch = useMemo(() => (path, options) => {
     const sep = path.includes('?') ? '&' : '?'
@@ -1469,7 +1483,7 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
     || transaction?.source_account_name || `Account ${accountId}`
   if (started && kind === 'trade') return (
     <TransactionModal ticker={ticker} initialTransaction={transaction} editorOnly
-      accountName={accountName} pf={accountFetch} onSaved={onSaved} onClose={onClose} />
+      accountName={accountName} pf={accountFetch} onSaved={() => onSaved(ticker)} onClose={onClose} />
   )
   const saveDividend = async event => {
     event.preventDefault()
@@ -1490,7 +1504,7 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Could not save dividend')
-      await onSaved()
+      await onSaved(ticker)
       onClose()
     } catch (e) { setError(e.message) }
     finally { setSaving(false) }
@@ -1499,10 +1513,25 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
     <div className="modal-overlay">
       <div className="card" role="dialog" aria-modal="true" aria-label={`${transaction ? 'Edit' : 'Add'} transaction for ${ticker}`}
         style={{ width: 540, maxWidth: '95vw', maxHeight: '85vh', overflow: 'auto' }}>
-        <h2>{transaction ? 'Edit Dividend' : 'Add Transaction'} — {ticker}</h2>
+        <h2>{transaction ? 'Edit Dividend' : 'Add Transaction'}{ticker ? ` — ${ticker}` : ''}</h2>
         {error && <div className="alert alert-error" role="alert">{error}</div>}
         {!started ? (
-          <form onSubmit={event => { event.preventDefault(); setStarted(true) }}>
+          <form onSubmit={event => { event.preventDefault(); if (ticker) setStarted(true) }}>
+            {!fixedTicker && (
+              <div className="form-group">
+                <label htmlFor={`${uid}-ledger-ticker`}>Ticker</label>
+                <input id={`${uid}-ledger-ticker`} required autoFocus list={`${uid}-ledger-tickers`}
+                  value={tickerInput} onChange={event => setTickerInput(event.target.value.toUpperCase())} />
+                <datalist id={`${uid}-ledger-tickers`}>
+                  {tickerSuggestions.map(symbol => <option key={symbol} value={symbol} />)}
+                </datalist>
+                <small style={{ color: 'var(--text-dim-2)' }}>
+                  Closed positions included. In an account fed by broker positions files, a trade
+                  dated before the latest file corrects history and realized gains without
+                  reopening the position.
+                </small>
+              </div>
+            )}
             <div className="form-group">
               <label htmlFor={`${uid}-ledger-account`}>Account</label>
               <select id={`${uid}-ledger-account`} required value={accountId} onChange={event => setAccountId(event.target.value)}>
@@ -1516,7 +1545,7 @@ function LedgerTransactionEditor({ ticker, transaction, pf, basisMode, onSaved, 
                 <option value="trade">Buy / Sell</option><option value="dividend">Dividend payment</option>
               </select>
             </div>
-            <button className="btn btn-primary" disabled={!accountId}>Continue</button>{' '}
+            <button className="btn btn-primary" disabled={!accountId || !ticker}>Continue</button>{' '}
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
           </form>
         ) : (
@@ -1588,22 +1617,56 @@ const isClosedBuyLot = (txn) => {
   return txn.shares_remaining != null && Number(txn.shares_remaining) <= 1e-9
 }
 
-function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
+const historyEventType = event => String(event.transaction_type || 'BUY').toUpperCase()
+// A dividend's share, price and fee cells read 0, so it sorts as 0 there too.
+const historyTradeValue = key => event => (historyEventType(event) === 'DIVIDEND' ? 0 : Number(event[key]) || 0)
+
+// Sort values follow what each cell displays: a blank Realized G/L shows
+// $0.00, so it sorts as 0 rather than last. Only an undated row sorts last.
+const TRANSACTION_HISTORY_COLUMNS = [
+  { key: 'actions', label: 'Actions', sortable: false },
+  { key: 'transaction_date', label: 'Date', type: 'date' },
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'type', label: 'Type', type: 'string', value: historyEventType },
+  { key: 'shares', label: 'Shares', type: 'number', value: historyTradeValue('shares') },
+  { key: 'price_per_share', label: 'Price', type: 'number', value: historyTradeValue('price_per_share') },
+  { key: 'fees', label: 'Fees', type: 'number', value: historyTradeValue('fees') },
+  { key: 'cash_amount', label: 'Cash Amount', type: 'number', value: event => transactionCashAmount(event) },
+  { key: 'realized_gain', label: 'Realized G/L', type: 'number', value: event => Number(event.realized_gain) || 0 },
+  { key: 'account', label: 'Account', type: 'string', value: event => event.source_account_name || '' },
+  { key: 'status', label: 'Status', type: 'string', value: event => (event.closed_position ? 'Closed position' : 'Open') },
+  { key: 'notes', label: 'Notes', type: 'string', value: event => event.raw_notes || event.notes || '' },
+]
+// Newest first is the order the server sends, so this default changes nothing.
+const TRANSACTION_HISTORY_DEFAULT_SORT = { key: 'transaction_date', direction: 'desc' }
+const TRANSACTION_HISTORY_HEADER_STYLE = { position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2, whiteSpace: 'nowrap' }
+
+// Gains & Losses opens this over its Realized tab with `initialTicker`, the
+// one closed position the user picked.
+export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, initialTicker = '' }) {
   const dialog = useDialog()
   const [payload, setPayload] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [query, setQuery] = useState('')
+  const [tickerFilter, setTickerFilter] = useState(String(initialTicker || '').toUpperCase())
   const [typeFilter, setTypeFilter] = useState('ALL')
   const [closedOnly, setClosedOnly] = useState(false)
+  const [sort, setSort] = useState(TRANSACTION_HISTORY_DEFAULT_SORT)
   const [reloadKey, setReloadKey] = useState(0)
   const [editing, setEditing] = useState(null) // { ticker, transaction }
+  const [adding, setAdding] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [actionFeedback, setActionFeedback] = useState(null) // { type, text }
 
   const afterChange = ticker => {
     setReloadKey(key => key + 1)
     onChanged?.(ticker)
+  }
+
+  const afterAdd = ticker => {
+    setActionFeedback({ type: 'success', text: `${ticker} transaction added. Its holding and realized gains were recalculated.` })
+    afterChange(ticker)
   }
 
   const editEvent = async event => {
@@ -1678,22 +1741,36 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
 
   useEffect(() => {
     // Escape belongs to the row editor while it is open.
-    const onKeyDown = event => { if (event.key === 'Escape' && !editing) onClose() }
+    const onKeyDown = event => { if (event.key === 'Escape' && !editing && !adding) onClose() }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, editing])
+  }, [onClose, editing, adding])
 
   const events = useMemo(() => {
     const search = query.trim().toLowerCase()
-    return (payload?.events || []).filter(event => {
-      const type = String(event.transaction_type || 'BUY').toUpperCase()
+    const filtered = (payload?.events || []).filter(event => {
+      const type = historyEventType(event)
+      if (tickerFilter && String(event.ticker || '').toUpperCase() !== tickerFilter) return false
       if (typeFilter !== 'ALL' && type !== typeFilter) return false
       if (closedOnly && !event.closed_position) return false
       if (!search) return true
       return [event.ticker, event.notes, event.raw_notes, event.source_account_name]
         .some(value => String(value || '').toLowerCase().includes(search))
     })
-  }, [payload, query, typeFilter, closedOnly])
+    return sortLotRows(filtered, sort, TRANSACTION_HISTORY_COLUMNS)
+  }, [payload, query, tickerFilter, typeFilter, closedOnly, sort])
+
+  const historyTickers = useMemo(() => (
+    [...new Set((payload?.events || []).map(event => String(event.ticker || '').toUpperCase()).filter(Boolean))].sort()
+  ), [payload])
+  // Add Trade starts in the filtered ticker's account when it lives in only one.
+  const filteredTickerAccount = useMemo(() => {
+    if (!tickerFilter) return ''
+    const accounts = new Set((payload?.events || [])
+      .filter(event => String(event.ticker || '').toUpperCase() === tickerFilter)
+      .map(event => event.profile_id))
+    return accounts.size === 1 ? String([...accounts][0]) : ''
+  }, [payload, tickerFilter])
 
   const summary = payload?.summary || {}
   const fmtNumber = (value, digits = 3) => value == null
@@ -1715,10 +1792,18 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
               <h2 style={{ margin: 0 }}>Transaction History</h2>
               <div style={{ color: 'var(--text-dim-2)', fontSize: '0.82rem', marginTop: '0.3rem' }}>
                 Every saved buy, sell, and actual dividend, including tickers that are no longer held.
-                Edit or delete any row, closed positions included.
+                Edit or delete any row, or add a missing trade, closed positions included.
+                Click a ticker to show only its rows; click a column heading to sort.
               </div>
             </div>
-            <button className="btn btn-secondary" onClick={onClose}>Close</button>
+            <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
+              <button className="btn btn-success" disabled={loading || !!error}
+                title="Add a buy, sell, or dividend to any position, open or closed"
+                onClick={() => { setActionFeedback(null); setAdding(true) }}>
+                + Add Trade{tickerFilter ? ` for ${tickerFilter}` : ''}
+              </button>
+              <button className="btn btn-secondary" onClick={onClose}>Close</button>
+            </div>
           </div>
 
           {!loading && !error && (
@@ -1748,6 +1833,18 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
               aria-label="Search transaction history"
               style={{ minWidth: 260, flex: '1 1 320px' }}
             />
+            {tickerFilter && (
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: '0.35rem', padding: '0.2rem 0.3rem 0.2rem 0.6rem',
+                borderRadius: 999, border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: '0.78rem', fontWeight: 700,
+              }}>
+                Ticker: {tickerFilter}
+                <button type="button" onClick={() => setTickerFilter('')} aria-label={`Show every ticker, not just ${tickerFilter}`}
+                  title="Show every ticker" style={{ ...OVERRIDE_LINK_STYLE, textDecoration: 'none', padding: '0 0.3rem', fontSize: '0.9rem' }}>
+                  ×
+                </button>
+              </span>
+            )}
             <select value={typeFilter} onChange={event => setTypeFilter(event.target.value)} aria-label="Filter transaction type">
               <option value="ALL">All types</option>
               <option value="BUY">Buys</option>
@@ -1780,14 +1877,15 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
             <table style={{ width: '100%', minWidth: 1310, fontSize: '0.8rem', margin: 0 }}>
               <thead>
                 <tr>
-                  {['Actions', 'Date', 'Ticker', 'Type', 'Shares', 'Price', 'Fees', 'Cash Amount', 'Realized G/L', 'Account', 'Status', 'Notes'].map(label => (
-                    <th key={label} style={{ position: 'sticky', top: 0, background: 'var(--surface)', zIndex: 2, whiteSpace: 'nowrap' }}>{label}</th>
+                  {TRANSACTION_HISTORY_COLUMNS.map(column => (
+                    <LotSortHeader key={column.key} column={column} sort={sort} style={TRANSACTION_HISTORY_HEADER_STYLE}
+                      onSort={key => setSort(current => nextLotSort(current, key))} />
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {events.map(event => {
-                  const type = String(event.transaction_type || 'BUY').toUpperCase()
+                  const type = historyEventType(event)
                   const isDividend = type === 'DIVIDEND'
                   const isBuy = type === 'BUY'
                   return (
@@ -1805,7 +1903,15 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
                         </div>
                       </td>
                       <td style={{ whiteSpace: 'nowrap' }}>{event.transaction_date || '-'}</td>
-                      <td style={{ fontWeight: 700, color: 'var(--accent)' }}>{event.ticker || '-'}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--accent)' }}>
+                        {event.ticker && !tickerFilter ? (
+                          <button type="button" onClick={() => setTickerFilter(String(event.ticker).toUpperCase())}
+                            title={`Show only ${event.ticker}`}
+                            style={{ ...OVERRIDE_LINK_STYLE, textDecoration: 'none', fontWeight: 700 }}>
+                            {event.ticker}
+                          </button>
+                        ) : (event.ticker || '-')}
+                      </td>
                       <td style={{ color: transactionTypeColor(type), fontWeight: 700 }}>{type}</td>
                       <td title={isDividend ? 'This dividend was recorded as cash, so it did not directly add shares.' : undefined}>
                         {isDividend ? fmtNumber(0) : fmtNumber(event.shares)}
@@ -1848,6 +1954,11 @@ function TransactionHistoryModal({ onClose, pf, basisMode, onChanged }) {
       {editing && (
         <LedgerTransactionEditor {...editing} pf={pf} basisMode={basisMode}
           onClose={() => setEditing(null)} onSaved={() => afterChange(editing.ticker)} />
+      )}
+      {adding && (
+        <LedgerTransactionEditor pf={pf} basisMode={basisMode}
+          tickerSuggestions={historyTickers} defaultTicker={tickerFilter} defaultAccountId={filteredTickerAccount}
+          onClose={() => setAdding(false)} onSaved={afterAdd} />
       )}
     </div>
   )

@@ -1,0 +1,477 @@
+WEBVTT
+
+1
+00:00:03.321 --> 00:00:07.076
+Hi! In this video, I'll show you how to set up your accounts in
+
+2
+00:00:07.096 --> 00:00:08.594
+Portfolio Tracker.
+
+3
+00:00:09.229 --> 00:00:12.895
+We'll create two regular portfolios, and turn on Owner, so you
+
+4
+00:00:12.915 --> 00:00:14.234
+can see them together.
+
+5
+00:00:14.267 --> 00:00:18.214
+Then we'll import a Fidelity positions file, and a transactions
+
+6
+00:00:18.234 --> 00:00:22.449
+file. At the end, you'll see how a ticker that's in both accounts
+
+7
+00:00:22.469 --> 00:00:24.298
+adds up in the Owner view.
+
+8
+00:00:28.320 --> 00:00:30.992
+Everything starts on the Portfolios page.
+
+9
+00:00:31.037 --> 00:00:34.512
+Open the Admin menu, and choose Portfolios.
+
+10
+00:00:34.558 --> 00:00:36.680
+This is where all your accounts live.
+
+11
+00:00:37.318 --> 00:00:41.342
+Right now the list is empty, so let's add our first account.
+
+12
+00:00:41.387 --> 00:00:44.390
+Click New Portfolio, and give it a name.
+
+13
+00:00:44.448 --> 00:00:47.184
+I'll call this one Fidelity Income Demo.
+
+14
+00:00:48.986 --> 00:00:51.747
+So what's a regular portfolio?
+
+15
+00:00:51.792 --> 00:00:53.928
+It's one real account at your broker.
+
+16
+00:00:53.986 --> 00:00:57.729
+It keeps its own positions, its own cash, and its own history.
+
+17
+00:00:58.244 --> 00:01:01.131
+Next, set the Broker Source to Fidelity.
+
+18
+00:01:01.151 --> 00:01:05.622
+This one matters. It tells Portfolio Tracker which broker's files
+
+19
+00:01:05.642 --> 00:01:07.152
+this account will accept.
+
+20
+00:01:07.198 --> 00:01:08.785
+It saves right away.
+
+21
+00:01:09.329 --> 00:01:12.868
+Account Type stays on User-owned, because this is a real account
+
+22
+00:01:12.888 --> 00:01:13.939
+that I own.
+
+23
+00:01:14.458 --> 00:01:16.811
+I'll add a second account the same way.
+
+24
+00:01:16.843 --> 00:01:20.612
+New Portfolio, Fidelity Activity Demo, and OK.
+
+25
+00:01:20.644 --> 00:01:23.622
+Then I'll set its Broker Source to Fidelity, too.
+
+26
+00:01:23.654 --> 00:01:25.943
+Now we have two regular accounts.
+
+27
+00:01:26.975 --> 00:01:28.856
+Now, let's talk about Owner.
+
+28
+00:01:28.901 --> 00:01:32.670
+If you ever forget what it does, this help line up here explains
+
+29
+00:01:32.690 --> 00:01:33.307
+it.
+
+30
+00:01:33.836 --> 00:01:35.334
+Here's the short version.
+
+31
+00:01:35.405 --> 00:01:38.905
+Owner is optional. It's not a brokerage account, and you never
+
+32
+00:01:38.925 --> 00:01:40.410
+import files into it.
+
+33
+00:01:40.481 --> 00:01:42.451
+Think of it as your personal rollup.
+
+34
+00:01:42.496 --> 00:01:46.086
+It adds up the accounts you choose, and shows them as one.
+
+35
+00:01:46.633 --> 00:01:49.164
+To turn it on, click Create Owner.
+
+36
+00:01:49.197 --> 00:01:52.952
+You'll be asked to confirm, with a reminder that Owner is a rollup,
+
+37
+00:01:52.972 --> 00:01:54.572
+not a brokerage account.
+
+38
+00:01:54.784 --> 00:01:55.950
+I'll click OK.
+
+39
+00:01:56.440 --> 00:01:58.754
+There it is, at the top of the list.
+
+40
+00:01:58.800 --> 00:02:02.211
+It's empty for now, because we haven't picked any accounts yet.
+
+41
+00:02:02.244 --> 00:02:05.374
+And notice the selector up top switched over to Owner.
+
+42
+00:02:05.904 --> 00:02:09.915
+To put accounts into Owner, just tick the Owner box on each row.
+
+43
+00:02:09.960 --> 00:02:14.035
+I'll check Fidelity Income Demo, and Fidelity Activity Demo.
+
+44
+00:02:14.526 --> 00:02:17.287
+That's it. Owner now combines them.
+
+45
+00:02:17.345 --> 00:02:21.228
+And see how its Broker Source changed to Rollup, no broker?
+
+46
+00:02:21.248 --> 00:02:23.843
+Each account still stands on its own, though.
+
+47
+00:02:23.876 --> 00:02:27.529
+Owner only adds them up for viewing, so nothing gets moved or
+
+48
+00:02:27.549 --> 00:02:28.447
+copied.
+
+49
+00:02:28.983 --> 00:02:32.356
+Down here, there's a similar tool called Aggregates.
+
+50
+00:02:32.402 --> 00:02:35.035
+Click Add Aggregate, and give it a name.
+
+51
+00:02:35.093 --> 00:02:37.420
+I'll use Demo Fidelity Aggregate.
+
+52
+00:02:39.347 --> 00:02:41.571
+Then tick the accounts you want in it.
+
+53
+00:02:41.796 --> 00:02:43.816
+I'll pick both Fidelity accounts.
+
+54
+00:02:44.372 --> 00:02:46.571
+So how is this different from Owner?
+
+55
+00:02:46.591 --> 00:02:50.092
+An aggregate is a read-only group that you name yourself.
+
+56
+00:02:50.112 --> 00:02:53.548
+You can make as many as you like, and one account can be in more
+
+57
+00:02:53.568 --> 00:02:57.247
+than one. Owner is the one main rollup of what you own.
+
+58
+00:02:57.293 --> 00:03:00.002
+Aggregates are for any other grouping you want.
+
+59
+00:03:00.515 --> 00:03:02.791
+Now let's bring in some data.
+
+60
+00:03:02.837 --> 00:03:07.217
+Imports always go into a regular account, never into Owner.
+
+61
+00:03:07.276 --> 00:03:11.031
+So first, pick the account in the selector at the top.
+
+62
+00:03:11.089 --> 00:03:13.455
+I'll choose Fidelity Income Demo.
+
+63
+00:03:14.738 --> 00:03:17.001
+Then open Admin, and Import.
+
+64
+00:03:17.046 --> 00:03:20.508
+See how it says, Importing into Fidelity Income Demo?
+
+65
+00:03:20.554 --> 00:03:23.595
+That's your check that the file lands in the right place.
+
+66
+00:03:24.078 --> 00:03:26.265
+Start with Step 1, Positions.
+
+67
+00:03:26.310 --> 00:03:29.810
+A positions file is a snapshot of what you own today.
+
+68
+00:03:29.907 --> 00:03:33.165
+Fidelity's already picked for us, because of the Broker Source
+
+69
+00:03:33.185 --> 00:03:34.428
+we set earlier.
+
+70
+00:03:34.933 --> 00:03:38.918
+Now click the drop box, choose the Fidelity positions file, and
+
+71
+00:03:38.938 --> 00:03:40.040
+click Preview.
+
+72
+00:03:40.568 --> 00:03:42.385
+Always preview first.
+
+73
+00:03:42.418 --> 00:03:45.956
+It shows the account named in the file, and what it found.
+
+74
+00:03:46.066 --> 00:03:49.222
+Here we've got eight shares of VTI, a hundred and fifty shares
+
+75
+00:03:49.242 --> 00:03:53.137
+of JEPQ, and twelve hundred and fifty dollars in cash.
+
+76
+00:03:53.652 --> 00:03:56.311
+That looks right, so I'll click Import.
+
+77
+00:03:56.356 --> 00:03:58.824
+And it brought in both positions.
+
+78
+00:03:59.359 --> 00:04:01.138
+Now for the second account.
+
+79
+00:04:01.209 --> 00:04:04.913
+I'll switch the selector to Fidelity Activity Demo, and choose
+
+80
+00:04:04.933 --> 00:04:07.107
+Step 2, Transactions.
+
+81
+00:04:07.127 --> 00:04:09.633
+A transactions file is your history.
+
+82
+00:04:09.691 --> 00:04:13.294
+Buys, sells, dividends, and reinvestments.
+
+83
+00:04:13.801 --> 00:04:17.366
+You'll see a warning when there's no positions snapshot yet.
+
+84
+00:04:17.398 --> 00:04:20.019
+Normally, you'd import positions first.
+
+85
+00:04:20.051 --> 00:04:23.462
+But this sample file is the full history for the account, so I'll
+
+86
+00:04:23.482 --> 00:04:25.452
+tick the box and keep going.
+
+87
+00:04:25.975 --> 00:04:29.909
+Pick the transactions file, and preview it, just like before.
+
+88
+00:04:31.201 --> 00:04:35.836
+It found a buy of twelve shares of VTI, one VTI dividend, and
+
+89
+00:04:35.856 --> 00:04:38.425
+one dividend reinvestment into JEPI.
+
+90
+00:04:38.445 --> 00:04:40.607
+Looks good. Import it.
+
+91
+00:04:41.119 --> 00:04:45.258
+Last, go to Step 3, and click Refresh Prices and Divs.
+
+92
+00:04:45.316 --> 00:04:48.791
+After importing, it's a good habit to refresh, so Owner picks
+
+93
+00:04:48.811 --> 00:04:51.686
+up the new holdings, along with current prices.
+
+94
+00:04:52.200 --> 00:04:53.800
+Now for the payoff.
+
+95
+00:04:53.820 --> 00:04:58.073
+Switch the selector to Owner, and open Portfolio, then Holdings.
+
+96
+00:04:58.131 --> 00:05:01.543
+This page lists every holding in whatever you've selected.
+
+97
+00:05:01.601 --> 00:05:03.443
+Let's scroll down to the table.
+
+98
+00:05:04.207 --> 00:05:07.695
+Look at VTI. It shows twenty shares.
+
+99
+00:05:07.727 --> 00:05:11.534
+That's the eight shares from Fidelity Income Demo, plus the twelve
+
+100
+00:05:11.554 --> 00:05:13.575
+from Fidelity Activity Demo.
+
+101
+00:05:13.608 --> 00:05:17.286
+When the same ticker is in more than one account, Owner adds the
+
+102
+00:05:17.306 --> 00:05:19.493
+shares together into one row.
+
+103
+00:05:20.018 --> 00:05:23.965
+Tickers that are only in one account, like JEPQ and JEPI, keep
+
+104
+00:05:23.985 --> 00:05:25.483
+their own share counts.
+
+105
+00:05:25.999 --> 00:05:29.398
+And if I flip back to each account, you'll see the original numbers
+
+106
+00:05:29.418 --> 00:05:33.416
+haven't changed. Fidelity Income Demo still has its eight shares
+
+107
+00:05:33.436 --> 00:05:34.602
+of VTI.
+
+108
+00:05:35.149 --> 00:05:39.402
+And Fidelity Activity Demo has its twelve shares of VTI, plus
+
+109
+00:05:39.422 --> 00:05:41.851
+that small reinvestment into JEPI.
+
+110
+00:05:41.896 --> 00:05:43.917
+Owner simply adds these up for you.
+
+111
+00:05:44.590 --> 00:05:47.644
+The aggregate we made shows the same combined view.
+
+112
+00:05:47.690 --> 00:05:51.968
+It's worked out live from its members, so nothing is stored twice.
+
+113
+00:05:53.287 --> 00:05:55.219
+So, that's the setup.
+
+114
+00:05:55.251 --> 00:05:59.262
+Make one regular portfolio for each real account, and import into
+
+115
+00:05:59.282 --> 00:06:03.191
+that account. Turn on Owner when you want everything in one view,
+
+116
+00:06:03.262 --> 00:06:06.010
+and use aggregates for any other groupings.
+
+117
+00:06:06.068 --> 00:06:07.362
+Thanks for watching!
+
+118
+00:06:08.650 --> 00:06:10.887
+For informational purposes only.
+
+119
+00:06:10.933 --> 00:06:13.000
+Not financial advice.

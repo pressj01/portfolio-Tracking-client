@@ -1,0 +1,39 @@
+Portfolio Tracker: Create Portfolios, Use Owner, and Import Fidelity Data
+Voice: en-US-AvaMultilingualNeural, rate -2% (edge-tts)
+
+[0:03.2] intro1: Hi! In this video, I'll show you how to set up your accounts in Portfolio Tracker.
+[0:09.0] intro2: We'll create two regular portfolios, and turn on Owner, so you can see them together. Then we'll import a Fidelity positions file, and a transactions file. At the end, you'll see how a ticker that's in both accounts adds up in the Owner view.
+[0:24.6] A1: Everything starts on the Portfolios page. Open the Admin menu, and choose Portfolios. This is where all your accounts live.
+[0:33.6] A2: Right now the list is empty, so let's add our first account. Click New Portfolio, and give it a name. I'll call this one Fidelity Income Demo.
+[0:45.3] A3: So what's a regular portfolio? It's one real account at your broker. It keeps its own positions, its own cash, and its own history.
+[0:54.6] A4: Next, set the Broker Source to Fidelity. This one matters. It tells the app which broker's files this account will accept. It saves right away.
+[1:05.2] A5: Account Type stays on User-owned, because this is a real account that I own.
+[1:10.3] A6: I'll add a second account the same way. New Portfolio, Fidelity Activity Demo, and OK. Then I'll set its Broker Source to Fidelity, too. Now we have two regular accounts.
+[1:22.9] B1: Now, let's talk about Owner. If you ever forget what it does, this help line up here explains it.
+[1:29.7] B2: Here's the short version. Owner is optional. It's not a brokerage account, and you never import files into it. Think of it as your personal rollup. It adds up the accounts you choose, and shows them as one.
+[1:42.5] B3: To turn it on, click Create Owner. The app asks you to confirm, and reminds you that Owner is a rollup, not a brokerage account. I'll click OK.
+[1:52.5] B4: There it is, at the top of the list. It's empty for now, because we haven't picked any accounts yet. And notice the selector up top switched over to Owner.
+[2:01.9] C1: To put accounts into Owner, just tick the Owner box on each row. I'll check Fidelity Income Demo, and Fidelity Activity Demo.
+[2:10.6] C2: That's it. Owner now combines them. And see how its Broker Source changed to Rollup, no broker? Each account still stands on its own, though. Owner only adds them up for viewing, so nothing gets moved or copied.
+[2:25.0] C3: Down here, there's a similar tool called Aggregates. Click Add Aggregate, and give it a name. I'll use Demo Fidelity Aggregate.
+[2:35.4] C4: Then tick the accounts you want in it. I'll pick both Fidelity accounts.
+[2:40.3] C5: So how is this different from Owner? An aggregate is a read-only group that you name yourself. You can make as many as you like, and one account can be in more than one. Owner is the one main rollup of what you own. Aggregates are for any other grouping you want.
+[2:56.5] D1: Now let's bring in some data. Imports always go into a regular account, never into Owner. So first, pick the account in the selector at the top. I'll choose Fidelity Income Demo.
+[3:10.8] D2: Then open Admin, and Import. See how it says, Importing into Fidelity Income Demo? That's your check that the file lands in the right place.
+[3:20.1] D3: Start with Step 1, Positions. A positions file is a snapshot of what you own today. Fidelity's already picked for us, because of the Broker Source we set earlier.
+[3:30.9] D4: Now click the drop box, choose the Fidelity positions file, and click Preview.
+[3:36.6] D5: Always preview first. It shows the account named in the file, and what it found. Here we've got eight shares of VTI, a hundred and fifty shares of JEPQ, and twelve hundred and fifty dollars in cash.
+[3:49.7] D6: That looks right, so I'll click Import. And it brought in both positions.
+[3:55.3] D7: Now for the second account. I'll switch the selector to Fidelity Activity Demo, and choose Step 2, Transactions. A transactions file is your history. Buys, sells, dividends, and reinvestments.
+[4:09.8] D8: The app warns you when there's no positions snapshot yet. Normally, you'd import positions first. But this sample file is the full history for the account, so I'll tick the box and keep going.
+[4:22.0] D9: Pick the transactions file, and preview it, just like before.
+[4:27.2] D10: It found a buy of twelve shares of VTI, one VTI dividend, and one dividend reinvestment into JEPI. Looks good. Import it.
+[4:37.1] D11: Last, go to Step 3, and click Refresh Prices and Divs. After importing, it's a good habit to refresh, so Owner picks up the new holdings, along with current prices.
+[4:48.2] E1: Now for the payoff. Switch the selector to Owner, and open Portfolio, then Holdings. This page lists every holding in whatever you've selected. Let's scroll down to the table.
+[5:00.3] E2: Look at VTI. It shows twenty shares. That's the eight shares from Fidelity Income Demo, plus the twelve from Fidelity Activity Demo. When the same ticker is in more than one account, Owner adds the shares together into one row.
+[5:16.1] E3: Tickers that are only in one account, like JEPQ and JEPI, keep their own share counts.
+[5:22.1] E4: And if I flip back to each account, you'll see the original numbers haven't changed. Fidelity Income Demo still has its eight shares of VTI.
+[5:31.2] E4b: And Fidelity Activity Demo has its twelve shares of VTI, plus that small reinvestment into JEPI. Owner simply adds these up for you.
+[5:40.6] E5: The aggregate we made shows the same combined view. It's worked out live from its members, so nothing is stored twice.
+[5:49.3] O1: So, that's the setup. Make one regular portfolio for each real account, and import into that account. Turn on Owner when you want everything in one view, and use aggregates for any other groupings. Thanks for watching!
+[6:04.6] O2: For informational purposes only. Not financial advice.

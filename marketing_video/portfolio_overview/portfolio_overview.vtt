@@ -1,0 +1,533 @@
+WEBVTT
+
+1
+00:00:03.338 --> 00:00:07.042
+Hi! This is a quick tour of Portfolio Tracker.
+
+2
+00:00:07.062 --> 00:00:10.703
+It's a desktop program for Windows and Mac that you buy once,
+
+3
+00:00:10.723 --> 00:00:12.131
+with no subscription.
+
+4
+00:00:13.879 --> 00:00:17.507
+For this tour, I've set up two demo accounts, a brokerage account
+
+5
+00:00:17.527 --> 00:00:22.635
+and a Roth IRA. Up top, I'm viewing them together as one household.
+
+6
+00:00:22.668 --> 00:00:24.893
+Let's walk through the main screens.
+
+7
+00:00:25.353 --> 00:00:27.169
+We'll start on the Dashboard.
+
+8
+00:00:27.228 --> 00:00:29.479
+The first row is the big picture.
+
+9
+00:00:29.524 --> 00:00:33.228
+Your portfolio value, the change since the last close, and your
+
+10
+00:00:33.248 --> 00:00:35.116
+return over the period you pick.
+
+11
+00:00:35.659 --> 00:00:37.935
+These range buttons set that period.
+
+12
+00:00:37.955 --> 00:00:41.762
+One year, five years, year to date, and so on.
+
+13
+00:00:41.820 --> 00:00:45.308
+The grade and risk cards below follow the same window.
+
+14
+00:00:45.802 --> 00:00:47.708
+Next come the income cards.
+
+15
+00:00:47.753 --> 00:00:50.948
+Dividends so far this year, what you've been paid this month,
+
+16
+00:00:50.968 --> 00:00:54.175
+and your estimated monthly and annual income.
+
+17
+00:00:54.195 --> 00:00:57.797
+Yield on cost compares that income with what you paid.
+
+18
+00:00:58.302 --> 00:01:01.892
+Portfolio Value Over Time charts your account history.
+
+19
+00:01:01.912 --> 00:01:04.940
+It's rebuilt from your transactions, so you can see how you got
+
+20
+00:01:04.960 --> 00:01:05.719
+here.
+
+21
+00:01:06.819 --> 00:01:10.357
+Below that, the dividends expected this week, and your allocation
+
+22
+00:01:10.377 --> 00:01:13.355
+by category, next to the targets you set.
+
+23
+00:01:13.413 --> 00:01:16.123
+The Diff column shows where you're over or under.
+
+24
+00:01:16.643 --> 00:01:20.156
+And at the bottom, every holding, with its cost basis, current
+
+25
+00:01:20.176 --> 00:01:24.110
+value, dividends, yield, and total profit.
+
+26
+00:01:24.616 --> 00:01:26.561
+Now the Dividend Calendar.
+
+27
+00:01:26.606 --> 00:01:30.451
+Open the Portfolio menu, and choose Dividend Calendar.
+
+28
+00:01:32.272 --> 00:01:35.977
+The month view puts each payment on the day the cash arrives.
+
+29
+00:01:36.035 --> 00:01:39.344
+Days before today are payments you've already received.
+
+30
+00:01:39.377 --> 00:01:41.525
+Later days are the ones still coming.
+
+31
+00:01:41.571 --> 00:01:45.620
+The small icons tell you whether a date is confirmed, estimated,
+
+32
+00:01:45.754 --> 00:01:47.890
+or matched to your imported history.
+
+33
+00:01:48.791 --> 00:01:52.407
+Each day shows its total, and the top right shows the total for
+
+34
+00:01:52.426 --> 00:01:56.118
+the month. That makes it easy to spot the lighter months.
+
+35
+00:01:56.646 --> 00:01:59.713
+The Agenda view lists the same payments in order.
+
+36
+00:01:59.809 --> 00:02:03.514
+For each one, you'll see the ex-dividend date, the amount per
+
+37
+00:02:03.534 --> 00:02:07.277
+share, and whether the pay date is confirmed or estimated.
+
+38
+00:02:08.832 --> 00:02:13.110
+Next, importing. Imports go into one account at a time, so I'll
+
+39
+00:02:13.130 --> 00:02:15.623
+switch the selector to the brokerage account.
+
+40
+00:02:15.656 --> 00:02:18.200
+Then open Admin, and choose Import.
+
+41
+00:02:22.406 --> 00:02:26.047
+The Broker Import tab reads exports straight from your broker.
+
+42
+00:02:26.105 --> 00:02:30.626
+Right now, that's Charles Schwab, E*TRADE, Fidelity, Robinhood,
+
+43
+00:02:30.646 --> 00:02:33.190
+Shear Group, and Interactive Brokers.
+
+44
+00:02:33.690 --> 00:02:35.698
+It works in three steps.
+
+45
+00:02:35.718 --> 00:02:39.741
+Step 1, Positions, is a snapshot of what you own today.
+
+46
+00:02:39.799 --> 00:02:43.478
+Step 2, Transactions, brings in your history, like dividends,
+
+47
+00:02:43.498 --> 00:02:45.915
+DRIP, and buys and sells.
+
+48
+00:02:45.985 --> 00:02:50.315
+Step 3, Refresh, updates prices and dividend data.
+
+49
+00:02:50.807 --> 00:02:54.422
+What if your broker isn't on that list, or you keep your own spreadsheet?
+
+50
+00:02:54.455 --> 00:02:56.603
+That's what the generic import is for.
+
+51
+00:02:56.661 --> 00:02:58.874
+Start on the Generic Positions tab.
+
+52
+00:02:59.408 --> 00:03:03.559
+Click Download Holdings Template to get a ready-made Excel file.
+
+53
+00:03:03.604 --> 00:03:07.500
+Only two columns are required, Ticker and Shares.
+
+54
+00:03:07.533 --> 00:03:11.595
+You can add price paid, dividend, frequency, and more, and market
+
+55
+00:03:11.615 --> 00:03:13.304
+data is filled in for you.
+
+56
+00:03:13.837 --> 00:03:17.019
+For your history, use Generic Transactions.
+
+57
+00:03:17.064 --> 00:03:20.794
+Its template has one row per transaction, with a date, a type
+
+58
+00:03:20.814 --> 00:03:25.922
+like buy, sell, or dividend, then the ticker, shares, price, and
+
+59
+00:03:25.942 --> 00:03:26.815
+amount.
+
+60
+00:03:27.369 --> 00:03:30.079
+Here's a small file I made in that format.
+
+61
+00:03:30.137 --> 00:03:32.477
+I'll drop it in, and click Preview.
+
+62
+00:03:34.083 --> 00:03:37.482
+The preview shows exactly what's in the file, before anything
+
+63
+00:03:37.502 --> 00:03:41.691
+changes. And when you do import, any row that's already in your
+
+64
+00:03:41.711 --> 00:03:43.017
+history is skipped.
+
+65
+00:03:43.076 --> 00:03:44.727
+I won't import this one.
+
+66
+00:03:44.759 --> 00:03:46.742
+It was just to show you the format.
+
+67
+00:03:50.325 --> 00:03:52.460
+Now a couple of research tools.
+
+68
+00:03:52.519 --> 00:03:55.432
+Open Analysis, then ETF Comparer.
+
+69
+00:03:56.696 --> 00:03:59.712
+I'll add three popular dividend funds.
+
+70
+00:03:59.770 --> 00:04:03.092
+SCHD, VYM, and JEPI.
+
+71
+00:04:03.625 --> 00:04:07.304
+The chart shows total return, with dividends reinvested, over
+
+72
+00:04:07.324 --> 00:04:08.898
+the period you choose.
+
+73
+00:04:08.931 --> 00:04:12.291
+You can also switch to price only, to see the difference dividends
+
+74
+00:04:12.311 --> 00:04:13.044
+make.
+
+75
+00:04:13.541 --> 00:04:15.090
+Scroll down for more.
+
+76
+00:04:15.161 --> 00:04:19.375
+There's yield on cost over time, each fund's distribution history,
+
+77
+00:04:19.395 --> 00:04:24.210
+and a side by side table with yield, expense ratio, and returns.
+
+78
+00:04:25.791 --> 00:04:29.700
+Further down, you'll find average returns over several periods,
+
+79
+00:04:29.720 --> 00:04:31.970
+and each fund's top holdings.
+
+80
+00:04:33.238 --> 00:04:35.743
+Right next to it is ETF Overlap.
+
+81
+00:04:35.789 --> 00:04:37.860
+It answers a simple question.
+
+82
+00:04:37.880 --> 00:04:42.248
+If I own both of these funds, how much am I really diversifying?
+
+83
+00:04:42.839 --> 00:04:46.429
+I'll pick a popular pair, VOO and QQQ.
+
+84
+00:04:47.860 --> 00:04:52.036
+The circle shows overlap by weight, not just shared tickers.
+
+85
+00:04:52.107 --> 00:04:55.812
+Here, a big part of each fund sits in the same companies.
+
+86
+00:04:56.350 --> 00:04:59.991
+The sector chart shows where each fund leans, and the table lists
+
+87
+00:05:00.011 --> 00:05:01.572
+the shared holdings.
+
+88
+00:05:01.592 --> 00:05:05.208
+When two funds overlap a lot, buying both can add more of the
+
+89
+00:05:05.228 --> 00:05:07.937
+same risk, instead of spreading it out.
+
+90
+00:05:08.450 --> 00:05:11.300
+Now, Cash Flow and Sustainability.
+
+91
+00:05:11.358 --> 00:05:13.226
+It's in the Portfolio menu.
+
+92
+00:05:15.962 --> 00:05:18.786
+This screen is also a full budgeting tool.
+
+93
+00:05:18.831 --> 00:05:23.008
+You list your income and expenses once, with categories, due dates,
+
+94
+00:05:23.028 --> 00:05:24.883
+and how often they repeat.
+
+95
+00:05:24.954 --> 00:05:28.276
+Portfolio Tracker adds your dividend income for you.
+
+96
+00:05:28.784 --> 00:05:31.826
+Adding an expense only takes a moment.
+
+97
+00:05:31.871 --> 00:05:35.869
+I'll add a gym membership, thirty dollars a month, under Health,
+
+98
+00:05:35.889 --> 00:05:37.757
+and click Add expense.
+
+99
+00:05:41.891 --> 00:05:44.192
+The cards up top update right away.
+
+100
+00:05:44.238 --> 00:05:49.179
+Expenses this month, portfolio income before and after tax, and
+
+101
+00:05:49.199 --> 00:05:52.636
+what's left over. The green banner tells you whether your income
+
+102
+00:05:52.656 --> 00:05:54.498
+covers this month's bills.
+
+103
+00:05:55.064 --> 00:05:57.595
+Further down, there's a stress test.
+
+104
+00:05:57.653 --> 00:06:01.804
+It runs bull, neutral, and bear markets over the years ahead,
+
+105
+00:06:01.850 --> 00:06:03.909
+with and without your other income.
+
+106
+00:06:04.405 --> 00:06:08.823
+In this demo, the tougher cases run short over twenty years, mostly
+
+107
+00:06:08.843 --> 00:06:11.783
+because expenses keep growing with inflation.
+
+108
+00:06:11.815 --> 00:06:14.729
+That's exactly the kind of thing you want to find out early.
+
+109
+00:06:15.234 --> 00:06:17.829
+That brings us to Retirement Readiness.
+
+110
+00:06:17.900 --> 00:06:20.253
+It's in the Portfolio menu, too.
+
+111
+00:06:22.604 --> 00:06:25.556
+It uses your budget and your portfolios together.
+
+112
+00:06:25.614 --> 00:06:29.242
+Monthly expenses and other income are pulled straight from the
+
+113
+00:06:29.262 --> 00:06:33.132
+cash flow plan. Here, that's Social Security and a pension, about
+
+114
+00:06:33.152 --> 00:06:35.721
+thirty six hundred a month before tax.
+
+115
+00:06:36.230 --> 00:06:38.136
+Then you set your assumptions.
+
+116
+00:06:38.194 --> 00:06:42.039
+I'll use a six percent yield in good markets, four and a half
+
+117
+00:06:42.059 --> 00:06:45.585
+percent in a bear market, and fifteen thousand dollars of cash
+
+118
+00:06:45.605 --> 00:06:46.605
+set aside.
+
+119
+00:06:48.335 --> 00:06:49.986
+The cards show the result.
+
+120
+00:06:50.006 --> 00:06:53.060
+What the portfolio needs to pay each month, the income it can
+
+121
+00:06:53.080 --> 00:06:56.836
+produce in good and bad markets, and the gap to a safety buffer
+
+122
+00:06:56.856 --> 00:06:58.660
+of three times that need.
+
+123
+00:06:59.176 --> 00:07:00.700
+The badge sums it up.
+
+124
+00:07:00.745 --> 00:07:03.264
+In this demo, it says Building.
+
+125
+00:07:03.322 --> 00:07:07.332
+The portfolio covers the gap today, even in a bear market, but
+
+126
+00:07:07.352 --> 00:07:09.475
+the full buffer isn't there yet.
+
+127
+00:07:09.508 --> 00:07:13.672
+The chart and milestones below show how that changes over time.
+
+128
+00:07:14.217 --> 00:07:15.779
+And that's the tour.
+
+129
+00:07:15.837 --> 00:07:19.784
+Portfolio Tracker is a one-time purchase for Windows and Mac,
+
+130
+00:07:19.804 --> 00:07:21.838
+and you can find it on Gumroad.
+
+131
+00:07:21.896 --> 00:07:23.228
+Thanks for watching!
+
+132
+00:07:24.482 --> 00:07:26.719
+For informational purposes only.
+
+133
+00:07:26.765 --> 00:07:28.832
+Not financial advice.

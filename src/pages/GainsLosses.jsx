@@ -42,6 +42,8 @@ import {
   lifetimeTotalReturnPayload,
 } from '../utils/lifetimePerformance'
 import { loadTrackerCharts, trackerChartsSearchParams } from '../utils/sharedTrackerCharts'
+import { clearAllDashboardCache } from '../utils/dashboardCache'
+import { TransactionHistoryModal } from './ManageHoldings'
 
 const fmt = v => formatMoney(v)
 const fmtPct = v => v != null ? `${Number(v).toFixed(2)}%` : '\u2014'
@@ -136,6 +138,18 @@ export default function GainsLosses({ embedded = false }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  // Transaction History opens over this page: null is closed, '' every ticker.
+  // A change made there reloads the page once, when the history closes.
+  const [historyTicker, setHistoryTicker] = useState(null)
+  const historyChanged = useRef(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const closeHistory = useCallback(() => {
+    setHistoryTicker(null)
+    if (!historyChanged.current) return
+    historyChanged.current = false
+    clearAllDashboardCache()
+    setReloadKey(key => key + 1)
+  }, [])
 
   const [chartData, setChartData] = useState(null)
   const [chartLoading, setChartLoading] = useState(false)
@@ -159,7 +173,7 @@ export default function GainsLosses({ embedded = false }) {
   // An Unrealized row opens onto the lots behind its total, fetched on demand.
   // A Realized row already carries its sells in the summary, so it needs none.
   const { lotDetails, toggleLotDetails, setLotDetailView, clearLotDetails } = useLotDetails(pf)
-  useEffect(() => clearLotDetails(), [selection, basisMode, clearLotDetails])
+  useEffect(() => clearLotDetails(), [selection, basisMode, clearLotDetails, reloadKey])
 
   useSharedPerformanceRange(period, customStart, customEnd, (next) => {
     setPeriod(next.period)
@@ -199,7 +213,7 @@ export default function GainsLosses({ embedded = false }) {
       })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [categories, subcategories, selection, basisMode, pf])
+  }, [categories, subcategories, selection, basisMode, pf, reloadKey])
 
   // Names for sold-out tickers are fetched after the summary lands, never with
   // it: the lookup goes out to Yahoo and the table's numbers must not wait on
@@ -291,7 +305,7 @@ export default function GainsLosses({ embedded = false }) {
       .catch(e => { if (active) setChartError(e.message) })
       .finally(() => { if (active) setChartLoading(false) })
     return () => { active = false }
-  }, [period, customStart, customEnd, rangeError, categories, subcategories, selection, basisMode, pf, profileQueryString])
+  }, [period, customStart, customEnd, rangeError, categories, subcategories, selection, basisMode, pf, profileQueryString, reloadKey])
 
   // Render Plotly charts
   useEffect(() => {
@@ -710,6 +724,15 @@ export default function GainsLosses({ embedded = false }) {
             </span>
             <strong>{val}</strong>
             {expandable && <span className="gl-lot-count">&times;{row.lot_count}</span>}
+            <button
+              type="button"
+              className="gl-manage-trades"
+              aria-label={`Manage ${row.ticker} transactions`}
+              title={`Edit, delete, or add buys and sells for ${row.ticker}, closed positions included`}
+              onClick={() => setHistoryTicker(row.ticker)}
+            >
+              Manage
+            </button>
           </span>
         )
       } else if (tab === 'unrealized') {
@@ -1353,11 +1376,21 @@ export default function GainsLosses({ embedded = false }) {
                 {t.label}
               </button>
             ))}
+            {tab === 'realized' && (
+              <button
+                className="btn btn-secondary"
+                style={{ marginLeft: '0.75rem', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                title="Every buy, sell, and dividend, closed positions included: edit, delete, or add trades"
+                onClick={() => setHistoryTicker('')}
+              >
+                Transaction History
+              </button>
+            )}
             {tab === 'realized' && multiLotTickers.length > 0 && (
               <>
                 <button
                   className="btn btn-secondary"
-                  style={{ marginLeft: '0.75rem', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                  style={{ marginLeft: '0.5rem', padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
                   onClick={toggleAllLots}
                 >
                   {allLotsExpanded ? 'Collapse all lots' : 'Expand all lots'}
@@ -1419,6 +1452,16 @@ export default function GainsLosses({ embedded = false }) {
       )}
       {!isLifetimePerformancePeriod(period) && chartData && !chartLoading && !chartData.realized_rows?.length && (
         <p style={{ color: 'var(--p-556677)', fontStyle: 'italic', textAlign: 'center', marginBottom: '2rem' }}>No realized sales occurred inside the selected performance range.</p>
+      )}
+
+      {historyTicker !== null && (
+        <TransactionHistoryModal
+          pf={pf}
+          basisMode={basisMode}
+          initialTicker={historyTicker}
+          onChanged={() => { historyChanged.current = true }}
+          onClose={closeHistory}
+        />
       )}
     </div>
   )

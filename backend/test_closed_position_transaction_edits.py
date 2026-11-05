@@ -191,6 +191,87 @@ class ClosedPositionTransactionEditTest(unittest.TestCase):
         self.assertIsNotNone(holding)
         self.assertAlmostEqual(holding["quantity"], 10, places=6)
 
+    def _add(self, ticker, body, profile_id=2):
+        return self.client.post(
+            f"/api/holdings/{ticker}/transactions?profile_id={profile_id}", json=body,
+        )
+
+    def test_adding_a_missing_sale_to_a_closed_position(self):
+        # The history nets +2 GOOGL; the sale that sold them was never imported.
+        response = self._add("GOOGL", {
+            "transaction_type": "SELL", "transaction_date": "2025-05-01",
+            "shares": 2, "price_per_share": 150,
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+
+        self.assertIsNone(self._holding("GOOGL"))
+        # FIFO leaves 2 shares of the 2023-05-22 lot at $125.2499.
+        sale = self._txn("GOOGL", "2025-05-01", 2)
+        self.assertAlmostEqual(sale["realized_gain"], round(2 * (150 - 125.2499), 2), places=2)
+
+    def test_a_backdated_buy_corrects_history_without_reopening(self):
+        response = self._add("XYZ", {
+            "transaction_type": "BUY", "transaction_date": "2026-08-01",
+            "shares": 5, "price_per_share": 18,
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+
+        self.assertIsNone(self._holding("XYZ"), "the broker's file says XYZ was sold")
+        # The sale now draws 5 shares from the new lot and 5 from the old one.
+        sale = self._txn("XYZ", "2026-10-15", 10)
+        self.assertAlmostEqual(sale["realized_gain"], 10 * 25 - (5 * 18 + 5 * 20), places=2)
+
+    def test_a_buy_dated_after_the_file_reopens_a_closed_position(self):
+        response = self._add("XYZ", {
+            "transaction_type": "BUY", "transaction_date": "2026-10-20",
+            "shares": 4, "price_per_share": 30,
+        })
+        self.assertEqual(response.status_code, 201, response.get_json())
+
+        holding = self._holding("XYZ")
+        self.assertIsNotNone(holding)
+        self.assertAlmostEqual(holding["quantity"], 4, places=6)
+        self.assertAlmostEqual(holding["purchase_value"], 120, places=2)
+
+    def test_a_sale_the_history_cannot_cover_is_refused_and_writes_nothing(self):
+        response = self._add("GOOGL", {
+            "transaction_type": "SELL", "transaction_date": "2025-05-01",
+            "shares": 5, "price_per_share": 150,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("only 2.000000 shares are available", response.get_json()["error"])
+        self.assertIsNone(self._holding("GOOGL"), "a refused trade must not leave a placeholder row")
+
+    def test_without_a_broker_import_added_trades_follow_the_history(self):
+        response = self._add("GOOGL", {
+            "transaction_type": "BUY", "transaction_date": "2025-06-01",
+            "shares": 3, "price_per_share": 170,
+        }, profile_id=3)
+        self.assertEqual(response.status_code, 201, response.get_json())
+        holding = self._holding("GOOGL", profile_id=3)
+        self.assertIsNotNone(holding)
+        self.assertAlmostEqual(holding["quantity"], 5, places=6)
+
+        response = self._add("GOOGL", {
+            "transaction_type": "SELL", "transaction_date": "2025-07-01",
+            "shares": 5, "price_per_share": 180,
+        }, profile_id=3)
+        self.assertEqual(response.status_code, 201, response.get_json())
+        self.assertIsNone(self._holding("GOOGL", profile_id=3))
+
+    def test_selling_a_ticker_with_no_history_is_still_refused(self):
+        response = self._add("NEWT", {
+            "transaction_type": "SELL", "transaction_date": "2026-10-20",
+            "shares": 1, "price_per_share": 10,
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("no holding exists yet", response.get_json()["error"])
+
+    def test_add_trade_lists_accounts_without_a_ticker(self):
+        response = self.client.get("/api/transaction-accounts?profile_id=2")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        self.assertEqual([account["id"] for account in response.get_json()], [2])
+
     def test_history_rows_carry_what_the_edit_buttons_need(self):
         response = self.client.get("/api/transactions/history?profile_id=2")
         self.assertEqual(response.status_code, 200)
