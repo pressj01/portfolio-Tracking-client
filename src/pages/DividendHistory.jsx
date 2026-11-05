@@ -265,7 +265,7 @@ export default function DividendHistory() {
                       </label>
                       {subs.map(s => (
                         <label key={`sub-${s.id}`} className="growth-cat-option"
-                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                          style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}>
                           <input type="checkbox" disabled={catChecked}
                             checked={catChecked || subcategories.includes(String(s.id))}
                             onChange={e => {

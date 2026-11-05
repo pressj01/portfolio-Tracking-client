@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
+import { buildSubcategoryTree, holdingInSubcategories } from '../utils/categoryHierarchy'
 
 const fmt = v => formatMoney(v)
 const fmtDate = v => v || '\u2014'
@@ -64,6 +65,9 @@ export default function SafeWithdrawal() {
       category: r.category || r.classification_type || '',
       subcategory_id: r.subcategory_id ?? null,
       subcategory: r.subcategory || '',
+      // The holding's chain of sub-categories, top first (they nest to any depth).
+      subcategory_path_ids: Array.isArray(r.subcategory_path_ids) ? r.subcategory_path_ids : [],
+      subcategory_path: Array.isArray(r.subcategory_path) ? r.subcategory_path : [],
       frequency: r.div_frequency || '',
       purchase_date: r.purchase_date || '',
       price_paid: r.price_paid || 0,
@@ -85,26 +89,29 @@ export default function SafeWithdrawal() {
   }), [rows, pct])
 
   const categoryList = useMemo(() => {
-    // Category names with the sub-categories actually present in the holdings.
+    // Category names with the sub-categories actually present in the holdings,
+    // including every level above a holding's own sub-category, listed as a
+    // tree (each with its depth for indenting).
     const byName = new Map()
     allComputed.forEach(r => {
       if (!r.category) return
       let entry = byName.get(r.category)
       if (!entry) { entry = { name: r.category, subs: new Map() }; byName.set(r.category, entry) }
-      if (r.subcategory_id != null && r.subcategory) entry.subs.set(r.subcategory_id, r.subcategory)
+      const ids = r.subcategory_path_ids.length ? r.subcategory_path_ids : (r.subcategory_id != null ? [r.subcategory_id] : [])
+      const names = r.subcategory_path.length ? r.subcategory_path : (r.subcategory ? [r.subcategory] : [])
+      ids.forEach((id, i) => {
+        if (names[i]) entry.subs.set(id, { id, name: names[i], parent_id: i > 0 ? ids[i - 1] : null })
+      })
     })
     return [...byName.values()]
-      .map(e => ({
-        name: e.name,
-        subs: [...e.subs].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
-      }))
+      .map(e => ({ name: e.name, subs: buildSubcategoryTree([...e.subs.values()]).ordered }))
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [allComputed])
 
   const computed = useMemo(() => {
     if (selCats.length === 0 && selSubs.length === 0) return allComputed
-    return allComputed.filter(r => selCats.includes(r.category)
-      || (r.subcategory_id != null && selSubs.includes(String(r.subcategory_id))))
+    // A selected sub-category also brings in the ones nested inside it.
+    return allComputed.filter(r => selCats.includes(r.category) || holdingInSubcategories(r, selSubs))
   }, [allComputed, selCats, selSubs])
 
   const totals = useMemo(() => {
@@ -238,7 +245,7 @@ export default function SafeWithdrawal() {
                           </label>
                           {c.subs.map(s => (
                             <label key={`sub-${s.id}`} className="growth-cat-option"
-                              style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}>
+                              style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}>
                               <input type="checkbox" disabled={catChecked}
                                 checked={catChecked || selSubs.includes(String(s.id))}
                                 onChange={e => {

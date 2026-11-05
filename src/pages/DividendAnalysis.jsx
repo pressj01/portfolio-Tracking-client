@@ -6,6 +6,7 @@ import { formatMoney, formatMoneyCompact } from '../utils/money'
 import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
+import { buildSubcategoryTree, indentedName, subtreeIds } from '../utils/categoryHierarchy'
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -414,21 +415,41 @@ function CategoryDividendsChart({ rows, categories }) {
     }
 
     const grouped = {}
+    // Sub-categories nest to any depth. A level splits into the
+    // sub-categories directly inside it; branchUnder finds which of those a
+    // holding's (possibly deeper) sub-category sits under.
+    const tree = selectedCategory ? buildSubcategoryTree(selectedCategory.subcategories) : null
+    const branchUnder = (subId, levelId) => {
+      const level = levelId == null ? null : String(levelId)
+      let node = subId == null || subId === '' ? null : tree.byId.get(String(subId))
+      while (node) {
+        const parent = node.parent_id == null ? null : String(node.parent_id)
+        if (parent === level) return node
+        node = parent == null ? null : tree.byId.get(parent)
+      }
+      return null
+    }
+    const selectedNode = selectedCategory && subcategoryId ? tree.byId.get(String(subcategoryId)) : null
     if (selectedCategory && subcategoryId) {
-      rows
-        .filter(r => r.category_name === selectedCategory.name && String(r.subcategory_id || '') === String(subcategoryId))
-        .forEach(r => add(grouped, r.ticker || 'Unknown', Number(r.total_divs_received) || 0))
+      const inBranch = selectedNode ? subtreeIds(selectedNode) : new Set([String(subcategoryId)])
+      const branchRows = rows.filter(r => r.category_name === selectedCategory.name
+        && inBranch.has(String(r.subcategory_id ?? '')))
+      if (selectedNode && selectedNode.children.length) {
+        branchRows.forEach(r => {
+          const child = branchUnder(r.subcategory_id, selectedNode.id)
+          add(grouped, child ? child.name : `Directly in ${selectedNode.name}`, Number(r.total_divs_received) || 0)
+        })
+      } else {
+        branchRows.forEach(r => add(grouped, r.ticker || 'Unknown', Number(r.total_divs_received) || 0))
+      }
     } else if (selectedCategory) {
-      const subcats = selectedCategory.subcategories || []
-      if (subcats.length) {
-        subcats.forEach(s => { grouped[s.name] = { name: s.name, value: 0, count: 0 } })
-        grouped.Unassigned = { name: 'Unassigned', value: 0, count: 0 }
+      if (tree.roots.length) {
         rows
           .filter(r => r.category_name === selectedCategory.name)
           .forEach(r => {
             const value = Number(r.total_divs_received) || 0
-            const sub = subcats.find(s => String(s.id) === String(r.subcategory_id || ''))
-            add(grouped, sub ? sub.name : 'Unassigned', value)
+            const branch = branchUnder(r.subcategory_id, null)
+            add(grouped, branch ? branch.name : 'Unassigned', value)
           })
       } else {
         rows
@@ -514,7 +535,7 @@ function CategoryDividendsChart({ rows, categories }) {
             <span style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Sub-category:</span>
             <select style={controlStyle} value={subcategoryId} onChange={e => setSubcategoryId(e.target.value)} title="Filter subcategory">
               <option value="">All sub-categories</option>
-              {selectedCategory.subcategories.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {selectedCategory.subcategories.map(s => <option key={s.id} value={s.id}>{indentedName(s)}</option>)}
             </select>
           </>
         )}
@@ -935,7 +956,7 @@ export default function DividendAnalysis() {
                         <label
                           key={s.id}
                           className="growth-cat-option"
-                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}
+                          style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}
                         >
                           <input
                             type="checkbox"

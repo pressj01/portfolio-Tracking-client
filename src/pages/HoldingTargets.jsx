@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { useCurrency } from '../context/CurrencyContext'
 import { formatMoney } from '../utils/money'
+import { indentedName, rollUpCategoryTree, subtreeIds } from '../utils/categoryHierarchy'
 
 const pct = value => `${Number(value || 0).toFixed(2)}%`
 const shares = value => Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 4 })
@@ -29,28 +30,33 @@ const formatWhen = ms => {
   return `${absolute} (${relative})`
 }
 
+// Splits a category's budget down its sub-category tree (any depth): a
+// targeted sub-category gets its target % of its parent's budget and splits
+// that the same way; what is left at each level is shared equally by the
+// holdings sitting directly there and every holding in the untargeted
+// sub-categories under it.
 function equalTargets(category, categoryBudget) {
   const result = {}
-  const subcategories = category.subcategories || []
-  const targetedSubs = subcategories.filter(sub => sub.target_pct != null)
-  if (!targetedSubs.length) {
-    const each = category.tickers.length ? categoryBudget / category.tickers.length : 0
-    category.tickers.forEach(row => { result[row.ticker] = each })
-    return result
+  const tree = rollUpCategoryTree(category.subcategories, category.tickers)
+  const split = (children, directRows, budget) => {
+    const targeted = children.filter(child => child.target_pct != null)
+    if (!targeted.length) {
+      const members = [...directRows, ...children.flatMap(child => child.all)]
+      const each = members.length ? budget / members.length : 0
+      members.forEach(row => { result[row.ticker] = each })
+      return
+    }
+    let usedPct = 0
+    targeted.forEach(child => {
+      const pct = Math.max(0, Number(child.target_pct || 0))
+      usedPct += pct
+      split(child.children, child.direct, budget * pct / 100)
+    })
+    const remainder = [...directRows, ...children.filter(child => child.target_pct == null).flatMap(child => child.all)]
+    const each = remainder.length ? budget * Math.max(0, 100 - usedPct) / 100 / remainder.length : 0
+    remainder.forEach(row => { result[row.ticker] = each })
   }
-  let usedSubPct = 0
-  targetedSubs.forEach(sub => {
-    const members = category.tickers.filter(row => row.subcategory_id === sub.id)
-    const subPct = Math.max(0, Number(sub.target_pct || 0))
-    usedSubPct += subPct
-    const each = members.length ? categoryBudget * subPct / 100 / members.length : 0
-    members.forEach(row => { result[row.ticker] = each })
-  })
-  const untargetedIds = new Set(subcategories.filter(sub => sub.target_pct == null).map(sub => sub.id))
-  const remainderMembers = category.tickers.filter(row => row.subcategory_id == null || untargetedIds.has(row.subcategory_id))
-  const remaining = categoryBudget * Math.max(0, 100 - usedSubPct) / 100
-  const each = remainderMembers.length ? remaining / remainderMembers.length : 0
-  remainderMembers.forEach(row => { result[row.ticker] = each })
+  split(tree.roots, tree.unassigned, categoryBudget)
   return result
 }
 
@@ -171,7 +177,9 @@ export default function HoldingTargets() {
       const mode = (planActive && settings.modes?.[category.id]) || 'custom'
       const categoryBudget = Number(category.target_pct ?? category.actual_pct ?? 0)
       const equal = equalTargets(category, categoryBudget)
-      const subName = new Map((category.subcategories || []).map(sub => [sub.id, sub.name]))
+      // Sub-categories nest to any depth: show the whole path, e.g. "Gold › Miners".
+      const subName = new Map(rollUpCategoryTree(category.subcategories, []).ordered
+        .map(node => [node.id, [...node.path.map(p => p.name), node.name].join(' › ')]))
       const rows = category.tickers.map(holding => {
         const currentPortfolioPct = data.total_value > 0 ? holding.current_value / data.total_value * 100 : 0
         const saved = planActive ? settings.targets?.[holding.ticker] : undefined
@@ -210,11 +218,21 @@ export default function HoldingTargets() {
         const monthlyDelta = tradeValue * Number(row.current_yield || 0) / 100 / 12
         return { ...row, rawTargetValue, rawTradeValue, requestedShares, adjustedTargetPct, targetValue, tradeValue, targetShares, tradeShares, monthlyDelta }
       })
-      const subRows = (category.subcategories || []).map(sub => ({
-        id: sub.id, name: sub.name, statedTarget: sub.target_pct,
-        ...rollup(rows.filter(row => row.subcategory_id === sub.id)),
-      })).filter(sub => sub.count > 0 || sub.statedTarget != null)
-      const unclassified = rows.filter(row => row.subcategory_id == null)
+      // One row per sub-category at every depth, each rolling up its whole
+      // branch; its stated target is a % of its parent.
+      const subTree = rollUpCategoryTree(category.subcategories, rows)
+      const subRows = subTree.ordered.map(node => {
+        const branch = subtreeIds(node)
+        return {
+          id: node.id,
+          name: node.name,
+          depth: node.depth,
+          statedTarget: node.target_pct,
+          parentName: node.path.length ? node.path[node.path.length - 1].name : 'category',
+          ...rollup(rows.filter(row => row.subcategory_id != null && branch.has(String(row.subcategory_id)))),
+        }
+      }).filter(sub => sub.count > 0 || sub.statedTarget != null)
+      const unclassified = subTree.unassigned
       if (unclassified.length) subRows.push({ id: 'unclassified', name: 'Unclassified', statedTarget: null, ...rollup(unclassified) })
       const totals = rollup(rows)
       const coverage = category.categoryBudget > 0 ? totals.requestedTargetPct / category.categoryBudget * 100 : null
@@ -679,7 +697,7 @@ export default function HoldingTargets() {
         <thead><tr><th>Category / Subcategory</th><th>#</th><th>Category Plan</th><th>Requested</th><th>Coverage</th><th>Adjusted</th><th>Current</th><th>Monthly Income Now</th><th>Monthly Income After</th><th>Current Value</th><th>Target Value</th><th>To Target</th></tr></thead>
         <tbody>{categories.map(category => <React.Fragment key={category.id}>
           <tr className="pillar-parent"><td>{category.name}</td><td>{category.count}</td><td>{pct(category.categoryBudget)}</td><td>{pct(category.requestedTargetPct)}</td><td className={category.coverage != null && category.coverage > 100.01 ? 'trade-sell' : category.coverage != null && category.coverage < 99.99 ? 'trade-buy' : ''}>{coverageLabel(category.coverage)}</td><td>{pct(category.adjustedTargetPct)}</td><td>{pct(category.currentPct)}</td><td>{money(category.income)}</td><td>{money(category.income + category.incomeDelta)}</td><td>{money(category.currentValue)}</td><td>{money(category.targetValue)}</td><td className={category.targetValue - category.currentValue >= 0 ? 'trade-buy' : 'trade-sell'}>{category.targetValue - category.currentValue >= 0 ? '+' : ''}{money(category.targetValue - category.currentValue)}</td></tr>
-          {category.subRows.map(sub => <tr className="pillar-sub" key={`${category.id}-${sub.id}`}><td>↳ {sub.name}{sub.statedTarget != null ? ` (${pct(sub.statedTarget)} of category)` : ''}</td><td>{sub.count}</td><td>—</td><td>{pct(sub.requestedTargetPct)}</td><td>—</td><td>{pct(sub.adjustedTargetPct)}</td><td>{pct(sub.currentPct)}</td><td>{money(sub.income)}</td><td>{money(sub.income + sub.incomeDelta)}</td><td>{money(sub.currentValue)}</td><td>{money(sub.targetValue)}</td><td className={sub.targetValue - sub.currentValue >= 0 ? 'trade-buy' : 'trade-sell'}>{sub.targetValue - sub.currentValue >= 0 ? '+' : ''}{money(sub.targetValue - sub.currentValue)}</td></tr>)}
+          {category.subRows.map(sub => <tr className="pillar-sub" key={`${category.id}-${sub.id}`}><td style={sub.depth ? { paddingLeft: `${0.75 + sub.depth * 1.1}rem` } : undefined}>↳ {sub.name}{sub.statedTarget != null ? ` (${pct(sub.statedTarget)} of ${sub.parentName})` : ''}</td><td>{sub.count}</td><td>—</td><td>{pct(sub.requestedTargetPct)}</td><td>—</td><td>{pct(sub.adjustedTargetPct)}</td><td>{pct(sub.currentPct)}</td><td>{money(sub.income)}</td><td>{money(sub.income + sub.incomeDelta)}</td><td>{money(sub.currentValue)}</td><td>{money(sub.targetValue)}</td><td className={sub.targetValue - sub.currentValue >= 0 ? 'trade-buy' : 'trade-sell'}>{sub.targetValue - sub.currentValue >= 0 ? '+' : ''}{money(sub.targetValue - sub.currentValue)}</td></tr>)}
         </React.Fragment>)}</tbody>
         <tfoot><tr><td>Totals</td><td>{allRows.length}</td><td>{pct(categories.reduce((sum, category) => sum + category.categoryBudget, 0))}</td><td>{pct(scenario.requestedTotal)}</td><td>{coverageLabel(scenario.requestedTotal)}</td><td>{pct(adjustedTotal)}</td><td>{pct(categories.reduce((sum, category) => sum + category.currentPct, 0))}</td><td>{money(data.monthly_income)}</td><td>{money(Number(data.monthly_income || 0) + incomeDelta)}</td><td>{money(data.total_value)}</td><td>{money(Number(data.total_value || 0) * adjustedTotal / 100)}</td><td className={tradeTotal >= 0 ? 'trade-buy' : 'trade-sell'}>{tradeTotal >= 0 ? '+' : ''}{money(tradeTotal)}</td></tr></tfoot>
       </table></div>
@@ -701,7 +719,7 @@ export default function HoldingTargets() {
           <input className="hypo-add-ticker" placeholder="Ticker (e.g. SCHD)" value={addPanel.ticker} autoFocus disabled={addPanel.loading} onChange={e => setAddPanel(p => ({ ...p, ticker: e.target.value, error: '' }))} onKeyDown={e => { if (e.key === 'Enter') addHypothetical(category) }} />
           {(category.subcategories || []).length > 0 && <select className="hypo-add-sub" value={addPanel.subcategoryId} disabled={addPanel.loading} onChange={e => setAddPanel(p => ({ ...p, subcategoryId: e.target.value }))}>
             <option value="">No subcategory</option>
-            {(category.subcategories || []).map(sub => <option key={sub.id} value={sub.id}>{sub.name}</option>)}
+            {(category.subcategories || []).map(sub => <option key={sub.id} value={sub.id}>{indentedName(sub)}</option>)}
           </select>}
           <button className="btn btn-small btn-primary" onClick={() => addHypothetical(category)} disabled={addPanel.loading || !addPanel.ticker.trim()}>{addPanel.loading ? 'Looking up…' : 'Add'}</button>
           {addPanel.error && <span className="hypo-add-error">{addPanel.error}</span>}

@@ -1211,30 +1211,75 @@ def ensure_tables_exist(conn=None):
         cur.execute("ALTER TABLE ticker_categories_new RENAME TO ticker_categories")
 
     # ── subcategories ───────────────────────────────────────────────────────────
-    # Optional second tier within a category (e.g. Metals → Gold / Silver / Copper).
-    # Purely additive: tickers keep their top-level category_id so every other
-    # feature is unaffected; subcategory_id is grouping metadata for the
-    # Categories page only.
+    # Sub-categories inside a category, nested to any depth (e.g. Metals → Gold
+    # → Miners). parent_id is the sub-category above (NULL = directly under the
+    # category). Purely additive: tickers keep their top-level category_id so
+    # every other feature still rolls them up to the category; subcategory_id
+    # is grouping metadata.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS subcategories (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             category_id INTEGER NOT NULL,
+            parent_id   INTEGER,
             name        TEXT NOT NULL,
             target_pct  REAL,
             profile_id  INTEGER NOT NULL DEFAULT 1,
             sort_order  INTEGER NOT NULL DEFAULT 0,
-            UNIQUE (category_id, name, profile_id),
             FOREIGN KEY (category_id) REFERENCES categories(id)
         )
     """)
 
-    # Add target_pct to subcategories if missing (sub-category target = % of parent category)
+    # Add target_pct to subcategories if missing (sub-category target = % of its parent)
     _subcat_cols = {r[1] for r in cur.execute("PRAGMA table_info(subcategories)").fetchall()}
     if "target_pct" not in _subcat_cols:
         try:
             cur.execute("ALTER TABLE subcategories ADD COLUMN target_pct REAL")
         except Exception:
             pass
+
+    # Nesting: add parent_id. The old table also had UNIQUE (category_id, name,
+    # profile_id), which would stop two branches each having, say, a "Tech"
+    # sub-category, so it is rebuilt (ids kept, so ticker assignments survive)
+    # and names are unique among siblings instead.
+    _subcat_cols = {r[1] for r in cur.execute("PRAGMA table_info(subcategories)").fetchall()}
+    _full_subcat_table = {"category_id", "name", "target_pct", "profile_id", "sort_order"} <= _subcat_cols
+    if "parent_id" not in _subcat_cols and not _full_subcat_table:
+        # A trimmed-down table (some test fixtures build one by hand): just add
+        # the column rather than rebuilding from columns it doesn't have.
+        try:
+            cur.execute("ALTER TABLE subcategories ADD COLUMN parent_id INTEGER")
+        except Exception:
+            pass
+    elif "parent_id" not in _subcat_cols:
+        cur.execute("""
+            CREATE TABLE subcategories_new (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                parent_id   INTEGER,
+                name        TEXT NOT NULL,
+                target_pct  REAL,
+                profile_id  INTEGER NOT NULL DEFAULT 1,
+                sort_order  INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (category_id) REFERENCES categories(id)
+            )
+        """)
+        cur.execute("""
+            INSERT INTO subcategories_new
+                (id, category_id, parent_id, name, target_pct, profile_id, sort_order)
+            SELECT id, category_id, NULL, name, target_pct, profile_id, sort_order
+            FROM subcategories
+        """)
+        cur.execute("DROP TABLE subcategories")
+        cur.execute("ALTER TABLE subcategories_new RENAME TO subcategories")
+    try:
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_subcategories_sibling_name
+            ON subcategories (profile_id, category_id, COALESCE(parent_id, 0), name)
+        """)
+    except sqlite3.OperationalError:
+        pass  # a trimmed-down fixture table without profile_id
+    except sqlite3.IntegrityError:
+        pass  # existing duplicate siblings: leave them rather than fail startup
 
     # Add subcategory_id to ticker_categories if missing
     _tc_cols = {r[1] for r in cur.execute("PRAGMA table_info(ticker_categories)").fetchall()}

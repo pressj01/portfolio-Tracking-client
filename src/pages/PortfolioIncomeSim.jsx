@@ -542,7 +542,7 @@ function DripProjectionsPanel() {
                         <span>{c.name}</span>
                       </label>
                       {subs.map(s => (
-                        <label key={`sub-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.75rem 0.35rem 1.9rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.85rem', opacity: catChecked ? 0.5 : 1 }}>
+                        <label key={`sub-${s.id}`} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: `0.35rem 0.75rem 0.35rem ${1.9 + (Number(s.depth) || 0) * 1.1}rem`, cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.85rem', opacity: catChecked ? 0.5 : 1 }}>
                           <input
                             type="checkbox"
                             disabled={catChecked}

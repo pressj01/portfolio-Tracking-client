@@ -458,7 +458,7 @@ export default function Growth({ embedded = false }) {
                         <label
                           key={s.id}
                           className="growth-cat-option"
-                          style={{ paddingLeft: '1.4rem', opacity: catChecked ? 0.5 : 1 }}
+                          style={{ paddingLeft: `${1.4 + (Number(s.depth) || 0) * 1.1}rem`, opacity: catChecked ? 0.5 : 1 }}
                         >
                           <input
                             type="checkbox"
