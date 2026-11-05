@@ -26190,8 +26190,13 @@ def list_transactions(ticker):
 
 
 @app.route("/api/holdings/<ticker>/transaction-accounts", methods=["GET"])
-def transaction_accounts(ticker):
-    """Offer explicit source accounts when adding from an Owner/aggregate ledger."""
+@app.route("/api/transaction-accounts", methods=["GET"])
+def transaction_accounts(ticker=None):
+    """Offer explicit source accounts when adding from an Owner/aggregate ledger.
+
+    The ticker plays no part; the bare route serves Transaction History's Add
+    Trade, which asks for the account before the ticker is settled.
+    """
     is_agg, pids = get_profile_filter()
     conn = get_connection()
     try:
@@ -26865,7 +26870,22 @@ def add_transaction(ticker):
         "SELECT 1 FROM all_account_info WHERE ticker = ? AND profile_id = ?",
         (ticker, profile_id),
     ).fetchone()
-    if not existing:
+    # A closed position keeps its history but has no holding row: the rollup
+    # deletes it once the history sells out, and a positions import drops it
+    # once the broker's file stops listing the ticker. Transaction History
+    # adds trades to those so a missing buy or sell can be filled in without
+    # re-importing. No placeholder row is written for them: the rollup creates
+    # one if the history then holds shares, and a refused trade leaves nothing.
+    closed_position = not existing and conn.execute(
+        "SELECT 1 FROM transactions WHERE ticker = ? AND profile_id = ? LIMIT 1",
+        (ticker, profile_id),
+    ).fetchone() is not None
+    if closed_position:
+        # Taken before anything is written, as for an edit. In a broker-fed
+        # account a trade dated before the latest positions file only corrects
+        # the history; one dated after it moves the broker's zero.
+        broker_baseline = _closed_position_baseline(conn, ticker, profile_id)
+    elif not existing:
         # Create a minimal holding — the rollup will fill in quantity/price/value
         if txn_type == "SELL":
             conn.close()
@@ -26894,11 +26914,11 @@ def add_transaction(ticker):
                 cat_id = cat_row["id"] if isinstance(cat_row, dict) else cat_row[0]
                 _replace_ticker_category(conn, profile_id, ticker, cat_id)
         conn.commit()
+        broker_baseline = None
     else:
         # Auto-seed existing holding's current data as the first transaction
         _seed_transaction_if_needed(ticker, profile_id, conn)
-
-    broker_baseline = _broker_holding_baseline(conn, ticker, profile_id) if existing else None
+        broker_baseline = _broker_holding_baseline(conn, ticker, profile_id)
 
     try:
         normalized_allocs = []

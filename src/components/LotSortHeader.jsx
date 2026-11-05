@@ -1,13 +1,13 @@
 // Header cell for the lot tables. The label is a real button so the sort is
 // reachable from the keyboard, and aria-sort announces the current order.
-export default function LotSortHeader({ column, sort, onSort }) {
+export default function LotSortHeader({ column, sort, onSort, style }) {
   if (column.sortable === false) {
-    return <th title={column.tip}>{column.label}</th>
+    return <th title={column.tip} style={style}>{column.label}</th>
   }
   const active = sort?.key === column.key
   const direction = active ? sort.direction : null
   return (
-    <th aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
+    <th aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'} style={style}>
       <button
         type="button"
         className="mh-lot-sort"
