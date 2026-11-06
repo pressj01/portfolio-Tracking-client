@@ -9,7 +9,9 @@ import {
   GRADE_WINDOW_NOTE,
   PERFORMANCE_PERIODS,
   formatPerformanceAsOf,
+  formatPerformanceChartRange,
   formatPerformanceDate,
+  heldPeriodStart,
   isLifetimePerformancePeriod,
   performancePeriodUnavailableReason,
   performancePeriodWindow,
@@ -102,4 +104,56 @@ test('calendar-anchored presets and an unknown inception are never blocked', () 
     assert.equal(performancePeriodUnavailableReason(key, '2026-10-01', '2026-10-23'), null, key)
   }
   assert.equal(performancePeriodUnavailableReason('10y', null, '2026-10-23'), null)
+})
+
+test('a holding bought after the range starts is labeled as held, not market observations', () => {
+  const chart = {
+    return_basis: 'owned_period',
+    period_key: '1y',
+    requested_start_date: '2025-11-05',
+    requested_end_date: '2026-11-05',
+    effective_start_date: '2026-07-23',
+    effective_end_date: '2026-11-05',
+  }
+  const heldStart = heldPeriodStart(chart)
+  assert.equal(heldStart, '2026-07-23')
+  assert.equal(
+    formatPerformanceChartRange(
+      chart.requested_start_date,
+      chart.requested_end_date,
+      chart.effective_start_date,
+      chart.effective_end_date,
+      { actualLabel: 'held' },
+    ),
+    'From 11/5/2025 to 11/5/2026 · held 7/23/2026 to 11/5/2026',
+  )
+})
+
+test('a held period is not flagged when the range is fully covered or not owned-period', () => {
+  const base = {
+    return_basis: 'owned_period',
+    period_key: '1y',
+    requested_start_date: '2025-11-08',
+    requested_end_date: '2026-11-05',
+    effective_end_date: '2026-11-05',
+  }
+  // A weekend start resolves to the prior close, which is never "held since".
+  assert.equal(heldPeriodStart({ ...base, effective_start_date: '2025-11-07' }), null)
+  assert.equal(heldPeriodStart({ ...base, effective_start_date: '2025-11-08' }), null)
+  // Purchase date unknown: the chart is the ticker's market return.
+  assert.equal(heldPeriodStart({ ...base, return_basis: 'market_period', effective_start_date: '2026-07-23' }), null)
+  // "Since Purchase" already says so.
+  assert.equal(heldPeriodStart({ ...base, period_key: 'all', effective_start_date: '2026-07-23' }), null)
+  assert.equal(heldPeriodStart(null), null)
+})
+
+test('the chart range keeps the market-observations wording by default', () => {
+  assert.equal(
+    formatPerformanceChartRange('2025-11-08', '2026-11-05', '2025-11-07', '2026-11-05'),
+    'From 11/8/2025 to 11/5/2026 · market observations 11/7/2025 to 11/5/2026',
+  )
+  assert.equal(
+    formatPerformanceChartRange('2025-11-05', '2026-11-05', '2025-11-05', '2026-11-05'),
+    'From 11/5/2025 to 11/5/2026',
+  )
 })

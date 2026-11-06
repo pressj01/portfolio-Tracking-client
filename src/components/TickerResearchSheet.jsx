@@ -16,7 +16,9 @@ import {
   customRangeError,
   isLifetimePerformancePeriod,
   formatPerformanceChartRange,
+  formatPerformanceDate,
   formatPerformanceRange,
+  heldPeriodStart,
   readSharedPerformanceRange,
   todayInputValue,
 } from '../utils/performancePeriods'
@@ -393,26 +395,38 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
           },
         ]
     const ct = chartTheme(isDark)
+    const heldStart = heldPeriodStart(chart)
     const chartRange = formatPerformanceChartRange(
       chart.requested_start_date,
       chart.requested_end_date,
       chart.effective_start_date || chart.dates?.[0],
       chart.effective_end_date || chart.dates?.[chart.dates.length - 1],
+      heldStart ? { actualLabel: 'held' } : undefined,
     )
+    const chartHeading = !hasTotalReturn
+      ? 'Recent Price History'
+      : heldStart
+        ? `Return Since ${formatPerformanceDate(heldStart)}`
+        : `${chart.period_label || 'Selected Period'} Return`
     window.Plotly.newPlot(el, traces, {
       template: ct.template,
       paper_bgcolor: ct.paper,
       plot_bgcolor: ct.plot,
+      // Title and subtitle are pinned to the top of the figure, and the top
+      // margin leaves a band beneath them for the legend; with Plotly's
+      // auto-centred title the two-line heading ran into the legend.
       title: {
-        text: `${chart.ticker} — ${hasTotalReturn ? `${chart.period_label || 'Selected Period'} Return` : 'Recent Price History'}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`,
+        text: `${chart.ticker} — ${chartHeading}${chartRange ? `<br><sup>${chartRange}</sup>` : ''}`,
         font: { size: 16, color: ct.title },
+        y: 0.97,
+        yanchor: 'top',
       },
       xaxis: { title: '', gridcolor: ct.grid },
       yaxis: hasTotalReturn
         ? { title: 'Return %', gridcolor: ct.grid, ticksuffix: '%' }
         : { title: 'Price', gridcolor: ct.grid, tickprefix: '$' },
       legend: { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'center', x: 0.5, font: { size: 12 } },
-      margin: { l: 50, r: 20, t: 80, b: 40 },
+      margin: { l: 50, r: 20, t: 92, b: 40 },
       hovermode: 'x unified',
       shapes: hasTotalReturn
         ? [{ type: 'line', x0: chart.dates[0], x1: chart.dates[chart.dates.length - 1], y0: 0, y1: 0, line: { dash: 'dot', color: ct.zeroline, width: 1 } }]
@@ -436,6 +450,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
   ]
 
   const title = research?.name || holding?.description || cef?.name || ticker
+  const chartHeldStart = heldPeriodStart(chart)
   const endingTotalReturn = lastNumber(chart?.total_return)
   const endingPriceReturn = lastNumber(chart?.price_return)
   const yieldPct = num(holding?.current_annual_yield)
@@ -564,7 +579,7 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
                 </div>
               )}
               <div className="alert alert-info" style={{ marginBottom: '0.75rem' }}>
-                <strong>{chart.period_label || 'Selected period'}:</strong>{' '}
+                <strong>{chartHeldStart ? 'Return while held' : (chart.period_label || 'Selected period')}:</strong>{' '}
                 {formatPerformanceRange(chart.effective_start_date, chart.effective_end_date)
                   || formatPerformanceRange(chart.requested_start_date, chart.requested_end_date)
                   || 'Dates unavailable'}
@@ -572,8 +587,16 @@ export default function TickerResearchSheet({ ticker, seed = null, onClose }) {
                   <> — <strong>Total Return {endingTotalReturn.toFixed(2)}%</strong></>
                 )}
                 {endingPriceReturn != null && `; Price Return ${endingPriceReturn.toFixed(2)}%`}
+                {chartHeldStart && (
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.85em', opacity: 0.85 }}>
+                    {ticker} was first held on {formatPerformanceDate(chartHeldStart)}, after the{' '}
+                    {chart.period_label || 'selected'} range begins
+                    {formatPerformanceDate(chart.requested_start_date) ? ` (${formatPerformanceDate(chart.requested_start_date)})` : ''},
+                    so this covers only the time it has been held — not the fund&apos;s return over the whole range.
+                  </div>
+                )}
               </div>
-              <div ref={chartRef} id="ticker-research-chart" style={{ height: '360px' }} />
+              <div ref={chartRef} id="ticker-research-chart" style={{ height: '372px' }} />
             </>
           )}
         </section>
