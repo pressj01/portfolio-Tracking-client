@@ -497,11 +497,25 @@ export const formatAccountingCoverage = (metrics) => {
   return parts.join(' ')
 }
 
+// A holding's return chart is owned-period: it cannot begin before the first
+// close the position was held. When that start falls after the selected range
+// begins, the shorter window is the holding period, not missing market
+// history, so copy must not call it "market observations" or label it with
+// the preset ("1 Year") as if the whole range were covered.
+export const heldPeriodStart = (chart) => {
+  if (!chart || chart.return_basis !== 'owned_period' || chart.period_key === 'all') return null
+  const start = chart.effective_start_date
+  const requested = chart.requested_start_date
+  if (!formatPerformanceDate(start) || !formatPerformanceDate(requested)) return null
+  return start > requested ? start : null
+}
+
 export const formatPerformanceChartRange = (
   requestedStart,
   requestedEnd,
   actualStart,
   actualEnd,
+  { actualLabel = 'market observations' } = {},
 ) => {
   const selectedStartValue = requestedStart || actualStart
   const selectedEndValue = requestedEnd || actualEnd
@@ -519,7 +533,7 @@ export const formatPerformanceChartRange = (
   ) {
     return selectedLabel
   }
-  return `${selectedLabel} · market observations ${actualStartLabel} to ${actualEndLabel}`
+  return `${selectedLabel} · ${actualLabel} ${actualStartLabel} to ${actualEndLabel}`
 }
 
 // Single gate for the custom range, shared by every performance screen so a
