@@ -498,6 +498,11 @@ def ensure_tables_exist(conn=None):
             -- count the drop guard kept, until the sale that explains the drop
             -- is on record (app._settle_broker_file_positions).
             broker_file_position       TEXT,
+            -- Distributions paid since the broker file that its shares and
+            -- cash do not include yet: estimated value and the payments (JSON)
+            -- behind it (app._distributions_since_broker_file).
+            dist_since_file_value      REAL DEFAULT 0,
+            dist_since_file_detail     TEXT,
             -- Per seeded share, how much more was originally paid than the
             -- price the ledger's seed lot carries (app._original_basis_from_lots).
             original_seed_premium      REAL,

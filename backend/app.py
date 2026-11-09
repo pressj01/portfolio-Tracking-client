@@ -6256,6 +6256,11 @@ def _ensure_basis_columns(conn):
         # the drop guard kept, held until the sale that explains the drop is
         # on record — see _settle_broker_file_positions.
         "broker_file_position": "TEXT",
+        # Distributions paid since the broker file that neither its shares nor
+        # its cash include yet: the estimated value, and the payments behind it
+        # (JSON) — see _distributions_since_broker_file. Never part of quantity.
+        "dist_since_file_value": "REAL DEFAULT 0",
+        "dist_since_file_detail": "TEXT",
     }
     for col, col_type in needed.items():
         if col not in cols:
@@ -6738,6 +6743,8 @@ def _set_profile_cash_value(conn, profile_id, cash_value, source="positions_impo
             profile_id,
         ),
     )
+    # A new balance already holds the cash distributions paid up to its date.
+    _rebase_distributions_since_file(conn, profile_id)
 
 
 def _large_unsold_position_drop_guard(conn, profile_id, ticker, pos, existing):
@@ -10421,7 +10428,13 @@ def set_include_in_owner(pid):
 def profiles_summary():
     """Return per-profile stats for the Manage Portfolios page."""
     conn = get_connection()
-    rows = conn.execute("""
+    # Paid since the broker file, as the Dashboard's Portfolio Value adds it.
+    distributions_expr = (
+        "COALESCE(SUM(CASE WHEN a.quantity > 0 THEN a.dist_since_file_value END), 0)"
+        if "dist_since_file_value" in _table_columns(conn, "all_account_info")
+        else "0"
+    )
+    rows = conn.execute(f"""
         SELECT p.id, p.name, p.broker_source, p.created_at, p.include_in_owner,
                p.is_user_owned,
                p.owner_active,
@@ -10430,7 +10443,9 @@ def profiles_summary():
                COALESCE(p.cash_value, 0) AS cash_value,
                p.cash_source, p.cash_updated_at,
                COUNT(a.ticker) as holdings_count,
-               COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0) as total_value
+               {distributions_expr} AS distributions_since_import,
+               COALESCE(SUM(a.current_value), 0) + COALESCE(p.cash_value, 0)
+                   + {distributions_expr} as total_value
         FROM profiles p
         LEFT JOIN all_account_info a ON p.id = a.profile_id
         WHERE p.id != 1 OR p.owner_active = 1
@@ -12143,6 +12158,8 @@ def _finalize_positions_snapshot(profile_id, conn, tickers=None):
         _sync_preserved_position_purchase_date(ticker, profile_id, conn)
         _refresh_drip_tracking_from_transactions(ticker, profile_id, conn)
 
+    # The file now holds whatever paid up to its date.
+    _rebase_distributions_since_file(conn, profile_id)
     return results
 
 
@@ -14250,6 +14267,10 @@ def api_portfolio_value():
             ).fetchone()
             cash_value = float(cash_row[0] if cash_row else 0)
 
+        # Paid since the broker file but not yet in its shares or cash; read
+        # from the same accounts as the cash so Owner sums its sources.
+        distributions = _distributions_since_file_summary(conn, cash_profile_ids)
+
         irr_profile_ids = profile_ids
         if not is_aggregate and profile_ids == [1]:
             owner_source_ids = _get_owner_source_profile_ids(conn)
@@ -14269,7 +14290,9 @@ def api_portfolio_value():
         return jsonify({
             "holdings_value": round(holdings_value, 2),
             "cash_value": round(cash_value, 2),
-            "account_value": round(holdings_value + cash_value, 2),
+            "distributions_since_import": distributions,
+            "broker_value": round(holdings_value + cash_value, 2),
+            "account_value": round(holdings_value + cash_value + distributions["value"], 2),
             "live_nav_date": _live_nav_date(),
             "irr": irr_details.get("irr"),
             "irr_pct": irr_details.get("irr_pct"),
@@ -20292,6 +20315,306 @@ def _simulate_drip_refresh(div_series, close_series, base_qty, start_date=None, 
     }
 
 
+# ── Distributions paid since the broker file ─────────────────────────────────
+# A broker-synced account is valued as (file shares × today's price) + file cash.
+# Prices move on every refresh; shares and cash stand still until the next
+# positions import. Each ex-date drops a fund's price by about its distribution,
+# but the cash (or reinvested shares) that pays it only arrives with the next
+# file, so between imports the account reads low by everything paid since. These
+# helpers estimate that amount. It is stored beside the broker's figures, never
+# written into quantity or cash_value, which every import guard and the ledger
+# read as "what the broker said", and a newer file or cash balance absorbs it.
+
+# An ex-date this far before the file can still pay after it (a quarterly CEF
+# can pay a month after going ex).
+DISTRIBUTIONS_SINCE_FILE_LOOKBACK_DAYS = 60
+_DISTRIBUTION_NON_ACTUAL_SOURCES = ("refresh_estimate", "projection", "estimate", "estimated")
+
+
+def _distribution_baselines(holding, profile=None):
+    """(cash_as_of, shares_as_of): the last day each broker figure already covers.
+
+    Shares: the later of the holding's file date and its import date. The two
+    are the same for an ordinary file; the Interactive Brokers roll-forward
+    advances import_date as it applies later trades, so the count it leaves
+    already includes them.
+
+    Cash: a broker import stamps the moment it ran, but the balance is the
+    file's own, so the file date wins when it is earlier. A hand-entered
+    balance is as of the day it was typed. With no cash on record at all, the
+    file date is still the right line: a payment after it is not in the value.
+    """
+    holding = holding or {}
+    snap = _date_from_value(str(holding.get("broker_snapshot_date") or "")[:10] or None)
+    imported = _parse_holding_import_date(holding.get("import_date"))
+    known = [day for day in (snap, imported) if day is not None]
+    shares_as_of = max(known) if known else None
+    file_day = snap or imported
+
+    profile = profile or {}
+    cash_day = _date_from_value(str(profile.get("cash_updated_at") or "")[:10] or None)
+    source = str(profile.get("cash_source") or "").strip().lower()
+    if cash_day is None:
+        cash_as_of = file_day
+    elif source == "manual" or file_day is None:
+        cash_as_of = cash_day
+    else:
+        cash_as_of = min(cash_day, file_day)
+    return cash_as_of, shares_as_of
+
+
+def _series_close_on_or_before(close_series, day):
+    """Last close on or before ``day``, or None."""
+    if close_series is None or day is None:
+        return None
+    try:
+        series = _ensure_naive_datetime_index(close_series)
+        prior = series[series.index <= pd.Timestamp(day)]
+        if prior.empty:
+            return None
+        price = float(prior.iloc[-1])
+    except Exception:
+        return None
+    return price if price > 0 else None
+
+
+def _distributions_since_broker_file(
+    events,
+    quantity,
+    *,
+    is_drip,
+    as_of,
+    today=None,
+    close_series=None,
+    current_price=None,
+    purchase_date=None,
+    broker_payments=None,
+    match_days=3,
+):
+    """What a broker-synced holding has been paid since its figures were taken.
+
+    ``events`` are distributions as {"ex", "pay", "per_share"}. One counts when
+    it pays after ``as_of`` and on or before today, matching when the broker
+    credits it. Shares bought on or after an ex-date are not paid it. A real
+    payment the broker has already reported (``broker_payments``, from a later
+    transactions import) replaces the estimate for its distribution, and one
+    with no matching event still counts.
+
+    Cash holdings add the dollars. Reinvesting holdings buy shares at the close
+    on the pay date, the next distribution pays on those too, and they are
+    valued at today's price, as the next file will value them.
+
+    Returns {"value", "cash", "drip_shares", "events"}.
+    """
+    result = {"value": 0.0, "cash": 0.0, "drip_shares": 0.0, "events": []}
+    as_of = _date_from_value(as_of)
+    today = _date_from_value(today) or datetime.date.today()
+    held = max(0.0, _num_or_zero(quantity))
+    if as_of is None or held <= 0:
+        return result
+    purchased = _date_from_value(purchase_date)
+    price_now = _num_or_zero(current_price)
+    price_now = price_now if price_now > 0 else None
+
+    paid = []
+    for event in events or ():
+        ex = _date_from_value(event.get("ex"))
+        pay = _date_from_value(event.get("pay")) or ex
+        per_share = _num_or_zero(event.get("per_share"))
+        if ex is None or pay is None or per_share <= 0 or ex > today:
+            continue
+        if not (as_of < pay <= today):
+            continue
+        if purchased is not None and purchased >= ex:
+            continue
+        paid.append({"ex": ex, "pay": pay, "per_share": per_share})
+
+    reported = []
+    for payment in broker_payments or ():
+        pay = _date_from_value(payment.get("pay"))
+        amount = _num_or_zero(payment.get("amount"))
+        if pay is None or amount <= 0 or not (as_of < pay <= today):
+            continue
+        reported.append({"pay": pay, "amount": amount, "used": False})
+    reported.sort(key=lambda payment: payment["pay"])
+    for item in paid:
+        best = None
+        for payment in reported:
+            if payment["used"]:
+                continue
+            gap = abs((payment["pay"] - item["pay"]).days)
+            if gap <= match_days and (best is None or gap < best[0]):
+                best = (gap, payment)
+        if best is not None:
+            best[1]["used"] = True
+            item["broker_amount"] = best[1]["amount"]
+            item["pay"] = best[1]["pay"]
+    for payment in reported:
+        if not payment["used"]:
+            paid.append({"ex": None, "pay": payment["pay"], "per_share": None,
+                         "broker_amount": payment["amount"]})
+    paid.sort(key=lambda item: (item["pay"], item["ex"] or item["pay"]))
+
+    running = held
+    cash = 0.0
+    drip_shares = 0.0
+    value = 0.0
+    for item in paid:
+        entry = {
+            "ex": item["ex"].isoformat() if item["ex"] else None,
+            "pay": item["pay"].isoformat(),
+        }
+        if item.get("broker_amount") is not None:
+            amount = float(item["broker_amount"])
+            entry["source"] = "broker"
+        else:
+            amount = item["per_share"] * running
+            entry.update(source="estimate", per_share=round(item["per_share"], 6),
+                         shares=round(running, 6))
+        if amount <= 0:
+            continue
+        entry["amount"] = round(amount, 2)
+        reinvest_price = (
+            (_series_close_on_or_before(close_series, item["pay"]) or price_now) if is_drip else None
+        )
+        if reinvest_price:
+            bought = amount / reinvest_price
+            running += bought
+            drip_shares += bought
+            worth = bought * (price_now or reinvest_price)
+            entry.update(kind="drip", reinvest_price=round(reinvest_price, 4),
+                         drip_shares=round(bought, 6))
+        else:
+            cash += amount
+            worth = amount
+            entry["kind"] = "cash"
+        value += worth
+        result["events"].append(entry)
+
+    result.update(value=round(value, 2), cash=round(cash, 2), drip_shares=round(drip_shares, 6))
+    return result
+
+
+def _distribution_detail_value(events, current_price):
+    """Value stored events at ``current_price``: cash as paid, shares at today's price."""
+    price = _num_or_zero(current_price)
+    total = 0.0
+    for event in events or ():
+        if event.get("kind") == "drip":
+            shares = _num_or_zero(event.get("drip_shares"))
+            total += shares * (price if price > 0 else _num_or_zero(event.get("reinvest_price")))
+        else:
+            total += _num_or_zero(event.get("amount"))
+    return round(total, 2)
+
+
+def _rebase_distributions_since_file(conn, profile_id):
+    """Drop what a newer positions file or cash balance now includes.
+
+    Runs whenever a file or a cash figure is written, so the estimate never
+    counts a payment the broker's own figure already holds. A file dated today
+    clears it; an older one keeps what paid after it until the next refresh
+    rebuilds the list from market data.
+    """
+    columns = _table_columns(conn, "all_account_info")
+    if "dist_since_file_detail" not in columns:
+        return
+    profile = {}
+    profile_cols = _table_columns(conn, "profiles")
+    if {"cash_source", "cash_updated_at"} <= profile_cols:
+        row = conn.execute(
+            "SELECT cash_source, cash_updated_at FROM profiles WHERE id = ?",
+            (profile_id,),
+        ).fetchone()
+        if row:
+            profile = {"cash_source": row[0], "cash_updated_at": row[1]}
+    rows = conn.execute(
+        """SELECT ticker, current_price, import_date, broker_snapshot_date,
+                  dist_since_file_detail
+             FROM all_account_info
+            WHERE profile_id = ? AND dist_since_file_detail IS NOT NULL""",
+        (profile_id,),
+    ).fetchall()
+    for row in rows:
+        holding = {
+            "import_date": row[2],
+            "broker_snapshot_date": row[3],
+        }
+        try:
+            detail = json.loads(row[4] or "{}")
+        except (TypeError, ValueError):
+            detail = {}
+        cash_as_of, shares_as_of = _distribution_baselines(holding, profile)
+        kept = []
+        for event in detail.get("events") or ():
+            baseline = shares_as_of if event.get("kind") == "drip" else cash_as_of
+            pay = _date_from_value(event.get("pay"))
+            if pay is not None and (baseline is None or pay > baseline):
+                kept.append(event)
+        if kept:
+            known = [day for day in (cash_as_of, shares_as_of) if day is not None]
+            since = max(known).isoformat() if known else detail.get("since")
+            new_detail = json.dumps({"since": since, "events": kept})
+            new_value = _distribution_detail_value(kept, row[1])
+        else:
+            new_detail, new_value = None, 0.0
+        conn.execute(
+            """UPDATE all_account_info
+                  SET dist_since_file_value = ?, dist_since_file_detail = ?
+                WHERE ticker = ? AND profile_id = ?""",
+            (new_value, new_detail, row[0], profile_id),
+        )
+
+
+def _distributions_since_file_summary(conn, profile_ids):
+    """The estimate for the given accounts, total and per account.
+
+    Returns {"value", "payments", "since", "accounts": [...]}; ``since`` is the
+    one file date every contributing account shares, or None when they differ.
+    """
+    summary = {"value": 0.0, "payments": 0, "since": None, "accounts": []}
+    ids = [int(pid) for pid in profile_ids or []]
+    if not ids or "dist_since_file_value" not in _table_columns(conn, "all_account_info"):
+        return summary
+    placeholders = ",".join("?" * len(ids))
+    rows = conn.execute(
+        f"""SELECT a.profile_id, p.name, a.dist_since_file_value, a.dist_since_file_detail
+              FROM all_account_info a
+              JOIN profiles p ON p.id = a.profile_id
+             WHERE a.profile_id IN ({placeholders})
+               AND COALESCE(a.quantity, 0) > 0
+               AND COALESCE(a.dist_since_file_value, 0) != 0""",
+        ids,
+    ).fetchall()
+    accounts = {}
+    for row in rows:
+        pid = int(row[0])
+        account = accounts.setdefault(pid, {
+            "profile_id": pid, "name": row[1] or f"Profile {pid}",
+            "value": 0.0, "payments": 0, "estimated": 0, "since": None,
+        })
+        account["value"] += float(row[2] or 0)
+        try:
+            detail = json.loads(row[3] or "{}")
+        except (TypeError, ValueError):
+            detail = {}
+        events = detail.get("events") or []
+        account["payments"] += len(events)
+        account["estimated"] += sum(1 for event in events if event.get("source") != "broker")
+        since = detail.get("since")
+        if since and (account["since"] is None or since < account["since"]):
+            account["since"] = since
+    for account in accounts.values():
+        account["value"] = round(account["value"], 2)
+    ordered = sorted(accounts.values(), key=lambda account: -account["value"])
+    summary["accounts"] = ordered
+    summary["value"] = round(sum(account["value"] for account in ordered), 2)
+    summary["payments"] = sum(account["payments"] for account in ordered)
+    dates = {account["since"] for account in ordered}
+    summary["since"] = dates.pop() if len(dates) == 1 else None
+    return summary
+
+
 def _reinvest_period_key(ts, view):
     """Bucket a timestamp into a sortable period key for the chosen granularity."""
     if view == "yearly":
@@ -20646,7 +20969,7 @@ def refresh_market_data():
     # - Owner: source accounts that feed Owner
     # - Aggregate: aggregate member profiles
     all_rows = conn.execute(
-        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, div_manual_until, div_dates_manual_until, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
+        "SELECT profile_id, ticker, description, quantity, price_paid, purchase_value, purchase_date, reinvest, base_quantity, import_date, broker_snapshot_date, ex_div_date, div_pay_date, div_frequency, div_frequency_locked, div, div_manual_until, div_dates_manual_until, dividend_paid, estim_payment_per_year, approx_monthly_income, current_value, ytd_divs, current_month_income FROM all_account_info WHERE profile_id IN ({})".format(
             ",".join("?" * len(source_pids))
         ) + " AND quantity > 0",
         source_pids,
@@ -20699,6 +21022,7 @@ def refresh_market_data():
             "reinvest": (r["reinvest"] or "").upper(),
             "base_quantity": r["base_quantity"] or r["quantity"] or 0,
             "import_date": r["import_date"] or "",
+            "broker_snapshot_date": r["broker_snapshot_date"] or None,
             "ex_div_date": r["ex_div_date"] or None,
             "div_pay_date": r["div_pay_date"] or None,
             "div_frequency": r["div_frequency"] or None,
@@ -21142,6 +21466,59 @@ def refresh_market_data():
                 return resolved_date
         return parsed_pay
 
+    def _refresh_distribution_events(ticker, snapshot, freq, description, payment_history, since):
+        """Each distribution that went ex on or after ``since``, with its pay date.
+
+        Yahoo's history carries ex-dates only. The latest distribution's pay
+        date comes from the snapshot; earlier ones are estimated the same way
+        the calendar does, from the fund's own ex-to-pay lag. A distribution the
+        fund has declared but Yahoo's history does not list yet still counts.
+        """
+        events = []
+        latest_ex = _refresh_parse_date(snapshot.get("ex_div_date"))
+        latest_pay = _refresh_parse_date(snapshot.get("div_pay_date"))
+        if latest_ex is not None and latest_pay is not None and latest_pay < latest_ex:
+            latest_pay = None
+
+        def pay_for(ex):
+            declared = None
+            if latest_pay is not None and latest_ex is not None and abs((ex - latest_ex).days) <= 3:
+                declared = latest_pay.isoformat()
+            return _refresh_expected_pay_date(
+                ex.isoformat(), declared, freq,
+                ticker=ticker, description=description, payment_history=payment_history,
+                pay_date_confirmed=bool(declared and snapshot.get("pay_date_confirmed")),
+            ) or ex
+
+        seen = []
+        history = snapshot.get("history")
+        if history is not None and not history.empty:
+            series = _ensure_naive_datetime_index(history)
+            series = series[series.index >= pd.Timestamp(since)]
+            for stamp, amount in series.items():
+                try:
+                    amount = float(amount or 0)
+                except (TypeError, ValueError):
+                    continue
+                if amount <= 0:
+                    continue
+                ex = pd.Timestamp(stamp).date()
+                events.append({"ex": ex, "pay": pay_for(ex), "per_share": amount})
+                seen.append(ex)
+        latest_div = snapshot.get("div") if snapshot.get("has_dividend") else None
+        try:
+            latest_div = float(latest_div or 0)
+        except (TypeError, ValueError):
+            latest_div = 0.0
+        if (
+            latest_ex is not None
+            and latest_ex >= since
+            and latest_div > 0
+            and not any(abs((ex - latest_ex).days) <= 3 for ex in seen)
+        ):
+            events.append({"ex": latest_ex, "pay": pay_for(latest_ex), "per_share": latest_div})
+        return events
+
     # Load last-refresh timestamps per profile so we can estimate accrued dividends
     last_refresh_times = {}
     for pid in source_pids:
@@ -21179,6 +21556,41 @@ def refresh_market_data():
             source_pids,
         ).fetchall()
     }
+    # What each broker-synced account's cash figure covers, and the payments a
+    # later transactions import has already reported, for the estimate of
+    # distributions paid since the file (_distributions_since_broker_file).
+    managed_cash_profiles = {}
+    reported_payments = {}
+    if positions_managed_ids:
+        managed_list = sorted(positions_managed_ids)
+        managed_placeholders = ",".join("?" * len(managed_list))
+        if {"cash_source", "cash_updated_at"} <= _table_columns(conn, "profiles"):
+            for row in conn.execute(
+                f"SELECT id, cash_source, cash_updated_at FROM profiles WHERE id IN ({managed_placeholders})",
+                managed_list,
+            ).fetchall():
+                managed_cash_profiles[row["id"]] = {
+                    "cash_source": row["cash_source"],
+                    "cash_updated_at": row["cash_updated_at"],
+                }
+        try:
+            non_actual = ",".join("?" * len(_DISTRIBUTION_NON_ACTUAL_SOURCES))
+            for row in conn.execute(
+                f"""SELECT profile_id, UPPER(TRIM(ticker)) AS ticker, payment_date, amount
+                      FROM dividend_payments
+                     WHERE profile_id IN ({managed_placeholders})
+                       AND payment_date >= ?
+                       AND LOWER(COALESCE(source, '')) NOT IN ({non_actual})
+                       AND LOWER(COALESCE(source, '')) NOT LIKE '%estimate%'""",
+                [*managed_list,
+                 (refresh_date - datetime.timedelta(days=400)).isoformat(),
+                 *_DISTRIBUTION_NON_ACTUAL_SOURCES],
+            ).fetchall():
+                reported_payments.setdefault((row["profile_id"], row["ticker"]), []).append(
+                    {"pay": row["payment_date"], "amount": row["amount"]}
+                )
+        except sqlite3.OperationalError:
+            reported_payments = {}
     for pid in source_pids:
         if pid in owner_source_ids:
             refreshed_owner_source = True
@@ -21455,6 +21867,60 @@ def refresh_market_data():
                 sets.extend(["current_price = ?", "current_value = ?", "gain_or_loss = ?",
                              "gain_or_loss_percentage = ?", "percent_change = ?"])
                 vals.extend([new_price, current_value, gain, gain_pct, gain_pct])
+
+            # Distributions paid since the broker file. Only a broker-synced
+            # account needs this: a manual portfolio's DRIP is simulated into
+            # its quantity above, and its cash dividends count as income that
+            # left, not value. Money-market funds are cash already.
+            dist_value = 0.0
+            dist_detail = None
+            dist_write = True
+            if pid in positions_managed_ids and not _is_money_market_holding(
+                {"ticker": t, "description": h.get("description")}
+            ):
+                cash_as_of, shares_as_of = _distribution_baselines(
+                    h, managed_cash_profiles.get(pid)
+                )
+                dist_as_of = shares_as_of if is_drip else cash_as_of
+                if dist_as_of is not None and not snapshot.get("known"):
+                    # No dividend data from the market this run: keep the last
+                    # estimate rather than read an outage as "nothing was paid".
+                    # (snapshot_known can be set from stored income above; that
+                    # carries no distribution dates to count from.)
+                    dist_write = False
+                elif dist_as_of is not None:
+                    dist_freq = new_freq or old_freq
+                    dist_events = _refresh_distribution_events(
+                        t,
+                        snapshot,
+                        dist_freq,
+                        h.get("description"),
+                        actual_payment_history.get((pid, t), []),
+                        dist_as_of - datetime.timedelta(days=DISTRIBUTIONS_SINCE_FILE_LOOKBACK_DAYS),
+                    )
+                    dist_result = _distributions_since_broker_file(
+                        dist_events,
+                        qty,
+                        is_drip=is_drip,
+                        as_of=dist_as_of,
+                        today=refresh_date,
+                        close_series=close_history.get(t),
+                        current_price=new_price or (
+                            (float(h.get("current_value") or 0) / qty) if qty else None
+                        ),
+                        purchase_date=purchase_date or None,
+                        broker_payments=reported_payments.get((pid, str(t).strip().upper())),
+                        match_days=_distribution_window_days(dist_freq),
+                    )
+                    dist_value = dist_result["value"]
+                    if dist_result["events"]:
+                        dist_detail = json.dumps({
+                            "since": dist_as_of.isoformat(),
+                            "events": dist_result["events"],
+                        })
+            if dist_write:
+                sets.extend(["dist_since_file_value = ?", "dist_since_file_detail = ?"])
+                vals.extend([round(dist_value, 2), dist_detail])
 
             if snapshot_known or new_div or new_exdiv or new_freq:
                 if old_exdiv and old_pay_date and (
@@ -21744,7 +22210,7 @@ def refresh_market_data():
     account_value_row = conn.execute(
         f"""SELECT
                 COALESCE((
-                    SELECT SUM(current_value)
+                    SELECT SUM(current_value + COALESCE(dist_since_file_value, 0))
                     FROM all_account_info
                     WHERE profile_id IN ({placeholders}) AND quantity > 0
                 ), 0)

@@ -8,6 +8,7 @@ import { chartTheme } from '../utils/chartTheme'
 import { prorateAnnualYield, returnVsYield } from '../utils/returnVsYield'
 import { readDashboardCache, writeDashboardCache, dashboardCacheKey as buildDashboardCacheKey } from '../utils/dashboardCache'
 import { formatMoney } from '../utils/money'
+import { distributionsSinceImportLine, distributionsSinceImportTitle } from '../utils/distributionsSinceImport'
 import {
   formatShare,
   indentedName,
@@ -1846,12 +1847,13 @@ export default function Dashboard() {
     const reinvestPct = monthlyIncome ? (monthlyReinvested / monthlyIncome) : 0
 
     const cashValue = Number(portfolioValue?.cash_value || 0)
+    const distributionsSinceImport = portfolioValue?.distributions_since_import || null
     const accountValue = portfolioValue?.account_value == null
       ? currentValue
       : Number(portfolioValue.account_value)
 
     const lifetimeIncome = incomeSummary?.lifetime_income ?? totalDivs
-    return { lifetimeIncome, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, cashValue, accountValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
+    return { lifetimeIncome, ytdDivs, monthlyIncome, monthlyReinvested, monthlyNotReinvested, reinvestPct, annualIncome, dividendPaid, withdraw8Annual, withdraw8Monthly, cashNotReinvested, totalCashReinvested, sharesBoughtFromDividend, sharesBoughtInYear, sharesInMonth, dripSharesMonthly, dripSharesYearly, currentValue, cashValue, distributionsSinceImport, accountValue, avgYoc, currentYield, priceReturn, totalReturn, purchaseValue, gainLoss, currentMonthIncome, currentMonthIncomeDelta, currentMonthReinvested, currentMonthNotReinvested, currentMonthReinvestPct }
   }, [holdings, incomeSummary, portfolioValue])
 
   const marketExposure = useMemo(() => {
@@ -2366,8 +2368,11 @@ export default function Dashboard() {
           value={fmt(totals.accountValue)}
           color="var(--accent-bright)"
           sub={totals.cashValue > 0 ? `Includes ${fmt(totals.cashValue)} cash` : 'No cash balance'}
-          note="Full account: open holdings + cash"
-          title="Full account value: open holdings plus idle cash. The Holdings overview Value card is holdings only and excludes cash."
+          note={distributionsSinceImportLine(totals.distributionsSinceImport, fmt) || 'Full account: open holdings + cash'}
+          title={[
+            'Full account value: open holdings plus idle cash. The Holdings overview Value card is holdings only and excludes cash.',
+            distributionsSinceImportTitle(totals.distributionsSinceImport, fmt),
+          ].filter(Boolean).join(' ')}
         />
         <SummaryCard
           className="dashboard-headline-card daily-change-card"
