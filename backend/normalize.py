@@ -159,6 +159,9 @@ def populate_income_tracking(profile_id=1):
 def snapshot_nav(profile_id=1, nav_date=None, source="snapshot"):
     """Upsert a holdings-plus-cash account value snapshot into portfolio_nav.
 
+    Includes the distributions a broker-synced account has been paid since its
+    last file, the same figure the Dashboard's Portfolio Value box adds.
+
     ``source`` tags the row: 'snapshot' for a manually recorded value and
     'close' for the automatic end-of-day capture. Both are authoritative (the
     chart-repair logic protects either), so a later capture cleanly overwrites
@@ -202,7 +205,34 @@ def snapshot_nav(profile_id=1, nav_date=None, source="snapshot"):
                     (profile_id,),
                 ).fetchone()
                 cash_value = cash_row[0] if cash_row else 0.0
-        total_value = float(holdings_value or 0) + float(cash_value or 0)
+        # Distributions paid since the broker file, which the Portfolio Value
+        # box includes (app._distributions_since_file_summary). The chart's
+        # latest point has to match that box, so the snapshot carries it too.
+        # Owner reads its source accounts, as it does for cash.
+        distributions_value = 0.0
+        holding_cols = {
+            col[1] for col in conn.execute("PRAGMA table_info(all_account_info)").fetchall()
+        }
+        if "dist_since_file_value" in holding_cols:
+            dist_ids = [profile_id]
+            if profile_id == 1:
+                source_ids = [
+                    r[0] for r in conn.execute(
+                        "SELECT id FROM profiles WHERE id != 1 AND include_in_owner = 1"
+                    ).fetchall()
+                ]
+                dist_ids = source_ids or dist_ids
+            dist_row = conn.execute(
+                f"""SELECT COALESCE(SUM(dist_since_file_value), 0)
+                    FROM all_account_info
+                    WHERE profile_id IN ({",".join("?" * len(dist_ids))})
+                      AND COALESCE(quantity, 0) > 1e-9""",
+                dist_ids,
+            ).fetchone()
+            distributions_value = float(dist_row[0] or 0) if dist_row else 0.0
+        total_value = (
+            float(holdings_value or 0) + float(cash_value or 0) + distributions_value
+        )
         if total_value <= 0:
             return 0.0
         conn.execute(
