@@ -6406,15 +6406,25 @@ function MacroDashboardHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 2: Portfolio Exposure</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Analyzes how each holding is classified by macro sensitivity (e.g., Rate Sensitive, Inflation Hedge,
-        Oil Linked, Volatility Linked). Shows a breakdown of your portfolio value across sensitivity
-        categories with an alignment score indicating how well-positioned your portfolio is for current
-        macro conditions.
+        Shows how your portfolio is allocated across macro sensitivity tags, and how well that mix
+        lines up with current inflation, rate, and oil conditions. The header shows the
+        <strong>Current Regime</strong>, a <strong>Portfolio Alignment</strong> score with a label
+        (Well Positioned, Slightly Favorable, Neutral, Slightly Unfavorable, or Poorly Positioned),
+        and <strong>Total Value</strong>. A bar chart breaks down portfolio value by sensitivity tag:
+        Inflation Benefiting, Inflation Negative, Inflation Neutral, Rate Sensitive (Positive),
+        Rate Sensitive (Negative), Rate Sensitive (Mild), Commodity Linked, Safe Haven, and Growth Equity.
       </p>
-      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li>Holdings are classified using a 4-tier fallback system: user overrides → classification type → description keywords → ticker-specific rules.</li>
-        <li>Click any sensitivity category to expand and see which holdings fall into it.</li>
-      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The <strong>Holdings Detail</strong> table lists every holding with Ticker, Description, Pillar,
+        Value, % Port, Sensitivity, Source, Score, and Label. Label is Favorable, Neutral, Unfavorable,
+        or Excluded. Unfavorable rows also offer a <strong>Consolidate</strong> button. A holding can
+        have more than one sensitivity tag. If more than 20% of the portfolio is Unclassified, a warning
+        appears above the table.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Source shows how the tags were chosen: Override, Pillar, Category, Sector, Name, or Unclassified.
+        There is no confidence score. To confirm or change a tag, use the Classifications tab.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124826.jpg" alt="Portfolio Exposure breakdown by macro sensitivity" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />
@@ -6452,16 +6462,47 @@ function MacroDashboardHelp() {
 
       <h3 style={{ color: 'var(--accent)', marginTop: '2rem', marginBottom: '0.5rem' }}>Tab 5: Classifications</h3>
       <p style={{ marginBottom: '0.75rem' }}>
-        Lets you override the system's automatic macro sensitivity classification for any holding.
-        The system classifies holdings using description keywords and classification types, but you
-        can manually set sensitivity tags or exclude a holding from macro analysis entirely.
+        Review auto-classified tags and override them for any holding. Each row shows Ticker, Description,
+        Source, Current Classification, Score, and Actions.
+      </p>
+      <p style={{ marginBottom: '0.75rem' }}>
+        Auto-classification uses this fallback order. The Source column names the step that produced the tags:
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
-        <li><strong>Filter buttons</strong> — View All, Overridden only, Auto-classified only, or Excluded only.</li>
-        <li><strong>Edit</strong> — Opens a multi-select dropdown to choose sensitivity tags for a holding.</li>
-        <li><strong>Exclude</strong> — Removes a holding from macro exposure calculations.</li>
-        <li><strong>Revert</strong> — Removes the override and returns to auto-classification.</li>
+        <li><strong>Override</strong> — a tag you saved on this tab.</li>
+        <li><strong>Pillar</strong> — the holding's pillar type, when it is Hedged Anchor, Anchor, Gold/Silver, Booster, Juicer, BDC, or Growth. Generic types such as ETF, Stock, Equity, Fund, CEF, or Bond are skipped.</li>
+        <li><strong>Category</strong> — the fund's Yahoo Finance category.</li>
+        <li><strong>Sector</strong> — the Yahoo Finance sector, if no category matched.</li>
+        <li><strong>Name</strong> — words in the Yahoo Finance name, the holding description, or the ticker.</li>
+        <li><strong>Unclassified</strong> — none of the steps above produced a tag.</li>
       </ul>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Filter buttons</strong> — All, Overridden, Auto-classified, or Excluded.</li>
+        <li><strong>Edit</strong> — Opens a multi-select list of sensitivity tags. A holding can have more than one tag.</li>
+        <li><strong>Save</strong> — Stores your selection as an override.</li>
+        <li><strong>Exclude</strong> — Removes the holding from macro exposure calculations.</li>
+        <li><strong>Cancel</strong> — Closes the editor without saving.</li>
+        <li><strong>Revert</strong> — Appears on overridden holdings. Removes the override and returns to auto-classification.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        When you are choosing a tag, think about how the fund behaves:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '0.75rem' }}>
+        <li><strong>Rate Sensitive (Positive)</strong> — floating-rate, bank/senior loans, and BDCs.</li>
+        <li><strong>Rate Sensitive (Negative)</strong> — long bonds, preferreds, REITs, utilities, and many covered-call or option-income funds.</li>
+        <li><strong>Rate Sensitive (Mild)</strong> — short-term bonds and many dividend equity funds.</li>
+        <li><strong>Inflation Benefiting</strong> — TIPS, commodities, and energy.</li>
+        <li><strong>Inflation Negative</strong> — long bonds, high yield, preferreds, and utilities.</li>
+        <li><strong>Inflation Neutral</strong> — typical dividend or value equity.</li>
+        <li><strong>Commodity Linked</strong> — oil, energy, MLPs, and broad commodities.</li>
+        <li><strong>Safe Haven</strong> — gold, silver, and precious metals.</li>
+        <li><strong>Growth Equity</strong> — growth and tech funds.</li>
+      </ul>
+      <p style={{ marginBottom: '0.75rem' }}>
+        The best check is the fund's own strategy or holdings. These tags then feed Portfolio Exposure
+        and the Rebalancing Tilts suggestions. The Income Benchmark tab uses a different set of income
+        buckets, so do not mix those up with these macro tags.
+      </p>
 
       <div style={{ marginBottom: '1.5rem' }}>
         <img src="./help-screenshots/macro-dashboard/Screenshot 2026-05-09 124932.jpg" alt="Classifications tab for macro sensitivity overrides" style={{ maxWidth: '100%', height: 'auto', borderRadius: '4px', border: '1px solid var(--p-333)' }} />

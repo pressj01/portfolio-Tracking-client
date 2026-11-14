@@ -58737,7 +58737,7 @@ def macro_exposure():
         favorable_holdings=favorable,
         unfavorable_holdings=unfavorable,
         unclassified_pct=unclassified_pct,
-        unclassified_warning=f"{unclassified_pct}% of your portfolio couldn't be classified. Assign pillar types in Manage Holdings for more accurate results." if (unclassified_pct or 0) > 20 else None,
+        unclassified_warning=f"{unclassified_pct}% of your portfolio couldn't be classified. Open the Classifications tab and use Edit to assign sensitivity tags for more accurate results." if (unclassified_pct or 0) > 20 else None,
     )
 
 
