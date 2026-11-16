@@ -1,6 +1,16 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfileFetch } from '../../context/ProfileContext'
 import { formatMoneyWhole } from '../../utils/money'
+import LotSortHeader from '../../components/LotSortHeader'
+import useTableSort from '../../utils/useTableSort'
+
+const PEER_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'name', label: 'Name', type: 'string' },
+  { key: 'yield_pct', label: 'Yield %', type: 'number', align: { textAlign: 'right' } },
+  { key: 'return_1y', label: '1Y Return', type: 'number', align: { textAlign: 'right' } },
+  { key: 'add', label: '', sortable: false },
+]
 
 function metricColor(val, thresholds, lowerBetter = false) {
   if (val == null) return '#8899aa'
@@ -110,6 +120,8 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
     }
   }, [result, whatIfTicker, whatIfWeight])
 
+  const { sorted: peerRows, sort: peerSort, onSort: onPeerSort } = useTableSort(peerData?.peers, PEER_COLUMNS)
+
   // Set what-if slider to current weight on ticker change
   useEffect(() => {
     if (!result?.metrics?.length || !whatIfTicker) return
@@ -142,15 +154,13 @@ export default function ToolsPanel({ tickers, result, onAddTicker }) {
             <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
               <thead>
                 <tr>
-                  <th style={th}>Ticker</th>
-                  <th style={th}>Name</th>
-                  <th style={{ ...th, textAlign: 'right' }}>Yield %</th>
-                  <th style={{ ...th, textAlign: 'right' }}>1Y Return</th>
-                  <th style={th}></th>
+                  {PEER_COLUMNS.map(col => (
+                    <LotSortHeader key={col.key} column={col} sort={peerSort} onSort={onPeerSort} style={{ ...th, ...col.align }} />
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {peerData.peers.map(p => (
+                {peerRows.map(p => (
                   <tr key={p.ticker} style={{ borderBottom: '1px solid var(--p-1a2a3e)' }}>
                     <td style={{ padding: '0.35rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{p.ticker}</td>
                     <td style={{ padding: '0.35rem 0.5rem', color: 'var(--text-muted)', fontSize: '0.78rem' }}>{p.name || '—'}</td>

@@ -3917,7 +3917,9 @@ function GainsLossesHelp() {
       <h4 style={{ marginBottom: '0.4rem' }}>Combined Tab</h4>
       <p style={{ marginBottom: '0.75rem' }}>
         One row per ticker across both open and closed positions. Shows unrealized, realized, and
-        net figures side by side so you can see the full history of each ticker.
+        net figures side by side so you can see the full history of each ticker. The arrow beside a
+        ticker opens its lots: an open position shows its open lots with the complete buy, sell and
+        dividend history one click away, and a fully closed position opens straight onto that history.
       </p>
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker / Description</strong> — The symbol and name.</li>
@@ -11557,26 +11559,55 @@ function TaxLossHarvestHelp() {
       <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
         <li><strong>Ticker</strong> — The holding. Lots bought via DRIP reinvestment are tagged with a DRIP label.</li>
         <li><strong>Buy Date</strong> — The date that specific lot was purchased, which determines the holding period.</li>
-        <li><strong>Shares</strong> — Open shares remaining in that lot (after any prior partial sells).</li>
+        <li><strong>Account</strong> — Shown when the view spans more than one account: the account that holds the lot.</li>
+        <li><strong>Shares</strong> — Open shares remaining in that lot after every earlier sale. Sales are matched to the lots they name when you picked specific lots, and otherwise oldest-first (FIFO), so a position you sold out of and later bought back only shows the shares bought since.</li>
         <li><strong>Cost/sh</strong> — Average cost per share including fees for this lot.</li>
         <li><strong>Current</strong> — Current market price from the most recent holdings refresh.</li>
         <li><strong>Unrealized $</strong> — The dollar loss at current price. Shown in red.</li>
         <li><strong>Term</strong> — <strong>ST</strong> (short-term, held ≤ 365 days) or <strong>LT</strong> (long-term, held &gt; 365 days). Determines which tax rate applies.</li>
-        <li><strong>Wash</strong> — <span style={{ color: 'var(--pos)' }}>Clear</span> means no conflicting buy in the last 30 days; <span style={{ color: 'var(--neg)' }}>Wash sale → date</span> means a buy of the same ticker occurred within the window and the harvest is blocked until that date.</li>
+        <li><strong>Wash</strong> — <span style={{ color: 'var(--pos)' }}>Clear</span> means no conflicting buy in the last 30 days; <span style={{ color: 'var(--neg)' }}>Wash sale → date</span> means another buy of the same ticker occurred within the window and the harvest is blocked until that date. The purchase that created a lot never blocks that same lot.</li>
         <li><strong>Tax Saved</strong> — Estimated tax saved if this lot is harvested, using your configured marginal rates.</li>
         <li><strong>Plan button</strong> — Only enabled for Clear lots. Click to add the harvest to your plan.</li>
       </ul>
 
       <p style={{ marginBottom: '1rem' }}>
-        Click any row to expand it. The expanded panel shows <strong>replacement candidate suggestions</strong>
-        (tickers in the same category that aren't substantially identical to what you're selling)
-        and, for blocked lots, the specific BUY transactions causing the wash-sale conflict along
-        with the exact date the window clears.
+        Click any column heading to sort by it; click it again to reverse the order. Click any row to
+        expand it. The expanded panel shows <strong>replacement candidate suggestions</strong> and, for
+        blocked lots, the specific BUY transactions causing the wash-sale conflict, the account each was
+        bought in, and the exact date the window clears.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>By lot or by holding</h3>
+      <p style={{ marginBottom: '1rem' }}>
+        <strong>By lot</strong> lists every losing purchase lot on its own row. <strong>By holding</strong> adds
+        a holding's losing lots into one row — total shares, share-weighted cost, total loss and tax saved —
+        with the individual lots (sortable, each with its own Plan button) behind the arrow. A holding whose
+        lots are partly long-term and partly short-term shows <strong>Mixed</strong>; one where only some
+        lots are wash-sale blocked shows <strong>Partly blocked</strong>.
+      </p>
+
+      <h3 style={{ marginBottom: '0.5rem' }}>Replacement candidates</h3>
+      <p style={{ marginBottom: '0.5rem' }}>
+        Turn <strong>Show replacement candidates</strong> off to hide them. When on, candidates are drawn
+        from your own categories and swap list, from scanner funds that share the holding's strategy,
+        category or industry, and from the ETF issuer listings, then scored on:
+      </p>
+      <ul style={{ paddingLeft: '1.5rem', lineHeight: '1.8', marginBottom: '1rem' }}>
+        <li>the same kind of security (fund, closed-end fund, stock, REIT, BDC, preferred);</li>
+        <li>the same category, strategy, sector or industry;</li>
+        <li>shared traits such as option income, covered calls or fixed income;</li>
+        <li>how close the candidate's yield is to the holding's, and the same payout frequency.</li>
+      </ul>
+      <p style={{ marginBottom: '1rem' }}>
+        For a holding yielding 4% or more, a candidate must be an income fund itself or pay at least half
+        that yield. Tickers you already hold and funds tracking the same index (substantially identical)
+        are always excluded. The reasons under each ticker show what matched. Suggestions are a starting
+        point for research, not recommendations.
       </p>
 
       <p style={{ marginBottom: '1rem' }}>
         Use the <strong>Hide wash-sale-blocked lots</strong> checkbox to filter the table to
-        actionable candidates only.
+        actionable candidates only. Your choices of view, replacements and filter are remembered.
       </p>
 
       <h3 style={{ marginBottom: '0.5rem' }}>Planned tab</h3>

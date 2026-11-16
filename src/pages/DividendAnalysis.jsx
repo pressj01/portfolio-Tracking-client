@@ -7,6 +7,27 @@ import ColumnCustomizer from '../components/ColumnCustomizer'
 import { useColumnLayout } from '../utils/useColumnLayout'
 import { gradingSettingsQuery } from '../utils/gradingPreferences'
 import { buildSubcategoryTree, indentedName, subtreeIds } from '../utils/categoryHierarchy'
+import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
+
+const PIPELINE_DETAIL_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'left' } },
+  { key: 'status', label: 'Status', type: 'string', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'left' } },
+  { key: 'ex_date', label: 'Ex-Date', type: 'date', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'center' } },
+  { key: 'pay_date', label: 'Pay Date', type: 'date', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'center' } },
+  { key: 'amount', label: 'Amount', type: 'number', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'right' } },
+  { key: 'source', label: 'Source', type: 'string', align: { padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)', textAlign: 'left' } },
+]
+
+const AT_RISK_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'left' } },
+  { key: 'score_model', label: 'Type', type: 'string', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'center' } },
+  { key: 'aum', label: 'AUM', type: 'number', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'right' }, tip: 'Assets under management, from the same fund profiles used by ETF Compare and Security Research.', value: row => (row.score_model === 'stock' ? null : row.aum) },
+  { key: 'risk_level', label: 'Risk Level', type: 'string', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'center' } },
+  { key: 'safety_score', label: 'Safety Score', type: 'number', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'center' } },
+  { key: 'est_annual_income', label: 'Est. Annual Income', type: 'number', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'right' } },
+  { key: 'reasons', label: 'Reason(s)', type: 'string', align: { padding: '0.4rem 0.5rem', color: 'var(--text-dim)', textAlign: 'left' }, value: row => (row.risk_reasons || []).join('; ') },
+]
 
 function GradeBadge({ grade, large }) {
   if (!grade || grade === 'N/A') return <span className={`grade-badge grade-na ${large ? 'grade-lg' : ''}`}>N/A</span>
@@ -681,9 +702,12 @@ function DividendPipelineChart({ pipeline }) {
     return () => window.Plotly.purge(el)
   }, [pipeline, isDark])
 
+  const { sorted: details, sort: detailSort, onSort: onDetailSort } = useTableSort(
+    pipeline?.details?.[selectedMonth] || [], PIPELINE_DETAIL_COLUMNS,
+  )
+
   if (!pipeline?.months?.length) return null
 
-  const details = pipeline.details?.[selectedMonth] || []
   const selectedLabel = pipeline.labels?.[pipeline.months.indexOf(selectedMonth)] || selectedMonth
   const selectedTotals = pipeline.totals?.[selectedMonth] || {}
   const statusColor = {
@@ -737,12 +761,9 @@ function DividendPipelineChart({ pipeline }) {
           <table style={{ width: '100%', fontSize: '0.84rem', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'var(--border)' }}>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Ticker</th>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Status</th>
-                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Ex-Date</th>
-                <th style={{ textAlign: 'center', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Pay Date</th>
-                <th style={{ textAlign: 'right', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Amount</th>
-                <th style={{ textAlign: 'left', padding: '0.5rem 0.6rem', color: 'var(--p-b5c5d8)' }}>Source</th>
+                {PIPELINE_DETAIL_COLUMNS.map(col => (
+                  <LotSortHeader key={col.key} column={col} sort={detailSort} onSort={onDetailSort} style={col.align} />
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -901,6 +922,9 @@ export default function DividendAnalysis() {
 
   const dividendSafety = data?.totals?.dividend_safety
   const atRiskCount = dividendSafety?.at_risk_holdings?.length ?? 0
+  const { sorted: atRiskRows, sort: atRiskSort, onSort: onAtRiskSort } = useTableSort(
+    dividendSafety?.at_risk_holdings, AT_RISK_COLUMNS,
+  )
 
   return (
     <div className="page dashboard">
@@ -1018,17 +1042,13 @@ export default function DividendAnalysis() {
                 <table style={{ fontSize: '0.85rem', width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Ticker</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Type</th>
-                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }} title="Assets under management, from the same fund profiles used by ETF Compare and Security Research">AUM</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Risk Level</th>
-                      <th style={{ textAlign: 'center', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Safety Score</th>
-                      <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Est. Annual Income</th>
-                      <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem', color: 'var(--text-dim)' }}>Reason(s)</th>
+                      {AT_RISK_COLUMNS.map(col => (
+                        <LotSortHeader key={col.key} column={col} sort={atRiskSort} onSort={onAtRiskSort} style={col.align} />
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {dividendSafety.at_risk_holdings.map(h => (
+                    {atRiskRows.map(h => (
                       <tr key={h.ticker} style={{ borderBottom: '1px solid var(--p-0a1628)' }}>
                         <td style={{ padding: '0.4rem 0.5rem', color: 'var(--accent-bright)', fontWeight: 600 }}>{h.ticker}</td>
                         <td style={{ padding: '0.4rem 0.5rem', textAlign: 'center', color: 'var(--text-strong)' }}>

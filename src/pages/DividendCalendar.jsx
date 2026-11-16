@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useProfile, useProfileFetch } from '../context/ProfileContext'
 import { formatMoney } from '../utils/money'
+import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
 import {
   paymentsPerYear,
   estimatePaymentIncome,
@@ -1013,8 +1015,21 @@ function OptStat({ label, value, tone }) {
   )
 }
 
+// Arrives ranked by schedule fit; a heading re-sorts those ten.
+const CANDIDATE_COLUMNS = [
+  { key: 'ticker', label: 'Ticker', type: 'string' },
+  { key: 'provider', label: 'Provider', type: 'string' },
+  { key: 'freq', label: 'Freq', type: 'string' },
+  { key: 'helps', label: 'Helps', type: 'number', tip: 'How many shortfall months this schedule covers.', value: row => (row.helps || []).length },
+  { key: 'distributionPerShareInMonth', label: 'Distribution/share', type: 'number' },
+  { key: 'annualYieldPct', label: 'Yield', type: 'number' },
+  { key: 'sharesNeeded', label: 'Shares needed to fill the gap', type: 'number' },
+  { key: 'estimatedCost', label: 'Est. cost', type: 'number' },
+]
+
 function CandidateRecommendations({ candidates, weakMonths }) {
-  const top = candidates.recommendations.slice(0, 10)
+  const ranked = useMemo(() => candidates.recommendations.slice(0, 10), [candidates])
+  const { sorted: top, sort: candidateSort, onSort: onCandidateSort } = useTableSort(ranked, CANDIDATE_COLUMNS)
   const trackedPreview = candidates.tracked
   const targetLabel = weakMonths.length ? weakMonths.map(m => m.label).join(', ') : 'No shortfall months'
 
@@ -1034,14 +1049,9 @@ function CandidateRecommendations({ candidates, weakMonths }) {
           <table className="dc-candidate-table">
             <thead>
               <tr>
-                <th>Ticker</th>
-                <th>Provider</th>
-                <th>Freq</th>
-                <th>Helps</th>
-                <th>Distribution/share</th>
-                <th>Yield</th>
-                <th>Shares needed to fill the gap</th>
-                <th>Est. cost</th>
+                {CANDIDATE_COLUMNS.map(col => (
+                  <LotSortHeader key={col.key} column={col} sort={candidateSort} onSort={onCandidateSort} />
+                ))}
               </tr>
             </thead>
             <tbody>

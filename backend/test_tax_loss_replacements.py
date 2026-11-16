@@ -114,6 +114,49 @@ class TaxLossReplacementTest(unittest.TestCase):
         self.assertLess(abs(suggestions[0]["yield_delta"]), 0.03)
         self.assertIn("same ETF category", suggestions[0]["match_reasons"])
 
+    def test_low_yield_funds_are_not_offered_for_a_high_income_holding(self):
+        # CRF: a ~20% closed-end fund whose broker description abbreviates
+        # "fund" to "FD". Issuer listings store yield in percent, so 0.2375 is
+        # a 0.24% fund -- it used to be read as a 23.75% one and offered as a
+        # close income match.
+        self.conn.execute(
+            "INSERT INTO all_account_info VALUES (?,?,?,?,?,?,?,?,?)",
+            ("CRF", 1, "CORNERSTONE TOTAL RETURN FD IN COM", None, 10000, 2100, 0.21, "M", 1700),
+        )
+        self.conn.execute("INSERT INTO etf_providers VALUES (1, 'Test Provider')")
+        self.conn.executemany(
+            "INSERT INTO etf_provider_funds VALUES (1,?,?,?,?,?)",
+            [
+                ("ARKQ", "ARK Autonomous Technology & Robotics ETF", 0.2375, None, 2.1e9),
+                ("IBB", "iShares Biotechnology ETF", 0.2299, None, 7.8e9),
+                ("HIGH", "High Income Premium ETF", 19.5, "Monthly", 1.5e9),
+            ],
+        )
+
+        source = _source_profile(self.conn, "CRF", [1])
+        self.assertEqual(source["asset_family"], "fund")
+
+        suggestions = candidate_replacements(
+            self.conn,
+            "CRF",
+            {"holding_profile_ids": [1], "transaction_profile_ids": [1]},
+        )
+        by_ticker = {s["ticker"]: s for s in suggestions}
+        self.assertIn("HIGH", by_ticker)
+        self.assertAlmostEqual(by_ticker["HIGH"]["yield"], 0.195)
+        self.assertNotIn("ARKQ", by_ticker)
+        self.assertNotIn("IBB", by_ticker)
+
+    def test_scanner_yield_is_read_in_the_unit_it_was_saved_in(self):
+        from tax_loss import _scanner_yield_ratio
+
+        # Percent x 100 before the 2026-05-28 build, plain percent after.
+        self.assertAlmostEqual(_scanner_yield_ratio(39.0, "2026-04-16T12:13:43"), 0.0039)
+        self.assertAlmostEqual(_scanner_yield_ratio(840.0, "2026-04-16T12:13:43"), 0.084)
+        self.assertAlmostEqual(_scanner_yield_ratio(6.91, "2026-05-28T09:39:53"), 0.0691)
+        self.assertAlmostEqual(_scanner_yield_ratio(5564.0, "2026-09-01T00:00:00"), 0.5564)
+        self.assertIsNone(_scanner_yield_ratio(None, "2026-09-01"))
+
     def test_legacy_mirror_fallback_uses_dividend_aliases(self):
         self.conn.execute(
             """INSERT INTO holdings

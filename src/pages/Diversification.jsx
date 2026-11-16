@@ -5,6 +5,18 @@ import { useTheme } from '../context/ThemeContext'
 import ThemedPlot from '../components/ThemedPlot'
 import SectorExposurePanel from '../components/SectorExposurePanel'
 import { formatMoney } from '../utils/money'
+import LotSortHeader from '../components/LotSortHeader'
+import useTableSort from '../utils/useTableSort'
+
+const FUND_COVERAGE_COLUMNS = [
+  { key: 'ticker', label: 'Fund', type: 'string', align: { textAlign: 'left' } },
+  { key: 'value', label: 'Value', type: 'number', align: { textAlign: 'right' } },
+  { key: 'source', label: 'Source', type: 'string', align: { textAlign: 'left' } },
+  { key: 'as_of', label: 'Holdings as of', type: 'date', align: { textAlign: 'left' }, tip: 'The date the holdings describe, where the source states one (SEC filings are a quarter-end).' },
+  { key: 'age_days', label: 'Downloaded', type: 'number', align: { textAlign: 'left' } },
+  { key: 'mode', label: 'Basis', type: 'string', align: { textAlign: 'left' } },
+  { key: 'coverage_pct', label: 'Coverage', type: 'number', align: { textAlign: 'right' }, value: row => (row.status === 'unresolved' ? null : row.coverage_pct) },
+]
 
 // Distinct hues that stay legible on both themes. Cycled, so the ranked list
 // and the donut always agree on a slice's colour.
@@ -215,6 +227,7 @@ export default function Diversification({ initialTab = 'holdings' }) {
   // constituent count -- the server reports that separately.
   const totalConstituents = data?.constituent_count ?? rows.length
   const shown = useMemo(() => rows.slice(0, 60), [rows])
+  const { sorted: fundRows, sort: fundSort, onSort: onFundSort } = useTableSort(data?.funds, FUND_COVERAGE_COLUMNS)
   const maxPct = shown.length ? Math.max(...shown.map(r => Math.abs(r.weight_pct))) : 1
 
   const donut = useMemo(() => {
@@ -734,19 +747,13 @@ export default function Diversification({ initialTab = 'holdings' }) {
               <table className="table" style={{ width: '100%', fontSize: '0.85rem' }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left' }}>Fund</th>
-                    <th style={{ textAlign: 'right' }}>Value</th>
-                    <th style={{ textAlign: 'left' }}>Source</th>
-                    <th style={{ textAlign: 'left' }} title="The date the holdings describe, where the source states one (SEC filings are a quarter-end).">
-                      Holdings as of
-                    </th>
-                    <th style={{ textAlign: 'left' }}>Downloaded</th>
-                    <th style={{ textAlign: 'left' }}>Basis</th>
-                    <th style={{ textAlign: 'right' }}>Coverage</th>
+                    {FUND_COVERAGE_COLUMNS.map(col => (
+                      <LotSortHeader key={col.key} column={col} sort={fundSort} onSort={onFundSort} style={col.align} />
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {data.funds.map(f => {
+                  {fundRows.map(f => {
                     const aged = f.source !== 'exposure'
                       && (f.age_days ?? 0) >= (fresh?.stale_after_days ?? 7)
                     return (

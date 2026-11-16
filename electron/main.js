@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, nativeImage } = require('electron')
+const { app, BrowserWindow, dialog, nativeImage, shell } = require('electron')
 const path = require('path')
 const http = require('http')
 const { spawn, execSync } = require('child_process')
@@ -110,6 +110,26 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
+
+  // The app routes with a hash (#/settings), so a page never needs to load a
+  // different document. A plain link written as href="/settings" instead
+  // replaced the whole window with file:///settings in the installed app: a
+  // blank white page that Reload only reloaded. Keep the window on the app and
+  // send web links to the browser.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const sameDocument = url.split('#')[0] === mainWindow.webContents.getURL().split('#')[0]
+    if (sameDocument) return
+    event.preventDefault()
+    if (/^https?:\/\//i.test(url) && !url.startsWith(VITE_URL)) {
+      shell.openExternal(url)
+      return
+    }
+    // An app path typed as a plain link: show that screen instead.
+    const route = url.replace(/^[a-z]+:\/\/[^/]*/i, '').replace(/^\/[A-Za-z]:/, '').split('#')[0]
+    if (route && route !== '/' && !/\.html?$/i.test(route)) {
+      mainWindow.webContents.executeJavaScript(`window.location.hash = ${JSON.stringify(`#${route}`)}`).catch(() => {})
+    }
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null

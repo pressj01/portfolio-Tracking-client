@@ -1658,6 +1658,11 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
   const [adding, setAdding] = useState(false)
   const [busyId, setBusyId] = useState(null)
   const [actionFeedback, setActionFeedback] = useState(null) // { type, text }
+  // Event ids ticked for a bulk delete. Kept across filter changes so a
+  // selection built up over several searches survives; only rows still in the
+  // loaded history count.
+  const [selectedIds, setSelectedIds] = useState(() => new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const afterChange = ticker => {
     setReloadKey(key => key + 1)
@@ -1763,6 +1768,66 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
   const historyTickers = useMemo(() => (
     [...new Set((payload?.events || []).map(event => String(event.ticker || '').toUpperCase()).filter(Boolean))].sort()
   ), [payload])
+
+  const selectedEvents = useMemo(
+    () => (payload?.events || []).filter(event => selectedIds.has(event.id)),
+    [payload, selectedIds],
+  )
+  const visibleSelected = events.filter(event => selectedIds.has(event.id)).length
+  const allVisibleSelected = events.length > 0 && visibleSelected === events.length
+  const toggleSelected = id => setSelectedIds(current => {
+    const next = new Set(current)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    return next
+  })
+  // Select-all works on what the filters show, so "Ticker: CRF" plus
+  // "Closed positions only" selects exactly one closed round trip.
+  const toggleAllVisible = () => setSelectedIds(current => {
+    const next = new Set(current)
+    if (allVisibleSelected) events.forEach(event => next.delete(event.id))
+    else events.forEach(event => next.add(event.id))
+    return next
+  })
+
+  const deleteSelected = async () => {
+    if (!selectedEvents.length) return
+    const trades = selectedEvents.filter(event => event.record_type !== 'dividend')
+    const dividends = selectedEvents.filter(event => event.record_type === 'dividend')
+    const tickers = [...new Set(selectedEvents.map(event => event.ticker))].sort()
+    const parts = []
+    if (trades.length) parts.push(`${trades.length.toLocaleString()} buy/sell row${trades.length === 1 ? '' : 's'}`)
+    if (dividends.length) parts.push(`${dividends.length.toLocaleString()} dividend${dividends.length === 1 ? '' : 's'}`)
+    const tickerText = tickers.length <= 6 ? tickers.join(', ') : `${tickers.length} tickers`
+    if (!await dialog.confirm(
+      `Delete ${parts.join(' and ')} for ${tickerText}? This cannot be undone. `
+      + 'Holdings, cost basis and realized gains for those positions will be recalculated. '
+      + 'Re-import the broker file afterwards to restore anything removed by mistake.'
+    )) return
+    setActionFeedback(null)
+    setBulkDeleting(true)
+    try {
+      const response = await pf('/api/transactions/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactions: trades.map(event => ({ id: event.transaction_id, profile_id: event.profile_id })),
+          dividends: dividends.map(event => ({ id: event.dividend_payment_id, profile_id: event.profile_id })),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || 'Could not delete the selected rows')
+      const removed = (data.deleted_transactions || 0) + (data.deleted_dividends || 0)
+      setActionFeedback({ type: 'success', text: `Deleted ${removed.toLocaleString()} row${removed === 1 ? '' : 's'} for ${tickerText}.` })
+      setSelectedIds(new Set())
+      setReloadKey(key => key + 1)
+      ;(data.tickers || tickers).forEach(ticker => onChanged?.(ticker))
+    } catch (e) {
+      setActionFeedback({ type: 'error', text: e.message })
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
   // Add Trade starts in the filtered ticker's account when it lives in only one.
   const filteredTickerAccount = useMemo(() => {
     if (!tickerFilter) return ''
@@ -1793,7 +1858,8 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
               <div style={{ color: 'var(--text-dim-2)', fontSize: '0.82rem', marginTop: '0.3rem' }}>
                 Every saved buy, sell, and actual dividend, including tickers that are no longer held.
                 Edit or delete any row, or add a missing trade, closed positions included.
-                Click a ticker to show only its rows; click a column heading to sort.
+                Click a ticker to show only its rows; click a column heading to sort. Tick rows (or the
+                box in the heading to take every row the filters show) to delete them together.
               </div>
             </div>
             <div style={{ display: 'flex', gap: '0.5rem', flexShrink: 0 }}>
@@ -1858,6 +1924,20 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
             <span style={{ color: 'var(--text-dim-2)', fontSize: '0.78rem' }}>
               Showing {events.length.toLocaleString()}
             </span>
+            {selectedEvents.length > 0 && (
+              <span style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center', fontSize: '0.8rem' }}>
+                <strong>{selectedEvents.length.toLocaleString()} selected</strong>
+                {visibleSelected < selectedEvents.length && (
+                  <span style={{ color: 'var(--text-dim-2)' }}>({(selectedEvents.length - visibleSelected).toLocaleString()} hidden by filters)</span>
+                )}
+                <button type="button" className="btn btn-danger" disabled={bulkDeleting || busyId != null} onClick={deleteSelected}>
+                  {bulkDeleting ? 'Deleting…' : 'Delete selected'}
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={bulkDeleting} onClick={() => setSelectedIds(new Set())}>
+                  Clear selection
+                </button>
+              </span>
+            )}
           </div>
           {actionFeedback && (
             <div className={`alert ${actionFeedback.type === 'error' ? 'alert-error' : 'alert-success'}`}
@@ -1877,6 +1957,13 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
             <table style={{ width: '100%', minWidth: 1310, fontSize: '0.8rem', margin: 0 }}>
               <thead>
                 <tr>
+                  <th style={{ ...TRANSACTION_HISTORY_HEADER_STYLE, width: 28 }}>
+                    <input type="checkbox" checked={allVisibleSelected}
+                      ref={element => { if (element) element.indeterminate = visibleSelected > 0 && !allVisibleSelected }}
+                      onChange={toggleAllVisible} disabled={bulkDeleting}
+                      aria-label={allVisibleSelected ? 'Unselect every row shown' : 'Select every row shown'}
+                      title={allVisibleSelected ? 'Unselect every row shown' : 'Select every row the current filters show'} />
+                  </th>
                   {TRANSACTION_HISTORY_COLUMNS.map(column => (
                     <LotSortHeader key={column.key} column={column} sort={sort} style={TRANSACTION_HISTORY_HEADER_STYLE}
                       onSort={key => setSort(current => nextLotSort(current, key))} />
@@ -1889,7 +1976,12 @@ export function TransactionHistoryModal({ onClose, pf, basisMode, onChanged, ini
                   const isDividend = type === 'DIVIDEND'
                   const isBuy = type === 'BUY'
                   return (
-                    <tr key={event.id}>
+                    <tr key={event.id} style={selectedIds.has(event.id) ? { background: 'rgba(239,154,154,0.08)' } : undefined}>
+                      <td>
+                        <input type="checkbox" checked={selectedIds.has(event.id)} disabled={bulkDeleting}
+                          onChange={() => toggleSelected(event.id)}
+                          aria-label={`Select ${event.ticker} ${type} on ${event.transaction_date || 'undated'}`} />
+                      </td>
                       <td className="mh-lot-actions">
                         <div style={{ display: 'flex', gap: '0.35rem' }}>
                           <button type="button" className="btn btn-primary" aria-label={`Edit ${event.ticker} ${type} on ${event.transaction_date || 'undated'}`}
